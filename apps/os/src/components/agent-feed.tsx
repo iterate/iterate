@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useRef, type ReactNode } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   BanIcon,
@@ -377,6 +377,15 @@ function AgentActivityRow({
   );
 }
 
+/**
+ * Messages queued for after the running turn, rendered as PART OF THE
+ * COMPOSER: the queue is input that hasn't reached the agent yet, so it
+ * belongs with the input surface, not in the feed's history. The stack is a
+ * rounded card tucked behind the composer pill (the pill overlaps its bottom
+ * edge). On phones it collapses to the newest message — each new queued
+ * message pushes the previous one out of view — with a "+N more" toggle;
+ * wider viewports show the whole (scroll-capped) stack.
+ */
 export function QueuedMessagesPanel({
   messages,
   isInterrupting,
@@ -386,38 +395,59 @@ export function QueuedMessagesPanel({
   isInterrupting: boolean;
   onInterrupt?: () => Promise<void> | void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  if (messages.length === 0) return null;
+  const hiddenCount = messages.length - 1;
   return (
-    <div className="flex flex-col gap-2 py-3">
-      <div className="flex items-center gap-3">
-        <div className="h-px flex-1 bg-border" />
-        <span className="font-mono text-xs text-muted-foreground">
-          Queued messages for after the next agent turn
+    <div
+      className="-mb-4 rounded-t-3xl border border-b-0 bg-muted/40 px-3 pb-6 pt-1.5"
+      data-testid="queued-messages-panel"
+    >
+      <div className="flex items-center gap-2 px-1.5 py-1">
+        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+          Queued for the next agent turn
         </span>
-        <div className="h-px flex-1 bg-border" />
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="shrink-0 font-mono text-[11px] text-muted-foreground underline-offset-2 hover:underline sm:hidden"
+          >
+            {expanded ? "collapse" : `+${hiddenCount} more`}
+          </button>
+        ) : null}
+        {onInterrupt == null ? null : (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void onInterrupt()}
+            disabled={isInterrupting}
+            className="ml-auto h-6 shrink-0 gap-1 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800 dark:text-red-300 dark:hover:bg-red-950/30"
+          >
+            {isInterrupting ? (
+              <Spinner className="size-3" />
+            ) : (
+              <BanIcon className="size-3 text-current" />
+            )}
+            Interrupt & send now
+          </Button>
+        )}
       </div>
-      {messages.map((message) => (
-        <Message key={message.id} from="user" className="py-1">
-          <MessageContent className="group-[.is-user]:rounded-2xl">
+      <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+        {messages.map((message, index) => (
+          <div
+            key={message.id}
+            className={cn(
+              "rounded-xl border bg-background/80 px-3 py-1.5 text-sm",
+              // The mobile push-out: only the newest message stays pinned to
+              // the composer while collapsed.
+              !expanded && index < messages.length - 1 && "hidden sm:block",
+            )}
+          >
             <UserMessageBody item={message} />
-          </MessageContent>
-        </Message>
-      ))}
-      {onInterrupt == null ? null : (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void onInterrupt()}
-          disabled={isInterrupting}
-          className="self-end border-red-200 bg-red-50 text-red-700 shadow-sm hover:border-red-300 hover:bg-red-100 hover:text-red-800 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
-        >
-          {isInterrupting ? (
-            <Spinner className="size-3" />
-          ) : (
-            <BanIcon className="size-3 text-current" />
-          )}
-          Interrupt agent and send now
-        </Button>
-      )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -13,8 +13,10 @@ import { CodeEditor } from "@iterate-com/ui/components/code-editor";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Spinner } from "@iterate-com/ui/components/spinner";
@@ -40,8 +42,10 @@ type AgentComposerRawConfig = {
 
 /**
  * The quiet pill composer: a `+` button opens the mode menu (Message / Raw
- * event), the textarea grows with content, and a single round send button
- * submits. Raw mode accepts YAML or JSON — the parser handles both, so there
+ * event) plus the attach-files action, the textarea grows with content, and a
+ * single round send button submits. Attachment lives INSIDE the `+` menu — a
+ * second icon button next to the textarea left too little typing room on
+ * phones. Raw mode accepts YAML or JSON — the parser handles both, so there
  * is deliberately no format toggle.
  */
 export function AgentPillComposer({
@@ -147,6 +151,26 @@ export function AgentPillComposer({
                 </span>
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
+            {message?.onAttach == null ? null : (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={isSubmitting}
+                  onClick={() => {
+                    // Attachments belong to the message draft; leaving raw or
+                    // examples mode here keeps the picked files visible.
+                    if (activeMode !== "message") onModeChange("message");
+                    message.onAttach?.();
+                  }}
+                >
+                  <PaperclipIcon className="text-muted-foreground" />
+                  <span className="flex min-w-0 flex-1 flex-col py-0.5">
+                    <span className="font-medium">Attach files</span>
+                    <span className="text-xs text-muted-foreground">Send along with a message</span>
+                  </span>
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -166,38 +190,21 @@ export function AgentPillComposer({
             {message?.attachments == null ? null : (
               <div className="px-1 pb-1">{message.attachments}</div>
             )}
-            <div className="flex min-w-0 items-end gap-1">
-              {message?.onAttach == null ? null : (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  type="button"
-                  title="Attach files"
-                  onClick={message.onAttach}
-                  disabled={isSubmitting}
-                  // mb-1 centers the size-7 button on the size-9 mode button's
-                  // icon axis (both bottom-aligned by the items-end row).
-                  className="mb-1 rounded-full text-muted-foreground"
-                >
-                  <PaperclipIcon className="size-4" />
-                </Button>
-              )}
-              <textarea
-                ref={messageRef}
-                value={message?.value ?? ""}
-                onChange={(event) => message?.onValueChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                    event.preventDefault();
-                    submit();
-                  }
-                }}
-                rows={1}
-                aria-label={message?.placeholder ?? "Message this stream"}
-                placeholder={message?.placeholder ?? "Message this stream"}
-                className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
-              />
-            </div>
+            <textarea
+              ref={messageRef}
+              value={message?.value ?? ""}
+              onChange={(event) => message?.onValueChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
+              rows={1}
+              aria-label={message?.placeholder ?? "Message this stream"}
+              placeholder={message?.placeholder ?? "Message this stream"}
+              className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
+            />
           </div>
         )}
 

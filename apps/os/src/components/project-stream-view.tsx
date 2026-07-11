@@ -28,7 +28,7 @@ import {
   BrowserFeedProcessor,
   type BrowserFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
-import { AgentTokenUsageStrip } from "~/components/agent-feed.tsx";
+import { AgentTokenUsageStrip, QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
@@ -49,7 +49,7 @@ import {
   presetsForStream,
 } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { connectItxBrowser, reconnectItx, useItxAddress } from "~/itx/itx-react.tsx";
+import { connectItxBrowser, reconnectItx } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
@@ -83,6 +83,7 @@ export function ProjectStreamView({
   panel,
   projectId,
   projectSlug,
+  resetStreamSourceTransport,
   showHeader = true,
   streamSource,
   streamPath,
@@ -107,21 +108,31 @@ export function ProjectStreamView({
   panel?: ReactNode;
   projectId: string | null;
   projectSlug?: string;
+  /**
+   * Evict the transport `streamSource` dials through when the stream runtimes
+   * declare it dead (see BrowserStreamConnectionConfig.resetTransport). Pair
+   * it with a custom `streamSource`; the default source wires its own.
+   */
+  resetStreamSourceTransport?: () => void;
   showHeader?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
-  const itxAddress = useItxAddress();
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
-  // The source dials the CURRENT socket per call (connectItxBrowser reads the
-  // live socket map) instead of capturing a render-time handle: the stream
-  // runtimes it feeds outlive this render, and a captured capnweb stub pins
-  // whatever transport it was born on — after a suspend/resume killed that
-  // socket, every reconnect would ride the corpse and the feed would wedge
-  // until a reload (the repro in specs/stream-resume-after-suspend.spec.ts).
+  // Dial itx imperatively (never `useItx()`), and PER CALL: the stream view's
+  // shell — header, tabs, composer, panel — must paint before the socket
+  // connects (a hook read here would suspend the whole view into the nearest
+  // route boundary), and the stream runtimes this source feeds outlive the
+  // render — a captured capnweb stub pins whatever transport it was born on,
+  // so after a suspend/resume killed that socket every reconnect would ride
+  // the corpse and the feed would wedge until a reload (the repro in
+  // specs/stream-resume-after-suspend.spec.ts).
   const resolvedStreamSource = useMemo<ItxStreamSource>(
-    () => streamSource ?? (async (path) => (await connectItxBrowser(itxAddress)).streams.get(path)),
-    [itxAddress, streamSource],
+    () =>
+      streamSource ??
+      (async (path) =>
+        (await connectItxBrowser(projectId == null ? {} : { projectId })).streams.get(path)),
+    [projectId, streamSource],
   );
   const streamClientFactory = useMemo(
     () => async (input: { streamPath: string }) =>
@@ -129,9 +140,19 @@ export function ProjectStreamView({
     [resolvedStreamSource],
   );
   // The half-open lane: a suspended page's socket can die without a close
-  // frame, so the socket map still hands out the corpse. When the runtime's
-  // probes/dials time out it calls this to evict it; the next dial is fresh.
-  const resetTransport = useCallback(() => reconnectItx(itxAddress), [itxAddress]);
+  // frame, so the socket map keeps handing out the corpse and per-call dialing
+  // alone can't recover. When the runtimes' probes/dials time out they call
+  // this to evict it; the next dial is fresh. Eviction must target the exact
+  // context the source dials, so a custom streamSource brings its own
+  // resetTransport (or none) and only the default source wires the default.
+  const resetTransport = useMemo(
+    () =>
+      resetStreamSourceTransport ??
+      (streamSource === undefined
+        ? () => reconnectItx(projectId == null ? {} : { projectId })
+        : undefined),
+    [resetStreamSourceTransport, streamSource, projectId],
+  );
 
   // Two browser-hosted processors share the stream's per-path SQLite mirror:
   // the verbatim raw-event `events` log (also the composer's append target)
@@ -141,7 +162,7 @@ export function ProjectStreamView({
   // presence/busy from — which is why it mounts here, not in the feed body.
   const { store, snapshot } = useStreamProcessorStore<BrowserRawEventsState>({
     createStreamClient: streamClientFactory,
-    resetTransport,
+    ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
     streamPath,
     slug: BrowserRawEventsContract.slug,
@@ -151,7 +172,7 @@ export function ProjectStreamView({
   });
   const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore<BrowserFeedState>({
     createStreamClient: streamClientFactory,
-    resetTransport,
+    ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
     streamPath,
     slug: BrowserFeedContract.slug,
@@ -252,9 +273,6 @@ export function ProjectStreamView({
   // local_index order (raw rows click through to the inspector).
   const modeBody = (
     <StreamFeedView
-      {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
-        ? { onInterruptQueuedMessages: interrupt.run }
-        : {})}
       // Fresh virtualizer state per stream mirror + mode (see StreamFeedView docs).
       key={`${feedStore.streamDatabase.databasePath}:${activeMode}`}
       database={feedStore.streamDatabase}
@@ -268,11 +286,12 @@ export function ProjectStreamView({
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
       {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
       emptyLabel={connectionLabel}
-      isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
       projectSlug={projectSlug}
       isPending={agentUiState == null && feedSnapshot.connectionStatus !== "subscribed"}
     />
   );
+
+  const queuedUserMessages = caps.agentFeed ? (agentUiState?.queuedUserMessages ?? []) : [];
 
   // The feed column — mode body with overlays on top, composer below. One JSX
   // value so the split layout and the fullPanel Events sheet render the same
@@ -286,19 +305,30 @@ export function ProjectStreamView({
 
       <div className="shrink-0 px-4 pb-2.5 pt-2.5">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
-          <StreamViewComposer
-            autoFocusMessage={autoFocusMessageComposer}
-            {...(defaultComposerMode == null
-              ? caps.agentFeed
-                ? { defaultMode: "message" as const }
-                : { defaultMode: "raw" as const }
-              : { defaultMode: defaultComposerMode })}
-            interrupt={interrupt}
-            {...(messageComposer == null ? {} : { messageComposer })}
-            onNudgeDeliveries={nudgeDeliveries}
-            presence={presence}
-            store={store}
-          />
+          <div>
+            {/* Queued messages are part of the composer: the panel tucks
+                behind the pill (painted first, overlapped via its negative
+                bottom margin) and grows the composer column, which the feed's
+                stick-to-bottom already follows on viewport resize. */}
+            <QueuedMessagesPanel
+              messages={queuedUserMessages}
+              isInterrupting={interrupt?.isInterrupting ?? false}
+              {...(interrupt == null ? {} : { onInterrupt: interrupt.run })}
+            />
+            <StreamViewComposer
+              autoFocusMessage={autoFocusMessageComposer}
+              {...(defaultComposerMode == null
+                ? caps.agentFeed
+                  ? { defaultMode: "message" as const }
+                  : { defaultMode: "raw" as const }
+                : { defaultMode: defaultComposerMode })}
+              interrupt={interrupt}
+              {...(messageComposer == null ? {} : { messageComposer })}
+              onNudgeDeliveries={nudgeDeliveries}
+              presence={presence}
+              store={store}
+            />
+          </div>
           {caps.agentFeed && agentUiState?.tokenUsage != null ? (
             <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
           ) : null}

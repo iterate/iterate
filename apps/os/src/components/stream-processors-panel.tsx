@@ -616,6 +616,32 @@ function buildProcessorPanelEntries(
     });
   }
 
+  // Live connections the reduced roster doesn't carry: ephemeral consumers
+  // exist ONLY in the runtime connection table (core state v14), and this
+  // client's presence roster may not know consumers that connected before its
+  // mirror subscribed. The runtime table is the authority on "connected now".
+  for (const [subscriptionKey, value] of Object.entries(streamRuntime?.runtime.connections ?? {})) {
+    if (entries.has(subscriptionKey)) continue;
+    const runtimeConnection = readRuntimeRecord(value);
+    if (runtimeConnection == null) continue;
+    const subscriptionType = readSubscriptionType(runtimeConnection) ?? "ephemeral";
+    const subscriber = readRuntimeRecord(runtimeConnection.subscriber);
+    const announcement = readAnnouncement(subscriber?.processor);
+    entries.set(subscriptionKey, {
+      subscriptionKey,
+      kind: subscriptionType === "configured" ? "processor" : "consumer",
+      connected: true,
+      direction: "outbound",
+      ...(typeof subscriber?.description === "string"
+        ? { description: subscriber.description }
+        : {}),
+      ...(announcement == null ? {} : { processor: announcement }),
+      subscriptionType,
+      runtimeConnection,
+      runtimeSubscription: streamRuntime?.runtime.subscriptions[subscriptionKey],
+    });
+  }
+
   for (const [subscriptionKey, config] of Object.entries(configured)) {
     const current = entries.get(subscriptionKey);
     const runtimeSubscription = streamRuntime?.runtime.subscriptions[subscriptionKey];
@@ -649,7 +675,12 @@ function buildProcessorPanelEntries(
     });
   }
 
-  return [...entries.values()].sort(compareProcessorEntries);
+  // Dead ephemeral consumers are noise: an ephemeral connection IS its live
+  // socket, so a disconnected one is just a tab that left. Durable entries
+  // keep showing while disconnected (asleep/parked is real state).
+  return [...entries.values()]
+    .filter((entry) => entry.kind !== "consumer" || entry.connected)
+    .sort(compareProcessorEntries);
 }
 
 function processorEntrySections(entries: readonly ProcessorPanelEntry[]): Array<{
@@ -675,7 +706,7 @@ function processorEntrySections(entries: readonly ProcessorPanelEntry[]): Array<
     },
     {
       title: "Ephemeral consumers",
-      emptyLabel: "No ephemeral consumers have connected yet.",
+      emptyLabel: "No ephemeral consumers are connected.",
       entries: entries.filter((entry) => entry.kind === "consumer"),
     },
   ];
