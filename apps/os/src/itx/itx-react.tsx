@@ -113,8 +113,19 @@ type ItxAddress = { projectId?: string; path?: string; baseUrl?: string };
 
 const DIAL_TIMEOUT_MS = 15_000;
 
-/** The connecting promise per context (a project slug, or `undefined` = global). */
+/** The connecting promise per context (a project id, or `undefined` = global). */
 const sockets = new Map<string | undefined, Promise<ItxHandle>>();
+/** When each context's socket was dialed — the youth test for {@link evictItxSocket}. */
+const dialedAt = new Map<string | undefined, number>();
+/**
+ * The raw WebSocket per context, so eviction can CLOSE it. Disposing the
+ * handle in the sockets map releases only the derived project stub — capnweb
+ * tears the session down (rejecting every pending and future call) only when
+ * the underlying transport closes. Without this, evicting a half-open socket
+ * would strand in-flight calls (a composer send, a suspended query) hanging
+ * forever on a session nothing references anymore.
+ */
+const socketTransports = new Map<string | undefined, WebSocket>();
 /** Woken on any socket death so mounted readers (useSyncExternalStore) re-dial. */
 const listeners = new Set<() => void>();
 const wake = () => {
@@ -180,10 +191,28 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
       sockets.delete(context);
       wake();
     }
+    if (socketTransports.get(context) === ws) socketTransports.delete(context);
     reject(new Error("itx WebSocket closed before connecting"));
   });
   sockets.set(context, promise);
+  socketTransports.set(context, ws);
+  dialedAt.set(context, Date.now());
   return promise;
+}
+
+/**
+ * Evict a context's socket on SUSPICION of a half-open transport (a probe or
+ * dial timed out) — the {@link reconnectItx} lane for liveness machinery, with
+ * one guard reconnectItx must not have: a socket dialed less than one dial
+ * timeout ago cannot be the corpse the suspicion accumulated against (timeouts
+ * take ≥5-15s to fire), so refuse to evict it. Without this, two stream
+ * runtimes sharing a socket double-evict: the second runtime's late strike
+ * would kill the healthy successor the first runtime's eviction just dialed.
+ */
+export function evictItxSocket(address?: ItxAddress): void {
+  const context = address?.projectId;
+  if (Date.now() - (dialedAt.get(context) ?? 0) < DIAL_TIMEOUT_MS) return;
+  reconnectItx(address);
 }
 
 /**
@@ -199,6 +228,17 @@ export function reconnectItx(address?: ItxAddress): void {
   if (!promise) return;
   sockets.delete(context);
   wake();
+  // CLOSE the transport, don't just unmap it: capnweb tears the session down
+  // (rejecting every pending and future call) only on transport close.
+  // Unmapping alone leaves a ghost session that in-flight calls — a composer
+  // send, a suspended query — hang on forever, and on a half-open socket the
+  // OS may never deliver a close for us. The close listener's identity guards
+  // make this safe against the map already pointing at a successor.
+  const ws = socketTransports.get(context);
+  if (ws !== undefined) {
+    socketTransports.delete(context);
+    ws.close();
+  }
   void promise.then((itx) => (itx as Partial<Disposable>)[Symbol.dispose]?.()).catch(() => {});
 }
 
@@ -253,7 +293,7 @@ function ItxPrewarm({ context }: { context: string | undefined }) {
  *
  * One <ItxProvider> serves every context — they're just different addresses:
  *   <ItxProvider />                          → global (home / projects list / admin)
- *   <ItxProvider projectId={projectSlug} />  → a project (the 99% case)
+ *   <ItxProvider projectId={project.id} />  → a project (the 99% case)
  *
  * The pre-warm dials the socket in a SIBLING Suspense boundary, so children
  * render immediately: only the components that actually read through itx
@@ -334,7 +374,7 @@ export function useItx(override?: ItxAddress): ItxHandle {
  *
  * Reads the SAME socket map the hook uses (same dedupe, same persist-across-
  * navigation, same re-dial-on-death), so it shares the socket a provider/hook in
- * the same subtree already warmed — address it by the same key (the project SLUG)
+ * the same subtree already warmed — address it by the same key (the project ID)
  * to land on that socket. Running outside render there is no provider context to
  * read: pass the address explicitly (defaults to global).
  */

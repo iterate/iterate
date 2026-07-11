@@ -49,7 +49,7 @@ import {
   presetsForStream,
 } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { connectItxBrowser } from "~/itx/itx-react.tsx";
+import { connectItxBrowser, evictItxSocket } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
@@ -83,6 +83,7 @@ export function ProjectStreamView({
   panel,
   projectId,
   projectSlug,
+  resetStreamSourceTransport,
   showHeader = true,
   streamSource,
   streamPath,
@@ -107,15 +108,25 @@ export function ProjectStreamView({
   panel?: ReactNode;
   projectId: string | null;
   projectSlug?: string;
+  /**
+   * Evict the transport `streamSource` dials through when the stream runtimes
+   * declare it dead (see BrowserStreamConnectionConfig.resetTransport). Pair
+   * it with a custom `streamSource`; the default source wires its own.
+   */
+  resetStreamSourceTransport?: () => void;
   showHeader?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
-  // Dial itx imperatively (never `useItx()`): the stream view's shell —
-  // header, tabs, composer, panel — must paint before the socket connects,
-  // with the feed showing its own "connecting" state. A hook read here would
-  // suspend the whole view into the nearest route boundary.
+  // Dial itx imperatively (never `useItx()`), and PER CALL: the stream view's
+  // shell — header, tabs, composer, panel — must paint before the socket
+  // connects (a hook read here would suspend the whole view into the nearest
+  // route boundary), and the stream runtimes this source feeds outlive the
+  // render — a captured capnweb stub pins whatever transport it was born on,
+  // so after a suspend/resume killed that socket every reconnect would ride
+  // the corpse and the feed would wedge until a reload (the repro in
+  // specs/stream-resume-after-suspend.spec.ts).
   const resolvedStreamSource = useMemo<ItxStreamSource>(
     () =>
       streamSource ??
@@ -124,9 +135,28 @@ export function ProjectStreamView({
     [projectId, streamSource],
   );
   const streamClientFactory = useMemo(
-    () => async (input: { streamPath: string }) =>
-      asBrowserStreamClient(await resolvedStreamSource(input.streamPath), () => {}),
+    () => async (input: { streamPath: string }) => {
+      const stub = await resolvedStreamSource(input.streamPath);
+      // The stub's REAL dispose, so every reconnect releases its stream export
+      // on the (possibly long-lived, healthy) session instead of stranding one
+      // per reconnect in the cap table on both sides.
+      return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
+    },
     [resolvedStreamSource],
+  );
+  // The half-open lane: a suspended page's socket can die without a close
+  // frame, so the socket map keeps handing out the corpse and per-call dialing
+  // alone can't recover. When the runtimes' probes/dials time out they call
+  // this to evict it; the next dial is fresh. Eviction must target the exact
+  // context the source dials, so a custom streamSource brings its own
+  // resetTransport (or none) and only the default source wires the default.
+  const resetTransport = useMemo(
+    () =>
+      resetStreamSourceTransport ??
+      (streamSource === undefined
+        ? () => evictItxSocket(projectId == null ? {} : { projectId })
+        : undefined),
+    [resetStreamSourceTransport, streamSource, projectId],
   );
 
   // Two browser-hosted processors share the stream's per-path SQLite mirror:
@@ -137,6 +167,7 @@ export function ProjectStreamView({
   // presence/busy from — which is why it mounts here, not in the feed body.
   const { store, snapshot } = useStreamProcessorStore<BrowserRawEventsState>({
     createStreamClient: streamClientFactory,
+    ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
     streamPath,
     slug: BrowserRawEventsContract.slug,
@@ -146,6 +177,7 @@ export function ProjectStreamView({
   });
   const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore<BrowserFeedState>({
     createStreamClient: streamClientFactory,
+    ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
     streamPath,
     slug: BrowserFeedContract.slug,
