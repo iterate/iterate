@@ -620,16 +620,6 @@ export const AgentProcessorContract = defineProcessorContract({
             reasoningOutputTokens: 0,
           },
         },
-        {
-          description: "A Workers AI model reports totals only — no cache/reasoning breakdown.",
-          payload: {
-            llmRequestOffset: 61,
-            model: "@cf/moonshotai/kimi-k2.7-code",
-            maxContextTokens: 256000,
-            inputTokens: 4096,
-            outputTokens: 118,
-          },
-        },
       ],
     },
     "events.iterate.com/agent/history-reset": {

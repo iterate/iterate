@@ -321,7 +321,10 @@ const ReplayResponseSection = memo(
             {outcome.errorMessage}
           </pre>
         )}
-        {response == null && outcome?.errorMessage == null ? (
+        {/* A committed output CAN be the empty string — an empty-text response
+            with no thinking must still say so instead of a bare header. */}
+        {(response == null || (response.text === "" && response.thinkingText === "")) &&
+        outcome?.errorMessage == null ? (
           <p className="text-sm text-muted-foreground">
             {outcome == null
               ? "Nothing has streamed back yet."

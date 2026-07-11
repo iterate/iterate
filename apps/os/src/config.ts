@@ -85,6 +85,12 @@ export const AppConfig = z.object({
    * envs.ts via envShapedVars (APP_CONFIG_CLOUDFLARE_AI_GATEWAY__*), so this
    * is per-deployment, not per-Doppler-secret.
    *
+   * `byok` is the default AND what every deployed env sets explicitly: the
+   * platform is gpt-5.5-only, unified billing meters OpenAI-prompt-cached
+   * tokens at the uncached price (~6x at our hit rate), and BYOK benchmarked
+   * latency-neutral-or-better. The default matters for LOCAL DEV, which has
+   * no envs.ts entry — dev must ride the same lane as production.
+   *
    * `responseCacheTtlSeconds` opts the BYOK lane into the gateway's RESPONSE
    * cache (whole-answer replay — distinct from OpenAI's prompt cache, which
    * BYOK gets unconditionally). Only for deployments whose conversations are
@@ -92,7 +98,7 @@ export const AppConfig = z.object({
    */
   cloudflareAiGateway: z
     .object({
-      transport: z.enum(["unified", "byok"]).default("unified"),
+      transport: z.enum(["unified", "byok"]).default("byok"),
       id: z.string().trim().min(1).default("default"),
       responseCacheTtlSeconds: z.coerce.number().int().positive().optional(),
     })
