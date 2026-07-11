@@ -24,10 +24,12 @@ export type SecretUpdateInput = {
  * optional human-facing note the collection page shows the user (what the
  * key is for, where to find it).
  */
-export type SecretCollectInput = {
+export type CollectSecretInput = {
   path: string;
   /** The egress allowlist the secret is born pinned to — the user sees these
-   * origins on the collection page as the promise of where the value can go. */
+   * origins on the collection page as the promise of where the value can go.
+   * Must be non-empty http(s) URLs; validated at mint so a bad list fails on
+   * the agent that can fix it, not in the user's face at submit time. */
   egress: { urls: string[] };
   /** Shown to the user on the collection page (e.g. "API key for
    * api.somewhere.com — found under Settings → API"). */
@@ -41,7 +43,7 @@ export type SecretCollectInput = {
  * and — when the caller was an agent scope — that agent receives a message
  * that the secret at this path is ready.
  */
-export type SecretCollectionLink = {
+export type CollectSecretLink = {
   path: string;
   url: string;
 };

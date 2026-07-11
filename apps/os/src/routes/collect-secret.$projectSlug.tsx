@@ -1,7 +1,8 @@
 import { Suspense, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
-import { CheckCircle2Icon, KeyRoundIcon } from "lucide-react";
+import { CheckCircle2Icon, KeyRoundIcon, TriangleAlertIcon } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Card,
@@ -19,7 +20,7 @@ import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { CollectSecretSearch } from "~/lib/collect-secret-link.ts";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
-import { ItxProvider, useItx } from "~/itx/itx-react.tsx";
+import { ItxProvider, useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 // The secret-collection deep link target: a chrome-free, one-job page an
 // agent sends a user to when it needs a credential it must never see in
@@ -58,26 +59,42 @@ function CollectSecretPage() {
   );
 }
 
+/** How the submit ended: stored + agent told, stored but the notify failed
+ * (the one partial state — the user must relay by hand), or stored with no
+ * agent to tell. The secret itself is never half-stored: material + egress
+ * land in one update. */
+type SavedOutcome = "notified" | "notify-failed" | "no-notify";
+
 function CollectSecretCard() {
   const search = Route.useSearch();
   const { projectSlug } = Route.useParams();
   const itx = useItx();
   const [material, setMaterial] = useState("");
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState<SavedOutcome | null>(null);
+  // An unsigned link can point at an EXISTING secret — an org member pasting
+  // a value here would silently replace its material and repin its egress.
+  // Describe the path up front and say so before they type anything.
+  const existing = useItxQuery({
+    key: ["collect-secret", projectSlug, search.path],
+    query: (itx) => itx.secrets.get(search.path).__describe(),
+  });
 
   const submit = useMutation({
-    mutationFn: async (value: string) => {
+    mutationFn: async (value: string): Promise<SavedOutcome> => {
       const secret = itx.secrets.get(search.path);
       // Material and egress land in ONE update, so the secret is born already
       // pinned to its hosts — no window where it exists but cannot be used.
-      await secret.update({ material: value, egress: { urls: search.egress } });
-      // The secret processor folds the update asynchronously; don't announce
-      // the secret before a request could actually use it.
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        if ((await secret.__describe()).hasMaterial) break;
-        await new Promise((resolve) => setTimeout(resolve, 200));
+      const event = await secret.update({ material: value, egress: { urls: search.egress } });
+      // The processor folds the journal asynchronously; only announce the
+      // secret once the fold has passed our update and reports material.
+      await secret.processor.waitUntilEvent({ offset: event.offset, timeoutMs: 15_000 });
+      if ((await secret.__describe()).hasMaterial !== true) {
+        throw new Error(`The secret at ${search.path} did not report stored material.`);
       }
-      if (search.notify !== undefined) {
+      if (search.notify === undefined) return "no-notify";
+      // The secret IS stored from here on — a notify failure must not present
+      // as total failure (the user would retype; the agent would wait forever).
+      try {
         await itx.agents
           .get(search.notify)
           .message(
@@ -85,9 +102,12 @@ function CollectSecretCard() {
               `It is stored write-only, pinned to ${search.egress.join(", ")}, and ready ` +
               `to use with getSecret placeholders.`,
           );
+        return "notified";
+      } catch {
+        return "notify-failed";
       }
     },
-    onSuccess: () => setSaved(true),
+    onSuccess: (outcome) => setSaved(outcome),
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
 
@@ -105,16 +125,18 @@ function CollectSecretCard() {
     );
   }
 
-  if (saved) {
+  if (saved !== null) {
     return (
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <CheckCircle2Icon className="mx-auto size-8 text-green-600" />
           <CardTitle>Secret saved</CardTitle>
           <CardDescription>
-            {search.notify !== undefined
+            {saved === "notified"
               ? "The agent that asked for it has been notified and will pick up from here. You can close this tab."
-              : "You can close this tab."}
+              : saved === "notify-failed"
+                ? `The secret is stored, but the agent that asked for it could not be notified. Tell it the secret at ${search.path} is ready.`
+                : "You can close this tab."}
           </CardDescription>
         </CardHeader>
       </Card>
@@ -127,11 +149,17 @@ function CollectSecretCard() {
         <KeyRoundIcon className="mx-auto size-6 text-muted-foreground" />
         <CardTitle className="text-xl">Provide a secret</CardTitle>
         <CardDescription>
-          {search.description ?? "An agent in this project needs a credential only you have."}
+          Someone in this project asked for a credential only you have.
         </CardDescription>
       </CardHeader>
       <Separator />
       <CardContent className="space-y-4 pt-6">
+        {search.description === undefined ? null : (
+          <div className="space-y-1 text-sm">
+            <div className="text-muted-foreground">The requester says</div>
+            <div>{search.description}</div>
+          </div>
+        )}
         <div className="space-y-1 text-sm">
           <div className="text-muted-foreground">Stored at</div>
           <code className="text-xs">{search.path}</code>
@@ -146,6 +174,19 @@ function CollectSecretCard() {
             ))}
           </ul>
         </div>
+        {existing.hasMaterial ? (
+          <Alert variant="destructive">
+            <TriangleAlertIcon className="size-4" />
+            <AlertTitle>This replaces an existing secret</AlertTitle>
+            <AlertDescription>
+              {`A secret already exists at ${search.path}`}
+              {existing.egress.urls.length > 0
+                ? `, currently pinned to ${existing.egress.urls.join(", ")}`
+                : ""}
+              . Saving overwrites its value and its allowed hosts.
+            </AlertDescription>
+          </Alert>
+        ) : null}
         <form
           onSubmit={(event) => {
             event.preventDefault();

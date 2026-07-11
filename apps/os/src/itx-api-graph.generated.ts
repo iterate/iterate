@@ -525,7 +525,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SecretCollection",
     kind: "interface",
     sourceText:
-      '/** Secret catalog within one project. */\nexport interface SecretCollection {\n  __describe(): Promise<Description>;\n  /** The secret at a path. */\n  get(path: string): Secret;\n  /**\n   * Mint a deep link where the USER enters a secret value themselves — the\n   * door for credentials an agent must never see in chat. The page (a\n   * minimal, chrome-free form) shows the description and the egress origins\n   * the value is pinned to; on submit it stores material + egress in one\n   * update, so the secret is born already pinned. When the caller is an\n   * agent scope, the page also messages that agent ("The user submitted the\n   * secret at …"), which starts its next turn — send the URL to the user,\n   * end the turn, and act on the notification. Nothing is created until the\n   * user submits; the link itself is stateless.\n   */\n  collectFromUser(input: SecretCollectInput): Promise<SecretCollectionLink>;\n  /** Known secrets, read from the project processor\'s reduced state. */\n  list(): Promise<StreamListItem[]>;\n}',
+      '/** Secret catalog within one project. */\nexport interface SecretCollection {\n  __describe(): Promise<Description>;\n  /** The secret at a path. */\n  get(path: string): Secret;\n  /**\n   * Mint a deep link where the USER enters a secret value themselves — the\n   * door for credentials an agent must never see in chat. The page (a\n   * minimal, chrome-free form) shows the description and the egress origins\n   * the value is pinned to; on submit it stores material + egress in one\n   * update, so the secret is born already pinned. When the caller is an\n   * agent scope, the page also messages that agent ("The user submitted the\n   * secret at …"), which starts its next turn — send the URL to the user,\n   * end the turn, and act on the notification. Nothing is created until the\n   * user submits; the link itself is stateless.\n   */\n  collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;\n  /** Known secrets, read from the project processor\'s reduced state. */\n  list(): Promise<StreamListItem[]>;\n}',
     summary: "Secret catalog within one project.",
     memberSummaries: {
       get: "The secret at a path.",
@@ -536,8 +536,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [
       "Description",
       "Secret",
-      "SecretCollectInput",
-      "SecretCollectionLink",
+      "CollectSecretInput",
+      "CollectSecretLink",
       "StreamListItem",
     ],
   },
@@ -1344,20 +1344,20 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["SchedulerAction", "SchedulerRecurrence"],
   },
   {
-    name: "SecretCollectInput",
+    name: "CollectSecretInput",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Input to `itx.secrets.collectFromUser`: which path the secret should land\n * at, the egress origins its material may ever be substituted into, and an\n * optional human-facing note the collection page shows the user (what the\n * key is for, where to find it).\n */\nexport type SecretCollectInput = {\n  path: string;\n  /** The egress allowlist the secret is born pinned to — the user sees these\n   * origins on the collection page as the promise of where the value can go. */\n  egress: { urls: string[] };\n  /** Shown to the user on the collection page (e.g. "API key for\n   * api.somewhere.com — found under Settings → API"). */\n  description?: string;\n};',
+      '/**\n * Input to `itx.secrets.collectFromUser`: which path the secret should land\n * at, the egress origins its material may ever be substituted into, and an\n * optional human-facing note the collection page shows the user (what the\n * key is for, where to find it).\n */\nexport type CollectSecretInput = {\n  path: string;\n  /** The egress allowlist the secret is born pinned to — the user sees these\n   * origins on the collection page as the promise of where the value can go.\n   * Must be non-empty http(s) URLs; validated at mint so a bad list fails on\n   * the agent that can fix it, not in the user\'s face at submit time. */\n  egress: { urls: string[] };\n  /** Shown to the user on the collection page (e.g. "API key for\n   * api.somewhere.com — found under Settings → API"). */\n  description?: string;\n};',
     summary:
       "Input to `itx.secrets.collectFromUser`: which path the secret should land at, the egress origins its material may ever be substituted into, and an optional human-facing note the collection page shows the user (what the key is for, where to find it).",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
-    name: "SecretCollectionLink",
+    name: "CollectSecretLink",
     kind: "typeAlias",
     sourceText:
-      "/**\n * What `itx.secrets.collectFromUser` returns: the normalized secret path and\n * the deep link to the chrome-free collection page. Send the URL to the user;\n * when they submit, the secret is stored (material + egress pin in one update)\n * and — when the caller was an agent scope — that agent receives a message\n * that the secret at this path is ready.\n */\nexport type SecretCollectionLink = {\n  path: string;\n  url: string;\n};",
+      "/**\n * What `itx.secrets.collectFromUser` returns: the normalized secret path and\n * the deep link to the chrome-free collection page. Send the URL to the user;\n * when they submit, the secret is stored (material + egress pin in one update)\n * and — when the caller was an agent scope — that agent receives a message\n * that the secret at this path is ready.\n */\nexport type CollectSecretLink = {\n  path: string;\n  url: string;\n};",
     summary:
       "What `itx.secrets.collectFromUser` returns: the normalized secret path and the deep link to the chrome-free collection page.",
     memberSummaries: {},

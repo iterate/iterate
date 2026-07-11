@@ -222,8 +222,8 @@ import type {
   RevokeCapabilityInput,
 } from "./domains/capability-host/types.ts";
 import type {
-  SecretCollectInput,
-  SecretCollectionLink,
+  CollectSecretInput,
+  CollectSecretLink,
   SecretDescription,
   SecretUpdateInput,
 } from "./domains/secrets/types.ts";
@@ -1672,7 +1672,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; projectId: string; scopePath?: string }) {
+  constructor(readonly props: { auth: ItxAuth; projectId: string; scopePath: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -1697,12 +1697,21 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
    * end the turn, and act on the notification. Nothing is created until the
    * user submits; the link itself is stateless.
    */
-  async collectFromUser(input: SecretCollectInput): Promise<SecretCollectionLink> {
+  async collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink> {
     const path = normalizeSecretPath(input.path);
     if (input.egress.urls.length === 0) {
       throw new Error(
         "collectFromUser needs at least one egress URL: the user is shown where the value can ever be sent, and a secret pinned to nothing can never be used.",
       );
+    }
+    // Validate the pin at mint, so a bad list fails on the caller that can
+    // fix it — not as a raw "Invalid URL" in the user's face at submit time.
+    for (const url of input.egress.urls) {
+      if (!URL.canParse(url) || !/^https?:$/.test(new URL(url).protocol)) {
+        throw new Error(
+          `collectFromUser egress URLs must be absolute http(s) URLs; got ${JSON.stringify(url)}.`,
+        );
+      }
     }
     const project = await readProjectById(env.PROJECT_DIRECTORY, this.props.projectId);
     if (!project?.slug) {
@@ -1716,7 +1725,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
         path,
         egress: input.egress.urls,
         ...(input.description === undefined ? {} : { description: input.description }),
-        ...(scopePath?.startsWith("/agents/") ? { notify: scopePath } : {}),
+        ...(scopePath.startsWith("/agents/") ? { notify: scopePath } : {}),
       },
     });
     return { path, url };
