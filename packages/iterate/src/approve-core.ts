@@ -160,13 +160,18 @@ export async function reject(stream: RpcStub<Stream>, offset: number): Promise<v
 }
 
 /**
- * Page the project stream once and return every approval request still open —
- * a `requested` with no matching `settled`/`rejected` that hasn't expired —
- * oldest first, plus the highest offset seen so a live tail resumes exactly
- * past it (no gap, no replay). Each is flagged `submitted` when a grant already
- * exists but the door hasn't settled it: a bare grant is NOT terminal (the door
- * may ignore an unverifiable one), so such a hold stays open, but a front-end
- * shows it awaiting the door rather than offering a second, racing decision.
+ * Page the project stream once and return every approval request still open,
+ * oldest first, plus the highest offset seen so a live tail resumes exactly past
+ * it (no gap, no replay). Each is flagged `submitted` when a grant is winning but
+ * the door hasn't settled it — a front-end then shows it awaiting the door rather
+ * than offering a second, racing decision.
+ *
+ * The door acts on the FIRST resolution and appends `settled` only when it
+ * releases, so this mirrors that authority: a request is terminal when a
+ * `settled` exists, or when the first grant/reject (by offset order) was a
+ * reject. A stray reject that lands AFTER a winning grant does NOT close the
+ * hold — the release can still succeed, so it stays open (submitted) and the
+ * reconnecting approver keeps watching for its settlement.
  *
  * Both front-ends reconcile through this one function so terminal and machine
  * views can't derive "still open" differently.
@@ -176,8 +181,8 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
   cursor: number;
 }> {
   const requests = new Map<number, RequestedPayload>();
-  const resolved = new Set<number>(); // settled or rejected — terminal
-  const submitted = new Set<number>(); // a grant exists, door hasn't settled it
+  const settled = new Set<number>(); // door released/failed — always terminal
+  const firstResolution = new Map<number, "granted" | "rejected">(); // door honors the first
   let cursor = 0;
   while (true) {
     const page = await stream.getEvents({
@@ -194,15 +199,28 @@ export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
       const ref = (event.payload as { approvalRequestEventOffset?: number })
         .approvalRequestEventOffset;
       if (typeof ref !== "number") continue;
-      if (event.type === EVENT.granted) submitted.add(ref);
-      else resolved.add(ref);
+      if (event.type === EVENT.settled) settled.add(ref);
+      // Pages arrive ascending, so the first grant/reject we see IS the first by
+      // offset — the one the door acted on.
+      else if (!firstResolution.has(ref)) {
+        firstResolution.set(ref, event.type === EVENT.granted ? "granted" : "rejected");
+      }
     }
   }
   const now = Date.now();
   // Map iteration is insertion order — paged ascending — so this is oldest first.
   const open = [...requests]
-    .filter(([offset, payload]) => !resolved.has(offset) && Date.parse(payload.expiresAt) > now)
-    .map(([offset, payload]) => ({ offset, payload, submitted: submitted.has(offset) }));
+    .filter(
+      ([offset, payload]) =>
+        !settled.has(offset) &&
+        firstResolution.get(offset) !== "rejected" &&
+        Date.parse(payload.expiresAt) > now,
+    )
+    .map(([offset, payload]) => ({
+      offset,
+      payload,
+      submitted: firstResolution.get(offset) === "granted",
+    }));
   return { open, cursor };
 }
 
