@@ -44,10 +44,14 @@ function ProjectHomePage() {
   const { welcome } = Route.useSearch();
   const params = Route.useParams();
   const navigate = useNavigate();
+  // `address` dials lazily inside the subscription effect, so this page never
+  // suspends: the stream view paints immediately and the side panel shows its
+  // own "Loading project…" card until the first push lands.
   const lifecycle = useLiveState(
     (itx) => itx.liveState,
     (state) => state.reduced,
-    [],
+    [project.id],
+    { address: { projectId: project.id } },
   );
   const created = lifecycle.value?.created ?? false;
   // Onboarding phase: the completion event has not been appended yet. The
