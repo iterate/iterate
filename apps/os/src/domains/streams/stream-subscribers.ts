@@ -862,10 +862,10 @@ export class StreamSubscribers {
         while (open) {
           let events: StreamEvent[] = [];
           if (deliverEvents) {
-            // Same byte-capped read as the push drain: 100 near-2MB events in
-            // one live batch would blow the RPC frame limit and turn into a
-            // delivery failure the subscriber can never get past.
-            const readEvents = this.#readBatch(cursor, 100);
+            // Same byte-capped read as the push drain: a batch of near-2MB
+            // events in one live frame would blow the RPC frame limit and turn
+            // into a delivery failure the subscriber can never get past.
+            const readEvents = this.#readBatch(cursor, DELIVERY_BATCH_LIMIT);
             const lastOffset = readEvents.at(-1)?.offset;
             if (lastOffset === undefined) {
               // Caught up; the next append wakes us again. The first drain

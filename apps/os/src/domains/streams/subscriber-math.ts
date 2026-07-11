@@ -29,8 +29,14 @@ export const SKIP_CONFIRM_ATTEMPTS = 3;
  */
 export const MAX_CONSECUTIVE_SKIPS = 3;
 
-/** Events per delivery batch (also the bisect ceiling). */
-export const DELIVERY_BATCH_LIMIT = 100;
+/**
+ * Events per delivery batch (also the bisect ceiling). The byte cap below is
+ * the real frame guard; this count cap exists so the poison bisect has a
+ * finite ladder and a single drain iteration stays a bounded read. 1000 small
+ * events ≈ 300KB — measured ~10× fewer pump pushes and ~4× faster browser
+ * SQLite ingest than the previous 100 on catch-up-heavy workloads.
+ */
+export const DELIVERY_BATCH_LIMIT = 1000;
 
 /** Soft cap on a delivery frame's payload bytes (large events shrink the batch). */
 export const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
