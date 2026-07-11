@@ -111,9 +111,9 @@ describe("worker builds", () => {
         });
         await project.repo.edit({
           path: "worker.ts",
-          oldString: "export default class ProjectWorker extends WorkerEntrypoint<Env> {",
+          oldString: "export default class ProjectWorker extends BaseProjectEntrypoint {",
           newString: [
-            "export default class ProjectWorker extends WorkerEntrypoint<Env> {",
+            "export default class ProjectWorker extends BaseProjectEntrypoint {",
             "  get slack(): WebClient {",
             `    const client = new WebClient("xoxb-e2e-test-token", { slackApiUrl: ${JSON.stringify(mock.url)} });`,
             "    // The SDK's axios defaults to its node-http adapter, which hangs",
