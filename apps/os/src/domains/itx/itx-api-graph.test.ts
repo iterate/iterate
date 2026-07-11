@@ -3,7 +3,13 @@
 // behavior) are what itx.docs relies on at runtime.
 import { describe, expect, test } from "vitest";
 import { ITX_API_DECLARATIONS } from "../../itx-api-graph.generated.ts";
-import { declarationsByName, searchScore, typeSlice } from "./itx-api-graph.ts";
+import {
+  declarationsByName,
+  mountDeclaration,
+  referencedPlatformTypeNames,
+  searchScore,
+  typeSlice,
+} from "./itx-api-graph.ts";
 
 const byName = declarationsByName(ITX_API_DECLARATIONS);
 
@@ -72,5 +78,44 @@ describe("searchScore", () => {
     expect(searchScore("email gmail inbox", "Gmail requests against the INBOX")).toBe(2);
     expect(searchScore("email gmail gmail", "gmail")).toBe(1);
     expect(searchScore("zebra", "no such word")).toBe(0);
+  });
+});
+
+describe("mounted capabilities in the graph", () => {
+  test("referencedPlatformTypeNames scans code, not comments", () => {
+    expect(
+      referencedPlatformTypeNames(
+        "// Stream in a comment does not count\nexport type Root = { tail(): Promise<StreamEvent[]>; agent: Agent };",
+        byName,
+      ).sort(),
+    ).toEqual(["Agent", "StreamEvent"]);
+    expect(referencedPlatformTypeNames("export type X = { n: number };", byName)).toEqual([]);
+  });
+
+  test("a typed mount slices across the layer boundary into platform declarations", () => {
+    const synthetic = mountDeclaration({
+      declarations: byName,
+      dottedPath: "tools.tail",
+      instructions: "The project stream's newest events. Call tools.tail.tail().",
+      types: "export type Tail = { tail(): Promise<StreamEvent[]> };",
+    });
+    const declarations = new Map(byName);
+    declarations.set(synthetic.name, synthetic);
+    const slice = typeSlice({ declarations, rootName: "tools.tail", maxTokens: 4_000 });
+    expect(slice.includedNames[0]).toBe("tools.tail");
+    expect(slice.includedNames).toContain("StreamEvent");
+    expect(slice.sourceText).toContain('Mounted capability "tools.tail"');
+    expect(slice.sourceText).toContain("The project stream's newest events.");
+  });
+
+  test("an untyped mount still yields a readable entry", () => {
+    const synthetic = mountDeclaration({
+      declarations: byName,
+      dottedPath: "legacy",
+      instructions: "An old mount.",
+    });
+    expect(synthetic.referencedTypeNames).toEqual([]);
+    expect(synthetic.sourceText).toContain("No types recorded");
+    expect(synthetic.sourceText).toContain("itx.legacy.__describe()");
   });
 });

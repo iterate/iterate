@@ -149,10 +149,16 @@ import { ITX_API_DECLARATIONS } from "./itx-api-graph.generated.ts";
 import {
   declarationsByName,
   firstSentence,
+  mountDeclaration,
   searchScore,
   typeSlice,
   type DocsSearchHit,
 } from "./domains/itx/itx-api-graph.ts";
+import {
+  mcpCapabilityTypeDeclaration,
+  openApiCapabilityTypeDeclaration,
+} from "./domains/itx/capability-type-declarations.ts";
+import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
 import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
   StreamProcessor,
@@ -4936,11 +4942,13 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       instructions:
         "Search + fetch over everything callable from this scope: working example scripts (proven ones run unattended against a live project in the platform's test suite — copy those first), the public type surface, and this scope's mounted capabilities. " +
         'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". ' +
-        "get({ name }) fetches what a hit names: an example's full annotated code, or a type declaration with its referenced types.",
+        "get({ name }) fetches what a hit names: an example's full annotated code, a type declaration with its referenced types, or a mounted capability's instructions + types. " +
+        "typecheck({ code }) compiles an `async (itx) => { … }` script against this scope's types without running it.",
       children: {
-        get: "Fetch one entry by name: an example's full code, or a type declaration closure.",
+        get: "Fetch one entry by name: an example's full code, a type declaration closure, or a mount's types.",
         search:
           "Find examples, types, and mounted capabilities by keywords (pass many related words).",
+        typecheck: "Compile a script against this scope's types without running it (advisory).",
       },
       parent: "a project itx (itx.docs)",
     });
@@ -4996,13 +5004,14 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
 
     // Capabilities mounted in this scope's chain (agent scope sees its own
     // mounts plus the project root's) — the part of the surface no static
-    // corpus can know.
+    // corpus can know. The haystack includes the mount's Capability Type
+    // Declaration, so its method names and member docs are searchable.
     const { capabilities } = await this.#capabilityHost.__describe();
     for (const capability of capabilities) {
       if (capability.type === "builtin") continue; // builtins are covered by their type declarations
       const dottedPath = capability.path.join(".");
       const instructions = capability.instructions ?? "";
-      const score = searchScore(input.q, `${dottedPath} ${instructions}`);
+      const score = searchScore(input.q, `${dottedPath} ${instructions} ${capability.types ?? ""}`);
       if (score === 0) continue;
       scored.push({
         score,
@@ -5010,7 +5019,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
           kind: "capability",
           name: dottedPath,
           summary: firstSentence(instructions) || "(no instructions recorded)",
-          fetchCall: `await itx.${dottedPath}.__describe()`,
+          fetchCall: `await itx.docs.get({ name: ${JSON.stringify(dottedPath)} })`,
         },
       });
     }
@@ -5037,7 +5046,9 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * rest are marked interactive); a type declaration name returns its
    * TypeScript source plus as much of its reference closure as fits
    * `maxTokens` (default 1500), ending with a comment naming anything left
-   * out and how to fetch it.
+   * out and how to fetch it; a mounted capability's dotted path (say
+   * "tools.weather") returns its instructions and types plus the platform
+   * declarations those types reference, same budget rules.
    */
   async get(input: { name: string; maxTokens?: number }): Promise<string> {
     const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.name);
@@ -5059,18 +5070,36 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
         "}",
       ].join("\n");
     }
+    // Clamp instead of reject: an out-of-range value from a model should
+    // cost a degraded answer, not a wasted turn. The floor covers the
+    // trailer reserve plus one small declaration.
+    const maxTokens = Number.isFinite(input.maxTokens)
+      ? Math.min(Math.max(input.maxTokens!, 300), 10_000)
+      : 1500;
     if (ITX_API_DECLARATIONS_BY_NAME.has(input.name)) {
-      // Clamp instead of reject: an out-of-range value from a model should
-      // cost a degraded answer, not a wasted turn. The floor covers the
-      // trailer reserve plus one small declaration.
-      const maxTokens = Number.isFinite(input.maxTokens)
-        ? Math.min(Math.max(input.maxTokens!, 300), 10_000)
-        : 1500;
       return typeSlice({
         declarations: ITX_API_DECLARATIONS_BY_NAME,
         rootName: input.name,
         maxTokens,
       }).sourceText;
+    }
+    // A mounted capability's dotted path: slice from a synthetic declaration
+    // built from the mount's durable metadata, so the walk crosses from the
+    // scope layer into the platform declarations its types reference.
+    const { capabilities } = await this.#capabilityHost.__describe();
+    const mount = capabilities.find(
+      (capability) => capability.type !== "builtin" && capability.path.join(".") === input.name,
+    );
+    if (mount) {
+      const synthetic = mountDeclaration({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        dottedPath: input.name,
+        instructions: mount.instructions,
+        types: mount.types,
+      });
+      const declarations = new Map(ITX_API_DECLARATIONS_BY_NAME);
+      declarations.set(synthetic.name, synthetic);
+      return typeSlice({ declarations, rootName: synthetic.name, maxTokens }).sourceText;
     }
     const nearest = (await this.search({ q: input.name })).slice(0, 3);
     throw new Error(
@@ -5080,6 +5109,24 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
           : "") +
         `. itx.docs.search({ q: "several related words" }) finds examples, types, and capabilities.`,
     );
+  }
+
+  /**
+   * Typecheck an `async (itx) => { … }` script against this scope's surface —
+   * the platform types plus every mounted capability's types (npm-backed
+   * `import("pkg")` types resolve too) — WITHOUT running it. Advisory: a
+   * clean result does not promise the script works, but a typo like
+   * `itx.streams.gett(...)` comes back as a compiler error with a
+   * did-you-mean instead of costing a failed run.
+   */
+  async typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }> {
+    const { capabilities } = await this.#capabilityHost.__describe();
+    const problems = await checkItxScript({
+      capabilities,
+      code: input.code,
+      typechecker: env.TYPECHECKER,
+    });
+    return { ok: problems.length === 0, problems };
   }
 }
 
@@ -5411,7 +5458,11 @@ class McpClientRpcTarget extends IterateRpcRelay<"McpClientRpc"> {
       instructions:
         this.props.description?.instructions ??
         `An ad-hoc MCP client for ${this.props.config.url}: a flattened dispatcher; client.someTool(input) calls the tool "someTool".`,
-      types: this.props.description?.types,
+      // Connect-time auto-typing: absent a hand-written declaration, the
+      // server's own tool inputSchemas become the types. provideCapability
+      // stamps this onto a durable mount, so docs and the typechecker see
+      // third-party tools like builtins.
+      types: this.props.description?.types ?? mcpCapabilityTypeDeclaration(tools),
       children: Object.fromEntries(
         tools.map((tool) => [tool.name, tool.description ?? "MCP tool"]),
       ),
@@ -5497,13 +5548,15 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
   }
 
   async __describe(): Promise<Description> {
-    const { operations } = await this.#ready();
+    const { operations, spec } = await this.#ready();
 
     return describeNode({
       instructions:
         this.props.description?.instructions ??
         "An ad-hoc OpenAPI client: a flat dispatcher; client.someOperationId(input) executes that operation against the spec's server.",
-      types: this.props.description?.types,
+      // Connect-time auto-typing from the spec's operations — see the MCP
+      // client's __describe for the full story.
+      types: this.props.description?.types ?? openApiCapabilityTypeDeclaration(operations, spec),
       children: Object.fromEntries(
         operations.map((operation) => [
           operation.operationId,

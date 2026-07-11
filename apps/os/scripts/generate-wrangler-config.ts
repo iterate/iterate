@@ -130,6 +130,11 @@ function builderWorkerName(osWorkerName: string) {
   return `${osWorkerName}-builder`;
 }
 
+/** The typechecker sidecar's worker name, derived the same way. */
+function typecheckerWorkerName(osWorkerName: string) {
+  return `${osWorkerName}-typechecker`;
+}
+
 /**
  * SSH keys authorized to `wrangler containers ssh` into ANY sandbox instance.
  *
@@ -285,6 +290,10 @@ function workerBindings(input: {
       // ~14MB) so the product script stays small. Bound by name — deploy.ts
       // deploys the builder first.
       { binding: "BUILDER", service: builderWorkerName(input.workerName) },
+      // The typechecker sidecar (src/typechecker.ts,
+      // wrangler.typechecker.jsonc): the one script carrying the TypeScript
+      // compiler (tswasm, ~30MB wasm). Same deploy-first rule as the builder.
+      { binding: "TYPECHECKER", service: typecheckerWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
     browser: { binding: "BROWSER" },
@@ -525,12 +534,43 @@ export const builderConfig = {
   env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, builderEnvBlock(env)])),
 };
 
+/**
+ * The typechecker sidecar's config, cut from the builder's pattern: the
+ * minimum possible worker around the TypeScript compiler wasm — a pure
+ * function (files in, diagnostics out) with NO bindings at all. Wrangler
+ * bundles src/typechecker.ts directly (no vite); local dev runs it as an
+ * auxiliary worker in the same workerd (vite.config.ts).
+ */
+export const typecheckerConfig = {
+  $schema: "node_modules/wrangler/config-schema.json",
+  name: "os-typechecker",
+  main: "./src/typechecker.ts",
+  compatibility_date: COMPATIBILITY_DATE,
+  compatibility_flags: ["nodejs_compat"],
+  observability: OBSERVABILITY,
+  env: Object.fromEntries(
+    Object.entries(envs).map(([name, env]) => [
+      name,
+      {
+        name: typecheckerWorkerName(env.osWorkerName),
+        account_id: env.cloudflareAccountId,
+        observability: OBSERVABILITY,
+      },
+    ]),
+  ),
+};
+
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
 export const writeWranglerConfig = () => {
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.builder.jsonc", import.meta.url),
     appLabel: "apps/os (builder sidecar)",
     config: builderConfig,
+  });
+  writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.typechecker.jsonc", import.meta.url),
+    appLabel: "apps/os (typechecker sidecar)",
+    config: typecheckerConfig,
   });
   return writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),

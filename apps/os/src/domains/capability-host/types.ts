@@ -26,7 +26,20 @@ export type FlattenedCapabilityTarget = {
   invokeCapability(input: FlattenedCapabilityInvocation): unknown;
 };
 
-/** Capability recipe accepted by `provideCapability`. */
+/**
+ * Capability recipe accepted by `provideCapability`.
+ *
+ * `types` is the mount's Capability Type Declaration: TypeScript declaration
+ * text describing the mounted value. The FIRST exported type/interface is the
+ * mount's own type; later exports are supporting types. Bare references to
+ * platform types (`export type Root = Stream;`) and npm type imports
+ * (`export type Slack = import("@slack/web-api").WebClient;`) both resolve.
+ * Validated at provide time — a declaration that does not compile rejects the
+ * mount — and read by `itx.docs` (search/get) and `itx.docs.typecheck`. An
+ * itx-expression mount provided WITHOUT types asks the capability's
+ * `__describe()` once and keeps what it reports (the MCP/OpenAPI connect
+ * doors generate theirs from tool schemas and spec operations).
+ */
 export type ProvideCapabilityInput =
   | {
       capability: unknown;

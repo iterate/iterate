@@ -375,6 +375,16 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toHaveProperty("firstHit.fetchCall");
     },
   },
+  "typed-capability-mount": {
+    assert: (result, _ctx, expect) => {
+      expect(result).toEqual({
+        searchFoundMount: true,
+        entryIncludesStreamDeclaration: true,
+        goodScriptOk: true,
+        typoCaught: true,
+      });
+    },
+  },
   "agent-send-message": {
     vars: ({ marker }) => ({
       agentPath: `/agents/example-${marker}`,

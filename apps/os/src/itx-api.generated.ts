@@ -638,9 +638,20 @@ export interface Docs {
    * rest are marked interactive); a type declaration name returns its
    * TypeScript source plus as much of its reference closure as fits
    * `maxTokens` (default 1500), ending with a comment naming anything left
-   * out and how to fetch it.
+   * out and how to fetch it; a mounted capability's dotted path (say
+   * "tools.weather") returns its instructions and types plus the platform
+   * declarations those types reference, same budget rules.
    */
   get(input: { name: string; maxTokens?: number }): Promise<string>;
+  /**
+   * Typecheck an `async (itx) => { … }` script against this scope's surface —
+   * the platform types plus every mounted capability's types (npm-backed
+   * `import("pkg")` types resolve too) — WITHOUT running it. Advisory: a
+   * clean result does not promise the script works, but a typo like
+   * `itx.streams.gett(...)` comes back as a compiler error with a
+   * did-you-mean instead of costing a failed run.
+   */
+  typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }>;
 }
 
 /**
@@ -1521,7 +1532,20 @@ export type ProjectLiveState = {
   liveDemo: { count: number };
 };
 
-/** Capability recipe accepted by `provideCapability`. */
+/**
+ * Capability recipe accepted by `provideCapability`.
+ *
+ * `types` is the mount's Capability Type Declaration: TypeScript declaration
+ * text describing the mounted value. The FIRST exported type/interface is the
+ * mount's own type; later exports are supporting types. Bare references to
+ * platform types (`export type Root = Stream;`) and npm type imports
+ * (`export type Slack = import("@slack/web-api").WebClient;`) both resolve.
+ * Validated at provide time — a declaration that does not compile rejects the
+ * mount — and read by `itx.docs` (search/get) and `itx.docs.typecheck`. An
+ * itx-expression mount provided WITHOUT types asks the capability's
+ * `__describe()` once and keeps what it reports (the MCP/OpenAPI connect
+ * doors generate theirs from tool schemas and spec operations).
+ */
 export type ProvideCapabilityInput =
   | {
       capability: unknown;
