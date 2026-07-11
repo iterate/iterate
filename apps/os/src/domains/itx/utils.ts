@@ -233,6 +233,28 @@ export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path
  * instance: each missing property extends the path, and applying the function
  * performs one explicit invokeCapability({ path, args }) call.
  */
+/**
+ * Names common protocols LOOK UP on arbitrary objects and CALL if callable:
+ * JSON.stringify (toJSON) and vitest/jest equality (asymmetricMatch). A
+ * dynamic fallback answering them turns every stringify/assert of a
+ * capability surface into a live invokeCapability dispatch — and the
+ * asymmetricMatch case is worse than noise: vitest treats any object with a
+ * callable asymmetricMatch as an asymmetric matcher, and a dispatcher
+ * returning a (truthy) Promise makes the equality SPURIOUSLY PASS.
+ *
+ * Enforced BOTH at the prototype-chain hop and at every depth of the path
+ * proxies it hands out (stringify probes callables too — the first fix
+ * stopped at the hop and JSON.stringify(itx.someMount) still dispatched).
+ * NOT in RESERVED_DYNAMIC_PATH_SEGMENTS, and the membership bar is HIGH,
+ * because these names become unreachable as dotted capability segments
+ * (explicit invokeCapability({ path }) still reaches them): only names that
+ * are (a) probed-and-called by ubiquitous protocols AND (b) implausible as
+ * capability/method names belong here. `inspect` fails (b) — blocking it
+ * broke itx.agentProbe.inspect(...) in preview e2e; chai/loupe probing it
+ * during error formatting is the accepted lesser evil.
+ */
+const PROTOCOL_PROBE_KEYS: ReadonlySet<string> = new Set(["toJSON", "asymmetricMatch"]);
+
 export function createInvokeCapabilityPathProxy(
   invoker: InvokeCapabilityTarget,
   path: string[] = [],
@@ -247,7 +269,7 @@ export function createInvokeCapabilityPathProxy(
     },
     get(target, key, receiver) {
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
-      if (isReserved(key)) return undefined;
+      if (isReserved(key) || PROTOCOL_PROBE_KEYS.has(key)) return undefined;
       // NOTE `__describe` is deliberately NOT reserved: it traverses like any
       // other segment, and the capability-host processor intercepts trailing
       // `__describe` and answers from the mount's durable metadata
@@ -258,7 +280,9 @@ export function createInvokeCapabilityPathProxy(
     getOwnPropertyDescriptor(target, key) {
       const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
       if (descriptor) return descriptor;
-      if (typeof key === "symbol" || isReserved(key)) return undefined;
+      if (typeof key === "symbol" || isReserved(key) || PROTOCOL_PROBE_KEYS.has(key)) {
+        return undefined;
+      }
       // Cap'n Web's server-side path traversal probes own descriptors before
       // reading a segment. Dynamic roots need to look discoverable here so
       // calls like project.slack.chat.postMessage(...) reach the apply trap.
@@ -271,7 +295,7 @@ export function createInvokeCapabilityPathProxy(
     },
     has(target, key) {
       if (typeof key === "symbol") return key in target;
-      return !isReserved(key);
+      return !isReserved(key) && !PROTOCOL_PROBE_KEYS.has(key);
     },
   });
 }
@@ -339,25 +363,6 @@ export function createInvokeCapabilityPathProxy(
  */
 /** Prototypes that already carry a fallback hop (idempotence guard). */
 const PROTOTYPE_FALLBACK_HOPS = new WeakSet<object>();
-
-/**
- * Names common protocols LOOK UP on arbitrary objects and CALL if callable:
- * JSON.stringify (toJSON) and vitest/jest equality (asymmetricMatch). A
- * dynamic fallback answering them turns every stringify/assert of a
- * capability surface into a live invokeCapability dispatch.
- *
- * Scoped to the HOP and NOT added to RESERVED_DYNAMIC_PATH_SEGMENTS (which
- * applies at every depth of a dotted path). Membership bar is HIGH, because
- * the hop is not only a caller-facing surface: capability dispatch resolves
- * an expression to a target and then walks the REMAINING path segments by
- * plain property access — through this very trap. Blocking `inspect` here
- * broke `itx.agentProbe.inspect(...)` in preview e2e (the mounted worker's
- * method is reached via the DynamicWorkerRpcTarget hop). So: only names
- * that are (a) probed-and-called by ubiquitous protocols AND (b)
- * implausible as capability/method names belong here. `inspect` fails (b);
- * chai/loupe probing it during error formatting is the lesser evil.
- */
-const PROTOCOL_PROBE_KEYS: ReadonlySet<string> = new Set(["toJSON", "asymmetricMatch"]);
 
 export function installPrototypeInvokeCapabilityFallback<
   T extends abstract new (...args: never[]) => object,

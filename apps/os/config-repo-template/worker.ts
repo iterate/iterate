@@ -127,7 +127,12 @@ export default class ProjectWorker extends WorkerEntrypoint<Env> {
           const defaults = await itx.agents.defaults.forPath(childPath);
           await itx.streams.get(childPath).append(...defaults.events);
         } finally {
-          itx[Symbol.dispose]?.();
+          // Guarded: stub disposal is contractually non-throwing, but a throw
+          // HERE would reject processEvent AFTER the append side effect —
+          // redelivery would then apply the defaults twice.
+          try {
+            itx[Symbol.dispose]?.();
+          } catch {}
         }
       }
     }
@@ -171,8 +176,11 @@ export class HelloApp extends WorkerEntrypoint<Env> {
         projectId: description.projectId,
       });
     } finally {
-      // Release the itx stub (see the processEvent comment above).
-      project[Symbol.dispose]?.();
+      // Release the itx stub (see the processEvent comment above); guarded so
+      // a throwing dispose can never mask the response.
+      try {
+        project[Symbol.dispose]?.();
+      } catch {}
     }
   }
 }
