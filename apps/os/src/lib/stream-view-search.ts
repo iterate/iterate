@@ -213,8 +213,9 @@ const RELEASE_PANEL_EDGE = {
  * inspector, the LLM request inspector, the processors sheet, and (on
  * full-panel layouts) the Events sheet. They share the same screen edge, so
  * every setter keeps them mutually exclusive; if a hand-edited URL asks for
- * more than one, the raw-event inspector beats the LLM request inspector,
- * which beats the processors sheet, which beats the Events sheet.
+ * more than one, either inspector beats the processors sheet, which beats
+ * the Events sheet (between the two inspectors, StreamInspectorOverlay picks
+ * whichever the active mode can render, raw-event inspector first).
  */
 export function useStreamViewPanels(): {
   inspectedOffset: number | null;
@@ -234,8 +235,12 @@ export function useStreamViewPanels(): {
 } {
   const { search, setSearch } = useStreamViewSearch();
   const inspectedOffset = search.event ?? null;
-  // The raw-event inspector wins a hand-edited URL naming both inspectors.
-  const inspectedLlmRequestOffset = inspectedOffset == null ? (search.llmRequest ?? null) : null;
+  // Both inspector offsets are surfaced as-is. Openers keep them mutually
+  // exclusive, so both set = a stale or hand-edited URL; precedence between
+  // them is the RENDERER's call (StreamInspectorOverlay): only it knows
+  // whether the mode can actually show the raw inspector, and suppressing
+  // the LLM offset here would leave the edge empty in modes that can't.
+  const inspectedLlmRequestOffset = search.llmRequest ?? null;
   const focusedProcessorKey = search.processor ?? null;
   const processorsPanelOpen =
     inspectedOffset == null &&
