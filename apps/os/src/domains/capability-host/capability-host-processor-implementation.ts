@@ -359,16 +359,23 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async #selfDescribedTypes(
     expression: Extract<ProvideCapabilityInput, { type: "itx-expression" }>["expression"],
   ): Promise<string | undefined> {
+    // The catch rides the promise itself, BEFORE the race: describing may
+    // lose to the deadline and fail later, and an abandoned rejection must
+    // not surface as unhandled after the provide already returned.
+    const described = this.#describeExpressionTypes(expression).catch(() => undefined);
+    // The deadline keeps a hanging third-party server (MCP listTools, an
+    // OpenAPI spec fetch) from hanging the provide — past it, the mount just
+    // stays untyped.
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
-      // Describing may dial a third-party server (MCP listTools, an OpenAPI
-      // spec fetch); a deadline keeps a hanging server from hanging the
-      // provide — past it, the mount just stays untyped.
       return await Promise.race([
-        this.#describeExpressionTypes(expression),
-        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 10_000)),
+        described,
+        new Promise<undefined>((resolve) => {
+          deadline = setTimeout(() => resolve(undefined), 10_000);
+        }),
       ]);
-    } catch {
-      return undefined;
+    } finally {
+      clearTimeout(deadline);
     }
   }
 
