@@ -1,14 +1,16 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-} from "../streams/stream-processor-host.ts";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
+import { checkCapabilityTypes } from "../typecheck/virtual-project.ts";
 import {
   CapabilityHostProcessor,
   type ParentCapabilityHost,
@@ -43,6 +45,9 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+    version: workerVersion(this.env),
   });
   readonly #capabilityHostProcessor = this.#processorHost.add(
     (deps) =>
@@ -62,6 +67,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         parent: this.#parentCapabilityHost(),
         path: this.#name.path,
         scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
+        validateCapabilityTypes: (types) =>
+          checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
       }),
   );
 
@@ -94,8 +101,18 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     };
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  alarm(): Promise<void> {
+    return this.#processorHost.handleAlarm();
+  }
+
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
   }
 
   get processor() {

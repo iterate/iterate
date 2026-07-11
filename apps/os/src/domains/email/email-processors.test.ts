@@ -35,6 +35,8 @@ class MemoryStream implements Stream {
     return { instructions: "in-memory test stream", types: "", children: {} };
   }
 
+  async kill(): Promise<void> {}
+
   constructor(
     readonly network: MemoryStreamNetwork,
     readonly path: string,
@@ -102,11 +104,23 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {}, workerDelivery: null } };
+    return { coreProcessorState: null, runtime: { connections: {}, subscriptions: {} } };
   }
 
   async subscribe(): Promise<never> {
     throw new Error("MemoryStream does not implement subscribe().");
+  }
+
+  async acceptCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement acceptCrossPost().");
+  }
+
+  async crossPostTo(): Promise<never> {
+    throw new Error("MemoryStream does not implement crossPostTo().");
+  }
+
+  async removeCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement removeCrossPost().");
   }
 }
 
@@ -158,7 +172,7 @@ describe("EmailProcessor (thread router)", () => {
   it("creates a thread route keyed by the received event's offset and forwards", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream });
+    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -193,7 +207,7 @@ describe("EmailProcessor (thread router)", () => {
   it("routes a +t-tagged reply to the existing thread without a new route", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream });
+    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -222,7 +236,7 @@ describe("EmailProcessor (thread router)", () => {
   it("routes an untagged reply via In-Reply-To/References to the existing thread", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream });
+    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -250,7 +264,7 @@ describe("EmailProcessor (thread router)", () => {
   it("routes replies to the agent's own outbound mail via the email/sent index", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream });
+    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -290,7 +304,7 @@ describe("EmailProcessor (thread router)", () => {
   it("folds sender-allowed patterns into the project allowlist, deduped and case-folded", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream });
+    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -318,7 +332,7 @@ describe("EmailProcessor (thread router)", () => {
     // NOT /agents/email/**) and a sent audit fact carrying the threadId.
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream });
+    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append(
@@ -368,7 +382,7 @@ describe("EmailProcessor (thread router)", () => {
   it("starts a new thread when an unknown +t tag arrives (no attacker-minted ids)", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream });
+    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
     const cursors = new Map<object, number>();
 
     await stream.append({
@@ -395,7 +409,7 @@ describe("EmailProcessor (thread router)", () => {
       }
       return originalRoutedAppend(...inputs);
     };
-    const processor = new EmailProcessor({ stream });
+    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
     const [received] = await stream.append({
       type: "events.iterate.com/email/received",
       payload: receivedPayload({}),
@@ -429,7 +443,12 @@ describe("EmailAgentProcessor", () => {
   }) {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/agents/email/t1");
-    const processor = new EmailAgentProcessor({ stream, ...deps });
+    const processor = new EmailAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ...deps,
+    });
     const cursors = new Map<object, number>();
     return { cursors, network, processor, stream };
   }
@@ -475,7 +494,7 @@ describe("EmailAgentProcessor", () => {
       ],
     ]);
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({ files: [resolved] });
@@ -496,7 +515,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).not.toHaveProperty("files");
@@ -522,7 +541,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
@@ -550,7 +569,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agent/input-added",
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({
@@ -589,7 +608,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(1);
     // Our own looped-back mail never becomes the thread counterpart — the
     // human sender stays the reply target.
@@ -619,7 +638,7 @@ describe("EmailAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
     expect(processor.state.counterpart).toBeUndefined();
   });

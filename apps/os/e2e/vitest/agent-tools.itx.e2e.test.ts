@@ -7,6 +7,7 @@
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
 
 const PROOF_STREAM = "/e2e/agent-tools-proof";
 const PROOF_TYPE = "events.iterate.test/agent-tools-proof";
@@ -21,6 +22,8 @@ test(
     using agent = handle.agent("/agents/e2e-tools");
 
     const marker = crypto.randomUUID().slice(0, 8);
+    // Full codemode loop (LLM → script → reply) routinely exceeds the 45s ask
+    // default under preview load; wait with the same ceiling as the test.
     await agent.ask({
       message: [
         `Run a script that appends one event of type ${PROOF_TYPE} with payload`,
@@ -28,22 +31,31 @@ test(
         `itx.streams.get(${JSON.stringify(PROOF_STREAM)}).append(...). After the script`,
         `runs, send a chat message that contains exactly the word done.`,
       ].join(" "),
+      timeoutMs: 180_000,
     });
 
     // The reply may arrive before or after the script completes depending on
     // how the model ordered its actions — poll both effects independently.
+    // (waitForCondition, not expect.poll: expect.poll loses the test context
+    // on vitest retry in the CI-parallel lane and turns any first-attempt
+    // flake into a hard "expect.poll() must be called inside a test" failure.)
     using itx = handle.itx();
-    await expect
-      .poll(
-        async () => {
-          const events = await itx.streams.get(PROOF_STREAM).getEvents({});
-          return events.some(
-            (event) => event.type === PROOF_TYPE && event.payload?.marker === marker,
-          );
-        },
-        { interval: 1_000, timeout: 120_000 },
-      )
-      .toBe(true);
+    await waitForCondition(
+      async () => {
+        const events = await itx.streams.get(PROOF_STREAM).getEvents({});
+        return events.some(
+          (event) => event.type === PROOF_TYPE && event.payload?.marker === marker,
+        );
+      },
+      {
+        description: "the proof event to land on the target stream",
+        intervalMs: 1_000,
+        // Turns run 15-60s under preview-account load (measured live
+        // 2026-07-10: a healthy turn with a 31s LLM response); two turns plus
+        // boot must fit, so this sits just under the 240s test ceiling.
+        timeoutMs: 180_000,
+      },
+    );
 
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
     const types = agentEvents.map((event) => event.type.replace("events.iterate.com/", ""));
@@ -54,29 +66,42 @@ test(
 );
 
 test(
-  "provider toggle: cloudflare-ai answers after llm-provider-selected",
+  "agent answers after llm model is selected",
   // See above — heavy-test ceiling.
   { timeout: 240_000 },
   async ({ expect }) => {
-    await using handle = await createTestProject({ slugPrefix: "provider-toggle" });
-    using agent = handle.agent("/agents/e2e-provider");
+    await using handle = await createTestProject({ slugPrefix: "agent-model" });
+    using agent = handle.agent("/agents/e2e-model");
 
-    // Force the toggle regardless of the deployment's default provider.
+    // Force an explicitly-selected model for the assertion — the model the
+    // DEPLOYMENT defaults to (itx.agents.defaults), not a hardcoded one.
+    // What this test proves is the explicit-selection MECHANISM
+    // (llm-provider-selected wins over defaults), not any particular vendor;
+    // asking the deployment keeps it green even if account model
+    // availability shifts again (the 2026-07-10 lesson: a hardcoded
+    // openai/gpt-5.5 pin was unrunnable on the preview account until
+    // unified billing was enabled, and watchdogged the whole lane).
+    using defaultsItx = handle.itx();
+    const policy = await defaultsItx.agents.defaults.forPath("/agents/e2e-model");
     await agent.stream.append({
       type: "events.iterate.com/agent/llm-provider-selected",
-      // The contract requires the model alongside the provider; a model-less
-      // append is schema-invalid and wedges the agent processor's ingest.
-      payload: { model: "@cf/moonshotai/kimi-k2.7-code", provider: "cloudflare-ai" },
+      // The contract requires a model; a model-less append is schema-invalid
+      // and wedges the agent processor's ingest.
+      payload: { model: policy.model },
     });
 
-    const response = await agent.ask({ message: "Reply with a short greeting." });
+    const response = await agent.ask({
+      message: "Reply with a short greeting.",
+      // Gateway turns under preview load can sit past the 45s default — a
+      // single turn measured 31s healthy, worse when the shared per-minute
+      // budget is saturated and the retry backoff (10/20/60s) is riding.
+      timeoutMs: 180_000,
+    });
     expect(response.type).toBe("events.iterate.com/agents/web-message-sent");
 
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
     expect(
-      agentEvents.some(
-        (event) => event.type === "events.iterate.com/cloudflare-ai/llm-request-started",
-      ),
+      agentEvents.some((event) => event.type === "events.iterate.com/agent/llm-request-started"),
     ).toBe(true);
   },
 );

@@ -14,14 +14,15 @@ import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
+import { connectItx } from "../../../apps/os/src/itx-client.ts";
 import type {
   ItxAuthCredentials,
   Project,
   ProjectListEntry,
   Session,
   Stream,
-} from "../../../apps/os/src/itx-api.generated.ts";
-import { connectItx } from "../../../apps/os/src/itx-client.ts";
+} from "./itx-api.generated.ts";
+import { shareMyComputer } from "./use-my-computer.ts";
 import {
   CONFIG_PATH,
   Config,
@@ -1032,6 +1033,74 @@ const launcherProcedures = {
         env.ITERATE_BEARER_TOKEN = token;
       }
       await runInheritedProcess({ ...command, env });
+    }),
+
+  useMyComputer: os
+    .input(
+      z.object({
+        project: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe(
+            "OS project id (prj_…) or slug. Defaults to the active config's defaultProject.",
+          ),
+        name: z
+          .string()
+          .trim()
+          .regex(
+            /^[a-zA-Z][a-zA-Z0-9]*$/,
+            "Use a camelCase name: letters and digits, starting with a letter.",
+          )
+          .optional()
+          .describe(
+            "Name agents use to reach this computer (camelCase; the itx.<name> path). Prompted if omitted.",
+          ),
+      }),
+    )
+    .meta({
+      description:
+        "Share THIS computer with a project's agents as itx.myComputer (native dialogs, notifications, Swift). Runs until Ctrl-C.",
+    })
+    .handler(async ({ input }) => {
+      const resolved = resolveConfig(process.cwd(), { throw: true });
+
+      // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
+      // the stored `iterate login` session, kicking off a browser login if none.
+      const envAuth = osAuthFromEnvironment();
+      let authHeaders: OsAuthHeaders | undefined;
+      if (!envAuth) {
+        try {
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        } catch (error) {
+          if (!shouldAutoLoginForChat(error)) throw error;
+          console.error(
+            `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
+          );
+          await loginToResolvedConfig(resolved);
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        }
+      }
+      const auth = envAuth ?? osAuthFromHeaders(authHeaders!);
+
+      const projectId = await resolveChatProject({
+        auth,
+        baseUrl: resolved.config.osBaseUrl,
+        configName: resolved.name,
+        configPath: CONFIG_PATH,
+        configuredDefaultProject: resolved.config.defaultProject,
+        explicitProject: input.project,
+      });
+
+      // Prompts for a name, provides itx.<name>, then blocks until Ctrl-C.
+      await shareMyComputer({
+        auth: auth.credentials,
+        baseUrl: resolved.config.osBaseUrl,
+        projectId,
+        headers: headersRecord(auth.requestHeaders),
+        name: input.name,
+      });
     }),
 
   orgs: {

@@ -15,8 +15,6 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
-  path: string;
-  projectId: string | null;
 };
 
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
@@ -27,6 +25,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     state,
   }: Parameters<StreamProcessor<RepoProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
+      case "events.iterate.com/repo/create-requested":
+        return { ...state, createRequested: true };
       case "events.iterate.com/repo/created":
         return {
           ...state,
@@ -83,7 +83,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     blockProcessorWhile,
     event,
     state,
-    append,
+    appendTo,
   }: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0]): undefined {
     if (event.type === "events.iterate.com/github/webhook-received") {
       // PR webhooks route to a per-PR agent stream, everything else (pushes,
@@ -94,7 +94,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       const prNumber = pullRequestNumberFromWebhookBody((event.payload as { body?: unknown }).body);
       const github = state.github;
       if (prNumber === null || github === null) return;
-      const streamPath = prAgentPath(this.deps.path, prNumber);
+      const streamPath = prAgentPath(this.path, prNumber);
       // The key carries the FULL GitHub coordinates, not just the PR number:
       // relinking the repo to a different repository or connection must emit
       // a fresh route event that repoints existing PR agents — a coordinate-
@@ -102,17 +102,19 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       // would keep replying to the OLD repository's PR.
       const routeEvent = {
         type: "events.iterate.com/github-pr/route-configured" as const,
-        idempotencyKey: `github-pr-route:${this.deps.projectId}:${this.deps.path}:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
+        idempotencyKey: this.idempotencyKey(
+          `pr-route:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
+        ),
         payload: {
           ...github,
           number: prNumber,
-          repoPath: this.deps.path,
+          repoPath: this.path,
           streamPath,
         },
       };
       const forwardedEvent = {
         type: "events.iterate.com/github/webhook-received" as const,
-        idempotencyKey: `github-pr:forward:${this.deps.projectId}:${this.deps.path}:${event.offset}`,
+        idempotencyKey: this.idempotencyKey("pr-forward", event),
         payload: event.payload,
       };
       // Durable obligation, not best-effort: this forward is the webhook's
@@ -120,24 +122,48 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       // fire-and-forget append). blockProcessorWhile holds the checkpoint so
       // a failed append replays; the keys above dedupe the replay.
       blockProcessorWhile(async () => {
-        await this.stream.at(streamPath).append(routeEvent, forwardedEvent);
+        await appendTo(streamPath, routeEvent, forwardedEvent);
       });
       return;
     }
 
     if (event.type !== "events.iterate.com/repo/create-requested") return;
+    // Address validation stays per-event (a mis-addressed request is a loud
+    // error); the creation itself is reconciled from the at-head fold in
+    // processEventBatch.
     this.#assertOwnCreateRequest(event);
-    if (state.created) return;
+  }
 
-    blockProcessorWhile(async () => {
-      const payload = await this.deps.createRepoArtifact(event.payload);
-      await append({
+  /**
+   * Creation is an OBLIGATION reconciled from the at-head fold, never a
+   * per-event reaction: a journal refold (the normal aftermath of a
+   * state-schema deploy) replays `create-requested` with event-time state in
+   * which `created` is still false, but the at-head fold has already absorbed
+   * the journaled `repo/created` fact — so `createRepoArtifact`, whose seeding
+   * force-pushes the seed commit and would clobber user commits, provably
+   * never re-runs. No expiry on purpose: "this repo should exist" does not go
+   * stale, and the vendor call is idempotent (get-or-create + re-seed of a
+   * fresh repo folds to a no-op), so a create-succeeded/append-failed retry is
+   * safe.
+   */
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<RepoProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    if (args.checkpointOffset < args.streamMaxOffset) return;
+    if (!args.state.createRequested || args.state.created) return;
+    args.blockProcessorWhile(async () => {
+      const payload = await this.deps.createRepoArtifact({
+        path: this.path,
+        projectId: this.projectId,
+      });
+      await args.append({
         type: "events.iterate.com/repo/created",
-        idempotencyKey: `repo-created:${this.deps.projectId}:${this.deps.path}`,
+        idempotencyKey: this.idempotencyKey("created"),
         payload: {
           ...payload,
-          path: this.deps.path,
-          projectId: this.deps.projectId,
+          path: this.path,
+          projectId: this.projectId,
         },
       });
     });
@@ -145,9 +171,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 
   /** Reject a create-requested addressed to a different repo than this processor serves. */
   #assertOwnCreateRequest(event: RepoCreateRequested): void {
-    if (event.payload.projectId !== this.deps.projectId || event.payload.path !== this.deps.path) {
+    if (event.payload.projectId !== this.projectId || event.payload.path !== this.path) {
       throw new Error(
-        `repo/create-requested for "${event.payload.projectId}:${event.payload.path}" on repo "${this.deps.projectId}:${this.deps.path}"`,
+        `repo/create-requested for "${event.payload.projectId}:${event.payload.path}" on repo "${this.projectId}:${this.path}"`,
       );
     }
   }

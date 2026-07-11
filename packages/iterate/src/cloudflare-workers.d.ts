@@ -5,6 +5,10 @@ declare module "cloudflare:workers" {
       props: Props;
     };
   }
+  export abstract class DurableObject<Env = unknown> {
+    protected env: Env;
+    protected ctx: unknown;
+  }
 }
 
 // Minimal ambient stand-ins for @cloudflare/workers-types globals referenced

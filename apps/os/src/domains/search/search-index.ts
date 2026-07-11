@@ -24,12 +24,14 @@
 //
 // The write paths are best-effort mirrors: a failed index write must never
 // fail the user-facing operation that triggered it (append, file put, repo
-// commit). Stream delivery gets durability anyway via the stream-owned
-// checkpoint (see StreamDurableObject's search-index ProjectWorkerDelivery).
+// commit). Stream events are indexed as a first-party step on the project
+// worker's ordered, checkpointed delivery (root `processEventBatch` →
+// `#indexStreamSearch` in rpc-targets.ts), re-reading each touched segment so
+// a transient failure self-heals on the next batch (see indexStreamEventBatch).
 
 import { itxEnv } from "../../env.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
-import type { StreamEventBatch } from "../streams/rpc-types.ts";
+import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 
 /** Offsets per stream-event segment document. */
 export const SEARCH_SEGMENT_SIZE = 100;
@@ -162,14 +164,28 @@ export function renderStreamSegmentDocument(input: {
 
 /**
  * Index one delivered stream batch: rewrite every segment document the batch
- * touches. Reads each affected segment's full offset range back from stream
- * storage (via the hook) so the document is complete and the write is
- * idempotent regardless of how delivery batched the offsets.
+ * touches. For each affected segment it re-reads the segment's FULL offset
+ * range back from the stream (via `readEvents`) rather than indexing only the
+ * batch's events, so the document is complete and the write is idempotent
+ * regardless of how delivery batched the offsets.
+ *
+ * That full re-read is also what makes this safe to run as a first-party step
+ * on the shared project-worker delivery (root `processEventBatch`) instead of
+ * its own checkpointed lane: the delivery cursor advances on the worker's
+ * success, not this side effect, so a transient R2 failure here is healed by
+ * the NEXT batch in the same segment (which re-reads and rewrites the whole
+ * segment). Only a segment that goes permanently quiet right after a failed
+ * write stays short until `itx.search.indexStream`/reindex — acceptable for a
+ * derived, rebuildable corpus.
  */
 export async function indexStreamEventBatch(input: {
-  batch: StreamEventBatch;
-  /** Committed-event range read from stream storage (bounds are exclusive/exclusive like getEvents). */
-  readEvents: (args: { afterOffset: number; beforeOffset: number; limit: number }) => StreamEvent[];
+  batch: StreamPushEventBatch;
+  /** Committed-event range read from the stream (bounds exclusive/exclusive, like the DO's getEvents). */
+  readEvents: (args: {
+    afterOffset: number;
+    beforeOffset: number;
+    limit: number;
+  }) => Promise<StreamEvent[]>;
 }): Promise<void> {
   const { batch } = input;
   if (batch.projectId === null) return;
@@ -179,7 +195,7 @@ export async function indexStreamEventBatch(input: {
   const segments = new Set(offsets.map(segmentForOffset));
   for (const segment of segments) {
     const { first, last } = segmentOffsetRange(segment);
-    const events = input.readEvents({
+    const events = await input.readEvents({
       afterOffset: first - 1,
       beforeOffset: last + 1,
       limit: SEARCH_SEGMENT_SIZE,

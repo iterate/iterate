@@ -1,0 +1,86 @@
+# Preview cleanup on PR close — the other half of the preview lifecycle in
+# cloudflare-previews.yml. Cleanup lives in its own workflow because every run
+# of a workflow re-emits all of its job check names on the head SHA: when
+# deploy and cleanup shared one workflow with complementary `if:`s, the
+# `closed`-event run re-reported "Preview / deploy + e2e" as skipped,
+# clobbering the earlier success on every merged PR (GitHub displays the
+# latest check run per name).
+#
+# The concurrency groups below are copied VERBATIM from cloudflare-previews.yml
+# so the two workflows still coordinate: closing a PR mid-deploy cancels the
+# in-flight deploy run (cancel-in-progress on the shared workflow-level group)
+# and the job-level lifecycle group serializes whatever remains — cleanup never
+# races a deploy for the same preview slot.
+#
+# Depot registers automatic triggers when this file is on the default branch —
+# branch-only changes to the `on:` block do not take effect until merged.
+#
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN,
+# ITERATE_BOT_GITHUB_TOKEN.
+#
+# Keep the `paths` list below identical to cloudflare-previews.yml's, so a
+# close runs cleanup for exactly the PRs that could have deployed a preview.
+
+name: Cloudflare Preview Cleanup (Depot CI)
+
+on:
+  pull_request:
+    types:
+      - closed
+    paths:
+      - .depot/workflows/cloudflare-previews.yml
+      - packages/shared/**
+      - packages/ui/**
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - patches/**
+      - scripts/preview/**
+      - envs.ts
+      - scripts/lib/**
+      - apps/iterate-com/**
+      - apps/auth-example/**
+      - apps/os/**
+      - apps/auth/**
+      - apps/auth-contract/**
+      - apps/os/src/domains/streams/**
+      - apps/semaphore/**
+      - apps/streams-example-app/**
+
+concurrency:
+  group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    name: Preview / cleanup
+    runs-on: depot-ubuntu-24.04
+    concurrency:
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+      - name: Preview / cleanup
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd -- pnpm preview cleanup \
+            --github-token "$GITHUB_TOKEN" \
+            --pull-request-number "${{ github.event.pull_request.number }}"

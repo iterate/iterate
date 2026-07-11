@@ -18,25 +18,33 @@ export type WorkspaceFileInfo = {
   updatedAt: number;
 };
 
-/** One commit returned by `WorkspaceGit.log`. */
-export type WorkspaceGitLogEntry = {
-  author: { email: string; name: string; timestamp: number };
-  message: string;
-  oid: string;
-  parent: string[];
+/**
+ * One overlay change returned by `WorkspaceGit.status`: a local file that
+ * shadows a parent file ("modified"), one the parent does not have ("added"),
+ * or a parent file hidden by a local delete ("deleted"). "modified" means
+ * shadowed, not necessarily different — the overlay never diffs content.
+ */
+export type WorkspaceChange = {
+  change: "added" | "deleted" | "modified";
+  path: string;
 };
 
-/** One file's staging state returned by `WorkspaceGit.status`. */
-export type WorkspaceGitStatusEntry = {
-  filepath: string;
-  /** HEAD status: 0=absent, 1=present. */
-  head: number;
-  /** Stage status: 0=absent, 1=identical, 2=modified, 3=added. */
-  stage: number;
-  /** Human-readable status (e.g. "modified", "added"). */
-  status: string;
-  /** Workdir status: 0=absent, 1=identical, 2=modified. */
-  workdir: number;
+/** One commit returned by `WorkspaceGit.log` (the config repo's main history). */
+export type WorkspaceGitLogEntry = {
+  author: { email: string; name: string };
+  message: string;
+  oid: string;
+  /** Epoch milliseconds. */
+  timestamp: number;
+};
+
+/** Result of `WorkspaceGit.commit` — the commit landed on the config repo's main. */
+export type WorkspacePublishResult = {
+  /** The repo branch the commit landed on — the config repo's default (main). */
+  branch: string;
+  /** Paths committed (after .gitignore filtering) plus deletions applied. */
+  changedPaths: string[];
+  commitOid: string;
 };
 
 /** Input to `Workspace.edit` — a safe single-occurrence string replacement. */

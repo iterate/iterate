@@ -73,6 +73,19 @@ export default async function deploy(
         secrets: ctx.secrets,
       });
 
+      // Preview deploys pass their PR head sha (scripts/preview/preview.ts)
+      // so projects seeded there install that exact commit's pkg.pr.new build
+      // of `iterate` instead of the template's @main — e2e tests then
+      // exercise the branch tip's iterate/sdk, pinned (unlike @<pr>/@main,
+      // which are moving refs). The pkg-pr-new GHA workflow publishes under
+      // the PR HEAD sha on every push, so the URL exists by the time anything
+      // npm-installs a seeded repo. Unset everywhere else (prod, local dev,
+      // direct doppler-run deploys), leaving the template untouched.
+      const previewHeadSha = process.env.PREVIEW_PULL_REQUEST_HEAD_SHA;
+      if (previewHeadSha) {
+        secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC = `https://pkg.pr.new/iterate/iterate/iterate@${previewHeadSha}`;
+      }
+
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
@@ -106,22 +119,23 @@ export default async function deploy(
         compatibilityDate: COMPATIBILITY_DATE,
       });
 
-      // The builder sidecar deploys FIRST: the os worker's BUILDER service
-      // binding is by name, and a binding to a not-yet-existing script fails
-      // the deploy. The builder has no secrets and no vite build — wrangler
-      // bundles src/builder.ts (esbuild-wasm rides as a wasm module).
-      // Skew window: between this deploy and the os deploy (or if the os
-      // deploy fails), a bundler/schema-version bump means the os worker
-      // hashes the OLD key prefix while the builder writes the new one — the
-      // cache runs cold (correct output via by-value returns, every request
-      // rebuilds) until the os deploy lands. If "cache never hits" appears
-      // mid-rollout, finish the deploy.
+      // The sidecars deploy FIRST: the os worker's BUILDER/TYPECHECKER
+      // service bindings are by name, and a binding to a not-yet-existing
+      // script fails the deploy. Sidecars have no secrets and no vite build —
+      // wrangler bundles their entries directly (the toolchain wasm rides as
+      // a wasm module). Builder skew window: between this deploy and the os
+      // deploy (or if the os deploy fails), a bundler/schema-version bump
+      // means the os worker hashes the OLD key prefix while the builder
+      // writes the new one — the cache runs cold (correct output via
+      // by-value returns, every request rebuilds) until the os deploy lands.
+      // If "cache never hits" appears mid-rollout, finish the deploy.
       writeWranglerConfig();
-      run(
-        "pnpm",
-        ["exec", "wrangler", "deploy", "--config", "wrangler.builder.jsonc", "--env", ctx.name],
-        { cwd: fileURLToPath(new URL("..", import.meta.url)), env: credentials },
-      );
+      for (const sidecarConfig of ["wrangler.builder.jsonc", "wrangler.typechecker.jsonc"]) {
+        run("pnpm", ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name], {
+          cwd: fileURLToPath(new URL("..", import.meta.url)),
+          env: credentials,
+        });
+      }
     },
     smokes: (env) => [
       {

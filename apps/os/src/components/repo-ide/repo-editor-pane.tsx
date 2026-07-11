@@ -3,11 +3,16 @@ import { getOriginalDoc, unifiedMergeView } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
 import { LockIcon, MinusIcon, PencilIcon, PlusIcon, Undo2Icon } from "lucide-react";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { changedLinesGutter } from "./change-gutter.ts";
-import { repoFileKind } from "./repo-file-kinds.ts";
+import { HtmlPreview } from "./html-preview.tsx";
+import { isPreviewablePath, repoFileKind } from "./repo-file-kinds.ts";
+import { useRepoFileJsonSchema } from "./repo-json-schema.ts";
+import { useRepoTypeScriptExtensions } from "./repo-typescript.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
@@ -28,6 +33,8 @@ export function RepoEditorPane({
   change,
   diffOpen,
   onToggleDiff,
+  previewOpen,
+  onTogglePreview,
   onSetWorking,
   onSetStaged,
   onStageFile,
@@ -44,6 +51,11 @@ export function RepoEditorPane({
   change: FileChange | undefined;
   diffOpen: boolean;
   onToggleDiff: (open: boolean) => void;
+  /** Markdown, html, and svg files: show the rendered preview (markdown HTML,
+   * or the sandboxed html iframe) instead of the editor — of the current buffer,
+   * or of the staged snapshot in the Index view. */
+  previewOpen: boolean;
+  onTogglePreview: (open: boolean) => void;
   onSetWorking: (entry: FileEntry | undefined) => void;
   onSetStaged: (entry: FileEntry | undefined) => void;
   onStageFile: () => void;
@@ -72,6 +84,43 @@ export function RepoEditorPane({
   // snapshot when one exists, else HEAD.
   const textBaseline = staged?.type === "write" ? staged.content : (headContent ?? undefined);
 
+  // TypeScript language service (diagnostics, hover, autocomplete) for
+  // ts/tsx/js/jsx working-tree buffers — empty for everything else, and for
+  // the readonly Index view (an inspection surface, not a live buffer).
+  const typeScriptExtensions = useRepoTypeScriptExtensions({
+    projectId,
+    repoPath,
+    commitOid: headCommitOid,
+    path,
+    enabled: kind.kind === "text" && !stagedView,
+  });
+
+  // json-schema diagnostics/hover/completion for JSON and YAML buffers: an
+  // explicit $schema (prop or yaml modeline) wins, else the well-known
+  // filename map (package.json, tsconfig, …). Resolved against the live
+  // buffer so adding a $schema line applies before any commit; the schema
+  // itself is fetched from schemastore/wherever by the browser and failure
+  // just means no squigglies. (TS and json/yaml are disjoint kinds, so the two
+  // extension sets never both apply to one buffer.)
+  const schemaLanguage =
+    kind.kind === "text" &&
+    (kind.language === "json" || kind.language === "jsonc" || kind.language === "yaml")
+      ? kind.language
+      : null;
+  const jsonSchema = useRepoFileJsonSchema({
+    path,
+    language: schemaLanguage,
+    content: working?.type === "write" ? working.content : (textBaseline ?? ""),
+  });
+  // The readonly Index view renders the STAGED snapshot, so it must validate
+  // against the schema that snapshot declares — not the working buffer's, whose
+  // `$schema` may have diverged (e.g. added/changed after staging).
+  const stagedJsonSchema = useRepoFileJsonSchema({
+    path,
+    language: schemaLanguage,
+    content: staged?.type === "write" ? staged.content : "",
+  });
+
   // The plain editor carries vscode-style gutter bars for lines differing
   // from the baseline; diff mode swaps in the unified (inline) merge view on
   // the same document, whose per-chunk "+" controls STAGE the chunk — the
@@ -79,9 +128,13 @@ export function RepoEditorPane({
   // listener below writes that doc back as the staged snapshot. Memoized so
   // the editor view survives re-renders.
   const editorExtensions = useMemo(() => {
-    if (kind.kind !== "text" || textBaseline === undefined) return [];
-    if (!diffOpen) return [changedLinesGutter(textBaseline)];
+    if (kind.kind !== "text") return [];
+    // A never-committed file has no baseline to diff against, but the
+    // language service still applies.
+    if (textBaseline === undefined) return typeScriptExtensions;
+    if (!diffOpen) return [...typeScriptExtensions, changedLinesGutter(textBaseline)];
     return [
+      ...typeScriptExtensions,
       unifiedMergeView({
         original: textBaseline,
         allowInlineDiffs: true,
@@ -113,7 +166,7 @@ export function RepoEditorPane({
       }),
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks are stable store methods; content inputs drive recreation
-  }, [kind.kind, textBaseline, headContent, diffOpen]);
+  }, [kind.kind, textBaseline, headContent, diffOpen, typeScriptExtensions]);
 
   // The readonly staged view diffs HEAD against the staged snapshot with no
   // chunk controls — inspection only.
@@ -130,6 +183,31 @@ export function RepoEditorPane({
         : [],
     [stagedView, staged, headContent],
   );
+
+  const editorExtensionsWithSchema = useMemo(
+    () => [...editorExtensions, jsonSchema.extensions],
+    [editorExtensions, jsonSchema.extensions],
+  );
+  const stagedDiffExtensionsWithSchema = useMemo(
+    () => [...stagedDiffExtensions, stagedJsonSchema.extensions],
+    [stagedDiffExtensions, stagedJsonSchema.extensions],
+  );
+
+  // Subtle header note: which schema is validating the buffer, or that the
+  // fetch failed (in which case there are simply no squigglies). The Index view
+  // names its own (staged-snapshot) schema.
+  const schemaNoteFor = (result: typeof jsonSchema) =>
+    result.status === "active" ? (
+      <span title={result.url} className="text-[10px] text-muted-foreground">
+        {new URL(result.url).pathname.split("/").pop() || result.url}
+      </span>
+    ) : result.status === "unavailable" ? (
+      <span title={result.url} className="text-[10px] text-muted-foreground italic">
+        schema unavailable
+      </span>
+    ) : null;
+  const schemaNote = schemaNoteFor(jsonSchema);
+  const stagedSchemaNote = schemaNoteFor(stagedJsonSchema);
 
   const replaceFile = async () => {
     const file = await pickLocalFile(kind.kind === "image" ? "image/*" : undefined);
@@ -191,14 +269,23 @@ export function RepoEditorPane({
     entry === undefined ? undefined : headHasPath ? ("modified" as const) : ("added" as const);
 
   if (stagedView && staged?.type === "write" && kind.kind === "text") {
+    // Same Code/Preview toggle as the working view, over the staged snapshot
+    // — the Index pseudo-file stays readonly either way.
+    const showStagedPreview = previewOpen && isPreviewablePath(path);
     return (
       <FileChrome
         path={path}
-        suffix="(Index)"
+        suffix={showStagedPreview ? "(Index Preview)" : "(Index)"}
         readonly
         status={status}
+        leading={
+          isPreviewablePath(path) ? (
+            <CodePreviewToggle preview={showStagedPreview} onChange={onTogglePreview} />
+          ) : undefined
+        }
         actions={
           <>
+            {stagedSchemaNote}
             <Button variant="secondary" size="sm" className="text-xs" disabled>
               Diff
             </Button>
@@ -225,18 +312,26 @@ export function RepoEditorPane({
           </>
         }
       >
-        <SourceCodeBlock
-          key={`${path}:staged`}
-          className="min-h-0 flex-1"
-          plainChrome
-          showLineNumbers
-          editable={false}
-          wrapLongLines={false}
-          code={staged.content}
-          language={kind.language}
-          codeMirrorExtensions={stagedDiffExtensions}
-          onChange={() => {}}
-        />
+        {showStagedPreview ? (
+          kind.language === "markdown" ? (
+            <MarkdownPreview markdown={staged.content} />
+          ) : (
+            <HtmlPreview html={staged.content} />
+          )
+        ) : (
+          <SourceCodeBlock
+            key={`${path}:staged`}
+            className="min-h-0 flex-1"
+            plainChrome
+            showLineNumbers
+            editable={false}
+            wrapLongLines={false}
+            code={staged.content}
+            language={kind.language}
+            codeMirrorExtensions={stagedDiffExtensionsWithSchema}
+            onChange={() => {}}
+          />
+        )}
       </FileChrome>
     );
   }
@@ -248,14 +343,27 @@ export function RepoEditorPane({
       if (content === textBaseline) onSetWorking(undefined);
       else onSetWorking({ type: "write", content });
     };
+    // Markdown, html, and svg files get a vscode-style Code | Preview toggle;
+    // the preview renders the CURRENT buffer (unsaved edits included). Diff wins
+    // if a hand-edited URL sets both `preview` and `diff` (the toggles keep them
+    // mutually exclusive, but honor that invariant here too) so the pane never
+    // renders Preview while the header shows the Diff/"Working Tree" state.
+    const showPreview = previewOpen && !diffOpen && isPreviewablePath(path);
     return (
       <FileChrome
         path={path}
-        {...(diffOpen ? { suffix: "(Working Tree)" } : {})}
+        {...(diffOpen ? { suffix: "(Working Tree)" } : showPreview ? { suffix: "(Preview)" } : {})}
         status={status}
+        leading={
+          isPreviewablePath(path) ? (
+            <CodePreviewToggle preview={showPreview} onChange={onTogglePreview} />
+          ) : undefined
+        }
         actions={
           <>
-            {headHasPath || staged !== undefined ? (
+            {schemaNote}
+            {/* The preview replaces the editor, diff and all. */}
+            {!showPreview && (headHasPath || staged !== undefined) ? (
               <Button
                 variant={diffOpen ? "secondary" : "ghost"}
                 size="sm"
@@ -269,18 +377,26 @@ export function RepoEditorPane({
           </>
         }
       >
-        <SourceCodeBlock
-          key={path}
-          className="min-h-0 flex-1"
-          plainChrome
-          showLineNumbers
-          editable
-          wrapLongLines={false}
-          code={value}
-          language={kind.language}
-          codeMirrorExtensions={editorExtensions}
-          onChange={stageText}
-        />
+        {showPreview ? (
+          kind.language === "markdown" ? (
+            <MarkdownPreview markdown={value} />
+          ) : (
+            <HtmlPreview html={value} />
+          )
+        ) : (
+          <SourceCodeBlock
+            key={path}
+            className="min-h-0 flex-1"
+            plainChrome
+            showLineNumbers
+            editable
+            wrapLongLines={false}
+            code={value}
+            language={kind.language}
+            codeMirrorExtensions={editorExtensionsWithSchema}
+            onChange={stageText}
+          />
+        )}
       </FileChrome>
     );
   }
@@ -342,11 +458,14 @@ export function RepoEditorPane({
   );
 }
 
-function FileChrome({
+/** Shared editor-pane chrome (path header + status badge + actions slot) —
+ * exported for the sibling readonly commit-diff pane so every pane matches. */
+export function FileChrome({
   path,
   suffix,
   readonly = false,
   status,
+  leading,
   actions,
   children,
 }: {
@@ -355,12 +474,15 @@ function FileChrome({
   suffix?: string;
   readonly?: boolean;
   status?: "added" | "deleted" | "modified";
+  /** Top-left slot before the path — the Code | Preview toggle lives here. */
+  leading?: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        {leading}
         <span className="min-w-0 truncate font-mono text-xs">
           {path}
           {suffix === undefined ? null : <span className="text-muted-foreground"> {suffix}</span>}
@@ -381,7 +503,55 @@ function FileChrome({
   );
 }
 
-function EmptyPane({ label }: { label: string }) {
+/** vscode's "Code | Preview" tab pair for previewable (markdown / html) files. */
+function CodePreviewToggle({
+  preview,
+  onChange,
+}: {
+  preview: boolean;
+  onChange: (preview: boolean) => void;
+}) {
+  return (
+    <Tabs
+      value={preview ? "preview" : "code"}
+      onValueChange={(value) => onChange(value === "preview")}
+      className="shrink-0"
+    >
+      <TabsList className="h-7">
+        <TabsTrigger value="code" className="px-2 text-xs">
+          Code
+        </TabsTrigger>
+        <TabsTrigger value="preview" className="px-2 text-xs">
+          Preview
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+}
+
+/**
+ * Rendered markdown for the current working-tree buffer, via MessageResponse
+ * (streamdown) — already the agent feed's chat renderer, so no new dependency
+ * and no dangerouslySetInnerHTML. SECURITY INVARIANT: repo content is
+ * user-supplied, and the layer that actually defuses it is rehype-sanitize's
+ * default (GitHub) schema in streamdown's DEFAULT rehype pipeline — its
+ * rehype-harden config is wide open (`allowedProtocols: ["*"]` etc.). That
+ * default only holds because nothing here passes `rehypePlugins`; don't add
+ * that prop without re-checking sanitization.
+ */
+function MarkdownPreview({ markdown }: { markdown: string }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl px-8 py-6 text-sm">
+        {/* A settled document, not a stream — skip streamdown's unpaired-
+            marker balancing (it appends a phantom `*` to text like "17 * 23"). */}
+        <MessageResponse parseIncompleteMarkdown={false}>{markdown}</MessageResponse>
+      </div>
+    </div>
+  );
+}
+
+export function EmptyPane({ label }: { label: string }) {
   return (
     <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
       {label}

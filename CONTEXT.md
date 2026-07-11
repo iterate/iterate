@@ -91,6 +91,52 @@ _Avoid_: Slack secret, Slack app config
 A durable registration that asks the Stream Runtime to deliver one Event Stream Path to a hosted stream processor.
 _Avoid_: afterAppend callback, ad hoc WebSocket listener
 
+**Itx Type Graph**:
+The canonical machine-readable form of the public itx surface: one
+`ItxApiDeclaration` record per exported declaration — verbatim source text
+including JSDoc, the TSDoc summary (first sentence), per-member summaries,
+and referenced type names (the edges a closure walk follows) — generated
+from the RpcTarget classes. Discovery responses, the flat type file, human
+docs, and script typechecking are all projections of it. Identifiers follow
+established vocabulary (TypeScript grammar, TSDoc sections), never invented
+middle-layer words.
+_Avoid_: the types blob, treating itx-api.generated.ts as the contract,
+"brief" (TSDoc calls it a summary)
+
+**Type Surface Projection**:
+`itx-api.generated.ts` — the import-free flat join of the Itx Type Graph, kept
+for consumers that need standalone TypeScript text: the published `iterate`
+package, internal client typing, and virtual-filesystem type environments
+(REPL, repo IDE, script checker).
+_Avoid_: the contract, design-of-record (the graph is canonical)
+
+**Capability Type Declaration**:
+TypeScript module source describing one capability — the canonical
+description format for everything callable on itx regardless of origin. One
+grammar: inline declarations, bare names resolving against the ambient Itx
+Type Graph, and standard type-level `import("pkg")` references whose packages
+are declared in a `typesDependencies` semver map, typm-resolved and
+snapshotted content-addressed at provide time (the journal records the
+resolved version and content hash). Non-TS descriptions (MCP JSON Schema,
+OpenAPI specs) normalize to it at the boundary where the capability enters
+the system. Authored types are always plain: RPC stubification is one
+canonical recursive transform (capnweb's) applied at the itx entry point by
+consumers, never spelled per capability. Description and checking only —
+runtime validation stays with the runtime schema (zod today).
+_Avoid_: instructions (that is prose), JSON schema as a description format,
+per-mount stubify flags, read-time npm type resolution
+
+**Docs Door**:
+`itx.docs` — the scope-aware corpus query surface (search + budget-shaped
+fetch) over the Itx Type Graph, the caller's mount table, and the example
+catalogue. Exists once per scoped itx handle (subtree narrowing is a
+parameter); `__describe()` exists on every node. Division of labor: describe
+identifies one node and is never big; docs queries the corpus and is always
+budget-shaped. Subsumes the former `itx.examples` node (protected term
+deleted; the internal example catalogue remains authoring infrastructure).
+_Avoid_: overloading `__describe` with query arguments, per-node `__docs` verb,
+itx.examples
+
 **App Config**:
 Typed runtime configuration serialized into the deployed app and readable by running app code.
 _Avoid_: runtime config, deployment config

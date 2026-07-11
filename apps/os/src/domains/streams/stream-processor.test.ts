@@ -64,21 +64,14 @@ function unrelatedEvent(offset?: number): StreamEvent {
 
 function counter() {
   nextOffset = 0;
-  return new CounterProcessor({ stream: neverStream });
+  return new CounterProcessor({ stream: neverStream, path: "/tests/counter", projectId: null });
 }
 
-describe("StreamProcessor.onStateChange", () => {
-  it("pushes the current checkpoint snapshot immediately on subscribe", async () => {
+describe("StreamProcessor.observeStateChanges", () => {
+  it("notifies the observer with the new snapshot after every state-changing batch", async () => {
     const processor = counter();
-    const pushes: unknown[] = [];
-    await processor.onStateChange((snapshot) => void pushes.push(snapshot));
-    expect(pushes).toEqual([{ offset: 0, state: { count: 0 } }]);
-  });
-
-  it("pushes { offset, state } after every checkpointed batch that changed state", async () => {
-    const processor = counter();
-    const pushes: { offset: number; state: { count: number } }[] = [];
-    await processor.onStateChange((snapshot) => void pushes.push(snapshot));
+    const snapshots: { offset: number; state: { count: number } }[] = [];
+    processor.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
     await processor.ingest({ events: [incrementedEvent(2)], streamMaxOffset: 1 });
     await processor.ingest({
@@ -86,116 +79,35 @@ describe("StreamProcessor.onStateChange", () => {
       streamMaxOffset: 3,
     });
 
-    expect(pushes).toEqual([
-      { offset: 0, state: { count: 0 } },
+    expect(snapshots).toEqual([
       { offset: 1, state: { count: 2 } },
       { offset: 3, state: { count: 10 } },
     ]);
   });
 
-  it("advances the checkpoint through non-consumed events without pushing", async () => {
+  it("does not notify when a batch leaves state unchanged", async () => {
     const processor = counter();
-    const pushes: unknown[] = [];
-    await processor.onStateChange((snapshot) => void pushes.push(snapshot));
+    const snapshots: unknown[] = [];
+    processor.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
     await processor.ingest({ events: [unrelatedEvent()], streamMaxOffset: 1 });
 
-    expect(pushes).toHaveLength(1);
+    expect(snapshots).toHaveLength(0);
     await expect(processor.snapshot()).resolves.toEqual({ offset: 1, state: { count: 0 } });
   });
 
-  it("unsubscribe stops pushes and isLive reports the drop", async () => {
+  it("stops notifying after unsubscribe; currentState reflects the fold", async () => {
     const processor = counter();
-    const pushes: unknown[] = [];
-    const handle = await processor.onStateChange((snapshot) => void pushes.push(snapshot));
-
-    expect(handle.isLive()).toBe(true);
-    handle.unsubscribe();
-    expect(handle.isLive()).toBe(false);
+    const snapshots: unknown[] = [];
+    const unsubscribe = processor.observeStateChanges((snapshot) => void snapshots.push(snapshot));
 
     await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
-    expect(pushes).toHaveLength(1);
-  });
+    expect(snapshots).toHaveLength(1);
+    expect(processor.currentState).toEqual({ count: 1 });
 
-  // NOTE: callbacks in these tests count calls manually instead of via vi.fn —
-  // the processor DISPOSES a dropped callback (releasing the RPC stub), and
-  // vitest mocks implement Symbol.dispose as mockRestore, which wipes the call
-  // record the moment the (correct) disposal happens.
-  it("a synchronously throwing callback rejects the subscribe and registers nothing", async () => {
-    const processor = counter();
-    let calls = 0;
-    const cb = () => {
-      calls += 1;
-      throw new Error("broken stub");
-    };
-    await expect(processor.onStateChange(cb)).rejects.toThrow("broken stub");
-    expect(calls).toBe(1);
-
-    // Nothing registered: the next state change must not call it again.
-    await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
-    expect(calls).toBe(1);
-  });
-
-  it("an async delivery rejection drops the subscription (dead remotes self-prune)", async () => {
-    const processor = counter();
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      let calls = 0;
-      const handle = await processor.onStateChange(() => {
-        calls += 1;
-        // The initial push succeeds; every later delivery rejects, the way a
-        // dead capnweb/Workers RPC stub rejects every call.
-        return calls === 1 ? undefined : Promise.reject(new Error("stub is broken"));
-      });
-
-      await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
-      // The rejection is observed asynchronously.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(handle.isLive()).toBe(false);
-      await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 2 });
-      expect(calls).toBe(2);
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it("a transport onRpcBroken signal drops the subscription", async () => {
-    const processor = counter();
-    let broken: ((error: unknown) => void) | undefined;
-    let calls = 0;
-    const cb = Object.assign(() => void (calls += 1), {
-      onRpcBroken(register: (error: unknown) => void) {
-        broken = register;
-      },
-    });
-
-    const handle = await processor.onStateChange(cb);
-    expect(handle.isLive()).toBe(true);
-    expect(calls).toBe(1);
-
-    broken?.(new Error("session lost"));
-    expect(handle.isLive()).toBe(false);
-
-    await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 1 });
-    expect(calls).toBe(1);
-  });
-
-  it("dup()s a retainable callback and disposes the duplicate on unsubscribe", async () => {
-    const processor = counter();
-    const dispose = vi.fn();
-    const duplicate = Object.assign(vi.fn(), { [Symbol.dispose]: dispose });
-    const cb = Object.assign(vi.fn(), { dup: () => duplicate });
-
-    const handle = await processor.onStateChange(cb);
-    expect(duplicate).toHaveBeenCalledTimes(1); // deliveries go to the duplicate
-    expect(cb).not.toHaveBeenCalled();
-
-    handle.unsubscribe();
-    expect(dispose).toHaveBeenCalledTimes(1);
-
-    handle.unsubscribe(); // idempotent: a second call must not double-dispose
-    expect(dispose).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    await processor.ingest({ events: [incrementedEvent(1)], streamMaxOffset: 2 });
+    expect(snapshots).toHaveLength(1);
   });
 });
 
@@ -235,7 +147,10 @@ describe("StreamProcessor parse-failure skipping", () => {
   function recordingCounter() {
     nextOffset = 0;
     const { appends, stream } = recordingStream();
-    return { appends, processor: new CounterProcessor({ stream }) };
+    return {
+      appends,
+      processor: new CounterProcessor({ stream, path: "/tests/counter", projectId: null }),
+    };
   }
 
   it("skips an unparseable consumed-type event and folds the rest of the batch", async () => {
@@ -276,7 +191,14 @@ describe("StreamProcessor parse-failure skipping", () => {
       await vi.waitFor(() => expect(appends).toHaveLength(1));
       expect(appends[0]).toMatchObject({
         type: "events.iterate.com/stream/error-occurred",
-        idempotencyKey: "processor-event-parse-failed:test-counter:2",
+        idempotencyKey: "test-counter/event-parse-failed@/tests/counter:2",
+        source: {
+          processor: {
+            slug: "test-counter",
+            stream: { path: "/tests/counter", projectId: null },
+            whileProcessing: { offset: 2, type: "events.iterate.com/test/incremented" },
+          },
+        },
       });
       expect(consoleError).toHaveBeenCalledTimes(1);
     } finally {
@@ -307,6 +229,8 @@ describe("StreamProcessor parse-failure skipping", () => {
     try {
       nextOffset = 0;
       const processor = new CounterProcessor({
+        path: "/tests/counter",
+        projectId: null,
         stream: {
           append: () => Promise.reject(new Error("append transport down")),
         } as unknown as Stream,
@@ -320,5 +244,265 @@ describe("StreamProcessor parse-failure skipping", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+describe("StreamProcessor.reconcile", () => {
+  class ReconcilingCounter extends CounterProcessor {
+    reconciledStates: { count: number }[] = [];
+    protected override async reconcile(
+      args: Parameters<StreamProcessor<typeof CounterContract>["reconcile"]>[0],
+    ): Promise<void> {
+      this.reconciledStates.push(args.state);
+    }
+  }
+
+  it("runs after at-head batches with the batch's final fold", async () => {
+    nextOffset = 0;
+    const processor = new ReconcilingCounter({
+      stream: neverStream,
+      path: "/tests/counter",
+      projectId: null,
+    });
+    await processor.ingest({
+      events: [incrementedEvent(2), incrementedEvent(3)],
+      streamMaxOffset: 2,
+    });
+    expect(processor.reconciledStates).toEqual([{ count: 5 }]);
+  });
+
+  it("never runs for a mid-catch-up batch (behind streamMaxOffset)", async () => {
+    nextOffset = 0;
+    const processor = new ReconcilingCounter({
+      stream: neverStream,
+      path: "/tests/counter",
+      projectId: null,
+    });
+    // A refold in progress: the head sits at offset 10, this page ends at 2.
+    await processor.ingest({
+      events: [incrementedEvent(2), incrementedEvent(3)],
+      streamMaxOffset: 10,
+    });
+    expect(processor.reconciledStates).toEqual([]);
+    // The final catch-up page reaches the head; reconciliation gets its pass.
+    await processor.ingest({ events: [incrementedEvent(5, 10)], streamMaxOffset: 10 });
+    expect(processor.reconciledStates).toEqual([{ count: 10 }]);
+  });
+});
+
+// Every append a processor makes through the emitted lanes carries
+// `source.processor`: who appended (slug/version + home stream) and — on the
+// per-event lanes — while processing which event. These tests pin the stamp's
+// shape, the overwrite rule, and the batch-level omission of `whileProcessing`.
+describe("StreamProcessor provenance stamping", () => {
+  const EchoContract = defineProcessorContract({
+    slug: "test-echo",
+    version: "0.0.1",
+    description: "Echoes triggers; exists to test append-lane provenance stamping.",
+    stateSchema: z.object({ seen: z.number().default(0) }),
+    events: {
+      "events.iterate.com/test/triggered": {
+        description: "A trigger the echo processor consumes.",
+        payloadSchema: z.object({ id: z.string() }),
+      },
+      "events.iterate.com/test/echoed": {
+        description: "The echo emitted in response to a trigger.",
+        payloadSchema: z.object({ id: z.string() }),
+      },
+    },
+    consumes: ["events.iterate.com/test/triggered"],
+    emits: ["events.iterate.com/test/echoed"],
+  });
+
+  const HOME = { path: "/tests/echo", projectId: "prj_echo" };
+  const STAMP = { slug: "test-echo", version: "0.0.1", stream: HOME };
+
+  function triggeredEvent(offset: number): StreamEvent {
+    return {
+      type: "events.iterate.com/test/triggered",
+      payload: { id: `t${offset}` },
+      createdAt: new Date(offset).toISOString(),
+      offset,
+      path: HOME.path,
+    };
+  }
+
+  // A stream whose own appends AND `at(path)` children record into one log,
+  // tagged with the destination path.
+  function recordingNetwork() {
+    const appends: { path: string; event: StreamEventInput }[] = [];
+    const streamAt = (path: string): Stream =>
+      ({
+        append: (...events: StreamEventInput[]) => {
+          appends.push(...events.map((event) => ({ path, event })));
+          return Promise.resolve(
+            events.map((event, index) => ({
+              ...event,
+              offset: 1_000 + appends.length + index,
+              createdAt: new Date(0).toISOString(),
+              path,
+            })),
+          );
+        },
+        at: (child: string) => streamAt(child),
+      }) as unknown as Stream;
+    return { appends, stream: streamAt(HOME.path) };
+  }
+
+  class EchoProcessor extends StreamProcessor<typeof EchoContract> {
+    readonly contract = EchoContract;
+
+    protected override processEvent({
+      event,
+      append,
+      appendTo,
+      blockProcessorWhile,
+    }: Parameters<StreamProcessor<typeof EchoContract>["processEvent"]>[0]): undefined {
+      const echo = {
+        type: "events.iterate.com/test/echoed" as const,
+        idempotencyKey: this.idempotencyKey("echo", event),
+        payload: { id: event.payload.id },
+      };
+      blockProcessorWhile(async () => {
+        await append(echo);
+        await appendTo("/tests/echo-sibling", {
+          ...echo,
+          // The caller's stamp claim must lose to the framework's.
+          source: { processor: { slug: "forged", version: "9", stream: HOME } },
+        });
+      });
+    }
+  }
+
+  class BatchEchoProcessor extends StreamProcessor<typeof EchoContract> {
+    readonly contract = EchoContract;
+
+    protected override async processEventBatch(
+      args: Parameters<StreamProcessor<typeof EchoContract>["processEventBatch"]>[0],
+    ): Promise<void> {
+      await super.processEventBatch(args);
+      await args.append({
+        type: "events.iterate.com/test/echoed",
+        idempotencyKey: this.idempotencyKey(`batch-summary:${args.checkpointOffset}`),
+        payload: { id: "batch" },
+      });
+    }
+  }
+
+  it("stamps per-event appends with the processor and the event being processed", async () => {
+    const { appends, stream } = recordingNetwork();
+    const processor = new EchoProcessor({ stream, ...HOME });
+
+    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+
+    const home = appends.filter(({ path }) => path === HOME.path);
+    expect(home).toHaveLength(1);
+    expect(home[0]!.event).toMatchObject({
+      idempotencyKey: "test-echo/echo@/tests/echo:7",
+      source: {
+        processor: {
+          ...STAMP,
+          whileProcessing: { offset: 7, type: "events.iterate.com/test/triggered" },
+        },
+      },
+    });
+  });
+
+  it("appendTo lands on the sibling stream with the same stamp, overwriting claims", async () => {
+    const { appends, stream } = recordingNetwork();
+    const processor = new EchoProcessor({ stream, ...HOME });
+
+    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+
+    const sibling = appends.filter(({ path }) => path === "/tests/echo-sibling");
+    expect(sibling).toHaveLength(1);
+    expect(sibling[0]!.event.source?.processor).toEqual({
+      ...STAMP,
+      whileProcessing: { offset: 7, type: "events.iterate.com/test/triggered" },
+    });
+  });
+
+  it("stamps batch-level appends without whileProcessing", async () => {
+    const { appends, stream } = recordingNetwork();
+    const processor = new BatchEchoProcessor({ stream, ...HOME });
+
+    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+
+    const summary = appends.find(({ event }) => event.idempotencyKey?.includes("batch-summary"));
+    expect(summary?.event.idempotencyKey).toBe("test-echo/batch-summary:7");
+    expect(summary?.event.source?.processor).toEqual(STAMP);
+  });
+
+  it("refuses to append an event type missing from emits, on both lanes", () => {
+    const { stream } = recordingNetwork();
+    const processor = new (class extends StreamProcessor<typeof EchoContract> {
+      readonly contract = EchoContract;
+      emitForeign() {
+        return this.append({
+          type: "events.iterate.com/test/triggered",
+          payload: { id: "x" },
+        } as never);
+      }
+      forwardForeign() {
+        return this.appendTo("/tests/echo-sibling", {
+          type: "events.iterate.com/test/triggered",
+          payload: { id: "x" },
+        } as never);
+      }
+    })({ stream, ...HOME });
+
+    expect(() => processor.emitForeign()).toThrow(/cannot build emitted event/);
+    expect(() => processor.forwardForeign()).toThrow(/cannot build emitted event/);
+  });
+});
+
+describe("StreamProcessor checkpoint loading", () => {
+  it("treats a snapshot that fails the current state schema as a cache miss and refolds", async () => {
+    // The deploy-a-schema-change scenario: the stored checkpoint carries the
+    // OLD state shape. Wedging on it would make snapshot()/ingest() reject
+    // forever — with the recovery machinery itself crash-looping on the
+    // parse. The checkpoint is a disposable cache of the fold; discard and
+    // refold from the journal.
+    nextOffset = 0;
+    const processor = new CounterProcessor({
+      stream: neverStream,
+      path: "/tests/counter",
+      projectId: null,
+      readState: () => ({
+        offset: 7,
+        state: { count: "three", legacyField: true } as never,
+      }),
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await processor.ingest({
+        events: [incrementedEvent(2, 1), incrementedEvent(3, 2)],
+        streamMaxOffset: 2,
+      });
+      // The poisoned offset-7 checkpoint was discarded: both events (below
+      // offset 7) folded from scratch.
+      expect(processor.state).toEqual({ count: 5 });
+      expect(processor.checkpointOffset).toBe(2);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("discarding the cache"),
+        expect.anything(),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+});
+
+describe("contract event-input envelope", () => {
+  it("accepts ephemeral: true on an emitted input (the strict envelope must know the key)", () => {
+    // Load-bearing: getEventInputSchema is .strict(), so without `ephemeral`
+    // in the envelope every processor-lane ephemeral append (the agent's LLM
+    // chunks) would throw "Unrecognized key" at parse.
+    const parsed = CounterContract.parseEventInput("events.iterate.com/test/incremented", {
+      type: "events.iterate.com/test/incremented",
+      ephemeral: true,
+      payload: { by: 1 },
+    });
+    expect(parsed.ephemeral).toBe(true);
   });
 });

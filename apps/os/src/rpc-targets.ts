@@ -34,6 +34,7 @@ import { parseConfig } from "./config.ts";
 import {
   resolveItxAuth,
   resolveOrganizationSlugForCreate,
+  trustedInternalAuthContext,
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
@@ -46,20 +47,25 @@ import {
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
+import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
 import { DurableObjectNameCodec, normalizePath } from "./domains/durable-object-names.ts";
-import { normalizeAgentPath } from "./domains/agents/utils.ts";
+import { normalizeAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
 import {
   describeNode,
   rejectBuiltinCollision,
-  withInvokeCapabilityFallback,
+  installPrototypeInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
-import { ITX_TYPES_SOURCE } from "./types-source.generated.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
-import { defaultProjectWorkerRef, PROJECT_REPO_PATH } from "./domains/repos/utils.ts";
+import {
+  CONFIG_REPO_PATH,
+  defaultProjectWorkerRef,
+  isRepoNotSeededError,
+} from "./domains/repos/utils.ts";
+import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import {
   DEFAULT_SANDBOX_INSTANCE_TYPE,
@@ -73,16 +79,18 @@ import {
 } from "./domains/sandboxes/utils.ts";
 import { SandboxProcessorContract } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
-import { normalizeWorkspacePath, workspaceBranchName } from "./domains/workspaces/utils.ts";
+import { isRootWorkspacePath, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
 import {
   completeConnect,
+  connectTelegram,
   disconnectProvider,
   getConnectionStatus,
   listIntegrationConnections,
   startOAuthFlow,
+  type ConnectTelegramResult,
 } from "./domains/integrations/connect-flows.ts";
 import {
   BUILTIN_INTEGRATION_SLUGS,
@@ -102,6 +110,14 @@ import {
   SLACK_CALL_GRAMMAR,
 } from "./domains/integrations/slack-api.ts";
 import {
+  callProjectTelegramBotApi,
+  TELEGRAM_CALL_GRAMMAR,
+} from "./domains/integrations/telegram-api.ts";
+import {
+  connectionWaitroseClient,
+  WAITROSE_CALL_GRAMMAR,
+} from "./domains/integrations/waitrose-api.ts";
+import {
   deleteProjectFile,
   mintProjectFileUrl,
   putProjectFile,
@@ -112,6 +128,7 @@ import {
   buildDurableObjectProcessorSubscriptionConfiguredEvent,
   resolveStreamPath,
 } from "./domains/streams/utils.ts";
+import { compileJsonataExpression } from "./domains/streams/event-selector.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
 import type {
   DynamicWorkerCapability,
@@ -120,6 +137,7 @@ import type {
   ProjectWorker,
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
+import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -127,12 +145,27 @@ import {
   type OpenApiOperation,
 } from "./domains/itx/openapi-types.ts";
 import { callMcpToolPath, listMcpTools } from "./domains/itx/mcp-client.ts";
-import { ITX_EXAMPLES, type ItxExample } from "./itx/examples.ts";
+import { ITX_EXAMPLES } from "./itx/examples.ts";
+import { ITX_API_DECLARATIONS } from "./itx-api-graph.generated.ts";
+import {
+  declarationsByName,
+  oneLineSummary,
+  mountDeclaration,
+  searchScore,
+  weightedDeclarationScore,
+  typeSlice,
+  type DocsSearchHit,
+} from "./domains/itx/itx-api-graph.ts";
+import {
+  mcpCapabilityTypeDeclaration,
+  openApiCapabilityTypeInline,
+  openApiCapabilityTypeReference,
+} from "./domains/itx/capability-type-declarations.ts";
+import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
 import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
 import type {
   StreamProcessor,
   StreamProcessorContract,
-  StreamProcessorStateSubscriptionHandle,
 } from "./domains/streams/stream-processor.ts";
 import type {
   CapabilityDescription,
@@ -148,6 +181,8 @@ import type {
   EditRepoFileResult,
   GithubSyncResult,
   LinkGithubResult,
+  RepoCommitDetails,
+  RepoLogResult,
 } from "./domains/repos/types.ts";
 import type {
   BuiltinIntegrationSlug,
@@ -155,12 +190,14 @@ import type {
   GmailRequestInput,
   IntegrationConnectionStatus,
   IntegrationConnectionListEntry,
+  OAuthProviderSlug,
 } from "./domains/integrations/types.ts";
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
   indexRepoSnapshotToSearchIndex,
+  indexStreamEventBatch,
   mirrorFileToSearchIndex,
   projectSearchFilter,
   searchInstanceName,
@@ -172,17 +209,18 @@ import type {
 } from "./domains/search/search-index.ts";
 import type { AgentFileAttachment } from "./domains/agents/agent-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
+import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
 import type {
   CfBrowserQuickAction,
   CfBrowserQuickActionOptions,
   CfImageTransformInput,
+  CfAiRunOptions,
   CfMarkdownConversionArgs,
   CfMarkdownConversionResult,
   CfMarkdownSupportedFormat,
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
-import type { ItxExampleSummary, ItxExampleWithCode } from "./itx/examples.ts";
 import type { McpClientConnectInput, McpClientRpc } from "./domains/itx/mcp-client.ts";
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
 import type { ProjectListEntry } from "./project-deployment-status.ts";
@@ -196,22 +234,37 @@ import type {
 } from "./domains/capability-host/types.ts";
 import type { SecretDescription, SecretUpdateInput } from "./domains/secrets/types.ts";
 import type {
+  GetProcessorRuntimeState,
+  LiveStateRpc,
+  LiveStateSubscriptionHandle,
   ProcessEventBatch,
+  StreamPushEventBatch,
   ProcessorRuntimeState,
   ProcessorSnapshot,
   StreamEventReadInput,
   StreamProcessorRpc,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
   StreamSubscriptionHandle,
+  WakeableStreamProcessorRpc,
 } from "./domains/streams/rpc-types.ts";
+import { StreamReceiverUnavailableError } from "./domains/streams/rpc-types.ts";
+import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
+import type { LiveUpdate } from "./lib/live-state/protocol.ts";
+import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { AgentProcessorState } from "./domains/agents/agent-processor-contract.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
+import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
+import type { TouchInput } from "./domains/projects/stream-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
+import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
+  WorkspaceChange,
   WorkspaceFileInfo,
   WorkspaceGitLogEntry,
-  WorkspaceGitStatusEntry,
+  WorkspacePublishResult,
 } from "./domains/workspaces/types.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
@@ -236,7 +289,6 @@ import { EmailProcessorContract } from "./domains/email/email-processor-contract
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import {
   agentDefaultsForPath,
-  deploymentDefaultLlmProvider,
   type AgentDefaultPolicy,
   type AgentDefaultsOverrides,
 } from "./domains/agents/agent-defaults.ts";
@@ -281,6 +333,8 @@ class IterateRpcRelay<Name extends string> extends IterateRpcTarget<Name> {}
 
 type FetchOnly = Pick<Fetcher, "fetch">;
 
+const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
+
 const PARALLEL_OPENAPI_SPEC_URL = "https://docs.parallel.ai/public-openapi.json";
 const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
 
@@ -321,14 +375,18 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
+        crossPostTo:
+          "Copy matching events onto another stream (optionally JSONata-transformed). Rides durable delivery, so ephemeral events are never cross-posted; a selector matching only ephemeral types delivers nothing.",
         getEvent: "One event by offset or idempotencyKey.",
         getEvents: "Read one bounded page of events.",
+        kill: "Abort the current Durable Object incarnation; the next request boots it again.",
         readEvents: "Create a pager for bounded event pages.",
-        subscribe: "Live event delivery; returns an unsubscribe handle.",
+        removeCrossPost: "Remove a cross-post configured by crossPostTo.",
+        subscribe: "Ephemeral live event delivery; returns an unsubscribe handle.",
         waitForEvent: "Block until a matching event lands.",
       },
       parent: "streams.get(path)",
@@ -372,14 +430,22 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
   }
 
-  /** One event by offset or idempotencyKey; undefined when it does not exist. */
+  /** One event by offset or idempotencyKey; undefined when it does not exist.
+   * Point reads return ephemeral rows too — but those rows are evictable, so
+   * an offset that once resolved may later read as undefined. */
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
     return this.durableObjectStub.getEvent(args);
   }
 
-  /** Read one bounded page of committed events (optionally filtered by type). */
+  /**
+   * Read one bounded page of committed events (default from the stream's
+   * start; filter with `eventTypes`, page forward with `afterOffset`). A full
+   * page (500 events) means MORE remain — page with
+   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
+   * shows you the beginning, not the head.
+   */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     return this.durableObjectStub.getEvents(args);
   }
@@ -396,6 +462,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
+   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`
+   * events too — remember their rows may be evicted if you record the offset.
    */
   waitForEvent(args: {
     afterOffset?: number;
@@ -413,44 +481,155 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return this.durableObjectStub.getProcessorRuntimeState(args);
   }
 
-  /** Live debug view of the stream Durable Object: core processor state, open connections, and the project worker delivery checkpoint. */
+  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
       connections: Record<string, unknown>;
-      workerDelivery: {
-        checkpoint: number;
-        consecutiveFailures: number;
-        retryScheduled: boolean;
-      } | null;
+      subscriptions: Record<
+        string,
+        {
+          mode: "wake" | "push" | "webhook";
+          ackedOffset: number;
+          lag: number;
+          attempt: number;
+          nextAttemptAt: number | null;
+          lastError: string | null;
+          parkedAtOffset: number | null;
+          connected: boolean;
+        }
+      >;
     };
   }> {
     return this.durableObjectStub.runtimeState();
   }
 
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
+  }
+
   /**
-   * Live event delivery: `processEventBatch` is called for every committed
-   * batch (optionally replayed from `replayAfterOffset`); returns an
-   * unsubscribe handle. Set `configured: true` only from trusted-internal
-   * auth — it opens the durable configured subscription registered under
-   * `subscriptionKey` (the wake-handshake response) instead of an ephemeral one.
+   * Session-scoped live event delivery (the "ephemeral" subscription lane —
+   * also the only lane that receives `ephemeral: true` events):
+   * `processEventBatch` is called for every committed batch (optionally
+   * replayed from `replayAfterOffset`); returns an unsubscribe handle.
+   * Forgotten on disconnect — durable delivery is configured as data instead,
+   * by appending a `subscription-configured` event (wake or push mode) to the
+   * stream.
    */
   subscribe(args: {
     subscriptionKey?: string;
-    configured?: boolean;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
     eventTypes?: readonly string[];
+    selector?: { eventTypes?: string[]; condition?: string };
     events?: boolean;
     subscriber?: unknown;
+    /** Optional live debug hook, retained for the subscription's lifetime. */
+    getRuntimeState?: GetProcessorRuntimeState;
   }): Promise<StreamSubscriptionHandle> {
-    // `configured: true` opens the durable configured subscription for the
-    // given key (the wake-handshake response) — only the platform's own
-    // Durable Objects may do that; everyone else gets ephemeral subscriptions.
-    if (args.configured === true && this.props.auth.principal !== "trusted-internal") {
-      throw new Error("configured subscriptions require trusted internal auth");
+    // The zero-return-frame wire guarantee, relay leg. The Stream DO retains
+    // and invokes the delivery callback over Workers RPC, and Workers RPC
+    // always ships a call result — so if the DO's calls were forwarded
+    // straight through to the subscriber's Cap'n Web stub, this worker would
+    // have to PULL the subscriber's resolution to produce that result,
+    // putting one subscriber-originated resolve frame per batch on the socket
+    // (live-proven against a preview deployment; see stream-wire.e2e.test.ts).
+    // Terminating the call HERE keeps the subscriber leg one-way: the
+    // forwarder invokes the subscriber's stub and disposes the result
+    // unpulled, and the DO's Workers RPC result is the forwarder's own
+    // synchronous `undefined`. The retained stub is session-owned — Cap'n Web
+    // disposes a session's exports when the session ends, which is exactly an
+    // ephemeral subscription's lifetime.
+    const forward = retainProcessEventBatch(args.processEventBatch);
+    return this.durableObjectStub.subscribe({
+      ...args,
+      processEventBatch: (batch) => void forward(batch),
+    });
+  }
+
+  /**
+   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
+   * appends the batch's events into THIS stream with provenance stamping,
+   * structural loop protection, and source-derived idempotency keys. A source
+   * stream cross-posts here by configuring
+   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.
+   */
+  acceptCrossPost(batch: StreamPushEventBatch): Promise<void> {
+    // Only the platform's own delivery spine dials acceptCrossPost: it arrives
+    // through a push expression evaluated against the project's trusted itx
+    // root. A session principal appending copies would bypass provenance
+    // stamping.
+    if (this.props.auth.principal !== "trusted-internal") {
+      throw new Error("acceptCrossPost is dialed by stream push subscriptions, not sessions");
     }
-    return this.durableObjectStub.subscribe(args);
+    return Promise.resolve(this.durableObjectStub.acceptCrossPost(batch));
+  }
+
+  /**
+   * "When events matching this land HERE, post them onto stream `path`" — the
+   * cross-post verb. Pure sugar over appending a `subscription-configured`
+   * push subscription targeting the destination's `acceptCrossPost` sink; the appended
+   * event (returned) is the real interface and shows in the log like any
+   * other config. Same-`key` calls replace the previous cross-post; remove
+   * with `removeCrossPost`. Copies carry the full provenance chain
+   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`
+   * is an optional JSONata expression CONSTRUCTING the copied event's body
+   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":
+   * payload.body.repository.full_name } }`); omitted fields copy verbatim.
+   */
+  async crossPostTo(args: {
+    /** Destination stream path (this project). */
+    path: string;
+    /** Subscription identity; defaults to `cross-post:<destination path>`. */
+    key?: string;
+    eventTypes?: string[];
+    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */
+    condition?: string;
+    /** JSONata constructor for the copied event's `{type?, payload?, metadata?}`. */
+    transform?: string;
+    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */
+    deliver?: "all" | "new" | { afterOffset: number };
+  }): Promise<StreamEvent> {
+    const destination = normalizePath(args.path);
+    if (args.transform !== undefined) {
+      // Same configure-time posture as selector conditions (#validateAppend
+      // compiles them): an unparseable transform must fail THIS call, not
+      // park the subscription at delivery time hours later.
+      compileJsonataExpression(args.transform);
+    }
+    const selector = {
+      ...(args.eventTypes === undefined ? {} : { eventTypes: args.eventTypes }),
+      ...(args.condition === undefined ? {} : { condition: args.condition }),
+    };
+    const [event] = await this.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        subscriptionKey: args.key ?? `cross-post:${destination}`,
+        delivery: {
+          mode: "push",
+          expression: ["streams", ["get", destination], "acceptCrossPost"],
+        },
+        ...(Object.keys(selector).length === 0 ? {} : { selector }),
+        ...(args.deliver === undefined ? {} : { deliver: args.deliver }),
+        ...(args.transform === undefined ? {} : { params: { transform: args.transform } }),
+      },
+    });
+    return event!;
+  }
+
+  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
+  async removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent> {
+    const key =
+      args.key ?? (args.path === undefined ? undefined : `cross-post:${normalizePath(args.path)}`);
+    if (key === undefined) throw new Error("removeCrossPost needs a path or key");
+    const [event] = await this.append({
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { subscriptionKey: key },
+    });
+    return event!;
   }
 }
 
@@ -516,7 +695,9 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
         "outcome is an event on this stream.",
       children: {
         cancel: "Remove a Schedule by key (idempotent).",
+        kill: "Restart the scheduler's server-side object; the next request boots it fresh.",
         list: "Every Schedule, reduced from the stream.",
+        processor: "The scheduler stream processor (snapshot/state).",
         set: "Upsert a Schedule: { key, recurrence, script, metadata? }.",
         trigger: "Run a Schedule now (advances a recurring clock, consumes a one-shot).",
       },
@@ -538,6 +719,14 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
     );
   }
 
+  /** The scheduler stream processor (snapshot/state). */
+  get processor(): WakeableStreamProcessorRpc<SchedulerProcessorState> {
+    return new ProcessorRelayRpcTarget<SchedulerProcessorState>({
+      auth: this.props.auth,
+      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
   set(input: SetScheduleInput): Promise<ScheduleView> {
     return this.#durableObjectStub.setSchedule({
@@ -551,6 +740,11 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
   cancel(key: string): Promise<void> {
     return this.#durableObjectStub.cancelSchedule(key);
+  }
+
+  /** Restart the scheduler's server-side object; the next request boots it fresh. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.#durableObjectStub.kill());
   }
 
   list(): Promise<ScheduleView[]> {
@@ -617,8 +811,8 @@ async function requestRepoCreate(input: {
     stream.append(
       buildDurableObjectProcessorSubscriptionConfiguredEvent({
         durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
+        processor: ["repos", ["get", path], "processor"],
         processorSlug: RepoProcessorContract.slug,
-        subscriberType: "repo",
       }),
       {
         type: "events.iterate.com/repo/create-requested",
@@ -649,23 +843,27 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return describeNode({
       instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing) and cross-posts GitHub webhooks about it onto this repo's stream; the repo processor state shows the link and last push outcome.`,
       children: {
+        commitDetails:
+          "One commit's metadata plus its changed files with +/- line counts, diffed against its first parent ({ commitOid }).",
         commitFiles:
           "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
         create: "Create the repo if it does not exist yet.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
+        kill: "Restart the repo's server-side object; the next request boots it fresh.",
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, webhooks cross-post in.",
         listFiles: "List file paths.",
+        log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
         readFile:
-          'Read one file ({ path, encoding? }); encoding "base64" for binary files (images, PDFs).',
+          'Read one file ({ path, encoding?, commitOid? }); encoding "base64" for binary files (images, PDFs), commitOid for a pinned read at a historic commit.',
         syncFromGithub:
           "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } prunes to the newest N commits — required for big repositories, GitHub keeps full history).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
-      parent: "repos.get(path); the project repo is itx.repo",
+      parent: "repos.get(path); the project's config repo (/repos/config) is itx.repo",
     });
   }
 
@@ -704,6 +902,11 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     return this.#durableObjectStub.whoami();
   }
 
+  /** Restart the repo's server-side object; the next request boots it fresh. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.#durableObjectStub.kill());
+  }
+
   /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */
   commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
     return this.#durableObjectStub.commitFiles(input);
@@ -723,10 +926,30 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   }
 
   /**
-   * Committed file contents at HEAD; null when the path does not exist.
-   * `encoding: "base64"` reads raw bytes (images, PDFs) base64-encoded.
+   * Commit history of a branch, newest first — oid, message, author,
+   * timestamp (epoch ms), parent oids. Deliberately without per-commit file
+   * stats (those cost tree checkouts per commit); fetch them lazily per
+   * commit through `commitDetails`.
    */
-  readFile(input: { path: string; encoding?: "utf8" | "base64" }): Promise<{
+  log(input: { branch?: string; limit?: number } = {}): Promise<RepoLogResult> {
+    return this.#durableObjectStub.log(input);
+  }
+
+  /**
+   * One commit's metadata plus the files it changed versus its first parent
+   * (the whole tree for the root commit), with `git diff --numstat`-shaped
+   * +/- line counts; binary files are flagged instead of counted.
+   */
+  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails> {
+    return this.#durableObjectStub.commitDetails(input);
+  }
+
+  /**
+   * Committed file contents at HEAD — or, with `commitOid`, pinned to that
+   * commit — null when the path does not exist there. `encoding: "base64"`
+   * reads raw bytes (images, PDFs) base64-encoded.
+   */
+  readFile(input: { path: string; encoding?: "utf8" | "base64"; commitOid?: string }): Promise<{
     commitOid: string;
     content: string;
     path: string;
@@ -780,9 +1003,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
    *
-   * Public repositories transfer server-side (any history size); private
-   * ones transfer in-process, where big histories need `depth`. `depth`
-   * prunes to the newest N commits — GitHub retains the full history, and a
+   * The history transfers in-process, so big histories need `depth` — it
+   * prunes to the newest N commits. GitHub retains the full history, and a
    * later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
@@ -799,8 +1021,18 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   }
 
   /** The repo stream processor (snapshot/state). */
-  get processor(): StreamProcessorRpc<RepoProcessorState> {
-    return new ProcessorRelayRpcTarget<RepoProcessorState>(() => this.#durableObjectStub.processor);
+  get processor(): WakeableStreamProcessorRpc<RepoProcessorState> {
+    return new ProcessorRelayRpcTarget<RepoProcessorState>({
+      auth: this.props.auth,
+      host: () => this.#durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
+  get liveState(): LiveStateRpc<RepoProcessorState> {
+    return new LiveStateRelayRpcTarget<RepoProcessorState>(
+      () => this.#durableObjectStub as unknown as LiveStateDurableObjectStub<RepoProcessorState>,
+    );
   }
 }
 
@@ -856,9 +1088,9 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Agent catalog: get("/agents/<name>") returns the agent control surface; list() the known agent streams.',
+        'Agent catalog: get("/agents/<name>") returns the agent control surface. Paths without a leading "/" resolve relative to YOUR scope with filesystem semantics — get("researcher") from an agent script addresses a child agent, get("..") from a child addresses its parent. list() the known agent streams.',
       children: {
-        get: "One agent by path.",
+        get: "One agent by path (absolute, or relative to the calling scope).",
         list: "Known agents (from project state).",
         defaults: "The platform's default agent policy, as data (forPath).",
       },
@@ -866,23 +1098,50 @@ class AgentCollectionRpcTarget extends IterateRpcTarget<"AgentCollection"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      projectId: string;
+      /**
+       * The scope path of the itx this collection was reached through — the
+       * "current actor". Relative `get()` paths resolve against it, and
+       * `message()` on the returned agents stamps it as the sender when it
+       * is an agent path. Captured at itx mint time (itxForScope), so it is
+       * a property of the tree, not of per-call auth.
+       */
+      sourceScopePath?: string;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The agent control surface at a path (`"/agents/<name>"`). */
+  /**
+   * The agent control surface at a path (`"/agents/<name>"`, or relative to
+   * the calling scope — `".."` climbs). The returned handle is a plain,
+   * unproxied RpcTarget ON PURPOSE, so callers can PIPELINE onto this call —
+   * `itx.agents.get(path).message(text)` or `.someTool(args)` in one
+   * expression — over workerd RPC (the script lane); dynamic members resolve
+   * through the prototype-chain fallback. See AgentRpcTarget's class comment
+   * for the mechanism and `agent-handle-pipelining.itx.e2e.test.ts` for the
+   * guard.
+   */
   get(path: string): AgentRpcTarget {
+    const resolved = resolveAgentPath(path, this.props.sourceScopePath);
     return new AgentRpcTarget({
       auth: this.props.auth,
       capabilityHost: new CapabilityHostRpcTarget({
         auth: this.props.auth,
         ctx: this.props.ctx,
-        path: normalizeAgentPath(path),
+        path: resolved,
         projectId: this.props.projectId,
       }),
       ctx: this.props.ctx,
       projectId: this.props.projectId,
+      ...(this.props.sourceScopePath === undefined
+        ? {}
+        : { sourceScopePath: this.props.sourceScopePath }),
     });
   }
 
@@ -909,7 +1168,7 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, provider, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, provider selection, workspace mount, boot context; plus the onboarding kickoff for the onboarding agent). Pass overrides ({ systemPrompt?, provider?, model? }) to bake customizations into the returned events. The seeded project worker calls this from its child-stream-created reaction.",
+        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus the onboarding kickoff for the onboarding agent). Pass overrides ({ systemPrompt?, model? }) to bake customizations into the returned events. The seeded project worker calls this from its child-stream-created reaction.",
       children: { forPath: "Default policy (and its event batch) for one agent path." },
       parent: "the agent catalog (itx.agents.defaults)",
     });
@@ -926,14 +1185,41 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
    * (projectId, path), so appending them twice — or racing a redelivery — is
    * a no-op.
    */
-  forPath(path: string, overrides?: AgentDefaultsOverrides): AgentDefaultPolicy {
+  async forPath(path: string, overrides?: AgentDefaultsOverrides): Promise<AgentDefaultPolicy> {
     return agentDefaultsForPath({
       agentPath: normalizeAgentPath(path),
-      deploymentLlmProvider: deploymentDefaultLlmProvider(env),
       projectId: this.props.projectId,
+      ...(await agentBootProjectFacts(this.props.projectId)),
       ...(overrides === undefined ? {} : { overrides }),
     });
   }
+}
+
+/**
+ * Human-facing project facts for an agent's boot context, best-effort from
+ * the project directory: name, slug, and the served worker URL (via the
+ * canonical builder, so loopback bases keep their scheme/port and wildcard
+ * bases normalize). Absent (id-only boot line) when the directory has no
+ * record yet — never a birth blocker.
+ */
+async function agentBootProjectFacts(
+  projectId: string,
+): Promise<{ project?: { name: string; slug: string; workerUrl?: string } }> {
+  const record = await readProjectById(env.PROJECT_DIRECTORY, projectId).catch(() => null);
+  if (record === null) return {};
+  const config = parseConfig(env);
+  const workerUrl = buildProjectWorkerUrl({
+    projectSlug: record.slug,
+    projectHostnameBases: config.projectHostnameBases,
+    ...(config.baseUrl === undefined ? {} : { appBaseUrl: config.baseUrl }),
+  });
+  return {
+    project: {
+      name: record.name,
+      slug: record.slug,
+      ...(workerUrl === null ? {} : { workerUrl }),
+    },
+  };
 }
 
 /**
@@ -967,7 +1253,7 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its bare Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy() and __describe() like every node. The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
+        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its bare Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy()/kill() and __describe() like every node. The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
       children: {
         create: "Create a sandbox (strict: existing/destroyed names are errors). Returns { path }.",
         get: "The sandbox at a created path (boots the container on first use).",
@@ -1108,19 +1394,24 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
 /**
  * Catalog of durable workspaces within one project.
  *
- * A workspace is addressed by its FULL path, which always lives under
- * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
- * `/repos/...`: an agent's workspace is the agent path under the prefix
- * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
- * scope), and standalone workspaces live under `/workspaces/<anything>`.
- * Getting a workspace is cheap; the first call on it clones the project repo.
+ * `get("/")` is the project's ROOT workspace: a read-only, always-fresh
+ * materialization of the config repo's main branch. Every other workspace is
+ * addressed by its FULL path under `/workspaces/` — the same domain-prefix
+ * convention as `/sandboxes/...` and `/repos/...`: an agent's workspace is
+ * the agent path under the prefix (`/workspaces/agents/...`, exposed as
+ * `itx.workspace` in that agent's scope), and standalone workspaces live
+ * under `/workspaces/<anything>`. Non-root workspaces are OVERLAYS over the
+ * root: writes stay local, missing reads fall through to latest main — no
+ * clone, usable instantly.
  */
 class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Durable workspace filesystems: get(path) returns a Durable-Object-hosted private checkout of the project repo (no container, always warm). Paths live under /workspaces/ — an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
-      children: { get: "The workspace at a path (clones the project repo on first use)." },
+        "Durable workspace filesystems (Durable-Object-hosted, no container, always warm). get(\"/\") is the project's read-only ROOT workspace — always the latest main of the config repo. Other paths live under /workspaces/ and are instant copy-on-write overlays over the root: an agent's own workspace is its agent path under the prefix (what itx.workspace resolves to); pick /workspaces/<name> for standalone ones.",
+      children: {
+        get: 'The workspace at a path — "/" for the read-only root (latest main), /workspaces/<name> for a private overlay.',
+      },
       parent: "a project itx (itx.workspaces)",
     });
   }
@@ -1130,7 +1421,7 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The workspace at a path (clones the project repo on first use). */
+  /** The workspace at a path — "/" is the read-only root (latest main); others are private overlays. */
   get(path: string): WorkspaceRpcTarget {
     return new WorkspaceRpcTarget({
       auth: this.props.auth,
@@ -1142,38 +1433,44 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
 
 /**
  * One durable workspace: a private virtual filesystem living in a Durable
- * Object (no container, always warm), seeded on first use with a checkout of
- * the project repo at `/` — every call waits for that clone, so a read that
- * returns proves the checkout exists. Read, write, and edit files freely;
- * nothing is shared until pushed. `git` publishes commits to the workspace's
- * own branch in the project repo (`workspaces/<path>`), never to main.
+ * Object (no container, always warm). The root workspace (`"/"`) is the
+ * read-only, always-fresh materialization of the config repo's main branch.
+ * Every other workspace is an OVERLAY over the root: reads see latest main
+ * until a local write shadows a path, writes and deletes stay private, and
+ * there is no clone — a new workspace is usable instantly. `git.commit`
+ * commits the overlay's changes straight to the config repo's MAIN branch
+ * (the same lane as `itx.repo.commitFiles`, so the project worker/website
+ * redeploys automatically), then the overlay resets to mirror the new main.
  *
- * Constraints: individual files are capped at ~1.5MB (store large blobs with
- * `itx.files`), and the `.git` directory is platform-managed — read it if you
- * like, but writes there are rejected (use the `git` methods). Workspace
- * branches are for durability and handoff, not worker builds: point worker
- * refs at branches maintained through `itx.repo`, never at `workspaces/**`.
+ * Constraints: the `.git` name is reserved (platform-managed). Large files
+ * are fine (past ~1.5MB they are stored in R2 transparently).
  */
 class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   async __describe(): Promise<Description> {
+    const isRoot = isRootWorkspacePath(this.props.path);
     return describeNode({
-      instructions:
-        `A durable workspace at "${this.props.path}": a private checkout of the project repo in a Durable Object filesystem (cloned on first use; every call waits for that clone, so a successful read proves the checkout is ready). Paths are absolute with "/" as the repo root. Read/write/edit freely — nothing is shared until pushed; ` +
-        `workspace.git publishes commits to the project repo branch "${workspaceBranchName(this.props.path)}", never to main.`,
+      instructions: isRoot
+        ? "The project's ROOT workspace (\"/\"): a read-only, always-fresh checkout of the config repo's main branch — reads always see the latest commit on main. Writes are rejected (write in your own workspace, or commit to main via itx.repo). Every other workspace overlays this one."
+        : `A durable workspace at "${this.props.path}": an instant copy-on-write overlay over the config repo's latest main (no clone — reads fall through to main until a local write shadows a path; writes and deletes stay private until committed). Paths are absolute with "/" as the repo root. ` +
+          "workspace.git.commit({ message }) commits your changes to the config repo's MAIN branch — the project worker/website redeploys automatically; no branches, no push, no extra steps.",
       children: {
-        appendFile: "Append to a file.",
+        appendFile: "Append to a file (copies a fallen-through file up first).",
         cp: "Copy a file or directory ({ recursive } for trees).",
         deleteFile: "Delete one file (false when it did not exist).",
-        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Working-tree only — commit via git.",
+        edit: "Replace an exact string in one file; oldString must match once unless replaceAll is true. Private until committed via git.",
         exists: "Whether a path exists.",
-        git: "Git over this checkout: status/add/rm/commit/log/diff/push — push goes to this workspace's own branch.",
+        git: "Commit surface: status (changes vs main), commit (changes → the config repo's main), log (main's history).",
         glob: "Files matching a glob pattern.",
+        kill: "Restart the workspace's server-side object; the next request boots it fresh.",
+        listAllFiles: "Every file path in the merged view (sorted).",
         mkdir: "Create a directory ({ recursive } for parents).",
         mv: "Move/rename a file or directory.",
         readDir: "List a directory (defaults to the root).",
         readFile: "One file's contents ({ path }); null when missing.",
         readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
-        reset: "Wipe the checkout; the next call re-clones. Unpushed work is LOST.",
+        reset:
+          "Wipe the local layer and deletions — back to a pristine view of main. Unpublished work is LOST.",
+        revert: "Un-pin ONE path: drop the local copy/deletion so it follows latest main again.",
         rm: "Remove a path ({ recursive, force }).",
         stat: "Metadata for one path; null when missing.",
         whoami: "Workspace identity string (debug).",
@@ -1204,6 +1501,11 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return this.durableObjectStub.whoami();
   }
 
+  /** Restart the workspace's server-side object; the next request boots it fresh. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
+  }
+
   /** File contents, or null when the path does not exist. */
   readFile(path: string): Promise<string | null> {
     return this.durableObjectStub.readFile(path);
@@ -1215,12 +1517,28 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   }
 
   /**
-   * Wipe the checkout and re-clone the project repo on the next call — the
-   * escape hatch for a wedged workspace. Unpushed work is LOST (pushed
-   * commits survive on the workspace branch).
+   * Wipe the workspace back to pristine: the local layer and every deletion
+   * vanish, leaving a clean view of latest main (on the root, the next read
+   * re-materializes). Uncommitted work is LOST (committed changes live on
+   * main).
    */
   reset(): Promise<void> {
     return this.durableObjectStub.reset();
+  }
+
+  /**
+   * Un-pin one path: drop the local copy (file or subtree) and any deletion
+   * of it, so the path follows latest main again — the surgical sibling of
+   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
+   * masks it until that ancestor is reverted too.
+   */
+  revert(path: string): Promise<void> {
+    return this.durableObjectStub.revert(path);
+  }
+
+  /** Every file path in the merged view (local layer over latest main), sorted. */
+  listAllFiles(): Promise<string[]> {
+    return this.durableObjectStub.listAllFiles();
   }
 
   writeFile(path: string, content: string): Promise<void> {
@@ -1288,27 +1606,23 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 }
 
 /**
- * Git operations over a workspace's checkout, mirroring `@cloudflare/shell`'s
- * git command names so upstream docs apply. The workflow is ordinary git:
- * `add({ filepath: "." })` stages everything, `commit({ message })` commits,
- * `push()` publishes to the workspace's own branch in the project repo.
- * Push credentials are injected inside the workspace Durable Object (from the
- * project repo's `gitAccess()`), so no token ever rides this surface.
+ * The commit surface of an overlay workspace. There is no staging area, no
+ * branch, and no separate push: `commit({ message })` turns the workspace's
+ * changes (local files minus `.gitignore`d paths, plus deletions) into ONE
+ * ordinary commit on the config repo's MAIN branch — the same lane as
+ * `itx.repo.commitFiles`, so the project worker/website redeploys
+ * automatically. Credentials are internal; no token rides this surface.
  */
 class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        `Git over the workspace checkout at "${this.props.path}". Ordinary flow: add({ filepath: "." }) → commit({ message }) → push(). ` +
-        `push() publishes to the project repo branch "${workspaceBranchName(this.props.path)}" (this workspace's own branch — never main); credentials are automatic.`,
+        `Commit surface of the workspace at "${this.props.path}". commit({ message }) commits this workspace's changes to the config repo's MAIN branch — changes go live immediately (the project worker/website rebuilds from main automatically). ` +
+        "No add, no push, no branches: every local file not .gitignored is included, deletions apply, and afterwards the workspace mirrors the new main.",
       children: {
-        add: 'Stage a file ("." for everything).',
-        commit: "Commit staged changes ({ message, author? }).",
-        diff: "Changed files relative to HEAD.",
-        log: "Commit history ({ depth? }).",
-        push: "Push the workspace branch to the project repo ({ force? }).",
-        rm: "Stage a file deletion.",
-        status: "Staging state of every changed file.",
+        commit: "Commit the workspace's changes to the config repo's main ({ message, author? }).",
+        log: "The config repo's main-branch history, newest first ({ limit? }).",
+        status: "Changes vs latest main: added / modified (shadowed) / deleted paths.",
       },
       parent: "a workspace (workspace.git)",
     });
@@ -1329,40 +1643,22 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
     );
   }
 
-  /** Staging state of every changed file. */
-  status(): Promise<WorkspaceGitStatusEntry[]> {
+  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
+  status(): Promise<WorkspaceChange[]> {
     return this.durableObjectStub.gitStatus();
   }
 
-  /** Stage a file (`filepath: "."` stages everything). */
-  add(input: { filepath: string }): Promise<{ added: string }> {
-    return this.durableObjectStub.gitAdd(input);
-  }
-
-  /** Stage a file deletion. */
-  rm(input: { filepath: string }): Promise<{ removed: string }> {
-    return this.durableObjectStub.gitRm(input);
-  }
-
+  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
   commit(input: {
     author?: { email: string; name: string };
     message: string;
-  }): Promise<{ message: string; oid: string }> {
+  }): Promise<WorkspacePublishResult> {
     return this.durableObjectStub.gitCommit(input);
   }
 
-  log(input?: { depth?: number }): Promise<WorkspaceGitLogEntry[]> {
+  /** The config repo's main-branch history, newest first. */
+  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]> {
     return this.durableObjectStub.gitLog(input);
-  }
-
-  /** Changed files in the working tree relative to HEAD. */
-  diff(): Promise<{ filepath: string; status: string }[]> {
-    return this.durableObjectStub.gitDiff();
-  }
-
-  /** Push the workspace branch to the project repo. */
-  push(input?: { force?: boolean }): Promise<{ branch: string; ok: true }> {
-    return this.durableObjectStub.gitPush(input);
   }
 }
 
@@ -1411,6 +1707,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
       instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
         fetch: "Egress fetch with secret placeholders substituted server-side.",
+        kill: "Restart the secret's server-side object; the next request boots it fresh.",
         update: "Set the value, egress URLs, and/or refresh strategy.",
       },
       parent: "itx.secrets.get(path)",
@@ -1438,14 +1735,29 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return this.durableObjectStub.fetch(request);
   }
 
+  /** Restart the secret's server-side object; the next request boots it fresh. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
+  }
+
   /** Set the secret material and/or its egress allowlist. */
   update(input: SecretUpdateInput): Promise<StreamEvent> {
     return this.durableObjectStub.update(input);
   }
 
   /** The secret stream processor; its public state IS the SecretDescription. */
-  get processor(): StreamProcessorRpc<SecretDescription> {
-    return new ProcessorRelayRpcTarget<SecretDescription>(() => this.durableObjectStub.processor);
+  get processor(): WakeableStreamProcessorRpc<SecretDescription> {
+    return new ProcessorRelayRpcTarget<SecretDescription>({
+      auth: this.props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */
+  get liveState(): LiveStateRpc<SecretDescription> {
+    return new LiveStateRelayRpcTarget<SecretDescription>(
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
+    );
   }
 }
 
@@ -1716,7 +2028,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown. TEXT generation (summarize, draft, classify, answer) is the common case: run a 'Text Generation' model from models() with { messages: [{ role, content }, …] } and read result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
         run: "Run one model invocation.",
@@ -1736,11 +2048,14 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     return Promise.resolve(env.AI.models());
   }
 
-  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`). */
-  run(model: string, body: unknown): Promise<unknown> {
-    const options: AiRunOptions | undefined =
-      this.props.gateway === undefined ? undefined : { gateway: this.props.gateway };
-    return env.AI.run(model, body as Record<string, unknown>, options);
+  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
+   * The optional third argument is the binding's own options object — e.g.
+   * `{ gateway: { id: "default", skipCache: true } }` — passed through to
+   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown> {
+    const gateway = options?.gateway ?? this.props.gateway;
+    const merged = gateway === undefined ? options : { ...options, gateway };
+    return env.AI.run(model, body as Record<string, unknown>, merged as AiRunOptions | undefined);
   }
 
   /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */
@@ -1764,11 +2079,11 @@ class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Cloudflare Browser Run binding. Use quickAction(action, options) for simple browser tasks: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. Example: const resp = await itx.browser.quickAction("markdown", { url }); return await resp.json(). Raw fetch(input, init) exposes the binding for CDP/library integrations. First-party docs: Browser Run https://developers.cloudflare.com/browser-run/ ; Quick Actions https://developers.cloudflare.com/browser-run/quick-actions/ ; Workers binding quickAction https://developers.cloudflare.com/changelog/post/2026-05-28-use-browser-run-quick-actions-directly-from-workers/ .',
+        'Cloudflare Browser Run binding. Use quickAction(action, options) for simple browser tasks: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. It returns the RESULT directly — const markdown = await itx.browser.quickAction("markdown", { url }) is a string; screenshot/pdf return bytes (Uint8Array) ready to attach to a chat message. Raw fetch(input, init) exposes the binding for CDP/library integrations. First-party docs: Browser Run https://developers.cloudflare.com/browser-run/ ; Quick Actions https://developers.cloudflare.com/browser-run/quick-actions/ ; Workers binding quickAction https://developers.cloudflare.com/changelog/post/2026-05-28-use-browser-run-quick-actions-directly-from-workers/ .',
       children: {
         fetch: "Raw Browser Run binding fetch for CDP/library use.",
         quickAction:
-          'Run a Browser Run quick action: quickAction("markdown", { url }) or quickAction("screenshot", { url, screenshotOptions }).',
+          'Run a Browser Run quick action and get its result directly: quickAction("markdown", { url }) returns the markdown string; quickAction("screenshot", { url, screenshotOptions }) returns image bytes.',
       },
       parent: "a project itx (itx.browser / itx.integrations.cf.browser)",
     });
@@ -1779,16 +2094,26 @@ class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability
     return env.BROWSER.fetch(input, init);
   }
 
-  /** Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot, scrape, json, links, crawl. */
-  quickAction(
+  /**
+   * Browser Run Quick Actions: content, screenshot, pdf, markdown, snapshot,
+   * scrape, json, links, crawl. Returns the action's RESULT directly —
+   * `quickAction("markdown", { url })` is the markdown string, structured
+   * actions (links, json, scrape, …) are their parsed value, and binary
+   * actions (screenshot, pdf) are bytes — instead of the binding's raw
+   * Response, whose `{ success, result }` JSON envelope every caller was
+   * unwrapping by hand (and the agent prompt's one-call recipe promised not
+   * to need). A failed action throws with the envelope's error.
+   */
+  async quickAction(
     action: CfBrowserQuickAction,
     options: CfBrowserQuickActionOptions,
-  ): Promise<Response> {
-    return (
+  ): Promise<string | Uint8Array | unknown> {
+    const response = await (
       env.BROWSER as BrowserRun & {
         quickAction(action: string, options: Record<string, unknown>): Promise<Response>;
       }
     ).quickAction(action, options);
+    return unwrapBrowserRunQuickAction(action, response);
   }
 }
 
@@ -1921,7 +2246,8 @@ function describeConnectionSdk(input: {
  * The `itx.integrations` collection.
  *
  * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.
- * Built-in slugs (`slack`, `google`, `github`) dispatch to deployment code —
+ * Built-in slugs (`slack`, `google`, `github`, `telegram`, `waitrose`)
+ * dispatch to deployment code —
  * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
  * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
  * the Gmail REST proxy, and `itx.integrations.github["jonas"]` is a real
@@ -1947,7 +2273,6 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-    return withInvokeCapabilityFallback(this);
   }
 
   // The project-root capability table: unknown slugs resolve there, and
@@ -1996,6 +2321,25 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           sdk: "a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object argument",
           slug: "slack",
         });
+      }
+      // The connection's router processor: the project-class host Durable
+      // Object at this connection's stream path. `processor` is a claimed
+      // child, not a Web API replay — it is what the connect flow's wake
+      // subscription persists (["integrations", "slack", <connection>,
+      // "processor", "wakeStreamSubscriber"]).
+      if (method[0] === "processor") {
+        const relay = new ProcessorRelayRpcTarget({
+          auth: this.props.auth,
+          host: () =>
+            env.PROJECT.getByName(
+              DurableObjectNameCodec.stringify({
+                path: `/integrations/slack/${connection}`,
+                projectId: this.props.projectId,
+              }),
+            ) as unknown as ProcessorHostStub,
+        });
+        if (method.length === 1) return relay;
+        return await replayPathCall(relay, { args, path: method.slice(1) });
       }
       // The connection's wrapped Slack WebClient: replay the caller's dotted Web
       // API path onto it (chat.postMessage, conversations.list, …) — the real
@@ -2074,6 +2418,73 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       }
     }
 
+    if (slug === "telegram") {
+      if (!connection || method.length === 0) {
+        throw new Error(TELEGRAM_CALL_GRAMMAR);
+      }
+      if (method.length === 1 && method[0] === "__describe") {
+        return describeConnectionSdk({
+          connection,
+          example: `await itx.integrations.telegram[${JSON.stringify(connection)}].sendMessage({ chat_id, text })`,
+          grammar: TELEGRAM_CALL_GRAMMAR,
+          sdk: "the Telegram Bot API (https://core.telegram.org/bots/api): any method name as ONE dotted segment (sendMessage, sendPhoto, getMe, …) with ONE params object; the bot token is substituted at the egress door",
+          slug: "telegram",
+        });
+      }
+      // The connection's router processor: the project-class host Durable
+      // Object at this connection's stream path — same relay shape as Slack's.
+      // It is what the connect flow's wake subscription persists
+      // (["integrations", "telegram", <connection>, "processor", ...]).
+      if (method[0] === "processor") {
+        const relay = new ProcessorRelayRpcTarget({
+          auth: this.props.auth,
+          host: () =>
+            env.PROJECT.getByName(
+              DurableObjectNameCodec.stringify({
+                path: `/integrations/telegram/${connection}`,
+                projectId: this.props.projectId,
+              }),
+            ) as unknown as ProcessorHostStub,
+        });
+        if (method.length === 1) return relay;
+        return await replayPathCall(relay, { args, path: method.slice(1) });
+      }
+      // The Bot API is flat — a deeper path means the caller invented a
+      // namespace (telegram["bot"].chat.sendMessage): answer with the grammar.
+      if (method.length !== 1) throw new Error(TELEGRAM_CALL_GRAMMAR);
+      return await callProjectTelegramBotApi({
+        body: (args[0] ?? {}) as Record<string, unknown>,
+        connection,
+        method: method[0]!,
+        projectId: this.props.projectId,
+      });
+    }
+
+    if (slug === "waitrose") {
+      if (!connection || method.length === 0) {
+        throw new Error(WAITROSE_CALL_GRAMMAR);
+      }
+      if (method.length === 1 && method[0] === "__describe") {
+        return describeConnectionSdk({
+          connection,
+          example: `await itx.integrations.waitrose[${JSON.stringify(connection)}].searchProducts("oat milk", { size: 5 })`,
+          grammar: WAITROSE_CALL_GRAMMAR,
+          sdk: 'the vendored Waitrose client (waitrose-api.ts): shoppingContext(), searchProducts(term, { size, sortBy, start }), trolley(orderId?), addToTrolley(lineNumber, quantity), removeFromTrolley(lineNumber), updateTrolleyItems(items, orderId?). Connect by writing the connection secret: await itx.secrets.get("/secrets/integrations/waitrose/<connection>/session").update({ egress: { urls: ["https://www.waitrose.com"] }, material: { username, password }, refresh: { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql-prod/graph/live" } }) — the Secret DO logs in on first use and re-logins on 401',
+          slug: "waitrose",
+        });
+      }
+      // The connection's vendored Waitrose client: replay the caller's method
+      // path onto it — its transport rides the connection secret's
+      // substituting egress (waitrose-api.ts), so a session token never
+      // enters this isolate. Methods are flat; a deeper path means the caller
+      // invented a namespace, and the client's own miss error answers it.
+      const waitrose = connectionWaitroseClient({
+        connection,
+        projectId: this.props.projectId,
+      });
+      return await replayPathCall(waitrose, { args, path: method });
+    }
+
     if (slug === "parallel") {
       const [, ...operationPath] = path;
       return await (
@@ -2131,8 +2542,10 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
         'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit acting as a GitHub App installation — await itx.integrations.github["<connection>"].rest.apps.listReposAccessibleToInstallation() (data.repositories), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }). User-scoped ...ForAuthenticatedUser endpoints answer 403.',
+        'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
+        'Waitrose: await itx.integrations.waitrose["<connection>"].searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
-        'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.examples.get({ id: "github-mcp-connect" }).',
+        'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.docs.get({ name: "github-mcp-connect" }).',
       ].join("\n"),
       types: [
         "type GmailRequestInput = {",
@@ -2166,6 +2579,12 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "  chat: { postMessage(body: Record<string, unknown>): Promise<Record<string, unknown>> };",
         "  // ...every other Web API method, same dotted shape",
         "}",
+        '// itx.integrations.telegram["<connection>"] is the Telegram Bot API:',
+        "// flat method names (ONE segment), one params object, JSON result.",
+        "interface TelegramConnection {",
+        "  sendMessage(params: { chat_id: number | string; text: string } & Record<string, unknown>): Promise<Record<string, unknown>>;",
+        "  // ...every other Bot API method, same flat shape (sendPhoto, getMe, ...)",
+        "}",
         "// itx.integrations.parallel exposes a flat OpenAPI RPC target:",
         "type Parallel = OpenApiRpc;",
       ].join("\n"),
@@ -2173,6 +2592,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
           "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+        connectTelegram:
+          "Connect a Telegram bot by BotFather token: { botToken } — no OAuth, no redirect.",
         disconnect: "Disconnect one connection: { provider, connection }.",
         getConnection: "Connection status for { provider, connection }.",
         github:
@@ -2184,6 +2605,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         slack:
           'Per-connection wrapped Slack WebClient: slack["<connection>"].chat.postMessage({ channel, text }) — any Web API method, one body object.',
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
+        telegram:
+          'Per-connection Telegram Bot API: telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method, one params object.',
       },
       parent: "a project itx (itx.integrations)",
     });
@@ -2201,10 +2624,29 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     });
   }
 
+  /**
+   * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
+   * validates the token, setWebhook points the bot at this deployment (with a
+   * derived secret token), and the token lands in a write-only connection
+   * secret. Throws with a human-readable message on failure — except a bot
+   * already claimed by ANOTHER project, which answers the structured
+   * `ok: false, error: "telegram_bot_already_claimed"` arm so the caller can
+   * confirm and retry with `steal: true` (moving the bot: the old project is
+   * disconnected first; possession of the token is the authorization).
+   */
+  connectTelegram(input: { botToken: string; steal?: boolean }): Promise<ConnectTelegramResult> {
+    return connectTelegram({
+      botToken: input.botToken,
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+      steal: input.steal,
+    });
+  }
+
   /** Begin the OAuth connect flow; returns the authorization URL. */
   startOAuthFlow(input: {
     callbackUrl?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     /** The user to bind the OAuth state to. Browser-supplied, not authority;
      * the callback's check against the signed state is the backstop. */
     userId: string;
@@ -2225,7 +2667,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     code?: string;
     /** GitHub App installation id — github's callback carries this, not a code. */
     installationId?: string;
-    provider: BuiltinIntegrationSlug;
+    provider: OAuthProviderSlug;
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult> {
@@ -2273,11 +2715,30 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       instructions:
         "First-party email: send({ to, subject, text, html }) delivers through Cloudflare Email Service from this project's own address (<slug>@<hostname base>). An explicit `from` must match that address — a project can never send as anyone else. From ANY agent scope, send binds the conversation to the calling agent: replies to that mail arrive as this agent's inputs, and reply({ text }) answers the latest counterpart with correct threading headers. Both take attachments: [{ path }] (project files via itx.files, any file type) or [{ filename, data }] (inline base64); limits 32 files / 5 MiB total. Both return { messageId }.",
       children: {
+        processor:
+          "The email router's stream processor (the project-class host at /integrations/email).",
         send: "Send one email from the project's address; agent scopes get replies routed back to them. Returns { from, messageId }.",
         reply:
           "Reply within this agent's email conversation (email thread agents, or any agent that has sent/received project email); returns { from, to, messageId }.",
       },
       parent: "the project itx root",
+    });
+  }
+
+  /** The email router's stream processor: the project-class host Durable
+   * Object at /integrations/email, whose EmailProcessor routes inbound mail.
+   * Wake subscriptions for it persist `["email", "processor",
+   * "wakeStreamSubscriber"]`. */
+  get processor(): WakeableStreamProcessorRpc {
+    return new ProcessorRelayRpcTarget({
+      auth: this.props.auth,
+      host: () =>
+        env.PROJECT.getByName(
+          DurableObjectNameCodec.stringify({
+            path: EMAIL_INTEGRATION_STREAM_PATH,
+            projectId: this.props.projectId,
+          }),
+        ) as unknown as ProcessorHostStub,
     });
   }
 
@@ -2451,8 +2912,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName,
           idempotencyKey: `stream/subscription-configured:${durableObjectName}#${EmailAgentProcessorContract.slug}`,
+          processor: ["agents", ["get", scopePath], "processor"],
           processorSlug: EmailAgentProcessorContract.slug,
-          subscriberType: "agent",
         }),
       ),
     ]);
@@ -2712,14 +3173,38 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
 type AgentRpcTargetProps = {
   auth: ItxAuth;
   // The agent scope's own capability host; its (already-normalized) path IS
-  // the agent path. Exposed as `agent.capabilityHost` and used as the
-  // fallback for dynamic dotted-path calls (`agent.someTool(...)`).
+  // the agent path. Exposed as `agent.capabilityHost` — the door to the
+  // scope's dynamic capabilities (`agent.capabilityHost.someTool(...)`).
   capabilityHost: CapabilityHostRpcTarget;
   ctx: CfExecutionContext;
   projectId: string;
+  /** The calling scope's path ("current actor") — see AgentCollectionRpcTarget. */
+  sourceScopePath?: string;
 };
 
-/** Agent capability surface for message loops and agent-local dynamic tools. */
+/**
+ * One agent: message loops and agent-local dynamic tools. Chain calls
+ * directly off `get` — `await itx.agents.get("researcher").message(task)`.
+ * Unknown members dispatch through the agent scope's capability host, so
+ * `agents.get(path).someTool(args)` and
+ * `agents.get(path).capabilityHost.someTool(args)` are equivalent; inside
+ * the agent's own scripts the same tools are simply `itx.someTool(args)`.
+ */
+// Engineering note (docs consumers never need this): instances are
+// DELIBERATELY plain — never wrapped in a Proxy. This is the surface most
+// routinely returned FROM A METHOD CALL, and workerd RPC classifies a call
+// result for promise pipelining with native brand checks a JS Proxy can
+// never pass (`serializeJsValueWithPipeline` in workerd's worker-rpc.c++
+// falls through to `NonPipelinable`, so EVERY pipelined call on the result
+// dies with the baffling "The RPC receiver does not implement the method
+// ..." — cloudflare/workerd#6873). A plain class instance classifies as a
+// single stub and pipelines fine. The dynamic-tool spellings come from the
+// PROTOTYPE-CHAIN fallback installed in the registry block at the bottom of
+// this file: unknown members walk the prototype chain into a proxied hop and
+// dispatch through this agent scope's capability host, while the instance
+// itself stays a genuine, natively-branded RpcTarget. See
+// installPrototypeInvokeCapabilityFallback (domains/itx/utils.ts) for the
+// mechanism, and agent-handle-pipelining.itx.e2e.test.ts for the guard.
 class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
@@ -2730,14 +3215,21 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     props.auth.assertCanAccessProject(props.projectId);
     normalizeAgentPath(props.capabilityHost.path);
     this.#props = props;
-    return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   get #path() {
     return this.#props.capabilityHost.path;
   }
 
-  /** The agent scope's own capability host (provide/revoke/runScript/__describe). */
+  /**
+   * The agent scope's own capability host (provide/revoke/runScript/
+   * __describe) — and the explicit dotted door to the scope's DYNAMIC
+   * capabilities: `agents.get(path).capabilityHost.someTool(args)`. The
+   * shorthand `agents.get(path).someTool(args)` resolves through the same
+   * host via the handle's prototype-chain fallback; both pipeline over
+   * workerd RPC. Inside the agent's own scripts the same capabilities are
+   * simply `itx.someTool(args)`.
+   */
   get capabilityHost(): CapabilityHostRpcTarget {
     return this.#props.capabilityHost;
   }
@@ -2763,8 +3255,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /** The agent stream processor (snapshot/state). */
-  get processor(): StreamProcessorRpc<AgentProcessorState> {
-    return new ProcessorRelayRpcTarget<AgentProcessorState>(() => this.durableObjectStub.processor);
+  get processor(): WakeableStreamProcessorRpc<AgentProcessorState> {
+    return new ProcessorRelayRpcTarget<AgentProcessorState>({
+      auth: this.#props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
   }
 
   /** The agent's own event stream. */
@@ -2785,31 +3280,126 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     });
   }
 
-  /** Append a user message to the agent stream (triggers the agent's loop). */
-  async sendMessage(message: string): Promise<StreamEvent> {
+  /**
+   * Send a message to this agent — THE inbound door for every caller. The
+   * event's `from` derives from the calling scope: inside an agent script
+   * (itx scoped to an agent path), the message is stamped
+   * `{ kind: "agent", path }` and does NOT refill the receiver's autonomous
+   * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
+   * (web UI, CLI, MCP session) it is a user message. Messaging a path that
+   * never existed births the agent: the first append creates the stream and
+   * the platform applies birth mechanics + default policy. Optional files
+   * are stored in project file storage and ride the message as attachments
+   * (images stay visible to vision-capable models).
+   */
+  async message(
+    input:
+      | string
+      | {
+          message: string;
+          files?: Array<{ contentType: string; data: FileData; filename: string }>;
+        },
+  ): Promise<StreamEvent> {
+    const { message, files: fileInputs } =
+      typeof input === "string"
+        ? { message: input, files: undefined }
+        : { message: input.message, files: input.files };
+    const from = this.#messageFrom();
+    const files =
+      fileInputs === undefined || fileInputs.length === 0
+        ? undefined
+        : await storeAgentFileAttachments({
+            agentPath: from.kind === "agent" ? from.path : this.#path,
+            config: parseConfig(env),
+            files: fileInputs,
+            projectId: this.#props.projectId,
+          });
     const [event] = await this.stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { content: message, origin: "web" },
+      type: "events.iterate.com/agents/message-received",
+      payload: {
+        content: message,
+        from,
+        ...(files === undefined ? {} : { files }),
+      },
     });
     return event;
   }
 
+  /** WHO a message() through this handle is from: the calling scope when it is an agent, else a user. */
+  #messageFrom(): { kind: "agent"; path: string } | { kind: "user"; origin: "web" } {
+    const source = this.#props.sourceScopePath;
+    return source !== undefined && source.startsWith("/agents/")
+      ? { kind: "agent", path: source }
+      : { kind: "user", origin: "web" };
+  }
+
   /**
-   * Send-and-wait convenience: appends a user message and resolves with the
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
+   * that already ran (a plain last-write-wins update) AND on a path that has
+   * never existed — the append births the agent with the full default policy
+   * plus these overrides, and the batch claims the same idempotency keys the
+   * project worker's defaults lane uses, so whichever lane runs second
+   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path's
+   * platform prompt wholesale — including the codemode contract that tells
+   * the agent how to act. For delegation, prefer putting instructions in the
+   * message itself and leaving the prompt alone.
+   */
+  async configure(input: AgentDefaultsOverrides): Promise<void> {
+    const defaults = agentDefaultsForPath({
+      agentPath: this.#path,
+      projectId: this.#props.projectId,
+      ...(await agentBootProjectFacts(this.#props.projectId)),
+      overrides: input,
+    });
+    // The defaults batch (fixed keys) establishes policy on a fresh agent and
+    // dedupes away on an existing one; the keyless events are the last word
+    // when the agent already had policy applied.
+    const events: Array<{
+      type: string;
+      idempotencyKey?: string;
+      payload: Record<string, unknown>;
+    }> = [...defaults.events];
+    if (input.systemPrompt !== undefined) {
+      events.push({
+        type: "events.iterate.com/agent/config-updated",
+        payload: { systemPrompt: defaults.systemPrompt },
+      });
+    }
+    if (input.model !== undefined) {
+      events.push({
+        type: "events.iterate.com/agent/llm-provider-selected",
+        payload: { model: defaults.model },
+      });
+    }
+    await this.stream.append(...events);
+  }
+
+  /**
+   * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
-   * exactly like two people typing into the same chat.
+   * exactly like two people typing into the same chat. Like `message`, the
+   * sender derives from the calling scope, so an agent asking another agent
+   * does not refill the receiver's autonomous turn budget. For delegated child
+   * agents, prefer `message()` and read their report from your own inputs:
+   * every agent-sourced message is labeled with how to reply (message the
+   * sender, whose web chat nobody watches), so `ask()` can time out waiting
+   * for a chat reply that never comes.
    */
   async ask(input: {
     message: string;
-    /** Where the message came from. Defaults to "web". */
+    /** Where a USER message came from (ignored for agent-scoped callers). Defaults to "web". */
     origin?: "web" | "mcp";
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
   }): Promise<StreamEvent> {
+    const from = this.#messageFrom();
     const [sent] = await this.stream.append({
-      type: "events.iterate.com/agents/user-message-received",
-      payload: { content: input.message, origin: input.origin ?? "web" },
+      type: "events.iterate.com/agents/message-received",
+      payload: {
+        content: input.message,
+        from: from.kind === "user" ? { kind: "user", origin: input.origin ?? "web" } : from,
+      },
     });
     return await this.stream.waitForEvent({
       afterOffset: sent.offset,
@@ -2864,17 +3454,22 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   > {
     return describeNode({
       instructions:
-        "One agent: the narrow control surface for the agent stream at this path. Dotted calls on unknown members resolve against the agent scope's capability host.",
+        "One agent: the control surface for the agent stream at this path. Besides the members below, the agent scope's dynamic capabilities dispatch directly on this handle — agents.get(path).someTool(args) (equivalently capabilityHost.someTool(args)); from inside the agent's own scope they are simply itx.someTool(args).",
       children: {
         addFiles:
           "Store files in project storage AND attach them to this conversation (one call, one message).",
         ask: "Send a message and wait for the agent's next chat reply.",
-        capabilityHost: "This agent scope's durable capability table.",
+        capabilityHost:
+          "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
+        configure:
+          "Set this agent's policy ({ systemPrompt?, model? }); on a never-seen path this births the agent with defaults plus the overrides.",
+        kill: "Restart the agent's server-side object; the next request boots it fresh.",
+        message:
+          "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
         processor: "The agent stream processor (snapshot/state).",
         provideCapability: "Shortcut: mount a capability on THIS agent's scope.",
         revokeCapability: "Shortcut: remove a mount from THIS agent's scope.",
-        sendMessage: "Append a user message to the agent stream.",
         stream: "The agent's own event stream.",
       },
       parent: `project ${this.#props.projectId}, via agents.get("${this.#path}")`,
@@ -2882,6 +3477,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
       whoami: `agent ${this.#props.projectId}:${this.#path}`,
     });
+  }
+
+  /** Restart the agent's server-side object; the next request boots it fresh. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
   }
 }
 
@@ -2932,9 +3532,9 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
  * RPC wrapper around a single DynamicWorkerRef.
  *
  * The returned object is a path proxy: unknown properties become path segments
- * and eventually call `invokeCapability`. Dynamic workers do not share a fixed
- * method surface, so this wrapper deliberately exposes no method names beyond
- * the flattened capability dispatcher.
+ * and eventually call `invokeCapability`. Dynamic workers reserve a tiny
+ * platform lifecycle surface (`invokeCapability`, `kill`, disposal); everything
+ * else belongs to the loaded worker.
  */
 class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> {
   readonly #buildBudgetMs: number | undefined;
@@ -2955,7 +3555,6 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
-    return withInvokeCapabilityFallback(this);
   }
 
   // Lazy: __describe answers from the ref alone and must not mint loopback
@@ -3001,6 +3600,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
         'To ask the worker to describe ITSELF (boots it; only works if its code implements `__describe`), call `invokeCapability({ path: ["__describe"] })`.',
       children: {
         invokeCapability: "Explicit dispatch into the worker: { path, args, flattenNestedPath? }.",
+        kill: "Restart the stateful worker's server-side object; stateless worker refs reject.",
       },
       parent: `itx.workers of this project (itx scope path "${this.#ref.path}")`,
       ref: {
@@ -3038,6 +3638,14 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       path,
       ref: this.#ref,
     });
+  }
+
+  /** Restart the stateful worker's server-side object; stateless worker refs reject. */
+  async kill(): Promise<void> {
+    if (this.#ref.type !== "stateful") {
+      throw new Error("Dynamic worker kill() only applies to stateful worker refs.");
+    }
+    await this.#runner.kill(this.#ref);
   }
 }
 
@@ -3091,9 +3699,9 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
    * `waitUntilCreated: false` to resolve as soon as the project EXISTS
    * (identity registered, directory primed, bootstrap events appended): the
    * saga then runs behind the returned handle, and its progress is ordinary
-   * live processor state (`itx.processor.onStateChange` — `state.created`
-   * flips when bootstrap lands). The dashboard uses the fast path to redirect
-   * into the project instantly and play creation progress from pushes.
+   * live state (`itx.liveState` — `state.reduced.created` flips when bootstrap
+   * lands). The dashboard uses the fast path to redirect into the project
+   * instantly and play creation progress from pushes.
    */
   async create(args: {
     organizationSlug?: string;
@@ -3129,6 +3737,9 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       projectId: args.projectId,
     });
 
+    // The config repo (its processor subscription, its cross-post rule onto
+    // `/`, and its create request) is armed by the project processor's
+    // create-requested lane, on the repo's own stream at CONFIG_REPO_PATH.
     const appendRootEvents = () =>
       stream.append(
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
@@ -3136,16 +3747,8 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
             projectId: registered.projectId,
             path: "/",
           }),
+          processor: ["processor"],
           processorSlug: ProjectProcessorContract.slug,
-          subscriberType: "project",
-        }),
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: PROJECT_REPO_PATH,
-          }),
-          processorSlug: RepoProcessorContract.slug,
-          subscriberType: "repo",
         }),
         {
           type: "events.iterate.com/project/create-requested",
@@ -3181,8 +3784,8 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
                   path: EMAIL_INTEGRATION_STREAM_PATH,
                 }),
                 idempotencyKey: `email-router-subscription:${registered.projectId}`,
+                processor: ["email", "processor"],
                 processorSlug: EmailProcessorContract.slug,
-                subscriberType: "project",
               }),
               {
                 type: "events.iterate.com/email/sender-allowed",
@@ -3191,7 +3794,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
               },
             )
             .then(() => undefined);
-    const [[, , createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
+    const [[, createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
       Promise.all([appendRootEvents(), seedEmailAllowlist()]),
     );
     // The project now EXISTS (identity, directory, bootstrap events); whether
@@ -3411,9 +4014,6 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     this.#props = { ...props, path: normalizePath(props.path) };
-    // The host itself gets the dotted-path fallback too: host.foo.bar(x) is
-    // host.invokeCapability({ path: ["foo", "bar"], args: [x] }).
-    return withInvokeCapabilityFallback(this);
   }
 
   /** The scope path this host fronts: `"/"` is the project root, `/agents/bla` an agent. */
@@ -3428,6 +4028,15 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         projectId: this.#props.projectId,
       }),
     );
+  }
+
+  /** This scope's capability-host stream processor (snapshot/state). A real
+   * member, so it also claims the name: mounts cannot shadow `processor`. */
+  get processor(): WakeableStreamProcessorRpc {
+    return new ProcessorRelayRpcTarget({
+      auth: this.#props.auth,
+      host: () => this.#durableObject as unknown as ProcessorHostStub,
+    });
   }
 
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
@@ -3468,6 +4077,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       children: {
         invokeCapability:
           "Explicit dynamic dispatch ({ path, args }); dotted calls compile to this.",
+        kill: "Restart this scope's server-side object; the next request boots it fresh.",
         provideCapability: "Mount a capability on THIS scope; returns a revoke handle.",
         revokeCapability: "Remove a mount from THIS scope.",
         runScript: "Run an async (itx) => {...} script in this scope.",
@@ -3485,6 +4095,11 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     result: unknown;
   }> {
     return await this.#durableObject.runScript(code);
+  }
+
+  /** Restart this scope's server-side object; the next request boots it fresh. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.#durableObject.kill());
   }
 }
 
@@ -3515,10 +4130,9 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
   }
 }
 /**
- * THE one table of project built-ins: member name -> one-line blip. Everything
- * else derives from it — the capability inventory rows in `__describe()`
- * (via PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS) and the `children` map — so
- * adding a built-in is one entry here plus the getter on ProjectRpcTarget.
+ * THE one table of project built-ins: member name -> one-line blip. The
+ * `children` map in `__describe()` derives from it, so adding a built-in is
+ * one entry here plus the getter on ProjectRpcTarget.
  */
 const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   agents: "Agent catalog: get(path), list().",
@@ -3532,18 +4146,21 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   egress: "Project-attributed outbound fetch (+ intercept).",
   email:
     "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
-  examples: "Catalogue of known-good itx script snippets: list(), get({ id }).",
+  docs: 'Find working code + types: search({ q: "many related words" }) over the example-script catalogue, type declarations, and mounted capabilities; get({ name }) fetches one.',
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
     'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].rest.repos.get({ owner, repo }) (a wrapped Octokit); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
+  kill: "Restart the project's server-side object; the next request boots it fresh.",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
   parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
+  processEventBatch:
+    "The project's event-batch dispatch point: streams' birth-certificate feeds deliver here; delegates to worker.processEventBatch.",
   processor: "The project stream processor (snapshot/state).",
   provideCapability:
     "Shortcut: mount a capability on THIS scope (capabilityHost.provideCapability).",
-  repo: "The project repo at /repos/project.",
+  repo: "The project's config repo at /repos/config.",
   repos: "Repo catalog by path.",
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
   sandboxes:
@@ -3556,18 +4173,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    "Durable workspace filesystems by path: get(path) is a private always-warm checkout of the project repo in a Durable Object (read/write/edit + git). An agent's own workspace is itx.workspace.",
+    'Durable workspace filesystems by path: get("/") is the read-only root (always latest main of the project repo); get("/workspaces/<name>") is an instant private overlay over it (read/write/edit + git publish). An agent\'s own workspace is itx.workspace.',
 };
-
-// The shortcut methods are children (callable members) but not capability
-// PATHS — they alias capabilityHost, which already has an inventory row.
-const PROJECT_BUILTIN_NON_PATHS = new Set(["provideCapability", "revokeCapability"]);
-
-const PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS: readonly CapabilityDescription[] = Object.entries(
-  PROJECT_BUILTIN_BLIPS,
-)
-  .filter(([name]) => !PROJECT_BUILTIN_NON_PATHS.has(name))
-  .map(([name, instructions]) => ({ instructions, path: [name], type: "builtin" as const }));
 
 type ProjectRpcTargetProps = {
   auth: ItxAuth;
@@ -3588,14 +4195,34 @@ type ProjectRpcTargetProps = {
  *
  * DESIGN NOTE — this RpcTarget sits *in front of* the capability-host Durable
  * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
- * in the isolate; only unknown roots fall through `withInvokeCapabilityFallback`
- * to the capability host's dynamic table (which itself chains up to enclosing
- * scopes). So the common `itx.streams.get(...)` path never makes a round trip
+ * in the isolate; only unknown roots fall through the prototype-chain
+ * fallback (the registry block at the bottom of this file) to the capability
+ * host's dynamic table (which itself chains up to enclosing scopes). So the
+ * common `itx.streams.get(...)` path never makes a round trip
  * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
  * capability can never shadow a built-in name — the built-in always wins
  * (`rejectBuiltinCollision` enforces this at provide time). If we end up needing
  * shadowable built-ins a lot, we'd move resolution behind the DO and pay the
  * round trip; today we don't.
+ */
+/**
+ * The project Durable Object's methods this isolate reaches — one typed view
+ * instead of re-declaring each signature at every `durableObjectStub` cast.
+ */
+type ProjectDurableObjectRpc = {
+  liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
+  incrementLiveDemo(): Promise<void>;
+  touchStreamActivity(input: TouchInput): Promise<void>;
+};
+
+/**
+ * An itx: the project capability surface, scoped to one path (the project
+ * root "/", an agent path, ...). Built-ins (streams, repo, agents, files,
+ * integrations, sandboxes, scheduler, docs, ...) are project-global and
+ * identical at every scope; what differs by scope is the capability host
+ * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
+ * Unknown dotted members dispatch dynamically against the scope's capability
+ * host, chaining up to the project root.
  */
 export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
@@ -3606,7 +4233,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     super();
     props.auth.assertCanAccessProject(props.projectId);
     this.#props = props;
-    return withInvokeCapabilityFallback(this, { invoker: props.capabilityHost });
   }
 
   /** The project this itx is scoped into. */
@@ -3623,8 +4249,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
-   * capability (built-ins + dynamic mounts), the children map, and the full
-   * public type surface in `types`.
+   * capability (built-ins + dynamic mounts), the children map, and the
+   * `Project` declaration in `types` (the full surface is one
+   * `itx.docs.get({ name })` per declaration away).
    */
   async __describe(): Promise<ProjectDescription> {
     const scopePath = this.#props.capabilityHost.path;
@@ -3636,10 +4263,16 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return describeNode({
       instructions:
         `An itx: project "${project.name}" (${project.projectId}) at scope "${scopePath}". ` +
-        "Built-ins are project-global and identical at every scope; `capabilities` is the full inventory (built-ins + dynamic mounts). " +
+        "Built-ins are project-global and identical at every scope — `children` below lists them; `capabilities` lists this scope's dynamic mounts. " +
         "Unknown dotted members dispatch dynamically against this scope's capability host, chaining up to the project root. " +
-        "Deep discovery: call __describe() on any child.",
-      types: ITX_TYPES_SOURCE,
+        'To find anything — e2e-tested example scripts, type declarations, mounted capabilities — use itx.docs.search({ q: "several related words" }) then itx.docs.get({ name }); __describe() works on every child.',
+      // The Project declaration alone is ~1.4k tokens; 2000 fits it plus a
+      // little of its closure, and the trailer names the rest.
+      types: typeSlice({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        rootName: "Project",
+        maxTokens: 2000,
+      }).sourceText,
       children: {
         ...PROJECT_BUILTIN_BLIPS,
         ...(scopePath.startsWith("/agents/")
@@ -3650,7 +4283,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           : {}),
       },
       parent: scopePath === "/" ? "session.projects" : `the project-root itx (scope "/")`,
-      capabilities: [...PROJECT_BUILTIN_CAPABILITY_DESCRIPTIONS, ...mountedCapabilities],
+      // Dynamic mounts only: the builtins are already the `children` map, and
+      // repeating their rows (and their types) turned the identity card into
+      // a 16KB wall that printed the same 29 members three times.
+      capabilities: mountedCapabilities,
       name: project.name,
       projectId: project.projectId,
     });
@@ -3679,11 +4315,32 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     ].join("\n");
   }
 
+  /** Restart the project's server-side object; the next request boots it fresh. */
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
+  }
+
   /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */
-  get processor(): StreamProcessorRpc<ProjectProcessorState> {
-    return new ProcessorRelayRpcTarget<ProjectProcessorState>(
-      () => this.durableObjectStub.processor,
-    );
+  get processor(): WakeableStreamProcessorRpc<ProjectProcessorState> {
+    return new ProcessorRelayRpcTarget<ProjectProcessorState>({
+      auth: this.#props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  /** The project DO's methods this isolate reaches — typed once (see {@link ProjectDurableObjectRpc}). */
+  get #projectDo(): ProjectDurableObjectRpc {
+    return this.durableObjectStub as unknown as ProjectDurableObjectRpc;
+  }
+
+  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
+  get liveState(): LiveStateRpc<ProjectLiveState> {
+    return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo);
+  }
+
+  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
+  get liveDemo(): LiveDemoRpcTarget {
+    return new LiveDemoRpcTarget(() => this.#projectDo.incrementLiveDemo());
   }
 
   /** Workers AI: run(model, body), models(). */
@@ -3765,6 +4422,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       auth: this.#props.auth,
       ctx: this.#props.ctx,
       projectId: this.#props.projectId,
+      // The "current actor": this itx's own scope path. Relative agent paths
+      // resolve against it, and message() stamps it as the sender when the
+      // scope is an agent — how delegated reports know who they are from.
+      sourceScopePath: this.#props.capabilityHost.path,
     });
   }
 
@@ -3784,9 +4445,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** Read-only catalogue of known-good itx script snippets (`list()`, `get({ id })`). */
-  get examples(): ItxExampleCatalogRpcTarget {
-    return new ItxExampleCatalogRpcTarget();
+  /** The docs door: `search({ q })` finds e2e-tested example scripts, type
+   * declarations, and this scope's mounted capabilities; `get({ name })`
+   * fetches one. Pass search MANY related words — matching is dumb word
+   * overlap. */
+  get docs(): ItxDocsRpcTarget {
+    return new ItxDocsRpcTarget({ capabilityHost: this.#props.capabilityHost });
   }
 
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
@@ -3877,11 +4541,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** The project repo at /repos/project. */
+  /** The project's config repo at /repos/config — shorthand for `repos.get("/repos/config")`. */
   get repo(): RepoRpcTarget {
     return new RepoRpcTarget({
       auth: this.#props.auth,
-      path: PROJECT_REPO_PATH,
+      path: CONFIG_REPO_PATH,
       projectId: this.#props.projectId,
     });
   }
@@ -3904,10 +4568,97 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
+   * Platform dispatch point: streams deliver committed event batches here
+   * for the project worker. Scripts should not call this — subscribe to a
+   * stream (or configure a subscription) instead.
+   */
+  // Why it exists (engineering, not caller-facing): every project-scoped
+  // stream's subscription expression names `["processEventBatch"]` — the
+  // INTENT, not the implementation — so envelope evolution happens here in
+  // deployment code instead of by patching user repos, and first-party
+  // per-event work (the streams index via #indexStreamActivity; future
+  // policy/metrics feeds) joins the same ordered, checkpointed delivery.
+  // Rule for such steps: idempotent and never-throwing; only the worker
+  // delegation may reject into the spine's retry/park machinery. Same trust
+  // model as worker.processEventBatch itself: any project principal.
+  async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
+    this.#indexStreamActivity(batch);
+    this.#indexStreamSearch(batch);
+    try {
+      return await this.worker.processEventBatch(batch);
+    } catch (error) {
+      // The bootstrap window: the worker cannot be MATERIALIZED yet (config
+      // repo unseeded, or its first build still in flight). That is this
+      // receiver being unavailable, not the batch being poison — say so in
+      // the delivery contract's vocabulary so the spine backs off and
+      // redelivers instead of skip-confirming real events. (A skipped
+      // `child-stream-created` is an agent the worker never applies policy
+      // to; this exact race skipped offset 1 of every fresh project's root
+      // stream against the config-repo seed.)
+      if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
+        throw new StreamReceiverUnavailableError(
+          `project worker is not ready yet: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Platform step: record the batch's stream in the project's streams index (a
+   * peer slice of `itx.liveState` — see StreamDatabase). Idempotent (`touch`
+   * only advances recency) and MUST NOT throw — a fire-and-forget dial into the
+   * project DO whose failure the next batch self-heals. Only the worker
+   * delegation above may reject into the spine's retry.
+   */
+  #indexStreamActivity(batch: StreamPushEventBatch): void {
+    const last = batch.events.at(-1);
+    if (last === undefined) return;
+    void Promise.resolve(
+      this.#projectDo.touchStreamActivity({
+        path: batch.path,
+        at: last.createdAt,
+        type: last.type,
+        // streamMaxOffset (not events.length) so a redelivered batch is idempotent.
+        maxOffset: batch.streamMaxOffset,
+      }),
+    ).catch(() => {
+      // Recency self-heals from the next batch; never surface into worker delivery.
+    });
+  }
+
+  /**
+   * SPIKE platform step: mirror the batch's stream events into the itx.search
+   * corpus (domains/search/search-index.ts) as fixed 100-offset segment
+   * documents. Same rules as {@link #indexStreamActivity}: idempotent
+   * (segment docs are deterministic rewrites), fire-and-forget, MUST NOT throw
+   * — only the worker delegation may reject into the spine's retry. It rides
+   * the same ordered, checkpointed delivery, re-reading each touched segment's
+   * full range from the stream so a transient failure self-heals on the next
+   * batch in that segment (see indexStreamEventBatch).
+   */
+  #indexStreamSearch(batch: StreamPushEventBatch): void {
+    if (batch.projectId === null) return;
+    const streamStub = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: batch.projectId, path: batch.path },
+        { allowNullProjectId: true },
+      ),
+    );
+    void indexStreamEventBatch({
+      batch,
+      readEvents: (args) => streamStub.getEvents(args),
+    }).catch((error: unknown) => {
+      console.error("stream search index failed", { path: batch.path, error });
+    });
+  }
+
+  /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
-   * invokeCapability in userspace, so `itx.worker.slack.chat.postMessage(...)`
-   * is one RPC end to end.
+   * invokeCapability in userspace, so a dotted call onto any getter the
+   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.
    */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
     return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
@@ -3948,6 +4699,18 @@ export function itxForScope(props: {
     ctx: props.ctx,
     projectId: props.projectId,
   });
+}
+
+/**
+ * The deployment-global trusted root: what a GLOBAL (`projectId: null`)
+ * stream's delivery dial evaluates expressions against (`ItxEntrypoint.get()`
+ * with `projectId: null` props). Session-shaped on purpose — deployment-wide
+ * repos/streams live on the session — so a global repo stream's wake
+ * expression (`["repos", ["get", path], "processor", "wakeStreamSubscriber"]`)
+ * walks the same shape a project stream's does.
+ */
+export function deploymentItxForTrustedInternal(props: { ctx: CfExecutionContext }) {
+  return new SessionRpcTarget({ auth: trustedInternalAuthContext(), ctx: props.ctx });
 }
 
 async function projectProcessorState(projectId: string) {
@@ -4360,10 +5123,11 @@ export class StreamProcessorRpcTarget<
        */
       catchUpBeforeSnapshot?: () => Promise<void>;
       /**
-       * Projection applied to EVERY state that leaves this facade — snapshots,
-       * runtime state, and `onStateChange` pushes. This is where a domain
-       * redacts internals from its public live state (secrets project away the
-       * ciphertext, exposing `hasMaterial` instead). Omitted = identity.
+       * Projection applied to EVERY state that leaves this facade — snapshots
+       * and runtime state. This is where a domain redacts internals from its
+       * public state (secrets project away the ciphertext, exposing
+       * `hasMaterial` instead); the node's `.liveState` applies the SAME
+       * redaction through the host's `getLiveState`. Omitted = identity.
        */
       publicState?: (state: ProcessorState<Contract>) => PublicState;
     } = {},
@@ -4397,21 +5161,6 @@ export class StreamProcessorRpcTarget<
     };
   }
 
-  async onStateChange(cb: (snapshot: ProcessorSnapshot<PublicState>) => unknown) {
-    // Without a projection the remote callback goes straight to the processor,
-    // keeping full stub retention. With one, deliveries pass through a
-    // projecting wrapper that forwards the WHOLE retention surface — dup (so
-    // the processor's retain duplicates the underlying remote stub, not the
-    // wrapper), disposal, and onRpcBroken — so a projected subscription lives
-    // exactly as long as an unprojected one.
-    const publicState = this.#publicState;
-    const target =
-      publicState === undefined
-        ? (cb as (snapshot: ProcessorSnapshot<ProcessorState<Contract>>) => unknown)
-        : projectStateChangeCallback(cb, publicState);
-    return new ProcessorStateSubscriptionRpcTarget(await this.#processor.onStateChange(target));
-  }
-
   waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
     return this.#processor.waitUntilEvent(input);
   }
@@ -4420,43 +5169,267 @@ export class StreamProcessorRpcTarget<
 // The examples catalogue is plain data (src/itx/examples.ts) shared with the
 // REPL "Examples" panel and the e2e matrix. Exposing it as a built-in lets
 // agents and scripts browse known-good snippets instead of guessing at the
-// surface; list() omits the code bodies so it stays cheap to skim.
-// Session-context entries are excluded: they run against the OS Session
-// (what authenticate() returns), which an itx holder does not have.
-const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
+// surface. Session-context entries are excluded: they run against the OS
+// Session (what authenticate() returns), which an itx holder does not have.
+// Project AND agent context: the docs door answers agents above all, and an
+// agent itx is the project surface plus its own mounts. Session-only
+// examples stay out — a project/agent scope cannot run them.
+const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context !== "session");
 
-class ItxExampleCatalogRpcTarget extends IterateRpcTarget<"ItxExampleCatalog"> {
+/**
+ * The docs door: search + fetch over everything callable from this scope —
+ * the platform's example scripts (most are proven: the test suite runs them
+ * unattended against a live project on every change; the rest are marked
+ * interactive), the public type surface (the Itx Type Graph), and the
+ * capabilities mounted in the caller's scope chain. One door for "how do I
+ * X?": search first, fetch what the hits name, adapt working code.
+ *
+ * The search mechanism is deliberately dumb (word matching, no embeddings),
+ * which is why every docstring here tells callers to pass MANY related words
+ * — recall comes from the query, not the engine.
+ */
+class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
+  readonly #capabilityHost: CapabilityHostRpcTarget;
+
+  constructor(props: { capabilityHost: CapabilityHostRpcTarget }) {
+    super();
+    this.#capabilityHost = props.capabilityHost;
+  }
+
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Read-only catalogue of known-good itx script snippets: list() summaries, get({ id }) one example with full code. Copy working patterns instead of inventing them.",
-      children: { get: "One example with code.", list: "All example summaries." },
-      parent: "a project itx (itx.examples)",
+        "Search + fetch over everything callable from this scope: working example scripts (proven ones run unattended against a live project in the platform's test suite — copy those first), the public type surface, and this scope's mounted capabilities. " +
+        'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". ' +
+        "get({ name }) fetches what a hit names: an example's full annotated code, a type declaration with its referenced types, or a mounted capability's instructions + types. " +
+        "typecheck({ code }) compiles an `async (itx) => { … }` script against this scope's types without running it.",
+      children: {
+        get: "Fetch one entry by name: an example's full code, a type declaration closure, or a mount's types.",
+        search:
+          "Find examples, types, and mounted capabilities by keywords (pass many related words).",
+        typecheck: "Compile a script against this scope's types without running it (advisory).",
+      },
+      parent: "a project itx (itx.docs)",
     });
   }
 
-  /** Every example summary, without code bodies (cheap to skim). */
-  async list(): Promise<ItxExampleSummary[]> {
-    return PROJECT_CONTEXT_EXAMPLES.map(exampleSummary);
-  }
+  /**
+   * Find examples, types, and mounted capabilities. Pass MANY related words —
+   * matching is dumb word overlap, so more synonyms means better recall:
+   * `search({ q: "file upload attachment bytes store image" })`, not
+   * `search({ q: "files" })`. Example hits are working scripts — prefer
+   * copying them over writing calls from scratch. Each hit's `fetchCall`
+   * field is the literal next call to make.
+   */
+  async search(input: { q: string }): Promise<DocsSearchHit[]> {
+    const scored: Array<{ hit: DocsSearchHit; score: number; proven?: boolean }> = [];
 
-  /** One example with its full script body. */
-  async get(input: { id: string }): Promise<ItxExampleWithCode> {
-    const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.id);
-    if (!example) {
-      throw new Error(`unknown example "${input.id}" — itx.examples.list() has every id`);
+    for (const example of PROJECT_CONTEXT_EXAMPLES) {
+      // Prose only, no code: code tokens made incidental matches (a fake
+      // capability demo containing "create"/"message" in its script) outrank
+      // the example whose TITLE says what the searcher wants. Recall for
+      // API-name queries still works — ids/titles/descriptions name their
+      // subjects, and type declarations cover the rest.
+      const score = searchScore(input.q, `${example.id} ${example.title} ${example.description}`);
+      if (score === 0) continue;
+      scored.push({
+        score,
+        // e2eProven?: false — ABSENT means proven (the matrix runs it);
+        // explicit false means interactive-only.
+        proven: example.e2eProven !== false,
+        hit: {
+          kind: "example",
+          name: example.id,
+          summary: `${example.title} — ${example.description}`,
+          fetchCall: `await itx.docs.get({ name: ${JSON.stringify(example.id)} })`,
+        },
+      });
     }
-    return { ...exampleSummary(example), code: example.code };
+
+    for (const declaration of ITX_API_DECLARATIONS) {
+      const memberText = Object.entries(declaration.memberSummaries)
+        .map(([member, summary]) => `${member} ${summary}`)
+        .join(" ");
+      // Hub declarations (Project, Docs, ...) carry every member's summary in
+      // their haystack and would match almost any query wholesale, crowding
+      // the examples out of the one screenful of hits. A word landing in the
+      // declaration's own name/summary counts fully; a member-only match
+      // counts half.
+      const score = weightedDeclarationScore({
+        query: input.q,
+        ownText: `${declaration.name} ${declaration.summary}`,
+        memberText,
+      });
+      if (score === 0) continue;
+      scored.push({
+        score,
+        hit: {
+          kind: "type",
+          name: declaration.name,
+          summary: declaration.summary,
+          fetchCall: `await itx.docs.get({ name: ${JSON.stringify(declaration.name)} })`,
+        },
+      });
+    }
+
+    // Capabilities mounted in this scope's chain (agent scope sees its own
+    // mounts plus the project root's) — the part of the surface no static
+    // corpus can know. The haystack includes the mount's Capability Type
+    // Declaration, so its method names and member docs are searchable.
+    const { capabilities } = await this.#capabilityHost.__describe();
+    for (const capability of capabilities) {
+      if (capability.type === "builtin") continue; // builtins are covered by their type declarations
+      const dottedPath = capability.path.join(".");
+      const instructions = capability.instructions ?? "";
+      const score = searchScore(input.q, `${dottedPath} ${instructions} ${capability.types ?? ""}`);
+      if (score === 0) continue;
+      scored.push({
+        score,
+        hit: {
+          kind: "capability",
+          name: dottedPath,
+          summary: oneLineSummary(instructions) || "(no instructions recorded)",
+          fetchCall: `await itx.docs.get({ name: ${JSON.stringify(dottedPath)} })`,
+        },
+      });
+    }
+
+    // Equal-score tie-break mirrors the guidance: working examples first,
+    // scope-specific mounts next, type reference last; 12 hits is about one
+    // screenful for a model.
+    const kindRank: Record<DocsSearchHit["kind"], number> = { example: 0, capability: 1, type: 2 };
+    return scored
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          kindRank[a.hit.kind] - kindRank[b.hit.kind] ||
+          // Proven examples (run unattended against a live project on every
+          // change) outrank interactive-only ones — alphabetical order was
+          // deciding real ties before.
+          Number(b.proven ?? false) - Number(a.proven ?? false) ||
+          a.hit.name.localeCompare(b.hit.name),
+      )
+      .slice(0, 12)
+      .map((entry) => entry.hit);
+  }
+
+  /**
+   * Fetch one entry by the name a search hit gave you. An example name
+   * returns its full script, annotated with its provenance (most examples
+   * run unattended against a live project in the platform's test suite; the
+   * rest are marked interactive); a type declaration name returns its
+   * TypeScript source plus as much of its reference closure as fits
+   * `maxTokens` (default 1500), ending with a comment naming anything left
+   * out and how to fetch it; a mounted capability's dotted path (say
+   * "tools.weather") returns its instructions and types plus the platform
+   * declarations those types reference, same budget rules.
+   */
+  async get(input: { name: string; maxTokens?: number }): Promise<string> {
+    const example = PROJECT_CONTEXT_EXAMPLES.find((candidate) => candidate.id === input.name);
+    if (example) {
+      // Paste-ready for the codemode contract: the annotation lives INSIDE
+      // the function (a response block must START with `async` — leading
+      // comments die silently), and `vars` is bound so the body's example
+      // inputs (`vars.foo ?? fallback`) resolve to their fallbacks until the
+      // caller substitutes real values.
+      return [
+        "async (itx) => {",
+        `  // EXAMPLE ${JSON.stringify(example.id)}: ${example.title}`,
+        example.e2eProven === false
+          ? `  // From the example catalogue (interactive: depends on a connected account or external service).`
+          : `  // Proven: this exact script runs unattended against a live project in the platform's test suite.`,
+        `  // ${example.description}`,
+        `  const vars = {}; // example inputs — replace \`vars.x ?? fallback\` with real values`,
+        example.code,
+        "}",
+      ].join("\n");
+    }
+    // Clamp instead of reject: an out-of-range value from a model should
+    // cost a degraded answer, not a wasted turn. The floor covers the
+    // trailer reserve plus one small declaration.
+    const maxTokens = Number.isFinite(input.maxTokens)
+      ? Math.min(Math.max(input.maxTokens!, 300), 10_000)
+      : 1500;
+    // A mounted capability's dotted path: slice from a synthetic declaration
+    // built from the mount's durable metadata, so the walk crosses from the
+    // scope layer into the platform declarations its types reference. Mounts
+    // resolve BEFORE platform declarations: a mount can never collide with a
+    // BUILTIN member (rejectBuiltinCollision), but nothing stops one sharing
+    // a platform TYPE name, and the caller's own mount is the likelier ask.
+    const { capabilities } = await this.#capabilityHost.__describe();
+    const mount = capabilities.find(
+      (capability) => capability.type !== "builtin" && capability.path.join(".") === input.name,
+    );
+    if (mount) {
+      const synthetic = mountDeclaration({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        dottedPath: input.name,
+        instructions: mount.instructions,
+        types: mount.types,
+      });
+      const declarations = new Map(ITX_API_DECLARATIONS_BY_NAME);
+      declarations.set(synthetic.name, synthetic);
+      return typeSlice({ declarations, rootName: synthetic.name, maxTokens }).sourceText;
+    }
+    if (ITX_API_DECLARATIONS_BY_NAME.has(input.name)) {
+      return typeSlice({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        rootName: input.name,
+        maxTokens,
+      }).sourceText;
+    }
+    // A builtin's itx member name ("docs", "workspace") is the natural thing
+    // to ask for after __describe(); resolve it to its declaration ("Docs")
+    // instead of erroring with unrelated closest-matches.
+    const caseInsensitive = [...ITX_API_DECLARATIONS_BY_NAME.keys()].find(
+      (name) => name.toLowerCase() === input.name.toLowerCase(),
+    );
+    if (caseInsensitive !== undefined) {
+      return typeSlice({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        rootName: caseInsensitive,
+        maxTokens,
+      }).sourceText;
+    }
+    const nearest = (await this.search({ q: input.name })).slice(0, 3);
+    throw new Error(
+      `unknown docs entry ${JSON.stringify(input.name)}` +
+        (nearest.length > 0
+          ? ` — closest matches: ${nearest.map((hit) => hit.name).join(", ")}`
+          : "") +
+        `. itx.docs.search({ q: "several related words" }) finds examples, types, and capabilities.`,
+    );
+  }
+
+  /**
+   * Typecheck an `async (itx) => { … }` script against this scope's surface —
+   * the platform types plus every mounted capability's types (npm-backed
+   * `import("pkg")` types resolve too) — WITHOUT running it. Advisory: a
+   * clean result does not promise the script works, but a typo like
+   * `itx.streams.gett(...)` comes back as a compiler error with a
+   * did-you-mean instead of costing a failed run.
+   */
+  async typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }> {
+    const { capabilities } = await this.#capabilityHost.__describe();
+    const problems = await checkItxScript({
+      capabilities,
+      code: input.code,
+      typechecker: env.TYPECHECKER,
+    });
+    return { ok: problems.length === 0, problems };
   }
 }
 
-function exampleSummary(example: ItxExample): ItxExampleSummary {
-  return {
-    description: example.description,
-    id: example.id,
-    title: example.title,
-  };
-}
+/**
+ * Narrow structural view of a processor-hosting Durable Object stub: every
+ * host class (agent, capability-host, project, repo, scheduler, secret)
+ * exposes the same `processor` facade property and the same host-level wake
+ * handshake, so the relay works over one shape instead of six stub types.
+ */
+type ProcessorHostStub = {
+  processor: PromiseLike<unknown>;
+  wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
+};
 
 /**
  * Isolate-side relay for a Durable-Object-hosted processor facade.
@@ -4472,20 +5445,28 @@ function exampleSummary(example: ItxExample): ItxExampleSummary {
  * across capnweb. This relay is a real RpcTarget at the property position:
  * each method awaits the resolved processor stub, then makes a plain method
  * call on it.
+ *
+ * It is also the host's WAKE DOOR (see {@link WakeableStreamProcessorRpc}):
+ * `wakeStreamSubscriber` forwards to the host Durable Object's top-level
+ * handshake, gated to trusted-internal because the handshake's sink drives
+ * the host's durable checkpoint (the same hole `StreamProcessorRpcTarget`
+ * exists to close for `ingest`).
  */
 class ProcessorRelayRpcTarget<State>
   extends IterateRpcRelay<"StreamProcessorRpc">
-  implements StreamProcessorRpc<State>
+  implements WakeableStreamProcessorRpc<State>
 {
-  readonly #resolveProcessor: () => PromiseLike<unknown>;
+  readonly #auth: ItxAuth;
+  readonly #host: () => ProcessorHostStub;
 
-  constructor(resolveProcessor: () => PromiseLike<unknown>) {
+  constructor(args: { auth: ItxAuth; host: () => ProcessorHostStub }) {
     super();
-    this.#resolveProcessor = resolveProcessor;
+    this.#auth = args.auth;
+    this.#host = args.host;
   }
 
   async #processor(): Promise<StreamProcessorRpc<State>> {
-    return (await this.#resolveProcessor()) as StreamProcessorRpc<State>;
+    return (await this.#host().processor) as StreamProcessorRpc<State>;
   }
 
   async snapshot() {
@@ -4496,70 +5477,64 @@ class ProcessorRelayRpcTarget<State>
     return await (await this.#processor()).getRuntimeState();
   }
 
-  async onStateChange(cb: (snapshot: ProcessorSnapshot<State>) => unknown) {
-    return await (await this.#processor()).onStateChange(cb);
-  }
-
   async waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
     return await (await this.#processor()).waitUntilEvent(input);
   }
+
+  /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */
+  wakeStreamSubscriber(
+    request: StreamSubscriberWakeRequest,
+  ): Promise<StreamSubscriberWakeResponse> {
+    if (this.#auth.principal !== "trusted-internal") {
+      throw new Error("wakeStreamSubscriber is dialed by stream delivery spines, not sessions");
+    }
+    return this.#host().wakeStreamSubscriber(request);
+  }
 }
 
 /**
- * Wrap a state-change callback so every delivery is projected through
- * `publicState`, WITHOUT losing the callback's RPC retention surface: `dup()`
- * duplicates the underlying remote stub (re-wrapped, so the duplicate projects
- * too), disposal releases it, and `onRpcBroken` forwards. This is what lets
- * `StreamProcessor.onStateChange`'s retain machinery treat a projected remote
- * callback exactly like a bare one.
+ * DO-side RpcTarget over a host's live-state engine — the surface a `.liveState`
+ * node exposes: `get()`/`subscribe()` — read-only over the wire (see
+ * LiveStateRpc: the DO derives this state from its fold, so writes go through
+ * the node's own verbs). `get`/`subscribe` first seed the engine from committed
+ * state so the first paint is never stale after a DO restart.
  */
-function projectStateChangeCallback<InternalState, PublicState>(
-  cb: (snapshot: ProcessorSnapshot<PublicState>) => unknown,
-  publicState: (state: InternalState) => PublicState,
-): (snapshot: ProcessorSnapshot<InternalState>) => unknown {
-  const retainable = cb as typeof cb &
-    Partial<Disposable> & {
-      dup?(): typeof cb;
-      onRpcBroken?(handler: (error: unknown) => void): void;
-    };
-  return Object.assign(
-    (snapshot: ProcessorSnapshot<InternalState>) =>
-      cb({ offset: snapshot.offset, state: publicState(snapshot.state) }),
-    {
-      ...(typeof retainable.dup === "function"
-        ? { dup: () => projectStateChangeCallback(retainable.dup!.call(retainable), publicState) }
-        : {}),
-      ...(typeof retainable.onRpcBroken === "function"
-        ? {
-            onRpcBroken: (handler: (error: unknown) => void) =>
-              retainable.onRpcBroken!.call(retainable, handler),
-          }
-        : {}),
-      [Symbol.dispose]: () => {
-        retainable[Symbol.dispose]?.();
-      },
-    },
-  );
+export class LiveStateRpcTarget<State extends object = Record<string, unknown>>
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<State>
+{
+  readonly #host: Pick<StreamProcessorHost<State>, "live" | "loadAndRefreshLive">;
+
+  constructor(host: Pick<StreamProcessorHost<State>, "live" | "loadAndRefreshLive">) {
+    super();
+    this.#host = host;
+  }
+
+  async get(): Promise<State> {
+    await this.#host.loadAndRefreshLive();
+    return this.#host.live.getState();
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    await this.#host.loadAndRefreshLive();
+    const handle = this.#host.live.subscribe(onUpdate);
+    return new LiveStateSubscriptionRpcTarget(handle);
+  }
 }
 
-/**
- * RPC ownership handle for one `onStateChange` subscription — the processor
- * counterpart of {@link StreamSubscriptionRpcTarget}. `unsubscribe()` is the
- * explicit domain operation, disposal is the scoped cleanup path, and `ping()`
- * reports whether the subscription is still registered on the live processor
- * (a dead Durable Object incarnation makes the call itself reject — both
- * signals tell the client to re-subscribe).
- */
-class ProcessorStateSubscriptionRpcTarget extends IterateRpcRelay<"ProcessorStateSubscriptionHandle"> {
-  readonly #handle: StreamProcessorStateSubscriptionHandle;
+/** RPC ownership handle for one live-state subscription — the `.liveState` twin of {@link StreamSubscriptionRpcTarget}. */
+class LiveStateSubscriptionRpcTarget extends IterateRpcRelay<"LiveStateSubscriptionHandle"> {
+  readonly #handle: LiveStateSubscription;
 
-  constructor(handle: StreamProcessorStateSubscriptionHandle) {
+  constructor(handle: LiveStateSubscription) {
     super();
     this.#handle = handle;
   }
 
   ping() {
-    return this.#handle.isLive();
+    return this.#handle.ping();
   }
 
   unsubscribe() {
@@ -4568,6 +5543,111 @@ class ProcessorStateSubscriptionRpcTarget extends IterateRpcRelay<"ProcessorStat
 
   [Symbol.dispose](): void {
     this.#handle.unsubscribe();
+  }
+}
+
+/** A Durable Object stub exposing a `.liveState` node — the one property the isolate relay dials. */
+type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<LiveStateRpc<State>> };
+
+/**
+ * Isolate-side relay for a DO-hosted `.liveState` node — awaits the DO stub's
+ * `.liveState` property (a Workers RPC property read can't be pipelined through)
+ * then forwards. Mirrors {@link ProcessorRelayRpcTarget}.
+ */
+class LiveStateRelayRpcTarget<State>
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<State>
+{
+  readonly #stub: () => LiveStateDurableObjectStub<State>;
+
+  constructor(stub: () => LiveStateDurableObjectStub<State>) {
+    super();
+    this.#stub = stub;
+  }
+
+  async get(): Promise<State> {
+    return await (await this.#stub().liveState).get();
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    return await (await this.#stub().liveState).subscribe(onUpdate);
+  }
+}
+
+/** How often the stateless demo ticker advances. */
+const LIVE_DEMO_TICK_MS = 1000;
+
+/**
+ * Demo: the STATELESS live-state case. This RpcTarget runs in the request
+ * isolate (no Durable Object); `subscribe` drives a per-connection LiveState
+ * engine from a timer — exactly the shape of polling a third-party API and
+ * pushing what changed. The timer lives precisely as long as the subscription.
+ */
+class LiveDemoTickerRpcTarget
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<{ tick: number; startedAt: number }>
+{
+  readonly #startedAt = Date.now();
+
+  async get(): Promise<{ tick: number; startedAt: number }> {
+    return { tick: 0, startedAt: this.#startedAt };
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<{ tick: number; startedAt: number }>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    const engine = new LiveState<{ tick: number; startedAt: number }>({
+      tick: 0,
+      startedAt: this.#startedAt,
+    });
+    const inner = engine.subscribe(onUpdate);
+    // The engine drops a subscriber itself when a delivery rejects (dead
+    // client), and it exposes no drop hook to the owner — so a driving loop
+    // like this one must check `ping()` and stop itself, or the timer outlives
+    // the subscription. This IS the template for the poll-an-API pattern.
+    const interval = setInterval(() => {
+      if (!inner.ping()) {
+        stop();
+        return;
+      }
+      engine.assign({ tick: engine.getState().tick + 1 });
+    }, LIVE_DEMO_TICK_MS);
+    const stop = () => {
+      clearInterval(interval);
+      inner.unsubscribe();
+    };
+    return new LiveStateSubscriptionRpcTarget({
+      ping: () => inner.ping(),
+      unsubscribe: stop,
+      [Symbol.dispose]: stop,
+    });
+  }
+}
+
+/**
+ * Demo capability (`itx.liveDemo`) — a corner of the tree that exists only to
+ * exercise both live-state cases: `ticker` (stateless, above) and `increment()`
+ * (mutates the project DO's shared counter, which every watcher of `itx.liveState`
+ * sees — the Durable-Object-backed case).
+ */
+class LiveDemoRpcTarget extends IterateRpcTarget<"LiveDemo"> {
+  readonly #incrementCounter: () => Promise<void>;
+
+  constructor(incrementCounter: () => Promise<void>) {
+    super();
+    this.#incrementCounter = incrementCounter;
+  }
+
+  /** Stateless live state: a poll-driven ticker, no Durable Object. */
+  get ticker(): LiveStateRpc<{ tick: number; startedAt: number }> {
+    return new LiveDemoTickerRpcTarget();
+  }
+
+  /** Stateful live state: bump the project DO's counter (visible on `itx.liveState`). */
+  increment(): Promise<void> {
+    return this.#incrementCounter();
   }
 }
 
@@ -4580,10 +5660,21 @@ function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
 
 type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 
-// Exa's hosted MCP server works unauthenticated (rate-limited); pre-connecting
-// it gives every project web search with zero setup.
+// Exa's hosted MCP server works unauthenticated (rate-limited, and the shared
+// free pool exhausts fast); pre-connecting it gives every project web search
+// with zero setup. When the deployment has a first-party Exa key
+// (config.integrations.exa), it rides as a bearer placeholder substituted at
+// the egress door — raw key bytes never enter the MCP client.
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
+const EXA_PLATFORM_KEY_HEADER = {
+  authorization: 'Bearer getSecret({ platform: "integrations.exa.apiKey" })',
+};
 
+/**
+ * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`
+ * returns a client whose dotted calls invoke the server's tools; `exa` is the
+ * pre-connected Exa web-search server every project gets.
+ */
 class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -4613,8 +5704,9 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
    * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.
    */
   get exa(): McpClientRpc {
+    const hasPlatformKey = parseConfig(env).integrations.exa !== undefined;
     return McpClientRpcTarget.createLazyClient(
-      { url: EXA_MCP_URL },
+      { url: EXA_MCP_URL, ...(hasPlatformKey ? { headers: EXA_PLATFORM_KEY_HEADER } : {}) },
       {
         description: {
           instructions:
@@ -4644,7 +5736,6 @@ class McpClientRpcTarget extends IterateRpcRelay<"McpClientRpc"> {
     },
   ) {
     super();
-    return withInvokeCapabilityFallback(this);
   }
 
   async __describe(): Promise<Description> {
@@ -4657,7 +5748,13 @@ class McpClientRpcTarget extends IterateRpcRelay<"McpClientRpc"> {
       instructions:
         this.props.description?.instructions ??
         `An ad-hoc MCP client for ${this.props.config.url}: a flattened dispatcher; client.someTool(input) calls the tool "someTool".`,
-      types: this.props.description?.types,
+      // Connect-time auto-typing: absent a hand-written declaration, the
+      // server's own tool inputSchemas become the types. provideCapability
+      // stamps this onto a durable mount, so docs and the typechecker see
+      // third-party tools like builtins.
+      types:
+        this.props.description?.types ??
+        mcpCapabilityTypeDeclaration(tools, `MCP server ${this.props.config.url}`),
       children: Object.fromEntries(
         tools.map((tool) => [tool.name, tool.description ?? "MCP tool"]),
       ),
@@ -4692,6 +5789,11 @@ type OpenApiReadyState = {
   spec: Record<string, unknown>;
 };
 
+/**
+ * Ad-hoc OpenAPI clients — `itx.openapi`. `connect({ specUrl })` fetches and
+ * parses a spec and returns a client whose dotted calls are the spec's
+ * operationIds, executed against its server through project egress.
+ */
 class OpenApiCollectionRpcTarget extends IterateRpcTarget<"OpenApiCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -4735,17 +5837,27 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
       const spec = await fetchSpec(props.config, props.egress);
       return { operations: listOpenApiOperations(spec), spec };
     });
-    return withInvokeCapabilityFallback(this);
   }
 
   async __describe(): Promise<Description> {
-    const { operations } = await this.#ready();
+    const { operations, spec } = await this.#ready();
 
     return describeNode({
       instructions:
         this.props.description?.instructions ??
         "An ad-hoc OpenAPI client: a flat dispatcher; client.someOperationId(input) executes that operation against the spec's server.",
-      types: this.props.description?.types,
+      // Connect-time auto-typing, reference-style: one line naming the spec
+      // (the typechecker materializes the full declaration at check time —
+      // schemas never enter the journal or an agent's context). Only a spec
+      // that itself NEEDS auth headers journals inline — same predicate as
+      // fetchSpec, so "we fetched it bare" and "the sidecar can fetch it
+      // bare" cannot drift. A public spec with an auth'd API (the common
+      // split) keeps the reference.
+      types:
+        this.props.description?.types ??
+        (Object.keys(specFetchHeaders(this.props.config)).length > 0
+          ? openApiCapabilityTypeInline(operations, spec, this.props.config.specUrl)
+          : openApiCapabilityTypeReference(this.props.config.specUrl)),
       children: Object.fromEntries(
         operations.map((operation) => [
           operation.operationId,
@@ -4783,17 +5895,29 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
   }
 }
 
+/**
+ * The connection's headers apply to the SPEC fetch only when the spec lives
+ * on the API's own host — the common split (public spec, auth'd API à la
+ * Stripe) sends nothing to the spec. This predicate decides both how
+ * `fetchSpec` fetches AND whether auto-typing must journal inline: a spec
+ * fetched bare here is equally fetchable by the typechecker's bare fetch,
+ * so it can journal the small `openapi:` reference.
+ */
+function specFetchHeaders(props: OpenApiConnectInput): Record<string, string> {
+  const specHost = new URL(props.specUrl).host;
+  const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
+  return specHost === apiHost ? (props.headers ?? {}) : {};
+}
+
 async function fetchSpec(
   props: OpenApiConnectInput,
   egress: FetchOnly,
 ): Promise<Record<string, unknown>> {
-  const specHost = new URL(props.specUrl).host;
-  const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
   // Headers can contain getSecret({ path: "/secrets/..." }) placeholders.
   // They must enter the project egress pipe, because that is the only place
   // secret material is substituted. Do not read or rewrite them here.
   const response = await egress.fetch(
-    new Request(props.specUrl, { headers: specHost === apiHost ? (props.headers ?? {}) : {} }),
+    new Request(props.specUrl, { headers: specFetchHeaders(props) }),
   );
   if (!response.ok) {
     throw new Error(`Fetching the OpenAPI spec at ${props.specUrl} returned ${response.status}.`);
@@ -4900,3 +6024,52 @@ function requestBase(props: OpenApiConnectInput, spec: Record<string, unknown>):
 function ensureTrailingSlash(url: string): string {
   return url.endsWith("/") ? url : `${url}/`;
 }
+
+// =============================================================================
+// Dynamic-capability fallbacks — the registry.
+//
+// Every surface listed here answers UNKNOWN dotted members by dispatching an
+// `invokeCapability({ path, args })` against its scope's capability table
+// (`itx.someTool(...)`, `host.foo.bar(x)`, `mcpClient.someToolName(args)`).
+// The fallback lives on each class's PROTOTYPE CHAIN — one proxied hop
+// between `Class.prototype` and its parent — NOT as a Proxy around instances:
+// workerd RPC brand-checks a method call's RESULT when classifying it for
+// promise pipelining, a Proxy never passes, and every pipelined call on it
+// then fails with "The RPC receiver does not implement the method ..."
+// (cloudflare/workerd#6873). With the hop, instances are genuine RpcTargets —
+// `itx.capabilityHosts.get(p).runScript(s)`, `itx.workers.get(ref).ping()`,
+// `itx.mcp.connect(url).someToolName(args)` all pipeline in one expression —
+// while unknown-name lookups still walk the prototype chain into the hop.
+// Mechanism details: installPrototypeInvokeCapabilityFallback (domains/itx/
+// utils.ts).
+// =============================================================================
+
+// The root itx / `projects.get(id)`: unknown roots dispatch via the scope's
+// capability host (mounted capabilities, `itx.someTool(...)`).
+installPrototypeInvokeCapabilityFallback(ProjectRpcTarget, {
+  invokerFor: (project) => project.capabilityHost,
+});
+// `capabilityHosts.get(path)` and every `capabilityHost` getter: the host IS
+// the invoker — `host.foo.bar(x)` is `host.invokeCapability({ path: ["foo",
+// "bar"], args: [x] })`.
+installPrototypeInvokeCapabilityFallback(CapabilityHostRpcTarget);
+// `itx.integrations`: userspace connections mount under provider slugs
+// (`itx.integrations.waitrose.mum.search(...)`).
+installPrototypeInvokeCapabilityFallback(ProjectIntegrationsRpcTarget);
+// `workers.get(ref)`: dotted paths flatten into one invokeCapability against
+// the dynamic worker (the userspace `invokeCapability` walk).
+installPrototypeInvokeCapabilityFallback(DynamicWorkerRpcTarget);
+// `mcp.connect(url)`: tool names are only known at runtime (tools/list), so
+// every tool call is a dynamic member by construction.
+installPrototypeInvokeCapabilityFallback(McpClientRpcTarget);
+// `openapi.connect(specUrl)`: operationIds are runtime-discovered, same shape
+// as MCP tools.
+installPrototypeInvokeCapabilityFallback(OpenApiRpcTarget);
+// `agents.get(path)`: an agent scope's mounted tools directly on the handle —
+// `itx.agents.get(path).someTool(args)` — dispatched via the agent's own
+// capability host (the explicit `agent.capabilityHost.someTool(...)` spelling
+// resolves identically). #1839 removed the instance Proxy to make handles
+// pipelinable; the hop restores the sugar without giving that back.
+installPrototypeInvokeCapabilityFallback(AgentRpcTarget, {
+  invokerFor: (agent) => agent.capabilityHost,
+});

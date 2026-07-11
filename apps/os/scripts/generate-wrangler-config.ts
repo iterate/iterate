@@ -95,6 +95,14 @@ export function envShapedVars(env: DeployedEnv) {
     APP_CONFIG_MCP__BASE_URL: env.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: env.cloudflareAiGatewayTransport,
+    ...(env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
+      ? {}
+      : {
+          APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(
+            env.cloudflareAiGatewayResponseCacheTtlSeconds,
+          ),
+        }),
   };
 }
 
@@ -120,6 +128,11 @@ const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
 /** The builder sidecar's worker name, derived — never spelled out in envs.ts. */
 function builderWorkerName(osWorkerName: string) {
   return `${osWorkerName}-builder`;
+}
+
+/** The typechecker sidecar's worker name, derived the same way. */
+function typecheckerWorkerName(osWorkerName: string) {
+  return `${osWorkerName}-typechecker`;
 }
 
 /**
@@ -277,11 +290,20 @@ function workerBindings(input: {
       // ~14MB) so the product script stays small. Bound by name — deploy.ts
       // deploys the builder first.
       { binding: "BUILDER", service: builderWorkerName(input.workerName) },
+      // The typechecker sidecar (src/typechecker.ts,
+      // wrangler.typechecker.jsonc): the one script carrying the TypeScript
+      // compiler (tswasm, ~30MB wasm). Same deploy-first rule as the builder.
+      { binding: "TYPECHECKER", service: typecheckerWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
     browser: { binding: "BROWSER" },
     images: { binding: "IMAGES" },
     media: { binding: "MEDIA" },
+    // Deploy identity for the stream processor hosts' crash-loop breaker: a
+    // revival that sees a NEW version id starts from a fresh backoff budget
+    // (the antidote deploy). Absent in local dev (miniflare fakes it or omits
+    // it); workerVersion(env) tolerates undefined.
+    version_metadata: { binding: "CF_VERSION_METADATA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
     queues: {
@@ -407,6 +429,12 @@ function localDevBindings() {
     ...bindings,
     vars: {
       ...bindings.vars,
+      // Local dev rides the BYOK lane with the response cache, same as the
+      // preview slots: agent-loop iteration replays yesterday's answers for
+      // free. In envShapedVars for deployed envs; spelled out here because
+      // local dev has no envs.ts entry.
+      APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
+      APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
@@ -509,12 +537,43 @@ export const builderConfig = {
   env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, builderEnvBlock(env)])),
 };
 
+/**
+ * The typechecker sidecar's config, cut from the builder's pattern: the
+ * minimum possible worker around the TypeScript compiler wasm — a pure
+ * function (files in, diagnostics out) with NO bindings at all. Wrangler
+ * bundles src/typechecker.ts directly (no vite); local dev runs it as an
+ * auxiliary worker in the same workerd (vite.config.ts).
+ */
+export const typecheckerConfig = {
+  $schema: "node_modules/wrangler/config-schema.json",
+  name: "os-typechecker",
+  main: "./src/typechecker.ts",
+  compatibility_date: COMPATIBILITY_DATE,
+  compatibility_flags: ["nodejs_compat"],
+  observability: OBSERVABILITY,
+  env: Object.fromEntries(
+    Object.entries(envs).map(([name, env]) => [
+      name,
+      {
+        name: typecheckerWorkerName(env.osWorkerName),
+        account_id: env.cloudflareAccountId,
+        observability: OBSERVABILITY,
+      },
+    ]),
+  ),
+};
+
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
 export const writeWranglerConfig = () => {
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.builder.jsonc", import.meta.url),
     appLabel: "apps/os (builder sidecar)",
     config: builderConfig,
+  });
+  writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.typechecker.jsonc", import.meta.url),
+    appLabel: "apps/os (typechecker sidecar)",
+    config: typecheckerConfig,
   });
   return writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),

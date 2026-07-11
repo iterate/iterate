@@ -9,11 +9,14 @@ const SEPARATOR = "--";
 const GLOBAL_REPO_ARTIFACT_PROJECT_ID = "global";
 
 /**
- * The project repo intentionally lives at the project stream root. Keeping the
- * path here lets project creation, project processors, and worker refs share the
- * same default repo address instead of each baking in their own `"/"` literal.
+ * The project's config repo — an ordinary repo at an ordinary `/repos/*`
+ * path, seeded during project bootstrap and the source the default project
+ * worker builds from. Keeping the path here lets project creation, project
+ * processors, and worker refs share the same address instead of each baking
+ * in their own literal. Its events reach the project stream `/` through the
+ * `cross-post:/` subscription the bootstrap saga arms on this repo's stream.
  */
-export const PROJECT_REPO_PATH = "/";
+export const CONFIG_REPO_PATH = "/repos/config";
 
 /**
  * The default project worker's build entry point. This shared filename keeps
@@ -31,9 +34,9 @@ const PROJECT_WORKER_ENTRY_POINT = "worker.ts";
 const PROJECT_WORKER_SOURCE_EXCLUDE = [".git/**", "node_modules/**", "dist/**", "build/**"];
 
 /**
- * THE canonical ref for a project's default worker: the seeded repo at the
- * project root, built from `worker.ts`. Everything that dispatches into "the
- * project worker" — the `project.worker` itx alias, project ingress, and the
+ * THE canonical ref for a project's default worker: the seeded config repo,
+ * built from `worker.ts`. Everything that dispatches into "the project
+ * worker" — the `project.worker` itx alias, project ingress, and the
  * per-stream event delivery pump — shares this one recipe so they can never
  * point at different workers.
  */
@@ -43,13 +46,51 @@ export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
     source: {
       files: {
         exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
-        repoPath: PROJECT_REPO_PATH,
+        repoPath: CONFIG_REPO_PATH,
         type: "repo",
       },
       options: { entryPoint: PROJECT_WORKER_ENTRY_POINT },
     },
     type: "stateless",
   };
+}
+
+/**
+ * The repo stream exists but its git data does not (yet): the Artifacts repo
+ * was never created, or was created and awaits its seed commit. Every project
+ * bootstrap has this window — the config repo's stream and its dependents
+ * (the project worker feed) come alive before the seed lands — so callers
+ * must be able to tell "not seeded YET, retry" from a real failure. Matched
+ * by NAME because the error crosses Workers RPC (which preserves `error.name`
+ * but not class identity).
+ */
+export class RepoNotSeededError extends Error {
+  static readonly NAME = "RepoNotSeededError";
+  override readonly name = RepoNotSeededError.NAME;
+}
+
+export function isRepoNotSeededError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === RepoNotSeededError.NAME;
+}
+
+/**
+ * Wraps a branch-clone failure as {@link RepoNotSeededError} when it means
+ * "the remote has no such ref/commits" — isomorphic-git's NotFoundError for a
+ * ref (an empty Artifacts remote answers HEAD with a branch that has no
+ * commits, observed as "Could not find refs/heads/master"), or the Artifacts
+ * repo itself missing (`NOT_FOUND` — created lazily by the bootstrap saga).
+ * Anything else returns unchanged.
+ */
+export function classifyRepoAccessError(error: unknown): unknown {
+  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+  const notSeeded =
+    code === "NOT_FOUND" ||
+    (code === "NotFoundError" && typeof message === "string" && message.includes("refs/"));
+  if (!notSeeded) return error;
+  return new RepoNotSeededError(
+    `Repo has no commits yet (unseeded or still seeding): ${typeof message === "string" ? message : String(error)}`,
+    { cause: error },
+  );
 }
 
 function normalizeRepoPath(path: string): string {

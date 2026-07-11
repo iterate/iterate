@@ -78,6 +78,22 @@ export interface DeployedEnv {
    * no SSL-for-SaaS quota unless Cloudflare explicitly provisions it.
    */
   cloudflareForSaasProjectHostnameBases: string[];
+  /**
+   * How agent LLM turns travel through the Cloudflare AI Gateway: `unified`
+   * = partner models on Cloudflare's unified billing; `byok` = the gateway's
+   * universal endpoint with our own OpenAI key (correct prompt-cache
+   * pricing, and the only path where the gateway's response cache works).
+   */
+  cloudflareAiGatewayTransport: "unified" | "byok";
+  /**
+   * Opts the BYOK lane into the AI Gateway RESPONSE cache (whole-answer
+   * replay for byte-identical normalized requests — see
+   * cloudflareAiGatewayResponseCacheKey). Only for envs whose conversations
+   * are synthetic: previews and dev, where e2e reruns should replay
+   * yesterday's answers for free. Leave unset on prd — a real user must
+   * never receive a cached agent reply.
+   */
+  cloudflareAiGatewayResponseCacheTtlSeconds?: number;
   /** IDs of the Cloudflare resources this env owns (created once by ensure-resources). */
   resources: {
     /** KV: slug -> project-id cache in front of the auth project directory. */
@@ -107,6 +123,10 @@ function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEn
     authBaseUrl: `https://auth.iterate-preview-${n}.com`,
     projectHostnameBases: [`iterate-preview-${n}.app`],
     cloudflareForSaasProjectHostnameBases: [],
+    cloudflareAiGatewayTransport: "byok",
+    // 7 days: long enough that overnight marathons and PR-lifetime reruns
+    // replay each other, short enough that stale answers age out on their own.
+    cloudflareAiGatewayResponseCacheTtlSeconds: 7 * 24 * 60 * 60,
     resources,
   };
 }
@@ -123,6 +143,11 @@ export const envs = {
     authBaseUrl: "https://auth.iterate.com",
     projectHostnameBases: ["iterate.app"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
+    // BYOK, like every other env: unified billing meters OpenAI-prompt-cached
+    // tokens at the uncached price (~6x at our hit rate), and BYOK benchmarked
+    // latency-neutral-or-better. NO response cache here — that knob stays
+    // preview/dev-only; a real user must never receive a cached agent reply.
+    cloudflareAiGatewayTransport: "byok",
     resources: {
       projectDirectoryKvId: "79d78df2e83b46d2b9083533e9f189c4",
       workerBuildCacheKvId: "43306c224d364c7aa804c3ff762c4d08",
@@ -190,19 +215,45 @@ export interface AuthDeployedEnv {
   dopplerConfig: string;
   authWorkerName: string;
   authBaseUrl: string;
+  /** Enables fixed `+test@nustom.com` OTPs for test automation. */
+  fixedTestOtpEnabled: boolean;
   resources: { authDbId: string };
 }
 
+function authEnvFromDeployedEnv(
+  env: DeployedEnv,
+  options: { fixedTestOtpEnabled: boolean },
+): AuthDeployedEnv {
+  return {
+    cloudflareAccountId: env.cloudflareAccountId,
+    dopplerConfig: env.dopplerConfig,
+    authWorkerName: env.authWorkerName,
+    authBaseUrl: env.authBaseUrl,
+    fixedTestOtpEnabled: options.fixedTestOtpEnabled,
+    resources: { authDbId: env.resources.authDbId },
+  };
+}
+
 export const authEnvs = {
-  ...envs,
+  prd: authEnvFromDeployedEnv(envs.prd, { fixedTestOtpEnabled: false }),
+  preview_1: authEnvFromDeployedEnv(envs.preview_1, { fixedTestOtpEnabled: true }),
+  preview_2: authEnvFromDeployedEnv(envs.preview_2, { fixedTestOtpEnabled: true }),
+  preview_3: authEnvFromDeployedEnv(envs.preview_3, { fixedTestOtpEnabled: true }),
+  preview_4: authEnvFromDeployedEnv(envs.preview_4, { fixedTestOtpEnabled: true }),
+  preview_5: authEnvFromDeployedEnv(envs.preview_5, { fixedTestOtpEnabled: true }),
+  preview_6: authEnvFromDeployedEnv(envs.preview_6, { fixedTestOtpEnabled: true }),
+  preview_7: authEnvFromDeployedEnv(envs.preview_7, { fixedTestOtpEnabled: true }),
+  preview_8: authEnvFromDeployedEnv(envs.preview_8, { fixedTestOtpEnabled: true }),
+  preview_9: authEnvFromDeployedEnv(envs.preview_9, { fixedTestOtpEnabled: true }),
   dev_global: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "dev_global",
     authWorkerName: "auth-dev-global",
     authBaseUrl: "https://auth.iterate-dev.com",
+    fixedTestOtpEnabled: true,
     resources: { authDbId: "a4e70d97-74aa-4f9f-8da9-4540e552b2a9" },
   },
-} satisfies Record<string, AuthDeployedEnv>;
+} satisfies Record<EnvName | "dev_global", AuthDeployedEnv>;
 
 /**
  * apps/semaphore — the preview-slot lease coordinator. prd serves all real

@@ -31,7 +31,9 @@ const PLATFORM_API_KEYS: Record<
   { origins: readonly string[]; value: (config: AppConfig) => string | undefined }
 > = {
   "integrations.exa.apiKey": {
-    origins: ["https://api.exa.ai"],
+    // api.exa.ai is the REST API; mcp.exa.ai is Exa's hosted MCP server, which
+    // the built-in itx.mcp.exa client authenticates against with this key.
+    origins: ["https://api.exa.ai", "https://mcp.exa.ai"],
     value: (config) => config.integrations.exa?.apiKey.exposeSecret(),
   },
   "integrations.parallel.apiKey": {

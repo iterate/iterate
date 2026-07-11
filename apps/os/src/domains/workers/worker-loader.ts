@@ -3,6 +3,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerRef, DynamicWorkerSource, WorkerBuildOptions } from "./schemas.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
+import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
 import { stableSha256 } from "./utils.ts";
 
 const WORKER_COMPATIBILITY_DATE = "2026-05-01";
@@ -109,6 +110,22 @@ async function withBuildBudget(
   }
 }
 
+/**
+ * Every bundled dynamic worker build can `import ... from "iterate/sdk"`: the
+ * platform supplies the sdk runtime as a virtual module, because resolving it
+ * by install cannot work — the bundler's npm installer is registry-semver-only
+ * and the seeded devDependency is a pkg.pr.new URL. Injection happens BEFORE
+ * the build key is computed, and `options` is hashed into the key wholesale,
+ * so an sdk change invalidates cached artifacts instead of serving stale
+ * builds. A source that supplies its own `iterate/sdk` virtual module wins.
+ */
+function withIterateSdkVirtualModule(options: WorkerBuildOptions): WorkerBuildOptions {
+  return {
+    ...options,
+    virtualModules: { "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE, ...options.virtualModules },
+  };
+}
+
 // Concurrent cold resolutions of one build key deliberately do NOT share a
 // promise: awaiting another request's in-flight RPC is workerd's
 // "cannot perform I/O on behalf of a different request" trap. Duplicates are
@@ -120,11 +137,12 @@ async function resolveThroughBuilder(input: {
   projectId: string;
   source: DynamicWorkerSource;
 }): Promise<ResolvedWorkerSource> {
+  const options = withIterateSdkVirtualModule(input.options);
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
   const buildKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-    options: input.options,
+    options,
     source: resolved,
   });
 
@@ -152,7 +170,7 @@ async function resolveThroughBuilder(input: {
   const artifact = await env.BUILDER.build({
     buildKey,
     files: await resolvedSourceFiles(input.projectId, resolved),
-    options: input.options,
+    options,
   });
   return memoizeArtifact(artifact);
 }

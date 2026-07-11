@@ -20,6 +20,11 @@ export const RepoProcessorContract = defineProcessorContract({
   description: "Tiny fake repo projection for the ITX reference implementation.",
   stateSchema: z.object({
     artifactName: z.string().nullable().default(null),
+    /** An open creation OBLIGATION: `create-requested` folded, `created` not
+     * yet. The end-of-batch reconciler compares this pair at head — never
+     * event-time state, which a journal refold replays with `created` still
+     * false (docs/writing-stream-processors.md, "Refold safety"). */
+    createRequested: z.boolean().default(false),
     created: z.boolean().default(false),
     defaultBranch: z.string().nullable().default(null),
     github: GithubLinkPayload.nullable().default(null),
@@ -43,6 +48,15 @@ export const RepoProcessorContract = defineProcessorContract({
         projectId: z.string().nullable(),
         path: z.string(),
       }),
+      examples: [
+        {
+          description: 'Project bootstrap requested the config repo at path "/repos/config".',
+          payload: {
+            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
+            path: "/repos/config",
+          },
+        },
+      ],
     },
     "events.iterate.com/repo/created": {
       description: "The repo was created.",
@@ -53,10 +67,36 @@ export const RepoProcessorContract = defineProcessorContract({
         projectId: z.string().nullable(),
         remote: z.string(),
       }),
+      examples: [
+        {
+          description:
+            "The project's config repo finished bootstrapping: its git remote is a Cloudflare Artifacts repository named after the project id and path.",
+          payload: {
+            artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw",
+            defaultBranch: "main",
+            path: "/repos/config",
+            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
+            remote:
+              "https://6d7f0e2c4b9a5138f2ce7a1b8d3e4f50.artifacts.cloudflare.net/git/os-prd-repos/prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw.git",
+          },
+        },
+      ],
     },
     "events.iterate.com/repo/github-link-configured": {
       description: "The repo was linked to a GitHub repository (mirror-out on every commit).",
       payloadSchema: GithubLinkPayload,
+      examples: [
+        {
+          description:
+            "The repo was linked to acme-inc/acme-config through the GitHub App installation's connection.",
+          payload: {
+            connection: "install-87654321",
+            installationId: "87654321",
+            owner: "acme-inc",
+            repo: "acme-config",
+          },
+        },
+      ],
     },
     "events.iterate.com/repo/github-unlinked": {
       description: "The repo's GitHub link was removed.",
@@ -65,6 +105,16 @@ export const RepoProcessorContract = defineProcessorContract({
         owner: z.string(),
         repo: z.string(),
       }),
+      examples: [
+        {
+          description: "The link to acme-inc/acme-config was removed; mirroring stops.",
+          payload: {
+            connection: "install-87654321",
+            owner: "acme-inc",
+            repo: "acme-config",
+          },
+        },
+      ],
     },
     "events.iterate.com/repo/github-push-completed": {
       description: "A mirror push delivered the branch head to the linked GitHub repository.",
@@ -74,6 +124,17 @@ export const RepoProcessorContract = defineProcessorContract({
         owner: z.string(),
         repo: z.string(),
       }),
+      examples: [
+        {
+          description: "The default branch's new head was mirrored to GitHub after a commit.",
+          payload: {
+            branch: "main",
+            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+            owner: "acme-inc",
+            repo: "acme-config",
+          },
+        },
+      ],
     },
     "events.iterate.com/repo/github-push-failed": {
       description:
@@ -85,6 +146,32 @@ export const RepoProcessorContract = defineProcessorContract({
         owner: z.string(),
         repo: z.string(),
       }),
+      examples: [
+        {
+          description:
+            "GitHub rejected the mirror push as non-fast-forward: GitHub has commits this repo does not.",
+          payload: {
+            branch: "main",
+            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+            error:
+              'Error: GitHub push of main was rejected (non-fast-forward means GitHub has commits this repo does not; use syncFromGithub() to adopt them or pushToGithub({ force: true }) to overwrite): {"refs/heads/main":"fetch first"}',
+            owner: "acme-inc",
+            repo: "acme-config",
+          },
+        },
+        {
+          description:
+            "The push failed before a head was resolved (null commitOid): the connection's installation token could not be minted.",
+          payload: {
+            branch: "main",
+            commitOid: null,
+            error:
+              'Error: GitHub connection "install-87654321" has no usable installation token (HttpError: Not Found). Use itx.integrations.list() to see connections.',
+            owner: "acme-inc",
+            repo: "acme-config",
+          },
+        },
+      ],
     },
     "events.iterate.com/repo/github-synced": {
       description: "The repo adopted the linked GitHub repository's branch head (syncFromGithub).",
@@ -96,11 +183,63 @@ export const RepoProcessorContract = defineProcessorContract({
         previousCommitOid: z.string().nullable(),
         repo: z.string(),
       }),
+      examples: [
+        {
+          description: "A fast-forward sync adopted GitHub's newer branch head.",
+          payload: {
+            branch: "main",
+            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+            forced: false,
+            owner: "acme-inc",
+            previousCommitOid: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
+            repo: "acme-config",
+          },
+        },
+        {
+          description: "A forced sync overwrote diverged local history with GitHub's branch head.",
+          payload: {
+            branch: "main",
+            commitOid: "b7e2f0a9c8d14e3fa6570b2c9d8e1f4a3b5c6d70",
+            forced: true,
+            owner: "acme-inc",
+            previousCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+            repo: "acme-config",
+          },
+        },
+      ],
     },
     "events.iterate.com/github/webhook-received": {
       description:
         "One GitHub webhook delivery, captured verbatim on the connection stream and cross-posted here by the repo's linkGithub rule. Maximally loose: bodies are GitHub's, stored rows must always re-parse.",
       payloadSchema: z.object({}).loose(),
+      examples: [
+        {
+          description:
+            "A push delivery (trimmed): GitHub's webhook body under `body`, plus the delivery headers and the routing installation id.",
+          payload: {
+            body: {
+              ref: "refs/heads/main",
+              before: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
+              after: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+              commits: [
+                {
+                  id: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+                  message: "Update worker routing",
+                  author: { name: "Jane Doe", email: "jane@acme-inc.com" },
+                },
+              ],
+              repository: { full_name: "acme-inc/acme-config" },
+              sender: { login: "jane-doe" },
+              installation: { id: 87654321 },
+            },
+            headers: {
+              githubDelivery: "72d3162e-cc78-11e3-81ab-4c9367dc0958",
+              githubEvent: "push",
+            },
+            installationId: "87654321",
+          },
+        },
+      ],
     },
     "events.iterate.com/github-pr/route-configured": {
       description:
@@ -116,6 +255,21 @@ export const RepoProcessorContract = defineProcessorContract({
           streamPath: z.string(),
         })
         .loose(),
+      examples: [
+        {
+          description:
+            "The first PR webhook for acme-inc/acme-config#42 bound its agent stream to the pull request.",
+          payload: {
+            connection: "install-87654321",
+            installationId: "87654321",
+            number: 42,
+            owner: "acme-inc",
+            repo: "acme-config",
+            repoPath: "/repos/config",
+            streamPath: "/agents/repos/config/pull-requests/42",
+          },
+        },
+      ],
     },
   },
   processorDeps: [CoreProcessorContract],

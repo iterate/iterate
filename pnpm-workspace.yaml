@@ -20,7 +20,6 @@ catalogs:
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
-  - drizzle-kit
   - miniflare
   - wrangler
   - workerd
@@ -51,7 +50,6 @@ minimumReleaseAgeExclude:
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
-  - better-sqlite3
   - esbuild
   - lightningcss
   - node-pty
@@ -77,7 +75,6 @@ overrides:
   agents>x402: '-'
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
-  better-sqlite3: npm:libsql@0.5.22
   capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
@@ -94,5 +91,5 @@ patchedDependencies:
   '@better-auth/oauth-provider@1.6.9': patches/@better-auth__oauth-provider@1.6.9.patch
   '@cloudflare/worker-bundler@0.2.1': patches/@cloudflare__worker-bundler@0.2.1.patch
   '@cloudflare/workers-types@4.20260621.1': patches/@cloudflare__workers-types@4.20260621.1.patch
+  '@journeyapps/wa-sqlite@1.7.0': patches/@journeyapps__wa-sqlite@1.7.0.patch
   capnweb@0.8.0: patches/capnweb@0.8.0.patch
-  middlewright@0.1.1: patches/middlewright@0.1.1.patch

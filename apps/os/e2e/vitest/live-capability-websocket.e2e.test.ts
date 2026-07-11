@@ -113,7 +113,7 @@ function nodeWebSocketFetchHandler(request: Request): Promise<Response> {
  * real-fetch-lane hop terminates at this class's `fetch`; the socket would
  * have to come back through capability dispatch. */
 const FORWARDING_APP_SOURCE = `import { WorkerEntrypoint } from "cloudflare:workers";
-import type { ItxBinding } from "../../sdk.ts";
+import type { ItxBinding } from "iterate/sdk";
 
 export default class LiveWsApp extends WorkerEntrypoint<{ ITX: ItxBinding }> {
   async fetch(req: Request): Promise<Response> {
@@ -195,7 +195,7 @@ test.fails(
     type: "stateless",
     path: "/",
     source: {
-      files: { type: "repo", repoPath: "/", include: ["apps/livews/**", "sdk.ts"] },
+      files: { type: "repo", repoPath: "/repos/config", include: ["apps/livews/**"] },
       options: { entryPoint: "apps/livews/worker.ts" },
     },
   },

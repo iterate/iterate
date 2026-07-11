@@ -2,8 +2,9 @@
 // browser-raw-events schema version reset, running against real SQLite via
 // node:sqlite. The key regression: bumping BROWSER_RAW_EVENTS_SCHEMA_VERSION
 // drops the events table, so it must also clear the processor_state checkpoint —
-// a stale checkpoint over an empty mirror would skip historical replay and then
-// wedge on the append-continuity trigger.
+// a stale checkpoint over an empty mirror would skip historical replay and
+// silently rebuild without the skipped prefix (the gap-tolerant trigger accepts
+// the hole).
 
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -68,6 +69,8 @@ function createRawEventsProcessor(sql: SqlClient) {
   });
   return new BrowserRawEventsProcessor({
     stream: stream(),
+    path: "/tests/raw",
+    projectId: null,
     sql,
     readState: storage.readState,
     writeState: storage.writeState,
@@ -149,8 +152,8 @@ describe("browser raw events schema version reset", () => {
     // Second "page load" (fresh SqlClient, so the schema ensurer re-runs): the
     // version reset must clear the checkpoint, not just drop the table.
     // Before the fix this snapshot reported offset 2 over an empty mirror, so
-    // the server skipped historical replay and the first new insert hit the
-    // append-continuity trigger.
+    // the server skipped historical replay — a permanent silent hole in the
+    // mirror (the gap-tolerant trigger accepts it).
     const secondLoad = createRawEventsProcessor(wrap(db));
     expect(await secondLoad.snapshot()).toMatchObject({ offset: 0 });
 
@@ -176,8 +179,8 @@ describe("browser raw events schema version reset", () => {
 
     // Straight to ingest, no snapshot() first: prepare() must still run the
     // version reset before the stale checkpoint is memoized. Without that,
-    // offsets 1-2 are filtered out against the stale cursor and inserting
-    // offset 3 into the freshly-reset table trips the continuity trigger.
+    // offsets 1-2 are filtered out against the stale cursor and the mirror
+    // keeps a permanent silent hole below offset 3.
     const secondLoad = createRawEventsProcessor(wrap(db));
     await secondLoad.ingest({
       events: [rawEvent(1), rawEvent(2), rawEvent(3)],
@@ -206,7 +209,7 @@ describe("browser raw events schema version reset", () => {
     expect(rows.map((row) => Number(row.offset))).toEqual([1, 2, 3]);
   });
 
-  it("the continuity trigger rejects a gap in mirrored offsets", async () => {
+  it("the trigger accepts gaps (evicted ephemeral offsets never replay) but rejects out-of-order inserts", async () => {
     const sql = wrap(new DatabaseSync(":memory:"));
     await ensureBrowserRawEventsSchema(sql);
 
@@ -217,6 +220,105 @@ describe("browser raw events schema version reset", () => {
       ]);
 
     await insert(1);
-    await expect(insert(3)).rejects.toThrow(/append continuously/);
+    // Offset 2 was an ephemeral event later evicted server-side: the offset
+    // stays consumed but there is no row to replay, so the mirror must accept
+    // the gap.
+    await insert(3);
+    const rows = await sql.exec(`SELECT offset FROM events ORDER BY offset`);
+    expect(rows.map((row) => Number(row.offset))).toEqual([1, 3]);
+    // Order still holds: a new row below the local head is a delivery bug.
+    await expect(insert(2)).rejects.toThrow(/offsets must increase/);
+  });
+
+  it("the processor fails a gapped batch BEFORE inserting, so the self-heal can replay the hole", async () => {
+    // Until server-side eviction exists, every delivered stream is dense —
+    // a batch starting past localHead+1 means rows were lost in flight.
+    // Throwing pre-insert keeps the checkpoint at the hole's edge; inserting
+    // would seal it forever (the gap-tolerant trigger accepts everything
+    // after, and the checkpoint advances past the missing rows).
+    const sql = wrap(new DatabaseSync(":memory:"));
+    const processor = createRawEventsProcessor(sql);
+    await processor.ingest({ events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
+
+    await expect(
+      processor.ingest({ events: [rawEvent(4), rawEvent(5)], streamMaxOffset: 5 }),
+    ).rejects.toThrow(/offset gap/);
+    // Nothing inserted, checkpoint unmoved: the replay can still fill 3-5.
+    const rows = await sql.exec(`SELECT offset FROM events ORDER BY offset`);
+    expect(rows.map((row) => Number(row.offset))).toEqual([1, 2]);
+    expect(await processor.snapshot()).toMatchObject({ offset: 2 });
+  });
+});
+
+// The event_type_counts table replaces the UI's reactive COUNT(*) full scans
+// (they starve ingest on deep mirrors — see the schema comment). Its one
+// invariant: it always equals what COUNT(*) GROUP BY type would return.
+describe("browser raw events incremental type counts", () => {
+  const typedEvent = (offset: number, type: string): StreamEvent => ({
+    ...rawEvent(offset),
+    type,
+  });
+
+  const countsByType = async (sql: SqlClient) =>
+    Object.fromEntries(
+      (await sql.exec(`SELECT type, n FROM event_type_counts ORDER BY type`)).map((row) => [
+        row.type,
+        Number(row.n),
+      ]),
+    );
+
+  it("tracks per-type counts through ingest, matching COUNT(*)", async () => {
+    const sql = wrap(new DatabaseSync(":memory:"));
+    const processor = createRawEventsProcessor(sql);
+
+    await processor.ingest({
+      events: [typedEvent(1, "a"), typedEvent(2, "b"), typedEvent(3, "a")],
+      streamMaxOffset: 3,
+    });
+    await processor.ingest({ events: [typedEvent(4, "a")], streamMaxOffset: 4 });
+
+    expect(await countsByType(sql)).toEqual({ a: 3, b: 1 });
+    const scanned = await sql.exec(`SELECT type, COUNT(*) AS n FROM events GROUP BY type`);
+    expect(Object.fromEntries(scanned.map((row) => [row.type, Number(row.n)]))).toEqual(
+      await countsByType(sql),
+    );
+  });
+
+  it("does not double-count a replayed duplicate (RAISE IGNORE skips the count trigger)", async () => {
+    const db = new DatabaseSync(":memory:");
+    const firstLoad = createRawEventsProcessor(wrap(db));
+    await firstLoad.ingest({
+      events: [typedEvent(1, "a"), typedEvent(2, "a")],
+      streamMaxOffset: 2,
+    });
+
+    // A fresh page load resumes and the server replays an already-mirrored
+    // offset: the before-insert trigger swallows it, so the count trigger
+    // must never fire for it.
+    const secondLoad = createRawEventsProcessor(wrap(db));
+    await secondLoad.ingest({
+      events: [typedEvent(2, "a"), typedEvent(3, "a")],
+      streamMaxOffset: 3,
+    });
+
+    expect(await countsByType(wrap(db))).toEqual({ a: 3 });
+  });
+
+  it("a schema version reset drops the counts with the mirror", async () => {
+    const db = new DatabaseSync(":memory:");
+    const firstLoad = createRawEventsProcessor(wrap(db));
+    await firstLoad.ingest({ events: [typedEvent(1, "a")], streamMaxOffset: 1 });
+    expect(await countsByType(wrap(db))).toEqual({ a: 1 });
+
+    db.exec(`PRAGMA user_version = ${BROWSER_RAW_EVENTS_SCHEMA_VERSION - 1}`);
+    const secondLoad = createRawEventsProcessor(wrap(db));
+    await secondLoad.ingest({
+      events: [typedEvent(1, "b"), typedEvent(2, "b")],
+      streamMaxOffset: 2,
+    });
+
+    // Only the rebuilt mirror's counts survive; nothing carried over from the
+    // dropped generation.
+    expect(await countsByType(wrap(db))).toEqual({ b: 2 });
   });
 });

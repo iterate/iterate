@@ -7,9 +7,11 @@
 //      installation has permission and it does not;
 //   2. records the link on the Repo Durable Object (KV for the mirror-push hot
 //      path + a `repo/github-link-configured` fact on the repo stream);
-//   3. installs a cross-post rule on the connection stream so every GitHub
-//      webhook about that repository is copied onto the repo's own stream —
-//      the generic stream-rule primitive, not GitHub-special routing.
+//   3. installs a cross-post subscription on the connection stream — a push
+//      subscription whose expression addresses the repo stream's
+//      `acceptCrossPost` sink — so every GitHub webhook about that repository is copied onto
+//      the repo's own stream, durably and at-least-once. The generic stream
+//      subscription primitive, not GitHub-special routing.
 //
 // Unlinking reverses 2 and 3. The mirror pushes themselves live on the Repo
 // Durable Object (repo-durable-object.ts), serialized with commits.
@@ -37,29 +39,41 @@ function isGithubNameAlreadyExistsError(error: unknown): boolean {
   return text.includes("name already exists") || (e.message ?? "").includes("name already exists");
 }
 
-/** The one rule id a repo's GitHub webhook cross-post rule lives under, so
+/** The one subscription key a repo's GitHub webhook cross-post lives under, so
  * re-linking replaces it and unlinking knows what to remove. */
-function githubCrossPostRuleId(repoPath: string): string {
+function githubCrossPostSubscriptionKey(repoPath: string): string {
   return `github-repo:${repoPath}`;
 }
 
-/** The cross-post rule copying one repository's GitHub webhooks from a
+/** The cross-post subscription copying one repository's GitHub webhooks from a
  * connection stream onto the repo's own stream — built in one place so the
- * install and the re-link compensation (restore) can never drift. */
-function githubCrossPostRuleEvent(input: {
+ * install and the re-link compensation (restore) can never drift. A push
+ * subscription: the connection stream owns the cursor, retries with backoff,
+ * and parks loudly on sustained failure, so webhook copies are at-least-once
+ * instead of the old fire-and-forget rule's silent losses. */
+function githubCrossPostSubscriptionEvent(input: {
   owner: string;
   repo: string;
   repoPath: string;
-  ruleId: string;
+  subscriptionKey: string;
 }) {
   return {
-    type: "events.iterate.com/stream/rule-configured",
+    type: "events.iterate.com/stream/subscription-configured",
     payload: {
-      condition: `payload.body.repository.full_name = ${JSON.stringify(`${input.owner}/${input.repo}`)}`,
-      eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
-      path: input.repoPath,
-      ruleId: input.ruleId,
-      type: "cross-post",
+      subscriptionKey: input.subscriptionKey,
+      selector: {
+        eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
+        condition: `payload.body.repository.full_name = ${JSON.stringify(`${input.owner}/${input.repo}`)}`,
+      },
+      delivery: {
+        mode: "push",
+        expression: ["streams", ["get", input.repoPath], "acceptCrossPost"],
+      },
+      // Live-tail: webhooks that arrived before the link existed are not this
+      // repo's history. Explicit (though "new" is the default) because on a
+      // RE-link the explicit deliver seeks the cursor forward — a fresh link
+      // starts a fresh tail rather than replaying the previous link's backlog.
+      deliver: "new",
     },
   };
 }
@@ -134,54 +148,59 @@ export async function linkRepoToGithub(input: {
   };
   const repoStub = repoDurableObjectStub(input.projectId, repoPath);
   const previous = await repoStub.getGithubLink();
-  const ruleId = githubCrossPostRuleId(repoPath);
+  const subscriptionKey = githubCrossPostSubscriptionKey(repoPath);
 
   // Re-linking through a DIFFERENT connection: the previous connection's
-  // stream holds this repo's rule (same ruleId, other stream). Remove it
+  // stream holds this repo's subscription (same key, other stream). Remove it
   // FIRST, before anything else changes — if the removal fails nothing has
   // moved and a retry starts clean, whereas removing it later would let a
-  // failure strand a live duplicate rule that a retried linkGithub (whose
-  // stored link already names the new connection) could never find again.
-  // If a LATER step fails, the compensation below reinstalls this exact rule
-  // (the previous link carries everything needed to rebuild it), so the old
-  // link never sits ruleless. Same connection needs nothing: the
-  // rule-configured below replaces by id.
+  // failure strand a live duplicate subscription that a retried linkGithub
+  // (whose stored link already names the new connection) could never find
+  // again. If a LATER step fails, the compensation below reinstalls this
+  // exact subscription (the previous link carries everything needed to
+  // rebuild it), so the old link never sits unrouted. Same connection needs
+  // nothing: the subscription-configured below replaces by key.
   if (previous !== null && previous.connection !== input.connection) {
     await integrationStreamStub(
       input.projectId,
       integrationConnectionStreamPath("github", previous.connection),
-    ).append({ type: "events.iterate.com/stream/rule-removed", payload: { ruleId } });
+    ).append({
+      type: "events.iterate.com/stream/subscription-removed",
+      payload: { subscriptionKey },
+    });
   }
 
   // The webhook lane: GitHub App webhooks already land verbatim on the
-  // connection stream (`/integrations/github/<connection>`); this rule copies
-  // the ones about the linked repository onto the repo's own stream. The rule
-  // goes in BEFORE the link is recorded — "linked" must always imply
-  // "webhooks route" — and the link write is the commit point: if it fails,
-  // the just-installed rule is rolled back and the previous connection's rule
-  // (removed above) is reinstalled.
+  // connection stream (`/integrations/github/<connection>`); this push
+  // subscription copies the ones about the linked repository onto the repo's
+  // own stream. The subscription goes in BEFORE the link is recorded —
+  // "linked" must always imply "webhooks route" — and the link write is the
+  // commit point: if it fails, the just-installed subscription is rolled back
+  // and the previous connection's subscription (removed above) is reinstalled.
   const connectionStream = integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath("github", input.connection),
   );
   try {
-    await connectionStream.append(githubCrossPostRuleEvent({ owner, repo, repoPath, ruleId }));
+    await connectionStream.append(
+      githubCrossPostSubscriptionEvent({ owner, repo, repoPath, subscriptionKey }),
+    );
     await repoStub.configureGithubLink(link);
   } catch (error) {
     const compensations: string[] = [];
-    // Roll back the new rule (a no-op fold if the failure happened before it
-    // committed) and restore the previous connection's rule so the still-
-    // recorded old link keeps its webhook lane. Both best-effort: compensation
-    // failures are named in the surfaced error, and a re-run of linkGithub
-    // repairs everything (rules replace by id).
+    // Roll back the new subscription (a no-op fold if the failure happened
+    // before it committed) and restore the previous connection's subscription
+    // so the still-recorded old link keeps its webhook lane. Both best-effort:
+    // compensation failures are named in the surfaced error, and a re-run of
+    // linkGithub repairs everything (subscriptions replace by key).
     try {
       await connectionStream.append({
-        type: "events.iterate.com/stream/rule-removed",
-        payload: { ruleId },
+        type: "events.iterate.com/stream/subscription-removed",
+        payload: { subscriptionKey },
       });
     } catch (rollbackError) {
       compensations.push(
-        `rolling back the webhook rule "${ruleId}" on connection "${input.connection}" failed (${String(rollbackError)})`,
+        `rolling back the webhook subscription "${subscriptionKey}" on connection "${input.connection}" failed (${String(rollbackError)})`,
       );
     }
     if (previous !== null && previous.connection !== input.connection) {
@@ -190,23 +209,23 @@ export async function linkRepoToGithub(input: {
           input.projectId,
           integrationConnectionStreamPath("github", previous.connection),
         ).append(
-          githubCrossPostRuleEvent({
+          githubCrossPostSubscriptionEvent({
             owner: previous.owner,
             repo: previous.repo,
             repoPath,
-            ruleId,
+            subscriptionKey,
           }),
         );
       } catch (restoreError) {
         compensations.push(
-          `restoring the previous webhook rule on connection "${previous.connection}" failed (${String(restoreError)})`,
+          `restoring the previous webhook subscription on connection "${previous.connection}" failed (${String(restoreError)})`,
         );
       }
     }
     if (compensations.length === 0) throw error;
-    console.error("github link compensation failed", { repoPath, ruleId, compensations });
+    console.error("github link compensation failed", { repoPath, subscriptionKey, compensations });
     throw new Error(
-      `${String(error)} (additionally: ${compensations.join("; ")} — re-run linkGithub to repair, rules replace by id)`,
+      `${String(error)} (additionally: ${compensations.join("; ")} — re-run linkGithub to repair, subscriptions replace by key)`,
     );
   }
 
@@ -234,16 +253,16 @@ export async function unlinkRepoFromGithub(input: {
   const link = await repoStub.getGithubLink();
   if (link === null) return { unlinked: false };
 
-  // Rule first, link last — mirroring linkRepoToGithub's ordering: the link
-  // is the commit point, so a failure anywhere leaves the link in place and a
-  // retried unlinkGithub() can still find the connection and finish the job
-  // (removing an already-removed rule is a no-op fold).
+  // Subscription first, link last — mirroring linkRepoToGithub's ordering:
+  // the link is the commit point, so a failure anywhere leaves the link in
+  // place and a retried unlinkGithub() can still find the connection and
+  // finish the job (removing an already-removed subscription is a no-op fold).
   await integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath("github", link.connection),
   ).append({
-    type: "events.iterate.com/stream/rule-removed",
-    payload: { ruleId: githubCrossPostRuleId(repoPath) },
+    type: "events.iterate.com/stream/subscription-removed",
+    payload: { subscriptionKey: githubCrossPostSubscriptionKey(repoPath) },
   });
   const removed = await repoStub.removeGithubLink();
   return { unlinked: removed !== null };

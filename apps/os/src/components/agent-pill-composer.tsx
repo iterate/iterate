@@ -95,7 +95,7 @@ export function AgentPillComposer({
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl">
+    <div className="w-full">
       {error == null ? null : (
         <p className="mb-2 ml-4 truncate font-mono text-xs text-destructive" role="alert">
           {error}
@@ -175,7 +175,9 @@ export function AgentPillComposer({
                   title="Attach files"
                   onClick={message.onAttach}
                   disabled={isSubmitting}
-                  className="mb-0.5 rounded-full text-muted-foreground"
+                  // mb-1 centers the size-7 button on the size-9 mode button's
+                  // icon axis (both bottom-aligned by the items-end row).
+                  className="mb-1 rounded-full text-muted-foreground"
                 >
                   <PaperclipIcon className="size-4" />
                 </Button>

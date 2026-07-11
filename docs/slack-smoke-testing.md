@@ -86,7 +86,7 @@ doppler run --project os --config prd -- sh -c 'echo "$APP_CONFIG_BASE_URL"'
 9. Inspect the routed stream for these useful timestamps:
    - `events.iterate.com/slack/webhook-received`
    - `events.iterate.com/agent/input-added`
-   - `events.iterate.com/openai-ws/llm-request-started`
+   - `events.iterate.com/agent/llm-request-started`
    - `events.iterate.com/itx/script-execution-completed`
 
 10. Remove the temporary OS project.

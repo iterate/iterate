@@ -33,6 +33,8 @@ class MemoryStream implements Stream {
     return { instructions: "in-memory test stream", types: "", children: {} };
   }
 
+  async kill(): Promise<void> {}
+
   async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     return inputs.map((input) => {
       if (input.type === this.failAppendsOfType) {
@@ -91,11 +93,23 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {}, workerDelivery: null } };
+    return { coreProcessorState: null, runtime: { connections: {}, subscriptions: {} } };
   }
 
   async subscribe(): Promise<never> {
     throw new Error("MemoryStream does not implement subscribe().");
+  }
+
+  async acceptCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement acceptCrossPost().");
+  }
+
+  async crossPostTo(): Promise<never> {
+    throw new Error("MemoryStream does not implement crossPostTo().");
+  }
+
+  async removeCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement removeCrossPost().");
   }
 }
 
@@ -118,6 +132,8 @@ function makeHarness(options?: {
   const snapshotStore = options?.snapshotStore ?? { snapshot: undefined };
   const processor = new SchedulerProcessor({
     stream,
+    path: stream.path,
+    projectId: null,
     dynamicWorkers: { invokeCapability },
     now: () => clock.now,
     readAlarm: async () => null,

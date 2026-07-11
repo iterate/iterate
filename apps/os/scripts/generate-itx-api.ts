@@ -5,7 +5,11 @@
 // source of truth: docstrings live on the classes, data shapes on the schemas.
 // This script projects that source of truth into one import-free .ts file that
 // (a) itx scripts can typecheck against, (b) humans can read top-to-bottom,
-// (c) agents receive verbatim via the ITX_TYPES_SOURCE embed.
+// (c) runtime consumers (itx.docs, __describe, the REPL editor) reach
+// per-declaration through the Itx Type Graph (itx-api-graph.generated.ts),
+// emitted by the same run. A copy of the flat file is written into
+// packages/iterate, where the published `iterate/sdk` export re-exports it
+// (freshness enforced by the same test).
 //
 // How it works: open the apps/os project with the native TypeScript compiler
 // (@typescript/native-preview — the same API the type-aware lint plugin uses),
@@ -54,13 +58,17 @@ import type {
   ParameterDeclaration,
   TypeAliasDeclaration,
 } from "@typescript/native-preview/unstable/ast";
+import { stripComments } from "../src/domains/itx/itx-api-graph.ts";
+import type { ItxApiDeclaration } from "../src/domains/itx/itx-api-graph.ts";
 
 const projectDir = fileURLToPath(new URL("..", import.meta.url));
 const tsconfigPath = path.join(projectDir, "tsconfig.json");
 const rpcTargetsPath = path.join(projectDir, "src/rpc-targets.ts");
 const outPath = path.join(projectDir, "src/itx-api.generated.ts");
-/** The codegen COPY of the generated file seeded into project repos — same content, so its exports must not count as declarations. */
-const sdkCopyPath = path.join(projectDir, "project-repo-template/sdk.ts");
+/** The copy published as `iterate/sdk` (packages/iterate re-exports it from its hand-written sdk.ts). Same content as outPath. */
+const packageCopyPath = path.resolve(projectDir, "../../packages/iterate/src/itx-api.generated.ts");
+/** The Itx Type Graph: the flat file's declarations as per-declaration records (see src/domains/itx/itx-api-graph.ts). */
+const graphOutPath = path.join(projectDir, "src/itx-api-graph.generated.ts");
 
 /** The opt-in roots in rpc-targets.ts (see their docstrings there). */
 const ITERATE_ROOT = "IterateRpcTarget";
@@ -251,7 +259,7 @@ export function generateItxApi(): string {
   for (const fileName of project.rootFiles) {
     if (fileName.endsWith(".d.ts")) continue;
     const resolved = path.resolve(fileName);
-    if (resolved === rpcTargetsPath || resolved === outPath || resolved === sdkCopyPath) continue;
+    if (resolved === rpcTargetsPath || resolved === outPath) continue;
     if (fileName.includes("node_modules")) continue;
     const sourceFile = project.program.getSourceFile(fileName);
     if (!sourceFile) continue;
@@ -326,7 +334,7 @@ export function generateItxApi(): string {
     // zod's JSON helper prints its internal alias; the public name is JsonValue.
     out = out.replaceAll(/\bz\.core\.util\.JSONType\b/g, "JsonValue");
     // Scan code only — docstring prose is full of capitalized words.
-    const codeOnly = out.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/\/\/[^\n]*/g, "");
+    const codeOnly = stripComments(out);
     for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
       const name = match[0];
       if (exclude?.has(name)) continue;
@@ -482,7 +490,7 @@ export function generateItxApi(): string {
   enqueue("UnauthenticatedOs");
   // The worker-side contract: `env.ITX` on dynamic workers. Not reachable from
   // the /api walk (nothing on the capability tree mentions it), but worker code
-  // imports it from the sdk.ts copy of this file, so it is a second seed.
+  // imports it through `iterate/sdk`, so it is a second seed.
   enqueue("ItxBinding");
   while (queue.length > 0) {
     const name = queue.shift()!;
@@ -540,6 +548,122 @@ export function generateItxApi(): string {
   return execFileSync(
     path.join(projectDir, "../../node_modules/.bin/oxfmt"),
     [`--stdin-filepath=${outPath}`],
+    { encoding: "utf8", input: raw },
+  );
+}
+
+/**
+ * The Itx Type Graph: parse the FORMATTED flat file back into one record per
+ * exported declaration (see ItxApiDeclaration). Deriving the graph from the
+ * emitted text — rather than collecting records during emission — guarantees
+ * each record's `sourceText` is exactly the declaration's text in
+ * itx-api.generated.ts (oxfmt formatting included), so "the flat file is the
+ * join of the graph" holds by construction.
+ */
+export function buildItxApiGraph(flatFileSource: string): ItxApiDeclaration[] {
+  using session = openProject(new Map([[outPath, flatFileSource]]));
+  const sourceFile = session.project.program.getSourceFile(outPath);
+  if (!sourceFile) throw new Error("could not load the generated itx api into the program");
+  const fullText = sourceFile.getFullText();
+
+  /** The declaration's own JSDoc: the last block in its leading trivia, but
+   * only when nothing except whitespace separates it from the declaration —
+   * otherwise a docless declaration would inherit the file preamble or a
+   * section separator's neighbor. */
+  const ownJsDoc = (statement: Node): string => {
+    const trivia = fullText.slice(statement.getFullStart(), statement.getStart());
+    const lastBlock = [...trivia.matchAll(/\/\*\*[\s\S]*?\*\//g)].at(-1);
+    if (!lastBlock) return "";
+    const gap = trivia.slice(lastBlock.index + lastBlock[0].length);
+    return gap.trim() === "" ? lastBlock[0] : "";
+  };
+
+  /** TSDoc summary, first sentence: strip comment syntax, cut at the first
+   * block tag, take up to the first sentence-ending period. */
+  const summaryOf = (jsDoc: string): string => {
+    const text = jsDoc
+      .replace(/^\/\*\*/, "")
+      .replace(/\*\/$/, "")
+      .replaceAll(/^\s*\* ?/gm, "")
+      .split(/\n\s*@/)[0]!
+      .replaceAll(/\s+/g, " ")
+      .trim();
+    return text.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? text;
+  };
+
+  const declarations: Array<{
+    statement: InterfaceDeclaration | TypeAliasDeclaration;
+    record: ItxApiDeclaration;
+  }> = [];
+  for (const statement of sourceFile.statements) {
+    if (!isInterfaceDeclaration(statement) && !isTypeAliasDeclaration(statement)) continue;
+    const jsDoc = ownJsDoc(statement);
+    const memberSummaries: Record<string, string> = {};
+    if (isInterfaceDeclaration(statement)) {
+      for (const member of statement.members) {
+        const memberName = "name" in member ? (member.name as Node | undefined)?.getText() : "";
+        if (!memberName) continue;
+        const memberDoc = ownJsDoc(member);
+        if (memberDoc) memberSummaries[memberName] = summaryOf(memberDoc);
+      }
+    }
+    declarations.push({
+      statement,
+      record: {
+        name: statement.name.text,
+        kind: isInterfaceDeclaration(statement) ? "interface" : "typeAlias",
+        sourceText: [jsDoc, statement.getText()].filter(Boolean).join("\n"),
+        summary: summaryOf(jsDoc),
+        memberSummaries,
+        referencedTypeNames: [],
+      },
+    });
+  }
+
+  // Reference edges: identifiers in the declaration's CODE (comments
+  // stripped) that name another declaration in this graph.
+  const allNames = new Set(declarations.map(({ record }) => record.name));
+  for (const { statement, record } of declarations) {
+    const codeOnly = stripComments(statement.getText());
+    const referenced = new Set<string>();
+    for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
+      if (match[0] !== record.name && allNames.has(match[0])) referenced.add(match[0]);
+    }
+    record.referencedTypeNames = [...referenced];
+  }
+
+  const records = declarations.map(({ record }) => record);
+  const duplicates = records.filter(
+    (record, index) => records.findIndex((other) => other.name === record.name) !== index,
+  );
+  if (duplicates.length > 0) {
+    throw new Error(
+      `itx api graph has duplicate declaration names: ${duplicates.map((d) => d.name).join(", ")}`,
+    );
+  }
+  return records;
+}
+
+/** The generated module carrying the Itx Type Graph, formatted for the repo. */
+export function generateItxApiGraphSource(flatFileSource: string): string {
+  const records = buildItxApiGraph(flatFileSource);
+  const raw = [
+    "// GENERATED by scripts/generate-itx-api.ts — do not edit.",
+    "// Regenerate with: pnpm generate:itx-api",
+    "// Freshness is enforced by itx-api.generated.test.ts.",
+    "//",
+    "// The Itx Type Graph: every exported declaration of itx-api.generated.ts as",
+    "// one record, in file order — same generator run, same content, kept",
+    "// per-declaration so runtime consumers (itx.docs, __describe) can assemble",
+    "// bounded slices instead of shipping the whole flat file.",
+    'import type { ItxApiDeclaration } from "./domains/itx/itx-api-graph.ts";',
+    "",
+    `export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = ${JSON.stringify(records, null, 2)};`,
+    "",
+  ].join("\n");
+  return execFileSync(
+    path.join(projectDir, "../../node_modules/.bin/oxfmt"),
+    [`--stdin-filepath=${graphOutPath}`],
     { encoding: "utf8", input: raw },
   );
 }
@@ -625,4 +749,8 @@ if (isMain) {
   verifyRpcTargetsSatisfyContract(source);
   writeFileSync(outPath, source);
   console.log(`wrote ${outPath}`);
+  writeFileSync(packageCopyPath, source);
+  console.log(`wrote ${packageCopyPath}`);
+  writeFileSync(graphOutPath, generateItxApiGraphSource(source));
+  console.log(`wrote ${graphOutPath}`);
 }

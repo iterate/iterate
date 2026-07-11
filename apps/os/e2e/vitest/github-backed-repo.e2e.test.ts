@@ -1,9 +1,10 @@
 // GitHub-backed repos, the CI-provable half: webhook events arriving on a
 // GitHub connection stream cross-post onto the linked repo's own stream
-// through the exact rule `repo.linkGithub` installs (same ruleId, same JSONata
-// condition on repository.full_name). The GitHub-touching half (mirror push,
-// create-on-link, syncFromGithub) authenticates against real GitHub and is
-// proven by production smoke, not here.
+// through the exact push subscription `repo.linkGithub` installs (same
+// subscriptionKey, same JSONata condition on repository.full_name, same
+// ingest-targeting delivery expression). The GitHub-touching half (mirror
+// push, create-on-link, syncFromGithub) authenticates against real GitHub and
+// is proven by production smoke, not here.
 
 import { expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -31,22 +32,28 @@ test("github webhooks about a linked repository cross-post onto the repo stream"
   using connectionStream = project.streams.get(connectionPath);
   using repoStream = project.streams.get(repoPath);
 
-  // The rule linkGithub installs, verbatim.
+  // The push subscription linkGithub installs, verbatim (see
+  // githubCrossPostSubscriptionEvent in src/domains/repos/github-link.ts).
   await connectionStream.append({
-    type: "events.iterate.com/stream/rule-configured",
+    type: "events.iterate.com/stream/subscription-configured",
     payload: {
-      condition: 'payload.body.repository.full_name = "acme/widgets"',
-      eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
-      path: repoPath,
-      ruleId: `github-repo:${repoPath}`,
-      type: "cross-post",
+      subscriptionKey: `github-repo:${repoPath}`,
+      selector: {
+        eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
+        condition: 'payload.body.repository.full_name = "acme/widgets"',
+      },
+      delivery: {
+        mode: "push",
+        expression: ["streams", ["get", repoPath], "acceptCrossPost"],
+      },
+      deliver: "new",
     },
   });
 
   const arrived = repoStream.waitForEvent({
     afterOffset: 0,
     eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
-    timeoutMs: 10_000,
+    timeoutMs: 15_000,
   });
 
   // Two webhook deliveries on the connection stream — the installation-wide
@@ -79,7 +86,7 @@ test("github webhooks about a linked repository cross-post onto the repo stream"
   expect(copied.source?.crossPostedFrom).toHaveLength(1);
   expect(copied.source?.crossPostedFrom?.[0]).toMatchObject({
     path: connectionPath,
-    ruleId: `github-repo:${repoPath}`,
+    subscriptionKey: `github-repo:${repoPath}`,
     type: GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE,
   });
 

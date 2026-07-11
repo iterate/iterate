@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CreateWorkerOptions } from "@cloudflare/worker-bundler";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { normalizePath } from "../durable-object-names.ts";
-import type { StreamEventBatch } from "../streams/rpc-types.ts";
+import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
 
@@ -104,6 +104,9 @@ export type DynamicWorkerSource = {
   options?: WorkerBuildOptions;
 };
 
+/** Fields shared by every dynamic worker ref (stateless and stateful): the
+ * itx scope `path` the worker binds to and the declarative `source` it is
+ * built from. */
 export type DynamicWorkerRefBase = {
   /**
    * ITX scope path for the worker's `env.ITX` binding and for stateful worker
@@ -158,8 +161,12 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
 /** Worker recipe accepted by `workers.get` and worker-backed capabilities. */
 export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;
 
-/** Dynamic worker RPC stub plus the disposal operation owned by the caller. */
-export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T & Disposable;
+/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */
+export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &
+  Disposable & {
+    /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */
+    kill(): Promise<void>;
+  };
 
 /**
  * Per-stub dispatch options for `DynamicWorkerCollection.get`.
@@ -190,29 +197,14 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 /**
- * Slack Web API surface exposed by the seeded project worker
- * (`itx.worker.slack.chat.postMessage({...})`).
- *
- * The seeded repo implements this in userland with the real `@slack/web-api`
- * package (installed by the worker build pipeline from its `package.json`), so
- * any nested Web API method family resolves — the index signature reflects
- * that this tree is as wide as the SDK's.
- */
-export interface ProjectWorkerSlack {
-  chat: {
-    postMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
-  } & Record<string, unknown>;
-  [family: string]: unknown;
-}
-
-/**
  * Default seeded project worker contract.
  *
  * This documents the reference repo's `worker.ts` only. Arbitrary dynamic
  * workers should be typed by callers through `workers.get<T>(ref)`. The
  * platform dispatches to it with flattened paths, so the worker implements
  * `invokeCapability` in userspace and every dotted call — including any
- * nested `slack.*` Web API family — is one RPC.
+ * nested surface a userland getter hands back (an SDK client the project
+ * adds and installs through its `package.json`) — is one RPC.
  */
 export interface ProjectWorker {
   fetch(req: Request): Promise<Response>;
@@ -224,10 +216,11 @@ export interface ProjectWorker {
    * stream it lives on, so `${event.path}@${event.offset}` identifies a
    * delivery globally and is the idempotency-key idiom for reactions. The
    * stream only advances its checkpoint when this resolves; throwing means
-   * the whole batch is redelivered later.
+   * the whole batch is redelivered later. Ephemeral events
+   * (`ephemeral: true` appends — e.g. `agent/llm-response-chunk`) are never
+   * delivered to this feed; their durable truth arrives as its own event.
    */
-  processEventBatch(batch: StreamEventBatch): Promise<void>;
-  slack: ProjectWorkerSlack;
+  processEventBatch(batch: StreamPushEventBatch): Promise<void>;
 }
 
 const WorkerFileSource = z.discriminatedUnion("type", [
@@ -346,10 +339,18 @@ export const DynamicWorkerRef = z.discriminatedUnion("type", [
  * the host — worker code never picks its own project.
  *
  * @public — not reachable from the /api entrypoint walk; published for
- * project-worker code, which imports it from the project repo's sdk.ts copy
- * of this contract.
+ * project-worker code, which imports it from its `iterate` devDependency's
+ * `iterate/sdk` export (re-exported by the seeded sdk.ts).
  */
 export type ItxBinding = {
   fetch(request: Request): Promise<Response>;
-  get(): Promise<ProjectRpcTarget>;
+  /**
+   * The value delivered over the loopback is an RPC STUB of the project root,
+   * and stubs are disposable — typed honestly so worker code can (and
+   * should) write `using itx = await this.env.ITX.get()`: releasing the stub
+   * when the handler ends keeps workerd's "An RPC stub was not disposed
+   * properly" warning out of production logs. Values obtained THROUGH it
+   * hold their own references and survive its disposal.
+   */
+  get(): Promise<ProjectRpcTarget & Disposable>;
 };

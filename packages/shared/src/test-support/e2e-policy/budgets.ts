@@ -69,12 +69,21 @@ export const E2E_TEST_TIMEOUT_MS = 120_000;
 export const E2E_HEAVY_TEST_TIMEOUT_MS = 240_000;
 
 /**
- * Watchdog on the whole preview vitest lane (`timeout N pnpm e2e` in
- * scripts/preview/preview.ts). Sits just above a healthy lane (itx monolith
- * plus the heavy tests' own caps, running concurrently). Kills, never
- * retries: a lane that blows this is wedged, not slow.
+ * Watchdog on each preview sub-lane (`timeout N pnpm e2e` and
+ * `timeout N pnpm spec` in scripts/preview/preview.ts). Kills, never
+ * retries: a lane that blows this is wedged, not slow — before the specs
+ * lane was bounded, a wedged onboarding agent stretched one preview test
+ * step to 13 minutes (2026-07-09, run dpmddk1b75).
+ *
+ * "Healthy" includes one absorbed heavy-test retry: since #1826 the agent
+ * processor spaces LLM retries 10/20/40s apart, so an agent test whose first
+ * attempt eats a Workers-AI rate-limit blip legitimately takes ~190s before
+ * its re-roll passes (observed on the slack-agent e2e). A 360s ceiling
+ * killed an all-green lane bloated by exactly that. Both sub-lanes run
+ * concurrently, so even a fully watchdogged attempt stays inside the
+ * preview job's 10-minute timeout-minutes ceiling.
  */
-export const OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS = 360;
+export const OS_PREVIEW_LANE_TIMEOUT_SECS = 480;
 
 /**
  * Watchdog on one whole preview e2e run (flake-hunt-loop.sh, marathon). A

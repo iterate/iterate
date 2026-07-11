@@ -1,22 +1,25 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import type { RepoProcessorState } from "../../../../../domains/repos/repo-processor-contract.ts";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoIde } from "~/components/repo-ide/repo-ide.lazy.tsx";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItxState } from "~/itx/itx-react.tsx";
+import { useLiveState } from "~/itx/itx-react.tsx";
 
 /** The stream-view params plus the IDE's own view state (open file, diff,
- * source-control / GitHub sidebar). */
+ * markdown/html preview, source-control / GitHub sidebar, history sidebar +
+ * expanded commit). */
 const RepoDetailSearch = StreamViewSearch.extend({
   file: z.string().optional().catch(undefined),
   diff: z.boolean().optional().catch(undefined),
+  preview: z.boolean().optional().catch(undefined),
   scm: z.boolean().optional().catch(undefined),
   gh: z.boolean().optional().catch(undefined),
   staged: z.boolean().optional().catch(undefined),
+  history: z.boolean().optional().catch(undefined),
+  commit: z.string().optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
@@ -42,15 +45,16 @@ function ProjectRepoDetailContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const repoPath = repoPathFromSplat(params._splat);
-  const repoProcessor = useItxState<RepoProcessorState>(
-    (itx, setState) => itx.repos.get(repoPath).processor.onStateChange(setState),
+  const repoProcessor = useLiveState(
+    (itx) => itx.repos.get(repoPath).liveState,
+    (state) => state,
     [repoPath],
   );
 
   // The IDE only mounts on an initialized repo (its file reads would throw
   // before the artifact exists); until then the panel shows the bootstrap
   // progress the processor state pushes in live.
-  const state = repoProcessor.state;
+  const state = repoProcessor.value;
   const panel =
     state === undefined ? (
       <div
@@ -62,7 +66,11 @@ function ProjectRepoDetailContent() {
     ) : state.initialized ? (
       <RepoIde key={`${project.id}:${repoPath}`} projectId={project.id} repoPath={repoPath} />
     ) : (
-      <div className="overflow-y-auto p-4">
+      // data-spinner: this panel is live bootstrap progress (the processor
+      // pushes each step in), and right after repos.create it can also show a
+      // momentarily-stale checkpoint on a repo that IS already initialized —
+      // waits must keep extending until the live push replaces it.
+      <div className="overflow-y-auto p-4" data-spinner="true">
         <div className="mx-auto w-full max-w-2xl rounded-lg border bg-card">
           <InfoRow label="Created" value={state.created ? "yes" : "not yet"} />
           <InfoRow label="Initialized" value={state.initialized ? "yes" : "not yet"} />
@@ -90,9 +98,5 @@ function ProjectRepoDetailContent() {
 
 function repoPathFromSplat(splat: string | undefined) {
   const suffix = splat?.replace(/^\/+/, "") ?? "";
-  // TEMPORARY HACK: the legacy project repo lives at path "/", whose suffix is
-  // empty — its URL ".../repos//" normalizes to the repos index, making it
-  // unviewable. "ROOT" stands in for it until the / repo becomes /repos/config.
-  if (suffix === "ROOT") return "/";
   return `/repos/${suffix}`;
 }

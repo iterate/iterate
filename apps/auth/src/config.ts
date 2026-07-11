@@ -46,6 +46,9 @@ export const AppConfig = z.object({
   adminAllowlist: z.string().trim().default(DEFAULT_ADMIN_ALLOWLIST),
   /** Whether the email one-time-passcode sign-in lane is offered. */
   emailOtpEnabled: publicValue(z.boolean().default(false)),
+  /** Whether `+test@nustom.com` emails accept the fixed test OTP instead of
+   * sending mail. Intended only for local/dev/preview automation. */
+  fixedTestOtpEnabled: z.boolean().default(false),
   /** Deployed base domain project homepages live under (e.g. "iterate.app",
    * "iterate-preview-3.app") — onboarding previews "<slug>.<base>". Mirrors
    * os's APP_CONFIG_PROJECT_HOSTNAME_BASES. */

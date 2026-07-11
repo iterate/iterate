@@ -197,6 +197,84 @@ test("random bulk insert creates multiple filterable event types and shows filte
   await expect(eventMeta(page, selectedType).first()).toBeVisible();
 });
 
+// Regression for the OPFS wedge that made high-throughput sessions look like they "lost"
+// events: navigating to a different stream kills the previous page's DB worker, which
+// releases its Web Lock immediately but can leave its OPFS sync access handles open for a
+// while. The next page's OPFSCoopSyncVFS init sweeps stale `.ahp-*` temp directories and —
+// before patches/@journeyapps__wa-sqlite@1.7.0.patch — a removeEntry hitting that window
+// threw NoModificationAllowedError, fatally rejecting VFS creation. Every reconnect
+// re-failed the same way, so the new page showed no events and every append died, until a
+// much later reload. The patch makes the sweep best-effort; this test drives the exact
+// trigger: leave a page mid-bulk-ingest, then require the next stream to mirror and append.
+test("navigating to a new stream mid-ingest still opens the new mirror and appends", async ({
+  page,
+}) => {
+  const busyPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: busyPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  // Big enough that the mirror is still ingesting when we navigate away.
+  await page.getByLabel("Count").fill("20000");
+  await page.getByLabel("Batch size").fill("1000");
+  await page.getByLabel("Seconds").fill("0");
+  await page.getByRole("button", { name: "Stream random events" }).click();
+
+  const nextPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: nextPath }));
+
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible({
+    timeout: 15_000,
+  });
+  const type = "events.iterate.com/debug/playwright-post-navigation";
+  await appendComposerEvent(page, { type, payload: { nextPath } });
+  await expect(eventMeta(page, type).first()).toBeVisible();
+});
+
+// Deterministic version of the wedge above: plant exactly the OPFS state the dead worker
+// leaves behind — a `.ahp-*` temp directory whose Web Lock nobody holds but whose file has
+// an open sync access handle (held here by a worker in a second tab, standing in for a
+// terminated worker whose handles the browser has not released yet). The stream page's VFS
+// sweep then deterministically hits NoModificationAllowedError on removeEntry; unpatched
+// wa-sqlite turned that into "no database can open on this origin".
+test("stale OPFS temp directory with open handles does not block the mirror", async ({
+  context,
+  page,
+}) => {
+  const handleHolder = await context.newPage();
+  await handleHolder.goto("/blank");
+  await handleHolder.evaluate(async () => {
+    const workerSource = `
+      (async () => {
+        const root = await navigator.storage.getDirectory();
+        const dir = await root.getDirectoryHandle(".ahp-e2e-stale", { create: true });
+        const file = await dir.getFileHandle("0.tmp", { create: true });
+        // Held open for the page's lifetime; only sync access handles make
+        // removeEntry throw NoModificationAllowedError.
+        globalThis.heldHandle = await file.createSyncAccessHandle();
+        postMessage("ready");
+      })();
+    `;
+    const worker = new Worker(URL.createObjectURL(new Blob([workerSource])));
+    await new Promise((resolve, reject) => {
+      worker.onmessage = resolve;
+      worker.onerror = (event) => reject(new Error(event.message));
+    });
+  });
+
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible({
+    timeout: 15_000,
+  });
+  const type = "events.iterate.com/debug/playwright-stale-ahp";
+  await appendComposerEvent(page, { type, payload: { streamPath } });
+  await expect(eventMeta(page, type).first()).toBeVisible();
+
+  // Release the handle and remove the planted directory so later tests' sweeps
+  // are not left deleting it (best-effort; the sweep also cleans it up).
+  await handleHolder.close();
+});
+
 // Regression for initial tail anchoring from persisted local SQLite rows. A stream page that
 // already has enough rows to scroll should mount at the newest rows after a reload, not at
 // local_index 0. This is separate from "follow while appending": reload reconstructs the
@@ -212,7 +290,7 @@ test("stream page reload starts at the bottom of an existing local mirror", asyn
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
 
-  const expectedCount = insertedCount + 3; // created + woken + subscriber-connected
+  const expectedCount = insertedCount + 4; // created + worker-feed config + woken + subscriber-connected
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
@@ -251,7 +329,7 @@ test("event feed view starts at the bottom on first visit while replay fills the
 
   const freshContext = await browser.newContext();
   const page = await freshContext.newPage();
-  await page.goto(streamRoute({ path: streamPath, view: "browser-event-feed" }));
+  await page.goto(streamRoute({ path: streamPath, view: "browser-feed" }));
   await expect(page.getByTestId("feed-item-count")).not.toHaveText(/^0 feed items$/, {
     timeout: 30_000,
   });
@@ -583,9 +661,9 @@ test("scroll to bottom affordance keeps counting while scrolling older rows duri
 });
 
 // Known failing regression: tail row expansion currently grows underneath the sticky composer.
-// Leave this as a failing test for now. The rest of the stream uses TanStack Virtual's native
-// chat behavior (`anchorTo: "end"` + `followOnAppend`) and we do not want custom scroll
-// bookkeeping just to paper over this edge case.
+// Leave this as a failing test for now. Clicking the row is leaving-the-tail intent (the
+// bottom stick releases on pointerdown, so an expansion is readable without being yanked),
+// which means nothing re-pins the expanded JSON above the sticky composer.
 test("expanding the tail event row at stream end stays above the composer", async ({ page }) => {
   test.fail(true, "Known regression: expanded tail rows can grow under the sticky composer.");
 
@@ -731,7 +809,7 @@ test("large streams stay virtualized and can scroll from tail to earliest rows",
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
 
-  const expectedCount = insertedCount + 3; // created + woken + subscriber-connected
+  const expectedCount = insertedCount + 4; // created + worker-feed config + woken + subscriber-connected
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
   });
@@ -801,6 +879,140 @@ test("kill reconnects and appends a new woken event", async ({ page }) => {
   await expect(eventMeta(page, "events.iterate.com/stream/woken")).toHaveCount(2);
 });
 
+// The stream DO can die at any moment (eviction, deploy, explicit kill) and browser-side
+// appends must survive it with zero loss AND zero duplication: appendBatch stamps an
+// idempotency key on every event and retries across the reconnect, so a batch that
+// committed-but-lost-its-ack dedupes instead of double-appending, and one that never
+// committed lands after the DO reboots.
+test("killing the stream DO mid-blast loses no appends and duplicates none", async ({ page }) => {
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  const insertedCount = 3000;
+  await page.getByLabel("Count").fill(String(insertedCount));
+  await page.getByLabel("Batch size").fill("50");
+  await page.getByLabel("Seconds").fill("3");
+  await page.getByRole("button", { name: "Stream random events" }).click();
+  await expect(page.getByTestId("insert-state")).toHaveText("inserting");
+
+  // Kill the DO while the blast is in flight (twice, for good measure).
+  await page.waitForTimeout(500);
+  await page.getByRole("button", { name: "Kill" }).click();
+  await page.waitForTimeout(1_000);
+  await page.getByRole("button", { name: "Kill" }).click();
+
+  // The blast must still complete cleanly — retried batches, not errors.
+  await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 });
+
+  // Exactly `insertedCount` generated events: none lost, none duplicated.
+  // Control events (created/woken/subscriber-*) vary with the kills, so count
+  // only the generated types via the filter dropdown.
+  await expect
+    .poll(
+      () =>
+        page.getByLabel("Event type filter").evaluate((element) => {
+          if (!(element instanceof HTMLSelectElement)) throw new Error("not a select");
+          return [...element.options]
+            .filter((option) => option.value.startsWith("events.iterate.com/random/"))
+            .reduce((sum, option) => sum + Number(/\((\d+)\)$/.exec(option.text)?.[1] ?? 0), 0);
+        }),
+      { timeout: 60_000 },
+    )
+    .toBe(insertedCount);
+});
+
+// Same guarantee from a FOLLOWER tab: appends ride the follower's own connection (no
+// leadership required), survive a mid-blast DO kill, and both tabs' mirrors converge on
+// the exact same count.
+test("two tabs: follower blast survives a DO kill and both mirrors converge", async ({
+  context,
+  page,
+}) => {
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  const otherPage = await context.newPage();
+  await Promise.all([
+    page.goto(streamRoute({ path: streamPath })),
+    otherPage.goto(streamRoute({ path: streamPath })),
+  ]);
+  await Promise.all([
+    expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible(),
+    expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible(),
+  ]);
+
+  const leader = (await isLeader(page)) ? page : otherPage;
+  const follower = leader === page ? otherPage : page;
+  await expect(follower.getByTestId("subscription-status")).toContainText(/follower|leader/);
+
+  const insertedCount = 2000;
+  await follower.getByLabel("Count").fill(String(insertedCount));
+  await follower.getByLabel("Batch size").fill("50");
+  await follower.getByLabel("Seconds").fill("3");
+  await follower.getByRole("button", { name: "Stream random events" }).click();
+  await expect(follower.getByTestId("insert-state")).toHaveText("inserting");
+
+  await leader.waitForTimeout(500);
+  await leader.getByRole("button", { name: "Kill" }).click();
+
+  await expect(follower.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 });
+
+  const generatedCount = (scope: Page) =>
+    scope.getByLabel("Event type filter").evaluate((element) => {
+      if (!(element instanceof HTMLSelectElement)) throw new Error("not a select");
+      return [...element.options]
+        .filter((option) => option.value.startsWith("events.iterate.com/random/"))
+        .reduce((sum, option) => sum + Number(/\((\d+)\)$/.exec(option.text)?.[1] ?? 0), 0);
+    });
+  await expect.poll(() => generatedCount(leader), { timeout: 60_000 }).toBe(insertedCount);
+  await expect.poll(() => generatedCount(follower), { timeout: 60_000 }).toBe(insertedCount);
+});
+
+// A cold mirror far behind the head must PULL history (paged getEvents, client-paced)
+// instead of letting the one-directional subscription blast the whole backlog at it —
+// that's the flow-control fix for the 1M-replay memory blowup. This pins the behavior:
+// a fresh browser context opening a stream thousands of events deep catches up exactly
+// (no loss, no duplication) and ends live-subscribed.
+test("cold open of a deep stream pull-pages history and converges exactly", async ({ browser }) => {
+  const seedContext = await browser.newContext();
+  const seedPage = await seedContext.newPage();
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  await seedPage.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(seedPage, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  const insertedCount = 5000;
+  await seedPage.getByLabel("Count").fill(String(insertedCount));
+  await seedPage.getByLabel("Batch size").fill("500");
+  await seedPage.getByLabel("Seconds").fill("0");
+  await seedPage.getByRole("button", { name: "Stream random events" }).click();
+  await expect(seedPage.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 });
+  await seedContext.close();
+
+  // Fresh context = fresh OPFS origin = checkpoint 0, thousands behind the head.
+  const coldContext = await browser.newContext();
+  const coldPage = await coldContext.newPage();
+  const consoleLines: string[] = [];
+  coldPage.on("console", (message) => consoleLines.push(message.text()));
+  await coldPage.goto(streamRoute({ path: streamPath }));
+  await expect(coldPage.getByTestId("stream-status")).toHaveText("subscribed", {
+    timeout: 60_000,
+  });
+  await expect
+    .poll(
+      () =>
+        coldPage.getByLabel("Event type filter").evaluate((element) => {
+          if (!(element instanceof HTMLSelectElement)) throw new Error("not a select");
+          return [...element.options]
+            .filter((option) => option.value.startsWith("events.iterate.com/random/"))
+            .reduce((sum, option) => sum + Number(/\((\d+)\)$/.exec(option.text)?.[1] ?? 0), 0);
+        }),
+      { timeout: 120_000 },
+    )
+    .toBe(insertedCount);
+  // The catch-up must have gone through the pull lane, not the subscription blast.
+  expect(consoleLines.some((line) => line.includes("pull-paging before subscribing"))).toBe(true);
+  await coldContext.close();
+});
+
 // Catches stale local OPFS mirrors after server reset. This is the deployed-worker race that
 // led to old local rows surviving; the browser now discards impossible local state and shows
 // the fresh server stream.
@@ -823,21 +1035,21 @@ test("reset discards stale local rows and shows a fresh stream", async ({ page }
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 });
 
-// The event-feed view hosts the browser-event-feed processor: specific-renderer events
-// (created/woken) render as their own rows; consecutive events of the same type collapse
-// into one group row. A new type always starts a fresh row.
+// The event-feed view hosts the unified browser-feed processor: specific-renderer events
+// (created/woken) render as their own raw.* rows; consecutive events of the same type
+// collapse into one raw.group row. A new type always starts a fresh row.
 test("event-feed view renders specific renderers as singletons and groups by type", async ({
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute({ path: streamPath, view: "browser-event-feed" }));
+  await page.goto(streamRoute({ path: streamPath, view: "browser-feed" }));
 
   await expect(
-    page.locator("[data-testid='feed-item'][data-component='stream.created']"),
+    page.locator("[data-testid='feed-item'][data-kind='raw.stream.created']"),
   ).toHaveCount(1);
-  await expect(
-    page.locator("[data-testid='feed-item'][data-component='stream.woken']"),
-  ).toHaveCount(1);
+  await expect(page.locator("[data-testid='feed-item'][data-kind='raw.stream.woken']")).toHaveCount(
+    1,
+  );
   await expect(
     page.locator("[data-testid='feed-lifecycle-marker'][data-kind='created']"),
   ).toContainText("Durable object created");
@@ -894,8 +1106,8 @@ test("view switcher navigates between the three views", async ({ page }) => {
   await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
-  await page.getByTestId("view-link-browser-event-feed").click();
-  await expect(page).toHaveURL(/view=browser-event-feed/);
+  await page.getByTestId("view-link-browser-feed").click();
+  await expect(page).toHaveURL(/view=browser-feed/);
   await expect(page.getByTestId("feed-item-count")).toBeVisible();
 
   await page.getByTestId("view-link-browser-state").click();
@@ -1009,10 +1221,10 @@ async function expectComposerAtScrollerBottom(page: Page) {
 }
 
 // The scroll helpers below move the viewport with direct `scrollTop` writes (deterministic,
-// frame-addressable), but the page's initial tail pin deliberately releases only on user
-// *input* events — programmatic scroll deltas are indistinguishable from the virtualizer's
-// own convergence writes (see use-initial-tail-scroll.ts). Each helper therefore dispatches
-// a wheel event first: the same signal a real user reading older rows would produce.
+// frame-addressable), but the page's bottom stick deliberately releases only on user
+// *input* events — programmatic scroll deltas are indistinguishable from the stick's own
+// re-pin writes (see use-stick-to-bottom.ts). Each helper therefore dispatches an upward
+// wheel event first: the same signal a real user reading older rows would produce.
 async function scrollStreamBy(page: Page, delta: number) {
   await page.getByTestId("stream-events").evaluate((element, scrollDelta) => {
     if (!(element instanceof HTMLElement))

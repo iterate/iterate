@@ -1,11 +1,8 @@
-// Shared in-memory harness for agent/provider processor tests: a Stream
-// implementation, cursor-based delivery mirroring production subscription
-// semantics, and a fake OpenAI Responses WebSocket. Used by
-// agent-processors.test.ts and the stream-repros/ tests.
+// Shared in-memory harness for agent processor tests: a Stream implementation
+// and cursor-based delivery mirroring production subscription semantics.
 
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
-import type { OpenAiResponsesWebSocket } from "./openai-ws-processor-implementation.ts";
 
 export class MemoryStream implements Stream {
   events: StreamEvent[] = [];
@@ -29,7 +26,9 @@ export class MemoryStream implements Stream {
       const offset = (this.events.at(-1)?.offset ?? 0) + 1;
       const event: StreamEvent = {
         ...input,
-        createdAt: new Date(offset).toISOString(),
+        // Wall-clock createdAt: expiry/backstop fold from createdAt, so epoch
+        // timestamps from offsets would mark every request expired immediately.
+        createdAt: new Date().toISOString(),
         offset,
         path: this.path,
       };
@@ -101,11 +100,25 @@ export class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {}, workerDelivery: null } };
+    return { coreProcessorState: null, runtime: { connections: {}, subscriptions: {} } };
   }
 
   async subscribe(): Promise<never> {
     throw new Error("MemoryStream does not implement subscribe().");
+  }
+
+  async acceptCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement acceptCrossPost().");
+  }
+
+  async kill(): Promise<void> {}
+
+  async crossPostTo(): Promise<never> {
+    throw new Error("MemoryStream does not implement crossPostTo().");
+  }
+
+  async removeCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement removeCrossPost().");
   }
 }
 
@@ -124,45 +137,4 @@ export async function deliverNewEvents(input: {
   if (events.length === 0) return;
   const streamMaxOffset = input.stream.events.at(-1)?.offset ?? 0;
   await input.processor.ingest({ events, streamMaxOffset });
-}
-
-export type FakeResponsesWebSocket = OpenAiResponsesWebSocket & { sent: unknown[] };
-
-/**
- * In-memory OpenAI Responses WebSocket: `sendResponseCreate` computes the
- * response frames for the request and feeds them to the messages iterator.
- */
-export function fakeResponsesWebSocket(
-  respond: (request: unknown) => unknown[],
-): FakeResponsesWebSocket {
-  const queue: unknown[] = [];
-  const waiters: Array<(result: IteratorResult<unknown>) => void> = [];
-  const push = (frame: unknown) => {
-    const waiter = waiters.shift();
-    if (waiter !== undefined) waiter({ value: frame, done: false });
-    else queue.push(frame);
-  };
-  const socket: FakeResponsesWebSocket & { readyState: number } = {
-    sent: [],
-    readyState: 1,
-    sendResponseCreate(event: unknown) {
-      socket.sent.push(event);
-      for (const frame of respond(event)) push(frame);
-    },
-    messages(): AsyncIterableIterator<unknown> {
-      return {
-        [Symbol.asyncIterator]() {
-          return this;
-        },
-        async next() {
-          if (queue.length > 0) return { value: queue.shift(), done: false };
-          return await new Promise<IteratorResult<unknown>>((resolve) => waiters.push(resolve));
-        },
-      };
-    },
-    close() {
-      socket.readyState = 3;
-    },
-  };
-  return socket;
 }

@@ -15,7 +15,7 @@ import type { ScheduleView, SchedulerRecurrence } from "../../../../domains/sche
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { SCHEDULER_PRIMARY_PATH } from "~/domains/scheduler/utils.ts";
-import { formatRelativeTime } from "~/lib/format-relative-time.ts";
+import { formatRelativeTime, formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
@@ -120,7 +120,7 @@ function ProjectSchedulerContent() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{schedule.runCount}</TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">
-                    {formatRelativeTime(schedule.setAt)}
+                    {formatTimeAgo(schedule.setAt)}
                   </TableCell>
                   <TableCell className="w-0">
                     <div className="flex justify-end gap-2">

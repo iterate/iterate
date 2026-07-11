@@ -5,7 +5,7 @@
 //   - `itx.agents.defaults.forPath(path)` (rpc-targets.ts) hands the policy to
 //     the project worker, which owns appending it — the seeded template reacts
 //     to `stream/child-stream-created` for `/agents/**` and appends
-//     `defaults.events` (see project-repo-template/worker.ts). Projects bend
+//     `defaults.events` (see config-repo-template/worker.ts). Projects bend
 //     policy by editing that reaction, not by forking the platform.
 //   - The project processor appends only MECHANICS (processor subscriptions);
 //     it no longer touches policy.
@@ -14,26 +14,19 @@
 // so at-least-once delivery to the worker and retried creates all collapse
 // into one durable birth certificate.
 
-import { PROJECT_REPO_INITIAL_FILES } from "../repos/project-repo-template.generated.ts";
+import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import { agentWorkspacePath, workspaceBranchName } from "../workspaces/utils.ts";
-import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { childAgentParentPath } from "../../lib/agent-paths.ts";
+import { agentWorkspacePath } from "../workspaces/utils.ts";
+import {
+  slackConnectionFromAgentPath,
+  telegramChatIdFromAgentPath,
+  telegramConnectionFromAgentPath,
+} from "../integrations/utils.ts";
 import { isEmailAgentPath } from "../email/utils.ts";
 import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
-import {
-  DEFAULT_AGENT_MODEL,
-  DEFAULT_AGENT_SYSTEM_PROMPT,
-  type AgentLlmProvider,
-} from "./agent-processor-contract.ts";
-import { DEFAULT_OPENAI_WS_MODEL } from "./openai-ws-processor-contract.ts";
-import { readOpenAiApiKeyFromAppConfig } from "./utils.ts";
-
-/** New agents default to openai-ws when the deployment has an OpenAI key
- * configured; otherwise they fall back to Workers AI. */
-export function deploymentDefaultLlmProvider(env: unknown): AgentLlmProvider {
-  return readOpenAiApiKeyFromAppConfig(env) === null ? "cloudflare-ai" : "openai-ws";
-}
+import { DEFAULT_AGENT_MODEL, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
@@ -61,12 +54,49 @@ export function slackAgentSystemPrompt(connection: string): string {
     `To SEND a file or image to the thread — including ones you generate with itx.ai.run (image models return base64 in response.image) — store it and post its signed url; Slack unfurls image urls into inline previews. NEVER paste base64 into message text: const stored = await itx.agent.addFiles({ files: [{ filename: "cat.png", contentType: "image/png", data: response.image }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); await ${postMessage}({ channel, thread_ts, text: "Here you go! " + stored.files[0].url }); Stored images also stay visible to you on later turns, so you can iterate on what you made.`,
     'If someone posts a URL to an image you need to look at, download it and attach it to your conversation so you can actually see it: const resp = await itx.egress.fetch(new Request(url)); await itx.agent.addFiles({ files: [{ filename: "photo.jpg", contentType: resp.headers.get("content-type") ?? "application/octet-stream", data: await resp.blob() }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); then return a short confirmation — the image is visible to you from your next turn.',
     'If asked about email, Gmail, or an inbox: await itx.integrations.list() shows the project\'s connections; a connected Google connection gives Gmail access via await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). Do not claim you lack inbox access before checking.',
-    'If asked about GitHub: itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest) acting as a GitHub App INSTALLATION — enumerate repos with await itx.integrations.github["<conn>"].rest.apps.listReposAccessibleToInstallation({ per_page: 5 }) (repos are in data.repositories; user-scoped ...ForAuthenticatedUser endpoints answer 403), .rest.issues.create({ owner, repo, title }), the escape hatch .request("GET /repos/{owner}/{repo}/readme", { owner, repo, headers: { accept: "application/vnd.github.raw+json" } }), or .graphql(query, variables). There is NO generic .api.request({ method, path }) shape. Known-good snippets: itx.examples.get({ id: "github-list-repos" }) and "github-read-file".',
+    'If asked about GitHub: itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest) acting as a GitHub App INSTALLATION — enumerate repos with await itx.integrations.github["<conn>"].rest.apps.listReposAccessibleToInstallation({ per_page: 5 }) (repos are in data.repositories; user-scoped ...ForAuthenticatedUser endpoints answer 403), .rest.issues.create({ owner, repo, title }), the escape hatch .request("GET /repos/{owner}/{repo}/readme", { owner, repo, headers: { accept: "application/vnd.github.raw+json" } }), or .graphql(query, variables). There is NO generic .api.request({ method, path }) shape. Known-good snippets: itx.docs.get({ name: "github-list-repos" }) and itx.docs.get({ name: "github-read-file" }).',
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${postMessage}({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.google["<connection>"].gmail.request(...)]) — so the thread is never silent while you fetch.`,
     "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
     `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this thread, bake the channel and thread_ts into it and call ${postMessage}. itx.scheduler.list() / cancel(key) manage schedules.`,
-    "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node, including provided capabilities. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+    'Use project capabilities on itx when they are relevant. FIND WORKING CODE FIRST: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities — matching is dumb word overlap, so more synonyms means better recall; await itx.docs.get({ name }) fetches one. await itx.__describe() works on every node, including provided capabilities.',
+  ].join("\n");
+}
+
+/**
+ * Agents under `/agents/telegram/**` are Telegram-chat agents: the telegram
+ * webhook router forwards raw chat updates to their stream (one stream per
+ * chat SESSION — `/new` rotates to a fresh one), the `telegram-agent`
+ * processor transcribes them, and replies go out through the journaled send
+ * pair (`telegram/send-requested` appended to the session stream → the
+ * processor delivers it and marks `telegram/message-sent`) instead of web
+ * chat. The connection and chat id come from the agent's path
+ * (`/agents/telegram/{connection}/chat-{chatId}[/session-{unixSeconds}]`).
+ */
+export function telegramAgentSystemPrompt(input: {
+  agentPath: string;
+  chatId: string | null;
+  connection: string;
+}): string {
+  const telegramConnection = `itx.integrations.telegram[${JSON.stringify(input.connection)}]`;
+  const chatIdNote = input.chatId === null ? "" : ` (this chat's id is ${input.chatId})`;
+  const sendRequest = (streamPath: string, text: string) =>
+    `itx.streams.get(${JSON.stringify(streamPath)}).append({ type: "events.iterate.com/telegram/send-requested", payload: { text: ${text} } })`;
+  return [
+    "You are an iterate AI agent running inside a Telegram chat.",
+    "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+    "The code block must contain a single async arrow function: async (itx) => { ... }.",
+    "Incoming Telegram webhook updates arrive as your inputs (message text, sender, chat).",
+    `To reply in the chat, append a SEND REQUEST to your own stream — it is delivered reliably and recorded in this thread's journal: await ${sendRequest(input.agentPath, '"..."')}. The payload is a plain Bot API sendMessage body: chat_id${chatIdNote} is set for you and ALWAYS this stream's chat (to message a different chat, use the raw sendMessage call below instead); other sendMessage params (parse_mode, reply_to_message_id, ...) can ride along in the payload. Never use itx.chat.sendMessage for Telegram replies.`,
+    `THREADS: this stream is one conversation session — /new from the user rotates the chat to a fresh session stream. When an input carries a reply-hint note (the user REPLIED to a message from a different thread, its stream path is in the note), or the user references earlier conversation you don't have, READ the referenced thread FIRST — before any repo/workspace exploration: await itx.streams.get(path).getEvents({ eventTypes: ["events.iterate.com/telegram/webhook-received", "events.iterate.com/telegram/send-requested"] }). Those two event types ARE the transcript (user text in payload.body.message.text, your replies in payload.text); do NOT call getEvents unfiltered — the first page is subscriber/llm plumbing, not conversation — and if exactly 500 events come back, page with afterOffset: events.at(-1).offset to reach the recent end. Only then answer: INTO that thread by appending your send request to that stream instead of your own, or here — your judgement.`,
+    `For any other Bot API call (sendPhoto, sendDocument, editMessageText, answerCallbackQuery, …) use ${telegramConnection}.<method>(params) with ONE params object (https://core.telegram.org/bots/api) — these are immediate calls, not journaled sends, so pass chat_id yourself.`,
+    'Messages are plain text by default. For formatting pass parse_mode: "HTML" with simple tags (<b>, <i>, <code>, <pre>, <a href>) — Telegram does NOT render markdown headings or tables, so prefer short plain-text replies.',
+    "v1 limitation: photos/voice/stickers people send arrive only as bracketed placeholders like [photo] — you cannot view them yet; say so if asked about one.",
+    "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
+    `Keep the chat in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${sendRequest(input.agentPath, '"Checking that now..."')}, itx.mcp.exa.web_search_exa({ query })]) — so the chat is never silent while you fetch.`,
+    "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
+    `To do something later or on a schedule (reminders, recurring reports), use await itx.scheduler.set({ key, recurrence: { in: seconds } | { every: seconds } | { cron, timezone? }, script: "async (itx, schedule, trigger) => { ... }" }) — the script is a STRING run later with full project access; to have it post back to this chat, bake the chat_id into it and call ${telegramConnection}.sendMessage (scheduled scripts outlive sessions, so use the direct call there, not a session send request). itx.scheduler.list() / cancel(key) manage schedules.`,
+    'Use project capabilities on itx when they are relevant. FIND WORKING CODE FIRST: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities — matching is dumb word overlap, so more synonyms means better recall; await itx.docs.get({ name }) fetches one. await itx.__describe() works on every node, including provided capabilities.',
   ].join("\n");
 }
 
@@ -88,7 +118,7 @@ export const EMAIL_AGENT_SYSTEM_PROMPT = [
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
   "Write emails like a thoughtful human colleague: plain text by default, greeting and sign-off optional and brief, no markdown formatting (it is not rendered in email).",
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
-  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+  'Use project capabilities on itx when they are relevant. FIND WORKING CODE FIRST: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities — matching is dumb word overlap, so more synonyms means better recall; await itx.docs.get({ name }) fetches one. await itx.__describe() works on every node, including provided capabilities.',
 ].join("\n");
 
 /**
@@ -111,7 +141,7 @@ const PR_AGENT_SYSTEM_PROMPT = [
   "GitHub is not chat: one complete, well-written comment per request. Do the work first (read the diff, fetch files, run scripts across turns), then comment once with the full answer. Write in GitHub-flavored markdown.",
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
-  "Use project capabilities on itx when they are relevant: await itx.__describe() lists them (`children` is the member map, `capabilities` the inventory) — the same __describe() works on any node. await itx.examples.list() / itx.examples.get({ id }) is a catalogue of known-good snippets.",
+  'Use project capabilities on itx when they are relevant. FIND WORKING CODE FIRST: await itx.docs.search({ q: "several related words" }) finds e2e-tested example scripts, type declarations, and mounted capabilities — matching is dumb word overlap, so more synonyms means better recall; await itx.docs.get({ name }) fetches one. await itx.__describe() works on every node, including provided capabilities.',
 ].join("\n");
 
 /**
@@ -141,13 +171,26 @@ const ONBOARDING_AGENT_SYSTEM_PROMPT = [
 ].join("\n");
 
 /** THE place the "agent path decides the reply door" rule lives: Slack thread
- * agents reply via their connection's Slack Web API, inbound MCP session agents via their blocked
+ * agents reply via their connection's Slack Web API, Telegram chat agents via
+ * their connection's Bot API, inbound MCP session agents via their blocked
  * ask_assistant call, everything else via web chat. */
 function agentSystemPromptForPath(agentPath: string): string {
+  // Child-agent paths FIRST: the routed-agent predicates below are shape-loose
+  // (Slack matches any >=6-segment path under its connection, email matches by
+  // prefix), so a child under a routed agent must not inherit its transcriber.
+  if (childAgentParentPath(agentPath) !== null) return DEFAULT_AGENT_SYSTEM_PROMPT;
   if (agentPath === ONBOARDING_AGENT_PATH) return ONBOARDING_AGENT_SYSTEM_PROMPT;
   const slackConnection = slackConnectionFromAgentPath(agentPath);
   if (slackConnection !== null) {
     return slackAgentSystemPrompt(slackConnection);
+  }
+  const telegramConnection = telegramConnectionFromAgentPath(agentPath);
+  if (telegramConnection !== null) {
+    return telegramAgentSystemPrompt({
+      agentPath,
+      chatId: telegramChatIdFromAgentPath(agentPath),
+      connection: telegramConnection,
+    });
   }
   if (isEmailAgentPath(agentPath)) return EMAIL_AGENT_SYSTEM_PROMPT;
   if (isPrAgentPath(agentPath)) return PR_AGENT_SYSTEM_PROMPT;
@@ -155,15 +198,11 @@ function agentSystemPromptForPath(agentPath: string): string {
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
 
-const DEFAULT_MODEL_BY_LLM_PROVIDER = {
-  "cloudflare-ai": DEFAULT_AGENT_MODEL,
-  "openai-ws": DEFAULT_OPENAI_WS_MODEL,
-} satisfies Record<AgentLlmProvider, string>;
-
-/** Caller-supplied policy overrides, baked into the returned events. */
+/** Caller-supplied policy overrides, baked into the returned events. A
+ * systemPrompt override REPLACES the path's platform prompt wholesale — the
+ * caller owns the whole contract, including how the agent acts (codemode). */
 export type AgentDefaultsOverrides = {
   systemPrompt?: string;
-  provider?: AgentLlmProvider;
   model?: string;
 };
 
@@ -171,7 +210,6 @@ export type AgentDefaultsOverrides = {
  * event batch that applies them (idempotency-keyed, safe to re-append). */
 export type AgentDefaultPolicy = {
   systemPrompt: string;
-  provider: AgentLlmProvider;
   model: string;
   events: AgentPolicyEventInput[];
 };
@@ -186,20 +224,29 @@ export type AgentPolicyEventInput = {
 };
 
 /**
- * The default agent policy for a path. `deploymentLlmProvider` is the
- * deployment-wide provider choice (openai-ws when the deployment has an
- * OpenAI key); `overrides` bake caller customization into the returned
- * events so the common case stays one append.
+ * The default agent policy for a path. Every agent runs through the single
+ * agent processor's Cloudflare AI binding; `overrides` bake caller
+ * customization into the returned events so the common case stays one append.
  */
 export function agentDefaultsForPath(input: {
   agentPath: string;
-  deploymentLlmProvider: AgentLlmProvider;
   projectId: string;
+  /**
+   * Human-facing project facts from the directory, when the caller has them:
+   * the very first question a real user asked their agent was "which project
+   * is this?", and an opaque prj_ hex id was the only answer the boot
+   * context could give. Optional because some hosts (tests, bare births)
+   * have no directory at hand — the id-only line still works.
+   */
+  project?: { name: string; slug: string; workerUrl?: string };
   overrides?: AgentDefaultsOverrides;
 }): AgentDefaultPolicy {
-  const { agentPath, projectId } = input;
-  const provider = input.overrides?.provider ?? input.deploymentLlmProvider;
-  const model = input.overrides?.model ?? DEFAULT_MODEL_BY_LLM_PROVIDER[provider];
+  const { agentPath, projectId, project } = input;
+  const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
+  // An override replaces the path prompt wholesale. There is no baked-in
+  // child-agent prompt either: child-agent-ness rides on the parent's MESSAGE
+  // (the fold labels agent-sourced messages with the sender's path and how to
+  // reply — see reduceAgentEvent's message-received arm).
   const systemPrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
 
   const events: AgentPolicyEventInput[] = [
@@ -211,11 +258,10 @@ export function agentDefaultsForPath(input: {
     {
       type: "events.iterate.com/agent/llm-provider-selected",
       idempotencyKey: `agent/llm-provider-selected:${projectId}:${agentPath}`,
-      payload: { ifUnset: true, model, provider },
+      payload: { ifUnset: true, model },
     },
     // The agent's own workspace, a durable itx-expression re-evaluated per
-    // call, so agent birth never touches the workspace Durable Object — the
-    // project-repo clone happens lazily on the first workspace call. (No
+    // call, so agent birth never touches the workspace Durable Object. (No
     // sandbox mount: sandboxes are pets, created explicitly via
     // itx.sandboxes.create.)
     {
@@ -226,30 +272,36 @@ export function agentDefaultsForPath(input: {
         type: "itx-expression",
         expression: ["workspaces", ["get", agentWorkspacePath(agentPath)]],
         instructions:
-          `THIS agent's own workspace: a private checkout of the project repo at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces), living in a Durable Object filesystem — no container, always warm. ` +
-          'The first call clones the project repo and every call waits for that clone. Read/write/edit freely (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root); nothing is shared until pushed. ' +
-          `workspace.git (add/commit/push) publishes to the project repo branch "${workspaceBranchName(agentWorkspacePath(agentPath))}", never to main.`,
+          `THIS agent's own workspace at "${agentWorkspacePath(agentPath)}" (your agent path under /workspaces): an instant copy-on-write overlay over the config repo's latest main, living in a Durable Object filesystem — no container, no clone, always warm. ` +
+          'Reads see latest main until you shadow a path; writes/edits/deletes stay private until committed (readFile/writeFile/edit/readDir/glob/…; paths are absolute, "/" is the repo root). ' +
+          "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
       },
     },
     // Per-agent boot context as a model-visible input (the system prompt is
-    // static; ids and paths are not). dont-trigger-request: this must never
-    // wake the LLM by itself.
+    // static; ids and paths are not). Facts and pointers only — everything
+    // per-capability is discoverable through itx.docs / __describe, so this
+    // must not grow back into a capability tour (the prompt budget test
+    // holds the line). dont-trigger-request: this must never wake the LLM
+    // by itself.
     {
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: `agent/boot-context:${projectId}:${agentPath}`,
       payload: {
         content: [
           "Platform context for this agent:",
-          `- Project id: ${projectId}`,
+          project === undefined
+            ? `- Project id: ${projectId}`
+            : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
           `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
-          '- The project repo is at repo path "/" — seeded during project bootstrap. On a brand-new project it may still be seeding for your first turn; if repo reads or worker calls say it is missing or not ready, keep onboarding conversational and retry shortly. Once seeded, it contains worker.ts (a static homepage + router over the apps below, plus an itx.worker.slack.* Slack SDK surface), apps/hello/worker.ts (stateless), apps/counter/worker.ts (stateful counter page), package.json (npm deps, installed at worker build time), sdk.ts (platform capability types), AGENTS.md, and ONBOARDING.md.',
-          "- Read the repo with itx.repo.readFile({ path }) and itx.repo.listFiles(); change it with itx.repo.commitFiles({ message, changes: [{ path, content }] }).",
-          "- Other agents live at /agents/<name> (itx.agents.list() / itx.agents.get(path)); Slack thread agents appear under /agents/slack/<connection>/<channel>/ts-<ts>; secrets under /secrets/**.",
-          '- Streams are path-addressed: itx.streams.get(path).append(event) / getEvents() / waitFor(); path "/" is the project root stream.',
-          '- Sandboxes (real Linux containers) are project pets, created explicitly: `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })`, then `const sandbox = await itx.sandboxes.get(path)` for the Cloudflare Sandbox SDK surface (exec, files, processes, gitCheckout, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). `itx.sandboxes.list()` shows existing ones — prefer reusing a sandbox over creating more. Only /workspace survives sleep/idle (snapshot-restored); nothing is preinstalled beyond the stock image and no repo is checked out.',
-          '- You also have your own workspace: `itx.workspace` is a private checkout of the project repo in a durable filesystem — no container, always warm, much faster than a sandbox for plain file work. `await itx.workspace.readFile("/worker.ts")`, `writeFile`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`. The first call clones the repo (a brand-new project may still be seeding — retry shortly if it errors). Your changes are private until you push: `await itx.workspace.git.add({ filepath: "." })`, `.git.commit({ message })`, `.git.push()` publishes to your own branch in the project repo, never main. Use the workspace for reading and editing files; use a sandbox when you need to RUN things.',
-          "- itx.__describe() lists the capabilities currently available in your scope; __describe() works on every node (itx.integrations, itx.capabilityHost, any provided capability) when you need detail.",
-          '- If Google is connected, Gmail is available per connection: await itx.integrations.list() shows connections, then itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }) for inbox requests.',
+          // One seed list, marked non-exhaustive, and ONE rule for choosing
+          // between the two write doors — the model was repeating this line
+          // verbatim to users as the repo's full contents.
+          '- The project config repo is at "/repos/config" (itx.repo), seeded with worker.ts (the project worker + website), AGENTS.md, package.json, and more. On a brand-new project it may still be seeding on your first turn — if repo or worker calls say it is missing or not ready, retry shortly instead of treating that as fatal.',
+          "- Two write doors, one rule: itx.repo.commitFiles({ message, changes }) for a small direct edit; your private workspace (itx.workspace, a live overlay of the repo's latest main: readFile/writeFile/edit/glob) when you want to read and change several files before shipping ONE commit via itx.workspace.git.commit({ message }). Both land straight on main and redeploy the project worker/website — no branches, no push.",
+          "- Delegate by messaging a child agent into existence: await itx.agents.get('researcher').message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
+          // Deliberate reinforcement of the prompt's FIND WORKING CODE
+          // section — repetition is the one thing small prompts buy back.
+          "- FIRST MOVE for anything unfamiliar: await itx.docs.search({ q: \"several related words\" }) — working example scripts, type declarations, and this project's mounted capabilities; each hit's fetchCall field is the literal next call. await itx.__describe() lists everything at your scope.",
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
@@ -263,7 +315,7 @@ export function agentDefaultsForPath(input: {
             idempotencyKey: `project-onboarding-start:${projectId}`,
             payload: {
               content:
-                "Start onboarding now. The project owner just created this project and is looking at the chat.",
+                "Begin onboarding. The project owner just created this project and is looking at the chat. If the user already sent a message above, answer it first, then continue the onboarding script.",
               llmRequestPolicy: { behaviour: "after-current-request" },
             },
           },
@@ -271,5 +323,5 @@ export function agentDefaultsForPath(input: {
       : []),
   ];
 
-  return { systemPrompt, provider, model, events };
+  return { systemPrompt, model, events };
 }

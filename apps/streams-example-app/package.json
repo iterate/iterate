@@ -20,7 +20,7 @@
     "@journeyapps/wa-sqlite": "^1.7.0",
     "@tanstack/react-router": "^1.170.10",
     "@tanstack/react-start": "^1.168.18",
-    "@tanstack/react-virtual": "^3.14.2",
+    "@tanstack/react-virtual": "^3.14.5",
     "capnweb": "^0.8.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

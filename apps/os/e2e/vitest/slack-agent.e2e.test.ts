@@ -120,8 +120,8 @@ test.skipIf(signingSecret === null)(
           path: SLACK_INTEGRATION_STREAM_PATH,
         }),
         idempotencyKey: `slack-router-subscription:${projectId}:${CONNECTION}`,
+        processor: ["integrations", "slack", CONNECTION, "processor"],
         processorSlug: "slack",
-        subscriberType: "project",
       }),
       {
         type: "events.iterate.com/slack/connected",
@@ -204,7 +204,7 @@ test.skipIf(signingSecret === null)(
       () => agentStream.getEvents({ afterOffset: 0 }),
       (events) =>
         hasEvent(events, "events.iterate.com/slack/webhook-received") &&
-        hasEvent(events, "events.iterate.com/agent/input-added") &&
+        hasEvent(events, "events.iterate.com/agents/message-received") &&
         hasEvent(events, "events.iterate.com/agent/llm-request-requested"),
       () => `agent input + llm request on ${agentStreamPath}`,
       120_000,

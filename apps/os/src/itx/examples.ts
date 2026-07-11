@@ -8,7 +8,7 @@
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
 //   run-script      itx.capabilityHost.runScript(`async (itx) => { const vars = …; <body> }`)
 //                   — the server-side script isolate agents use
-//   project-worker  the body baked into the project repo's worker.ts,
+//   project-worker  the body baked into the config repo's worker.ts,
 //                   executed against `await this.env.ITX.get()`
 //
 // Almost every example is written against a PROJECT itx (context: "project"):
@@ -37,26 +37,28 @@ export type ItxExampleRuntime = (typeof ITX_EXAMPLE_RUNTIMES)[number];
 export type ItxExample = {
   /** Script body: `itx` and `vars` in scope, explicit `return`. */
   code: string;
-  /** The handle the snippet expects: a project itx (the normal case) or the
-   * OS Session — what authenticate() returns, not an itx (__describe /
-   * projects.list only). */
-  context: "project" | "session";
+  /**
+   * Whether the e2e matrix (apps/os/e2e/examples) proves this entry by
+   * running it unattended across every runtime. `false` marks interactive
+   * reading material — snippets that need a real connected account, a
+   * remote model, or a Session context the matrix does not hold. Absent
+   * means proven; the matrix derives its exclusion list from this field and
+   * the docs door words its provenance claim from it.
+   */
+  e2eProven?: false;
+  /** The handle the snippet expects: a project itx (the normal case), an
+   * AGENT itx (the project surface plus the agent's own mounts — chat,
+   * workspace, agent; the docs door serves these too since agents are its
+   * main audience, but the unattended matrix skips them: they need a live
+   * conversation), or the OS Session — what authenticate() returns, not an
+   * itx (__describe / projects.list only). */
+  context: "agent" | "project" | "session";
   description: string;
   id: string;
   /** Runtimes the snippet runs unattended in (the e2e matrix honors this). */
   runtimes: ItxExampleRuntime[];
   title: string;
 };
-
-/** One example without its code — what `itx.examples.list()` returns. */
-export type ItxExampleSummary = {
-  description: string;
-  id: string;
-  title: string;
-};
-
-/** One example with its full script body — what `itx.examples.get({ id })` returns. */
-export type ItxExampleWithCode = ItxExampleSummary & { code: string };
 
 const ALL_RUNTIMES: ItxExampleRuntime[] = [...ITX_EXAMPLE_RUNTIMES];
 
@@ -66,6 +68,7 @@ const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
 export const ITX_EXAMPLES: ItxExample[] = [
   {
     id: "whoami",
+    e2eProven: false,
     title: "Who am I? (OS session)",
     description:
       "The top-level REPL holds the OS Session — the catalog authenticate() returned; it is not an itx. __describe() works on every node; on a Session its `principal` is who the socket carries.",
@@ -78,6 +81,7 @@ return description.principal;
   },
   {
     id: "list-projects",
+    e2eProven: false,
     title: "List projects, then open one",
     description:
       "A Session vends itxs: projects.list() shows the projects you can reach (id, slug, org, deployment status), and projects.get(id) returns the project-scoped itx — the same handle a project REPL holds. Every project-context example starts there.",
@@ -92,29 +96,28 @@ const projects = await itx.projects.list();
 // project REPL's \`itx\` has (streams, repo, workers, runScript, ...).
 const pid = vars.projectId ?? projects[0]?.id;
 if (!pid) throw new Error("Create a project first: await itx.projects.create({ slug: 'demo' })");
-const project = await itx.projects.get(pid);
 
-// describe() reports the project and its capability table.
-return await project.__describe();
+// describe() reports the project and its capability table. Method-returned
+// surfaces pipeline, so the get() needs no intermediate await.
+return await itx.projects.get(pid).__describe();
 `.trim(),
   },
   {
     id: "describe-project",
     title: "Describe the project (its __describe)",
     description:
-      "__describe() works on EVERY node and is the project's self-report: its id, name, a one-line blip per child member (`children`), and every capability reachable at this scope — built-ins plus anything mounted via a capability host. Agents read this to learn what they can call.",
+      "__describe() works on EVERY node and is the project's self-report: its id, name, a one-line blip per built-in member (`children`), and the dynamic capabilities mounted at this scope (`capabilities`). Agents read this to learn what they can call.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const description = await itx.__describe();
 
-// Built-ins are always there; dynamic mounts carry type "live" or
-// "itx-expression" plus the offset of the event that mounted them.
+// Built-ins are the children map; dynamic mounts appear in capabilities
+// with type "live" or "itx-expression" plus the offset of the event that
+// mounted them.
 return {
-  builtins: description.capabilities
-    .filter((capability) => capability.type === "builtin")
-    .map((capability) => capability.path.join(".")),
-  children: Object.keys(description.children),
+  builtins: Object.keys(description.children),
+  mounted: description.capabilities.map((capability) => capability.path.join(".")),
   projectId: description.projectId,
 };
 `.trim(),
@@ -170,6 +173,37 @@ const [appended] = await stream.append({
 // (stream/created, stream/woken, ...), so real code filters by type.
 const events = await stream.getEvents();
 return { appended, count: events.length };
+`.trim(),
+  },
+  {
+    id: "ephemeral-events",
+    title: "Ephemeral events: transient signals whose durable truth lands separately",
+    description:
+      "append({ ephemeral: true }) commits a second-class event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, durable subscribers — processors and the project worker's processEventBatch feed — never receive it, and the stream may evict the row later. Use it for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable fact as its own ordinary event.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Transient signal: live subscribers see it; nothing durable ever will.
+const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
+const [tick] = await stream.append({
+  type: "events.iterate.repl/progress-ticked",
+  ephemeral: true,
+  payload: { percent: 50 },
+});
+
+// The durable truth is its own ordinary event — THIS is what processors fold.
+const [done] = await stream.append({
+  type: "events.iterate.repl/work-completed",
+  payload: { result: "ok" },
+});
+
+const defaults = await stream.getEvents({ afterOffset: tick.offset - 1 });
+const raw = await stream.getEvents({ afterOffset: tick.offset - 1, includeEphemeral: true });
+return {
+  tickOffset: tick.offset, // ephemeral rows consume offsets like any commit
+  defaultOffsets: defaults.map((e) => e.offset), // [done.offset] — the tick is excluded
+  rawOffsets: raw.map((e) => e.offset), // [tick.offset, done.offset]
+};
 `.trim(),
   },
   {
@@ -296,8 +330,8 @@ return { mountType: mount?.type, note: event.payload.note, offset: event.offset 
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// Await the ref before calling: script isolates reach itx over Workers RPC,
-// which does not pipeline calls through an unresolved return value.
+// A handle is kept here because the worker is called twice below; one-off
+// calls pipeline in a single expression: await itx.workers.get(ref).hello().
 const greeter = await itx.workers.get({
   type: "stateless",
   entrypoint: "Greeter",
@@ -327,10 +361,11 @@ const greeter = await itx.workers.get({
   },
 });
 
-return {
-  greeting: await greeter.hello({ name: "world" }),
-  sum: await greeter.add(2, 3),
-};
+const [greeting, sum] = await Promise.all([
+  greeter.hello({ name: "world" }),
+  greeter.add(2, 3),
+]);
+return { greeting, sum };
 `.trim(),
   },
   {
@@ -341,7 +376,9 @@ return {
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const counter = await itx.workers.get({
+// Sequential dependent calls: keep the handle (un-awaited — calls pipeline
+// through it), await each step because the next depends on it.
+const counter = itx.workers.get({
   type: "stateful",
   className: "CounterDurableObject",
   // The durable identity: reuse the key to come back to the same state.
@@ -413,9 +450,9 @@ return {
   },
   {
     id: "workspace-edit-and-push",
-    title: "Edit files in a workspace, then push its branch",
+    title: "Edit files in a workspace, then commit them to main",
     description:
-      'A workspace is a private checkout of the project repo in a durable virtual filesystem (no container, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other. The first call clones the project repo and every call waits for that clone. Changes stay private until pushed: git.push() publishes to the workspace\'s OWN branch (workspaces/<path>), never main — use itx.repo.edit/commitFiles when a change should go live on main.',
+      'A workspace is an instant copy-on-write overlay over the config repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other, and itx.workspaces.get("/") is the shared read-only root (always latest main). Reads see latest main until a local write shadows a path. Changes stay private until git.commit({ message }) — which commits them straight to the config repo\'s MAIN branch (the project worker/website redeploys automatically; no branches, no push step) and resets the overlay to mirror the new main.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -423,11 +460,11 @@ return {
 // workspace is itx.workspace — for the example we address one by path.
 const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
 
-// Reads wait for the clone, so a successful read proves the checkout exists.
+// Reads fall through to the repo's latest main until shadowed by a write.
 // Paths are absolute; "/" is the repo root.
 const readme = await workspace.readFile("/README.md");
 
-// Write and edit freely — this is a working tree, not a commit-per-change.
+// Write and edit freely — the overlay is a private working tree.
 await workspace.writeFile("/notes/workspace-example.md", "status: draft\\n");
 const edited = await workspace.edit({
   path: "/notes/workspace-example.md",
@@ -435,16 +472,18 @@ const edited = await workspace.edit({
   newString: "status: reviewed",
 });
 
-// Ordinary git publishes to the workspace's own branch (never main).
-await workspace.git.add({ filepath: "." });
-const commit = await workspace.git.commit({ message: "Workspace example note" });
-const pushed = await workspace.git.push();
+// What changed vs main, then one call ships it: commit() lands the changes
+// on the config repo's MAIN branch — the project worker/website redeploys
+// automatically (no add/push dance, .gitignored files are skipped).
+const changes = await workspace.git.status();
+const committed = await workspace.git.commit({ message: "Workspace example note" });
 
 return {
   readmePresent: readme !== null,
   edited,
-  commitOid: commit.oid,
-  pushedBranch: pushed.branch,
+  changes,
+  commitOid: committed.commitOid,
+  committedTo: committed.branch,
 };
 `.trim(),
   },
@@ -486,7 +525,7 @@ return {
   },
   {
     id: "repo-commit-files",
-    title: "Commit files into the project repo",
+    title: "Commit files into the config repo",
     description:
       "Every project has a git-backed repo (itx.repo is the one at path '/'). commitFiles writes a batch of changes as one commit — this is how agents keep durable notes, and how the project worker at worker.ts gets updated (repo-sourced workers are late-bound: the next call sees the new commit).",
     context: "project",
@@ -512,14 +551,14 @@ return {
   },
   {
     id: "repo-read-file",
-    title: "Read a file from the project repo",
+    title: "Read a file from the config repo",
     description:
-      "Read committed file contents from the project repo. readFile returns the HEAD commit oid, normalized path, and content, or null when the file does not exist.",
+      "Read committed file contents from the config repo. readFile returns the HEAD commit oid, normalized path, and content, or null when the file does not exist.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const path = vars.path ?? "README.md";
-const repo = itx.repos.get(vars.repoPath ?? "/");
+const repo = itx.repos.get(vars.repoPath ?? "/repos/config");
 const file = await repo.readFile({ path });
 
 if (file === null) {
@@ -536,18 +575,18 @@ return {
   },
   {
     id: "repo-edit-file",
-    title: "Read then edit a project repo file",
+    title: "Read then edit a config repo file",
     description:
       "Use readFile to inspect the current content, then edit to replace an exact string and commit the change. edit is safe for coding-agent workflows: oldString must match exactly once unless replaceAll is true.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const path = vars.path ?? "notes/edit-example.md";
-const repo = itx.repos.get(vars.repoPath ?? "/");
+const repo = itx.repos.get(vars.repoPath ?? "/repos/config");
 const beforeText = "status: draft\\n";
 const afterText = "status: reviewed\\n";
 
-// Path-scoped repos need first-use creation; the default project repo already exists.
+// Path-scoped repos need first-use creation; the default config repo already exists.
 if (vars.repoPath) await repo.create();
 
 // Seed a known starting point. Agents can skip this when editing an existing file.
@@ -619,10 +658,28 @@ return described;
 `.trim(),
   },
   {
+    id: "egress-fetch",
+    e2eProven: false,
+    title: "Make a plain HTTP request through project egress",
+    description:
+      "itx.egress.fetch(url, init?) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. Secret placeholders in headers substitute at egress (see secret-postman-echo). External service — interactive-only.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const url = vars.url ?? "https://example.com/";
+
+const response = await itx.egress.fetch(url, { headers: { accept: "text/html" } });
+const body = await response.text();
+
+return { status: response.status, bodyStart: body.slice(0, 200) };
+`.trim(),
+  },
+  {
     id: "secret-postman-echo",
+    e2eProven: false,
     title: "Use a stored secret in a Postman Echo request",
     description:
-      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret(path) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service, so run it interactively.",
+      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret(path) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -695,46 +752,81 @@ return { record }; // ["capability-provided", "capability-revoked"]
   },
   {
     id: "agent-send-message",
-    title: "Send a message to an agent",
+    title: "Send a message to an agent (also how you create one)",
     description:
-      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). sendMessage appends the user-message event to the agent's stream and returns it; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when an LLM provider is configured).",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends the unified message-received event to the agent's stream and returns it — the sender is derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured). This is ALSO how you create, spawn, or birth a new child agent / subagent to delegate work to: messaging a fresh /agents/** path births that agent with default policy — put everything the child needs in the message.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const agent = await itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
-
-// The returned value is the committed stream event — the durable record the
+// One expression: get() pipelines, so no intermediate await is needed. The
+// returned value is the committed stream event — the durable record the
 // agent loop reduces into its history.
-const sent = await agent.sendMessage(vars.message ?? "Hello from the examples catalogue");
+const sent = await itx.agents
+  .get(vars.agentPath ?? "/agents/repl-demo")
+  .message(vars.message ?? "Hello from the examples catalogue");
 return { offset: sent.offset, payload: sent.payload, type: sent.type };
 `.trim(),
   },
   {
-    id: "browse-examples",
-    title: "Browse this catalogue through itx.examples",
+    id: "docs-search-and-get",
+    title: "Find working code + types through itx.docs",
     description:
-      "The catalogue itself is a built-in capability: list() returns every project-context entry without its code (cheap to skim), get({ id }) returns one with the full script body. Agents use this to copy working patterns instead of guessing at the surface. Session-context entries are excluded — an itx holder has no Session.",
+      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const summaries = await itx.examples.list();
+// MANY related words per query — the search is dumb word matching, so
+// synonyms are what buy recall.
+const hits = await itx.docs.search({ q: "repo file edit commit write change" });
 
-// Summaries carry { id, title, description } — no code. Fetch one entry's
-// full script body by id.
-const example = await itx.examples.get({ id: vars.exampleId ?? "describe-project" });
+// Hits are { kind: "example" | "type" | "capability", name, summary, fetchCall };
+// each hit's fetchCall field is the literal next call. Example hits are
+// working scripts — copy those first.
+const example = await itx.docs.get({ name: vars.name ?? "describe-project" });
+// Example scripts come back paste-ready: a complete async (itx) => { ... }
+// with the annotation and a vars stub INSIDE the function.
+
+// Type declarations come back as TypeScript source, ending with a comment
+// naming anything that did not fit (and how to fetch it).
+const streamTypes = await itx.docs.get({ name: "Stream", maxTokens: 800 });
 
 return {
-  count: summaries.length,
-  hasCode: typeof example.code === "string" && example.code.length > 0,
-  id: example.id,
+  hitCount: hits.length,
+  firstHit: hits[0] ?? null,
+  examplePasteReady: example.startsWith("async (itx) => {") && example.includes("// EXAMPLE"),
+  streamTypesIncludeAppend: streamTypes.includes("append("),
 };
+`.trim(),
+  },
+  {
+    id: "chat-message-with-files",
+    e2eProven: false,
+    title: "Send a chat message with an attached image or file",
+    description:
+      "itx.chat.sendMessage accepts attachments: files: [{ filename, contentType, data }] where data is a Blob, Uint8Array, or base64 string (what itx.ai.run image models return). One call stores the bytes in project file storage AND attaches them to the message — attached images render inline in the chat and stay visible to you on later turns. Agent-scope only (itx.chat is the agent's conversation); needs a live agent conversation to observe, so run it interactively.",
+    context: "agent",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// vars.data can be raw bytes or a base64 string — e.g. the b64_json an
+// ai-generate-image run returned. NEVER paste base64 into message text;
+// attach it and let the platform store + render it.
+const sent = await itx.chat.sendMessage(vars.caption ?? "Here you go!", {
+  files: [
+    {
+      filename: vars.filename ?? "picture.png",
+      contentType: vars.contentType ?? "image/png",
+      data: vars.data ?? new Blob(["hello from the examples catalogue"]),
+    },
+  ],
+});
+return { offset: sent.offset, type: sent.type };
 `.trim(),
   },
   {
     id: "files-roundtrip",
     title: "Store, read, and share a project file",
     description:
-      "itx.files.get(path) is project file storage (R2-backed, mutable paths): put({ data, contentType }) stores bytes — base64 strings (what itx.ai.run image models return), Uint8Array, Blob, or a stream — bytes() reads them back, url() mints a signed public link any HTTP client can fetch (default expiry 7 days), delete() removes the file. On agent scopes prefer itx.agent.addFiles: one call that stores AND attaches files to the conversation.",
+      "itx.files.get(path) is project file storage (R2-backed, mutable paths): put({ data, contentType }) stores bytes — base64 strings (what itx.ai.run image models return), Uint8Array, Blob, or a stream — bytes() reads them back, url() mints a signed public link any HTTP client can fetch (default expiry 7 days), delete() removes the file. Use it to save, keep, or persist data for later and remember state between runs (files hold bytes; streams hold structured events). On agent scopes prefer itx.agent.addFiles: one call that stores AND attaches files to the conversation.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -761,9 +853,10 @@ return { servedStatus: served.status, servedText, size: stored.size, text, url }
   },
   {
     id: "exa-web-search",
+    e2eProven: false,
     title: "Web search through the built-in Exa MCP server",
     description:
-      "itx.mcp.exa is a pre-connected MCP client for Exa's public server (https://mcp.exa.ai/mcp): web_search_exa({ query, numResults }) searches, web_fetch_exa({ urls }) reads pages as markdown. Tool names are flat calls on the client — the same shape any itx.mcp.connect({ url }) client has. External service, so run it interactively.",
+      "itx.mcp.exa is a pre-connected MCP client for Exa's public server (https://mcp.exa.ai/mcp): web_search_exa({ query, numResults }) searches, web_fetch_exa({ urls }) reads pages as markdown. Tool names are flat calls on the client — the same shape any itx.mcp.connect({ url }) client has. External service — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -778,18 +871,18 @@ return { pages, search };
   },
   {
     id: "connect-public-mcp",
+    e2eProven: false,
     title: "Connect a public MCP server, then mount it",
     description:
-      "itx.mcp.connect({ url }) opens any reachable MCP server as an ad-hoc capability target. Tool names become flat method calls on the returned client. Mount the same connection recipe as an itx-expression when you want agents and future sessions to discover it through describe() and call it as itx.publicMcp.<tool>(). External service, so run it interactively.",
+      "itx.mcp.connect({ url }) opens any reachable MCP server as an ad-hoc capability target. Tool names become flat method calls on the returned client. Mount the same connection recipe as an itx-expression when you want agents and future sessions to discover it through describe() and call it as itx.publicMcp.<tool>(). External service — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const mcpUrl = vars.mcpUrl ?? "https://mcp.exa.ai/mcp";
 
-// Ad-hoc client: no mount, no project event. You can call MCP tools directly
-// by their tool name on the returned client.
-const mcp = await itx.mcp.connect({ url: mcpUrl });
-const search = await mcp.web_search_exa({
+// Ad-hoc client: no mount, no project event. Tool names are methods on the
+// returned client, and connect() pipelines — one expression end to end.
+const search = await itx.mcp.connect({ url: mcpUrl }).web_search_exa({
   query: vars.query ?? "Cloudflare Workers RPC capabilities",
   numResults: 2,
 });
@@ -820,22 +913,65 @@ return {
 `.trim(),
   },
   {
+    id: "typed-capability-mount",
+    title: "Mount a capability with types, then discover and typecheck against it",
+    description:
+      "provideCapability's `types` field is a TypeScript declaration for the mounted value (first export = the mount's type; bare platform names like Stream resolve). It is validated at provide time, indexed by docs.search, returned by docs.get with the platform declarations it references, and joined into the scope's surface for docs.typecheck — so a script's typo against the mount is a compiler error before it costs a run.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+await itx.provideCapability({
+  expression: ["streams", ["get", "/"]],
+  instructions: "The project root stream, mounted at rootStream.",
+  path: ["rootStream"],
+  type: "itx-expression",
+  types: "export type RootStream = Stream;",
+});
+
+// The types metadata is part of the search haystack, so method names and
+// type text match too — pass MANY related words as always.
+const hits = await itx.docs.search({ q: "rootStream root stream mounted events" });
+const hit = hits.find((h) => h.kind === "capability" && h.name === "rootStream");
+
+// docs.get on a mount's dotted path returns its instructions and types plus
+// the platform declarations those types reference (Stream here — big enough
+// to need a raised maxTokens; the default 1500 would list it as frontier).
+const entry = await itx.docs.get({ name: "rootStream", maxTokens: 4000 });
+
+// docs.typecheck compiles a script against this scope's surface — platform
+// types AND typed mounts — without running it.
+const good = await itx.docs.typecheck({
+  code: "async (itx) => { return await itx.rootStream.getEvents(); }",
+});
+const typo = await itx.docs.typecheck({
+  code: "async (itx) => { return await itx.rootStream.appendd(); }",
+});
+
+return {
+  searchFoundMount: Boolean(hit),
+  entryIncludesStreamDeclaration: entry.includes("export interface Stream"),
+  goodScriptOk: good.ok,
+  typoCaught: typo.ok === false && typo.problems[0]?.includes("appendd"),
+};
+`.trim(),
+  },
+  {
     id: "connect-openapi-petstore",
+    e2eProven: false,
     title: "Connect OpenAPI Petstore, then mount it",
     description:
-      "itx.openapi.connect({ specUrl }) fetches an OpenAPI document through project egress and returns a client whose methods are the spec's flat operationIds. This calls Swagger Petstore's findPetsByStatus operation, then registers the same OpenAPI connection as a durable capability at itx.petstore. External service, so run it interactively.",
+      "itx.openapi.connect({ specUrl }) fetches an OpenAPI document through project egress and returns a client whose methods are the spec's flat operationIds. This calls Swagger Petstore's findPetsByStatus operation, then registers the same OpenAPI connection as a durable capability at itx.petstore. External service — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const petstoreSpecUrl =
   vars.specUrl ?? "https://petstore3.swagger.io/api/v3/openapi.json";
 
-// Await the OpenAPI client, then call operationIds as methods. This is the
-// same operation as:
-//   await (await itx.openapi.connect({ specUrl: petstoreSpecUrl }))
-//     .findPetsByStatus({ status: "available" })
-const petstore = await itx.openapi.connect({ specUrl: petstoreSpecUrl });
-const availablePets = await petstore.findPetsByStatus({ status: "available" });
+// operationIds are methods on the connected client, and connect() pipelines
+// — call straight through it in one expression.
+const availablePets = await itx.openapi
+  .connect({ specUrl: petstoreSpecUrl })
+  .findPetsByStatus({ status: "available" });
 
 // Mount the recipe when the client should become a named project capability.
 await itx.provideCapability({
@@ -861,9 +997,10 @@ return {
   },
   {
     id: "ai-models",
+    e2eProven: false,
     title: "Workers AI is a built-in capability",
     description:
-      "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one, toMarkdown() converts documents. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — run it interactively.",
+      "itx.ai proxies the platform's Workers AI binding: models() lists the catalog, run(model, body) executes one, toMarkdown() converts documents. Model availability and latency depend on the deployment's upstream account, so this entry is reading material for the matrix — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -877,9 +1014,10 @@ return {
   },
   {
     id: "github-list-repos",
+    e2eProven: false,
     title: "List repositories through the built-in GitHub integration",
     description:
-      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. The connection acts as a GitHub App installation, so repos are enumerated with rest.apps.listReposAccessibleToInstallation() — user-scoped ...ForAuthenticatedUser endpoints answer 403. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation, so run it interactively.',
+      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. The connection acts as a GitHub App installation, so repos are enumerated with rest.apps.listReposAccessibleToInstallation() — user-scoped ...ForAuthenticatedUser endpoints answer 403. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation — interactive-only.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -898,9 +1036,10 @@ return repos.data.repositories.map((repo) => ({ fullName: repo.full_name, update
   },
   {
     id: "github-read-file",
+    e2eProven: false,
     title: "Read a file from a repo through the built-in GitHub integration",
     description:
-      "Fetch file contents with Octokit's request() escape hatch: the raw media type returns the file body as a string (no base64 decode). rest.repos.getContent({ owner, repo, path }) is the JSON alternative — its data.content is base64. Needs a connected GitHub installation with access to the repo, so run it interactively.",
+      "Fetch file contents with Octokit's request() escape hatch: the raw media type returns the file body as a string (no base64 decode). rest.repos.getContent({ owner, repo, path }) is the JSON alternative — its data.content is base64. Needs a connected GitHub installation with access to the repo — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -921,9 +1060,10 @@ return { firstLines: String(readme.data).split("\\n").slice(0, 10), owner, repo 
   },
   {
     id: "github-backed-repo",
+    e2eProven: false,
     title: "Back a project repo with a real GitHub repository",
     description:
-      "linkGithub({ connection, owner, repo }) makes GitHub a mirror of a project repo: the GitHub repository is created (private) if the installation can create org repos, every later commit is mirrored automatically, and GitHub webhooks about that repository are cross-posted onto the repo's own stream. syncFromGithub() adopts commits made directly on GitHub (fast-forward only; force discards local-only commits). Needs a connected GitHub installation, so run it interactively.",
+      "linkGithub({ connection, owner, repo }) makes GitHub a mirror of a project repo: the GitHub repository is created (private) if the installation can create org repos, every later commit is mirrored automatically, and GitHub webhooks about that repository are cross-posted onto the repo's own stream. syncFromGithub() adopts commits made directly on GitHub (fast-forward only; force discards local-only commits). Needs a connected GitHub installation — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -950,25 +1090,20 @@ return { link, github: state.state.github, lastGithubPush: state.state.lastGithu
 `.trim(),
   },
   {
-    id: "stream-cross-post-rule",
-    title: "Cross-post matching events between streams with a rule",
+    id: "stream-cross-post",
+    title: "Cross-post matching events between streams",
     description:
-      'Streams have a built-in rule primitive: append events.iterate.com/stream/rule-configured with { ruleId, type: "cross-post", path, eventTypes, condition? } and every later matching event is copied to the target stream. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), rules never copy into a stream already on the chain (cycles are safe), and rule-removed deletes a rule.',
+      "stream.crossPostTo({ path, eventTypes, condition? }) copies every later matching event onto the target stream — sugar over a durable push subscription targeting the destination's acceptCrossPost sink, so copies are at-least-once. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), cross-posts never copy into a stream already on the chain (cycles are safe), and removeCrossPost({ path }) removes one.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 const source = itx.streams.get(vars.source ?? "/examples/cross-post/source");
 const target = itx.streams.get(vars.target ?? "/examples/cross-post/target");
 
-await source.append({
-  type: "events.iterate.com/stream/rule-configured",
-  payload: {
-    ruleId: "copy-important",
-    type: "cross-post",
-    path: vars.target ?? "/examples/cross-post/target",
-    eventTypes: ["events.iterate.example/note"],
-    condition: 'payload.importance = "high"', // JSONata over the event; optional
-  },
+await source.crossPostTo({
+  path: vars.target ?? "/examples/cross-post/target",
+  eventTypes: ["events.iterate.example/note"],
+  condition: 'payload.importance = "high"', // JSONata over the event; optional
 });
 
 await source.append(
@@ -986,9 +1121,10 @@ return { copied: copied.payload, provenance: copied.source?.crossPostedFrom };
   },
   {
     id: "gmail-search-inbox",
+    e2eProven: false,
     title: "Search the inbox through the built-in Gmail integration",
     description:
-      'itx.integrations.google["<connection>"].gmail.request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail, so run it interactively.',
+      'itx.integrations.google["<connection>"].gmail.request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail — interactive-only.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -1019,9 +1155,10 @@ return {
   },
   {
     id: "slack-post-message",
+    e2eProven: false,
     title: "Post a message through the built-in Slack integration",
     description:
-      'itx.integrations.slack["<connection>"] IS a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object — chat.postMessage({ channel, text }), conversations.list({ limit }), users.info({ user }). Posts to a real workspace, so run it interactively.',
+      'itx.integrations.slack["<connection>"] IS a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object — chat.postMessage({ channel, text }), conversations.list({ limit }), users.info({ user }). Posts to a real workspace — interactive-only.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -1041,9 +1178,10 @@ return { channel, ok: posted.ok, ts: posted.ts };
   },
   {
     id: "github-mcp-connect",
+    e2eProven: false,
     title: "GitHub's MCP server as a provided integration",
     description:
-      'The provided-integration lane, using GitHub\'s official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github["<connection>"], sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat, so run it interactively.',
+      'The provided-integration lane, using GitHub\'s official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github["<connection>"], sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat — interactive-only.',
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1067,8 +1205,7 @@ for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
 // enumerated by itx.integrations.list(). Mount at the PROJECT ROOT:
 // itx.integrations.* resolves through the project capability table, so an
 // own-scope itx.provideCapability from an agent is unreachable there.
-const rootHost = await itx.capabilityHosts.get("/");
-await rootHost.provideCapability({
+await itx.capabilityHosts.get("/").provideCapability({
   path: ["integrations", "github-mcp", connection],
   type: "itx-expression",
   instructions:
@@ -1092,6 +1229,7 @@ return { login: me?.login ?? me, listed: await itx.integrations.list() };
   },
   {
     id: "github-webhooks-project-worker",
+    e2eProven: false,
     title: "GitHub webhooks land on the project's own host",
     description:
       "Per-project webhook ingress already exists: every project host routes to the repo-backed worker.ts, whose fetch can append inbound deliveries to the connection's /integrations/github/{connection} journal — where a configured worker or agent subscriber picks them up. Point the GitHub repo/app webhook URL at https://<project-slug>.<base>/webhooks/github/<random-token> (the unguessable token in the path is the auth — worker code cannot hold the HMAC signing secret, by design). MUTATING: this REPLACES the seeded worker.ts (homepage + app router) wholesale — merge the route into your existing fetch instead if you have one. Run it interactively.",
@@ -1145,9 +1283,10 @@ return {
   },
   {
     id: "cf-ai-to-markdown",
+    e2eProven: false,
     title: "Convert a document to Markdown with Workers AI",
     description:
-      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). Call with no args for supported formats. Uses Cloudflare AI infrastructure, so run it interactively.",
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1158,10 +1297,34 @@ return { supported: supported.slice(0, 10), converted };
 `.trim(),
   },
   {
+    id: "ai-generate-text",
+    e2eProven: false,
+    title: "Generate or summarize text with a hosted LLM",
+    description:
+      "The most common model task: summarize, draft, classify, extract, rewrite, or answer questions by running a 'Text Generation' model through itx.ai.run() with { messages } (chat shape) and reading result.response. itx.ai.models() lists the catalog with prices. Uses paid/remote AI infrastructure — interactive-only.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+const text =
+  vars.text ?? "Cloudflare Workers run JavaScript close to users in hundreds of cities.";
+
+const result = await itx.ai.run("@cf/meta/llama-3.2-3b-instruct", {
+  messages: [
+    { role: "system", content: "Summarize the user's text in one short sentence." },
+    { role: "user", content: text },
+  ],
+});
+
+// Text models answer in result.response.
+return { summary: result.response };
+`.trim(),
+  },
+  {
     id: "ai-generate-image",
+    e2eProven: false,
     title: "Generate an image with a Workers AI model",
     description:
-      "Runs Cloudflare-hosted FLUX.2 [klein] 9B through itx.ai.run(). The model accepts multipart input and returns a base64 image in image. First-party docs: https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ . Uses paid/remote AI infrastructure, so run it interactively.",
+      "Generates an image with Cloudflare-hosted FLUX.2 [klein] 9B through itx.ai.run(). The model accepts multipart input and returns a base64 image in image. First-party docs: https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ . Uses paid/remote AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1187,9 +1350,10 @@ return {
   },
   {
     id: "ai-generate-audio",
+    e2eProven: false,
     title: "Generate speech audio with a Workers AI model",
     description:
-      "Runs xAI Grok TTS through itx.ai.run(). The model returns a hosted MP3 URL in result.audio. ElevenLabs is available through Cloudflare AI Gateway provider-native calls with an ElevenLabs token, not this zero-key env.AI.run path. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-tts/ . Uses paid/remote AI infrastructure, so run it interactively.",
+      "Speaks text with xAI Grok TTS via itx.ai.run(). The model returns a hosted MP3 URL in result.audio. ElevenLabs is available through Cloudflare AI Gateway provider-native calls with an ElevenLabs token, not this zero-key env.AI.run path. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-tts/ . Uses paid/remote AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1209,9 +1373,10 @@ return {
   },
   {
     id: "ai-transcribe-audio",
+    e2eProven: false,
     title: "Transcribe audio with a Workers AI model",
     description:
-      "Runs xAI Grok STT through itx.ai.run() against a small public MP3 URL and returns the transcription. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-stt/ . Uses paid/remote AI infrastructure and a public fetch, so run it interactively.",
+      "Transcribes audio with xAI Grok STT via itx.ai.run() against a small public MP3 URL and returns the transcription. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-stt/ . Uses paid/remote AI infrastructure and a public fetch — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1233,9 +1398,10 @@ return {
   },
   {
     id: "ai-generate-video",
+    e2eProven: false,
     title: "Generate video with a Workers AI model",
     description:
-      "Runs xAI Grok Imagine Video through itx.ai.run(). The model returns a hosted MP4 URL in result.video. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ . Uses paid/remote AI infrastructure, so run it interactively.",
+      "Runs xAI Grok Imagine Video through itx.ai.run(). The model returns a hosted MP4 URL in result.video. First-party docs: https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ . Uses paid/remote AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1255,23 +1421,25 @@ return {
   },
   {
     id: "cf-browser-markdown",
+    e2eProven: false,
     title: "Render a page to Markdown with Browser Run",
     description:
-      "Cloudflare Browser Run quick actions are available as itx.browser.quickAction() and itx.integrations.cf.browser.quickAction(). This renders a real page and converts it to Markdown. External service, so run it interactively.",
+      "Cloudflare Browser Run quick actions are available as itx.browser.quickAction() and itx.integrations.cf.browser.quickAction(). This renders a real page and converts it to Markdown. External service — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
-const resp = await itx.browser.quickAction("markdown", {
+const markdown = await itx.browser.quickAction("markdown", {
   url: "https://developers.cloudflare.com/browser-run/quick-actions/",
 });
-return await resp.json();
+return markdown.slice(0, 4_000);
 `.trim(),
   },
   {
     id: "cf-images-transform",
+    e2eProven: false,
     title: "Resize and convert an image with Cloudflare Images",
     description:
-      "Cloudflare Images transformations are available as itx.integrations.cf.images.transform({ image, transforms, output }). It accepts private streams too, not just public URLs. External fetch + Images binding, so run it interactively.",
+      "Cloudflare Images transformations are available as itx.integrations.cf.images.transform({ image, transforms, output }). It accepts private streams too, not just public URLs. External fetch + Images binding — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1289,9 +1457,10 @@ return {
   },
   {
     id: "cf-videos-frame",
+    e2eProven: false,
     title: "Extract a video frame with Media Transformations",
     description:
-      "Cloudflare Media Transformations are available as itx.integrations.cf.videos.transform({ video, transform, output }). Use output.mode = frame, spritesheet, audio, or video. External fetch + Media binding, so run it interactively.",
+      "Cloudflare Media Transformations are available as itx.integrations.cf.videos.transform({ video, transform, output }). Use output.mode = frame, spritesheet, audio, or video. External fetch + Media binding — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1309,9 +1478,10 @@ return {
   },
   {
     id: "email-send",
+    e2eProven: false,
     title: "Send an email from the project's address",
     description:
-      "itx.email.send() delivers real mail through Cloudflare Email Service from the project's own address (<slug>@<hostname base>); an explicit `from` must match it. Needs the deployment's sender domain onboarded for Email Sending, and it emails a real recipient — run it interactively with an address you own.",
+      "itx.email.send() delivers real mail through Cloudflare Email Service from the project's own address (<slug>@<hostname base>); an explicit `from` must match it. Needs the deployment's sender domain onboarded for Email Sending, and it emails a real recipient — interactive-only, with an address you own.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1327,7 +1497,7 @@ return receipt; // { from: "<slug>@<hostname base>", messageId }
     id: "scheduler-basics",
     title: "Schedule an itx script (set, list, cancel)",
     description:
-      "itx.scheduler runs itx scripts on a schedule: set() upserts by key with recurrence { cron, timezone? } | { every: seconds } | { at: ISO } | { in: seconds }, list() reads the reduced state, cancel(key) removes. The script is a STRING (no closures — bake values in) invoked later as fn(itx, schedule, trigger) with project-root authority, at least once per Trigger. Every set, trigger, and outcome is an event on the /scheduler/primary stream — the complete audit log.",
+      "itx.scheduler runs itx scripts on a schedule: set() upserts by key with recurrence { cron, timezone? } | { every: seconds } | { at: ISO } | { in: seconds }, list() reads the reduced state, cancel(key) removes. Use it to wait, delay, or defer work — do something later, tomorrow, at a specific time, or on a recurring cadence — and to give agents reminders. The script is a STRING (no closures — bake values in) invoked later as fn(itx, schedule, trigger) with project-root authority, at least once per Trigger. Every set, trigger, and outcome is an event on the /scheduler/primary stream — the complete audit log.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -1379,7 +1549,7 @@ const view = await itx.scheduler.set({
     // A fixed path = one long-lived agent accumulating context. For a fresh
     // agent per occurrence use a derived path instead, e.g.
     // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
-    await itx.agents.get("/agents/checkin").sendMessage(
+    await itx.agents.get("/agents/checkin").message(
       "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
     );
   }\`,

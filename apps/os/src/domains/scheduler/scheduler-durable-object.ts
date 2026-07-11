@@ -1,10 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-} from "../streams/stream-processor-host.ts";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ScheduleView } from "./types.ts";
@@ -48,6 +49,9 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   });
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: this.#stream,
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+    version: workerVersion(this.env),
   });
   readonly #schedulerProcessor = this.#processorHost.add(
     (deps) =>
@@ -63,13 +67,20 @@ export class SchedulerDurableObject extends DurableObject<Env> {
           waitUntil: (promise) => this.ctx.waitUntil(promise),
         }),
         now: () => Date.now(),
-        readAlarm: () => this.ctx.storage.getAlarm(),
-        repointAlarm: (atMs) =>
-          atMs === null ? this.ctx.storage.deleteAlarm() : this.ctx.storage.setAlarm(atMs),
+        // The DO alarm is SHARED with the processor host's keepalive, so the
+        // scheduler states its desire through a named slice and the host arms
+        // the earliest across all of them. Early fires (the keepalive's) run
+        // alarm() below, which is idempotent and re-arms this slice.
+        readAlarm: async () => this.#processorHost.getAlarmSlice("scheduler"),
+        repointAlarm: (atMs) => this.#processorHost.setAlarmSlice("scheduler", atMs),
       }),
   );
 
   async alarm(): Promise<void> {
+    // The shared alarm may be firing for the keepalive's slice, the
+    // scheduler's, or both — run both handlers; each is idempotent and
+    // re-derives its own next fire time.
+    await this.#processorHost.handleAlarm();
     try {
       await this.#processorHost.catchUp(PROCESSOR_SLUG);
       await this.#schedulerProcessor.triggerDue();
@@ -77,9 +88,10 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     } catch (error) {
       // Cloudflare retries a throwing alarm handler only a bounded number of
       // times; a prolonged Stream DO outage must not end with due schedules
-      // and no armed alarm. Arm a coarse fallback, then rethrow for the
-      // platform's own retry/observability.
-      await this.ctx.storage.setAlarm(Date.now() + 60_000);
+      // and no armed alarm. Arm a coarse fallback — AWAITED, so the alarm is
+      // durably armed before the rethrow surrenders to the platform's bounded
+      // retry/observability.
+      await this.#processorHost.setAlarmSlice("scheduler", Date.now() + 60_000);
       throw error;
     }
   }
@@ -117,8 +129,13 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     return this.#schedulerProcessor.listScheduleViews();
   }
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
+  }
+
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
   }
 
   get processor() {

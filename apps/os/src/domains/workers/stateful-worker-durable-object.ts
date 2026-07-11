@@ -94,6 +94,16 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       : await replayPath({ args, path, target });
   }
 
+  /** Abort the hosted facet and current outer Durable Object incarnation. */
+  kill(): void {
+    try {
+      this.ctx.facets.abort(FACET_NAME, `kill requested for ${this.ctx.id.name}`);
+    } catch (error) {
+      console.warn(`stateful worker facet kill skipped for ${this.ctx.id.name}`, error);
+    }
+    this.ctx.abort("kill requested");
+  }
+
   async #facet(ref: StatefulDynamicWorkerRef, buildBudgetMs?: number): Promise<unknown> {
     this.#assertRefMatchesName(ref);
 

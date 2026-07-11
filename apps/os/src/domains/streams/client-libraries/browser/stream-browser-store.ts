@@ -28,6 +28,32 @@ import {
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 const DEFAULT_STREAM_PROJECT_ID = "default";
+
+// --- Catch-up + flow-control tuning ----------------------------------------------------
+// The server's live subscription pump is deliberately one-directional: it never waits for
+// the client (see stream-subscribers.ts #open). That is perfect for the live tail and
+// fatal for a cold mirror thousands of events behind — the whole backlog gets blasted at
+// the socket faster than SQLite can apply it (measured: ~20k events/s delivered vs
+// ~1-4k events/s applied; a 1M-event replay ballooned a browser tab to >1.3GB of queued
+// batches and redelivered 3.26× through reconnect churn). So the leader PULLS history
+// with paged `getEvents` reads — client-paced, so backpressure is structural — and only
+// subscribes for the tail once it is within CATCHUP_THRESHOLD_EVENTS of the head.
+
+/** How far behind the server head a checkpoint may be before we page instead of subscribe. */
+const CATCHUP_THRESHOLD_EVENTS = 1_000;
+/** `getEvents` page size (its server-side maximum). */
+const CATCHUP_PAGE_LIMIT = 500;
+/**
+ * Live-tail safety valve: if the un-applied delivery backlog exceeds this many events, the
+ * subscription has outrun SQLite. Cut the connection (dropping the queued batches — the
+ * superseded-election guard already discards them) and reconnect; the fresh election
+ * pull-pages back to the head at the mirror's own pace. One control action when
+ * overwhelmed, zero protocol chatter in steady state — delivery frames stay one-way.
+ */
+const MAX_PENDING_INGEST_EVENTS = 20_000;
+
+/** Retries for `appendBatch` across reconnects/stream-DO restarts (~30s of backoff). */
+const APPEND_MAX_RETRIES = 8;
 export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /**
@@ -64,6 +90,9 @@ export type BrowserProcessorConfig = {
   /** Create the concrete processor once the browser runtime has a stream connection. */
   createProcessor(args: {
     stream: Stream;
+    /** The mirrored stream's identity — the StreamProcessor base deps' path/projectId. */
+    path: string;
+    projectId: string;
     sql: SqlClient;
     subscriptionKey: string;
   }): BrowserHostedProcessor;
@@ -76,16 +105,12 @@ type BrowserStreamConnectionConfig = {
 };
 
 /**
- * What `runtimeState()` returns on itx: `coreProcessorState` is
- * deliberately `unknown` on the public `Stream` capability (the full core state
- * is server internals). The runtime parses the slice it needs through
- * `parseBrowserCoreProcessorState`.
+ * The browser-hosted runtime only depends on the stream core state. The public
+ * `Stream.runtimeState()` also returns server-side runtime diagnostics, but
+ * browser processors should not type or depend on that debug payload.
  */
 export type StreamRuntimeState = {
   coreProcessorState: unknown;
-  runtime: {
-    connections: Record<string, unknown>;
-  };
 };
 
 /**
@@ -126,11 +151,7 @@ export type StreamBrowserStore = Disposable & {
   getProcessorRuntimeState(args: {
     subscriptionKey: SubscriptionKey;
   }): StreamRpcResult<ProcessorRuntimeState | null>;
-  /**
-   * Mirror reset is local-only on itx: the `Stream` capability has
-   * no `kill()`/`reset()`, so this clears the local tables + checkpoint and
-   * reconnects, letting reconcile + replay rebuild the mirror from the server.
-   */
+  /** Clear local tables + checkpoint and reconnect, letting reconcile + replay rebuild the mirror from the server. */
   clearLocalDatabase(): Promise<void>;
   /**
    * On-demand delivery check for when the caller knows the server is about to
@@ -259,6 +280,10 @@ function createStreamRuntime(
   let readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   // Self-heal backoff for browser-side ingest failures (C1).
   let ingestFailureCount = 0;
+  // Events delivered by the live subscription but not yet applied to SQLite — the
+  // in-memory backlog the MAX_PENDING_INGEST_EVENTS valve bounds. Reset whenever the
+  // connection is replaced (the superseded-election guard discards the queue with it).
+  let pendingIngestEvents = 0;
   // The server incarnation this connection reconciled against, how far deliveries have
   // progressed, and a counter bumped every time a delivery ARRIVES (before the possibly-slow
   // ingest). The liveness probe compares these against fresh runtimeState() so an
@@ -394,6 +419,7 @@ function createStreamRuntime(
   function scheduleReconnect(connectionError: string, delayMs: number) {
     if (disposed) return;
     connectionEpoch += 1;
+    pendingIngestEvents = 0;
     stopLivenessProbe();
     stopSubscriptionElection();
     stream?.[Symbol.dispose]();
@@ -452,11 +478,15 @@ function createStreamRuntime(
   // core state's per-DO-restart `incarnationId`. If our recorded incarnation differs from
   // the server's, the offset comparison is meaningless — rebuild the mirror. Otherwise fall
   // back to the offset check: discard when the server has fewer committed events than we do.
-  async function reconcileLocalMirrorWithServer(rpc: BrowserStreamClient) {
+  async function reconcileLocalMirrorWithServer(
+    rpc: BrowserStreamClient,
+  ): Promise<{ serverMaxOffset: number }> {
     // Deliberately a throwaway instance: processors memoize their checkpoint on
     // first read, so the real instance must be created after any discard below.
     const processor = args.createProcessor({
       stream: rpc,
+      path: args.streamPath,
+      projectId: args.projectId,
       sql,
       subscriptionKey,
     });
@@ -464,6 +494,7 @@ function createStreamRuntime(
     const localMaxOffset = checkpoint.offset;
     const { coreProcessorState: rawCoreProcessorState } = await rpc.runtimeState();
     const coreProcessorState = parseBrowserCoreProcessorState(rawCoreProcessorState);
+    const reconciled = { serverMaxOffset: coreProcessorState.maxOffset };
     const serverIncarnation = coreProcessorState.createdAt;
     reconciledIncarnation = serverIncarnation;
     const localIncarnation = await streamDatabase.readMirrorIncarnation(slug);
@@ -471,7 +502,17 @@ function createStreamRuntime(
       ? await streamDatabase.readMirrorSchemaVersion(slug)
       : schemaVersion;
 
-    if (localSchemaVersion !== schemaVersion) {
+    // A truly fresh mirror — no schema version ever recorded AND nothing
+    // checkpointed — must never take the rebuild lane: "undefined ≠ current"
+    // is not a schema CHANGE, and discarding would VACUUM an empty database
+    // on every first open (OPFS VACUUM under a sibling connection's open
+    // handles is exactly the contention that wedges the shared per-path
+    // file). A fresh checkpoint with a DIFFERENT recorded version still
+    // rebuilds: the slug's tables are shared across subscription keys, so an
+    // older subscription may have populated them under the old schema.
+    const trulyFreshMirror = localMaxOffset <= 0 && localSchemaVersion === undefined;
+
+    if (!trulyFreshMirror && localSchemaVersion !== schemaVersion) {
       console.warn(
         `[stream ${args.streamPath} ${slug}] Local ${slug} schema version changed; rebuilding mirror.`,
         { localSchemaVersion, schemaVersion },
@@ -479,16 +520,17 @@ function createStreamRuntime(
       await discardLocalMirror();
       await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
       await recordServerIncarnation(serverIncarnation);
-      return;
+      return reconciled;
     }
 
     if (localMaxOffset <= 0) {
-      // Fresh mirror: nothing to discard, just record which incarnation we are tracking.
+      // Fresh mirror: nothing to discard, just record which schema version and
+      // incarnation we are tracking.
       if (args.resetOnSchemaVersionChange) {
         await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
       }
       await recordServerIncarnation(serverIncarnation);
-      return;
+      return reconciled;
     }
 
     if (localIncarnation !== serverIncarnation) {
@@ -502,7 +544,7 @@ function createStreamRuntime(
       );
       await discardLocalMirror();
       await recordServerIncarnation(serverIncarnation);
-      return;
+      return reconciled;
     }
 
     if (coreProcessorState.maxOffset < localMaxOffset) {
@@ -517,6 +559,7 @@ function createStreamRuntime(
       await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
     }
     await recordServerIncarnation(serverIncarnation);
+    return reconciled;
   }
 
   function connect() {
@@ -621,13 +664,18 @@ function createStreamRuntime(
         if (!ownsRuntime()) return undefined;
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
-        await withDeadline("reconcile", reconcileLocalMirrorWithServer(election.connection));
+        const { serverMaxOffset } = await withDeadline(
+          "reconcile",
+          reconcileLocalMirrorWithServer(election.connection),
+        );
         // Re-check after every await: a step that settles late (after this
         // election was superseded) must not write runtime-wide fields like
         // lastDeliveredOffset over the current election's values.
         if (!ownsRuntime()) return undefined;
         const processor = args.createProcessor({
           stream: election.connection,
+          path: args.streamPath,
+          projectId: args.projectId,
           sql,
           subscriptionKey,
         });
@@ -636,16 +684,67 @@ function createStreamRuntime(
         // subscription, no probe, and no error.
         const checkpoint = await withDeadline("checkpoint read", processor.snapshot());
         if (!ownsRuntime()) return undefined;
-        lastDeliveredOffset = checkpoint.offset;
+
+        // Far behind the head? PULL history with paged reads before opening the
+        // one-directional subscription (see the flow-control block up top). Each
+        // page is fetched, applied, and checkpointed before the next is
+        // requested, so the server can never outrun the mirror here — and a
+        // page failure just reconnects and resumes from the checkpoint.
+        let catchUpOffset = checkpoint.offset;
+        let serverHead = serverMaxOffset;
+        if (serverHead - catchUpOffset > CATCHUP_THRESHOLD_EVENTS) {
+          console.info(
+            `[stream ${args.streamPath} ${slug}] mirror is ${serverHead - catchUpOffset} events behind; pull-paging before subscribing`,
+          );
+          for (;;) {
+            if (serverHead - catchUpOffset <= CATCHUP_THRESHOLD_EVENTS) {
+              // The head we were chasing was captured before these pages
+              // applied. A stream that kept appending meanwhile could be far
+              // ahead of it — re-read the live head before trusting the exit,
+              // or the subscription would dump the accumulated gap after all.
+              const { coreProcessorState: rawHeadState } = await withDeadline(
+                "catch-up head re-read",
+                election.connection.runtimeState(),
+              );
+              if (!ownsRuntime()) return undefined;
+              serverHead = parseBrowserCoreProcessorState(rawHeadState).maxOffset;
+              if (serverHead - catchUpOffset <= CATCHUP_THRESHOLD_EVENTS) break;
+            }
+            const page = (await withDeadline(
+              "catch-up page read",
+              election.connection.getEvents({
+                afterOffset: catchUpOffset,
+                // The mirror stores ephemeral rows too (the subscription lane
+                // delivers them); a default read here would skip every chunk
+                // run — losing streamed text the mirror promises to keep and
+                // false-firing the raw-events gap detector on each one.
+                includeEphemeral: true,
+                limit: CATCHUP_PAGE_LIMIT,
+              }),
+            )) as StreamEvent[];
+            if (!ownsRuntime()) return undefined;
+            if (page.length === 0) break; // server truth moved (reset?); subscribe reconciles
+            deliveryArrivals += 1;
+            lastBatchEvents = page.length;
+            totalDeliveredEvents += page.length;
+            await processor.ingest({ events: page, streamMaxOffset: serverHead });
+            if (!ownsRuntime()) return undefined;
+            catchUpOffset = page.at(-1)!.offset;
+            lastDeliveredOffset = catchUpOffset;
+          }
+        }
+        lastDeliveredOffset = catchUpOffset;
         return {
-          replayAfterOffset: checkpoint.offset,
+          replayAfterOffset: catchUpOffset,
           subscriber: {
             description: "browser",
             processor: {
               announcement: announceContract(processor.contract),
-              getRuntimeState: () => processor.getRuntimeState(),
             },
           },
+          // The live capability rides as a SIBLING of the serializable
+          // descriptor — the same position the wake handshake gives it.
+          getRuntimeState: () => processor.getRuntimeState(),
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
@@ -664,6 +763,7 @@ function createStreamRuntime(
             processEventBatch: ready.processEventBatch,
             replayAfterOffset: ready.replayAfterOffset,
             subscriber: ready.subscriber,
+            getRuntimeState: ready.getRuntimeState,
           }),
         );
       })
@@ -693,10 +793,16 @@ function createStreamRuntime(
       });
   }
 
+  // Batches are applied strictly one at a time (see ingestWithSelfHeal). The
+  // chain is runtime-wide: batches from a superseded election no-op inside
+  // their slot via the ownership re-check, so they can never block or
+  // interleave with the current election's.
+  let ingestChain: Promise<void> = Promise.resolve();
+
   // Browsers are an inbound (fire-and-forget) subscriber: the server advances its delivery
   // cursor regardless of whether our ingest succeeded and never closes the connection on an
-  // ingest error. So if applying a batch throws (a transient OPFS/SQLite error, or the
-  // continuity RAISE(ABORT) in browser-raw-events), we must self-heal — otherwise the mirror
+  // ingest error. So if applying a batch throws (a transient OPFS/SQLite error, or a
+  // RAISE(ABORT) from the mirror trigger: replay conflict / out-of-order insert), we must self-heal — otherwise the mirror
   // silently desyncs forever. We resubscribe from the last successfully-applied checkpoint
   // (the next election re-reads the processor's persisted offset into `replayAfterOffset`,
   // so the server replays from there), with bounded exponential backoff so repeated failures
@@ -711,6 +817,20 @@ function createStreamRuntime(
     // checkpoint of) the current election's processor on the same tables — and
     // it must not count as delivery progress either (see below).
     if (disposed || stream !== election.connection) return;
+    // Live-tail safety valve (see MAX_PENDING_INGEST_EVENTS): the server pump
+    // is one-directional and can outrun SQLite; queued-but-unapplied events
+    // otherwise accumulate in JS memory without bound. Cutting the connection
+    // discards the queue (every queued ingest bails on the superseded-election
+    // guard above) and the fresh election pull-pages from the checkpoint.
+    pendingIngestEvents += batch.events.length;
+    if (pendingIngestEvents > MAX_PENDING_INGEST_EVENTS) {
+      pendingIngestEvents = 0;
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] delivery outran the local mirror (> ${MAX_PENDING_INGEST_EVENTS} events queued); reconnecting to catch up at the mirror's pace`,
+      );
+      scheduleReconnect("delivery outran the local mirror", 0);
+      return;
+    }
     // Count the arrival HERE, for the current election only, and BEFORE the
     // (possibly slow) ingest await: the liveness probe reads a bumped counter
     // as "deliveries are flowing", so a long ingest must not look stalled,
@@ -718,10 +838,24 @@ function createStreamRuntime(
     deliveryArrivals += 1;
     lastBatchEvents = batch.events.length;
     totalDeliveredEvents += batch.events.length;
-    try {
+    // Serialize the apply and RE-CHECK ownership inside the slot. The entry
+    // guard above is not enough: two rapid batches both pass it, then batch
+    // A's failure schedules a reconnect while batch B already holds the next
+    // slot in the processor's own chain — B would apply over the failure,
+    // advancing the checkpoint PAST A's rows. The relaxed (gap-tolerant)
+    // mirror trigger accepts that hole, so nothing would ever repair it; the
+    // strict trigger used to fail B loudly by accident. `scheduleReconnect`
+    // clears `stream` synchronously, so a re-check inside the slot sees it.
+    const run = ingestChain.then(async () => {
+      if (disposed || stream !== election.connection) return;
       await processor.ingest(batch);
+      pendingIngestEvents = Math.max(0, pendingIngestEvents - batch.events.length);
       ingestFailureCount = 0;
       lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.streamMaxOffset);
+    });
+    ingestChain = run.catch(() => undefined);
+    try {
+      await run;
     } catch (error) {
       // Only the connection that is still current self-heals; a stale callback bails.
       if (disposed || stream !== election.connection) throw error;
@@ -924,6 +1058,7 @@ function createStreamRuntime(
     totalDeliveredEvents,
     lastBatchEvents,
     ingestFailures,
+    pendingIngestEvents,
     reconciledIncarnation,
     started,
     disposed,
@@ -968,9 +1103,33 @@ function createStreamRuntime(
   return {
     streamDatabase,
     appendBatch(appendArgs) {
-      // The itx Stream capability appends variadically; the batch
-      // arg shape is kept for consumers of the store.
-      return callWhenReady((rpc) => rpc.append(...appendArgs.events) as Promise<StreamEvent[]>);
+      // The itx Stream capability appends variadically; the batch arg shape is
+      // kept for consumers of the store.
+      //
+      // Durability: every event gets an idempotency key (unless the caller set
+      // one), which makes retrying safe — a batch that COMMITTED but lost its
+      // ack (socket died, DO evicted/killed/overloaded mid-response) returns
+      // the same committed events on retry instead of appending duplicates.
+      // Combined with callWhenReady's reconnect-wait, an appendBatch caller
+      // survives a stream DO eviction mid-blast with zero loss and zero dupes.
+      const events = appendArgs.events.map((event) =>
+        event.idempotencyKey === undefined
+          ? { ...event, idempotencyKey: crypto.randomUUID() }
+          : event,
+      );
+      const promise = (async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await callWhenReady((rpc) => rpc.append(...events) as Promise<StreamEvent[]>);
+          } catch (error) {
+            if (disposed || attempt >= APPEND_MAX_RETRIES) throw error;
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.min(5_000, 250 * 2 ** attempt)),
+            );
+          }
+        }
+      })();
+      return Object.assign(promise, { [Symbol.dispose]() {} });
     },
     runtimeState() {
       return callWhenReady((rpc) => rpc.runtimeState() as Promise<StreamRuntimeState>);

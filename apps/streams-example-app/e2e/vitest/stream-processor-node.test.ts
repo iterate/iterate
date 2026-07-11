@@ -65,6 +65,7 @@ class EchoExampleProcessor extends StreamProcessor<EchoExampleContract> {
 // host, boiled down to what one processor on one connection needs.
 async function hostEcho(args: {
   stream: Stream;
+  path: string;
   subscriptionKey: string;
   storage: {
     load: () => StreamProcessorSnapshot<EchoExampleState> | undefined;
@@ -73,6 +74,8 @@ async function hostEcho(args: {
 }) {
   const processor = new EchoExampleProcessor({
     stream: args.stream,
+    path: args.path,
+    projectId: null,
     readState: args.storage.load,
     writeState: args.storage.save,
   });
@@ -98,6 +101,7 @@ describe("node-hosted stream processor (e2e)", () => {
     let saved: StreamProcessorSnapshot<EchoExampleState> | undefined;
     const { handle } = await hostEcho({
       stream,
+      path,
       subscriptionKey: "node-echo",
       storage: { load: () => saved, save: (snapshot) => void (saved = snapshot) },
     });
@@ -141,6 +145,7 @@ describe("node-hosted stream processor (e2e)", () => {
       const stream = connection.stream as unknown as Stream;
       const { handle } = await hostEcho({
         stream,
+        path,
         subscriptionKey: "resume",
         storage,
       });
@@ -166,6 +171,7 @@ describe("node-hosted stream processor (e2e)", () => {
       const stream = connection.stream as unknown as Stream;
       const { handle } = await hostEcho({
         stream,
+        path,
         subscriptionKey: "resume",
         storage,
       });

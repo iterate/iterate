@@ -1,19 +1,22 @@
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { PROJECT_REPO_PATH } from "../repos/utils.ts";
-import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
+import { CONFIG_REPO_PATH } from "../repos/utils.ts";
+import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
+import { childAgentParentPath } from "../../lib/agent-paths.ts";
 import type { StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { CloudflareAiProcessorContract } from "../agents/cloudflare-ai-processor-contract.ts";
-import { OpenAiWsProcessorContract } from "../agents/openai-ws-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
-import { slackConnectionFromAgentPath } from "../integrations/utils.ts";
+import { TelegramAgentProcessorContract } from "../integrations/telegram-agent-processor-contract.ts";
+import {
+  slackConnectionFromAgentPath,
+  telegramConnectionFromAgentPath,
+} from "../integrations/utils.ts";
 import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
@@ -75,6 +78,7 @@ export class ProjectProcessor extends StreamProcessor<
     event,
     state,
     append,
+    appendTo,
   }: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]): undefined {
     // Project worker delivery is NOT here: every project stream (this one
     // included) pumps its own events into the worker's `processEventBatch`
@@ -89,16 +93,17 @@ export class ProjectProcessor extends StreamProcessor<
         }
         blockProcessorWhile(async () => {
           const timing = { projectId: this.deps.itx.projectId };
-          // The root saga and the email router arm in parallel — each is one
-          // batched append, cutting the create round-trips (see
-          // tasks/os-cold-create-latency.md). The Slack webhook router is NOT
-          // armed here: connection streams (/integrations/slack/{connection})
-          // are born at connect time by recordSlackConnection. The onboarding
-          // agent is deliberately NOT born here: its policy comes from the
-          // project worker, so birth waits for the repo-created lane below —
-          // after the worker readiness probe — where the pump delivers the
-          // birth announcement to an already-built worker and policy lands
-          // immediately instead of opening a stock-defaults window.
+          // The root saga, the config repo, and the email router arm in
+          // parallel — each is one batched append, cutting the create
+          // round-trips (see tasks/os-cold-create-latency.md). The Slack
+          // webhook router is NOT armed here: connection streams
+          // (/integrations/slack/{connection}) are born at connect time by
+          // recordSlackConnection. The onboarding agent is not born during
+          // bootstrap AT ALL: it births lazily on first use — opening its
+          // chat page (or any first append to its stream) creates the stream,
+          // and birth mechanics + policy follow through the ordinary
+          // child-stream-created lanes. Projects whose onboarding chat is
+          // never opened (CLI creates, test fixtures) never pay an LLM turn.
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
@@ -107,14 +112,48 @@ export class ProjectProcessor extends StreamProcessor<
                     projectId: this.deps.itx.projectId,
                     path: "/",
                   }),
+                  processor: ["capabilityHosts", ["get", "/"], "processor"],
                   processorSlug: CapabilityHostProcessorContract.slug,
-                  subscriberType: "capability-host",
+                }),
+              ),
+            ),
+            // The config repo is an ordinary repo on its own stream. Its
+            // birth batch is: the repo processor subscription, the
+            // cross-post rule that copies EVERY config-repo event onto the
+            // project stream `/` (deliver: "all", so the full history —
+            // including the `repo/created` this saga's next lane waits for —
+            // arrives with provenance), and the create request itself.
+            timedStep("create-timing", timing, "config-repo-append", () =>
+              appendTo(
+                CONFIG_REPO_PATH,
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: CONFIG_REPO_PATH,
+                  }),
+                  idempotencyKey: `repo-processor-subscription:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
+                  processor: ["repos", ["get", CONFIG_REPO_PATH], "processor"],
+                  processorSlug: RepoProcessorContract.slug,
                 }),
                 {
-                  type: "events.iterate.com/repo/create-requested",
-                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${PROJECT_REPO_PATH}`,
+                  type: "events.iterate.com/stream/subscription-configured",
+                  idempotencyKey: `config-repo-cross-post:${this.deps.itx.projectId}`,
                   payload: {
-                    path: PROJECT_REPO_PATH,
+                    // The key crossPostTo would pick for destination "/", so
+                    // `removeCrossPost({ path: "/" })` can manage this rule.
+                    subscriptionKey: "cross-post:/",
+                    delivery: {
+                      mode: "push",
+                      expression: ["streams", ["get", "/"], "acceptCrossPost"],
+                    },
+                    deliver: "all",
+                  },
+                },
+                {
+                  type: "events.iterate.com/repo/create-requested",
+                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
+                  payload: {
+                    path: CONFIG_REPO_PATH,
                     projectId: this.deps.itx.projectId,
                   },
                 },
@@ -128,15 +167,16 @@ export class ProjectProcessor extends StreamProcessor<
             // so the owner can email their project from day one without any
             // config.
             timedStep("create-timing", timing, "email-router-append", () =>
-              this.deps.itx.streams.get(EMAIL_INTEGRATION_STREAM_PATH).append(
+              appendTo(
+                EMAIL_INTEGRATION_STREAM_PATH,
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
                     projectId: this.deps.itx.projectId,
                     path: EMAIL_INTEGRATION_STREAM_PATH,
                   }),
                   idempotencyKey: `email-router-subscription:${this.deps.itx.projectId}`,
+                  processor: ["email", "processor"],
                   processorSlug: EmailProcessorContract.slug,
-                  subscriberType: "project",
                 }),
                 ...(event.payload.creatorEmail === undefined
                   ? []
@@ -174,54 +214,67 @@ export class ProjectProcessor extends StreamProcessor<
             // A scheduler stream's birth certificate is just its processor
             // subscription: the Scheduler Durable Object reduces schedules and
             // owns the alarm from the first delivered batch onward.
-            await this.deps.itx.streams.get(childPath).append(
+            await appendTo(
+              childPath,
               buildDurableObjectProcessorSubscriptionConfiguredEvent({
                 durableObjectName,
                 idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SchedulerProcessorContract.slug}`,
+                processor: ["schedulers", ["get", childPath], "processor"],
                 processorSlug: SchedulerProcessorContract.slug,
-                subscriberType: "scheduler",
               }),
             );
             return;
           }
           if (childPath.startsWith("/agents/")) {
             // MECHANICS only: the processor subscriptions that make a stream
-            // an agent. POLICY — system prompt, model/provider, capability
+            // an agent. POLICY — system prompt, model, capability
             // mounts, boot context — is appended by the PROJECT WORKER, which
             // sees this same child-stream-created event through its stream
             // delivery and applies itx.agents.defaults (see
-            // project-repo-template/worker.ts and agents/agent-defaults.ts).
-            // Slack-agent wiring requires the full thread shape — the
-            // connection segment is what replies authenticate with.
-            const isSlack = slackConnectionFromAgentPath(childPath) !== null;
-            await this.deps.itx.streams.get(childPath).append(
-              // Identical idempotency keys to the create-time onboarding
-              // subscriptions, so whichever lane runs second dedupes cleanly.
+            // config-repo-template/worker.ts and agents/agent-defaults.ts).
+            // Slack/Telegram-agent wiring requires the full routed-path shape
+            // — the connection segment is what replies authenticate with.
+            // Child-agent paths are checked FIRST: the routed-agent predicates
+            // are shape-loose (Slack matches any >=6-segment path under its
+            // connection, email matches by prefix), and a child under a routed
+            // agent must not inherit its transcriber.
+            const isChildAgent = childAgentParentPath(childPath) !== null;
+            const isSlack = !isChildAgent && slackConnectionFromAgentPath(childPath) !== null;
+            const isTelegram = !isChildAgent && telegramConnectionFromAgentPath(childPath) !== null;
+            await appendTo(
+              childPath,
+              // Stable idempotency keys: retried deliveries and re-created
+              // child streams collapse into one durable subscription set.
               ...agentSubscriptionEvents({
                 childPath,
-                email: isEmailAgentPath(childPath),
-                githubPr: isPrAgentPath(childPath),
+                email: !isChildAgent && isEmailAgentPath(childPath),
+                githubPr: !isChildAgent && isPrAgentPath(childPath),
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
+                telegram: isTelegram,
               }),
             );
             return;
           }
 
-          await this.deps.itx.streams.get(childPath).append(
+          await appendTo(
+            childPath,
             buildDurableObjectProcessorSubscriptionConfiguredEvent({
               durableObjectName,
+              processor: ["secrets", ["get", childPath], "processor"],
               processorSlug: SecretProcessorContract.slug,
-              subscriberType: "secret",
             }),
           );
         });
         return;
       }
       case "events.iterate.com/repo/created": {
+        // Arrives as a cross-posted copy: the config repo commits its facts
+        // on its own stream, and the `cross-post:/` rule armed at create
+        // copies them here — this saga only ever reacts to events ON `/`.
         if (
           event.payload.projectId !== this.deps.itx.projectId ||
-          event.payload.path !== PROJECT_REPO_PATH ||
+          event.payload.path !== CONFIG_REPO_PATH ||
           state.created ||
           state.createRequest === null
         ) {
@@ -235,18 +288,9 @@ export class ProjectProcessor extends StreamProcessor<
           await timedStep("create-timing", timing, "project-created-append", () =>
             append({
               type: "events.iterate.com/project/created",
-              idempotencyKey: `project-created:${this.deps.itx.projectId}`,
+              idempotencyKey: this.idempotencyKey("created"),
               payload: state.createRequest!,
             }),
-          );
-          // THE onboarding-agent birth, deliberately after the worker probe:
-          // the pump delivers the birth announcement to an already-built
-          // worker, so the policy (prompt, provider, kickoff) lands
-          // immediately — no window where the agent runs on stock defaults.
-          await timedStep("create-timing", timing, "onboarding-agent-birth", () =>
-            this.deps.itx.streams
-              .get(ONBOARDING_AGENT_PATH)
-              .append(...onboardingAgentStartEvents(this.deps)),
           );
         });
         return;
@@ -259,6 +303,7 @@ export class ProjectProcessor extends StreamProcessor<
             blockProcessorWhile,
             customDomains: this.deps.customDomains,
             event,
+            idempotencyKey: (key) => this.idempotencyKey(key, event),
             projectId: this.deps.itx.projectId,
             state,
           })
@@ -270,21 +315,10 @@ export class ProjectProcessor extends StreamProcessor<
   }
 }
 
-function onboardingAgentStartEvents(deps: { itx: Pick<ProjectRpcTarget, "projectId"> }) {
-  // Mechanics only — the onboarding agent's policy (prompt, provider, the
-  // "Start onboarding now" kickoff input) is appended by the project worker
-  // once it first builds, via the same child-stream-created reaction as every
-  // other agent. Until then the agent answers with the stock defaults.
-  return agentSubscriptionEvents({
-    childPath: ONBOARDING_AGENT_PATH,
-    projectId: deps.itx.projectId,
-  });
-}
-
 /**
  * The MECHANICS an agent stream is born with: the processor subscriptions
- * that give it an LLM loop, a capability host, and (for Slack/email threads)
- * its domain transcriber. Policy — prompt, model, mounts, boot context —
+ * that give it an LLM loop, a capability host, and (for Slack/Telegram/email
+ * threads) its domain transcriber. Policy — prompt, model, mounts, boot context —
  * comes from the project worker via itx.agents.defaults
  * (agents/agent-defaults.ts).
  */
@@ -294,26 +328,28 @@ function agentSubscriptionEvents(input: {
   githubPr?: boolean;
   projectId: string;
   slack?: boolean;
+  telegram?: boolean;
 }) {
   const durableObjectName = DurableObjectNameCodec.stringify({
     projectId: input.projectId,
     path: input.childPath,
   });
-  const subscription = (processorSlug: string, subscriberType: "agent" | "capability-host") =>
+  const subscription = (processorSlug: string, hostKind: "agent" | "capability-host") =>
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
+      processor:
+        hostKind === "agent"
+          ? ["agents", ["get", input.childPath], "processor"]
+          : ["capabilityHosts", ["get", input.childPath], "processor"],
       processorSlug,
-      subscriberType,
     });
   return [
+    // One agent processor owns history, scheduling, and the Cloudflare AI call.
     subscription(AgentProcessorContract.slug, "agent"),
-    // Both provider processors subscribe; only the one matching the agent's
-    // selected llmProvider answers llm-request-requested events.
-    subscription(CloudflareAiProcessorContract.slug, "agent"),
-    subscription(OpenAiWsProcessorContract.slug, "agent"),
     subscription(CapabilityHostProcessorContract.slug, "capability-host"),
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
+    ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug, "agent")] : []),
     ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
     ...(input.githubPr ? [subscription(PrAgentProcessorContract.slug, "agent")] : []),
   ];
@@ -331,10 +367,7 @@ function recordStream<
   return {
     ...state,
     agents: path.startsWith("/agents/") ? addStreamListItem(state.agents, item) : state.agents,
-    repos:
-      path === PROJECT_REPO_PATH || path.startsWith("/repos/")
-        ? addStreamListItem(state.repos, item)
-        : state.repos,
+    repos: path.startsWith("/repos/") ? addStreamListItem(state.repos, item) : state.repos,
     secrets: path.startsWith("/secrets/") ? addStreamListItem(state.secrets, item) : state.secrets,
     streams: addStreamListItem(state.streams, item),
   };

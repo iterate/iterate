@@ -47,14 +47,14 @@ Print conversation: `user-message-received` payload.content vs `web-message-sent
 
 ## 3. Repro test — in-memory, not e2e
 
-Real LLM slow/expensive/flaky. Bug almost always deterministic at transport boundary -> in-memory test: real processors + real reducers, fake transport, no deployment, no real LLM. Harness lives in `apps/os/src/domains/agents/test-helpers.ts`: `MemoryStream`, `deliverNewEvents`, `fakeResponsesWebSocket` (openai-ws). Fake `ai.run` for cloudflare-ai — see `agent-processors.test.ts` for usage of all.
+Real LLM slow/expensive/flaky. Bug almost always deterministic at transport boundary -> in-memory test: real processors + real reducers, fake transport, no deployment, no real LLM. Harness lives in `apps/os/src/domains/agents/test-helpers.ts`: `MemoryStream`, `deliverNewEvents`; fake the `ai` dep (`env.AI.run`) on `AgentProcessor` — see `agent-processors.test.ts` for usage of all.
 
 Test file: `apps/os/src/domains/agents/stream-repros/<slug>-<id>-<complaint>.test.ts`. Fixture JSON next to it.
 
 **Fixture shrink at dump time** (raw feed can be MBs — 9.9MB seen). Allowed, note each in test file:
 
-- Drop event types no processor under test consumes (`openai-ws/llm-response-chunk` = bulk).
-- Strip bulky payload fields no reducer reads (`result.rawResponse` on both `llm-request-completed` types).
+- Drop event types no processor under test consumes (`agent/llm-response-chunk` = bulk; legacy journals: `openai-ws/llm-response-chunk`).
+- Strip bulky payload fields no reducer reads (`result.rawResponse` on `llm-request-completed`).
 - Keep offsets + everything else verbatim. Fidelity first; minimisation is step 6, not now.
 
 **Seed = come into chat halfway.** Push fixture events directly into `stream.events` (keep original offsets). Prime checkpoint = DO-restart semantics: reduced state covers history, side effects only for new events:

@@ -118,9 +118,11 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   port-agnostic loopback client above.
 - Sign in as an agent/test: mint it (next section). Never script the OAuth
   dance.
-- Test emails: any `nustom.com` address ending its local part with `+test`
-  (e.g. `alice+test@nustom.com`) gets the fixed OTP `424242` in every auth
-  stage and sends no real email.
+- Test emails: outside production, any `nustom.com` address ending its local
+  part with `+test` (e.g. `alice+test@nustom.com`) gets the fixed OTP `424242`
+  and sends no real email. This is controlled by
+  `APP_CONFIG_FIXED_TEST_OTP_ENABLED`; production sets it false and always sends
+  a real email OTP.
 
 The dev-global auth deploys from `main` (alongside prd auth) and reseeds its
 OAuth clients from Doppler on every deploy — see
@@ -178,7 +180,7 @@ The working recipe to browse OS as a minted identity:
 # 1. create a project via the operator path (admin API secret)
 (cd apps/os && doppler run --project os --config dev -- pnpm cli itx run \
   --base-url http://localhost:<port> \
-  --eval 'const p = await itx.projects.create({ slug: "my-proj" }); return await p.__describe()' # note the returned projectId
+  --eval 'return await itx.projects.create({ slug: "my-proj" }).__describe()' # note the returned projectId
 )
 
 # 2. mint with BOTH org and project claims (the org can be any made-up id —
@@ -199,7 +201,7 @@ instead of opening it.
 
 A signed-in _human_ never hits this: the real OAuth flow walks you through
 creating an org + project on first sign-in (`+test@nustom.com` test emails with
-OTP `424242` work for that flow too, fully headless).
+OTP `424242` work for that flow too outside production, fully headless).
 
 The `browserSignInUrl` embeds the (short-lived) tokens as query params — treat
 it as a secret: it can appear in browser history and edge request logs, so

@@ -79,6 +79,30 @@ export const AppConfig = z.object({
     })
     .optional(),
   openAiApiKey: redacted(z.string().trim().min(1)),
+  /**
+   * How agent LLM turns travel through the Cloudflare AI Gateway — see
+   * CloudflareAiGatewayTransport in workers-ai-transport.ts. Values come from
+   * envs.ts via envShapedVars (APP_CONFIG_CLOUDFLARE_AI_GATEWAY__*), so this
+   * is per-deployment, not per-Doppler-secret.
+   *
+   * `byok` is the default AND what every deployed env sets explicitly: the
+   * platform is gpt-5.5-only, unified billing meters OpenAI-prompt-cached
+   * tokens at the uncached price (~6x at our hit rate), and BYOK benchmarked
+   * latency-neutral-or-better. The default matters for LOCAL DEV, which has
+   * no envs.ts entry — dev must ride the same lane as production.
+   *
+   * `responseCacheTtlSeconds` opts the BYOK lane into the gateway's RESPONSE
+   * cache (whole-answer replay — distinct from OpenAI's prompt cache, which
+   * BYOK gets unconditionally). Only for deployments whose conversations are
+   * synthetic (previews, local dev); never prd.
+   */
+  cloudflareAiGateway: z
+    .object({
+      transport: z.enum(["unified", "byok"]).default("byok"),
+      id: z.string().trim().min(1).default("default"),
+      responseCacheTtlSeconds: z.coerce.number().int().positive().optional(),
+    })
+    .prefault({}),
   cloudflare: z
     .object({
       accountId: publicValue(z.string().trim().min(1)).optional(),
@@ -88,6 +112,14 @@ export const AppConfig = z.object({
     })
     .default({}),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
+  /**
+   * npm dependency specifier substituted for the `iterate` package when
+   * seeding project repos (the template ships the pkg.pr.new `@main` URL).
+   * Preview deploys set this to the PR's own pkg.pr.new build so projects
+   * created there — e2e tests included — get the branch tip's `iterate/sdk`,
+   * not main's. Unset (prod, local dev) keeps the template's `@main`.
+   */
+  iterateSdkPackageSpec: z.string().trim().min(1).optional(),
   /** First-party project email (itx.email + the inbound email() door). */
   email: z
     .object({
@@ -147,6 +179,16 @@ export const AppConfig = z.object({
           webhookSecret: redacted(z.string().trim().min(1)).optional(),
         })
         .optional(),
+      /** Telegram Bot API integration. Deliberately NO deployment credential:
+       * bots connect by BotFather-token paste (`connectTelegram`), and the
+       * webhook secret token is derived from SECRET_ENCRYPTION_KEY. The block
+       * exists only so tests (and, in a pinch, a proxy deployment) can repoint
+       * the Bot API base at a controllable fake server. */
+      telegram: z
+        .object({
+          apiBaseUrl: z.url().default("https://api.telegram.org"),
+        })
+        .prefault({}),
       /** The dummy third-party used to prove the integrations model end to end
        * (apps/dummy-petshop). Its client credentials back the FIRST-PARTY
        * petshop lane's `{ platform: "integrations.petshop" }` clientCreds ref
@@ -172,7 +214,9 @@ export const AppConfig = z.object({
         })
         .optional(),
     })
-    .default({}),
+    // prefault (not default): `{}` is valid INPUT — the nested telegram block
+    // fills its own defaults — but not the parsed output shape.
+    .prefault({}),
   typeIdPrefix: z
     .string()
     .trim()

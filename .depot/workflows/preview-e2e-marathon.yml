@@ -25,11 +25,16 @@ on:
       pull-request-number:
         description: PR whose preview slot to marathon
         required: false
-        default: "1664"
+        default: "1850"
       runs:
         description: consecutive green runs required
         required: false
-        default: "50"
+        # 15, not 50: every lane run drives ~15 gpt-5.5 agent turns at ~34k
+        # prompt tokens each — a 50-run marathon materially dents the Workers
+        # AI daily spend cap (the 2026-07-10 2041 fleet outage was exactly
+        # that). 15 consecutive greens is strong stability evidence; run it
+        # twice on different days for more.
+        default: "15"
       warmup-runs:
         description: uncounted priming runs before counting starts
         required: false
@@ -67,8 +72,8 @@ jobs:
           # flake-hunt-loop.sh's `pnpm preview deploy/test` default their token
           # to GITHUB_TOKEN (resolveGithubToken in preview.ts).
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          PR_NUMBER: ${{ inputs.pull-request-number || '1664' }}
-          RUNS: ${{ inputs.runs || '50' }}
+          PR_NUMBER: ${{ inputs.pull-request-number || '1850' }}
+          RUNS: ${{ inputs.runs || '15' }}
           WARMUP_RUNS: ${{ inputs.warmup-runs || '1' }}
           LOG_DIR: /tmp/marathon
         # flake-hunt-loop.sh: preflight full-fleet deploy, warm, then loop the

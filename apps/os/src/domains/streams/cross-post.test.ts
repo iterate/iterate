@@ -8,14 +8,21 @@ describe("buildCrossPostAppendInput", () => {
       type: "events.iterate.test/source",
       payload: { marker: "source" },
       metadata: { traceId: "trace_123" },
-      source: { processor: { slug: "test-processor", version: "1.0.0" } },
+      source: {
+        processor: {
+          slug: "test-processor",
+          version: "1.0.0",
+          stream: { path: "/source", projectId: "prj_123" },
+          whileProcessing: { offset: 7, type: "events.iterate.test/trigger" },
+        },
+      },
       idempotencyKey: "original",
       offset: 42,
       createdAt: "2026-07-08T12:00:00.000Z",
       path: "/source",
     };
     const hop = {
-      ruleId: "source-to-target",
+      subscriptionKey: "source-to-target",
       createdAt: sourceEvent.createdAt,
       offset: sourceEvent.offset,
       path: sourceEvent.path,

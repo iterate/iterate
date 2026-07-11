@@ -49,12 +49,13 @@ a dispatch convention **on top of** RPC. Its "nodes" are not workerd objects:
   call arrives at the target as ONE
   `invokeCapability({ path, args })` invocation, and the path segments are
   **pure data** that the worker's own `invokeCapability` method interprets in
-  userspace. `worker.slack.chat.postMessage(x)` delivers
+  userspace. A `worker.slack.chat.postMessage(x)` call (say, onto a Slack SDK
+  getter a project added to its worker) delivers
   `{ path: ["slack", "chat", "postMessage"], args: [x] }`; nothing named
-  `slack` exists on either side of the wire. This is what lets the seeded
-  template hand back the raw Slack SDK — but it also means intermediate
-  segments are not addressable, describable, or protocol-capable. They are
-  strings.
+  `slack` exists on either side of the wire. This is what lets a worker getter
+  hand back a raw vendor SDK client — but it also means
+  intermediate segments are not addressable, describable, or
+  protocol-capable. They are strings.
 
 Either way, the transport is RPC method calls. Therefore **no name in the
 capability tree is protocol-special — `fetch` included**. A capability method
@@ -143,10 +144,10 @@ deliberately not blessed here: the specification above is the intended shape.
   lane. Project ingress and the seeded router already do this for app hosts;
   worker-to-worker HTTP is `env.ITX.fetch` with the dispatch header.
 - WebSockets specifically: `fetch` checks the `upgrade` header, returns
-  `new Response(null, { status: 101, webSocket })`. The seeded
-  `apps/websocket` app is the reference; `project-ingress.e2e.test.ts` proves
-  the lane end to end.
-- Calling methods on a worker (`itx.worker.slack.chat.postMessage`, provided
+  `new Response(null, { status: 101, webSocket })`. The seeded `CounterApp`'s
+  `/ws` route (a named export of the one-file seeded `worker.ts`) is the
+  reference; `project-ingress.e2e.test.ts` proves the lane end to end.
+- Calling methods on a worker (`itx.worker.<getter>.<method>`, provided
   capabilities, probes)? That is the capability tree — RPC dispatch,
   serialized results, `flattenNestedPaths` if the worker wants to interpret
   paths itself. Never expect protocol behavior from it, whatever the method

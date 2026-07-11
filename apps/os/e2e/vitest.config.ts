@@ -1,6 +1,7 @@
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { BaseSequencer, type TestSpecification } from "vitest/node";
 import { playwright } from "@vitest/browser-playwright";
 import {
   appendConsoleLineSync,
@@ -32,6 +33,61 @@ console.log(`[vitest] run slug: ${vitestRunSlug}`);
 
 const ci = process.env.CI === "true";
 
+// Observed wall-clock seconds per file on a green preview lane (Depot run
+// 1wd5nxb87d, 2026-07-09). Used for longest-first scheduling below — vitest
+// hands files to workers in sort order, so a slow file starting LAST becomes
+// the whole lane's tail (the itx catalogue at ~100s used to routinely start
+// mid-run and stretch the lane past 3 minutes). Unlisted files default to 15s
+// (roughly the observed median); exact numbers matter much less than the
+// slow/fast partition, so refresh only when the ranking visibly drifts.
+const observedFileSeconds: Record<string, number> = {
+  "agent-tools.itx.e2e.test.ts": 78,
+  "script-execution-concurrency.e2e.test.ts": 38,
+  "streams.e2e.test.ts": 34,
+  "stream-lifecycle.e2e.test.ts": 33,
+  "sandbox-egress.e2e.test.ts": 33,
+  "live-capability-websocket.e2e.test.ts": 31,
+  // The itx-*.e2e.test.ts entries are the old itx.e2e.test.ts catalogue
+  // (104s as one file) split for file-level parallelism; per-file numbers
+  // are estimates proportional to test counts, not yet observed.
+  "itx-agents.e2e.test.ts": 25,
+  "integrations-userspace.e2e.test.ts": 23,
+  "agent-codemode-fence.itx.e2e.test.ts": 19,
+  "itx-connect.e2e.test.ts": 18,
+  "itx-workers.e2e.test.ts": 18,
+  "slack-agent.e2e.test.ts": 18,
+  "project-ingress.e2e.test.ts": 18,
+  "scheduler.e2e.test.ts": 16,
+  "agent-script-result-spill.itx.e2e.test.ts": 16,
+  "itx-live-capabilities.e2e.test.ts": 15,
+  "stream-security.e2e.test.ts": 15,
+  "worker-build.e2e.test.ts": 15,
+  "workspace.itx.e2e.test.ts": 13,
+  "github-backed-repo.e2e.test.ts": 12,
+  "processor-reactivity.e2e.test.ts": 11,
+  "itx-core.e2e.test.ts": 10,
+  "itx-subscribe.e2e.test.ts": 10,
+  "repo-history.itx.e2e.test.ts": 10,
+  "stream-wire.e2e.test.ts": 10,
+  "itx-egress.e2e.test.ts": 8,
+  "admin-project.itx.e2e.test.ts": 8,
+  "repo-binary.itx.e2e.test.ts": 8,
+  "preview-smoke.e2e.test.ts": 8,
+  "preview.e2e.test.ts": 5,
+  "mcp-oauth.e2e.test.ts": 2,
+  "stream-capnweb.test.ts": 2,
+  "stream-rpc.test.ts": 1,
+  "stream-processor-node.test.ts": 1,
+};
+
+/** Longest-processing-time-first: start the slow files so they never tail the lane. */
+class SlowestFirstSequencer extends BaseSequencer {
+  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    const seconds = (spec: TestSpecification) => observedFileSeconds[basename(spec.moduleId)] ?? 15;
+    return [...files].sort((left, right) => seconds(right) - seconds(left));
+  }
+}
+
 const sharedProvide = {
   [E2E_RUN_ROOT_KEY]: vitestRunRoot,
   [E2E_PROJECT_ROOT_KEY]: e2eRoot,
@@ -56,20 +112,20 @@ export default defineConfig({
     // its own project against a deployed slot, so FILES are independent.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    maxWorkers: 4,
-    // Intra-file concurrency, back on now that #1601 fixed cold-slot create
-    // latency (~3-5s per saga). Before #1601 the slow cold creates piled up
-    // and overloaded the slot ("Durable Object storage operation exceeded
-    // timeout") at peak 8-24; with fast creates the slot tolerates the
-    // fan-out. peak ≈ maxWorkers × maxConcurrency: 4×4 = ~16 overloaded a
-    // very cold slot (4 DO-storage-timeout fails that survived retry), and
-    // 3 (peak ~12) still produced rotating stream-delivery timeouts under
-    // load ("saw 0 events" — e.g. the cross-post test on #1638's runs), so
-    // 2 (peak ~8) is the current setting. The robust fix for going higher is
-    // splitting the itx monolith into files (file parallelism at safe
-    // per-file concurrency) — see tasks/raise-e2e-maxconcurrency.md and
-    // tasks/streams-event-delivery-flake-under-concurrent-load.md.
-    sequence: { concurrent: ci },
+    // 6 workers × maxConcurrency 2 = peak ~12 concurrent tests. History of
+    // this number: 4×4 = ~16 overloaded a very cold slot pre-#1601
+    // (DO-storage timeouts), 4×3 = ~12 still produced rotating
+    // stream-delivery timeouts on #1638's runs, so it sat at 4×2 = ~8 for a
+    // while. Since then the slot got materially cheaper per test (#1601
+    // cold creates, #1801 eviction recovery, #1806 drain collapse, #1808
+    // agent processor consolidation), the onboarding smoke pre-warms the
+    // create path before the fan-out, and the lane's 634 test-seconds at
+    // peak 8 left the 8-core Depot box mostly idle at ~186s wall. Peak 12
+    // via FILE parallelism (safer than intra-file per
+    // tasks/raise-e2e-maxconcurrency.md) measured green — revalidate with a
+    // preview-e2e-marathon dispatch when touching either knob.
+    maxWorkers: 6,
+    sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
     maxConcurrency: 2,
     passWithNoTests: true,
     // Retry telemetry (policy rule 5 — see @iterate-com/shared

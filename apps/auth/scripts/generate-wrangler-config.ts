@@ -65,19 +65,25 @@ const sendEmailBindings = [{ name: "EMAIL" }];
 
 /**
  * Env-shaping config that is NOT secret and already lives in envs.ts —
- * emitted as per-env `vars` so the worker's runtime origin can never drift
- * from the route generated off the same entry. The names are the same
- * `APP_CONFIG_*` keys src/config.ts parses at runtime; deploy.ts also passes
- * them into the `vite build` environment because vite.config.ts inlines the
- * origin into the client bundle (`__AUTH_APP_ORIGIN__`). Local dev has no env
- * block; the key loads from process.env under `doppler run -- vite dev`.
+ * emitted as per-env `vars` so the worker's runtime origin and auth behavior
+ * flags can never drift from the route generated off the same entry. The
+ * names are the same `APP_CONFIG_*` keys src/config.ts parses at runtime;
+ * deploy.ts also passes them into the `vite build` environment because
+ * vite.config.ts inlines the origin into the client bundle
+ * (`__AUTH_APP_ORIGIN__`). Local dev gets its fixed-OTP flag from top-level
+ * `vars`; origin still loads from process.env under `doppler run -- vite dev`.
  */
 export function envShapedVars(env: AuthDeployedEnv) {
   return {
     APP_CONFIG_AUTH_APP_ORIGIN: env.authBaseUrl,
     APP_CONFIG_PUBLIC_URL: env.authBaseUrl,
+    APP_CONFIG_FIXED_TEST_OTP_ENABLED: String(env.fixedTestOtpEnabled),
   };
 }
+
+const LOCAL_DEV_VARS = {
+  APP_CONFIG_FIXED_TEST_OTP_ENABLED: "true",
+};
 
 // Deliberately omits APP_CONFIG_PUBLIC_URL: optional in src/config.ts, where
 // it defaults to authAppOrigin at runtime — local dev needn't supply it.
@@ -140,8 +146,9 @@ const config = {
   // Local dev has no real database; miniflare only needs a stable id.
   d1_databases: d1Bindings({ workerName: "auth-dev", databaseId: LOCAL_DEV_AUTH_DB_ID }),
   send_email: sendEmailBindings,
-  // Local dev loads the env-shaping keys from process.env like any other
-  // secret (deployed envs get them as generated vars instead).
+  vars: LOCAL_DEV_VARS,
+  // Local dev loads the origin from process.env like any other secret
+  // (deployed envs get it as a generated var instead).
   secrets: { required: [...REQUIRED_SECRETS, ...DERIVED_SECRETS, ...ENV_SHAPED_KEYS] },
   observability: OBSERVABILITY,
   env: Object.fromEntries(Object.entries(authEnvs).map(([name, env]) => [name, envBlock(env)])),

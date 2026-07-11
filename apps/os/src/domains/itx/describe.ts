@@ -40,6 +40,12 @@ export type ProjectDescription = Description & {
   projectId: string;
 };
 
+/**
+ * One capability in a project's inventory (`__describe().capabilities`): the
+ * itx path it is mounted at, how it is implemented (built-in, live-provided,
+ * or a persisted itx expression), and optional instructions/types for
+ * discovery.
+ */
 export type CapabilityDescription = {
   instructions?: string;
   path: string[];

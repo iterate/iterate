@@ -22,7 +22,8 @@ await itx.integrations.list(); // every connection, built-in and provided
 Two kinds of member, one address space — every dotted call is
 `{slug}.{connection}.{...method}`:
 
-- **Built-in slugs are dispatch branches** (`slack`, `google`) in the
+- **Built-in slugs are dispatch branches** (`slack`, `google`, `github`,
+  `telegram`) in the
   collection's `invokeCapability` — plain imperative branches whose code ships
   with the OS deployment. Not classes: their only callers are untyped dotted
   scripts, so a typed per-provider class ladder bought nothing (an earlier cut
@@ -112,65 +113,78 @@ deliberately not an event choreography: connect is synchronous (a browser is
 waiting on the callback), and credential material travels by parameter to
 exactly one confined home, never onto journals.
 
-## Provided integrations (the waitrose case)
+## Waitrose: the credentials-not-OAuth builtin
 
-A project implements a whole integration as ordinary code in its own repo.
-Every seeded repo carries a real one — `integrations/waitrose/`
-(`apps/os/project-repo-template`): a vendored Waitrose client (`client.ts`,
-the reverse-engineered Android app's operations — its GraphQL gateway rejects
-hand-slimmed selections, so the queries are the app's verbatim) exposed
-through the project worker's `waitrose` getter (`worker.ts`):
+Waitrose is a built-in like the others —
+`itx.integrations.waitrose["<connection>"].<method>(...)` dispatches in
+deployment code over the vendored client
+(`domains/integrations/waitrose-api.ts`: the reverse-engineered Android app's
+operations — its GraphQL gateway rejects hand-slimmed selections, so the
+queries are the app's verbatim). What makes it the interesting archetype is
+its connect flow: there is none. A connection exists when its secret does —
 
 ```js
-// worker.ts in the project repo — same shape as the slack getter
-get waitrose() {
-  return new Proxy({}, {
-    get: (_t, connection) => waitroseClient({
-      authorization: `Bearer getSecret({ path: "/secrets/integrations/waitrose/${connection}/session", field: "accessToken" })`,
-    }),
-  });
-}
+await itx.secrets.get("/secrets/integrations/waitrose/mum/session").update({
+  egress: { urls: ["https://www.waitrose.com"] },
+  material: { username: "mum@example.com", password: "…" },
+  refresh: {
+    kind: "waitrose-session",
+    graphqlUrl: "https://www.waitrose.com/api/graphql-prod/graph/live",
+  },
+});
 ```
 
 ```js
-await itx.worker.waitrose.mum.shoppingContext();
-await itx.worker.waitrose.mum.searchProducts("milk", { size: 5 });
+await itx.integrations.waitrose.mum.shoppingContext();
+await itx.integrations.waitrose.mum.searchProducts("milk", { size: 5 });
 ```
 
-No mount step: the project worker always exists and is late-bound to the
-repo, so the surface is **durable by construction** — nothing session-owned
-to expire, and a commit to `client.ts` is live on the next call. The platform
-dispatches every dotted `itx.worker.*` call as one flattened
-`invokeCapability({ path, args })` that the worker walks in userland (workerd
-RPC does not traverse instance fields). The client addresses its session
-secrets at `/secrets/integrations/waitrose/<connection>/session` with
-`getSecret` placeholders and bare `fetch()`; dynamic-worker egress routes
-through the project egress door, so **even the project's own integration code
-never holds its tokens**. The connection secret holds only
-`{ username, password }` plus the `waitrose-session` refresh strategy —
-Waitrose has no refresh grant, so the Secret DO re-runs the login itself:
-mint on first use, re-mint on 401.
+The connection secret holds only `{ username, password }` plus the
+`waitrose-session` refresh strategy — Waitrose has no refresh grant, so the
+Secret DO re-runs the login itself: mint on first use, re-mint on 401. The
+client's transport rides the project egress door with an `accessToken`
+`getSecret` placeholder, so **no isolate outside the Secret DO ever holds
+credentials** — the same confinement as every other builtin.
 
-For providers a project wants addressed like a built-in —
-`itx.integrations.<slug>.<connection>.<method>()` — `provideCapability({
-path: ["integrations", "<slug>"], type: "itx-expression", flattenNestedPaths:
-true })` mounts any expression (a standalone dynamic worker, an MCP
-connection, …) into the collection; the mount is a `capability-provided`
-event on the ITX journal — replayable, revocable, enumerable by
-`integrations.list()`. Mount at the project root
-(`itx.capabilityHosts.get("/")`) so the collection's dispatch can see it.
+## Provided integrations (userspace)
 
-Exercised in `e2e/vitest/integrations-userspace.e2e.test.ts`: the echo lane
-(two connections, substitution proof, `__describe` discovery, negative
-controls) and the strategy lane against petshop's GraphQL session-login door
-(`apps/dummy-petshop/src/graphql-login.ts` — the same wire shape the strategy
-speaks; the session is an ordinary petshop bearer). The seeded worker surface
-is exercised in `worker-build.e2e.test.ts` (build + userland dispatch, never
-dialing the vendor). The integration itself talks to the real Waitrose.
+A project can also implement a whole integration as ordinary code in its own
+repo — no platform change needed. Two shapes:
+
+- **A worker getter.** Add a getter on the default-export class in the
+  seeded `worker.ts` that hands back a vendor SDK client (installed from the
+  project's own `package.json`), and call it as
+  `itx.worker.<getter>.<method>(...)`. No mount step: the project worker
+  always exists and is late-bound to the repo, so the surface is **durable by
+  construction**. The platform dispatches every dotted `itx.worker.*` call as
+  one flattened `invokeCapability({ path, args })` that the worker walks in
+  userland (workerd RPC does not traverse instance fields). Session secrets
+  ride as `getSecret` placeholders in headers of bare `fetch()` calls;
+  dynamic-worker egress routes through the project egress door, so even the
+  project's own integration code never holds its tokens. Exercised in
+  `worker-build.e2e.test.ts`: the test commits the dep + getter to its own
+  project's repo first, then calls the new surface.
+
+- **A collection mount.** For providers a project wants addressed like a
+  built-in — `itx.integrations.<slug>.<connection>.<method>()` —
+  `provideCapability({ path: ["integrations", "<slug>"], type:
+"itx-expression", flattenNestedPaths: true })` mounts any expression (a
+  standalone dynamic worker, an MCP connection, …) into the collection; the
+  mount is a `capability-provided` event on the ITX journal — replayable,
+  revocable, enumerable by `integrations.list()`. Mount at the project root
+  (`itx.capabilityHosts.get("/")`) so the collection's dispatch can see it.
+  Exercised in `e2e/vitest/integrations-userspace.e2e.test.ts` with an
+  "ocado" integration: the echo lane (two connections, substitution proof,
+  `__describe` discovery, negative controls) and the strategy lane against
+  petshop's GraphQL session-login door
+  (`apps/dummy-petshop/src/graphql-login.ts` — the same wire shape the
+  `waitrose-session` strategy speaks; the session is an ordinary petshop
+  bearer).
 
 The one mechanical accommodation: `integrations` is a **namespace builtin** —
 `rejectBuiltinCollision` allows mounts at depth ≥ 2 under it (mounting at
-`["integrations"]` itself is still a collision).
+`["integrations"]` itself, or under a builtin slug like `waitrose`, is still
+a collision).
 
 ## GitHub: the third builtin
 
@@ -210,6 +224,45 @@ The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 cannot be shadowed) and `github-webhooks-project-worker` (deliveries landing
 on the project host's own worker).
 
+## Telegram: the fourth builtin
+
+Telegram has no OAuth — the BotFather token IS the credential — so it gets a
+dedicated verb, `connectTelegram({ botToken })`, instead of a contortion of
+the redirect machinery:
+
+- **Connect**: `getMe` validates the pasted token and yields the bot's numeric
+  id (the stable identity — usernames can change); the id is checked against
+  the deployment-wide directory, `setWebhook` points the bot at
+  `/api/integrations/telegram/webhook/<botId>` with a secret token **derived**
+  as `hmac(SECRET_ENCRYPTION_KEY, "telegram-webhook:<botId>")` (nothing
+  stored, no deployment config — previews work untouched), and the shared
+  `recordConnection` does the rest: token in the connection secret (egress
+  pinned to `https://api.telegram.org`), `telegram/connected` on the journal,
+  router armed, bot id claimed. Connection named from the bot username.
+- **API calls**: `itx.integrations.telegram["<connection>"].<method>(params)`
+  — the Bot API is flat, so exactly one method segment with one params object
+  (`sendMessage`, `sendPhoto`, `getMe`, …). The Bot API authenticates in the
+  **URL path** (`/bot<token>/<method>`), which is why secret substitution
+  reaches the request URL's path — and only its path — per ADR 0005: the
+  request carries
+  `/botgetSecret({ path: ... })/<method>` through project egress and the
+  Secret DO fills the token in.
+- **Inbound updates** land on the per-bot door path (Telegram payloads don't
+  identify the bot), verify the echoed `X-Telegram-Bot-Api-Secret-Token`
+  against the derived value (timing-safe; the one 401), and route on the bot
+  id with idempotency key `telegram-webhook:<botId>:<update_id>` — Telegram
+  retries undelivered updates and `update_id` is the delivery identity.
+- **Routing** is stateless (no Slack-style route table): an update's
+  destination is a pure function of its chat —
+  `/agents/telegram/<connection>/chat-<chatId>` (`/topic-<threadId>` appended
+  for forum supergroup topics; ids verbatim, sign included). The
+  `telegram-agent` processor transcribes updates into agent input (v1: media
+  as bracketed placeholders like `[photo]`), ignores bot-authored updates, and
+  sends the `typing` chat action while the agent works; the agent replies via
+  `sendMessage` with the chat id from its own path/inputs.
+- **Disconnect**: best-effort `deleteWebhook` (through the substituting egress
+  path — no material read), then the shared `recordDisconnection`.
+
 ## Deliberately not built
 
 - **A provider-file registry.** An earlier cut of this work modeled built-ins
@@ -227,7 +280,7 @@ on the project host's own worker).
 - **Implicit/default connections.** `itx.integrations.slack.chat.postMessage`
   is an error that tells you to name a connection, not a guess.
 - **Webhook signature verification in project workers** — worker code cannot
-  hold the HMAC secret (substitution is egress-header-only); capability-URL
+  hold the HMAC secret (substitution is egress-headers/path-only); capability-URL
   tokens are the workaround. The userspace verification story returns with the
   jail lane (ADR 0005), not as a compute method on the public secret.
 - **A generic refresh framework.** Refresh is named strategies in the

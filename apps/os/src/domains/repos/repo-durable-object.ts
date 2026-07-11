@@ -1,13 +1,14 @@
 import { DurableObject } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
-import { createGit } from "@cloudflare/shell/git";
-import {
-  createStreamProcessorHost,
-  type StreamSubscriberWakeRequest,
-} from "../streams/stream-processor-host.ts";
-import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
+import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "../streams/rpc-types.ts";
+import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
@@ -16,6 +17,7 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
 import { mintGithubInstallationToken } from "../integrations/github-app.ts";
 import { indexRepoSnapshotToSearchIndex } from "../search/search-index.ts";
+import { ROOT_WORKSPACE_PATH } from "../workspaces/utils.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -23,14 +25,29 @@ import type {
   EditRepoFileResult,
   GithubRepoLink,
   GithubSyncResult,
+  RepoCommitDetails,
   RepoFileChange,
+  RepoLogCommit,
+  RepoLogResult,
 } from "./types.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
-import { RepoArtifactNameCodec, base64ToBytes, bytesToBase64 } from "./utils.ts";
-import { PROJECT_REPO_INITIAL_FILES } from "./project-repo-template.generated.ts";
+import { diffFileMaps } from "./line-diff.ts";
+import {
+  CONFIG_REPO_PATH,
+  RepoArtifactNameCodec,
+  RepoNotSeededError,
+  base64ToBytes,
+  bytesToBase64,
+  classifyRepoAccessError,
+} from "./utils.ts";
+import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
+
+// Sentinel for "the root workspace cache could not answer — use the clone
+// lane". Distinct from null, which is an authoritative "not at HEAD".
+const CACHE_UNAVAILABLE = Symbol("cache-unavailable");
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
 
@@ -54,23 +71,39 @@ export class RepoDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     }),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+    version: workerVersion(this.env),
   });
   readonly #repoProcessor = this.#host.add(
     (deps) =>
       new RepoProcessor({
         ...deps,
         createRepoArtifact: (input) => this.createArtifactRepo(input),
-        path: this.#name.path,
-        projectId: this.#name.projectId,
       }),
   );
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<void> {
+  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#host.wakeStreamSubscriber(args);
+  }
+
+  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  alarm(): Promise<void> {
+    return this.#host.handleAlarm();
+  }
+
+  /** Abort the current Durable Object incarnation; the next request boots it again. */
+  kill(): void {
+    this.ctx.abort("kill requested");
   }
 
   get processor() {
     return new StreamProcessorRpcTarget(this.#repoProcessor);
+  }
+
+  /** The repo's live state — the get/set/assign/subscribe surface behind `itx.repos.get(path).liveState`. */
+  get liveState() {
+    return new LiveStateRpcTarget(this.#host);
   }
 
   /**
@@ -152,57 +185,96 @@ export class RepoDurableObject extends DurableObject<Env> {
   /**
    * A checked-out filesystem at a branch head or pinned commit — the one
    * clone pathway every read on this object goes through (file snapshots and
-   * single-file reads alike).
+   * single-file reads alike). `historyDepth` controls how much history the
+   * branch clone carries: the default 1 for content reads, a number for
+   * bounded history (`log` — isomorphic-git records the shallow boundary in
+   * `.git/shallow` and stops walking there), `"full"` when parents must be
+   * checkout-able (`commitDetails`).
    */
-  async #checkout(input: { branch?: string; commitOid?: string } = {}): Promise<{
+  async #checkout(
+    input: { branch?: string; commitOid?: string; historyDepth?: number | "full" } = {},
+  ): Promise<{
+    branch: string;
     filesystem: InMemoryFs;
+    git: ReturnType<typeof createGit>;
     head: { oid: string };
   }> {
     const repo = await this.gitAccess();
     const branch = input.branch ?? repo.defaultBranch;
+    const credentials = { password: repo.token, username: "x" };
+    // Read-your-write over the eventually consistent Artifacts remote: a
+    // clone right after a push can serve the previous HEAD (#recordPushedHead
+    // has the full story). BOTH paths retry against the recorded push — a
+    // pinned read of a just-pushed commit (the History diff pane's flow:
+    // commit → expand → click a file) fails its checkout on a stale clone for
+    // exactly the same reason a branch read serves the previous head.
+    const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
+
+    if (input.commitOid !== undefined) {
+      for (let attempt = 1; ; attempt++) {
+        // Pinned commits need history: a shallow clone only contains the
+        // branch tip. Project repos are small; correctness beats depth tuning.
+        const filesystem = new InMemoryFs();
+        const git = createGit(filesystem, REPO_DIR);
+        try {
+          await git.clone({ branch, url: repo.remote, ...credentials });
+        } catch (error) {
+          throw classifyRepoAccessError(error);
+        }
+        const [branchHead] = await git.log({ depth: 1 });
+        if (!branchHead) throw new RepoNotSeededError("Repo has no commits.");
+        try {
+          await git.checkout({ ref: input.commitOid, force: true });
+        } catch (error) {
+          // A clone still BEHIND the recorded push may simply predate the
+          // pinned commit — retryable. A caught-up clone that lacks the oid
+          // means the oid genuinely is not on this branch: fail fast.
+          if (expected && branchHead.oid !== expected && attempt <= 5) {
+            console.warn(
+              `repo pinned clone is behind the last push (saw ${branchHead.oid}, pushed ${expected}); retry ${attempt} for ${input.commitOid}`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+            continue;
+          }
+          throw error;
+        }
+        const [head] = await git.log({ depth: 1 });
+        if (!head) throw new Error("Repo has no commits.");
+        if (head.oid !== input.commitOid) {
+          throw new Error(`Repo checkout of ${input.commitOid} landed on ${head.oid}.`);
+        }
+        return { branch, filesystem, git, head };
+      }
+    }
 
     const clone = async () => {
       const filesystem = new InMemoryFs();
       const git = createGit(filesystem, REPO_DIR);
-      const credentials = { password: repo.token, username: "x" };
-      if (input.commitOid !== undefined) {
-        // Pinned commits need history: a shallow clone only contains the
-        // branch tip. Project repos are small; correctness beats depth tuning.
-        await git.clone({ branch, url: repo.remote, ...credentials });
-        await git.checkout({ ref: input.commitOid, force: true });
-      } else {
+      try {
         await git.clone({
           branch,
-          depth: 1,
+          ...(input.historyDepth === "full" ? {} : { depth: input.historyDepth || 1 }),
           singleBranch: true,
           url: repo.remote,
           ...credentials,
         });
+      } catch (error) {
+        throw classifyRepoAccessError(error);
       }
       const [head] = await git.log({ depth: 1 });
-      if (!head) throw new Error("Repo has no commits.");
-      return { filesystem, head };
+      if (!head) throw new RepoNotSeededError("Repo has no commits.");
+      return { filesystem, git, head };
     };
 
-    let { filesystem, head } = await clone();
-    if (input.commitOid !== undefined) {
-      if (head.oid !== input.commitOid) {
-        throw new Error(`Repo checkout of ${input.commitOid} landed on ${head.oid}.`);
-      }
-    } else {
-      // Read-your-write over the eventually consistent Artifacts remote: a
-      // clone right after a push can serve the previous HEAD (#recordPushedHead
-      // has the full story). Retry until the clone reaches the recorded push.
-      const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
-      for (let attempt = 1; expected && head.oid !== expected && attempt <= 5; attempt++) {
-        console.warn(
-          `repo clone is behind the last push (saw ${head.oid}, pushed ${expected}); retry ${attempt}`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-        ({ filesystem, head } = await clone());
-      }
+    let { filesystem, git, head } = await clone();
+    for (let attempt = 1; expected && head.oid !== expected && attempt <= 5; attempt++) {
+      console.warn(
+        `repo clone is behind the last push (saw ${head.oid}, pushed ${expected}); retry ${attempt}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      ({ filesystem, git, head } = await clone());
     }
-    return { filesystem, head };
+    return { branch, filesystem, git, head };
   }
 
   whoami(): string {
@@ -318,17 +390,26 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Committed file contents at HEAD, or null when the path does not exist.
-   * `encoding: "base64"` reads the raw bytes (images, PDFs — anything a utf8
-   * decode would corrupt) and returns them base64-encoded.
+   * Committed file contents at HEAD — or, with `commitOid`, pinned to that
+   * commit — null when the path does not exist there. `encoding: "base64"`
+   * reads the raw bytes (images, PDFs — anything a utf8 decode would corrupt)
+   * and returns them base64-encoded. HEAD reads serve from the root workspace
+   * cache (no clone); pinned reads keep the clone lane (the cache only ever
+   * holds the head).
    */
   async readFile(input: {
     path: string;
     encoding?: "utf8" | "base64";
+    commitOid?: string;
   }): Promise<{ commitOid: string; content: string; path: string } | null> {
     const path = normalizeRepoFilePath(input.path);
+    if (input.commitOid !== undefined) assertCommitOid(input.commitOid);
+    if (input.commitOid === undefined) {
+      const cached = await this.#readHeadFromRootCache(path, input.encoding);
+      if (cached !== CACHE_UNAVAILABLE) return cached;
+    }
     if (input.encoding === "base64") {
-      const { filesystem, head } = await this.#checkout();
+      const { filesystem, head } = await this.#checkout({ commitOid: input.commitOid });
       const absolutePath = `${REPO_DIR}/${path}`;
       if (!(await filesystem.exists(absolutePath))) return null;
       const bytes = await filesystem.readFileBytes(absolutePath);
@@ -336,15 +417,138 @@ export class RepoDurableObject extends DurableObject<Env> {
     }
     // Exact map lookup, deliberately not an include mask: glob metacharacters
     // in a filename must not change what this reads.
-    const { commitOid, files } = await this.getFilesSnapshot();
+    const { commitOid, files } = await this.getFilesSnapshot({ commitOid: input.commitOid });
     const content = files[path];
     return content === undefined ? null : { commitOid, content, path };
   }
 
-  /** All committed file paths at HEAD. */
+  /** All committed file paths at HEAD (the project repo serves from the root workspace cache). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
+    if (this.#hasRootWorkspaceCache()) {
+      try {
+        const head = await this.getHead();
+        const paths = await this.#rootWorkspaceStub().listAllFiles();
+        return { commitOid: head.commitOid, paths: paths.map((p) => p.slice(1)).sort() };
+      } catch (error) {
+        console.warn(
+          `repo listFiles via the root workspace cache failed; falling back to a clone: ${String(error)}`,
+        );
+      }
+    }
     const { commitOid, files } = await this.getFilesSnapshot();
     return { commitOid, paths: Object.keys(files).sort() };
+  }
+
+  /**
+   * A HEAD file read served from the project's root workspace — the durable
+   * cache of main this repo already keeps fresh through its head cursor —
+   * instead of a full clone per read.
+   *
+   * Call order matters: `getHead()` FIRST warms this DO's durable head cursor
+   * (the one-time cold miss clones), so when the root workspace's freshness
+   * check dials back into this DO re-entrantly (we are awaiting its read at
+   * that moment; the input gate is open at RPC awaits), that nested
+   * `getHead()` is a synchronous kv hit. The returned oid is the cursor read
+   * before the content — a commit landing between the two can make the
+   * content newer than its label, the inherent approximation of a HEAD read.
+   *
+   * The cache is a CACHE: any failure (workspace DO unhappy, uncacheable
+   * repo) falls back to the authoritative clone lane, loudly.
+   */
+  async #readHeadFromRootCache(
+    path: string,
+    encoding: "utf8" | "base64" | undefined,
+  ): Promise<
+    { commitOid: string; content: string; path: string } | null | typeof CACHE_UNAVAILABLE
+  > {
+    if (!this.#hasRootWorkspaceCache()) return CACHE_UNAVAILABLE;
+    try {
+      const head = await this.getHead();
+      const root = this.#rootWorkspaceStub();
+      if (encoding === "base64") {
+        const bytes = await root.readFileBytes(`/${path}`);
+        return bytes === null
+          ? null
+          : { commitOid: head.commitOid, content: bytesToBase64(bytes), path };
+      }
+      const content = await root.readFile(`/${path}`);
+      return content === null ? null : { commitOid: head.commitOid, content, path };
+    } catch (error) {
+      console.warn(
+        `repo head read via the root workspace cache failed; falling back to a clone: ${String(error)}`,
+      );
+      return CACHE_UNAVAILABLE;
+    }
+  }
+
+  // The root workspace mirrors exactly ONE repo: the project repo at "/".
+  // Every other repo (secondary /repos/**, per-example scratch repos,
+  // projectId-less legacy repos) stays on the clone lane — serving them from
+  // the project root's checkout returns the WRONG repo's files.
+  #hasRootWorkspaceCache(): boolean {
+    return this.#name.projectId !== null && this.#name.path === CONFIG_REPO_PATH;
+  }
+
+  #rootWorkspaceStub() {
+    return this.env.WORKSPACE.getByName(
+      DurableObjectNameCodec.stringify({
+        path: ROOT_WORKSPACE_PATH,
+        projectId: this.#name.projectId!,
+      }),
+    );
+  }
+
+  /**
+   * Commit history of a branch, newest first. One depth-limited single-branch
+   * clone + `git log` — deliberately WITHOUT per-commit file stats, which
+   * cost a checkout of every commit and its parent; `commitDetails` computes
+   * those lazily for one commit at a time (the UI's expand-a-row pattern).
+   */
+  async log(input: { branch?: string; limit?: number } = {}): Promise<RepoLogResult> {
+    const limit = parseLogLimit(input.limit);
+    // A depth-limited clone: `log` never checks anything out past the tip, so
+    // the sidebar's cost stays O(limit) as history grows. isomorphic-git
+    // stops the log walk at the recorded shallow boundary, and the boundary
+    // commit's `parents` are reported as plain oid strings either way.
+    const { branch, git } = await this.#checkout({ branch: input.branch, historyDepth: limit });
+    const entries = await git.log({ depth: limit });
+    return { branch, commits: entries.map(toRepoLogCommit) };
+  }
+
+  /**
+   * One commit's metadata plus the files it changed versus its first parent
+   * (versus an empty tree for the root commit), with numstat-shaped +/- line
+   * counts. Implementation: one full clone, then checkouts of the commit and
+   * its parent in the same filesystem — local tree walks, no second fetch.
+   */
+  async commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails> {
+    assertCommitOid(input.commitOid);
+    const { branch, filesystem, git } = await this.#checkout({
+      branch: input.branch,
+      historyDepth: "full",
+    });
+    // Resolve the commit directly — the input is a validated full oid, which
+    // isomorphic-git's ref resolution accepts as-is, so this stays O(1) as
+    // history grows. The single-branch clone only carries branch-reachable
+    // objects, so a foreign oid throws NotFound here.
+    const entry = await git.log({ ref: input.commitOid, depth: 1 }).then(
+      (entries) => entries[0],
+      () => undefined,
+    );
+    if (!entry) {
+      throw new Error(`Commit ${input.commitOid} was not found on branch "${branch}".`);
+    }
+    const parentOid = entry.parent[0] || null;
+
+    await git.checkout({ ref: entry.oid, force: true });
+    const commitFiles = await readCheckoutBytes(filesystem);
+    let parentFiles = new Map<string, Uint8Array>();
+    if (parentOid !== null) {
+      await git.checkout({ ref: parentOid, force: true });
+      parentFiles = await readCheckoutBytes(filesystem);
+    }
+
+    return { ...toRepoLogCommit(entry), files: diffFileMaps(parentFiles, commitFiles), parentOid };
   }
 
   // ===========================================================================
@@ -494,12 +698,11 @@ export class RepoDurableObject extends DurableObject<Env> {
    * store, unreferenced). The adopted head is live for worker builds the
    * moment this returns — same read-your-write boundary as commitFiles.
    *
-   * PUBLIC repositories transfer server-side (Artifacts imports straight
-   * from GitHub — any history size). PRIVATE repositories transfer in-process
-   * (the import service supports public sources only), where big histories
-   * need `depth`. `depth` prunes the adopted history to the newest N commits
-   * either way — GitHub retains the full history, so nothing is lost and a
-   * later deeper sync can widen the window.
+   * The history transfers in-process (checkout-free clone from GitHub +
+   * force-push to the Artifacts remote), so big histories need `depth` —
+   * which prunes the adopted history to the newest N commits. GitHub retains
+   * the full history, so nothing is lost and a later deeper sync can widen
+   * the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#serializeWrite(() => this.#syncFromGithub(input));
@@ -537,55 +740,27 @@ export class RepoDurableObject extends DurableObject<Env> {
       }
     }
 
-    // Two transfer lanes, picked by source visibility (probed BEFORE anything
-    // destructive happens):
+    // ONE transfer lane: clone GitHub in this isolate and force-push to the
+    // Artifacts remote. Deliberately NOT the server-side Artifacts import —
+    // import cannot overwrite an existing name, and the delete-then-reimport
+    // dance it forces is unsafe: `artifacts.delete()` is acknowledged first
+    // and applied asynchronously, so re-importing under the same name races
+    // the queued delete (observed live 2026-07-10: the import won the
+    // ALREADY_EXISTS retry loop, then the late delete destroyed the freshly
+    // imported repo, leaving no git data at all). The cost is memory: every
+    // object inflates in this isolate, so big histories need `depth` (this
+    // monorepo: a 21MB pack inflates to ~290MB, past the 128MB limit); GitHub
+    // keeps the full history, so a later deeper sync can widen the window.
     //
-    // - PUBLIC source: server-side Artifacts import (delete + import under the
-    //   same name — the remote URL is name-derived, so nothing else moves). No
-    //   repo bytes enter this isolate, so arbitrarily large histories sync.
-    //   The service supports public HTTPS remotes only (proven live: private
-    //   URLs answer REMOTE_AUTH_REQUIRED "Only public repositories" even with
-    //   embedded credentials).
-    // - PRIVATE source: in-DO git transfer (checkout-free clone + push). Every
-    //   object inflates in memory here, so big private histories need `depth`
-    //   (this monorepo: a 21MB pack inflates to ~290MB, past the 128MB limit);
-    //   small ones sync whole.
-    if (await githubRepoIsPublic(link)) {
-      // Reads hitting the brief delete->import window fail like any mid-force
-      // clone would and succeed on retry. Deleting the repo revokes its
-      // tokens, including this isolate's cached one — drop it so gitAccess
-      // re-mints against the imported repo.
-      const artifacts = this.requireArtifacts();
-      const artifactName = this.artifactName();
-      await artifacts.delete(artifactName);
-      this.#artifactTokenPromise = undefined;
-      // The delete is eventually consistent: an immediate import can still see
-      // the old name (observed live as ALREADY_EXISTS) — retry with backoff.
-      for (let attempt = 1; ; attempt++) {
-        try {
-          await artifacts.import({
-            source: {
-              url: `https://github.com/${link.owner}/${link.repo}.git`,
-              branch,
-              ...(input.depth === undefined ? {} : { depth: input.depth }),
-            },
-            target: { name: artifactName },
-          });
-          break;
-        } catch (error) {
-          const code = (error as { code?: string }).code;
-          if (code === "ALREADY_EXISTS" && attempt <= 5) {
-            await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
-            continue;
-          }
-          throw new Error(
-            `Artifacts import of ${link.owner}/${link.repo}#${branch} failed (the repo is deleted until a retried sync succeeds): ${redactGitCredentials(String(error))}`,
-          );
-        }
-      }
-    } else {
-      await this.#transferGithubHistoryInProcess({ branch, depth: input.depth, link, token });
-    }
+    // The get-or-create heals a repo whose Artifacts repo is missing (the
+    // destroyed state the old delete+import lane could leave behind): the
+    // transfer force-pushes the whole adopted history, so a brand-new empty
+    // artifact is a fine starting point. A recreated artifact invalidates any
+    // token minted against its predecessor — drop the cache (only then; the
+    // usual already-exists case keeps the one-token-per-isolate economy).
+    const artifact = await this.getOrCreateArtifact(this.artifactName());
+    if (artifact.created) this.#artifactTokenPromise = undefined;
+    await this.#transferGithubHistoryInProcess({ branch, depth: input.depth, link, token });
 
     // The adopted head is recorded for read-your-write, then the head cache
     // is invalidated and rebuilt through getHead's own cold-miss path (a
@@ -818,7 +993,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
         branch: defaultBranch,
-        files: PROJECT_REPO_INITIAL_FILES,
+        files: projectRepoSeedFiles(parseConfig(this.env).iterateSdkPackageSpec),
         remote,
         token,
       }),
@@ -853,7 +1028,9 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.#artifactTokenPromise ??= artifactToken(this.requireArtifacts(), artifactName).catch(
       (error: unknown) => {
         this.#artifactTokenPromise = undefined;
-        throw error;
+        // A missing Artifacts repo is the pre-seed window (createArtifactRepo
+        // hasn't run), the same "not ready yet" every unseeded clone signals.
+        throw classifyRepoAccessError(error);
       },
     );
     return {
@@ -863,17 +1040,19 @@ export class RepoDurableObject extends DurableObject<Env> {
     };
   }
 
-  private async getOrCreateArtifact(name: string) {
+  private async getOrCreateArtifact(name: string): Promise<{ created: boolean }> {
     try {
-      return await this.requireArtifacts().create(name, {
+      await this.requireArtifacts().create(name, {
         setDefaultBranch: REPO_DEFAULT_BRANCH,
       });
+      return { created: true };
     } catch (error) {
       // Only the race we mean to tolerate. The old blind catch masked real
       // failures (an INTERNAL_ERROR here fell through to get(), which then
       // reported a misleading NOT_FOUND).
       if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
-      return await this.requireArtifacts().get(name);
+      await this.requireArtifacts().get(name);
+      return { created: false };
     }
   }
 
@@ -1124,21 +1303,6 @@ function githubRemoteUrl(link: { owner: string; repo: string }): string {
 }
 
 /**
- * Whether a GitHub repository is publicly clonable, probed with an
- * UNAUTHENTICATED smart-HTTP ref advertisement: 200 = public, 401/404 =
- * private (GitHub answers 404 for hidden private repos). Decides the sync
- * transfer lane BEFORE anything destructive happens — the Artifacts import
- * service supports public sources only.
- */
-async function githubRepoIsPublic(link: { owner: string; repo: string }): Promise<boolean> {
-  const response = await fetch(`${githubRemoteUrl(link)}/info/refs?service=git-upload-pack`, {
-    headers: { "user-agent": "iterate-os" },
-  });
-  await response.body?.cancel();
-  return response.ok;
-}
-
-/**
  * Strip git credentials from strings surfaced to callers. Both git-over-HTTPS
  * URLs (`x-access-token:<token>@`) and bare installation tokens can leak
  * through third-party error messages — the Artifacts service has been
@@ -1182,6 +1346,48 @@ async function readCheckoutFiles(filesystem: InMemoryFs): Promise<Record<string,
     files[path] = await filesystem.readFile(`${REPO_DIR}/${path}`);
   }
   return files;
+}
+
+/** All committed files of a checkout as one path -> raw bytes map (skips
+ * .git) — the tree-diff input for `commitDetails`, where a utf8 decode before
+ * the binary sniff would corrupt exactly the files it needs to sniff. */
+async function readCheckoutBytes(filesystem: InMemoryFs): Promise<Map<string, Uint8Array>> {
+  const files = new Map<string, Uint8Array>();
+  for (const path of await walkCheckoutPaths(filesystem)) {
+    files.set(path, await filesystem.readFileBytes(`${REPO_DIR}/${path}`));
+  }
+  return files;
+}
+
+/** The public `RepoLogCommit` projection of a git log entry: epoch-ms
+ * timestamp (git speaks seconds), trailing-newline-trimmed message. */
+function toRepoLogCommit(entry: GitLogEntry): RepoLogCommit {
+  return {
+    author: { email: entry.author.email, name: entry.author.name },
+    message: entry.message.replace(/\n+$/, ""),
+    oid: entry.oid,
+    parents: entry.parent,
+    timestamp: entry.author.timestamp * 1000,
+  };
+}
+
+const REPO_LOG_DEFAULT_LIMIT = 20;
+const REPO_LOG_MAX_LIMIT = 200;
+
+function parseLogLimit(limit: number | undefined): number {
+  if (limit === undefined) return REPO_LOG_DEFAULT_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > REPO_LOG_MAX_LIMIT) {
+    throw new Error(`log limit must be an integer between 1 and ${REPO_LOG_MAX_LIMIT}.`);
+  }
+  return limit;
+}
+
+/** Commit oids are full 40-hex sha1 strings — never abbreviated refs, so a
+ * pinned read can't silently resolve a branch or tag name. */
+function assertCommitOid(commitOid: string): void {
+  if (!/^[0-9a-f]{40}$/.test(commitOid)) {
+    throw new Error(`commitOid must be a full 40-character hex sha, got "${commitOid}".`);
+  }
 }
 
 /** All committed file paths of a checkout (skips .git). */

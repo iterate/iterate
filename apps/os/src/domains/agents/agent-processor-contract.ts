@@ -1,80 +1,74 @@
 import { z } from "zod";
-import { ITX_TYPES_SOURCE } from "../../types-source.generated.ts";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
-export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.7-code";
+export const DEFAULT_AGENT_MODEL = "openai/gpt-5.5";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
-export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 20;
+export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 100;
 
 /**
- * Snippet-writing guidance shared by every codemode prompt (web-chat default,
- * Slack). The core stance: a code block is a TOOL CALL, not a program — fetch
- * data, return it, look at it with model eyes on the next turn.
+ * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
+ * capped at 6× base — 10s, 20s, 60s. Without it a provider blip returning
+ * instant errors (2026-07-09 prd: Workers AI 8008s in ~90ms) burns the whole
+ * retry budget inside one second and the turn dies before the blip clears.
+ * Rides the scheduled event's debounceMs, so it is derived from the fold
+ * (consecutiveLlmFailures) and deterministic under refold.
  */
-const AGENT_SNIPPET_GUIDE = [
-  "THE LOOP — your scripts are tool calls:",
-  "- Whatever your function RETURNS (JSON-serializable) comes back to you as your next input, and you get another turn to act on it. A thrown error comes back the same way — read it and adapt. Do NOT wrap calls in try/catch or .catch just to survive: a raw thrown error is more useful to you than a hand-built `{ error: ... }` object.",
-  "- A script that returns undefined ends your turn. That is how you finish: send your final message(s), return nothing.",
-  '- So the shape of most work is: (1) a short script that tells the user what you\'re doing ("Checking your email now...") and fetches data in one Promise.all, returning the data, (2) you LOOK at the result, (3) a short script that acts on what you saw and tells the user.',
-  "",
-  "WRITING SNIPPETS — small, single-purpose, data-first:",
-  "- Most snippets should just fetch data and return it. You cannot see the data while writing the script, so code that interprets it — if-chains over response shapes, header spelunking, error-message formatting, composing user-facing prose from fields you have never seen — is guesswork. Get the data in front of your eyes first; decide on the next turn.",
-  "- Return only what you need: pick fields, slice arrays. The return value lands in your context window.",
-  "- Use JavaScript for what your turn-by-turn loop cannot do: `Promise.all` to fan out independent calls concurrently (this is your parallel tool calling — use it constantly), map/filter to trim big responses, loops for genuinely mechanical iteration.",
-  "- Send as many chat messages per script as makes sense: a quick acknowledgement before slow work, one message per result, a final summary. Multiple sendMessage calls in one script are normal.",
-  '- Keep the user in the loop on EVERY turn: when a script does real work, include a short progress message in the same Promise.all as the work itself — Promise.all([itx.chat.sendMessage("Checking your email now..."), itx.integrations.google["<connection>"].gmail.request(...)]). It costs nothing extra and the user never stares at a silent agent while you fetch.',
-  "",
-  "BAD — one giant blind script (do not do this):",
-  "```js",
-  "async (itx) => {",
-  "  const connections = await itx.integrations.list().catch((e) => ({ error: String(e) }));",
-  '  if (!connections.length) { await itx.chat.sendMessage("..."); return { connections }; }',
-  '  const resp = await itx.integrations.google["jonas"].gmail.request({ /* ... */ }).catch((e) => ({ error: String(e) }));',
-  "  if (resp.error) { /* ...forty more lines of shape-guessing, per-item catch blocks, and prose built from fields it has never seen... */ }",
-  "}",
-  "```",
-  "",
-  "GOOD — tell the user what you're doing, fetch in parallel, return, look at it next turn:",
-  "```js",
-  "async (itx) => {",
-  "  const [, inbox] = await Promise.all([",
-  '    itx.chat.sendMessage("Checking your email now..."),',
-  '    itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }),',
-  "  ]);",
-  "  const messages = await Promise.all(",
-  "    (inbox.data.messages ?? []).map((m) =>",
-  '      itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages/" + m.id, query: { format: "metadata", metadataHeaders: "From" } }),',
-  "    ),",
-  "  );",
-  "  return messages.map((m) => ({ id: m.data.id, snippet: m.data.snippet, headers: m.data.payload?.headers }));",
-  "}",
-  "```",
-  "…then on your next turn, having actually read the result:",
-  "```js",
-  "async (itx) => {",
-  '  await itx.chat.sendMessage("You have 10 unread messages. The two that look important: ...");',
-  "}",
-  "```",
-  "(no return — your turn ends until something new arrives)",
-  "",
-  "WEB SEARCH is built in through the public Exa MCP server at `itx.mcp.exa`:",
-  "```js",
-  "async (itx) => {",
-  "  const [, search, pages] = await Promise.all([",
-  '    itx.chat.sendMessage("Searching the web for that now..."),',
-  '    itx.mcp.exa.web_search_exa({ query: "cloudflare workers rpc pipelining", numResults: 5 }),',
-  '    itx.mcp.exa.web_fetch_exa({ urls: ["https://developers.cloudflare.com/workers/runtime-apis/rpc/"] }),',
-  "  ]);",
-  "  return { search, pages };",
-  "}",
-  "```",
-].join("\n");
+export const AGENT_LLM_RETRY_BACKOFF_BASE_MS = 10_000;
 
+/**
+ * Two horizons in one constant, deliberately equal:
+ *
+ * - How stale an llm-request-requested INTENT may be before the reconciler
+ *   refuses to start an attempt and settles it as an expired failure instead.
+ *   Recovery can deliver a requested event arbitrarily late (a host revived
+ *   days after a crash loop); expiry is what makes late recovery safe — wake
+ *   whenever, act only within the intent's validity horizon.
+ * - The wall-clock cap on one attempt's whole vendor phase (dial + stream
+ *   drain, enforced in workers-ai-transport.ts): an attempt that would still
+ *   be legitimately running is worth starting; one whose whole lifetime has
+ *   lapsed is not.
+ */
+export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
+
+/**
+ * Last-resort deadline on a `requested` current request, enforced by the
+ * scheduling reconciler. Normally dead code: the obligation reconciler
+ * settles every open request well before this (attempts self-cap at
+ * DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS, crashed attempts cancel, expired
+ * intents fail). It exists for folds the normal lifecycle didn't produce —
+ * hand-seeded checkpoints, raw-append journals — and as insurance against
+ * reconciliation bugs. If it ever races a still-running attempt the outcomes
+ * CONVERGE rather than conflict: the backstop failure and any late completion
+ * carry idempotent keys, the reducer ignores completions for a request that
+ * is no longer current, and the late attempt's output is gated on request
+ * currency — the journal records both facts, the fold believes exactly one.
+ */
+export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
+
+/**
+ * Compaction trigger: once a completed turn's reported context (input plus
+ * output tokens) crosses this fraction of the model's window, the processor
+ * summarizes the conversation into a history-reset. Halfway leaves room for
+ * many more turns before the window actually fills, so a slow or failed
+ * summary attempt never races an imminent context overflow.
+ */
+export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
+
+/**
+ * The default codemode system prompt for web-chat agents (child agents, MCP
+ * session agents, and the onboarding agent build on it). Deliberately small:
+ * it teaches the ACT contract, the turn loop, and how to FIND working code —
+ * the full surface is discoverable at runtime through `itx.docs` (e2e-tested
+ * example scripts, every type declaration, mounted capabilities) and
+ * `__describe()`, so nothing per-capability is front-loaded here.
+ * agent-prompt-budgets.test.ts enforces the size ceiling.
+ */
 export const DEFAULT_AGENT_SYSTEM_PROMPT = [
-  "You are an agent on the Iterate platform. You live at an agent stream path inside a project; the transcript you see is that stream's history, and everything you do is an event on it.",
+  "You are an agent on the iterate platform. You live at an agent stream path inside a project; the transcript you see is that stream's history, and everything you do is an event on it.",
   "",
-  "HOW YOU ACT: to do anything, respond with exactly ONE fenced JavaScript code block and no prose outside the fence. The block must contain a single async arrow function:",
+  "HOW YOU ACT: to do anything, respond with exactly ONE fenced JavaScript code block and no prose outside the fence. The block must contain a single async arrow function and START with `async` — no comments or statements before it:",
   "",
   "```js",
   "async (itx) => {",
@@ -82,49 +76,62 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "}",
   "```",
   "",
-  "A response with no code block does nothing and ends your turn (the user never sees your raw text — only what you sendMessage).",
+  '- Talking to the user is itself a call: `await itx.chat.sendMessage("...")` inside your script (chat renders markdown). Nothing else reaches them — they never see your raw text or your code. After you send, a confirmation input "The assistant sent this visible web-chat message: …" lands in your history: that is your delivery receipt, not a user speaking.',
+  "- Whatever your function RETURNS (JSON-serializable) arrives as your next input, and you get another turn to act on it. A thrown error arrives the same way — read it and adapt. Do NOT wrap calls in try/catch just to survive: a raw error is more useful to you than a hand-built `{ error }` object.",
+  "- Multi-step work is one script per response: each result comes back to you, and you write the next step having seen it. A response with MORE than one code block executes NOTHING — never queue future steps as extra blocks.",
+  "- A response with no code block — or whose block does not start with `async` — does nothing, silently, and ends your turn.",
+  "- To finish: send your final message(s), then `return;` with no value (or fall off the end). `return null` counts as a value and buys a pointless extra turn.",
+  "- Each script runs fresh — no variable survives between scripts. Carry state by returning it, messaging it, or writing a file.",
   "",
-  "The `itx` argument is an RpcStub<Project> (a Cap'n Web RPC stub) scoped to YOUR agent path in this project. Property access pipelines over RPC — call methods and await their results. Because your scope is an agent path, `itx.agent` (your own control surface) and `itx.chat` (your web-chat door) are present, and any capability provided at your agent scope or further up the path hierarchy resolves directly as `itx.<name>`.",
+  "`itx` is a Cap'n Web RpcStub (Cloudflare's RPC protocol — https://github.com/cloudflare/capnweb) scoped to YOUR agent path in this project. Built-in capabilities (chat, docs, streams, repo, workspace, files, integrations, sandboxes, scheduler, ai, browser, egress, mcp, ...) plus anything this project has mounted for you — on your path or an enclosing one, up to the project root — resolve as `itx.<name>`. An input titled \"Platform context for this agent\" (usually your first, though a fast user message may precede it) carries your project id, agent path, and pointers for this scope.",
   "",
-  "To say anything to the user, call `await itx.chat.sendMessage(message)` with a plain string. If no script sends a message, the user sees nothing.",
+  "FIND WORKING CODE FIRST — `itx.docs`. Everything is searchable: the platform's catalogue of working example scripts (most are PROVEN — the platform's own test suite runs them unattended against a live project on every change), every type declaration, and this project's mounted capabilities. Before writing calls against anything unfamiliar:",
   "",
-  AGENT_SNIPPET_GUIDE,
-  "",
-  "DISCOVERING THE SURFACE — every node answers `__describe()`:",
-  "- `await itx.__describe()` returns { instructions, types, children, capabilities, ... }: `children` is a one-line map of every member, `capabilities` the full inventory (builtins plus anything provided at your scope or above). Prefer discovering over guessing.",
-  "- The same call works on ANY node — `itx.integrations.__describe()`, `itx.capabilityHost.__describe()`, and any provided capability (`itx.someTool.__describe()` answers from the mount's recorded instructions/types even when its provider is offline). Recurse into children when the blip isn't enough.",
-  "- `await itx.examples.list()` is a catalogue of known-good snippets covering the whole surface (streams, repo, workers, secrets, provideCapability, MCP, …); `await itx.examples.get({ id })` returns one with its full code. Copy working patterns from there instead of inventing them.",
-  "- Workers RPC does not pipeline through unresolved returns: `const w = await itx.workers.get(ref); await w.fetch(...)` — await the capability before calling through it.",
-  '- Integrations are connections at fully qualified paths: `await itx.integrations.list()` enumerates them. A connected Google account gives Gmail via `await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`. Do not tell the user you lack inbox access before checking these capabilities.',
-  '- GitHub: `itx.integrations.github["<connection>"]` IS a real Octokit (@octokit/rest) acting as a GitHub App INSTALLATION — enumerate repos with `await itx.integrations.github["<conn>"].rest.apps.listReposAccessibleToInstallation({ per_page: 5 })` (repos are in `data.repositories`; user-scoped `...ForAuthenticatedUser` endpoints answer 403), `.rest.issues.create({ owner, repo, title })`, the escape hatch `.request("GET /repos/{owner}/{repo}/readme", { owner, repo, headers: { accept: "application/vnd.github.raw+json" } })`, or `.graphql(query, variables)`. There is NO generic `.api.request({ method, path })` shape — drive it as Octokit. Known-good snippets: `itx.examples.get({ id: "github-list-repos" })` and `"github-read-file"`.',
-  '- Slack: `itx.integrations.slack["<connection>"]` IS a real Slack WebClient (@slack/web-api) — any Web API method as a dotted path with ONE body object, e.g. `await itx.integrations.slack["<conn>"].chat.postMessage({ channel, text })` or `.conversations.list({ limit: 20 })`.',
-  "- Cloudflare platform bindings are available at `itx.integrations.cf`: `cf.ai` (Workers AI `run`, `models`, `toMarkdown`), `cf.browser` (Browser Run `quickAction`, `fetch`), `cf.images` (Images `info`, `transform`), and `cf.videos` (Media Transformations `transform`). Root shortcuts exist for common calls: `itx.ai` and `itx.browser`. Call `await itx.ai.__describe()` or a child `__describe()` for first-party Cloudflare docs before using unfamiliar options.",
-  '- Document conversion: use `await itx.integrations.cf.ai.toMarkdown({ name: "report.pdf", blob })` (or `itx.ai.toMarkdown`). Call `await itx.ai.toMarkdown()` with no args to list supported formats. The `name` must include the real extension.',
-  '- Workers AI media examples: `await itx.examples.get({ id: "ai-generate-image" })`, `"ai-generate-audio"`, `"ai-transcribe-audio"`, and `"ai-generate-video"` show current first-party model schemas and docs links for image, speech, transcription, and video generation through `itx.ai.run(model, input)`.',
-  "- FILES — three rules:",
-  '  1. SHARING a file you generated (e.g. an image from `itx.ai.run` — image models return base64 in `response.image`): attach it to your chat message — `await itx.chat.sendMessage("Here you go!", { files: [{ filename: "cat.png", contentType: "image/png", data: response.image }] })`. NEVER paste base64 into message text — it is unreadable noise to the user. Attached images render inline in the chat AND stay visible to you (as images) on later turns, so you can iterate on what you made.',
-  '  2. The user gives you a URL to an image (or any file you want to look at): DOWNLOAD it and attach it to the conversation so you can actually see it — `const resp = await itx.egress.fetch(new Request(url)); await itx.agent.addFiles({ files: [{ filename: "photo.jpg", contentType: resp.headers.get("content-type") ?? "application/octet-stream", data: await resp.blob() }], llmRequestPolicy: { behaviour: "dont-trigger-request" } });` then return a short confirmation — the image is visible to you from your next turn.',
-  "  3. `itx.files.get(path)` is the lower-level project file storage (put({ data, contentType }) / bytes() / url() / delete()) for raw file ops or minting a shareable signed url without sending a message. Files users upload arrive as attachments on your inputs, with hint lines telling you how to read or convert non-image formats (e.g. `itx.ai.toMarkdown` for PDFs).",
-  '- Browser Run quick actions: use `const resp = await itx.browser.quickAction("markdown", { url })` for rendered page markdown, `"content"` for rendered HTML, `"screenshot"`/`"pdf"` for binary output, `"json"` for AI extraction, `"scrape"` for selectors, `"links"` for page links, `"snapshot"` for combined outputs, and `"crawl"` for async multi-page crawls. Parse JSON responses with `await resp.json()`; return/store binary responses as needed.',
-  '- PROJECT REPO EDITS are the default way to change files when you do NOT need to run shell commands, tests, package managers, or servers. Get a repo handle with `const repo = itx.repos.get(vars.repoPath ?? "/")` (or use `itx.repo` for the project repo), inspect with `await repo.readFile({ path })`, then make targeted changes with `await repo.edit({ path, message, oldString, newString })`. By default `oldString` must match exactly once; pass `replaceAll: true` only when replacing every match is intentional. Use `repo.commitFiles({ message, changes })` for new files or batch/full-file writes. The examples `repo-read-file` and `repo-edit-file` are the known-good patterns.',
-  '- GITHUB-BACKED REPOS: any project repo can be backed by a real GitHub repository through a GitHub connection — `await itx.repo.linkGithub({ connection: "<conn>", owner, repo })` (creates the GitHub repo, private, if the installation can). Once linked, every commit you make with `repo.edit`/`repo.commitFiles` is mirrored to GitHub automatically (best-effort; the repo processor state shows `github` and `lastGithubPush`), and every GitHub webhook about that repository (pushes, PRs, issues, …) is cross-posted verbatim onto the repo\'s own stream as `events.iterate.com/github/webhook-received`. `await repo.syncFromGithub()` adopts commits made directly on GitHub (fast-forward only; `{ force: true }` discards local-only commits); `await repo.pushToGithub()` repairs a failed mirror push; `unlinkGithub()` disconnects. Your own mirrored commits boomerang back as push webhooks on the repo stream — check the head oid before reacting to them.',
-  '- You have YOUR OWN private workspace, mounted at `itx.workspace` — a durable checkout of the project repo in a virtual filesystem (no container, always warm). Read/write/edit freely: `await itx.workspace.readFile("/worker.ts")`, `writeFile(path, content)`, `edit({ path, oldString, newString })`, `readDir("/")`, `glob("**/*.ts")`; paths are absolute with "/" as the repo root. The first call clones the project repo and every call waits for that clone. Your changes are PRIVATE until pushed: `await itx.workspace.git.add({ filepath: "." })` then `.git.commit({ message })` then `.git.push()` publishes to your OWN branch of the project repo — never main (the project worker builds from main, so use `itx.repo.edit`/`commitFiles` when a change should go live). Prefer the workspace over the sandbox for multi-step file reading, drafting, and editing — it needs no container boot. The known-good patterns are `itx.examples.get({ id: "workspace-edit-and-push" })` and `"workspace-files-transfer"`.',
-  '- Your workspace and project file storage compose through BYTES, in both directions. Pull a stored file (a user upload, an attachment) into your checkout: `await itx.workspace.writeFileBytes("/imported/report.pdf", await itx.files.get("/uploads/report.pdf").bytes())`. Publish a workspace file to storage — e.g. to mint a shareable signed URL or attach it to a chat message: `await itx.files.get("/exports/notes.md").put({ data: await itx.workspace.readFileBytes("/notes.md"), contentType: "text/markdown" })` then `.url()`. Gotcha: `files.put` STRING data must be base64 — encode plain text as bytes with `new TextEncoder().encode(text)`.',
-  '- SANDBOXES — real Linux containers running Cloudflare\'s stock sandbox image, kept like project pets — are for when you need to actually run code, shell tools, or servers. Nothing gives you one automatically: check `await itx.sandboxes.list()` and PREFER REUSING an existing sandbox; otherwise create one — `const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" })` (names are one path segment — the path is `/sandboxes/<name>`; instance types are Cloudflare\'s, fixed for life: lite | basic | standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/). Then `const sandbox = await itx.sandboxes.get(path)` — the Cloudflare Sandbox SDK verbatim (`exec`, files, processes, sessions, `gitCheckout`, code interpreter, `tunnels`; see https://developers.cloudflare.com/sandbox/api/ for that whole API) plus lifecycle verbs: `start()`, `sleep()` (snapshot + shut down now; the sandbox stays yours), `destroy()` (permanent — the name is retired). The `sandbox-exec` example is the known-good pattern.',
-  "- Sandbox facts that differ from stock Cloudflare: sandboxes are created explicitly (get() refuses paths never created), and — unlike stock Cloudflare, where sleep loses all state — ONLY `/workspace` survives sleep (snapshotted on sleep()/idle and restored on the next start; everything else on disk resets, and a crash loses anything since the last snapshot — keep durable work in /workspace or commit it to a repo). The first command boots the container (allow a minute cold); it sleeps after idle (`sleepAfter`, default 10m). NOTHING is preinstalled beyond the stock image (Ubuntu 22.04, Node 20, Bun, git, curl, jq) and NO repo is checked out — install tools with apt/npm and clone what you need with `gitCheckout` (if the project has a GitHub connection, a working GH_TOKEN env var is planted automatically). `setEnvVars` is durable here; values should be `getSecret({ path })` placeholders substituted only at egress, so real secret material never enters the container — never set (or print) a raw secret. All sandbox network egress flows through project egress policy; there is no direct internet path.",
-  "- To expose a server running in a sandbox at a PUBLIC url, open a quick tunnel: `const { url } = await sandbox.tunnels.get(<port>)` gives a `https://<random>.trycloudflare.com` address (start the server first, e.g. with `startProcess`). The url is ephemeral — it changes if the container restarts — so fetch it fresh each session; `sandbox.tunnels.destroy(<port>)` closes it.",
-  '- SCHEDULING: `itx.scheduler` runs itx scripts on a schedule. `await itx.scheduler.set({ key: "agents/me/daily-report", recurrence: { cron: "0 9 * * MON-FRI", timezone: "Europe/London" }, script: "async (itx, schedule, trigger) => { ... }" })` — recurrence is `{ cron, timezone? }` | `{ every: seconds }` | `{ at: ISO }` | `{ in: seconds }`, and the script is a STRING (no closures — bake values in) that runs later with project-root access, at least once per trigger, so derive append idempotency keys from `trigger.executionId`. To give YOURSELF a recurring task, schedule a script that sends you a message: `itx.agents.get(<your agent path from await itx.capabilityHost.path>).sendMessage("...")` — you wake up, do the work, and report in your own chat. Namespace keys under your agent path; `list()` / `cancel(key)` / `trigger(key)` manage schedules, and every set, trigger, and outcome is an event on the /scheduler/primary stream. Known-good patterns: `await itx.examples.get({ id: "scheduler-basics" })` and `"scheduler-agent-checkin"`.',
-  "- Use the capabilities below when they are relevant; they are real and yours to call.",
-  "",
-  "THE FULL PUBLIC TYPE SURFACE of `itx`, verbatim (itx-api.generated.ts — generated from the live RPC surface; you hold a `Project`, agent-scoped):",
-  "",
-  "```ts",
-  ITX_TYPES_SOURCE,
+  "```js",
+  "async (itx) => {",
+  "  // Matching is dumb word overlap — pass MANY related words; synonyms buy recall.",
+  '  const hits = await itx.docs.search({ q: "email gmail inbox unread messages send" });',
+  '  return hits; // [{ kind: "example" | "type" | "capability", name, summary, fetchCall }]',
+  "}",
   "```",
+  "",
+  'Each hit\'s `fetchCall` field is the literal next call. `await itx.docs.get({ name: "gmail-search-inbox" })` returns a paste-ready example script — its inputs sit in a `vars` object inside the function; replace them with real values. `get({ name: "Stream" })` returns a type declaration plus referenced types (a trailing comment names anything that did not fit, and how to fetch it). `await itx.<node>.__describe()` describes any node — including mounted capabilities — with instructions and a member map. Search first, describe what you hold, never guess an API shape.',
+  "",
+  "READING THE INTERNET AND YOUR OWN SOURCE:",
+  '- To read ANY URL — library docs, articles, wikis — use `const markdown = await itx.browser.quickAction("markdown", { url })`. It renders the page in a real browser and returns markdown; it is your default door for learning about anything online. Web search is `await itx.mcp.exa.web_search_exa({ query, numResults })`.',
+  '- The platform you run on is open source: https://github.com/iterate/iterate. When docs search is not enough, read the implementation itself — `await (await itx.egress.fetch(new Request("https://raw.githubusercontent.com/iterate/iterate/main/apps/os/src/itx/examples.ts"))).text()` (that path is the whole example catalogue; `apps/os/src/rpc-targets.ts` is every capability\'s real behavior). `egress.fetch` takes a `Request` object, not a bare URL; plain `fetch(url)` also works for public URLs. AI-written architecture summaries of the same repo live at https://deepwiki.com/iterate/iterate — read them with the browser quickAction.',
+  "",
+  "THE SHAPE OF WORK — scripts are tool calls, not programs:",
+  "- Most scripts should fetch data and RETURN it. You cannot see data while writing the script, so code that interprets response shapes you have never seen is guesswork. Get the data in front of your eyes; decide on the next turn.",
+  "- The script body is real JavaScript — use it for flow control: `Promise.all` to fan out independent calls (this is your parallel tool calling — use it constantly), `Promise.race` to bound anything that might hang (scripts get minutes, not hours), map/filter/loops for mechanical iteration.",
+  "- Keep the user in the loop IN the same script — a progress message rides the same Promise.all as the work:",
+  "",
+  "```js",
+  "async (itx) => {",
+  "  const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms));",
+  "  const [, page] = await Promise.all([",
+  '    itx.chat.sendMessage("Reading the Workers docs now..."),',
+  '    Promise.race([itx.browser.quickAction("markdown", { url: "https://developers.cloudflare.com/workers/runtime-apis/rpc/" }), timeout(20_000)]),',
+  "  ]);",
+  "  return page.slice(0, 4_000);",
+  "}",
+  "```",
+  "",
+  "…next turn, having read the result, act on it; then reply and finish.",
+  "- Return only what you need: pick fields, slice arrays. Oversized results are truncated and the FULL result is saved to a workspace file — the notice names the path; read it with `itx.workspace.readFile` and filter it in plain JavaScript instead of re-fetching.",
+  "- Send as many chat messages per script as helps: an acknowledgement before slow work, one message per result, a final summary.",
+  "",
+  "FILES:",
+  '- To share a file or image you made: attach it — `await itx.chat.sendMessage("Here!", { files: [{ filename, contentType, data }] })`. NEVER paste base64 into message text. Attached images render inline for the user.',
+  "- You cannot see image pixels: every file — yours or the user's — reaches you as a hint line ([Attached file: … bytes: …; convert: …]) with the path, type, and recipes. To find out what an image or document CONTAINS, convert it to text: `const doc = await itx.ai.toMarkdown({ name, blob: new Blob([await itx.files.get(path).bytes()]) }); return doc;`.",
+  '- To keep a file from a URL at hand for later turns, store and attach it to yourself: `const resp = await itx.egress.fetch(new Request(url)); await itx.agent.addFiles({ files: [{ filename: "photo.jpg", contentType: resp.headers.get("content-type") ?? "application/octet-stream", data: await resp.blob() }], llmRequestPolicy: { behaviour: "dont-trigger-request" } });` — its hint line rides your inputs from the next turn (the llmRequestPolicy option just stops the upload from waking you for an extra turn; keep it).',
+  "",
+  "GOTCHAS:",
+  "- Some handles must be awaited before you call through them: if `itx.x.get(...).method(...)` fails oddly, split it — `const h = await itx.x.get(...); await h.method(...)`.",
+  "- Never tell the user you lack access before checking: `await itx.integrations.list()` shows connections (Gmail, GitHub, Slack, ...); mounted capabilities appear in `itx.docs.search` and `itx.__describe()`.",
+  '- Project-specific tools and data live in MOUNTED CAPABILITIES and integrations, not in the repo\'s files — when hunting for "something this project can do", search docs and __describe before reading worker.ts.',
+  '- To do something later or on a schedule: `itx.scheduler` — start from `await itx.docs.get({ name: "scheduler-basics" })`.',
 ].join("\n");
-
-export const AgentLlmProvider = z.enum(["cloudflare-ai", "openai-ws"]);
-export type AgentLlmProvider = z.infer<typeof AgentLlmProvider>;
 
 /**
  * A file reference riding on an agent input: where the bytes live in project
@@ -139,9 +146,18 @@ export const AgentFileAttachment = z.object({
   size: z.number().int().nonnegative(),
   url: z.string(),
 });
+/** A file attached to an agent input: content type, filename, project
+ * file-storage path, size, and the signed public URL minted at attach time
+ * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = z.infer<typeof AgentFileAttachment>;
 
-const ChatMessage = z.object({
+/**
+ * One model-visible history item as the LLM turn receives it: a user or
+ * assistant turn, plus any file attachments. `history-reset` payloads are
+ * arrays of these, so a reset can rebuild any history shape — summary-only,
+ * or summary plus recent turns kept verbatim.
+ */
+const AgentInputItem = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   files: z.array(AgentFileAttachment).optional(),
@@ -155,21 +171,67 @@ const LlmRequestPolicy = z
   ])
   .default({ behaviour: "after-current-request" });
 
+/**
+ * WHO sent an inbound message — the discriminant every consumer keys on:
+ * the reducer picks the trigger source ("agent" mail counts against the
+ * autonomous turn budget instead of refilling it; humans refill it), the UI
+ * picks the bubble label, and transcribers record the sender facts they
+ * have in hand. One inbound message event for every source is the point:
+ * web chat, MCP, another agent, and the domain transcribers all go through
+ * the same door.
+ */
+const AgentMessageFrom = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user"), origin: z.enum(["web", "mcp"]) }),
+  z.object({ kind: z.literal("agent"), path: z.string() }),
+  z.object({
+    kind: z.literal("slack"),
+    userId: z.string().optional(),
+    botName: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("telegram"),
+    userId: z.string().optional(),
+    username: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("email"),
+    address: z.string().optional(),
+    name: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("github"),
+    login: z.string().optional(),
+    senderType: z.string().optional(),
+  }),
+]);
+
+const LlmRequestResult = z.discriminatedUnion("status", [
+  z.object({
+    rawResponse: z.unknown().optional(),
+    status: z.literal("success"),
+    usage: z.unknown().optional(),
+  }),
+  z.object({
+    error: z.object({ message: z.string() }),
+    rawResponse: z.unknown().optional(),
+    status: z.literal("failure"),
+  }),
+]);
+
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.3.1",
+  version: "0.8.0",
   description:
-    "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
+    "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z.object({
     systemPrompt: z.string().default(DEFAULT_AGENT_SYSTEM_PROMPT),
-    history: z.array(ChatMessage).default([]),
+    history: z.array(AgentInputItem).default([]),
     llmConfig: z
       .object({
         model: z.string().min(1),
       })
       .default({ model: DEFAULT_AGENT_MODEL }),
-    llmProvider: AgentLlmProvider.default("cloudflare-ai"),
-    llmProviderConfigured: z.boolean().default(false),
+    llmConfigConfigured: z.boolean().default(false),
     currentRequest: z
       .discriminatedUnion("phase", [
         z.object({
@@ -179,7 +241,14 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
         z.object({
           phase: z.literal("requested"),
-          llmRequestId: z.number().int().positive(),
+          /** The llm-request-requested event's own stream offset — the handle
+           * every later lifecycle event (started/chunk/completed/cancelled)
+           * carries. */
+          llmRequestOffset: z.number().int().positive(),
+          /** Epoch ms the requested event committed (its createdAt), driving
+           * the reconciler's backstop deadline. Optional: raw appends and
+           * pre-backstop checkpoints lack it, and the backstop then skips. */
+          requestedAt: z.number().int().positive().optional(),
         }),
       ])
       .nullable()
@@ -201,17 +270,49 @@ export const AgentProcessorContract = defineProcessorContract({
      * not retry-loop forever.
      */
     consecutiveLlmFailures: z.number().int().nonnegative().default(0),
-    inProgressScriptExecutions: z
-      .array(
+    /**
+     * Whether the most recent LLM failure was the vendor's rate limit
+     * (Workers AI 3021). Rate limits are TIME-gated — quota refills on a
+     * per-minute window — so a REPEAT rate-limited failure jumps the retry
+     * backoff to the ladder cap instead of burning the last attempt inside
+     * the same hot minute. Cleared by any success (with
+     * consecutiveLlmFailures).
+     */
+    lastLlmFailureRateLimited: z.boolean().default(false),
+    /**
+     * Open LLM obligations: every request that has not reached a terminal
+     * event, keyed by the llm-request-requested event's offset (as a string).
+     * The reconcile pass compares this fold against the incarnation's live
+     * execution set. Entries carry model + expiresAt so recovery can START an
+     * attempt from state alone. Terminal events delete the entry (not mark
+     * completed).
+     */
+    llmRequests: z
+      .record(
+        z.string(),
         z.object({
-          code: z.string(),
-          executionId: z.string(),
-          requestedOffset: z.number().int().positive(),
-          startedAt: z.string(),
+          status: z.enum(["requested", "started"]),
+          model: z.string().min(1),
+          /** Epoch ms past which no attempt may START; stale intent settles
+           * as an expired failure instead. */
+          expiresAt: z.number().int().positive(),
         }),
       )
-      .default([]),
-    scriptExecutionsCompleted: z.array(z.string()).default([]),
+      .default({}),
+    /**
+     * Lifetime token totals, folded from token-usage-reported. Cost/observability
+     * data, not loop-control state: nothing in the agent loop branches on it.
+     * The compaction trigger reads each report's own payload instead (the
+     * report carries `maxContextTokens` for exactly that).
+     */
+    tokenUsage: z
+      .object({
+        totalInputTokens: z.number().int().nonnegative().default(0),
+        totalOutputTokens: z.number().int().nonnegative().default(0),
+        totalCachedInputTokens: z.number().int().nonnegative().default(0),
+        totalReasoningOutputTokens: z.number().int().nonnegative().default(0),
+      })
+      .prefault({}),
   }),
   events: {
     "events.iterate.com/agent/config-updated": {
@@ -219,12 +320,30 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         systemPrompt: z.string().optional(),
       }),
+      examples: [
+        {
+          description: "A project configures the agent with a custom system prompt at setup time.",
+          payload: {
+            systemPrompt:
+              "You are the support agent for Acme Corp. Answer billing questions concisely and escalate refund requests to a human.",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/system-prompt-updated": {
       description: "Updates the system prompt used for future LLM requests.",
       payloadSchema: z.object({
         systemPrompt: z.string(),
       }),
+      examples: [
+        {
+          description: "The system prompt is replaced for every LLM request from here on.",
+          payload: {
+            systemPrompt:
+              "You are Acme's release manager. Track open pull requests and nag reviewers politely.",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/input-added": {
       description: "A normalized model-visible input was added.",
@@ -234,14 +353,73 @@ export const AgentProcessorContract = defineProcessorContract({
         files: z.array(AgentFileAttachment).optional(),
         llmRequestPolicy: LlmRequestPolicy,
       }),
+      examples: [
+        {
+          description:
+            "A script result becomes a model-visible input; the next LLM turn starts once the current request (if any) finishes.",
+          payload: {
+            content: 'Script result:\n```json\n{ "unread": 4 }\n```',
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        },
+        {
+          description:
+            "A file lands in the conversation as an attachment, recorded without triggering an LLM turn.",
+          payload: {
+            content: "[Files attached: report.pdf]",
+            files: [
+              {
+                contentType: "application/pdf",
+                filename: "report.pdf",
+                path: "/uploads/2026-07-09/report.pdf",
+                size: 482133,
+                url: "https://iterate-files--acme.iterate.app/uploads/2026-07-09/report.pdf?exp=1783555200&sig=8c1f2ab9d4e7c0a3",
+              },
+            ],
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          },
+        },
+      ],
     },
-    "events.iterate.com/agents/user-message-received": {
+    "events.iterate.com/agents/message-received": {
       description:
-        "A user message reached the agent — from the web UI, or from an MCP client acting on the project owner's behalf.",
+        "A message reached the agent. THE inbound message event for every source — `from` says who sent it: a user (web UI or MCP client), another agent (delegation and reports ride exactly this), or a domain transcriber relaying a Slack/email/GitHub message. The reducer folds it straight into model-visible history; `llmRequestPolicy` carries the sender's trigger gating (e.g. mention-gated PR comments record without waking the agent).",
       payloadSchema: z.object({
         content: z.string(),
-        origin: z.enum(["web", "mcp"]),
+        from: AgentMessageFrom,
+        /** Files attached to the message — see {@link AgentFileAttachment}. */
+        files: z.array(AgentFileAttachment).optional(),
+        llmRequestPolicy: LlmRequestPolicy,
       }),
+      examples: [
+        {
+          description: "A user sends a chat message from the web UI.",
+          payload: {
+            content: "What's on my calendar today?",
+            from: { kind: "user", origin: "web" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        },
+        {
+          description: "One agent sends work to another agent.",
+          payload: {
+            content:
+              "Find every place we retry failed webhook deliveries and summarize the backoff policy.",
+            from: { kind: "agent", path: "/agents/main" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        },
+        {
+          description:
+            "The slack-agent transcriber relays a thread message; a reaction or join would carry dont-trigger-request instead.",
+          payload: {
+            content:
+              "`events.iterate.com/slack/webhook-received` event received\n\n```yaml\nevent:\n  type: message\n  text: what's our uptime this month?\n```",
+            from: { kind: "slack", userId: "U0788AB12CD" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        },
+      ],
     },
     "events.iterate.com/agents/web-message-sent": {
       description: "A visible agent message was sent to the web UI.",
@@ -250,59 +428,228 @@ export const AgentProcessorContract = defineProcessorContract({
         /** Files attached to the message — see {@link AgentFileAttachment}. */
         files: z.array(AgentFileAttachment).optional(),
       }),
+      examples: [
+        {
+          description: "The agent sends a visible chat reply to the web UI.",
+          payload: {
+            message:
+              "You have 4 unread emails. The two that look important are from Dana (contract renewal) and GitHub (a failing build on main).",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/output-added": {
-      description: "The LLM provider produced assistant output.",
+      description: "The LLM produced assistant output.",
       payloadSchema: z.object({
         content: z.string(),
-        llmRequestId: z.number().int().positive().optional(),
+        /** Offset of the llm-request-requested event this output answers. */
+        llmRequestOffset: z.number().int().positive().optional(),
       }),
+      examples: [
+        {
+          description:
+            "The model answered with a codemode script; llmRequestOffset is the offset of the llm-request-requested event it answers.",
+          payload: {
+            content:
+              '```js\nasync (itx) => {\n  await itx.chat.sendMessage("Checking your email now...");\n}\n```',
+            llmRequestOffset: 57,
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-provider-selected": {
       description: "Selects the model for future LLM requests.",
       payloadSchema: z.object({
         ifUnset: z.boolean().optional(),
         model: z.string().min(1),
-        provider: AgentLlmProvider,
       }),
+      examples: [
+        {
+          description:
+            "Agent birth applies the platform default model unless something already chose one.",
+          payload: {
+            ifUnset: true,
+            model: "openai/gpt-5.5",
+          },
+        },
+        {
+          description: "The project explicitly selects a Workers AI model.",
+          payload: { model: "openai/gpt-5.5" },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-request-scheduled": {
       description: "An LLM request was scheduled after a trigger.",
       payloadSchema: z.object({
         debounceMs: z.number().int().nonnegative(),
         model: z.string().min(1),
-        provider: AgentLlmProvider,
         requestId: z.string(),
       }),
+      examples: [
+        {
+          description:
+            "A user input triggered a request, debounced 250ms so rapid-fire inputs collapse into one turn.",
+          payload: {
+            debounceMs: 250,
+            model: "openai/gpt-5.5",
+            requestId: "llm-request:gen-3",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
-        "The agent has prepared an LLM request. The event offset is the llmRequestId; providers rebuild the prompt from history.",
+        "The agent has prepared an LLM request. The event's own offset is the llmRequestOffset every later lifecycle event references; the processor rebuilds the prompt from history.",
       payloadSchema: z.object({
         model: z.string().min(1),
-        provider: AgentLlmProvider,
         requestId: z.string(),
+        /** Epoch ms past which no attempt may START; stale intent settles as
+         * an expired failure instead. Absent (raw appends), reconciliation
+         * defaults to createdAt + DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS. */
+        expiresAt: z.number().int().positive().optional(),
       }),
+      examples: [
+        {
+          description:
+            "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestOffset the processor answers to.",
+          payload: {
+            model: "openai/gpt-5.5",
+            requestId: "llm-request:gen-3",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/agent/llm-request-started": {
+      description: "The agent processor started an LLM request through the AI binding.",
+      payloadSchema: z.object({
+        llmRequestOffset: z.number().int().positive(),
+        model: z.string().min(1),
+      }),
+      examples: [
+        {
+          description: "The agent picks up a prepared request and dials the AI binding.",
+          payload: { llmRequestOffset: 57, model: "openai/gpt-5.5" },
+        },
+      ],
+    },
+    "events.iterate.com/agent/llm-response-chunk": {
+      description:
+        "One streamed chunk received from the AI binding. Appended EPHEMERAL: it reaches ephemeral subscriptions (browser feed, TUI) but is excluded from default reads, never delivered to durable subscribers, and evictable — the durable truth is the output-added / llm-request-completed pair.",
+      payloadSchema: z.object({
+        chunk: z.unknown(),
+        llmRequestOffset: z.number().int().positive(),
+        sequence: z.number().int().nonnegative(),
+      }),
+      examples: [
+        {
+          description: "The first streamed text delta of a response.",
+          payload: {
+            chunk: { choices: [{ delta: { content: "Hello" } }] },
+            llmRequestOffset: 57,
+            sequence: 0,
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-request-completed": {
-      description: "A provider processor finished an LLM request.",
+      description: "The agent processor finished an LLM request.",
       payloadSchema: z.object({
         durationMs: z.number().int().nonnegative(),
-        llmRequestId: z.number().int().positive(),
-        provider: AgentLlmProvider,
-        result: z.discriminatedUnion("status", [
-          z.object({
-            rawResponse: z.unknown().optional(),
-            status: z.literal("success"),
-            usage: z.unknown().optional(),
-          }),
-          z.object({
-            error: z.object({ message: z.string() }),
-            rawResponse: z.unknown().optional(),
-            status: z.literal("failure"),
-          }),
-        ]),
+        llmRequestOffset: z.number().int().positive(),
+        result: LlmRequestResult,
       }),
+      examples: [
+        {
+          description:
+            "The LLM returned assistant output, with token usage as the model reported it.",
+          payload: {
+            durationMs: 2340,
+            llmRequestOffset: 57,
+            result: {
+              status: "success",
+              usage: { completion_tokens: 118, prompt_tokens: 4096, total_tokens: 4214 },
+            },
+          },
+        },
+        {
+          description:
+            "The LLM call failed; the error becomes a model-visible input so the agent can react.",
+          payload: {
+            durationMs: 30012,
+            llmRequestOffset: 61,
+            result: {
+              error: { message: "LLM request timed out after 30000ms" },
+              status: "failure",
+            },
+          },
+        },
+      ],
+    },
+    "events.iterate.com/agent/token-usage-reported": {
+      description:
+        "Normalized token counts and the model's context window for a successfully completed " +
+        "LLM request. The processor translates vendor usage dialects (input_tokens vs " +
+        "prompt_tokens) at source, so consumers — the state tally, cost views, and compaction — " +
+        "see one shape.",
+      payloadSchema: z.object({
+        /** The llm-request-requested event this request ran under — the same
+         * handle the lifecycle events carry. */
+        llmRequestOffset: z.number().int().positive(),
+        model: z.string().min(1),
+        /** The model's context window, so a consumer can judge fullness from the event alone. */
+        maxContextTokens: z.number().int().positive(),
+        /** Total input tokens, including cached ones. */
+        inputTokens: z.number().int().nonnegative(),
+        /** Total output tokens, including reasoning ones. */
+        outputTokens: z.number().int().nonnegative(),
+        /** Prompt-cache hits, where the model reports them. */
+        cachedInputTokens: z.number().int().nonnegative().optional(),
+        /** Reasoning/thinking tokens, where the model reports them. */
+        reasoningOutputTokens: z.number().int().nonnegative().optional(),
+      }),
+      examples: [
+        {
+          description:
+            "An OpenAI model reports a mostly-cache-hit request at about a tenth of the model's window.",
+          payload: {
+            llmRequestOffset: 57,
+            model: "openai/gpt-5.5",
+            maxContextTokens: 272000,
+            inputTokens: 29295,
+            outputTokens: 111,
+            cachedInputTokens: 28416,
+            reasoningOutputTokens: 0,
+          },
+        },
+      ],
+    },
+    "events.iterate.com/agent/history-reset": {
+      description:
+        "Replaces the agent's model-visible history and system prompt wholesale. The " +
+        "processor's compaction lane appends it when a turn's context crosses the window " +
+        "threshold; anything else may append one too (userspace history management).",
+      payloadSchema: z.object({
+        systemPrompt: z.string(),
+        history: z.array(AgentInputItem),
+        reason: z.string().optional(),
+      }),
+      examples: [
+        {
+          description:
+            "A userspace compaction reaction replaces a near-full history with a summary; the offset in the reason is the token-usage-reported event that triggered it.",
+          payload: {
+            systemPrompt: "You are a helpful assistant.",
+            history: [
+              {
+                role: "user",
+                content:
+                  "[Earlier conversation history was compacted. Summary:]\n\nThe user is debugging a failing deploy...",
+              },
+            ],
+            reason: "compaction@1042: ~180000 tokens > 136000",
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/llm-request-cancelled": {
       description: "The current scheduled or requested LLM request was cancelled.",
@@ -314,10 +661,37 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
         z.object({
           phase: z.literal("requested"),
-          reason: z.literal("interrupted-by-user-input"),
-          llmRequestId: z.number().int().positive(),
+          reason: z.enum(["interrupted-by-user-input", "durable-object-crashed"]),
+          llmRequestOffset: z.number().int().positive(),
         }),
       ]),
+      examples: [
+        {
+          description: "New user input interrupted a request still in its debounce window.",
+          payload: {
+            phase: "scheduled",
+            reason: "interrupted-by-user-input",
+            requestId: "llm-request:gen-4",
+          },
+        },
+        {
+          description: "New user input interrupted a request already running at the model.",
+          payload: {
+            phase: "requested",
+            reason: "interrupted-by-user-input",
+            llmRequestOffset: 58,
+          },
+        },
+        {
+          description:
+            "The Durable Object incarnation died mid-attempt (kill/reset/eviction); the reconciler cancelled the in-flight request and the turn reschedules.",
+          payload: {
+            phase: "requested",
+            reason: "durable-object-crashed",
+            llmRequestOffset: 61,
+          },
+        },
+      ],
     },
     "events.iterate.com/agent/loop-stopped": {
       description:
@@ -327,23 +701,36 @@ export const AgentProcessorContract = defineProcessorContract({
         reason: z.string().trim().min(1),
         triggerOffset: z.number().int().positive(),
       }),
+      examples: [
+        {
+          description:
+            "The circuit breaker halted an agent that chained 100 autonomous script turns without human input.",
+          payload: {
+            maxAutonomousTurns: 100,
+            reason: "Agent circuit breaker stopped after 100 consecutive autonomous turns.",
+            triggerOffset: 143,
+          },
+        },
+      ],
     },
   },
-  processorDeps: [CapabilityHostProcessorContract],
+  processorDeps: [CapabilityHostProcessorContract, CoreProcessorContract],
   consumes: [
     "events.iterate.com/agent/config-updated",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
-    "events.iterate.com/agents/user-message-received",
+    "events.iterate.com/agents/message-received",
     "events.iterate.com/agents/web-message-sent",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-provider-selected",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-request-started",
     "events.iterate.com/agent/llm-request-completed",
+    "events.iterate.com/agent/token-usage-reported",
+    "events.iterate.com/agent/history-reset",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
-    "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
   ],
   emits: [
@@ -351,6 +738,12 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-request-started",
+    "events.iterate.com/agent/llm-response-chunk",
+    "events.iterate.com/agent/llm-request-completed",
+    "events.iterate.com/agent/token-usage-reported",
+    "events.iterate.com/agent/history-reset",
+    "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-requested",
@@ -366,8 +759,6 @@ export type AgentProcessorContract = typeof AgentProcessorContract;
 
 /**
  * The agent processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape (the old hand-written copy
- * in the former types.ts silently omitted `llmProviderConfigured` and
- * `requestGeneration`).
+ * `stateSchema`.
  */
 export type AgentProcessorState = ProcessorState<AgentProcessorContract>;

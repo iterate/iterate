@@ -7,7 +7,16 @@
 
 /** The integration slugs whose call surfaces ship with the OS deployment
  * (mirrored by BUILTIN_INTEGRATION_SLUGS in domains/integrations/utils.ts). */
-export type BuiltinIntegrationSlug = "github" | "google" | "slack";
+export type BuiltinIntegrationSlug = "github" | "google" | "slack" | "telegram" | "waitrose";
+
+/** The built-ins that connect via a redirect flow (OAuth code exchange or
+ * GitHub App installation) — the `startOAuthFlow`/`completeConnect` pair.
+ * Telegram is excluded: it connects by bot-token paste (`connectTelegram`),
+ * with no redirect and no signed state. Waitrose is excluded too: it connects
+ * by writing the connection secret (username/password plus the
+ * `waitrose-session` refresh strategy) — the Secret DO logs in itself on
+ * first use. */
+export type OAuthProviderSlug = Exclude<BuiltinIntegrationSlug, "telegram" | "waitrose">;
 
 /** Input to `itx.integrations.google["<connection>"].gmail.request(...)` — a
  * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the
@@ -20,6 +29,9 @@ export type GmailRequestInput = {
   query?: Record<string, boolean | number | string | null | undefined>;
 };
 
+/** Connection health for one integration connection (what
+ * `getConnectionStatus` returns): whether it is connected, plus the external
+ * account's id, display name, and provider-specific metadata. */
 export type IntegrationConnectionStatus = {
   connected: boolean;
   displayName: string | null;
@@ -49,6 +61,9 @@ export type IntegrationConnectionListEntry =
       source: "provided";
     };
 
+/** Outcome of `completeConnect` (the OAuth/installation redirect callback):
+ * `ok` plus the `callbackUrl` to send the browser back to; on failure, a
+ * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
   | { callbackUrl: string | null; error: string; ok: false };

@@ -81,6 +81,14 @@ cd apps/os
 doppler run --config prd -- pnpm cli claude-mcp
 ```
 
+By default the MCP server exposes only `exec_js`. If you deliberately want the
+plain-language project-agent bridge too, opt in with the URL parameter via the
+CLI flag:
+
+```bash
+doppler run --config prd -- pnpm cli claude-mcp --with-agent
+```
+
 For previews, run under the preview Doppler config:
 
 ```bash
@@ -115,7 +123,7 @@ doppler run --config preview_3 -- pnpm cli itx run \
 ```bash
 # Confirm the project resolves and list its capabilities.
 doppler run --config prd -- pnpm cli itx run \
-  --eval 'const project = await itx.projects.get("<prj_id>"); return await project.__describe()'
+  --eval 'return await itx.projects.get("<prj_id>").__describe()'
 
 # List the project's streams.
 doppler run --config prd -- pnpm cli itx run \

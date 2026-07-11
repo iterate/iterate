@@ -25,13 +25,12 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import type { ProjectProcessorState } from "../../../../../domains/projects/project-processor-contract.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { formatRelativeTime } from "~/lib/format-relative-time.ts";
+import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { useItx, useItxState } from "~/itx/itx-react.tsx";
+import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 /** Secrets live at `/secrets/<name>`; the route param is the bare name. */
 const secretPathFromName = (name: string) => `/secrets/${name}`;
@@ -91,10 +90,11 @@ function ProjectSecretsIndexContent() {
   // The secrets list is a slice of the project processor's reduced state; the
   // processor pushes state changes, so a new secret appears here without any
   // invalidation.
-  const projectState = useItxState<ProjectProcessorState>(
-    (itx, setState) => itx.processor.onStateChange(setState),
+  const projectState = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.reduced,
     [],
-  ).state;
+  ).value;
   const secretsList = projectState?.secrets;
 
   const createSecret = useMutation({
@@ -332,7 +332,7 @@ function ProjectSecretsIndexContent() {
                     <span className="truncate">{secretNameFromPath(secret.path)}</span>
                   </Link>
                   <div className="truncate text-xs text-muted-foreground">
-                    {secret.path} · Created {formatRelativeTime(secret.createdAt)}
+                    {secret.path} · Created {formatTimeAgo(secret.createdAt)}
                   </div>
                 </div>
               </div>

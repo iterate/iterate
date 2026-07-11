@@ -51,6 +51,16 @@ export interface Env {
    * artifact cache (see its BuilderEnv).
    */
   BUILDER: Service<import("./domains/workers/builder-entrypoint.ts").BuilderEntrypoint>;
+  /**
+   * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
+   * projects and returns diagnostics, behind provide-time capability-types
+   * validation and `itx.docs.typecheck`. The only script carrying the
+   * TypeScript compiler (tswasm, ~30MB wasm) — same quarantine story as
+   * BUILDER.
+   */
+  TYPECHECKER: Service<
+    import("./domains/typecheck/typechecker-entrypoint.ts").TypecheckerEntrypoint
+  >;
 
   AGENT: DurableObjectNamespace<
     import("./domains/agents/agent-durable-object.ts").AgentDurableObject
@@ -134,6 +144,14 @@ export interface Env {
    * bucket is derived data — safe to wipe and rebuild.
    */
   SEARCH_BUCKET: R2Bucket;
+  /**
+   * Deploy identity (wrangler `version_metadata` binding). The stream
+   * processor hosts' crash-loop breaker keys its backoff budget on the version
+   * id so a fresh deploy — the usual antidote to a deterministic crash loop —
+   * retries immediately instead of waiting out the plateau. Optional because
+   * local dev may not provide it; read through {@link workerVersion}.
+   */
+  CF_VERSION_METADATA?: { id: string; tag?: string };
   SCHEDULER: DurableObjectNamespace<
     import("./domains/scheduler/scheduler-durable-object.ts").SchedulerDurableObject
   >;
@@ -152,3 +170,9 @@ export interface Env {
 }
 
 export const itxEnv = workerEnv as unknown as Env;
+
+/** The deploy's version id, for the processor hosts' crash-loop breaker.
+ * "unversioned" in environments without the version_metadata binding. */
+export function workerVersion(env: Env): string {
+  return env.CF_VERSION_METADATA?.id ?? "unversioned";
+}

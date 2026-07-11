@@ -1108,68 +1108,6 @@ const plugin: StrictPlugin = {
         };
       },
     },
-    "drizzle-conventions": {
-      meta: {
-        hasSuggestions: true,
-        fixable: "code",
-      },
-      create: (context) => {
-        const dbMutateMethods = ["insert", "update", "delete"];
-        const dbMutateEnforcementListeners: Record<string, (node: any) => void> = {};
-        for (const m of dbMutateMethods) {
-          const selector = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.type='Identifier']`;
-          const selector2 = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.object.name='schemas']`;
-          dbMutateEnforcementListeners[selector] = (node: any) => {
-            const before = context.sourceCode.getText(node.arguments[0]);
-            const after = before.startsWith("schemas.")
-              ? before.replace("schemas.", "schema.")
-              : `schema.${node.arguments[0].name}`;
-            if (
-              (m === "delete" || m === "update") &&
-              node.callee.object.name !== "db" &&
-              node.callee.object.name !== "tx"
-            ) {
-              return; // too many false positives for Maps, hmac.update, etc.
-            }
-            context.report({
-              node: node.arguments[0],
-              message: `use \`db.${m}(${after})\` instead of \`db.${m}(${before})\` - it makes it easier to find ${m} expressions in the codebase`,
-              suggest: [
-                {
-                  desc: `Change \`${before}\` to \`${after}\``,
-                  fix: (fixer: Rule.RuleFixer) => fixer.replaceText(node.arguments[0], after),
-                },
-              ],
-            });
-          };
-          dbMutateEnforcementListeners[selector2] = dbMutateEnforcementListeners[selector];
-        }
-
-        return {
-          ...dbMutateEnforcementListeners,
-
-          "CallExpression[callee.property.name='transaction']": (node: any) => {
-            const parentReference = context.sourceCode.getText(node.callee.object);
-            const shouldUse = node.arguments[0].params[0]?.name;
-            esquery.match(node, esquery.parse(`${node.callee.object.type}`)).forEach((m) => {
-              const used = context.sourceCode.getText(m);
-              if (m !== node.callee.object && parentReference === used) {
-                context.report({
-                  node: m,
-                  message: `Don't use the parent connection (${used}) in a transaction. Use the passed in transaction connection (${shouldUse}).`,
-                  suggest: [
-                    {
-                      desc: `Change \`${used}\` to \`${shouldUse}\``,
-                      fix: (fixer: Rule.RuleFixer) => fixer.replaceText(m, shouldUse),
-                    },
-                  ],
-                });
-              }
-            });
-          },
-        };
-      },
-    },
     "spec-restricted-syntax": {
       meta: {
         type: "problem",

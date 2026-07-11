@@ -1,12 +1,16 @@
-// A project-owned integration, end to end: the project implements "waitrose"
+// A project-owned integration, end to end: the project implements "ocado"
 // as ordinary code in its own repo and mounts it into the integrations
-// collection with provideCapability({ path: ["integrations", "waitrose"] }) —
+// collection with provideCapability({ path: ["integrations", "ocado"] }) —
 // data, not deployment. It is then addressed exactly like a built-in, at fully
-// qualified connection paths: itx.integrations.waitrose.family.searchProducts(...)
-// and itx.integrations.waitrose.mum.basket.add(...). Per-connection session
+// qualified connection paths: itx.integrations.ocado.family.searchProducts(...)
+// and itx.integrations.ocado.mum.basket.add(...). Per-connection session
 // secrets ride as getSecret(path) placeholders in the worker's fetch
 // headers and substitute at project egress: the echo fixture (standing in for
-// the Waitrose API) is the only party that ever sees material.
+// the vendor API) is the only party that ever sees material.
+//
+// (Waitrose itself is a BUILT-IN — itx.integrations.waitrose, dispatched in
+// deployment code over the vendored client — so its slug is reserved here;
+// the builtin's surface is asserted below without dialing the vendor.)
 
 import { describe, expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -16,23 +20,23 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 
-function waitroseWorkerSource(echoUrl: string): string {
+function ocadoWorkerSource(echoUrl: string): string {
   return `
     import { WorkerEntrypoint } from "cloudflare:workers";
 
-    const WAITROSE_API_URL = ${JSON.stringify(echoUrl)};
+    const OCADO_API_URL = ${JSON.stringify(echoUrl)};
 
     // The session secret is addressed per connection and NEVER read here: the
     // authorization header carries a getSecret placeholder that project egress
     // substitutes inside the secret Durable Object. The integration's own code
     // cannot see its tokens.
-    function waitroseSdk(connection) {
+    function ocadoSdk(connection) {
       const authorization =
-        'getSecret({ path: "/secrets/integrations/waitrose/' + connection + '/session" })';
+        'getSecret({ path: "/secrets/integrations/ocado/' + connection + '/session" })';
       const call = async (operation, payload) => {
-        const response = await fetch(WAITROSE_API_URL, {
+        const response = await fetch(OCADO_API_URL, {
           method: "POST",
-          headers: { authorization, "x-waitrose-operation": operation },
+          headers: { authorization, "x-ocado-operation": operation },
           body: JSON.stringify(payload),
         });
         const echoed = await response.json();
@@ -49,22 +53,22 @@ function waitroseWorkerSource(echoUrl: string): string {
       };
     }
 
-    // Mounted at ["integrations", "waitrose"], so the first remaining path
+    // Mounted at ["integrations", "ocado"], so the first remaining path
     // segment is the CONNECTION and the rest is the SDK method path — the same
     // /integrations/<slug>/<connection> address shape as built-ins.
-    export class WaitroseIntegration extends WorkerEntrypoint {
+    export class OcadoIntegration extends WorkerEntrypoint {
       invokeCapability({ path, args }) {
         const [connection, ...rest] = path;
         if (!connection || rest.length === 0) {
           throw new Error(
-            "waitrose expects <connection>.<method>, e.g. itx.integrations.waitrose.family.searchProducts(...)",
+            "ocado expects <connection>.<method>, e.g. itx.integrations.ocado.family.searchProducts(...)",
           );
         }
-        let receiver = waitroseSdk(connection);
+        let receiver = ocadoSdk(connection);
         for (const segment of rest.slice(0, -1)) receiver = receiver?.[segment];
         const method = receiver?.[rest[rest.length - 1]];
         if (typeof method !== "function") {
-          throw new Error("waitrose sdk has no method " + rest.join("."));
+          throw new Error("ocado sdk has no method " + rest.join("."));
         }
         return method.apply(receiver, args);
       }
@@ -73,7 +77,7 @@ function waitroseWorkerSource(echoUrl: string): string {
 }
 
 describe("provided integrations", () => {
-  test("a project mounts waitrose into the collection; connections + secret confinement hold", async () => {
+  test("a project mounts ocado into the collection; connections + secret confinement hold", async () => {
     const echo = await startEgressEcho();
     try {
       using session = withItxSession();
@@ -81,13 +85,13 @@ describe("provided integrations", () => {
         type: "admin-secret",
         secret: adminSecret(),
       });
-      using project = itx.projects.create({ slug: `waitrose-${RUN_SUFFIX}` });
+      using project = itx.projects.create({ slug: `ocado-${RUN_SUFFIX}` });
       await project.__describe();
       const integrations = project.integrations as any;
 
       // Before the mount, the name resolves through the capability table and
       // fails loudly — nothing is silently invented.
-      await expect(integrations.waitrose.family.searchProducts("milk")).rejects.toThrow(
+      await expect(integrations.ocado.family.searchProducts("milk")).rejects.toThrow(
         /no capability/,
       );
 
@@ -104,10 +108,18 @@ describe("provided integrations", () => {
       // …but not under the names the collection's own dispatch claims: a mount
       // there would be durable, journaled, and silently unreachable, so it is
       // rejected loudly at provide time. Both builtin slugs and the
-      // collection's own verbs are reserved.
+      // collection's own verbs are reserved — waitrose included, now that it
+      // is a builtin.
       await expect(
         project.provideCapability({
           path: ["integrations", "slack", "shadow"],
+          type: "live",
+          capability: {},
+        }),
+      ).rejects.toThrow(/built-in integrations member/);
+      await expect(
+        project.provideCapability({
+          path: ["integrations", "waitrose", "shadow"],
           type: "live",
           capability: {},
         }),
@@ -123,30 +135,30 @@ describe("provided integrations", () => {
       // Two connections of one integration, secrets at the same fully
       // qualified paths a built-in would use.
       const secrets = {
-        family: `waitrose-session-family-${RUN_SUFFIX}`,
-        mum: `waitrose-session-mum-${RUN_SUFFIX}`,
+        family: `ocado-session-family-${RUN_SUFFIX}`,
+        mum: `ocado-session-mum-${RUN_SUFFIX}`,
       };
       for (const [connection, material] of Object.entries(secrets)) {
-        using secret = project.secrets.get(`/secrets/integrations/waitrose/${connection}/session`);
+        using secret = project.secrets.get(`/secrets/integrations/ocado/${connection}/session`);
         await secret.update({ egress: { urls: [echo.url] }, material });
         await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
-          description: `waitrose/${connection} secret to fold`,
+          description: `ocado/${connection} secret to fold`,
         });
       }
 
       // The integration is code in the project repo…
       await project.repo.commitFiles({
-        changes: [{ content: waitroseWorkerSource(echo.url), path: "integrations/waitrose.js" }],
-        message: "Implement the waitrose integration",
+        changes: [{ content: ocadoWorkerSource(echo.url), path: "integrations/ocado.js" }],
+        message: "Implement the ocado integration",
       });
 
       // …and ONE durable capability mount makes it part of the collection.
       using _provision = await project.provideCapability({
-        path: ["integrations", "waitrose"],
+        path: ["integrations", "ocado"],
         type: "itx-expression",
         flattenNestedPaths: true,
         instructions:
-          "Waitrose grocery integration. Address a connection first: itx.integrations.waitrose.<connection>.searchProducts(term) / .basket.add(itemId).",
+          "Ocado grocery integration. Address a connection first: itx.integrations.ocado.<connection>.searchProducts(term) / .basket.add(itemId).",
         expression: [
           "workers",
           [
@@ -154,10 +166,10 @@ describe("provided integrations", () => {
             {
               type: "stateless",
               path: "/",
-              entrypoint: "WaitroseIntegration",
+              entrypoint: "OcadoIntegration",
               source: {
-                files: { type: "repo", repoPath: "/" },
-                options: { entryPoint: "integrations/waitrose.js" },
+                files: { type: "repo", repoPath: "/repos/config" },
+                options: { entryPoint: "integrations/ocado.js" },
               },
             },
           ],
@@ -165,30 +177,30 @@ describe("provided integrations", () => {
       });
 
       // Same address shape as a built-in, fully qualified connection first.
-      const search = await integrations.waitrose.family.searchProducts("milk");
+      const search = await integrations.ocado.family.searchProducts("milk");
       expect(search).toEqual({
         operation: "search-products",
         payload: { term: "milk" },
-        sentAuthorization: 'getSecret({ path: "/secrets/integrations/waitrose/family/session" })',
+        sentAuthorization: 'getSecret({ path: "/secrets/integrations/ocado/family/session" })',
         receivedAuthorization: secrets.family,
       });
 
-      const basket = await integrations.waitrose.mum.basket.add("item-123");
+      const basket = await integrations.ocado.mum.basket.add("item-123");
       expect(basket).toEqual({
         operation: "basket-add",
         payload: { itemId: "item-123" },
-        sentAuthorization: 'getSecret({ path: "/secrets/integrations/waitrose/mum/session" })',
+        sentAuthorization: 'getSecret({ path: "/secrets/integrations/ocado/mum/session" })',
         receivedAuthorization: secrets.mum,
       });
 
       // Negative controls: the worker only ever held the placeholder
       // (sentAuthorization above), describe() leaks nothing, uses land on the
       // audit trail.
-      using familySecret = project.secrets.get("/secrets/integrations/waitrose/family/session");
+      using familySecret = project.secrets.get("/secrets/integrations/ocado/family/session");
       const described = await familySecret.__describe();
       expect(JSON.stringify(described)).not.toContain(secrets.family);
       await waitForCondition(async () => (await familySecret.__describe()).audit.usedCount >= 1, {
-        description: "waitrose/family usage audit to fold",
+        description: "ocado/family usage audit to fold",
       });
 
       // The collection enumerates the mount alongside built-in connections.
@@ -196,8 +208,8 @@ describe("provided integrations", () => {
         expect.arrayContaining([
           expect.objectContaining({
             connection: null,
-            integration: "waitrose",
-            path: "/integrations/waitrose",
+            integration: "ocado",
+            path: "/integrations/ocado",
             source: "provided",
           }),
         ]),
@@ -207,7 +219,7 @@ describe("provided integrations", () => {
       await expect(integrations.slack.chat.postMessage({ text: "hi" })).rejects.toThrow(
         /use itx.integrations.list\(\) to see connections/,
       );
-      await expect(integrations.ocado.family.searchProducts("milk")).rejects.toThrow(
+      await expect(integrations.tesco.family.searchProducts("milk")).rejects.toThrow(
         /no capability/,
       );
 
@@ -215,12 +227,38 @@ describe("provided integrations", () => {
       // durable metadata, never dialing the provider. (A trailing __describe
       // is a valid INVOCATION path — only mount NAMES reserve it; this used
       // to die in path validation with "invalid capability path segment".)
-      const describedMount = await integrations.waitrose.__describe();
-      expect(JSON.stringify(describedMount)).toContain("Waitrose grocery integration");
-      await expect(integrations.ocado.__describe()).rejects.toThrow(/no capability/);
+      const describedMount = await integrations.ocado.__describe();
+      expect(JSON.stringify(describedMount)).toContain("Ocado grocery integration");
+      await expect(integrations.tesco.__describe()).rejects.toThrow(/no capability/);
     } finally {
       await echo.close();
     }
+  });
+
+  // The builtin waitrose surface, asserted without ever dialing the vendor:
+  // the grammar guard, per-connection __describe (the connect recipe lives
+  // there), and a loud method miss out of the replayed client.
+  test("builtin waitrose: grammar, __describe, and method-miss stay loud", async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({ slug: `waitrose-builtin-${RUN_SUFFIX}` });
+    await project.__describe();
+    const integrations = project.integrations as any;
+
+    // A call without a connection is an error that teaches the grammar.
+    await expect(integrations.waitrose.mum()).rejects.toThrow(
+      /itx.integrations.waitrose expected `<connection>.<method>`/,
+    );
+
+    // The connection node answers __describe with the client surface and the
+    // connection-secret recipe — no journal, no vendor round trip.
+    const description = await integrations.waitrose.mum.__describe();
+    const rendered = JSON.stringify(description);
+    expect(rendered).toContain("vendored Waitrose client");
+    expect(rendered).toContain("waitrose-session");
+
+    // A method the client does not have misses loudly instead of dialing out.
+    await expect(integrations.waitrose.mum.noSuchMethod()).rejects.toThrow(/noSuchMethod/);
   });
 });
 

@@ -10,7 +10,7 @@
 //                   (and the Playwright REPL specs) execute in a project scope
 //                   where the Session's __describe().principal / itx.projects
 //                   do not exist. Session behavior is proven by the itx e2e
-//                   suites (apps/os/e2e/itx/itx.e2e.test.ts).
+//                   suites (apps/os/e2e/vitest/itx-core.e2e.test.ts).
 //   list-projects   session-context, same reason as whoami.
 //   ai-models       depends on the deployment's upstream Workers AI account
 //                   (catalog availability + latency); interactive reading
@@ -35,6 +35,11 @@
 //   exa-web-search  calls Exa's public MCP server (external service, rate
 //                   limited); interactive reading material, same rationale as
 //                   ai-models.
+//   ai-generate-text
+//                   depends on remote Workers AI model availability and
+//                   billing; interactive reading material.
+//   egress-fetch    fetches a public website through project egress; external
+//                   service, so keep it interactive.
 //   connect-public-mcp
 //                   explicitly connects to Exa's public MCP server; external
 //                   service and rate limited, so keep it interactive.
@@ -48,9 +53,21 @@
 //                   needs an onboarded sender domain and a real recipient
 //                   mailbox, so keep it interactive.
 
+import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
+
 export type ExampleRunContext = {
   /** Unique per example × runtime, for stream/event payload assertions. */
   marker: string;
+  /**
+   * Unique per test ATTEMPT, shared across the runtimes within it. For
+   * resources where the attempt should share one instance (the first runtime
+   * pays the cold path, the rest reuse it warm) but a RETRY must get a fresh
+   * one — a vitest retry that reuses the previous attempt's stuck resource
+   * can never recover (the sandbox container stall, marathons of
+   * 2026-07-10: the REPL spec's retry healed on a fresh placement while the
+   * matrix retry waited on the same stuck container).
+   */
+  attemptSalt: string;
   projectId: string;
 };
 
@@ -63,53 +80,45 @@ export type ExampleCase = {
    * tens of seconds; that is expected latency, not a hang.
    */
   completionTimeoutMs?: number;
+  /**
+   * Post-assertion teardown, run by every runner with a project-scoped itx.
+   * For examples that create real slot-level resources (sandbox containers):
+   * back-to-back e2e runs otherwise accumulate instances until Cloudflare's
+   * container provisioning throttles the whole slot into multi-minute boot
+   * stalls (every 2026-07-10 marathon died on this around run 4-6, while
+   * spaced-out PR runs never saw it). Best-effort — a cleanup failure logs,
+   * never fails the test.
+   */
+  cleanup?: (itx: unknown, ctx: ExampleRunContext) => Promise<void>;
 };
 
-/** Example ids that intentionally have no matrix case (see header). */
-export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
-  "whoami",
-  "list-projects",
-  "ai-models",
-  "cf-ai-to-markdown",
-  "ai-generate-image",
-  "ai-generate-audio",
-  "ai-transcribe-audio",
-  "ai-generate-video",
-  "cf-browser-markdown",
-  "cf-images-transform",
-  "cf-videos-frame",
-  "exa-web-search",
-  "connect-public-mcp",
-  "connect-openapi-petstore",
-  "secret-postman-echo",
-  "github-mcp-connect",
-  "github-webhooks-project-worker",
-  // Built-in integration usage snippets: each needs a REAL connected
-  // GitHub/Google/Slack account, which e2e fixture projects never hold.
-  "github-list-repos",
-  "github-read-file",
-  "github-backed-repo",
-  "gmail-search-inbox",
-  "slack-post-message",
-  "email-send",
-]);
+/** Example ids that intentionally have no matrix case: exactly the entries
+ * the catalogue marks `e2eProven: false` (see the field's docstring — the
+ * data is the single source; the per-id rationales live in the header
+ * above). */
+export const EXAMPLE_IDS_WITHOUT_CASES = new Set(
+  ITX_EXAMPLES.filter((example) => example.e2eProven === false).map((example) => example.id),
+);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
-  "stream-cross-post-rule": {
-    // Matrix runtimes share a project; per-runtime paths keep the rule and
-    // its copies from colliding with a sibling runtime's.
+  "stream-cross-post": {
+    // Matrix runtimes share a project; per-runtime paths keep the cross-post
+    // subscription and its copies from colliding with a sibling runtime's.
     vars: ({ marker }) => ({
       source: `/examples/cross-post/source-${marker}`,
       target: `/examples/cross-post/target-${marker}`,
     }),
-    assert: (result, _ctx, expect) => {
+    assert: (result, ctx, expect) => {
       const shaped = result as {
         copied: { importance: string; text: string };
-        provenance: Array<{ ruleId: string }>;
+        provenance: Array<{ subscriptionKey: string }>;
       };
       expect(shaped.copied).toMatchObject({ importance: "high", text: "copied" });
       expect(shaped.provenance).toHaveLength(1);
-      expect(shaped.provenance[0]).toMatchObject({ ruleId: "copy-important" });
+      // crossPostTo without an explicit key defaults to cross-post:<target>.
+      expect(shaped.provenance[0]).toMatchObject({
+        subscriptionKey: `cross-post:/examples/cross-post/target-${ctx.marker}`,
+      });
     },
   },
   "scheduler-basics": {
@@ -134,12 +143,24 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "describe-project": {
     assert: (result, { projectId }, expect) => {
       expect(result).toMatchObject({ projectId });
+      // Built-ins ARE the children map; `capabilities` holds dynamic mounts
+      // only. The matrix shares one fixture project, so sibling examples may
+      // have left durable mounts — assert the shape, not emptiness.
       const builtins = (result as { builtins: string[] }).builtins;
       expect(builtins).toEqual(
-        expect.arrayContaining(["streams", "repo", "workers", "secrets", "ai"]),
+        expect.arrayContaining([
+          "streams",
+          "repo",
+          "workers",
+          "secrets",
+          "ai",
+          "capabilityHost",
+          "integrations",
+        ]),
       );
-      const children = (result as { children: string[] }).children;
-      expect(children).toEqual(expect.arrayContaining(["capabilityHost", "integrations"]));
+      const mounted = (result as { mounted: string[] }).mounted;
+      expect(mounted.every((path) => typeof path === "string")).toBe(true);
+      expect(mounted).not.toContain("streams"); // builtins never appear here
     },
   },
   "discover-tree": {
@@ -191,6 +212,20 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect((result as { count: number }).count).toBeGreaterThan(0);
     },
   },
+  "ephemeral-events": {
+    vars: ({ marker }) => ({ path: `/repl/ephemeral-demo-${marker}` }),
+    assert: (result, _ctx, expect) => {
+      const shaped = result as {
+        tickOffset: number;
+        defaultOffsets: number[];
+        rawOffsets: number[];
+      };
+      // Consecutive offsets; the ephemeral tick is excluded from the default
+      // read and present (flagged position first) in the raw read.
+      expect(shaped.defaultOffsets).toEqual([shaped.tickOffset + 1]);
+      expect(shaped.rawOffsets).toEqual([shaped.tickOffset, shaped.tickOffset + 1]);
+    },
+  },
   "run-script": {
     assert: (result, { projectId }, expect) => {
       expect(result).toEqual({
@@ -239,32 +274,52 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "sandbox-exec": {
     // One shared sandbox name for the whole matrix: the first runtime pays
     // the create + container cold boot, the rest reuse the warm container
-    // (the example's get-or-create makes reuse natural). No marker on
-    // purpose. 300s: a cold-host image pull + boot has a long tail even on
-    // the stock image; anything past that is a container stuck provisioning,
-    // and we'd rather fail and re-run than mask it.
-    completionTimeoutMs: 300_000,
-    vars: () => ({ sandboxName: "example-matrix" }),
+    // (the example's get-or-create makes reuse natural), and the retry's
+    // attemptSalt re-rolls the container placement. No marker on
+    // purpose. 150s: a healthy cold boot is well under a minute; a boot
+    // past this is a container stuck provisioning on a bad placement, and
+    // the retry's FRESH attempt re-rolls placement and typically lands in
+    // ~15s — waiting out a 300s budget just stretched both e2e lanes past
+    // their watchdogs (2026-07-10 marathon j3tqdhncb6 run 2: one 5.1m boot
+    // stalled the spec AND examples-matrix; the retry passed in 14.8s).
+    completionTimeoutMs: 150_000,
+    vars: ({ attemptSalt }) => ({ sandboxName: `example-${attemptSalt}` }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
+    },
+    cleanup: async (itx, ctx) => {
+      const project = itx as {
+        sandboxes: { get(path: string): Promise<{ destroy(): Promise<unknown> }> };
+      };
+      const sandbox = await project.sandboxes.get(`/sandboxes/example-${ctx.attemptSalt}`);
+      await sandbox.destroy();
     },
   },
   "workspace-edit-and-push": {
     // Unique workspace per example × runtime: the path is durable identity
-    // (one Durable Object, one branch), so sharing one across the matrix
-    // would make the second runtime's edit() fail (oldString already
-    // replaced) and pushes race. Each run pays its own clone — seconds, not
-    // the sandbox's container boot — but the budget still covers a cold
-    // Artifacts clone with the 503-retry tail.
+    // (one Durable Object), so sharing one across the matrix would make the
+    // second runtime's edit() fail (oldString already replaced) and commits
+    // race. Since #1831 git.commit lands on the config repo's MAIN (no
+    // workspace branches); each runtime writes a distinct file path, so the
+    // two main commits don't conflict. The budget covers the repo commit
+    // lane's cold tail.
     completionTimeoutMs: 120_000,
     vars: ({ marker }) => ({ workspacePath: `/workspaces/examples/edit-${marker}` }),
-    assert: (result, ctx, expect) => {
+    assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({
         readmePresent: true,
         edited: { occurrenceCount: 1, path: "/notes/workspace-example.md" },
-        pushedBranch: `workspaces/examples/edit-${ctx.marker}`,
       });
-      expect((result as { commitOid: string }).commitOid).toMatch(/^[0-9a-f]{40}$/);
+      const typed = result as {
+        changes: { path: string }[];
+        commitOid: string;
+        committedTo: string;
+      };
+      // #1831: commits land straight on the config repo's default branch —
+      // there is no per-workspace branch anymore.
+      expect(typed.committedTo).toMatch(/^\S+$/);
+      expect(typed.commitOid).toMatch(/^[0-9a-f]{40}$/);
+      expect(typed.changes.map((change) => change.path)).toContain("/notes/workspace-example.md");
     },
   },
   "workspace-files-transfer": {
@@ -341,10 +396,24 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
     },
   },
-  "browse-examples": {
+  "docs-search-and-get": {
     assert: (result, _ctx, expect) => {
-      expect(result).toMatchObject({ hasCode: true, id: "describe-project" });
-      expect((result as { count: number }).count).toBeGreaterThan(10);
+      expect(result).toMatchObject({
+        examplePasteReady: true,
+        streamTypesIncludeAppend: true,
+      });
+      expect((result as { hitCount: number }).hitCount).toBeGreaterThan(0);
+      expect(result).toHaveProperty("firstHit.fetchCall");
+    },
+  },
+  "typed-capability-mount": {
+    assert: (result, _ctx, expect) => {
+      expect(result).toEqual({
+        searchFoundMount: true,
+        entryIncludesStreamDeclaration: true,
+        goodScriptOk: true,
+        typoCaught: true,
+      });
     },
   },
   "agent-send-message": {
@@ -354,8 +423,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     }),
     assert: (result, { marker }, expect) => {
       expect(result).toMatchObject({
-        payload: { content: `hello ${marker}`, origin: "web" },
-        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: `hello ${marker}`, from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/message-received",
       });
       expect((result as { offset: number }).offset).toBeGreaterThan(0);
     },

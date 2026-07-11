@@ -11,6 +11,11 @@
 // - Replay runs the same idempotency-keyed side effects as live delivery. The
 //   processor checkpoint is the guardrail; failed batches replay from the last
 //   fully processed offset.
+// - The Slack calls themselves are acknowledgement/cosmetic lanes and must be
+//   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
+//   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
+//   status is repainted once per at-head batch from the latest lifecycle fact
+//   instead of once per event.
 //
 // Adaptation from legacy: the itx agent contract has no
 // `agent/status-updated` event. The Slack "is thinking..." status now keys off
@@ -22,7 +27,12 @@ import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
-import { readRecord, readString, slackConnectionFromAgentPath } from "./utils.ts";
+import {
+  readRecord,
+  readString,
+  slackConnectionFromAgentPath,
+  webhookAckIsFresh,
+} from "./utils.ts";
 import {
   SlackAgentProcessorContract,
   type SlackAgentProcessorState,
@@ -35,6 +45,8 @@ export class SlackAgentProcessor extends StreamProcessor<
   SlackAgentProcessorContract,
   {
     callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
+    /** Injectable clock for the acknowledgement freshness gates. */
+    now?: () => number;
     /** Downloads Slack-shared files into project file storage (see
      * storeSlackFilesForAgent in slack-api.ts). `storageKey` is stable per
      * webhook event so replays overwrite instead of duplicating. */
@@ -90,17 +102,24 @@ export class SlackAgentProcessor extends StreamProcessor<
         // Route context (channel/thread_ts/streamPath) is captured in reduce().
         return;
       case "events.iterate.com/slack/webhook-received": {
-        const appendAgentInput = async (
+        // The webhook transcribes into the unified inbound message event —
+        // Slack messages are messages FROM a user, `from` carries the facts.
+        // The sender is extracted here, once, wherever the payload shape
+        // carries it (event_callback events vs interactivity payloads), so
+        // button presses and reactions keep their sender too.
+        const senderUserId = slackWebhookSenderUserId(event.payload.body);
+        const appendAgentMessage = async (
           input: {
             files?: AgentFileAttachment[];
             llmRequestPolicy?: { behaviour: "dont-trigger-request" };
           } = {},
         ) => {
           await append({
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `slack-agent:webhook-to-agent-input:${event.offset}`,
+            type: "events.iterate.com/agents/message-received",
+            idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
             payload: {
               content: slackWebhookAgentInput(event.payload),
+              from: { kind: "slack", ...(senderUserId == null ? {} : { userId: senderUserId }) },
               ...(input.files == null || input.files.length === 0 ? {} : { files: input.files }),
               ...(input.llmRequestPolicy == null
                 ? {}
@@ -117,7 +136,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           .loose()
           .safeParse(event.payload.body);
         if (!parsed.success) {
-          blockProcessorWhile(appendAgentInput);
+          blockProcessorWhile(appendAgentMessage);
           return;
         }
 
@@ -129,10 +148,10 @@ export class SlackAgentProcessor extends StreamProcessor<
         if (isBotAction(slackEvent, botUserId)) return;
         if (readStringField(slackEvent, "type") !== "message") {
           blockProcessorWhile(async () => {
-            await appendAgentInput({
+            await appendAgentMessage({
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             });
-            await this.#addEyesReactionForMessageTarget(target);
+            await this.#addEyesReactionForMessageTarget(target, event);
           });
           return;
         }
@@ -157,13 +176,13 @@ export class SlackAgentProcessor extends StreamProcessor<
           blockProcessorWhile(async () => {
             await append({
               type: "events.iterate.com/capability-host/script-execution-requested",
-              idempotencyKey: `slack-agent:bang-command:${event.offset}`,
+              idempotencyKey: this.idempotencyKey("bang-command", event),
               payload: {
                 code: bangCommand.code,
                 executionId: `slack-bang-command-${event.offset}`,
               },
             });
-            await this.#addEyesReactionForMessageTarget(target);
+            await this.#addEyesReactionForMessageTarget(target, event);
           });
           return;
         }
@@ -190,41 +209,84 @@ export class SlackAgentProcessor extends StreamProcessor<
               });
             }
           }
-          await appendAgentInput(files == null ? {} : { files });
-          await this.#addEyesReactionForMessageTarget(target);
+          await appendAgentMessage(files == null ? {} : { files });
+          await this.#addEyesReactionForMessageTarget(target, event);
         });
         return;
       }
-      case "events.iterate.com/agent/llm-request-requested":
-      case "events.iterate.com/agent/llm-request-completed":
-      case "events.iterate.com/capability-host/script-execution-requested":
-      case "events.iterate.com/capability-host/script-execution-completed": {
-        const update = slackAgentStatusForEvent(event);
-        if (update == null || state.channel == null || state.threadTs == null) return;
-        const { channel, latestMessageTs, threadTs } = state;
-        blockProcessorWhile(async () => {
-          await this.#callSlackApi("assistant.threads.setStatus", {
-            channel_id: channel,
-            thread_ts: threadTs,
-            ...update.status,
-          });
-          if (update.clear && latestMessageTs != null) {
-            await this.#callSlackApi("reactions.remove", {
-              channel,
-              name: "eyes",
-              timestamp: latestMessageTs,
-            });
-          }
-        });
-        return;
-      }
+      // LLM/script lifecycle facts drive the assistant status, which is
+      // repainted once per batch in processEventBatch — nothing per event.
       default:
         return;
     }
   }
 
-  async #addEyesReactionForMessageTarget(target: SlackAgentTarget | null) {
+  /**
+   * The latest status-relevant lifecycle fact this incarnation has seen but
+   * not yet painted. Behind-the-head batches defer painting to the at-head
+   * pass, but that pass's own batch may contain no lifecycle facts — a
+   * wake-lane batch stamped behind the head is followed by a trailing
+   * unfiltered catch-up that is often renders and inputs only, and a
+   * multi-page catch-up may fold the facts pages before the final one. The
+   * carry hands the deferred fact to whichever batch finally reaches head.
+   * In-memory on purpose: the status is a cosmetic lane, and a carry lost to
+   * an eviction is repaired by the next lifecycle fact (a revival's orphan
+   * settle IS a fresh `llm-request-completed`).
+   */
+  #unpaintedLifecycleFact: { createdAt: string; type: string } | undefined;
+
+  /**
+   * The Slack assistant status is a REPAINT of current truth, not a per-event
+   * effect: the latest lifecycle fact wins and one setStatus paints it. Three
+   * gates make the lane refold-safe (and un-race per-event
+   * `blockProcessorWhile` closures, which run concurrently within a batch):
+   * only an at-head pass paints (a behind batch defers via the carry above),
+   * only a fresh fact paints (a refold's historical lifecycle facts must not
+   * touch months-old threads), and it paints at most once per batch. Unlike
+   * the repo reconciler this lane reads batch facts, not the fold — folding a
+   * cosmetic status into state isn't worth a schema change — which is exactly
+   * why behind batches need the carry where fold-based reconcilers don't.
+   */
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    const latest =
+      args.reducedEvents.findLast(({ event }) => slackAgentStatusForEvent(event) != null)?.event ??
+      this.#unpaintedLifecycleFact;
+    if (args.checkpointOffset < args.streamMaxOffset) {
+      this.#unpaintedLifecycleFact = latest;
+      return;
+    }
+    this.#unpaintedLifecycleFact = undefined;
+    if (latest == null || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
+    const update = slackAgentStatusForEvent(latest)!;
+    const { channel, latestMessageTs, threadTs } = args.state;
+    if (channel == null || threadTs == null) return;
+    args.blockProcessorWhile(async () => {
+      await this.#callSlackApi("assistant.threads.setStatus", {
+        channel_id: channel,
+        thread_ts: threadTs,
+        ...update.status,
+      });
+      if (update.clear && latestMessageTs != null) {
+        await this.#callSlackApi("reactions.remove", {
+          channel,
+          name: "eyes",
+          timestamp: latestMessageTs,
+        });
+      }
+    });
+  }
+
+  /** The 👀 ack means "your message was just picked up" — only fresh webhooks
+   * qualify (see WEBHOOK_ACK_FRESHNESS_MS for why stale ones must not). */
+  async #addEyesReactionForMessageTarget(
+    target: SlackAgentTarget | null,
+    event: { createdAt: string },
+  ) {
     if (target == null || target.isBotMessage || target.isReactionEvent) return;
+    if (!webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) return;
     await this.#callSlackApi("reactions.add", {
       channel: target.channel,
       name: "eyes",
@@ -254,14 +316,114 @@ export class SlackAgentProcessor extends StreamProcessor<
   }
 }
 
+/**
+ * The human sender of a slack webhook, wherever the payload shape carries
+ * it: event_callback events (messages, reactions, joins) put it at
+ * `event.user`; interactivity payloads (block_actions, view submissions)
+ * at `user.id`. Undefined when the payload names no human (or is off-shape).
+ */
+function slackWebhookSenderUserId(body: unknown): string | undefined {
+  const record = readRecord(body);
+  if (record == null) return undefined;
+  return (
+    readString(readRecord(record.event)?.user) ??
+    readString(readRecord(record.user)?.id) ??
+    undefined
+  );
+}
+
+/**
+ * Envelope keys stripped from the model-facing transcript. `token` is
+ * Slack's webhook VERIFICATION SECRET — dumping it re-sends the secret to
+ * the LLM provider on every turn of every Slack agent. The rest is routing
+ * plumbing (event ids, authorization lists, dedup context) that drowns the
+ * message without telling the model anything actionable.
+ */
+const SLACK_ENVELOPE_NOISE = new Set([
+  "token",
+  "api_app_id",
+  "authorizations",
+  "authed_users",
+  "authed_teams",
+  "event_context",
+  "context_team_id",
+  "context_enterprise_id",
+  "event_id",
+  "event_time",
+  "is_ext_shared_channel",
+]);
+
+/** Event keys stripped for the same reason: `blocks` is the rich-text AST of
+ * the `text` field it sits next to (pure duplication at 10-50x the tokens);
+ * the rest is client/team bookkeeping. */
+const SLACK_EVENT_NOISE = new Set([
+  "blocks",
+  "client_msg_id",
+  "source_team",
+  "user_team",
+  "team",
+  "display_as_bot",
+  "is_locked",
+  "subscribed",
+]);
+
+/** Slack file objects carry dozens of thumbnail/preview fields; the model
+ * needs identity and type — the bytes ride separately as itx.files
+ * attachments on the same message. */
+const SLACK_FILE_KEYS = ["id", "name", "title", "mimetype", "filetype", "size", "mode"] as const;
+
+/**
+ * The model-facing transcript of one Slack webhook: the event's facts,
+ * curated rather than the raw wire payload (same posture as the email
+ * door's transcriber). Curation is by removal, not a whitelist, so rare
+ * event shapes (reactions, joins, interactivity payloads) keep their fields
+ * instead of arriving empty.
+ */
 function slackWebhookAgentInput(payload: unknown) {
   return [
     "`events.iterate.com/slack/webhook-received` event received",
     "",
     "```yaml",
-    stringifyYaml(payload).trimEnd(),
+    stringifyYaml(curateSlackWebhookPayload(payload)).trimEnd(),
     "```",
   ].join("\n");
+}
+
+function curateSlackWebhookPayload(payload: unknown): unknown {
+  const record = readRecord(payload);
+  if (record == null) return payload;
+  // headers are transport dedup facts (event id, request timestamp) — the
+  // curated body already carries everything the model can act on.
+  const { headers: _headers, ...envelope } = record;
+  const body = readRecord(record.body);
+  if (body == null) return envelope;
+  const curatedBody: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (SLACK_ENVELOPE_NOISE.has(key)) continue;
+    curatedBody[key] = key === "event" ? curateSlackEvent(value) : value;
+  }
+  return { ...envelope, body: curatedBody };
+}
+
+function curateSlackEvent(event: unknown): unknown {
+  const record = readRecord(event);
+  if (record == null) return event;
+  const curated: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (SLACK_EVENT_NOISE.has(key)) continue;
+    curated[key] = key === "files" && Array.isArray(value) ? value.map(curateSlackFile) : value;
+  }
+  return curated;
+}
+
+function curateSlackFile(file: unknown): unknown {
+  const record = readRecord(file);
+  if (record == null) return file;
+  const curated: Record<string, unknown> = {};
+  for (const key of SLACK_FILE_KEYS) {
+    if (record[key] !== undefined) curated[key] = record[key];
+  }
+  return curated;
 }
 
 function isBotMessage(slackEvent: Record<string, unknown>): boolean {
