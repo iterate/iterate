@@ -36,14 +36,21 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   // package (pkg.pr.new's @main URL resolves to the latest build published
   // from main — .github/workflows/pkg-pr-new.yml — so `npm install` in a
   // seeded repo always gets the contract the platform currently speaks), and
-  // the RUNTIME import (BaseProjectEntrypoint) is satisfied at build time by
-  // the platform-injected virtual module (worker-loader.ts), never by an npm
-  // install. The batch unpacking the old IterateProjectWorker base class did
-  // is inlined as processEventBatch on the worker itself.
+  // the RUNTIME imports (the IterateWorkerEntrypoint/IterateDurableObject
+  // base classes) are satisfied at build time by the platform-injected
+  // virtual module (worker-loader.ts), never by an npm install. The platform
+  // ceremony — processEventBatch unpacking, invokeCapability path-walking,
+  // fetchDynamicWorker — lives on the base classes; the template only
+  // overrides processEvent.
   const worker = templateFile("worker.ts");
   expect(worker).toContain('from "iterate/sdk"');
-  expect(worker).toContain("extends BaseProjectEntrypoint");
-  expect(worker).toContain("async processEventBatch(");
+  expect(worker).toContain("extends IterateWorkerEntrypoint");
+  expect(worker).toContain("extends IterateDurableObject");
+  expect(worker).toContain("async processEvent(");
+  // The ceremony methods live on the base classes — the template may mention
+  // them in prose but must not reimplement them.
+  expect(worker).not.toContain("async processEventBatch(");
+  expect(worker).not.toContain("async invokeCapability(");
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     devDependencies: Record<string, string>;

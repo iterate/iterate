@@ -11,9 +11,12 @@ test("the embedded iterate/sdk runtime is loader-ready plain JavaScript", async 
     esbuild.transform(ITERATE_SDK_VIRTUAL_MODULE, { format: "esm", loader: "js" }),
   ).resolves.toBeDefined();
 
-  // The runtime surface project workers extend, with its one platform
-  // dependency left external for workerd to resolve.
-  expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("class BaseProjectEntrypoint");
+  // The runtime surface project workers and apps extend, with its one
+  // platform dependency left external for workerd to resolve.
+  expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("class IterateWorkerEntrypoint");
+  expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("class IterateDurableObject");
+  expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("processEventBatch");
+  expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("invokeCapability");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("x-iterate-worker-dispatch");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain('from "cloudflare:workers"');
   expect(ITERATE_SDK_VIRTUAL_MODULE).not.toContain("import type");
