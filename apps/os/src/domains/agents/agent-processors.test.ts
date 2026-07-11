@@ -353,7 +353,15 @@ describe("minimal web-chat agent processors", () => {
     expect(aiCalls).toHaveLength(1);
     expect(aiCalls[0]).toMatchObject({
       stream: true,
-      messages: [expect.objectContaining({ role: "system" }), { role: "user", content: "hello" }],
+      messages: [
+        expect.objectContaining({ role: "system" }),
+        { role: "user", content: "hello" },
+        // The trailing clock stamp (prompt-cache-safe tail position).
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("Current date and time (UTC):"),
+        }),
+      ],
     });
   });
 

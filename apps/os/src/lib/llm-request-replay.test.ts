@@ -60,14 +60,16 @@ describe("replayLlmRequest", () => {
     expect(replay).not.toBeNull();
     expect(replay?.model).toBe("openai/gpt-5.5");
     expect(replay?.messages).toEqual([
-      {
-        id: "3:0",
-        role: "system",
-        // The request builder stamps the clock from the llm-request-requested
-        // event's own append time — replay reproduces it exactly.
-        content: "You are **demo**.\n\nCurrent date and time (UTC): 2026-07-11T00:00:03.000Z",
-      },
+      { id: "3:0", role: "system", content: "You are **demo**." },
       { id: "3:1", role: "user", content: "hello" },
+      {
+        id: "3:2",
+        role: "system",
+        // The clock rides as the LAST message (prompt-cache prefix safety),
+        // stamped from the llm-request-requested event's own append time —
+        // replay reproduces it exactly.
+        content: "Current date and time (UTC): 2026-07-11T00:00:03.000Z",
+      },
     ]);
     // Settled by the completed event that references this offset.
     expect(replay?.outcome).toEqual({ status: "success", durationMs: 1234, errorMessage: null });
@@ -80,8 +82,10 @@ describe("replayLlmRequest", () => {
       "user",
       "assistant",
       "user",
+      // The trailing clock stamp (prompt-cache-safe tail position).
+      "system",
     ]);
-    const lastMessage = replay?.messages.at(-1);
+    const lastMessage = replay?.messages.at(-2);
     expect(lastMessage?.content).toContain("look at this");
     // The hint line IS what the model saw — the file never travels inline.
     expect(lastMessage?.content).toContain('itx.files.get("/agents/web/demo/abc-cat.png")');
@@ -294,6 +298,7 @@ describe("replayLlmRequest", () => {
   it("skips malformed rows like the processor's own fold does", () => {
     const rows = ["not json", JSON.stringify({ half: "an event" }), ...conversationRows()];
     const replay = replayLlmRequest({ rawEventJsons: rows, llmRequestOffset: 3 });
-    expect(replay?.messages.at(-1)).toEqual({ id: "3:1", role: "user", content: "hello" });
+    // at(-2): the trailing clock stamp sits after the conversation.
+    expect(replay?.messages.at(-2)).toEqual({ id: "3:1", role: "user", content: "hello" });
   });
 });

@@ -300,4 +300,31 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
     expect(masked).toContain("sig=MASKED");
     expect(masked).not.toContain("deadbeef123");
   });
+
+  it("masks the clock stamp and the boot-context project line — birth turns share a key across projects", () => {
+    // Two projects' onboarding births differ ONLY in per-project boot facts
+    // and the per-request clock; the response cache must see them as equal
+    // (the preview-burn protection from the response-cache work).
+    const bodyFor = (name: string, slug: string, at: string) =>
+      JSON.stringify({
+        messages: [
+          { role: "system", content: "You are an agent." },
+          {
+            role: "user",
+            content: `Platform context for this agent:\n- Project: "${name}" (slug ${slug}, id prj_${"0".repeat(32)}) — the project worker/website serves https://${slug}.iterate-preview-4.app\n- Your agent stream path: /agents/onboarding`,
+          },
+          { role: "system", content: `Current date and time (UTC): ${at}` },
+        ],
+      });
+    const maskedA = maskCloudflareAiGatewayResponseCacheEntropy(
+      bodyFor("Snake Game", "snake", "2026-07-11T10:00:00.000Z"),
+    );
+    const maskedB = maskCloudflareAiGatewayResponseCacheEntropy(
+      bodyFor("Crossword Helper", "crossword", "2026-07-12T18:30:00.000Z"),
+    );
+    expect(maskedA).toBe(maskedB);
+    expect(maskedA).toContain("Current date and time (UTC): MASKED");
+    expect(maskedA).toContain("- Project: MASKED");
+    expect(maskedA).not.toContain("snake");
+  });
 });

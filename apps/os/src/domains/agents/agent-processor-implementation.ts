@@ -1117,18 +1117,28 @@ export function buildAgentLlmRequestBody(input: {
   // search for something recent, every scheduler cron, every "how old is
   // this?" judgment silently wrong, with no error signal. The request's own
   // llm-request-requested append time is the stamp: journaled, so refolds
-  // and the UI trace replay reproduce the exact request byte for byte.
+  // and the UI trace replay reproduce the exact request byte for byte. It
+  // rides as the LAST message, never inside the system prompt: a per-request
+  // value at the head of the request would change the prefix every turn and
+  // zero out the provider's prompt cache for the whole conversation behind
+  // it (the tail position leaves every cached prefix intact).
   const requestedAt = input.events.find(
     (event) =>
       event.offset === input.llmRequestOffset &&
       event.type === "events.iterate.com/agent/llm-request-requested",
   )?.createdAt;
-  const clockLine =
-    requestedAt === undefined ? "" : `\n\nCurrent date and time (UTC): ${requestedAt}`;
   return {
     messages: [
-      { role: "system" as const, content: state.systemPrompt + clockLine },
+      { role: "system" as const, content: state.systemPrompt },
       ...state.history,
+      ...(requestedAt === undefined
+        ? []
+        : [
+            {
+              role: "system" as const,
+              content: `Current date and time (UTC): ${requestedAt}`,
+            },
+          ]),
     ],
   };
 }
