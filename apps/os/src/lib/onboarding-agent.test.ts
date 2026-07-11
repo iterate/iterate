@@ -7,6 +7,8 @@ const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState
   createRequest: null,
   created: true,
   customDomains: [],
+  egressRules: [],
+  humanApprovalKeys: [],
   onboardingActive: false,
   onboardingCompletedAt: null,
   repos: [],

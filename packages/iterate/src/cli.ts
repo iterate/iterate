@@ -23,6 +23,9 @@ import type {
   Stream,
 } from "./itx-api.generated.ts";
 import { shareMyComputer } from "./use-my-computer.ts";
+import { runApprovalCli } from "./approve.ts";
+import { emitNeedsLogin, runApprovalJson } from "./approve-json.ts";
+import { launchMenubarApp } from "./menubar-app.ts";
 import {
   CONFIG_PATH,
   Config,
@@ -1100,6 +1103,152 @@ const launcherProcedures = {
         projectId,
         headers: headersRecord(auth.requestHeaders),
         name: input.name,
+      });
+    }),
+
+  approve: os
+    .input(
+      z.object({
+        project: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe(
+            "OS project id (prj_…) or slug. Defaults to the active config's defaultProject.",
+          ),
+        enroll: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Generate this machine's approval key (Secure Enclave when available) and enroll it before listening.",
+          ),
+        softwareKey: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("With --enroll: force a software P-256 key instead of the Secure Enclave."),
+        native: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "macOS: approve via native dialogs — the Approve button leads straight into Touch ID. Needs an enrolled Secure Enclave key.",
+          ),
+        keys: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("List the project's enrolled approval keys and exit."),
+        revoke: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Revoke this machine's approval key (append key-revoked, destroy local material) and exit.",
+          ),
+        json: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Machine mode for the menu-bar app: NDJSON events on stdout, {offset,decision} on stdin. Never opens a browser — emits a needs-login line instead.",
+          ),
+        menubar: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "macOS: build (on first use, from the shipped Swift source) and launch the menu-bar approver app for this project, then exit.",
+          ),
+      }),
+    )
+    .meta({
+      description:
+        "Be the human in the loop for a project's egress: watch held outbound requests and approve or reject each one (Touch-ID-signed when an enclave key is enrolled). Runs until Ctrl-C.",
+    })
+    .handler(async ({ input }) => {
+      const resolved = resolveConfig(process.cwd(), { throw: true });
+
+      // --menubar just builds + launches the GUI app; it needs no auth here (the
+      // app signs in itself). Handle it first, and standalone.
+      if (input.menubar) {
+        if (input.json || input.enroll || input.keys || input.revoke || input.native) {
+          throw new Error("--menubar is standalone; run it without the other flags.");
+        }
+        const project = input.project ?? resolved.config.defaultProject;
+        if (!project) {
+          throw new Error("--menubar needs --project or a configured defaultProject.");
+        }
+        await launchMenubarApp({
+          configName: resolved.name,
+          project,
+          log: (message) => console.error(message),
+        });
+        return;
+      }
+
+      // --json is listen-and-decide only; the setup flags are for the terminal
+      // form. Reject the combination loudly rather than silently ignoring it.
+      if (input.json && (input.enroll || input.keys || input.revoke || input.native)) {
+        throw new Error(
+          "--json cannot be combined with --enroll/--keys/--revoke/--native; run those separately.",
+        );
+      }
+
+      // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
+      // the stored `iterate login` session. In JSON mode we never open a
+      // browser — a missing session is reported so the app can drive login.
+      const envAuth = osAuthFromEnvironment();
+      let authHeaders: OsAuthHeaders | undefined;
+      if (!envAuth) {
+        try {
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        } catch (error) {
+          if (!shouldAutoLoginForChat(error)) throw error;
+          if (input.json) {
+            emitNeedsLogin();
+            return;
+          }
+          console.error(
+            `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
+          );
+          await loginToResolvedConfig(resolved);
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        }
+      }
+      const auth = envAuth ?? osAuthFromHeaders(authHeaders!);
+
+      const projectId = await resolveChatProject({
+        auth,
+        baseUrl: resolved.config.osBaseUrl,
+        configName: resolved.name,
+        configPath: CONFIG_PATH,
+        configuredDefaultProject: resolved.config.defaultProject,
+        explicitProject: input.project,
+      });
+
+      if (input.json) {
+        await runApprovalJson({
+          auth: auth.credentials,
+          baseUrl: resolved.config.osBaseUrl,
+          projectId,
+          headers: headersRecord(auth.requestHeaders),
+        });
+        return;
+      }
+
+      await runApprovalCli({
+        auth: auth.credentials,
+        baseUrl: resolved.config.osBaseUrl,
+        projectId,
+        headers: headersRecord(auth.requestHeaders),
+        enroll: input.enroll,
+        softwareKey: input.softwareKey,
+        native: input.native,
+        keys: input.keys,
+        revoke: input.revoke,
       });
     }),
 

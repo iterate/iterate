@@ -49,6 +49,7 @@
   "files": [
     "bin",
     "dist",
+    "menubar",
     "README.md"
   ],
   "scripts": {

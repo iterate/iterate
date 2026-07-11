@@ -68,6 +68,32 @@ export class ProjectProcessor extends StreamProcessor<
         return recordStream(state, event.payload.path, event.createdAt);
       case "events.iterate.com/stream/child-stream-created":
         return recordStream(state, event.payload.childPath, event.createdAt);
+      case "events.iterate.com/project/egress-rules-configured":
+        return { ...state, egressRules: event.payload.rules };
+      case "events.iterate.com/project/human-approval-key-added":
+        if (state.humanApprovalKeys.some((key) => key.keyId === event.payload.keyId)) return state;
+        return {
+          ...state,
+          humanApprovalKeys: [
+            ...state.humanApprovalKeys,
+            {
+              keyId: event.payload.keyId,
+              publicKey: event.payload.publicKey,
+              label: event.payload.label ?? "",
+              addedAt: event.createdAt,
+              revokedAt: null,
+            },
+          ],
+        };
+      case "events.iterate.com/project/human-approval-key-revoked":
+        return {
+          ...state,
+          humanApprovalKeys: state.humanApprovalKeys.map((key) =>
+            key.keyId === event.payload.keyId && key.revokedAt === null
+              ? { ...key, revokedAt: event.createdAt }
+              : key,
+          ),
+        };
       default:
         return reduceCustomDomainEvent({ event, state }) ?? state;
     }
