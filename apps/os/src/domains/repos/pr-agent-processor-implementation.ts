@@ -167,7 +167,13 @@ function pullRequestWebhookAgentInput(
       draft: typeof pullRequest?.draft === "boolean" ? pullRequest.draft : undefined,
       headRef: readString(readRecord(pullRequest?.head)?.ref),
       baseRef: readString(readRecord(pullRequest?.base)?.ref),
-      body: readString(pullRequest?.body),
+      // The PR description rides ONLY on `opened`. Every other action would
+      // re-render the same multi-KB body — a real prd PR journal accumulated
+      // 53 near-identical walls from CI edits to its preview table, burying
+      // the eventual @mention under a megabyte of history. Edits announce
+      // themselves via `action: edited`; the current body is one
+      // pulls.get away if the model ever needs it.
+      body: readString(body.action) === "opened" ? readString(pullRequest?.body) : undefined,
     },
     sender: {
       login: readString(sender?.login),

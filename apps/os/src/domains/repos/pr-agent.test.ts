@@ -573,6 +573,38 @@ describe("PrAgentProcessor (transcriber)", () => {
     expect(openedInput.content).toContain("Add widgets");
   });
 
+  it("renders the PR description only on opened — edits announce without the body wall", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      ROUTE_EVENT,
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(pullRequestBody({ action: "opened" })),
+      },
+      // CI bots edit PR bodies constantly (preview tables); a real prd
+      // journal accumulated 53 near-identical multi-KB body walls this way.
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(pullRequestBody({ action: "edited" })),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = agentInputs(stream).map(
+      (event) => (event.payload as { content: string }).content,
+    );
+    // inputs[0] is route context; opened carries the description, edited does not.
+    expect(inputs[1]).toContain("PR description");
+    expect(inputs[2]).toContain("edited");
+    expect(inputs[2]).not.toContain("PR description");
+    // The edit still announces the PR identity.
+    expect(inputs[2]).toContain("Add widgets");
+  });
+
   it("gates triggers on action, mention boundary, and PR-description mentions", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
