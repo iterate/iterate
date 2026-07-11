@@ -152,13 +152,10 @@ async function materializeOpenApiModules(
       (async () => {
         const response = await fetchImpl(specUrl);
         if (!response.ok) throw new Error(`spec fetch returned ${response.status}`);
-        const text = await response.text();
-        // Same order of budget as the npm lane's TYPM_LIMITS — an unbounded
-        // spec would exhaust the isolate BEFORE the compile's crash guard.
-        if (text.length > MAX_SPEC_BYTES) {
-          throw new Error(`spec is ${text.length} bytes (limit ${MAX_SPEC_BYTES})`);
-        }
-        const spec = JSON.parse(text) as Record<string, unknown>;
+        const spec = JSON.parse(await boundedBody(response, MAX_SPEC_BYTES)) as Record<
+          string,
+          unknown
+        >;
         const declaration = openApiCapabilityTypeDeclaration(listOpenApiOperations(spec), spec);
         // Ambient modules match arbitrary specifier strings; exports inside
         // keep their names, so import("openapi:…").Capability resolves.
@@ -175,4 +172,36 @@ async function materializeOpenApiModules(
     }
   }
   return { moduleText: declarations.join("\n\n"), notes };
+}
+
+/** Read a response body, aborting once it exceeds `maxBytes` — the cap must
+ * bind DURING download (same order of budget as the npm lane's TYPM_LIMITS);
+ * checking after `.text()` would let an oversized spec exhaust the isolate
+ * before the compile's crash guard ever runs. */
+async function boundedBody(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const text = await response.text(); // test fakes without streams
+    if (text.length > maxBytes) throw new Error(`spec exceeds ${maxBytes} bytes`);
+    return text;
+  }
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`spec exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+  const joined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
 }

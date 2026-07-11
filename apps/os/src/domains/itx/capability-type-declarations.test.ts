@@ -4,6 +4,7 @@ import {
   jsonSchemaToTypeText,
   mcpCapabilityTypeDeclaration,
   openApiCapabilityTypeDeclaration,
+  openApiCapabilityTypeInline,
   openApiCapabilityTypeReference,
 } from "./capability-type-declarations.ts";
 import { listOpenApiOperations } from "./openapi-types.ts";
@@ -179,6 +180,25 @@ test("generated declarations over the size budget collapse to one permissive lin
   );
   expect(small).toContain("// Generated from");
   expect(small).toContain("tool_1(input?: {");
+});
+
+test("openApiCapabilityTypeInline journals the full declaration for auth'd specs", () => {
+  // The sidecar's bare fetch cannot send auth headers, so specs behind them
+  // journal inline (budgeted like MCP) instead of by reference.
+  const spec = {
+    openapi: "3.0.0",
+    paths: {
+      "/pets": { get: { operationId: "listPets" } },
+    },
+  };
+  const inline = openApiCapabilityTypeInline(
+    listOpenApiOperations(spec),
+    spec,
+    "https://private.example.com/spec.json",
+  );
+  expect(inline).toContain("// Generated from https://private.example.com/spec.json");
+  expect(inline).toContain("listPets(input?: Record<string, unknown>): Promise<unknown>;");
+  expect(inline).not.toContain("openapi:");
 });
 
 test("openApiCapabilityTypeReference is one journal-sized line, not a schema dump", () => {

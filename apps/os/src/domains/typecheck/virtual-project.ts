@@ -27,7 +27,7 @@ const MAX_SCRIPT_CHARS = 200_000;
  * `async function`, or the parenthesized `(async (…)` form. The checker
  * enforces the same rule, or a pre-flighted green script would bounce at
  * run time. */
-const RUNTIME_SCRIPT_SHAPE = /^\(?async\s*(?:function|\()/;
+const RUNTIME_SCRIPT_SHAPE = /^(?:async\s*(?:function|\()|\(async\s*\()/;
 
 const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
 

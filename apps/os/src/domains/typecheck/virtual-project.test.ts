@@ -268,13 +268,21 @@ test("the checker enforces the runtime's block shape and size cap up front", asy
   expect(comment).toHaveLength(1);
   expect(comment[0]).toContain("starts with `async (`");
 
-  // The extractor's parenthesized form is accepted, matching the runtime.
+  // The extractor's parenthesized arrow form is accepted; its parenthesized
+  // FUNCTION form is not — mirror exactly, or green pre-flights bounce.
   const wrapped = await checkItxScript({
     capabilities: [],
     code: "(async (itx) => {})",
     typechecker,
   });
   expect(wrapped).toEqual([]);
+  const wrappedFunction = await checkItxScript({
+    capabilities: [],
+    code: "(async function (itx) {})",
+    typechecker,
+  });
+  expect(wrappedFunction).toHaveLength(1);
+  expect(wrappedFunction[0]).toContain("starts with");
 
   const huge = await checkItxScript({
     capabilities: [],

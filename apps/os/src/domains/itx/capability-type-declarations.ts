@@ -149,7 +149,27 @@ export function openApiCapabilityTypeDeclaration(
   operations: OpenApiOperation[],
   spec: Record<string, unknown>,
 ): string {
-  const members = operations.map((operation) => {
+  // No budget cap and no provenance header: this full form never rides the
+  // journal — the check-time materializer consumes it in memory (see
+  // run-typecheck.ts); journals carry openApiCapabilityTypeReference instead.
+  return `export type Capability = {\n${openApiMembers(operations, spec).join("\n")}\n};`;
+}
+
+/**
+ * The inline variant, for specs the CHECKER cannot re-fetch (auth headers
+ * ride project egress, which the sidecar does not hold): the full generated
+ * declaration journals directly, under the same budget as MCP.
+ */
+export function openApiCapabilityTypeInline(
+  operations: OpenApiOperation[],
+  spec: Record<string, unknown>,
+  source: string,
+): string {
+  return withGeneratedBudget({ members: openApiMembers(operations, spec), source });
+}
+
+function openApiMembers(operations: OpenApiOperation[], spec: Record<string, unknown>): string[] {
+  return operations.map((operation) => {
     const doc = operation.summary ? `  /** ${escapeCommentText(operation.summary)} */\n` : "";
     const parts: string[] = [];
     const parameterNames = new Set<string>();
@@ -192,10 +212,6 @@ export function openApiCapabilityTypeDeclaration(
         : "input?: Record<string, unknown>";
     return `${doc}  ${quoteMemberName(operation.operationId)}(${input}): Promise<unknown>;`;
   });
-  // No budget cap and no provenance header: this full form never rides the
-  // journal — the check-time materializer consumes it in memory (see
-  // run-typecheck.ts); journals carry openApiCapabilityTypeReference instead.
-  return `export type Capability = {\n${members.join("\n")}\n};`;
 }
 
 /**

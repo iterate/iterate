@@ -156,6 +156,7 @@ import {
 } from "./domains/itx/itx-api-graph.ts";
 import {
   mcpCapabilityTypeDeclaration,
+  openApiCapabilityTypeInline,
   openApiCapabilityTypeReference,
 } from "./domains/itx/capability-type-declarations.ts";
 import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
@@ -5553,7 +5554,7 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
   }
 
   async __describe(): Promise<Description> {
-    const { operations } = await this.#ready();
+    const { operations, spec } = await this.#ready();
 
     return describeNode({
       instructions:
