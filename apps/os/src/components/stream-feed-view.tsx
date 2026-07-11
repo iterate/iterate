@@ -5,7 +5,10 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/u
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
-import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
+import type {
+  SqlValue,
+  StreamBrowserDatabase,
+} from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import {
   AGENT_KIND_PREFIX,
   type RawFeedItemData,
@@ -66,6 +69,7 @@ export function StreamFeedView({
   isPending = false,
   liveState,
   onInspectEvent,
+  onInspectLlmRequest,
   projectSlug,
   isInterruptingQueuedMessages = false,
   onInterruptQueuedMessages,
@@ -79,6 +83,8 @@ export function StreamFeedView({
   liveState: AgentUiState | null;
   /** Opens the raw-event inspector panel at this offset (raw rows only). */
   onInspectEvent?: (offset: number) => void;
+  /** Opens the LLM request inspector at this llmRequestOffset (llm steps only). */
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
   projectSlug?: string;
   isInterruptingQueuedMessages?: boolean;
   onInterruptQueuedMessages?: () => Promise<void> | void;
@@ -178,80 +184,7 @@ export function StreamFeedView({
   const prefetchBefore = windowFirst > 0 ? 1 : 0;
   const queryOffset = windowFirst - prefetchBefore;
   const windowSize = virtualWindowSize + prefetchBefore;
-  // The filtered collection is ordered by local_index, so OFFSET/LIMIT over it
-  // IS the virtualizer's row window in dense positions.
-  const rowsResult = useStreamQuery(
-    database,
-    `SELECT local_index, kind, first_offset, last_offset, event_count, json(data) AS data
-     FROM feed_items WHERE ${whereSql}
-     ORDER BY local_index ASC LIMIT ? OFFSET ?`,
-    [...params, windowSize, queryOffset],
-  );
-  // Retain rows across range re-queries by MERGING each resolved window into
-  // the previously-loaded rows (bounded below). Replacing the map with just
-  // the latest window would forget loaded rows the moment the window shifts;
-  // rows scrolled back into view would then re-render as skeletons, and the
-  // skeleton's measurement would overwrite the row's real size — with an
-  // end-anchored virtualizer those size collapses cascade into the total
-  // thrashing and the scroll position stranding mid-history. The retained
-  // rows are only valid for the filter they were fetched under — reusing
-  // them across a filter change would briefly show unfiltered rows.
-  const retainKey = `${whereSql}:${params.join(" ")}`;
-  const lastRowsRef = useRef<{
-    retainKey: string;
-    rows: Map<number, { fingerprint: string; row: FeedRow }>;
-  } | null>(null);
-  const rowsByIndex = useMemo(() => {
-    const retained =
-      lastRowsRef.current?.retainKey === retainKey
-        ? lastRowsRef.current.rows
-        : new Map<number, { fingerprint: string; row: FeedRow }>();
-    if (rowsResult.status !== "ok") return retained;
-    const rows = new Map(retained);
-    rowsResult.data.forEach((sqlRow, position) => {
-      const index = queryOffset + position;
-      const kind = String(sqlRow.kind);
-      const raw = String(sqlRow.data);
-      // Identity stability is load-bearing: rows re-parse (new object) ONLY
-      // when their JSON changed. Handing memoized rows fresh-but-equal items
-      // on every window re-query re-renders their markdown, whose async
-      // re-parse collapses the row to empty for a frame — and a burst of
-      // rows momentarily measuring ~16px is exactly the kind of size storm
-      // that breaks the virtualizer's end anchor.
-      const fingerprint = `${kind}:${raw}`;
-      if (rows.get(index)?.fingerprint === fingerprint) return;
-      try {
-        const isAgent = kind.startsWith(AGENT_KIND_PREFIX);
-        const parsed = JSON.parse(raw) as AgentUiItem | RawFeedItemData;
-        rows.set(index, {
-          fingerprint,
-          row: {
-            kind,
-            firstOffset: Number(sqlRow.first_offset),
-            lastOffset: Number(sqlRow.last_offset),
-            eventCount: Number(sqlRow.event_count),
-            agentItem: isAgent ? (parsed as AgentUiItem) : null,
-            rawData: isAgent ? null : (parsed as RawFeedItemData),
-          },
-        });
-      } catch {
-        // Skip unparseable rows; the row stays a skeleton.
-      }
-    });
-    // Keep memory bounded on very long histories: drop the oldest-inserted
-    // entries once well past what any viewport plus overscan can show.
-    if (rows.size > MAX_RETAINED_ROWS) {
-      const excess = rows.size - MAX_RETAINED_ROWS;
-      let dropped = 0;
-      for (const key of rows.keys()) {
-        if (dropped >= excess) break;
-        rows.delete(key);
-        dropped++;
-      }
-    }
-    lastRowsRef.current = { retainKey, rows };
-    return rows;
-  }, [rowsResult.data, rowsResult.status, retainKey, queryOffset]);
+  const rowsByIndex = useRetainedFeedRows({ database, whereSql, params, queryOffset, windowSize });
 
   // All SCROLLING at the tail is owned by the stick (see the hook's docs):
   // it opens the feed at the newest content, holds the bottom through async
@@ -335,6 +268,7 @@ export function StreamFeedView({
                     live={live}
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
+                    onInspectLlmRequest={onInspectLlmRequest}
                   />
                 ) : isQueuedItem ? (
                   <QueuedMessagesPanel
@@ -357,6 +291,7 @@ export function StreamFeedView({
                     item={row.agentItem}
                     toggledIds={toggledIds}
                     onToggle={toggleExpanded}
+                    onInspectLlmRequest={onInspectLlmRequest}
                     projectSlug={projectSlug}
                   />
                 ) : (
@@ -376,6 +311,99 @@ export function StreamFeedView({
       </div>
     </div>
   );
+}
+
+/**
+ * The virtualizer's row window as parsed, identity-stable rows: a live SQL
+ * LIMIT/OFFSET query over the filtered collection's dense positions, merged
+ * into previously-loaded rows (bounded at MAX_RETAINED_ROWS). Retention is
+ * load-bearing, not a cache nicety: replacing the map with just the latest
+ * window would forget loaded rows the moment the window shifts; rows scrolled
+ * back into view would then re-render as skeletons, and the skeleton's
+ * measurement would overwrite the row's real size — with an end-anchored
+ * virtualizer those size collapses cascade into the total thrashing and the
+ * scroll position stranding mid-history. The retained rows are only valid for
+ * the filter they were fetched under — reusing them across a filter change
+ * would briefly show unfiltered rows.
+ */
+function useRetainedFeedRows({
+  database,
+  whereSql,
+  params,
+  queryOffset,
+  windowSize,
+}: {
+  database: StreamBrowserDatabase;
+  whereSql: string;
+  params: SqlValue[];
+  queryOffset: number;
+  windowSize: number;
+}): ReadonlyMap<number, { fingerprint: string; row: FeedRow }> {
+  // The filtered collection is ordered by local_index, so OFFSET/LIMIT over it
+  // IS the virtualizer's row window in dense positions.
+  const rowsResult = useStreamQuery(
+    database,
+    `SELECT local_index, kind, first_offset, last_offset, event_count, json(data) AS data
+     FROM feed_items WHERE ${whereSql}
+     ORDER BY local_index ASC LIMIT ? OFFSET ?`,
+    [...params, windowSize, queryOffset],
+  );
+  const retainKey = `${whereSql}:${params.join(" ")}`;
+  const lastRowsRef = useRef<{
+    retainKey: string;
+    rows: Map<number, { fingerprint: string; row: FeedRow }>;
+  } | null>(null);
+  return useMemo(() => {
+    const retained =
+      lastRowsRef.current?.retainKey === retainKey
+        ? lastRowsRef.current.rows
+        : new Map<number, { fingerprint: string; row: FeedRow }>();
+    if (rowsResult.status !== "ok") return retained;
+    const rows = new Map(retained);
+    rowsResult.data.forEach((sqlRow, position) => {
+      const index = queryOffset + position;
+      const kind = String(sqlRow.kind);
+      const raw = String(sqlRow.data);
+      // Identity stability is load-bearing: rows re-parse (new object) ONLY
+      // when their JSON changed. Handing memoized rows fresh-but-equal items
+      // on every window re-query re-renders their markdown, whose async
+      // re-parse collapses the row to empty for a frame — and a burst of
+      // rows momentarily measuring ~16px is exactly the kind of size storm
+      // that breaks the virtualizer's end anchor.
+      const fingerprint = `${kind}:${raw}`;
+      if (rows.get(index)?.fingerprint === fingerprint) return;
+      try {
+        const isAgent = kind.startsWith(AGENT_KIND_PREFIX);
+        const parsed = JSON.parse(raw) as AgentUiItem | RawFeedItemData;
+        rows.set(index, {
+          fingerprint,
+          row: {
+            kind,
+            firstOffset: Number(sqlRow.first_offset),
+            lastOffset: Number(sqlRow.last_offset),
+            eventCount: Number(sqlRow.event_count),
+            agentItem: isAgent ? (parsed as AgentUiItem) : null,
+            rawData: isAgent ? null : (parsed as RawFeedItemData),
+          },
+        });
+      } catch {
+        // Skip unparseable rows; the row stays a skeleton.
+      }
+    });
+    // Keep memory bounded on very long histories: drop the oldest-inserted
+    // entries once well past what any viewport plus overscan can show.
+    if (rows.size > MAX_RETAINED_ROWS) {
+      const excess = rows.size - MAX_RETAINED_ROWS;
+      let dropped = 0;
+      for (const key of rows.keys()) {
+        if (dropped >= excess) break;
+        rows.delete(key);
+        dropped++;
+      }
+    }
+    lastRowsRef.current = { retainKey, rows };
+    return rows;
+  }, [rowsResult.data, rowsResult.status, retainKey, queryOffset]);
 }
 
 const RawFeedItemRow = memo(function RawFeedItemRow({

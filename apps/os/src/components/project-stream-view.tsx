@@ -30,6 +30,7 @@ import {
 import { AgentTokenUsageStrip } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
+import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import {
   StreamProcessorsPanel,
@@ -192,28 +193,10 @@ export function ProjectStreamView({
     window.location.reload();
   }
 
-  const getProcessorRuntimeState = useCallback(
-    async (subscriptionKey: string) => {
-      const stream = await resolvedStreamSource(streamPath);
-      const [runtimeState, streamRuntimeState] = await Promise.all([
-        stream.getProcessorRuntimeState({ subscriptionKey }),
-        stream.runtimeState(),
-      ]);
-      return {
-        runtimeState,
-        // The itx Stream.runtimeState() types coreProcessorState as
-        // unknown; parse out the slice this panel needs.
-        streamMaxOffset: parseBrowserCoreProcessorState(streamRuntimeState.coreProcessorState)
-          .maxOffset,
-      };
-    },
-    [resolvedStreamSource, streamPath],
-  );
-  const getStreamRuntimeState = useCallback(
-    async (): Promise<StreamRuntimeDebugState> =>
-      (await resolvedStreamSource(streamPath)).runtimeState(),
-    [resolvedStreamSource, streamPath],
-  );
+  const { getProcessorRuntimeState, getStreamRuntimeState } = useProcessorsPanelDebugState({
+    resolvedStreamSource,
+    streamPath,
+  });
 
   const connectionLabel =
     snapshot.connectionError ??
@@ -264,6 +247,7 @@ export function ProjectStreamView({
       }}
       liveState={caps.agentFeed ? agentUiState : null}
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
+      {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
       emptyLabel={connectionLabel}
       isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
       projectSlug={projectSlug}
@@ -278,14 +262,7 @@ export function ProjectStreamView({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {modeBody}
-        {caps.eventInspector && panels.inspectedOffset != null ? (
-          <RawEventInspectorPanel
-            database={store.streamDatabase}
-            offset={panels.inspectedOffset}
-            onNavigate={panels.inspectEvent}
-            onClose={panels.closeInspector}
-          />
-        ) : null}
+        <StreamInspectorOverlay caps={caps} panels={panels} database={store.streamDatabase} />
       </div>
 
       <div className="shrink-0 px-4 pb-2.5 pt-2.5">
@@ -381,6 +358,46 @@ export function ProjectStreamView({
 }
 
 /**
+ * The feed's right-edge inspector, or nothing. At most one inspector holds
+ * the edge (useStreamViewPanels keeps their URL keys mutually exclusive):
+ * the raw-event inspector when the mode offers it and `?event=` is set,
+ * else the LLM request inspector when `?llmRequest=` is set — the latter in
+ * EVERY mode, so a shared link works regardless of the viewer's tab. Both
+ * read the RAW events mirror (not feed_items): the fold reads the journal,
+ * the same source the processor read.
+ */
+function StreamInspectorOverlay({
+  caps,
+  panels,
+  database,
+}: {
+  caps: ReturnType<typeof modeCapabilities>;
+  panels: ReturnType<typeof useStreamViewPanels>;
+  database: StreamBrowserDatabase;
+}) {
+  if (caps.eventInspector && panels.inspectedOffset != null) {
+    return (
+      <RawEventInspectorPanel
+        database={database}
+        offset={panels.inspectedOffset}
+        onNavigate={panels.inspectEvent}
+        onClose={panels.closeInspector}
+      />
+    );
+  }
+  if (panels.inspectedLlmRequestOffset != null) {
+    return (
+      <LlmRequestInspectorPanel
+        database={database}
+        llmRequestOffset={panels.inspectedLlmRequestOffset}
+        onClose={panels.closeLlmRequestInspector}
+      />
+    );
+  }
+  return null;
+}
+
+/**
  * Full-panel layouts relegate the feed to this right-edge sheet behind the
  * header's Events button (`?events=true`). Children are the filter row +
  * feed column the split layout renders inline.
@@ -430,6 +447,42 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
       </SheetContent>
     </Sheet>
   );
+}
+
+/**
+ * The processors sheet's on-demand debug accessors: server-side runtime state
+ * for one processor subscription (plus the stream's max offset for lag math)
+ * and for the stream itself. Dialed fresh per call — debug reads must see the
+ * server's CURRENT state, not a cached snapshot.
+ */
+function useProcessorsPanelDebugState(args: {
+  resolvedStreamSource: ItxStreamSource;
+  streamPath: string;
+}) {
+  const { resolvedStreamSource, streamPath } = args;
+  const getProcessorRuntimeState = useCallback(
+    async (subscriptionKey: string) => {
+      const stream = await resolvedStreamSource(streamPath);
+      const [runtimeState, streamRuntimeState] = await Promise.all([
+        stream.getProcessorRuntimeState({ subscriptionKey }),
+        stream.runtimeState(),
+      ]);
+      return {
+        runtimeState,
+        // The itx Stream.runtimeState() types coreProcessorState as
+        // unknown; parse out the slice this panel needs.
+        streamMaxOffset: parseBrowserCoreProcessorState(streamRuntimeState.coreProcessorState)
+          .maxOffset,
+      };
+    },
+    [resolvedStreamSource, streamPath],
+  );
+  const getStreamRuntimeState = useCallback(
+    async (): Promise<StreamRuntimeDebugState> =>
+      (await resolvedStreamSource(streamPath)).runtimeState(),
+    [resolvedStreamSource, streamPath],
+  );
+  return { getProcessorRuntimeState, getStreamRuntimeState };
 }
 
 /**
