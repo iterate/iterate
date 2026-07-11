@@ -16,6 +16,31 @@ import { stripComments } from "./itx-api-graph.ts";
 const MAX_SCHEMA_DEPTH = 4;
 
 /**
+ * Ceiling on a GENERATED declaration that rides the journal (~8k tokens).
+ * A declaration over this is noise to every reader; past it the mount keeps
+ * a one-line permissive type plus the provenance pointer instead. (OpenAPI
+ * mounts never hit this — they journal a spec REFERENCE the typechecker
+ * materializes at check time, exactly like npm imports.)
+ */
+const MAX_GENERATED_DECLARATION_CHARS = 32_000;
+
+/**
+ * The reference form an OpenAPI mount journals: one line naming the spec,
+ * resolved to the full generated declaration by the typechecker at check
+ * time (see materializeOpenApiModules in run-typecheck.ts) — the same
+ * store-a-reference mechanism as `import("@slack/web-api").WebClient`.
+ * Nothing bulky ever enters the journal or an agent's context.
+ */
+export function openApiCapabilityTypeReference(specUrl: string): string {
+  return (
+    `// Generated from ${specUrl}\n` +
+    `// Operation names and inputs resolve when itx.docs.typecheck compiles a script\n` +
+    `// against this mount; the spec at the URL above lists them for reading.\n` +
+    `export type Capability = import(${JSON.stringify(`openapi:${specUrl}`)}).Capability;`
+  );
+}
+
+/**
  * Render a JSON Schema as TypeScript type text. `root` anchors `$ref`
  * resolution; without one, `$ref`s render as `unknown`.
  */
@@ -58,20 +83,8 @@ export function jsonSchemaToTypeText(schema: unknown, root?: JsonSchema, depth =
       return `Array<${jsonSchemaToTypeText(node.items, root, depth + 1)}>`;
     case "object":
     case undefined: {
-      const properties = node.properties as Record<string, unknown> | undefined;
-      if (!properties) return node.type === "object" ? "Record<string, unknown>" : "unknown";
-      const required = new Set(Array.isArray(node.required) ? node.required : []);
-      const members = Object.entries(properties).map(([name, property]) => {
-        const resolvedProperty = resolveJsonSchema(property, root ?? {});
-        const description =
-          resolvedProperty !== undefined &&
-          typeof resolvedProperty === "object" &&
-          typeof resolvedProperty.description === "string"
-            ? `/** ${escapeCommentText(resolvedProperty.description)} */ `
-            : "";
-        const optional = required.has(name) ? "" : "?";
-        return `${description}${quoteMemberName(name)}${optional}: ${jsonSchemaToTypeText(property, root, depth + 1)}`;
-      });
+      if (!node.properties) return node.type === "object" ? "Record<string, unknown>" : "unknown";
+      const members = objectSchemaMembers(node, root, depth).map((member) => member.text);
       return `{ ${members.join("; ")} }`;
     }
     default:
@@ -79,12 +92,39 @@ export function jsonSchemaToTypeText(schema: unknown, root?: JsonSchema, depth =
   }
 }
 
+/** An object schema's properties as named member texts — shared by the
+ * object case above and the OpenAPI body merge (which needs the NAMES to
+ * drop body properties that collide with parameter names). */
+function objectSchemaMembers(
+  node: Record<string, unknown>,
+  root: JsonSchema | undefined,
+  depth: number,
+): Array<{ name: string; text: string }> {
+  const properties = (node.properties ?? {}) as Record<string, unknown>;
+  const required = new Set(Array.isArray(node.required) ? node.required : []);
+  return Object.entries(properties).map(([name, property]) => {
+    const resolvedProperty = resolveJsonSchema(property, root ?? {});
+    const description =
+      resolvedProperty !== undefined &&
+      typeof resolvedProperty === "object" &&
+      typeof resolvedProperty.description === "string"
+        ? `/** ${escapeCommentText(resolvedProperty.description)} */ `
+        : "";
+    const optional = required.has(name) ? "" : "?";
+    return {
+      name,
+      text: `${description}${quoteMemberName(name)}${optional}: ${jsonSchemaToTypeText(property, root, depth + 1)}`,
+    };
+  });
+}
+
 /**
  * The generated Capability Type Declaration for a connected MCP server: one
  * method per tool, input typed from the tool's inputSchema. The FIRST export
  * is the mount's own type (the convention every `types` string follows).
+ * `source` becomes a provenance comment pointing readers at the real thing.
  */
-export function mcpCapabilityTypeDeclaration(tools: Tool[]): string {
+export function mcpCapabilityTypeDeclaration(tools: Tool[], source: string): string {
   const members = tools.map((tool) => {
     const doc = tool.description ? `  /** ${escapeCommentText(tool.description)} */\n` : "";
     // Depth starts at 1: the input object renders inline inside the method
@@ -96,7 +136,7 @@ export function mcpCapabilityTypeDeclaration(tools: Tool[]): string {
     const required = Array.isArray(requiredProperties) && requiredProperties.length > 0;
     return `${doc}  ${quoteMemberName(tool.name)}(input${required ? "" : "?"}: ${input}): Promise<unknown>;`;
   });
-  return `export type Capability = {\n${members.join("\n")}\n};`;
+  return withGeneratedBudget({ members, source });
 }
 
 /**
@@ -112,22 +152,34 @@ export function openApiCapabilityTypeDeclaration(
   const members = operations.map((operation) => {
     const doc = operation.summary ? `  /** ${escapeCommentText(operation.summary)} */\n` : "";
     const parts: string[] = [];
+    const parameterNames = new Set<string>();
     let requiredInput = false;
     for (const parameter of operation.parameters) {
+      // OpenAPI allows one name in several locations (path + query); the
+      // input object has one key, so the first declaration wins.
+      if (parameterNames.has(parameter.name)) continue;
       const type = jsonSchemaToTypeText(parameter.schema, spec as JsonSchema, 1);
       if (parameter.required) requiredInput = true;
+      parameterNames.add(parameter.name);
       parts.push(`${quoteMemberName(parameter.name)}${parameter.required ? "" : "?"}: ${type}`);
     }
     // The body follows dispatch's conventions (executeOperation): an object
     // body's properties merge into the input object; a NON-object body
     // (string, array, union) rides under a `body` key; an object body
-    // without listed properties means leftover input keys ARE the body.
+    // without listed properties means leftover input keys ARE the body. A
+    // body property named like a parameter is DROPPED — the parameter claims
+    // that input key at dispatch, and a duplicate member would fail the
+    // compile gate and silently untype the whole mount (`/user/{username}`
+    // with `username` in the body is the classic REST echo).
     const body = operationBodySchema(operation, spec);
     if (isObjectSchema(body)) {
-      const bodyType = jsonSchemaToTypeText(body, spec as JsonSchema, 1);
-      if (bodyType.startsWith("{ ") && bodyType.endsWith(" }")) {
-        parts.push(bodyType.slice(2, -2));
-        if (Array.isArray(body.required) && body.required.length > 0) requiredInput = true;
+      const bodyMembers = objectSchemaMembers(body, spec as JsonSchema, 1).filter(
+        (member) => !parameterNames.has(member.name),
+      );
+      if (Object.keys((body.properties ?? {}) as object).length > 0) {
+        parts.push(...bodyMembers.map((member) => member.text));
+        const requiredBody = new Set(Array.isArray(body.required) ? body.required : []);
+        if (bodyMembers.some((member) => requiredBody.has(member.name))) requiredInput = true;
       } else {
         parts.push("[key: string]: unknown");
       }
@@ -140,19 +192,53 @@ export function openApiCapabilityTypeDeclaration(
         : "input?: Record<string, unknown>";
     return `${doc}  ${quoteMemberName(operation.operationId)}(${input}): Promise<unknown>;`;
   });
+  // No budget cap and no provenance header: this full form never rides the
+  // journal — the check-time materializer consumes it in memory (see
+  // run-typecheck.ts); journals carry openApiCapabilityTypeReference instead.
   return `export type Capability = {\n${members.join("\n")}\n};`;
 }
 
 /**
- * The name a `types` string binds its mount to: the first exported
- * type/interface declaration. Later exports are supporting types. Undefined
- * when the text exports nothing recognizable — consumers then treat the
- * mount as untyped.
+ * Assemble a generated declaration under the size ceiling: full schemas when
+ * they fit, a one-line permissive type when they do not — a wall of member
+ * names helps no reader, and the provenance line says where the real
+ * definitions live.
+ */
+function withGeneratedBudget(input: { members: string[]; source: string }): string {
+  const header = `// Generated from ${input.source}\n`;
+  const full = `${header}export type Capability = {\n${input.members.join("\n")}\n};`;
+  if (full.length <= MAX_GENERATED_DECLARATION_CHARS) return full;
+  return (
+    `${header}// Over budget: any member name is accepted — typos are NOT caught for this\n` +
+    `// mount; the source above lists the real tools.\n` +
+    `export type Capability = Record<string, (input?: Record<string, unknown>) => Promise<unknown>>;`
+  );
+}
+
+/**
+ * The name a `types` string binds its mount to: the first TOP-LEVEL exported
+ * type, interface, class, or enum. Later exports are supporting types.
+ * Undefined when the text exports nothing recognizable — consumers then
+ * treat the mount as untyped, and provide-time validation rejects it
+ * (a `types` string without a mount type is an authoring mistake).
+ *
+ * Top-level matters: `export interface Inner` nested inside an
+ * `export namespace NS { … }` is not importable by bare name — picking it
+ * produced an unresolvable type reference that broke typechecking for the
+ * WHOLE scope. Brace depth is counted on comment-stripped text (a lone
+ * unbalanced brace inside a string literal type can fool it; template-literal
+ * placeholders are balanced and cannot).
  */
 export function firstExportedTypeName(typesText: string): string | undefined {
-  return stripComments(typesText).match(
-    /export\s+(?:type|interface)\s+([A-Za-z_$][A-Za-z0-9_$]*)/,
-  )?.[1];
+  const codeOnly = stripComments(typesText);
+  const declaration =
+    /export\s+(?:declare\s+)?(?:abstract\s+)?(?:const\s+)?(?:type|interface|class|enum)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
+  for (const match of codeOnly.matchAll(declaration)) {
+    const before = codeOnly.slice(0, match.index);
+    const depth = (before.match(/\{/g)?.length ?? 0) - (before.match(/\}/g)?.length ?? 0);
+    if (depth === 0) return match[1];
+  }
+  return undefined;
 }
 
 function quoteMemberName(name: string): string {

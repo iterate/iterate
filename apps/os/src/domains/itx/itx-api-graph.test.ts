@@ -3,6 +3,7 @@
 // behavior) are what itx.docs relies on at runtime.
 import { describe, expect, test } from "vitest";
 import { ITX_API_DECLARATIONS } from "../../itx-api-graph.generated.ts";
+import * as graphHelpers from "./itx-api-graph.ts";
 import {
   declarationsByName,
   mountDeclaration,
@@ -78,6 +79,20 @@ describe("searchScore", () => {
     expect(searchScore("email gmail inbox", "Gmail requests against the INBOX")).toBe(2);
     expect(searchScore("email gmail gmail", "gmail")).toBe(1);
     expect(searchScore("zebra", "no such word")).toBe(0);
+  });
+});
+
+describe("stripComments", () => {
+  test("drops comments but leaves string contents — // in a URL is not a comment", () => {
+    const { stripComments } = graphHelpers;
+    expect(stripComments("// line\ncode; /* block */ more")).toBe("\ncode;  more");
+    expect(stripComments('import("openapi:https://x.example/spec.json")')).toBe(
+      'import("openapi:https://x.example/spec.json")',
+    );
+    expect(stripComments('const s = "a // not comment"; // real')).toBe(
+      'const s = "a // not comment"; ',
+    );
+    expect(stripComments('"escaped \\" quote // stays"')).toBe('"escaped \\" quote // stays"');
   });
 });
 

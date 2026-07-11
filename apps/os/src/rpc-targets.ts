@@ -148,7 +148,7 @@ import { ITX_EXAMPLES } from "./itx/examples.ts";
 import { ITX_API_DECLARATIONS } from "./itx-api-graph.generated.ts";
 import {
   declarationsByName,
-  firstSentence,
+  oneLineSummary,
   mountDeclaration,
   searchScore,
   typeSlice,
@@ -156,7 +156,7 @@ import {
 } from "./domains/itx/itx-api-graph.ts";
 import {
   mcpCapabilityTypeDeclaration,
-  openApiCapabilityTypeDeclaration,
+  openApiCapabilityTypeReference,
 } from "./domains/itx/capability-type-declarations.ts";
 import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
 import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
@@ -5018,7 +5018,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
         hit: {
           kind: "capability",
           name: dottedPath,
-          summary: firstSentence(instructions) || "(no instructions recorded)",
+          summary: oneLineSummary(instructions) || "(no instructions recorded)",
           fetchCall: `await itx.docs.get({ name: ${JSON.stringify(dottedPath)} })`,
         },
       });
@@ -5465,7 +5465,9 @@ class McpClientRpcTarget extends IterateRpcRelay<"McpClientRpc"> {
       // server's own tool inputSchemas become the types. provideCapability
       // stamps this onto a durable mount, so docs and the typechecker see
       // third-party tools like builtins.
-      types: this.props.description?.types ?? mcpCapabilityTypeDeclaration(tools),
+      types:
+        this.props.description?.types ??
+        mcpCapabilityTypeDeclaration(tools, `MCP server ${this.props.config.url}`),
       children: Object.fromEntries(
         tools.map((tool) => [tool.name, tool.description ?? "MCP tool"]),
       ),
@@ -5551,15 +5553,18 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
   }
 
   async __describe(): Promise<Description> {
-    const { operations, spec } = await this.#ready();
+    const { operations } = await this.#ready();
 
     return describeNode({
       instructions:
         this.props.description?.instructions ??
         "An ad-hoc OpenAPI client: a flat dispatcher; client.someOperationId(input) executes that operation against the spec's server.",
-      // Connect-time auto-typing from the spec's operations — see the MCP
-      // client's __describe for the full story.
-      types: this.props.description?.types ?? openApiCapabilityTypeDeclaration(operations, spec),
+      // Connect-time auto-typing, reference-style: one line naming the spec
+      // (the typechecker materializes the full declaration at check time —
+      // schemas never enter the journal or an agent's context). See the MCP
+      // client's __describe for the direct-declaration variant.
+      types:
+        this.props.description?.types ?? openApiCapabilityTypeReference(this.props.config.specUrl),
       children: Object.fromEntries(
         operations.map((operation) => [
           operation.operationId,

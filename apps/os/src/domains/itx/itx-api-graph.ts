@@ -11,9 +11,9 @@
 // before the first block tag, "referenced type names" are the identifiers a
 // declaration's signatures mention.
 //
-// The docs-door helpers that query the graph (search scoring, first-sentence
-// extraction) live here too: they are pure, unit-tested functions shared by
-// the docs RpcTarget and the generator.
+// The docs-door helpers that query the graph (search scoring, summary
+// capping, text scans) live here too: they are pure, unit-tested functions
+// shared by the docs RpcTarget and the generator.
 
 /**
  * One exported declaration of the public itx surface, as the itx api
@@ -257,9 +257,49 @@ export function referencedPlatformTypeNames(
  * example mentioning `import("some-pkg")` or a type name must never count
  * as a reference (the generator, the docs closure, and the typechecker's
  * npm scan all share this).
+ *
+ * String literals pass through VERBATIM: this is a small tokenizer, not a
+ * regex, because `//` inside a string (`"https://…"`) is not a comment —
+ * regex stripping ate specifier URLs mid-literal. Regex literals in scanned
+ * text (scripts contain them; type declarations don't) can still open a
+ * phantom comment when their source has adjacent slashes — the scans over
+ * this output are advisory, so that costs a missed match, never corruption.
  */
 export function stripComments(text: string): string {
-  return text.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/\/\/[^\n]*/g, "");
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i += 1;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i += 1;
+      i += 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      out += ch;
+      i += 1;
+      while (i < text.length && text[i] !== ch) {
+        if (text[i] === "\\") {
+          out += text[i]! + (text[i + 1] ?? "");
+          i += 2;
+          continue;
+        }
+        out += text[i]!;
+        i += 1;
+      }
+      out += text[i] ?? "";
+      i += 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
 }
 
 /**
@@ -275,10 +315,14 @@ export function mountDeclaration(input: {
   types?: string;
 }): ItxApiDeclaration {
   // The FULL instructions ride the entry (docs.get promises "instructions and
-  // types"); firstSentence is only for the one-line summary below.
+  // types"). Npm-backed types are references — point the reader at the
+  // package's real docs.
   const header = [
     `// Mounted capability "${input.dottedPath}" — call it as itx.${input.dottedPath}.<member>(...).`,
     ...(input.instructions ?? "").split("\n").flatMap((line) => (line ? [`// ${line}`] : [])),
+    ...importedPackageNames(input.types ?? "").map(
+      (name) => `// Types reference npm package "${name}" — https://www.npmjs.com/package/${name}`,
+    ),
   ];
   const body =
     input.types ??
@@ -287,7 +331,7 @@ export function mountDeclaration(input: {
     name: input.dottedPath,
     kind: "typeAlias",
     sourceText: [...header, body].join("\n"),
-    summary: input.instructions ? firstSentence(input.instructions) : "",
+    summary: input.instructions ? oneLineSummary(input.instructions) : "",
     memberSummaries: {},
     referencedTypeNames: input.types
       ? referencedPlatformTypeNames(input.types, input.declarations)
@@ -295,10 +339,48 @@ export function mountDeclaration(input: {
   };
 }
 
-/** First sentence of a prose string — what one-line summaries show. */
-export function firstSentence(text: string): string {
+/**
+ * A prose string as a one-line summary: whitespace collapsed, hard-capped.
+ * No sentence detection or other cleverness — typical mount instructions
+ * ride whole; the cap only exists because a 20KB instruction blob once
+ * became a 20KB search-hit summary in every scope that inherited the mount.
+ */
+export function oneLineSummary(text: string): string {
   const collapsed = text.replaceAll(/\s+/g, " ").trim();
-  return collapsed.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? collapsed;
+  return collapsed.length > 300 ? `${collapsed.slice(0, 300)}…` : collapsed;
+}
+
+/**
+ * String literals that follow an `import`/`from` keyword in CODE (comments
+ * stripped; ordinary prose strings never match — an enclosing literal is
+ * consumed whole before its contents are seen).
+ */
+export function importSpecifiersIn(text: string): string[] {
+  const specifiers = new Set<string>();
+  const codeOnly = stripComments(text);
+  for (const literal of codeOnly.matchAll(/(["'`])((?:\\.|(?!\1).)*)\1/g)) {
+    const before = codeOnly.slice(0, literal.index);
+    if (/(?:\bfrom|\bimport)\s*\(?\s*$/.test(before)) specifiers.add(literal[2]!);
+  }
+  return [...specifiers];
+}
+
+/**
+ * Npm package names among a text's import specifiers: bare names only (no
+ * relative paths, no `node:`/`openapi:`-style schemes), subpaths collapsed to
+ * the package. The typechecker acquires these; docs entries point readers at
+ * them.
+ */
+export function importedPackageNames(text: string): string[] {
+  const packages = new Set<string>();
+  for (const specifier of importSpecifiersIn(text)) {
+    if (specifier.startsWith(".") || specifier.startsWith("/")) continue;
+    const segments = specifier.split("/");
+    const packageName = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0]!;
+    if (packageName.includes(":")) continue; // a scheme, not an npm name
+    packages.add(packageName);
+  }
+  return [...packages];
 }
 
 /**

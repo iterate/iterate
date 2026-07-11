@@ -8,6 +8,7 @@
 import { createCompiler } from "tswasm";
 import { beforeAll, expect, test } from "vitest";
 import type { CapabilityDescription } from "../itx/describe.ts";
+import { openApiCapabilityTypeReference } from "../itx/capability-type-declarations.ts";
 import type { CompileFn } from "./run-typecheck.ts";
 import { runTypecheck, npmPackagesMentioned } from "./run-typecheck.ts";
 import {
@@ -53,6 +54,19 @@ async function fakeRegistryFetch(url: string): Promise<Response> {
   }
   if (url.endsWith("fake-pets@1.0.0/index.d.ts")) {
     return new Response("export type PetsClient = { listPets(): Promise<string[]> };");
+  }
+  if (url === "https://specs.example.com/store.json") {
+    return Response.json({
+      openapi: "3.0.0",
+      paths: {
+        "/pets/{petId}": {
+          get: {
+            operationId: "getPet",
+            parameters: [{ name: "petId", in: "path", required: true, schema: { type: "string" } }],
+          },
+        },
+      },
+    });
   }
   return new Response("not found", { status: 404 });
 }
@@ -205,4 +219,124 @@ test("npm specifier scan finds bare packages in code and ignores prose", () => {
     "/node_modules/zod/index.d.ts": 'import "left-pad";', // acquired files never re-scan
   };
   expect(npmPackagesMentioned(files).sort()).toEqual(["@slack/web-api", "zod"]);
+});
+
+test("a compiler crash comes back as a clean problem, not an infra throw", async () => {
+  // A type-compute bomb can OOM the wasm isolate; the raw throw used to leak
+  // "Worker exceeded memory limit." / non-JSON output to the provide caller.
+  const crashing: Typechecker = {
+    check: (input) =>
+      runTypecheck({
+        compiler: {
+          compile: () => {
+            throw new SyntaxError('"undefined" is not valid JSON');
+          },
+        },
+        fetchImpl: () => Promise.reject(new Error("no network")),
+        files: input.files,
+      }),
+  };
+  const problems = await checkCapabilityTypes({
+    types: "export type T = 1;",
+    typechecker: crashing,
+  });
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain("type checking crashed");
+  expect(problems[0]).toContain("too complex");
+});
+
+test("compiling-but-export-less types are rejected as an authoring mistake", async () => {
+  for (const types of [
+    "console.log(1);",
+    "export const x = 1;",
+    "export namespace NS { export interface Inner { x: 1 } }",
+  ]) {
+    const problems = await checkCapabilityTypes({ types, typechecker });
+    expect(
+      problems.some((p) => p.includes("exports no top-level type")),
+      types,
+    ).toBe(true);
+  }
+});
+
+test("the checker enforces the runtime's block shape and size cap up front", async () => {
+  const comment = await checkItxScript({
+    capabilities: [],
+    code: "// preamble\nasync (itx) => {}",
+    typechecker,
+  });
+  expect(comment).toHaveLength(1);
+  expect(comment[0]).toContain("starts with `async (`");
+
+  // The extractor's parenthesized form is accepted, matching the runtime.
+  const wrapped = await checkItxScript({
+    capabilities: [],
+    code: "(async (itx) => {})",
+    typechecker,
+  });
+  expect(wrapped).toEqual([]);
+
+  const huge = await checkItxScript({
+    capabilities: [],
+    code: `async (itx) => { ${"x;".repeat(150_000)} }`,
+    typechecker,
+  });
+  expect(huge).toHaveLength(1);
+  expect(huge[0]).toContain("check limit");
+
+  const notString = await checkItxScript({
+    capabilities: [],
+    code: ["async (itx) => {}"] as unknown as string,
+    typechecker,
+  });
+  expect(notString).toHaveLength(1);
+  expect(notString[0]).toContain("must be a string");
+});
+
+test("npm acquisition failures surface as notes alongside the module error", async () => {
+  const problems = await checkItxScript({
+    capabilities: [
+      { path: ["gone"], type: "itx-expression", types: 'export type G = import("fake-gone").X;' },
+    ],
+    code: "async (itx) => itx.gone",
+    typechecker, // fake registry 404s anything but fake-pets
+  });
+  expect(problems.some((p) => p.includes("Cannot find module"))).toBe(true);
+});
+
+test("openapi: references materialize at check time — schemas never ride the journal", async () => {
+  const reference = openApiCapabilityTypeReference("https://specs.example.com/store.json");
+  expect(reference.length).toBeLessThan(300); // what the journal carries
+
+  const capabilities: CapabilityDescription[] = [
+    { path: ["store"], type: "itx-expression", types: reference },
+  ];
+  const ok = await checkItxScript({
+    capabilities,
+    code: "async (itx) => itx.store.getPet({ petId: 'p1' })",
+    typechecker,
+  });
+  expect(ok).toEqual([]);
+
+  const typo = await checkItxScript({
+    capabilities,
+    code: "async (itx) => itx.store.getPett({ petId: 'p1' })",
+    typechecker,
+  });
+  expect(typo).toHaveLength(1);
+  expect(typo[0]).toContain("Did you mean 'getPet'");
+
+  // An unreachable spec degrades with a note, never a throw.
+  const broken = await checkItxScript({
+    capabilities: [
+      {
+        path: ["gone"],
+        type: "itx-expression",
+        types: openApiCapabilityTypeReference("https://specs.example.com/missing.json"),
+      },
+    ],
+    code: "async (itx) => itx.gone",
+    typechecker,
+  });
+  expect(broken.some((p) => p.includes("type generation failed"))).toBe(true);
 });
