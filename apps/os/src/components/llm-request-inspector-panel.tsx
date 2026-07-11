@@ -9,6 +9,7 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 import {
   LLM_REPLAY_EVENT_TYPES,
   replayLlmRequest,
+  type LlmRequestReplay,
   type LlmRequestReplayMessage,
 } from "~/lib/llm-request-replay.ts";
 
@@ -152,11 +153,7 @@ export function LlmRequestInspectorPanel({
   );
 }
 
-function OutcomeBadge({
-  outcome,
-}: {
-  outcome: NonNullable<ReturnType<typeof replayLlmRequest>>["outcome"];
-}) {
+function OutcomeBadge({ outcome }: { outcome: LlmRequestReplay["outcome"] }) {
   if (outcome == null) return <> · in flight</>;
   const duration = outcome.durationMs == null ? "" : ` in ${formatSeconds(outcome.durationMs)}`;
   return (
