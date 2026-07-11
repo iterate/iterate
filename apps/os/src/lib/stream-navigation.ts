@@ -7,7 +7,7 @@ import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
-import { useItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser, useItxAddress } from "~/itx/itx-react.tsx";
 
 /**
  * Where stream-tree nodes get their state: path → subscribable stream handle.
@@ -108,14 +108,20 @@ export function streamProjectDisplayLabel(projectId: string): string {
  * the tree browser's and the stream view's source contracts.
  */
 export function useAdminStreamSource(projectId: string) {
-  const itx = useItx();
+  const itxAddress = useItxAddress();
   const streamProjectId = projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
+  // Dial the CURRENT socket per call rather than capturing a render-time
+  // handle: the stream runtimes hold this source across socket deaths, and a
+  // captured stub would pin the dead transport forever (the suspend/resume
+  // feed wedge — see project-stream-view.tsx's source for the full story).
   const source = useMemo(
-    () => (streamPath: string) =>
-      streamProjectId == null
+    () => async (streamPath: string) => {
+      const itx = await connectItxBrowser(itxAddress);
+      return streamProjectId == null
         ? itx.streams.get(streamPath)
-        : itx.projects.get(streamProjectId).streams.get(streamPath),
-    [itx, streamProjectId],
+        : itx.projects.get(streamProjectId).streams.get(streamPath);
+    },
+    [itxAddress, streamProjectId],
   );
   return { source, streamProjectId };
 }

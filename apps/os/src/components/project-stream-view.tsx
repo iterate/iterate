@@ -49,7 +49,7 @@ import {
   presetsForStream,
 } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { useItx } from "~/itx/itx-react.tsx";
+import { connectItxBrowser, reconnectItx, useItxAddress } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
@@ -111,17 +111,27 @@ export function ProjectStreamView({
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
-  const itx = useItx();
+  const itxAddress = useItxAddress();
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
+  // The source dials the CURRENT socket per call (connectItxBrowser reads the
+  // live socket map) instead of capturing a render-time handle: the stream
+  // runtimes it feeds outlive this render, and a captured capnweb stub pins
+  // whatever transport it was born on — after a suspend/resume killed that
+  // socket, every reconnect would ride the corpse and the feed would wedge
+  // until a reload (the repro in specs/stream-resume-after-suspend.spec.ts).
   const resolvedStreamSource = useMemo<ItxStreamSource>(
-    () => streamSource ?? ((path) => itx.streams.get(path)),
-    [itx, streamSource],
+    () => streamSource ?? (async (path) => (await connectItxBrowser(itxAddress)).streams.get(path)),
+    [itxAddress, streamSource],
   );
   const streamClientFactory = useMemo(
     () => async (input: { streamPath: string }) =>
       asBrowserStreamClient(await resolvedStreamSource(input.streamPath), () => {}),
     [resolvedStreamSource],
   );
+  // The half-open lane: a suspended page's socket can die without a close
+  // frame, so the socket map still hands out the corpse. When the runtime's
+  // probes/dials time out it calls this to evict it; the next dial is fresh.
+  const resetTransport = useCallback(() => reconnectItx(itxAddress), [itxAddress]);
 
   // Two browser-hosted processors share the stream's per-path SQLite mirror:
   // the verbatim raw-event `events` log (also the composer's append target)
@@ -131,6 +141,7 @@ export function ProjectStreamView({
   // presence/busy from — which is why it mounts here, not in the feed body.
   const { store, snapshot } = useStreamProcessorStore<BrowserRawEventsState>({
     createStreamClient: streamClientFactory,
+    resetTransport,
     projectId: streamRuntimeProjectKey,
     streamPath,
     slug: BrowserRawEventsContract.slug,
@@ -140,6 +151,7 @@ export function ProjectStreamView({
   });
   const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore<BrowserFeedState>({
     createStreamClient: streamClientFactory,
+    resetTransport,
     projectId: streamRuntimeProjectKey,
     streamPath,
     slug: BrowserFeedContract.slug,

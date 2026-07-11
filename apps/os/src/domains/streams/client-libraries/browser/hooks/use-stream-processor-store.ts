@@ -39,6 +39,8 @@ type BrowserProcessorConstructorArgs<State> = {
  */
 export function useStreamProcessorStore<State>(input: {
   createStreamClient: BrowserStreamClientFactory;
+  /** See BrowserStreamConnectionConfig.resetTransport — evict a dead-but-never-closed transport. */
+  resetTransport?: () => void;
   projectId: string;
   streamPath: string;
   slug: string;
@@ -52,6 +54,7 @@ export function useStreamProcessorStore<State>(input: {
 }): { store: StreamBrowserStore; snapshot: StreamBrowserSnapshot } {
   const {
     createStreamClient,
+    resetTransport,
     projectId,
     streamPath,
     slug,
@@ -68,6 +71,7 @@ export function useStreamProcessorStore<State>(input: {
     () =>
       acquireStreamRuntime({
         createStreamClient,
+        ...(resetTransport === undefined ? {} : { resetTransport }),
         projectId,
         streamPath,
         slug,
@@ -92,6 +96,7 @@ export function useStreamProcessorStore<State>(input: {
       }),
     [
       createStreamClient,
+      resetTransport,
       projectId,
       streamPath,
       slug,

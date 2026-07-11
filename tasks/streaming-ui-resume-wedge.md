@@ -95,3 +95,19 @@ WebSocket: 1005`), then both runtimes wedge forever in
     identical wedge signature.
     The itx socket map re-dials fine (page chrome recovers); only the stream
     runtimes stay dead — precisely the reported UX.
+- 2026-07-11 (fix): adversarial audit CONFIRMED T1 on all five axes (capnweb
+  abort is terminal + no auto-reconnect; nothing remounts the view; React
+  keeps uSES subscriptions across Suspense so no accidental dispose-heal;
+  composer sends SUCCEED via fresh `connectItxBrowser` while the feed stays
+  wedged — the crueler UX; `unsubscribe()` on a broken session rejects async,
+  no sync-throw hazard). T3 REFUTED (repaint chain sound; multi-tab
+  follower-of-a-frozen-writer is a real but separate lane). T4 PARTIAL (db
+  worker death is undetected — no onerror — separate latent hazard).
+  Fix shipped: per-call transport resolution (view + admin source), factory
+  refresh on re-acquire, 15s dial deadline, StepTimeoutError-classified
+  transport eviction via `resetTransport` (wired to `reconnectItx(address)`),
+  probe rejections reconnect on first hit, resume listeners
+  (visibilitychange/online/pageshow → immediate nudge/reconnect), escalating
+  connect backoff. All four specs green locally (clean close ~30s recovery,
+  freeze ~56s, half-open ~40s — the mute-the-socket trick simulates a
+  suspend-killed TCP connection with no close frame).

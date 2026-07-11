@@ -229,6 +229,18 @@ function reconnectAllItx(): void {
 /** Default address = the global context. Lets useItx() work with NO provider. */
 const ItxAddressContext = createContext<ItxAddress>({});
 
+/**
+ * The ambient itx ADDRESS (not the handle). For code that must re-resolve the
+ * connection LATER rather than capture it now — e.g. the stream runtimes'
+ * client factory, whose captured stub would otherwise pin a dead socket after
+ * a suspend/resume killed the transport (dial {@link connectItxBrowser} with
+ * this address per attempt, and hand {@link reconnectItx} the same address to
+ * evict a half-open socket).
+ */
+export function useItxAddress(): ItxAddress {
+  return use(ItxAddressContext);
+}
+
 /** Subscribe to the socket map, suspend until this context's socket connects. */
 function useSocket(context: string | undefined): ItxHandle {
   const promise = useSyncExternalStore(
