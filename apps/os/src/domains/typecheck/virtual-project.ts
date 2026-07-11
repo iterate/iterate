@@ -148,42 +148,81 @@ function mountFileName(dottedPath: string): string {
 
 /**
  * Typecheck one mount's `types` string — the provide-time validation. Returns
- * problems as printable strings; empty means the declaration compiles against
- * the platform surface (npm `import("pkg")` references included).
+ * problems as printable strings; empty means the mount may be journaled (the
+ * declaration either compiled clean or the checker couldn't render a verdict).
+ *
+ * A `types` string is DURABLE: it enters the journal and every later script
+ * check in the scope re-compiles it. So this shares the execution gate's
+ * sidecar guards, with one deliberate difference in what a guard means:
+ * - A checker CRASH (code-0) or an unreachable/hung sidecar (throw, deadline)
+ *   is not proof the types are wrong — allow the mount rather than hard-reject
+ *   a valid declaration (and, since `provideCapability` is reachable from a
+ *   running script, rather than throwing an infra error into that script).
+ *   This mirrors checkItxScriptForExecution's permissive-on-non-proof stance.
+ * - Pathological NESTING, by contrast, is rejected, not skipped: unlike an
+ *   ephemeral script (which the gate runs unchecked), a type that would wedge
+ *   tsc's parser must never enter the journal, or it wedges every future check
+ *   in the scope.
+ * Real, deterministic type errors still reject — that is the whole point.
  */
 export async function checkCapabilityTypes(input: {
   types: string;
   typechecker: Typechecker;
+  deadlineMs?: number;
 }): Promise<string[]> {
   if (input.types.length > MAX_SCRIPT_CHARS) {
     return [
       `types — ${input.types.length} characters is over the ${MAX_SCRIPT_CHARS}-character check limit.`,
     ];
   }
+  if (exceedsNestingDepth(input.types, MAX_NESTING_DEPTH)) {
+    return [
+      `types — nesting deeper than ${MAX_NESTING_DEPTH} levels; simplify the declaration ` +
+        `(a type this deep would wedge the checker on every future script in this scope).`,
+    ];
+  }
+  // A declaration that exports no top-level type is an authoring mistake, not
+  // a typed mount: the first exported type IS the contract, and without one the
+  // mount would silently degrade to `any` (or worse — the namespace-nested case
+  // used to poison the whole scope's typecheck). This rule is LOCAL — it needs
+  // no compiler — so it holds even when the sidecar is unreachable below; a
+  // permissive checker failure must not let an export-less mount slip in.
+  const exportLess =
+    firstExportedTypeName(input.types) === undefined
+      ? [
+          "types — exports no top-level type/interface/class/enum; " +
+            "the FIRST exported declaration names the mount's type.",
+        ]
+      : [];
   const fileName = mountFileName("provided");
   const moduleText = mountModuleText(input.types);
-  const { diagnostics, notes } = await input.typechecker.check({
-    files: { ...SHARED_FILES, [fileName]: moduleText },
-  });
-  const problems = formatProblems(diagnostics, {
+  let checked: TypecheckResult;
+  try {
+    checked = await withDeadline(
+      input.typechecker.check({ files: { ...SHARED_FILES, [fileName]: moduleText } }),
+      input.deadlineMs ?? EXECUTION_CHECK_DEADLINE_MS,
+    );
+  } catch {
+    // Unreachable or hung sidecar — not a verdict on compilation, so allow the
+    // mount, but the local export-less rule still applies.
+    return exportLess;
+  }
+  // A code-0 crash diagnostic means "the check didn't happen", not "the types
+  // are wrong" — drop it so a transient compiler crash never hard-rejects a
+  // valid mount (the execution gate treats the same signal as `unchecked`).
+  const realErrors = checked.diagnostics.filter((diagnostic) => diagnostic.code !== 0);
+  const problems = formatProblems(realErrors, {
     label: "types",
     primaryFile: fileName,
     lineOffset: moduleText === input.types ? 0 : -1, // the injected import line
   });
-  // A declaration that compiles but exports no top-level type is an authoring
-  // mistake, not a typed mount: the first exported type IS the contract, and
-  // without one the mount would silently degrade to `any` (or worse — the
-  // namespace-nested case used to poison the whole scope's typecheck).
-  if (problems.length === 0 && firstExportedTypeName(input.types) === undefined) {
-    problems.push(
-      "types — compiles but exports no top-level type/interface/class/enum; " +
-        "the FIRST exported declaration names the mount's type.",
-    );
-  }
+  // Only surface the export-less rule when nothing else failed — a compile
+  // error already tells the author their declaration is broken.
+  if (problems.length === 0) return exportLess;
   // Notes are CONTEXT for failures (a budget-tripped npm package reads as a
   // plain typo without them), never verdicts: typm warns on perfectly
   // successful acquisitions, and a warning must not fail a compiling mount.
-  return problems.length > 0 ? [...problems, ...notes] : [];
+  return [...problems, ...checked.notes];
 }
 
 /**
