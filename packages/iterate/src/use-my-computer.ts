@@ -14,6 +14,11 @@
 // project a remote reference to a plain JavaScript object. Calls to it are RPCs
 // that come home to this process. Everything below is just (a) that object and
 // (b) keeping the socket alive so agents can reach it.
+//
+// Two front-ends ride the same core: the terminal command (shareMyComputer,
+// prints a paste-for-your-agent hint) and the machine one the menu-bar app
+// drives (runUseMyComputerJson) — the latter wraps the capability so every agent
+// call announces itself as NDJSON, which is how the app shows "in use".
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { hostname } from "node:os";
@@ -131,24 +136,20 @@ function agentPrompt(name: string): string {
   ].join("\n");
 }
 
-/**
- * Ask for a name, provide `itx.<name>`, and hold the line until Ctrl-C.
- *
- * A live mount only routes while its socket is warm, so we send a small
- * heartbeat to keep it hot. Never returns; the caller runs it as the body of a
- * long-lived command.
- */
-export async function shareMyComputer(input: {
+type ConnectInput = {
   auth: ItxAuthCredentials;
   baseUrl: string;
   projectId: string;
   headers?: Record<string, string>;
   name?: string;
-  log?: (message: string) => void;
-}): Promise<never> {
-  const log = input.log ?? ((message: string) => console.error(message));
-  const name = input.name ?? (await askComputerName());
+};
 
+/** Mount `capability` at `itx.<name>` and return the live socket stub. */
+async function connectAndProvide(
+  input: ConnectInput,
+  name: string,
+  capability: typeof myComputer,
+): Promise<RpcStub<Project>> {
   const itx = connectItx({
     auth: input.auth,
     baseUrl: input.baseUrl,
@@ -159,20 +160,120 @@ export async function shareMyComputer(input: {
   await itx.provideCapability({
     type: "live",
     path: [name],
-    capability: myComputer,
+    capability,
     instructions: INSTRUCTIONS,
     types: TYPES,
   });
-  log(`✅ itx.${name} is live for project ${input.projectId}. Press Ctrl-C to stop sharing.\n`);
-  log(agentPrompt(name));
+  return itx;
+}
 
-  // A live mount only routes while its socket is warm, so ping now and then to
-  // keep it hot (ignoring transient errors), and hold open until Ctrl-C.
+/** Keep the mount routable — a live capability only serves while its socket is warm — and never return. */
+function holdWarm(itx: RpcStub<Project>): Promise<never> {
   const heartbeat = () => itx.__describe().catch(() => {});
   heartbeat();
   setInterval(heartbeat, 5_000);
   return new Promise<never>(() => {});
 }
+
+/**
+ * Ask for a name, provide `itx.<name>`, and hold the line until Ctrl-C. Never
+ * returns; the caller runs it as the body of a long-lived command.
+ */
+export async function shareMyComputer(
+  input: ConnectInput & { log?: (message: string) => void },
+): Promise<never> {
+  const log = input.log ?? ((message: string) => console.error(message));
+  const name = input.name ?? (await askComputerName());
+  const itx = await connectAndProvide(input, name, myComputer);
+  log(`✅ itx.${name} is live for project ${input.projectId}. Press Ctrl-C to stop sharing.\n`);
+  log(agentPrompt(name));
+  return holdWarm(itx);
+}
+
+/**
+ * The machine front-end the menu-bar app drives. Same live mount, but the
+ * capability is wrapped so every agent call announces itself as NDJSON on
+ * stdout — that stream is how the app shows the computer being used.
+ *
+ * Out (stdout):
+ *   {"type":"status","loggedIn":true,"project":"prj_…","name":"jonasComputer"}
+ *   {"type":"call","id":1,"method":"ask","summary":"Deploy to prod?","at":"…"}
+ *   {"type":"call-done","id":1,"method":"ask","ok":true,"ms":1234}
+ */
+export async function runUseMyComputerJson(input: ConnectInput): Promise<never> {
+  const name = input.name ?? proposeComputerName();
+  const itx = await connectAndProvide(input, name, withActivity(myComputer));
+  emitJson({ type: "status", loggedIn: true, project: input.projectId, name });
+  // If the menu-bar parent goes away, stdin closes — stop sharing rather than
+  // leaving the computer silently lent with no window onto it.
+  process.stdin.on("end", () => process.exit(0));
+  process.stdin.resume();
+  return holdWarm(itx);
+}
+
+/** One NDJSON line to stdout — the machine protocol's only output channel. */
+function emitJson(line: Record<string, unknown>): void {
+  process.stdout.write(`${JSON.stringify(line)}\n`);
+}
+
+/** Emitted (and the process exits) when there is no usable session yet. */
+export function emitComputerNeedsLogin(): void {
+  emitJson({ type: "status", loggedIn: false });
+}
+
+/**
+ * Wrap each capability method so it emits `call` before running and `call-done`
+ * after — the menu-bar app reads these to show which agent action is live. The
+ * behaviour is otherwise identical: the wrapped method awaits the real one and
+ * returns (or rethrows) exactly what it did.
+ */
+function withActivity(capability: typeof myComputer): typeof myComputer {
+  let nextId = 0;
+  const wrapped = {} as Record<string, (arg: never) => Promise<unknown>>;
+  for (const [method, fn] of Object.entries(capability)) {
+    wrapped[method] = async (arg: never) => {
+      const id = (nextId += 1);
+      emitJson({
+        type: "call",
+        id,
+        method,
+        summary: summarizeCall(method, arg),
+        at: new Date().toISOString(),
+      });
+      const startedAt = Date.now();
+      try {
+        const result = await fn(arg);
+        emitJson({ type: "call-done", id, method, ok: true, ms: Date.now() - startedAt });
+        return result;
+      } catch (error) {
+        emitJson({
+          type: "call-done",
+          id,
+          method,
+          ok: false,
+          ms: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    };
+  }
+  return wrapped as typeof myComputer;
+}
+
+/** A short, human-readable line describing one call — for the app's activity log. */
+function summarizeCall(method: string, arg: unknown): string {
+  const input = (arg ?? {}) as { question?: string; message?: string; code?: string };
+  if (method === "ask") return truncate(input.question ?? "asked a question");
+  if (method === "notify") return truncate(input.message ?? "sent a notification");
+  if (method === "runSwift") {
+    const lines = (input.code ?? "").split("\n").filter((line) => line.trim() !== "").length;
+    return `ran ${lines} line${lines === 1 ? "" : "s"} of Swift`;
+  }
+  return method;
+}
+
+const truncate = (text: string) => (text.length > 80 ? `${text.slice(0, 79)}…` : text);
 
 // ── tiny local helpers ───────────────────────────────────────────────────────
 

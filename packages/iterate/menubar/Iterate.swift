@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 import UserNotifications
@@ -340,10 +341,196 @@ final class ApprovalController: ObservableObject {
   }
 }
 
+// MARK: - Use my computer
+
+/// One agent call to this computer, for the activity list. `running` flips off
+/// when its `call-done` lands.
+struct ComputerCall: Identifiable, Equatable {
+  let id: Int
+  let method: String
+  let summary: String
+  var running: Bool
+}
+
+/// Drives `iterate use-my-computer --json`: lends this Mac to the project's
+/// agents and surfaces each call they make, so the menu bar can show it in use.
+///
+/// Deliberately simpler than ApprovalController: sharing is opt-in (a conscious
+/// act), so if the watcher exits we just stop sharing and let the human
+/// re-enable — no silent auto-reconnect that would re-lend the machine.
+final class ComputerController: ObservableObject {
+  static let shared = ComputerController()
+
+  @Published var enabled = false  // the human asked to share
+  @Published var sharing = false  // the capability is mounted and live
+  @Published var computerName: String?  // the itx.<name> agents call
+  @Published var recentCalls: [ComputerCall] = []  // capped display list
+  @Published private var activeCalls = 0  // in-flight count, independent of the cap
+  @Published var lastError: String?
+
+  /// A call is running right now — the menu bar's "in use" indicator. Counted
+  /// separately from `recentCalls` so a slow call that scrolls off the capped
+  /// display list still keeps the indicator honest.
+  var inUse: Bool { activeCalls > 0 }
+
+  private let config = MenuBarConfig.load()
+  private var process: Process?
+  private var stdinHandle: FileHandle?
+  private var stdoutHandle: FileHandle?
+  private var buffer = Data()
+  private var generation = 0  // bumped on every stop(); voids stale stdout chunks
+  private var cancellables = Set<AnyCancellable>()
+
+  private init() {
+    // If the app loses its session, stop sharing immediately — the mount is
+    // dead anyway, and otherwise the computer could stay lent while the toggle
+    // greys out with no way to revoke but quitting.
+    ApprovalController.shared.$loggedIn
+      .dropFirst()
+      .sink { [weak self] loggedIn in
+        if !loggedIn { self?.stop() }
+      }
+      .store(in: &cancellables)
+  }
+
+  /// Turn sharing on or off — safe to drive straight from a Toggle binding.
+  func setEnabled(_ on: Bool) {
+    guard on != enabled else { return }
+    enabled = on
+    if on { start() } else { stop() }
+  }
+
+  private func start() {
+    stop()
+    enabled = true  // stop() cleared it; we ARE (re)starting
+    lastError = nil
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = [config.command] + config.argv(for: ["use-my-computer", "--json"])
+    if let cwd = config.cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+
+    let stdout = Pipe()
+    let stdin = Pipe()  // held open so the child lives; closing it stops sharing
+    process.standardOutput = stdout
+    process.standardInput = stdin
+    self.stdoutHandle = stdout.fileHandleForReading
+    self.stdinHandle = stdin.fileHandleForWriting
+
+    let session = generation
+    stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
+      let chunk = handle.availableData
+      if chunk.isEmpty {  // EOF: clear the handler so it stops busy-looping
+        handle.readabilityHandler = nil
+        return
+      }
+      DispatchQueue.main.async {
+        guard let self, self.generation == session else { return }  // stale chunk
+        self.ingest(chunk)
+      }
+    }
+    process.terminationHandler = { [weak self] _ in
+      DispatchQueue.main.async { self?.watcherExited() }
+    }
+    do {
+      try process.run()
+      self.process = process
+    } catch {
+      enabled = false
+      detachIO()
+      lastError = "Could not share your computer: \(error.localizedDescription)"
+    }
+  }
+
+  func stop() {
+    generation += 1  // any late stdout chunk from this session is now stale
+    enabled = false
+    process?.terminationHandler = nil
+    process?.terminate()
+    process = nil
+    detachIO()
+    sharing = false
+    recentCalls = []
+    activeCalls = 0
+  }
+
+  /// The watcher exited on its own (lost socket, needs-login, crash). We're no
+  /// longer sharing — say so honestly rather than silently re-lending the Mac.
+  private func watcherExited() {
+    generation += 1
+    detachIO()
+    sharing = false
+    recentCalls = []
+    activeCalls = 0
+    if enabled {
+      enabled = false
+      if lastError == nil { lastError = "Stopped sharing your computer." }
+    }
+  }
+
+  /// Drop this session's pipes/handles and any half-read line.
+  private func detachIO() {
+    stdoutHandle?.readabilityHandler = nil
+    stdoutHandle = nil
+    stdinHandle = nil
+    buffer = Data()
+  }
+
+  private func ingest(_ chunk: Data) {
+    buffer.append(chunk)
+    while let newline = buffer.firstIndex(of: 0x0A) {
+      let lineData = buffer.subdata(in: buffer.startIndex..<newline)
+      buffer.removeSubrange(buffer.startIndex...newline)
+      guard let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+        continue
+      }
+      handle(object)
+    }
+  }
+
+  private func handle(_ event: [String: Any]) {
+    switch event["type"] as? String {
+    case "status":
+      if event["loggedIn"] as? Bool == true {
+        sharing = true
+        computerName = event["name"] as? String
+      } else {
+        // No session — login is the approver's job; just stop and say so.
+        stop()
+        lastError = "Sign in first, then share your computer."
+      }
+    case "call":
+      guard let id = event["id"] as? Int else { return }
+      activeCalls += 1
+      recentCalls.insert(
+        ComputerCall(
+          id: id,
+          method: event["method"] as? String ?? "?",
+          summary: event["summary"] as? String ?? "",
+          running: true),
+        at: 0)
+      if recentCalls.count > 5 { recentCalls.removeLast(recentCalls.count - 5) }
+    case "call-done":
+      guard let id = event["id"] as? Int else { return }
+      // Decrement the in-flight count even if the row already scrolled off the
+      // capped list, so `inUse` and the menu-bar dot don't stay stuck on.
+      if activeCalls > 0 { activeCalls -= 1 }
+      guard let index = recentCalls.firstIndex(where: { $0.id == id }) else { return }
+      // Reassign the whole element (not a nested mutation) so the @Published
+      // array reliably republishes. Same idiom as ApprovalController.setSubmitting.
+      var call = recentCalls[index]
+      call.running = false
+      recentCalls[index] = call
+    default:
+      break
+    }
+  }
+}
+
 // MARK: - Views
 
 struct DropdownView: View {
   @EnvironmentObject var controller: ApprovalController
+  @EnvironmentObject var computer: ComputerController
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -360,8 +547,10 @@ struct DropdownView: View {
         }
       }
       Divider()
+      computerSection
+      Divider()
       HStack {
-        if let error = controller.lastError {
+        if let error = controller.lastError ?? computer.lastError {
           Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
         }
         Spacer()
@@ -370,6 +559,55 @@ struct DropdownView: View {
     }
     .padding(14)
     .frame(width: 340)
+  }
+
+  /// "Use my computer" — a toggle to lend this Mac to the project's agents, and,
+  /// while shared, a live list of the calls they make (the machine "in use").
+  @ViewBuilder private var computerSection: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .top) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Use my computer").font(.callout).bold()
+          Text(computerStatusLine).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+        }
+        Spacer()
+        Toggle("", isOn: Binding(get: { computer.enabled }, set: { computer.setEnabled($0) }))
+          .labelsHidden()
+          .toggleStyle(.switch)
+          // Need a session to START sharing, but never trap an ACTIVE share
+          // behind a greyed-out switch — always allow turning it off.
+          .disabled(!controller.loggedIn && !computer.enabled)
+      }
+      if computer.sharing {
+        if computer.recentCalls.isEmpty {
+          Text("Waiting for an agent to use it…").font(.caption).foregroundStyle(.secondary)
+        } else {
+          ForEach(computer.recentCalls) { call in
+            HStack(spacing: 6) {
+              if call.running {
+                ProgressView().controlSize(.small)
+              } else {
+                Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
+              }
+              Text("\(call.method) · \(call.summary)")
+                .font(.caption)
+                .foregroundStyle(call.running ? .primary : .secondary)
+                .lineLimit(1)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private var computerStatusLine: String {
+    if !controller.loggedIn { return "Sign in to lend this Mac to agents." }
+    if computer.sharing {
+      let name = computer.computerName.map { "itx.\($0)" } ?? "your computer"
+      return computer.inUse ? "In use now — \(name)" : "\(name) is live for this project."
+    }
+    if computer.enabled { return "Starting…" }
+    return "Let agents run dialogs, notifications and Swift here."
   }
 
   @ViewBuilder private var header: some View {
@@ -483,6 +721,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     ApprovalController.shared.start()  // connect at launch, not on first open
+    // Computer sharing is opt-in — it stays idle until the human flips it on.
+  }
+
+  /// Tear down both watchers on quit so we never leave the computer shared (or an
+  /// approver running) behind a closed menu bar.
+  func applicationWillTerminate(_ notification: Notification) {
+    ComputerController.shared.stop()
+    ApprovalController.shared.stop()
   }
 
   /// Show the banner even when the app is frontmost.
@@ -514,15 +760,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 struct IterateApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
   @StateObject private var controller = ApprovalController.shared
+  @StateObject private var computer = ComputerController.shared
 
   var body: some Scene {
     MenuBarExtra {
-      DropdownView().environmentObject(controller)
+      DropdownView().environmentObject(controller).environmentObject(computer)
     } label: {
-      // The 𝑖 template mark, plus a count when requests are waiting.
+      // The 𝑖 template mark, a count when requests are waiting, and a green dot
+      // while an agent is actively using this computer.
       Image(nsImage: IterateIcon.mark)
       if controller.requests.count > 0 {
         Text("\(controller.requests.count)")
+      }
+      if computer.inUse {
+        Image(systemName: "circle.fill").foregroundStyle(.green)
       }
     }
     .menuBarExtraStyle(.window)
