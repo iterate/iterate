@@ -21,6 +21,9 @@ import { StreamEvent } from "~/domains/streams/schemas.ts";
 export const LLM_REPLAY_EVENT_TYPES: readonly string[] = AgentProcessorContract.consumes;
 
 export type LlmRequestReplayMessage = {
+  /** Stable identity: a message IS its position in the replayed request (the
+   * journal is immutable, so the same offset always folds to the same list). */
+  id: string;
   role: "system" | "user" | "assistant";
   /** Flattened exactly as sent: file attachments become their hint lines. */
   content: string;
@@ -92,7 +95,8 @@ export function replayLlmRequest(input: {
 
   const body = buildAgentLlmRequestBody({ events, llmRequestOffset: input.llmRequestOffset });
   return {
-    messages: body.messages.map((message) => ({
+    messages: body.messages.map((message, position) => ({
+      id: `${input.llmRequestOffset}:${position}`,
       role: message.role,
       content: flattenMessageToText(message),
     })),

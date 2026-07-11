@@ -32,6 +32,14 @@ import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
+import {
+  formatClockTime,
+  formatDateTime,
+  formatDateTimeAttribute,
+  formatFileSize,
+  formatSeconds,
+  formatTokens,
+} from "~/lib/feed-format.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
 // The clean agent chat rows: user and assistant messages plus archived
@@ -944,50 +952,8 @@ function ThinkingBlock({ children }: { children: ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Formatting
+// Formatting (number/time formatters live in ~/lib/feed-format.ts)
 // ---------------------------------------------------------------------------
-
-function formatTokens(count: number | undefined): string {
-  if (count == null) return "?";
-  if (count < 1000) return String(count);
-  return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-}
-
-function formatSeconds(durationMs: number): string {
-  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
-  const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${Math.round(seconds % 60)}s`;
-}
-
-function formatFileSize(size: number): string {
-  if (size < 1024) return `${size} B`;
-  const kilobytes = size / 1024;
-  if (kilobytes < 1024) return `${kilobytes.toFixed(1).replace(/\.0$/, "")} KB`;
-  return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
-}
-
-function formatClockTime(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function formatDateTime(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleString([], {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  });
-}
-
-function formatDateTimeAttribute(timestampMs: number): string | undefined {
-  const date = new Date(timestampMs);
-  if (Number.isNaN(date.getTime())) return undefined;
-  return date.toISOString();
-}
 
 function stringifyResult(result: unknown): string {
   if (typeof result === "string") return result;

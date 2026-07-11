@@ -194,14 +194,27 @@ export function useStreamViewSearch(): {
 }
 
 /**
+ * Every key that claims the stream view's right screen edge. Openers spread
+ * this before setting their own key, so mutual exclusion is structural — a
+ * new edge surface joins by adding its key here rather than patching every
+ * other opener. (`events` is deliberately absent: the inspectors render
+ * INSIDE the Events sheet's feed, so they compose with it rather than
+ * compete; the processor sheet openers clear it themselves.)
+ */
+const RELEASE_PANEL_EDGE = {
+  event: undefined,
+  llmRequest: undefined,
+  panel: undefined,
+  processor: undefined,
+} satisfies Partial<StreamViewSearch>;
+
+/**
  * URL state for the stream view's right-edge overlays — the raw-event
  * inspector, the LLM request inspector, the processors sheet, and (on
  * full-panel layouts) the Events sheet. They share the same screen edge, so
  * every setter keeps them mutually exclusive; if a hand-edited URL asks for
  * more than one, the raw-event inspector beats the LLM request inspector,
- * which beats the processors sheet, which beats the Events sheet. (The
- * inspectors render INSIDE the Events sheet's feed, so those compose rather
- * than compete.)
+ * which beats the processors sheet, which beats the Events sheet.
  */
 export function useStreamViewPanels(): {
   inspectedOffset: number | null;
@@ -230,19 +243,13 @@ export function useStreamViewPanels(): {
     (search.panel === true || focusedProcessorKey != null);
   const eventsSheetOpen = search.events === true && !processorsPanelOpen;
   const inspectEvent = useCallback(
-    (offset: number) =>
-      setSearch({ event: offset, llmRequest: undefined, panel: undefined, processor: undefined }),
+    (offset: number) => setSearch({ ...RELEASE_PANEL_EDGE, event: offset }),
     [setSearch],
   );
   const closeInspector = useCallback(() => setSearch({ event: undefined }), [setSearch]);
   const inspectLlmRequest = useCallback(
     (llmRequestOffset: number) =>
-      setSearch({
-        llmRequest: llmRequestOffset,
-        event: undefined,
-        panel: undefined,
-        processor: undefined,
-      }),
+      setSearch({ ...RELEASE_PANEL_EDGE, llmRequest: llmRequestOffset }),
     [setSearch],
   );
   const closeLlmRequestInspector = useCallback(
@@ -252,23 +259,15 @@ export function useStreamViewPanels(): {
   const focusProcessor = useCallback(
     (subscriptionKey: string) =>
       setSearch({
+        ...RELEASE_PANEL_EDGE,
+        events: undefined,
         panel: true,
         processor: subscriptionKey,
-        event: undefined,
-        llmRequest: undefined,
-        events: undefined,
       }),
     [setSearch],
   );
   const openProcessorsOverview = useCallback(
-    () =>
-      setSearch({
-        panel: true,
-        processor: undefined,
-        event: undefined,
-        llmRequest: undefined,
-        events: undefined,
-      }),
+    () => setSearch({ ...RELEASE_PANEL_EDGE, events: undefined, panel: true }),
     [setSearch],
   );
   const closeProcessorsPanel = useCallback(

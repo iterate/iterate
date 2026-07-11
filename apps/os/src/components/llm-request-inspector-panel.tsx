@@ -6,6 +6,7 @@ import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message"
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
+import { formatDateTime, formatSeconds } from "~/lib/feed-format.ts";
 import {
   LLM_REPLAY_EVENT_TYPES,
   replayLlmRequest,
@@ -79,7 +80,7 @@ export function LlmRequestInspectorPanel({
               "The exact context sent to the model"
             ) : (
               <>
-                {new Date(replay.requestedAt).toLocaleString()} ·{" "}
+                {formatDateTime(Date.parse(replay.requestedAt))} ·{" "}
                 {replay.messages.length.toLocaleString()} messages ·{" "}
                 {(totalChars ?? 0).toLocaleString()} chars
                 <OutcomeBadge outcome={replay.outcome} />
@@ -109,9 +110,10 @@ export function LlmRequestInspectorPanel({
           onClick={async () => {
             if (replay == null) return;
             try {
-              await navigator.clipboard.writeText(
-                JSON.stringify({ messages: replay.messages }, null, 2),
-              );
+              // The wire shape only: `id` is this panel's row identity, not
+              // part of what the model received.
+              const messages = replay.messages.map(({ role, content }) => ({ role, content }));
+              await navigator.clipboard.writeText(JSON.stringify({ messages }, null, 2));
               setCopied(true);
               window.setTimeout(() => setCopied(false), 2_000);
             } catch {
@@ -129,15 +131,8 @@ export function LlmRequestInspectorPanel({
       <div className="min-h-0 flex-1 overflow-y-auto border-t">
         {replay != null ? (
           <div className="flex flex-col">
-            {replay.messages.map((message, index) => (
-              <ReplayMessageSection
-                // Positional identity is stable: the replayed request is an
-                // immutable fact of the journal, so index-keyed rows never
-                // reorder under the same offset.
-                key={index}
-                message={message}
-                renderMode={renderMode}
-              />
+            {replay.messages.map((message) => (
+              <ReplayMessageSection key={message.id} message={message} renderMode={renderMode} />
             ))}
           </div>
         ) : eventsResult.status === "pending" ? (
@@ -225,14 +220,6 @@ const ReplayMessageSection = memo(
   },
   (previous, next) =>
     previous.renderMode === next.renderMode &&
-    previous.message.role === next.message.role &&
+    previous.message.id === next.message.id &&
     previous.message.content === next.message.content,
 );
-
-function formatSeconds(durationMs: number): string {
-  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
-  const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${Math.round(seconds % 60)}s`;
-}

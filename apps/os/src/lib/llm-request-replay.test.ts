@@ -60,8 +60,8 @@ describe("replayLlmRequest", () => {
     expect(replay).not.toBeNull();
     expect(replay?.model).toBe("openai/gpt-5.5");
     expect(replay?.messages).toEqual([
-      { role: "system", content: "You are **demo**." },
-      { role: "user", content: "hello" },
+      { id: "3:0", role: "system", content: "You are **demo**." },
+      { id: "3:1", role: "user", content: "hello" },
     ]);
     // Settled by the completed event that references this offset.
     expect(replay?.outcome).toEqual({ status: "success", durationMs: 1234, errorMessage: null });
@@ -129,6 +129,6 @@ describe("replayLlmRequest", () => {
   it("skips malformed rows like the processor's own fold does", () => {
     const rows = ["not json", JSON.stringify({ half: "an event" }), ...conversationRows()];
     const replay = replayLlmRequest({ rawEventJsons: rows, llmRequestOffset: 3 });
-    expect(replay?.messages.at(-1)).toEqual({ role: "user", content: "hello" });
+    expect(replay?.messages.at(-1)).toEqual({ id: "3:1", role: "user", content: "hello" });
   });
 });
