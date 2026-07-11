@@ -364,11 +364,14 @@ final class ComputerController: ObservableObject {
   @Published var enabled = false  // the human asked to share
   @Published var sharing = false  // the capability is mounted and live
   @Published var computerName: String?  // the itx.<name> agents call
-  @Published var recentCalls: [ComputerCall] = []
+  @Published var recentCalls: [ComputerCall] = []  // capped display list
+  @Published private var activeCalls = 0  // in-flight count, independent of the cap
   @Published var lastError: String?
 
-  /// A call is running right now — the menu bar's "in use" indicator.
-  var inUse: Bool { recentCalls.contains { $0.running } }
+  /// A call is running right now — the menu bar's "in use" indicator. Counted
+  /// separately from `recentCalls` so a slow call that scrolls off the capped
+  /// display list still keeps the indicator honest.
+  var inUse: Bool { activeCalls > 0 }
 
   private let config = MenuBarConfig.load()
   private var process: Process?
@@ -447,6 +450,7 @@ final class ComputerController: ObservableObject {
     detachIO()
     sharing = false
     recentCalls = []
+    activeCalls = 0
   }
 
   /// The watcher exited on its own (lost socket, needs-login, crash). We're no
@@ -456,6 +460,7 @@ final class ComputerController: ObservableObject {
     detachIO()
     sharing = false
     recentCalls = []
+    activeCalls = 0
     if enabled {
       enabled = false
       if lastError == nil { lastError = "Stopped sharing your computer." }
@@ -495,6 +500,7 @@ final class ComputerController: ObservableObject {
       }
     case "call":
       guard let id = event["id"] as? Int else { return }
+      activeCalls += 1
       recentCalls.insert(
         ComputerCall(
           id: id,
@@ -504,13 +510,13 @@ final class ComputerController: ObservableObject {
         at: 0)
       if recentCalls.count > 5 { recentCalls.removeLast(recentCalls.count - 5) }
     case "call-done":
-      guard let id = event["id"] as? Int,
-        let index = recentCalls.firstIndex(where: { $0.id == id })
-      else { return }
+      guard let id = event["id"] as? Int else { return }
+      // Decrement the in-flight count even if the row already scrolled off the
+      // capped list, so `inUse` and the menu-bar dot don't stay stuck on.
+      if activeCalls > 0 { activeCalls -= 1 }
+      guard let index = recentCalls.firstIndex(where: { $0.id == id }) else { return }
       // Reassign the whole element (not a nested mutation) so the @Published
-      // array reliably republishes — otherwise the spinner, `inUse`, and the
-      // menu-bar dot can stay stuck after the call finishes. Same idiom as
-      // ApprovalController.setSubmitting.
+      // array reliably republishes. Same idiom as ApprovalController.setSubmitting.
       var call = recentCalls[index]
       call.running = false
       recentCalls[index] = call
