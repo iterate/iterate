@@ -46,6 +46,7 @@ import {
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
+import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
@@ -220,7 +221,12 @@ import type {
   ProvideCapabilityInput,
   RevokeCapabilityInput,
 } from "./domains/capability-host/types.ts";
-import type { SecretDescription, SecretUpdateInput } from "./domains/secrets/types.ts";
+import type {
+  SecretCollectInput,
+  SecretCollectionLink,
+  SecretDescription,
+  SecretUpdateInput,
+} from "./domains/secrets/types.ts";
 import type {
   GetProcessorRuntimeState,
   LiveStateRpc,
@@ -1655,13 +1661,18 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Secret catalog: get(path) / list(). Secret VALUES never transit this surface — they substitute into egress requests server-side.",
-      children: { get: "The secret at a path.", list: "Known secrets (from project state)." },
+        "Secret catalog: get(path) / list() / collectFromUser(input). Secret VALUES never transit this surface — they substitute into egress requests server-side.",
+      children: {
+        collectFromUser:
+          "Mint a deep link where the user enters a secret value themselves ({ path, egress, description? } → { path, url }); an agent caller is messaged when they submit.",
+        get: "The secret at a path.",
+        list: "Known secrets (from project state).",
+      },
       parent: "a project itx (itx.secrets)",
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; projectId: string; scopePath?: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -1673,6 +1684,42 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
       path: normalizeSecretPath(path),
       projectId: this.props.projectId,
     });
+  }
+
+  /**
+   * Mint a deep link where the USER enters a secret value themselves — the
+   * door for credentials an agent must never see in chat. The page (a
+   * minimal, chrome-free form) shows the description and the egress origins
+   * the value is pinned to; on submit it stores material + egress in one
+   * update, so the secret is born already pinned. When the caller is an
+   * agent scope, the page also messages that agent ("The user submitted the
+   * secret at …"), which starts its next turn — send the URL to the user,
+   * end the turn, and act on the notification. Nothing is created until the
+   * user submits; the link itself is stateless.
+   */
+  async collectFromUser(input: SecretCollectInput): Promise<SecretCollectionLink> {
+    const path = normalizeSecretPath(input.path);
+    if (input.egress.urls.length === 0) {
+      throw new Error(
+        "collectFromUser needs at least one egress URL: the user is shown where the value can ever be sent, and a secret pinned to nothing can never be used.",
+      );
+    }
+    const project = await readProjectById(env.PROJECT_DIRECTORY, this.props.projectId);
+    if (!project?.slug) {
+      throw new Error(`Project ${this.props.projectId} has no slug; cannot build a page URL.`);
+    }
+    const scopePath = this.props.scopePath;
+    const url = buildCollectSecretUrl({
+      baseUrl: parseConfig(env).baseUrl,
+      projectSlug: project.slug,
+      search: {
+        path,
+        egress: input.egress.urls,
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(scopePath?.startsWith("/agents/") ? { notify: scopePath } : {}),
+      },
+    });
+    return { path, url };
   }
 
   /** Known secrets, read from the project processor's reduced state. */
@@ -4345,6 +4392,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new SecretCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
+      // The scope path makes collectFromUser's links notify the calling
+      // agent when the user submits; non-agent scopes mint plain links.
+      scopePath: this.#props.capabilityHost.path,
     });
   }
 
