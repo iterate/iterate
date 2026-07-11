@@ -166,6 +166,15 @@ Vendor work that is **idempotent-by-overwrite** inside a durable lane
 (re-downloading Slack-shared files to a per-event storage key) is acceptable:
 wasteful on refold, never wrong.
 
+One guarantee holds in both directions: **processors never see ephemeral
+events** (`append({ ephemeral: true })` — LLM streaming chunks and other
+transient signals). The wake lane drops them from delivery and catch-up reads
+exclude them, so neither a live fold nor a refold ever contains one: you never
+need to filter them out yourself, and you cannot fold or side-effect on one.
+Corollary: anything your fold or reconciler depends on must NOT be appended
+ephemeral — the durable truth is always its own event (chunks →
+`output-added`).
+
 ### The refold test
 
 Every processor whose `process*` hooks touch a vendor must have one. It is a

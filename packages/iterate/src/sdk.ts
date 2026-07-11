@@ -92,11 +92,14 @@ async function invokeCapability(
  * but shouldn't have to hand-roll:
  *
  * - `processEventBatch` / `processEvent`: the platform delivers every
- *   committed event on every stream in the project as checkpointed
- *   per-stream batches — in per-stream order, at-least-once. The base
- *   unpacks them into one `processEvent(event)` call per event; override
- *   `processEvent` to react (one `if` per reaction, keyed on event.path +
- *   event.type). Throwing (or a worker that fails to build) leaves that
+ *   committed DURABLE event on every stream in the project as checkpointed
+ *   per-stream batches — in per-stream order, at-least-once. Events appended
+ *   with `ephemeral: true` (LLM streaming chunks and other transient
+ *   signals) never arrive here — they ride live `subscribe()` connections
+ *   only; react to the durable fact that supersedes them (e.g.
+ *   `agent/output-added`). The base unpacks batches into one
+ *   `processEvent(event)` call per event; override `processEvent` to react
+ *   (one `if` per reaction, keyed on event.path + event.type). Throwing (or a worker that fails to build) leaves that
  *   stream's checkpoint in place and the whole batch is redelivered later,
  *   so return normally to advance past events you don't care about — and
  *   anything a reaction appends should carry an idempotency key.

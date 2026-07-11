@@ -978,8 +978,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         afterOffset: next.maxOffset,
         beforeOffset: highestOffset + 1,
         limit: 500,
-        // Ephemeral rows folded on append (counters + circuit breaker), so a
-        // rebuild must re-fold them for the same state.
+        // Ephemeral rows folded on append (counters + circuit breaker), so
+        // the rebuild re-folds them. Exactly identical only while their rows
+        // survive: a post-eviction rebuild counts fewer events and re-burns
+        // fewer breaker tokens — bookkeeping drift, not correctness (see
+        // eventCount's doc in core-processor-contract.ts).
         includeEphemeral: true,
       });
       if (page.length === 0) break;

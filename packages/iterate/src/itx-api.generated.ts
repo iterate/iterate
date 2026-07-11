@@ -1000,7 +1000,9 @@ export interface ProjectWorker {
    * stream it lives on, so `${event.path}@${event.offset}` identifies a
    * delivery globally and is the idempotency-key idiom for reactions. The
    * stream only advances its checkpoint when this resolves; throwing means
-   * the whole batch is redelivered later.
+   * the whole batch is redelivered later. Ephemeral events
+   * (`ephemeral: true` appends — e.g. `agent/llm-response-chunk`) are never
+   * delivered to this feed; their durable truth arrives as its own event.
    */
   processEventBatch(batch: StreamPushEventBatch): Promise<void>;
 }
@@ -1018,7 +1020,9 @@ export interface Stream {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
-  /** One event by offset or idempotencyKey; undefined when it does not exist. */
+  /** One event by offset or idempotencyKey; undefined when it does not exist.
+   * Point reads return ephemeral rows too — but those rows are evictable, so
+   * an offset that once resolved may later read as undefined. */
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
@@ -1039,6 +1043,8 @@ export interface Stream {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
+   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`
+   * events too — remember their rows may be evicted if you record the offset.
    */
   waitForEvent(args: {
     afterOffset?: number;
@@ -1073,11 +1079,13 @@ export interface Stream {
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /**
-   * Live EPHEMERAL event delivery: `processEventBatch` is called for every
-   * committed batch (optionally replayed from `replayAfterOffset`); returns an
-   * unsubscribe handle. Session-scoped and forgotten on disconnect — durable
-   * delivery is configured as data instead, by appending a
-   * `subscription-configured` event (wake or push mode) to the stream.
+   * Session-scoped live event delivery (the "ephemeral" subscription lane —
+   * also the only lane that receives `ephemeral: true` events):
+   * `processEventBatch` is called for every committed batch (optionally
+   * replayed from `replayAfterOffset`); returns an unsubscribe handle.
+   * Forgotten on disconnect — durable delivery is configured as data instead,
+   * by appending a `subscription-configured` event (wake or push mode) to the
+   * stream.
    */
   subscribe(args: {
     subscriptionKey?: string;

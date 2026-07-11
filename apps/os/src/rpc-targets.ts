@@ -363,11 +363,12 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains).`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
-        crossPostTo: "Copy matching events onto another stream (optionally JSONata-transformed).",
+        crossPostTo:
+          "Copy matching events onto another stream (optionally JSONata-transformed). Rides durable delivery, so ephemeral events are never cross-posted; a selector matching only ephemeral types delivers nothing.",
         getEvent: "One event by offset or idempotencyKey.",
         getEvents: "Read one bounded page of events.",
         kill: "Abort the current Durable Object incarnation; the next request boots it again.",
@@ -417,7 +418,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
   }
 
-  /** One event by offset or idempotencyKey; undefined when it does not exist. */
+  /** One event by offset or idempotencyKey; undefined when it does not exist.
+   * Point reads return ephemeral rows too — but those rows are evictable, so
+   * an offset that once resolved may later read as undefined. */
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
@@ -447,6 +450,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
+   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`
+   * events too — remember their rows may be evicted if you record the offset.
    */
   waitForEvent(args: {
     afterOffset?: number;
@@ -493,11 +498,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /**
-   * Live EPHEMERAL event delivery: `processEventBatch` is called for every
-   * committed batch (optionally replayed from `replayAfterOffset`); returns an
-   * unsubscribe handle. Session-scoped and forgotten on disconnect — durable
-   * delivery is configured as data instead, by appending a
-   * `subscription-configured` event (wake or push mode) to the stream.
+   * Session-scoped live event delivery (the "ephemeral" subscription lane —
+   * also the only lane that receives `ephemeral: true` events):
+   * `processEventBatch` is called for every committed batch (optionally
+   * replayed from `replayAfterOffset`); returns an unsubscribe handle.
+   * Forgotten on disconnect — durable delivery is configured as data instead,
+   * by appending a `subscription-configured` event (wake or push mode) to the
+   * stream.
    */
   subscribe(args: {
     subscriptionKey?: string;

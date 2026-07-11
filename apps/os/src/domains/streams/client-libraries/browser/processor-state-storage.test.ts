@@ -229,6 +229,25 @@ describe("browser raw events schema version reset", () => {
     // Order still holds: a new row below the local head is a delivery bug.
     await expect(insert(2)).rejects.toThrow(/offsets must increase/);
   });
+
+  it("the processor fails a gapped batch BEFORE inserting, so the self-heal can replay the hole", async () => {
+    // Until server-side eviction exists, every delivered stream is dense —
+    // a batch starting past localHead+1 means rows were lost in flight.
+    // Throwing pre-insert keeps the checkpoint at the hole's edge; inserting
+    // would seal it forever (the gap-tolerant trigger accepts everything
+    // after, and the checkpoint advances past the missing rows).
+    const sql = wrap(new DatabaseSync(":memory:"));
+    const processor = createRawEventsProcessor(sql);
+    await processor.ingest({ events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
+
+    await expect(
+      processor.ingest({ events: [rawEvent(4), rawEvent(5)], streamMaxOffset: 5 }),
+    ).rejects.toThrow(/offset gap/);
+    // Nothing inserted, checkpoint unmoved: the replay can still fill 3-5.
+    const rows = await sql.exec(`SELECT offset FROM events ORDER BY offset`);
+    expect(rows.map((row) => Number(row.offset))).toEqual([1, 2]);
+    expect(await processor.snapshot()).toMatchObject({ offset: 2 });
+  });
 });
 
 // The event_type_counts table replaces the UI's reactive COUNT(*) full scans
