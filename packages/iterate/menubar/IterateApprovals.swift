@@ -91,11 +91,21 @@ final class ApprovalController: ObservableObject {
 
     stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
       let chunk = handle.availableData
-      guard !chunk.isEmpty else { return }
+      // Empty data means EOF: clear the handler so it stops firing (otherwise
+      // it busy-loops on the closed pipe).
+      if chunk.isEmpty {
+        handle.readabilityHandler = nil
+        return
+      }
       DispatchQueue.main.async { self?.ingest(chunk) }
     }
+    // The watcher exited (needs-login, auth loss, or crash): drop the now-stale
+    // pending rows and reflect that we're disconnected.
     process.terminationHandler = { [weak self] _ in
-      DispatchQueue.main.async { self?.loggedIn = false }
+      DispatchQueue.main.async {
+        self?.loggedIn = false
+        self?.requests = []
+      }
     }
     do {
       try process.run()
@@ -177,6 +187,13 @@ final class ApprovalController: ObservableObject {
       }
     case "error":
       lastError = event["message"] as? String
+      // A signing/append failure (e.g. cancelled Touch ID) leaves the request
+      // pending — clear its spinner so Approve/Reject come back for a retry.
+      if let offset = event["offset"] as? Int,
+        let index = requests.firstIndex(where: { $0.offset == offset })
+      {
+        requests[index].submitting = false
+      }
     default:
       break
     }
