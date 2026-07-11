@@ -1112,12 +1112,22 @@ const launcherProcedures = {
         explicitProject: input.project,
       });
 
+      // The share loop re-resolves credentials before every (re)connect so it
+      // survives the short access-token TTL over extended sharing: env secrets
+      // win (doppler/e2e, never expire), else re-read the stored session — which
+      // refreshes the OAuth token when it's near expiry.
+      const reauth = async () => {
+        const env = osAuthFromEnvironment();
+        if (env) return { auth: env.credentials, headers: headersRecord(env.requestHeaders) };
+        const current = resolveConfig(process.cwd(), { throw: true });
+        const refreshed = osAuthFromHeaders(await getOsAuthHeaders(current.config, current.name));
+        return { auth: refreshed.credentials, headers: headersRecord(refreshed.requestHeaders) };
+      };
       const shared = {
-        auth: auth.credentials,
         baseUrl: resolved.config.osBaseUrl,
         projectId,
-        headers: headersRecord(auth.requestHeaders),
         name: input.name,
+        reauth,
       };
       // JSON mode announces activity for the menu-bar app; the terminal form
       // prompts for a name and prints a paste-for-your-agent hint. Both block.
