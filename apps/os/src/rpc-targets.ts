@@ -4997,9 +4997,12 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * Find examples, types, and mounted capabilities. Pass MANY related words —
    * matching is dumb word overlap, so more synonyms means better recall:
    * `search({ q: "file upload attachment bytes store image" })`, not
-   * `search({ q: "files" })`. Example hits are working scripts — prefer
-   * copying them over writing calls from scratch. Each hit's `fetchCall`
-   * field is the literal next call to make.
+   * `search({ q: "files" })`. API-name queries work too: "itx" is dropped as
+   * noise and a word matching a row's NAME counts double, so `"itx.docs"`,
+   * `"worker"`, or `"agents"` rank their subject first instead of every row
+   * that mentions the word. Example hits are working scripts — prefer copying
+   * them over writing calls from scratch. Each hit's `fetchCall` field holds
+   * the ready-made docs.get call that fetches its full doc.
    */
   async search(input: { q: string }): Promise<DocsSearchHit[]> {
     const scored: Array<{ hit: DocsSearchHit; score: number; proven?: boolean }> = [];
@@ -5009,8 +5012,12 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       // capability demo containing "create"/"message" in its script) outrank
       // the example whose TITLE says what the searcher wants. Recall for
       // API-name queries still works — ids/titles/descriptions name their
-      // subjects, and type declarations cover the rest.
-      const score = searchScore(input.q, `${example.id} ${example.title} ${example.description}`);
+      // subjects, and type declarations cover the rest. A word landing in
+      // the row's NAME counts twice: `search({ q: "docs" })` must rank
+      // docs-search-and-get above every row that merely mentions itx.docs.
+      const score =
+        searchScore(input.q, `${example.id} ${example.title} ${example.description}`) +
+        searchScore(input.q, example.id);
       if (score === 0) continue;
       scored.push({
         score,
@@ -5035,11 +5042,12 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       // the examples out of the one screenful of hits. A word landing in the
       // declaration's own name/summary counts fully; a member-only match
       // counts half.
-      const score = weightedDeclarationScore({
-        query: input.q,
-        ownText: `${declaration.name} ${declaration.summary}`,
-        memberText,
-      });
+      const score =
+        weightedDeclarationScore({
+          query: input.q,
+          ownText: `${declaration.name} ${declaration.summary}`,
+          memberText,
+        }) + searchScore(input.q, declaration.name);
       if (score === 0) continue;
       scored.push({
         score,
@@ -5061,7 +5069,9 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       if (capability.type === "builtin") continue; // builtins are covered by their type declarations
       const dottedPath = capability.path.join(".");
       const instructions = capability.instructions ?? "";
-      const score = searchScore(input.q, `${dottedPath} ${instructions} ${capability.types ?? ""}`);
+      const score =
+        searchScore(input.q, `${dottedPath} ${instructions} ${capability.types ?? ""}`) +
+        searchScore(input.q, dottedPath);
       if (score === 0) continue;
       scored.push({
         score,
