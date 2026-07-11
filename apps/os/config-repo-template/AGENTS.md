@@ -17,21 +17,30 @@ capabilities through `await this.env.ITX.get()`. The worker is built by the
 platform's worker build pipeline: multi-file TypeScript works (the bundler
 follows imports), and npm dependencies declared in `package.json` are
 installed at build time. The platform's capability types and worker base
-classes come from the `iterate` package — `import { BaseProjectEntrypoint,
-type StreamEvent } from "iterate/sdk"`. It's a devDependency here: the
-platform supplies `iterate/sdk` to every worker build as a virtual module, so
-the build never installs it; run `npm install` to get typechecking and editor
-support.
+classes come from the `iterate` package — `import { IterateWorkerEntrypoint,
+IterateDurableObject, type StreamEvent } from "iterate/sdk"`. It's a
+devDependency here: the platform supplies `iterate/sdk` to every worker build
+as a virtual module, so the build never installs it; run `npm install` to get
+typechecking and editor support.
+
+Every worker class — the root project worker AND the apps — extends one of
+the two sdk base classes: `IterateWorkerEntrypoint` (stateless) or
+`IterateDurableObject` (stateful). Both carry the same platform surface:
+`processEventBatch` unpacks delivered event batches into overrideable
+`processEvent(event)` calls, `invokeCapability` dispatches flattened
+`itx.worker.<path>` calls (see below), and `fetchDynamicWorker` forwards HTTP
+into sibling workers. Env defaults to `{ ITX: ItxBinding }`.
 
 The example apps are named exports of the same `worker.ts`, routed by the
-default export's `fetch`: `HelloApp` (stateless WorkerEntrypoint) and
-`CounterApp` (a stateful Durable Object serving a mini client-side app whose
-count updates live over a WebSocket at `/ws`).
+default export's `fetch`: `HelloApp` (stateless, extends
+`IterateWorkerEntrypoint`) and `CounterApp` (stateful, extends
+`IterateDurableObject` — a mini client-side app whose count updates live over
+a WebSocket at `/ws`).
 The router dispatches every app request through `this.fetchDynamicWorker(req,
-ref)` — inherited from `BaseProjectEntrypoint` (iterate/sdk) — which forwards
-over the platform's fetch-native worker lane (`env.ITX.fetch` with the app's
-ref in the `x-iterate-worker-dispatch` header). Keep that shape: it is what
-lets WebSocket upgrades and streaming responses tunnel through (an
+ref)` — inherited from the base class — which forwards over the platform's
+fetch-native worker lane (`env.ITX.fetch` with the app's ref in the
+`x-iterate-worker-dispatch` header). Keep that shape: it is what lets
+WebSocket upgrades and streaming responses tunnel through (an
 `app.fetch(req)` RPC method call cannot carry a socket — the method's
 docstring has the full story). When an app outgrows the shared file, move its
 class into its own module and point the ref's `entryPoint` at it.
@@ -51,8 +60,8 @@ rides the fetch lane.
 To give agents a new capability surface, add a getter or method to the
 default-export worker class: the platform dispatches dotted
 `itx.worker.<path>` calls as one flattened `invokeCapability({ path, args })`
-that the worker walks in userland, so a getter can hand back a whole vendor
-SDK (installed from `package.json`) in a single round trip. Built-in
+that the base class walks in userland, so a getter can hand back a whole
+vendor SDK (installed from `package.json`) in a single round trip. Built-in
 integrations (Slack, Gmail, GitHub, Telegram, Waitrose) already live at
 `itx.integrations.<slug>["<connection>"]` — reach for a worker getter when
 the platform has no built-in for a provider.
