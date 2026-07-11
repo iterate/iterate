@@ -74,6 +74,7 @@ final class ApprovalController: ObservableObject {
 
   private let config = MenuBarConfig.load()
   private var process: Process?
+  private var loginProcess: Process?
   private var stdinHandle: FileHandle?
   private var stdoutHandle: FileHandle?
   private var buffer = Data()
@@ -163,6 +164,7 @@ final class ApprovalController: ObservableObject {
   /// Kick off `iterate login` (browser OAuth), then restart the watcher. Stop
   /// the current watcher first so login never overlaps a running approve.
   func login() {
+    guard loginProcess == nil else { return }  // one browser login at a time
     stop()
     reconnectAttempts = 0  // an explicit retry clears the give-up counter
     let process = Process()
@@ -170,10 +172,14 @@ final class ApprovalController: ObservableObject {
     process.arguments = [config.command] + config.argv(for: ["login"])
     if let cwd = config.cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
     process.terminationHandler = { [weak self] _ in
-      Task { @MainActor in self?.start() }
+      Task { @MainActor in
+        self?.loginProcess = nil
+        self?.start()
+      }
     }
     do {
       try process.run()
+      loginProcess = process
     } catch {
       // Login couldn't even launch — don't leave the app with no watcher.
       lastError = "Could not start login: \(error.localizedDescription)"

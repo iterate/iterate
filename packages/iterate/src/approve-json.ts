@@ -150,9 +150,12 @@ async function reconcileBacklog(
   const resolved = new Set<number>();
   let cursor = 0;
   while (true) {
+    // `granted` counts as decided here (though it's not a settle): a request
+    // already granted must not reappear as pending on restart and get
+    // re-approved. The live tail deliberately does NOT treat granted this way.
     const page = await stream.getEvents({
       afterOffset: cursor,
-      eventTypes: [EVENT.requested, ...RESOLUTION_TYPES],
+      eventTypes: [EVENT.requested, EVENT.granted, ...RESOLUTION_TYPES],
     });
     if (page.length === 0) break;
     for (const event of page) {
