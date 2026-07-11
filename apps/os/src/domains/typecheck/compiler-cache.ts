@@ -15,7 +15,7 @@
 /** A compiler cache: `get()` returns the shared instance (creating it once),
  * `resetIfCurrent()` drops it so the next `get()` re-creates — call it when a
  * compile crashed on the promise you were holding. */
-export interface CompilerCache<C> {
+interface CompilerCache<C> {
   get(): Promise<C>;
   resetIfCurrent(promise: Promise<C>): void;
 }
