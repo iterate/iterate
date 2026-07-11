@@ -323,3 +323,32 @@ export function searchScore(query: string, haystack: string): number {
   }
   return score;
 }
+
+/**
+ * Per-word declaration relevance: full credit for words in the declaration's
+ * own name/summary, half credit for words found only in its members' text.
+ * Keeps hub declarations (whose member text matches almost anything) from
+ * crowding examples out of docs.search results.
+ */
+export function weightedDeclarationScore(input: {
+  query: string;
+  ownText: string;
+  memberText: string;
+}): number {
+  const own = input.ownText.toLowerCase();
+  const members = input.memberText.toLowerCase();
+  const words = [
+    ...new Set(
+      input.query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean),
+    ),
+  ];
+  let score = 0;
+  for (const word of words) {
+    if (own.includes(word)) score += 1;
+    else if (members.includes(word)) score += 0.5;
+  }
+  return score;
+}

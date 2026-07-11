@@ -151,6 +151,7 @@ import {
   firstSentence,
   mountDeclaration,
   searchScore,
+  weightedDeclarationScore,
   typeSlice,
   type DocsSearchHit,
 } from "./domains/itx/itx-api-graph.ts";
@@ -4926,7 +4927,10 @@ export class StreamProcessorRpcTarget<
 // agents and scripts browse known-good snippets instead of guessing at the
 // surface. Session-context entries are excluded: they run against the OS
 // Session (what authenticate() returns), which an itx holder does not have.
-const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context === "project");
+// Project AND agent context: the docs door answers agents above all, and an
+// agent itx is the project surface plus its own mounts. Session-only
+// examples stay out — a project/agent scope cannot run them.
+const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.context !== "session");
 
 /**
  * The docs door: search + fetch over everything callable from this scope —
@@ -4974,16 +4978,19 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * field is the literal next call to make.
    */
   async search(input: { q: string }): Promise<DocsSearchHit[]> {
-    const scored: Array<{ hit: DocsSearchHit; score: number }> = [];
+    const scored: Array<{ hit: DocsSearchHit; score: number; proven?: boolean }> = [];
 
     for (const example of PROJECT_CONTEXT_EXAMPLES) {
-      const score = searchScore(
-        input.q,
-        `${example.id} ${example.title} ${example.description} ${example.code}`,
-      );
+      // Prose only, no code: code tokens made incidental matches (a fake
+      // capability demo containing "create"/"message" in its script) outrank
+      // the example whose TITLE says what the searcher wants. Recall for
+      // API-name queries still works — ids/titles/descriptions name their
+      // subjects, and type declarations cover the rest.
+      const score = searchScore(input.q, `${example.id} ${example.title} ${example.description}`);
       if (score === 0) continue;
       scored.push({
         score,
+        proven: example.e2eProven,
         hit: {
           kind: "example",
           name: example.id,
@@ -4997,10 +5004,16 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       const memberText = Object.entries(declaration.memberSummaries)
         .map(([member, summary]) => `${member} ${summary}`)
         .join(" ");
-      const score = searchScore(
-        input.q,
-        `${declaration.name} ${declaration.summary} ${memberText}`,
-      );
+      // Hub declarations (Project, Docs, ...) carry every member's summary in
+      // their haystack and would match almost any query wholesale, crowding
+      // the examples out of the one screenful of hits. A word landing in the
+      // declaration's own name/summary counts fully; a member-only match
+      // counts half.
+      const score = weightedDeclarationScore({
+        query: input.q,
+        ownText: `${declaration.name} ${declaration.summary}`,
+        memberText,
+      });
       if (score === 0) continue;
       scored.push({
         score,
@@ -5044,6 +5057,10 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
         (a, b) =>
           b.score - a.score ||
           kindRank[a.hit.kind] - kindRank[b.hit.kind] ||
+          // Proven examples (run unattended against a live project on every
+          // change) outrank interactive-only ones — alphabetical order was
+          // deciding real ties before.
+          Number(b.proven ?? false) - Number(a.proven ?? false) ||
           a.hit.name.localeCompare(b.hit.name),
       )
       .slice(0, 12)
@@ -5112,6 +5129,19 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       return typeSlice({
         declarations: ITX_API_DECLARATIONS_BY_NAME,
         rootName: input.name,
+        maxTokens,
+      }).sourceText;
+    }
+    // A builtin's itx member name ("docs", "workspace") is the natural thing
+    // to ask for after __describe(); resolve it to its declaration ("Docs")
+    // instead of erroring with unrelated closest-matches.
+    const caseInsensitive = [...ITX_API_DECLARATIONS_BY_NAME.keys()].find(
+      (name) => name.toLowerCase() === input.name.toLowerCase(),
+    );
+    if (caseInsensitive !== undefined) {
+      return typeSlice({
+        declarations: ITX_API_DECLARATIONS_BY_NAME,
+        rootName: caseInsensitive,
         maxTokens,
       }).sourceText;
     }
