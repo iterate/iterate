@@ -803,7 +803,14 @@ function updateLlmStep(
   return { ...state, live: { ...state.live, steps } };
 }
 
-function extractCloudflareChunkDeltas(chunk: unknown): {
+/**
+ * The response/thinking text deltas inside one streamed LLM chunk, across the
+ * vendor dialects we receive (Workers AI, OpenAI chat completions, Anthropic).
+ * Exported as the ONE place that knows chunk shapes: the live feed folds these
+ * into the streaming tail, and the LLM trace panel re-assembles a request's
+ * partial response from the same chunks.
+ */
+export function extractCloudflareChunkDeltas(chunk: unknown): {
   responseDelta: string;
   thinkingDelta: string;
 } {

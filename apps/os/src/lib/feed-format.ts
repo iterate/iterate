@@ -27,6 +27,13 @@ export function formatFileSize(size: number): string {
   return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
 }
 
+/** Code-mode agents stream itx code as their response; chat agents stream
+ * prose. Decides whether LLM response text renders as a code block. */
+const CODE_START_PATTERN = /^\s*(async|await|function|const|let|import)\b/;
+export function looksLikeCode(text: string): boolean {
+  return text.includes("```") || CODE_START_PATTERN.test(text);
+}
+
 /** Locale time-of-day with seconds, for step start times. */
 export function formatClockTime(timestampMs: number): string {
   return new Date(timestampMs).toLocaleTimeString([], {
