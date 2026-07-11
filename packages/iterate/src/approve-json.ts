@@ -32,6 +32,7 @@ import {
   connectApproval,
   EVENT,
   grant,
+  reconcileBacklog,
   reject,
   safeHost,
   type RequestedPayload,
@@ -72,10 +73,14 @@ export async function runApprovalJson(input: {
   // decision has the payload to sign over.
   const pending = new Map<number, RequestedPayload>();
 
-  // Reconcile the backlog: replay history once, emit still-pending requests,
-  // and return the max offset so the live tail starts exactly past it (no
-  // live-only race, no gap).
-  const cursor = await reconcileBacklog(stream, pending);
+  // Reconcile the backlog: replay history once, emit still-open requests (a
+  // grant already on the stream shows the row submitted, not a fresh prompt),
+  // and tail from the max offset so the live view starts exactly past it.
+  const { open, cursor } = await reconcileBacklog(stream);
+  for (const request of open) {
+    pending.set(request.offset, request.payload);
+    emitRequested(request.offset, request.payload, request.submitted);
+  }
 
   // Decisions run one at a time: signing pops Touch ID, and two enclave
   // signatures must not race. Each line chains after the last; handleDecision
@@ -143,51 +148,6 @@ export async function runApprovalJson(input: {
     tail = event.offset;
     dispatch(event, pending);
   }
-}
-
-/**
- * Read the whole stream once (paged), tracking which held requests are still
- * unresolved and unexpired, emit those, and return the highest offset seen so
- * the caller tails from exactly past it.
- */
-async function reconcileBacklog(
-  stream: RpcStub<Stream>,
-  pending: Map<number, RequestedPayload>,
-): Promise<number> {
-  const requests = new Map<number, RequestedPayload>();
-  const resolved = new Set<number>(); // terminal: settled or rejected
-  const submitted = new Set<number>(); // a grant exists, but the door hasn't settled it
-  let cursor = 0;
-  while (true) {
-    const page = await stream.getEvents({
-      afterOffset: cursor,
-      eventTypes: [EVENT.requested, EVENT.granted, ...RESOLUTION_TYPES],
-    });
-    if (page.length === 0) break;
-    for (const event of page) {
-      cursor = event.offset;
-      if (event.type === EVENT.requested) {
-        requests.set(event.offset, event.payload as RequestedPayload);
-        continue;
-      }
-      const ref = (event.payload as { approvalRequestEventOffset?: number })
-        .approvalRequestEventOffset;
-      if (typeof ref !== "number") continue;
-      // A grant alone is NOT terminal — the door may ignore an unsigned/invalid
-      // one and the hold stays open. So only settled/rejected resolve; a grant
-      // marks the request "submitted" (shown, but awaiting the door — not a
-      // fresh approve prompt).
-      if (event.type === EVENT.granted) submitted.add(ref);
-      else resolved.add(ref);
-    }
-  }
-  for (const [offset, payload] of requests) {
-    if (resolved.has(offset)) continue;
-    if (Date.parse(payload.expiresAt) <= Date.now()) continue;
-    pending.set(offset, payload);
-    emitRequested(offset, payload, submitted.has(offset));
-  }
-  return cursor;
 }
 
 function dispatch(event: StreamEvent, pending: Map<number, RequestedPayload>): void {

@@ -154,6 +154,53 @@ export async function reject(stream: RpcStub<Stream>, offset: number): Promise<v
 }
 
 /**
+ * Page the project stream once and return every approval request still open —
+ * a `requested` with no matching `settled`/`rejected` that hasn't expired —
+ * oldest first, plus the highest offset seen so a live tail resumes exactly
+ * past it (no gap, no replay). Each is flagged `submitted` when a grant already
+ * exists but the door hasn't settled it: a bare grant is NOT terminal (the door
+ * may ignore an unverifiable one), so such a hold stays open, but a front-end
+ * shows it awaiting the door rather than offering a second, racing decision.
+ *
+ * Both front-ends reconcile through this one function so terminal and machine
+ * views can't derive "still open" differently.
+ */
+export async function reconcileBacklog(stream: RpcStub<Stream>): Promise<{
+  open: Array<{ offset: number; payload: RequestedPayload; submitted: boolean }>;
+  cursor: number;
+}> {
+  const requests = new Map<number, RequestedPayload>();
+  const resolved = new Set<number>(); // settled or rejected — terminal
+  const submitted = new Set<number>(); // a grant exists, door hasn't settled it
+  let cursor = 0;
+  while (true) {
+    const page = await stream.getEvents({
+      afterOffset: cursor,
+      eventTypes: [EVENT.requested, EVENT.granted, EVENT.settled, EVENT.rejected],
+    });
+    if (page.length === 0) break;
+    for (const event of page) {
+      cursor = event.offset;
+      if (event.type === EVENT.requested) {
+        requests.set(event.offset, event.payload as RequestedPayload);
+        continue;
+      }
+      const ref = (event.payload as { approvalRequestEventOffset?: number })
+        .approvalRequestEventOffset;
+      if (typeof ref !== "number") continue;
+      if (event.type === EVENT.granted) submitted.add(ref);
+      else resolved.add(ref);
+    }
+  }
+  const now = Date.now();
+  // Map iteration is insertion order — paged ascending — so this is oldest first.
+  const open = [...requests]
+    .filter(([offset, payload]) => !resolved.has(offset) && Date.parse(payload.expiresAt) > now)
+    .map(([offset, payload]) => ({ offset, payload, submitted: submitted.has(offset) }));
+  return { open, cursor };
+}
+
+/**
  * Read back what the egress door did with a request: released (with the
  * upstream status), delivery-failed, rejected, or — if nothing lands in the
  * window — unsettled (an unverifiable signature is ignored server-side, so

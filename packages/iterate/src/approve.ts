@@ -30,6 +30,7 @@ import {
   EVENT,
   grant,
   messageFor,
+  reconcileBacklog,
   reject,
   safeHost,
   type RequestedPayload,
@@ -182,13 +183,31 @@ export async function runApprovalCli(input: {
     return "next";
   };
 
+  // A backlog request that already carries a grant — don't offer a fresh
+  // Approve/Reject (a second approver rejecting or duplicate-granting could
+  // race the door already honoring a valid grant). Wait for the door; only if
+  // it stays unsettled — an ignored/unverifiable grant — offer it afresh.
+  const awaitSubmitted = async (
+    offset: number,
+    payload: RequestedPayload,
+  ): Promise<"stop" | "next"> => {
+    if (Date.parse(payload.expiresAt) <= Date.now()) return "next";
+    prompts.log.info(
+      `#${offset} ${payload.method} ${safeHost(payload.url)} already has a grant — awaiting the egress door...`,
+    );
+    const settlement = await awaitSettlement(stream, offset);
+    reportSettlement(offset, settlement);
+    return settlement.kind === "unsettled" ? offerHeldRequest(offset, payload) : "next";
+  };
+
   // Answer requests already held before we connected (oldest first), THEN live-
   // tail new ones. Without this backlog pass a hold parked before the command
   // started would never surface — its caller's fetch left hanging until expiry.
-  // The --json front-end reconciles for the same reason.
-  const { held, cursor: from } = await heldBacklog(stream);
-  for (const request of held) {
-    if ((await offerHeldRequest(request.offset, request.payload)) === "stop") return;
+  // The --json front-end reconciles through the same shared function.
+  const { open, cursor: from } = await reconcileBacklog(stream);
+  for (const request of open) {
+    const handle = request.submitted ? awaitSubmitted : offerHeldRequest;
+    if ((await handle(request.offset, request.payload)) === "stop") return;
   }
 
   prompts.log.step(
@@ -220,45 +239,6 @@ export async function runApprovalCli(input: {
       return;
     }
   }
-}
-
-/**
- * Scan the stream once for requests still held — a `requested` with no matching
- * `settled`/`rejected` that hasn't expired — so the backlog pass can answer
- * holds parked before the command started. A bare grant is NOT terminal (the
- * door may ignore an unverifiable one), so granted-but-unsettled requests stay
- * held and are re-offered. Returns them oldest first plus the highest offset
- * seen, so the live tail resumes exactly past it with no gap and no replay.
- */
-async function heldBacklog(
-  stream: RpcStub<Stream>,
-): Promise<{ held: Array<{ offset: number; payload: RequestedPayload }>; cursor: number }> {
-  const requests = new Map<number, RequestedPayload>();
-  const resolved = new Set<number>(); // settled or rejected — terminal
-  let cursor = 0;
-  while (true) {
-    const page = await stream.getEvents({
-      afterOffset: cursor,
-      eventTypes: [EVENT.requested, EVENT.settled, EVENT.rejected],
-    });
-    if (page.length === 0) break;
-    for (const event of page) {
-      cursor = event.offset;
-      if (event.type === EVENT.requested) {
-        requests.set(event.offset, event.payload as RequestedPayload);
-        continue;
-      }
-      const ref = (event.payload as { approvalRequestEventOffset?: number })
-        .approvalRequestEventOffset;
-      if (typeof ref === "number") resolved.add(ref);
-    }
-  }
-  const held = [...requests]
-    .filter(
-      ([offset, payload]) => !resolved.has(offset) && Date.parse(payload.expiresAt) > Date.now(),
-    )
-    .map(([offset, payload]) => ({ offset, payload }));
-  return { held, cursor };
 }
 
 /** `--keys`: the project's enrolled approval keys, with this machine's marked. */
