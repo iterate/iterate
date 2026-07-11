@@ -4990,7 +4990,9 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       if (score === 0) continue;
       scored.push({
         score,
-        proven: example.e2eProven,
+        // e2eProven?: false — ABSENT means proven (the matrix runs it);
+        // explicit false means interactive-only.
+        proven: example.e2eProven !== false,
         hit: {
           kind: "example",
           name: example.id,
