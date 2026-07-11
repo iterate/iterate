@@ -188,6 +188,89 @@ describe("replayLlmRequest", () => {
     expect(replay?.response).toEqual({ text: "hello world", thinkingText: "", source: "chunks" });
   });
 
+  it("derives token counts, latency, and tokens/second from the lifecycle events", () => {
+    // Request 7 (still open in conversationRows). Timeline — createdAt encodes
+    // the offset as seconds (see row()): started at :10, first chunk at :11,
+    // last chunk at :14, completed at :15 → first chunk after 1s, generation
+    // window 4s, 100 output tok = 25 tok/s.
+    const rows = [
+      ...conversationRows(),
+      row(
+        "events.iterate.com/agent/llm-request-started",
+        { llmRequestOffset: 7, model: "openai/gpt-5.5" },
+        10,
+      ),
+      row(
+        "events.iterate.com/agent/llm-request-completed",
+        {
+          durationMs: 5000,
+          llmRequestOffset: 7,
+          result: {
+            status: "success",
+            rawResponse: { streamed: true, cloudflareAiGatewayResponseCacheStatus: "HIT" },
+          },
+        },
+        15,
+      ),
+      row(
+        "events.iterate.com/agent/token-usage-reported",
+        {
+          llmRequestOffset: 7,
+          model: "openai/gpt-5.5",
+          maxContextTokens: 272000,
+          inputTokens: 2500,
+          outputTokens: 100,
+          cachedInputTokens: 2400,
+          reasoningOutputTokens: 18,
+        },
+        16,
+      ),
+    ];
+    const chunkRows = [
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        { chunk: { choices: [{ delta: { content: "a" } }] }, llmRequestOffset: 7, sequence: 0 },
+        11,
+      ),
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        { chunk: { choices: [{ delta: { content: "b" } }] }, llmRequestOffset: 7, sequence: 1 },
+        14,
+      ),
+    ];
+    const replay = replayLlmRequest({
+      rawEventJsons: rows,
+      chunkEventJsons: chunkRows,
+      llmRequestOffset: 7,
+    });
+    expect(replay?.stats).toEqual({
+      tokens: {
+        inputTokens: 2500,
+        outputTokens: 100,
+        cachedInputTokens: 2400,
+        reasoningOutputTokens: 18,
+        maxContextTokens: 272000,
+      },
+      timeToFirstChunkMs: 1000,
+      generationMs: 4000,
+      chunkCount: 2,
+      outputTokensPerSecond: 25,
+      rawResponse: { streamed: true, cloudflareAiGatewayResponseCacheStatus: "HIT" },
+    });
+  });
+
+  it("reports empty stats when the journal has no usage or chunks", () => {
+    const replay = replayLlmRequest({ rawEventJsons: conversationRows(), llmRequestOffset: 7 });
+    expect(replay?.stats).toEqual({
+      tokens: null,
+      timeToFirstChunkMs: null,
+      generationMs: null,
+      chunkCount: 0,
+      outputTokensPerSecond: null,
+      rawResponse: null,
+    });
+  });
+
   it("reports no response when nothing streamed or committed", () => {
     const replay = replayLlmRequest({ rawEventJsons: conversationRows(), llmRequestOffset: 7 });
     expect(replay?.response).toBeNull();

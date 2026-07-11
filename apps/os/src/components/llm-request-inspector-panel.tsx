@@ -14,6 +14,7 @@ import {
   replayLlmRequest,
   type LlmRequestReplay,
   type LlmRequestReplayMessage,
+  type LlmRequestReplayStats,
 } from "~/lib/llm-request-replay.ts";
 
 /**
@@ -65,25 +66,21 @@ export function LlmRequestInspectorPanel({
      ORDER BY offset ASC`,
     [LLM_RESPONSE_CHUNK_EVENT_TYPE, llmRequestOffset],
   );
+  // BOTH queries must resolve before replaying: chunks-still-pending is not
+  // "no chunks", and for a trace whose only response lives in chunks
+  // (cancelled / failed / in flight) rendering early would flash "the model
+  // returned no text" over a response that is about to appear.
+  const loaded = eventsResult.status === "ok" && chunksResult.status === "ok";
   const replay = useMemo(
     () =>
-      eventsResult.status === "ok"
+      loaded
         ? replayLlmRequest({
             rawEventJsons: eventsResult.data.map((sqlRow) => String(sqlRow.raw_json)),
-            chunkEventJsons:
-              chunksResult.status === "ok"
-                ? chunksResult.data.map((sqlRow) => String(sqlRow.raw_json))
-                : [],
+            chunkEventJsons: chunksResult.data.map((sqlRow) => String(sqlRow.raw_json)),
             llmRequestOffset,
           })
         : null,
-    [
-      eventsResult.status,
-      eventsResult.data,
-      chunksResult.status,
-      chunksResult.data,
-      llmRequestOffset,
-    ],
+    [loaded, eventsResult.data, chunksResult.data, llmRequestOffset],
   );
 
   const [renderMode, setRenderMode] = useState<"markdown" | "plain">("markdown");
@@ -108,7 +105,7 @@ export function LlmRequestInspectorPanel({
               <>
                 {formatDateTime(Date.parse(replay.requestedAt))} ·{" "}
                 {replay.messages.length.toLocaleString()} messages ·{" "}
-                {(totalChars ?? 0).toLocaleString()} chars in
+                {(totalChars ?? 0).toLocaleString()} chars
                 <OutcomeBadge outcome={replay.outcome} />
               </>
             )}
@@ -161,8 +158,9 @@ export function LlmRequestInspectorPanel({
               <ReplayMessageSection key={message.id} message={message} renderMode={renderMode} />
             ))}
             <ReplayResponseSection replay={replay} renderMode={renderMode} />
+            <ReplayMetricsSection stats={replay.stats} />
           </div>
-        ) : eventsResult.status === "pending" ? (
+        ) : !loaded ? (
           <p className="px-5 py-3 text-sm text-muted-foreground">Opening local SQLite mirror…</p>
         ) : (
           <p className="px-5 py-3 text-sm text-muted-foreground">
@@ -334,3 +332,89 @@ const ReplayResponseSection = memo(
     previous.replay.outcome?.status === next.replay.outcome?.status &&
     previous.replay.outcome?.errorMessage === next.replay.outcome?.errorMessage,
 );
+
+/**
+ * Everything else the journal recorded about the call: normalized token
+ * counts with context-window fullness, latency split into time-to-first-chunk
+ * (the dial → the first streamed token landing) and the generation window
+ * (with a derived tokens/second), and the transport's verbatim completion
+ * payload behind a disclosure. All timings come from the lifecycle events'
+ * own server-stamped append times.
+ */
+function ReplayMetricsSection({ stats }: { stats: LlmRequestReplayStats }) {
+  const { tokens } = stats;
+  const hasAnything =
+    tokens != null ||
+    stats.chunkCount > 0 ||
+    stats.generationMs != null ||
+    stats.rawResponse != null;
+  if (!hasAnything) return null;
+  const contextPercent =
+    tokens == null
+      ? null
+      : Math.round(((tokens.inputTokens + tokens.outputTokens) / tokens.maxContextTokens) * 1000) /
+        10;
+  const streamingParts = [
+    stats.timeToFirstChunkMs == null
+      ? null
+      : `first chunk after ${formatSeconds(stats.timeToFirstChunkMs)}`,
+    stats.generationMs == null ? null : `generated in ${formatSeconds(stats.generationMs)}`,
+    stats.chunkCount === 0 ? null : `${stats.chunkCount.toLocaleString()} chunks`,
+    stats.outputTokensPerSecond == null ? null : `${stats.outputTokensPerSecond} tok/s`,
+  ].filter((part) => part != null);
+  return (
+    <section className="px-5 py-3">
+      <div className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        metrics
+      </div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-mono text-xs text-foreground/80">
+        {tokens == null ? null : (
+          <>
+            <dt className="text-muted-foreground/70">input</dt>
+            <dd>
+              {tokens.inputTokens.toLocaleString()} tok
+              {tokens.cachedInputTokens == null || tokens.cachedInputTokens === 0
+                ? ""
+                : ` (${tokens.cachedInputTokens.toLocaleString()} cached)`}
+            </dd>
+            <dt className="text-muted-foreground/70">output</dt>
+            <dd>
+              {tokens.outputTokens.toLocaleString()} tok
+              {tokens.reasoningOutputTokens == null || tokens.reasoningOutputTokens === 0
+                ? ""
+                : ` (${tokens.reasoningOutputTokens.toLocaleString()} reasoning)`}
+            </dd>
+            <dt className="text-muted-foreground/70">context</dt>
+            <dd>
+              {contextPercent}% of {Math.round(tokens.maxContextTokens / 1000)}k window
+            </dd>
+          </>
+        )}
+        {streamingParts.length === 0 ? null : (
+          <>
+            <dt className="text-muted-foreground/70">streaming</dt>
+            <dd>{streamingParts.join(" · ")}</dd>
+          </>
+        )}
+      </dl>
+      {stats.rawResponse == null ? null : (
+        <details className="mt-2">
+          <summary className="cursor-pointer font-mono text-xs text-muted-foreground/70 hover:text-foreground">
+            raw completion payload
+          </summary>
+          <pre className="mt-2 overflow-x-auto rounded-xl bg-muted/50 px-4 py-2.5 font-mono text-xs leading-relaxed text-muted-foreground">
+            {stringifyRawResponse(stats.rawResponse)}
+          </pre>
+        </details>
+      )}
+    </section>
+  );
+}
+
+function stringifyRawResponse(rawResponse: unknown): string {
+  try {
+    return JSON.stringify(rawResponse, null, 2) ?? String(rawResponse);
+  } catch {
+    return String(rawResponse);
+  }
+}
