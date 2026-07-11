@@ -16,6 +16,7 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
+  BROWSER_RAW_EVENTS_TABLES,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
@@ -134,7 +135,7 @@ export function ProjectStreamView({
     streamPath,
     slug: BrowserRawEventsContract.slug,
     schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-    tables: ["events"],
+    tables: BROWSER_RAW_EVENTS_TABLES,
     Processor: BrowserRawEventsProcessor,
   });
   const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore<BrowserFeedState>({
@@ -148,7 +149,13 @@ export function ProjectStreamView({
     Processor: BrowserFeedProcessor,
   });
 
-  const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
+  // Trigger-maintained counts (O(#types)) instead of COUNT(*) (full mirror
+  // scan): this query re-runs after every delivered batch and shares the one
+  // OPFS connection with ingest writes — see the raw-events processor schema.
+  const countResult = useStreamQuery(
+    store.streamDatabase,
+    `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
+  );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const agentUiState = useAgentUiReducedState(feedStore.streamDatabase);
   const metrics = useSimulatedRttMetrics();
