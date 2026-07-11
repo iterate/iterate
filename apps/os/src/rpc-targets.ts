@@ -5548,12 +5548,14 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
         "An ad-hoc OpenAPI client: a flat dispatcher; client.someOperationId(input) executes that operation against the spec's server.",
       // Connect-time auto-typing, reference-style: one line naming the spec
       // (the typechecker materializes the full declaration at check time —
-      // schemas never enter the journal or an agent's context). Specs behind
-      // auth headers journal inline instead: headers ride project egress,
-      // which the sidecar's bare fetch does not hold.
+      // schemas never enter the journal or an agent's context). Only a spec
+      // that itself NEEDS auth headers journals inline — same predicate as
+      // fetchSpec, so "we fetched it bare" and "the sidecar can fetch it
+      // bare" cannot drift. A public spec with an auth'd API (the common
+      // split) keeps the reference.
       types:
         this.props.description?.types ??
-        (this.props.config.headers
+        (Object.keys(specFetchHeaders(this.props.config)).length > 0
           ? openApiCapabilityTypeInline(operations, spec, this.props.config.specUrl)
           : openApiCapabilityTypeReference(this.props.config.specUrl)),
       children: Object.fromEntries(
@@ -5593,17 +5595,29 @@ class OpenApiRpcTarget extends IterateRpcRelay<"OpenApiRpc"> {
   }
 }
 
+/**
+ * The connection's headers apply to the SPEC fetch only when the spec lives
+ * on the API's own host — the common split (public spec, auth'd API à la
+ * Stripe) sends nothing to the spec. This predicate decides both how
+ * `fetchSpec` fetches AND whether auto-typing must journal inline: a spec
+ * fetched bare here is equally fetchable by the typechecker's bare fetch,
+ * so it can journal the small `openapi:` reference.
+ */
+function specFetchHeaders(props: OpenApiConnectInput): Record<string, string> {
+  const specHost = new URL(props.specUrl).host;
+  const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
+  return specHost === apiHost ? (props.headers ?? {}) : {};
+}
+
 async function fetchSpec(
   props: OpenApiConnectInput,
   egress: FetchOnly,
 ): Promise<Record<string, unknown>> {
-  const specHost = new URL(props.specUrl).host;
-  const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
   // Headers can contain getSecret({ path: "/secrets/..." }) placeholders.
   // They must enter the project egress pipe, because that is the only place
   // secret material is substituted. Do not read or rewrite them here.
   const response = await egress.fetch(
-    new Request(props.specUrl, { headers: specHost === apiHost ? (props.headers ?? {}) : {} }),
+    new Request(props.specUrl, { headers: specFetchHeaders(props) }),
   );
   if (!response.ok) {
     throw new Error(`Fetching the OpenAPI spec at ${props.specUrl} returned ${response.status}.`);
