@@ -441,11 +441,12 @@ export class StreamEventLog {
       const event = this.getByIdempotencyKey(idempotencyKey);
       return event === undefined ? new Map() : new Map([[idempotencyKey, event]]);
     }
-    const events = new Map<string, StreamEvent>();
+    const events = new Map<string, StreamEvent | undefined>();
     for (let start = 0; start < idempotencyKeys.length; start += MAX_SQL_BINDINGS) {
       const keys = idempotencyKeys.slice(start, start + MAX_SQL_BINDINGS);
-      const rows = this.sql
-        .exec<{ offset: number; idempotencyKey: string; eventJson: string | null }>(
+      let chunkedRows: Array<[number, string]> | undefined;
+      for (const row of this.sql
+        .exec(
           `
             select offset, idempotency_key as idempotencyKey,
               cast(event_json as text) as eventJson
@@ -455,20 +456,30 @@ export class StreamEventLog {
           `,
           ...keys,
         )
-        .toArray();
-      const chunkedOffsets = rows.filter((row) => row.eventJson === null).map((row) => row.offset);
-      const chunkedEvents = this.#readChunkedEvents(chunkedOffsets);
-      for (const row of rows) {
-        const stored =
-          row.eventJson === null
-            ? chunkedEvents.get(row.offset)
-            : { chunks: row.eventJson, byteLength: 0 };
-        if (stored !== undefined) {
-          events.set(row.idempotencyKey, this.#parseEvent(stored.chunks, stored.byteLength));
+        .raw<[number, string, string | null]>()) {
+        const [offset, idempotencyKey, eventJson] = row;
+        if (eventJson === null) {
+          // Establish insertion order now; replacing this placeholder after
+          // chunk hydration keeps the map in durable offset order.
+          events.set(idempotencyKey, undefined);
+          (chunkedRows ??= []).push([offset, idempotencyKey]);
+        } else {
+          events.set(idempotencyKey, this.#parseEvent(eventJson, 0));
+        }
+      }
+      if (chunkedRows !== undefined) {
+        const chunkedEvents = this.#readChunkedEvents(chunkedRows.map(([offset]) => offset));
+        for (const [offset, idempotencyKey] of chunkedRows) {
+          const stored = chunkedEvents.get(offset);
+          if (stored === undefined) {
+            events.delete(idempotencyKey);
+          } else {
+            events.set(idempotencyKey, this.#parseEvent(stored.chunks, stored.byteLength));
+          }
         }
       }
     }
-    return events;
+    return events as Map<string, StreamEvent>;
   }
 
   getRange(args: StreamRangeArgs): StreamEvent[] {

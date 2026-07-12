@@ -480,6 +480,28 @@ describe("StreamEventLog.getRange", () => {
     expect([...hits.values()]).toEqual(committedEvents);
   });
 
+  it("materializes batched idempotency hits from positional raw rows", () => {
+    const db = new DatabaseSync(":memory:");
+    let rawReads = 0;
+    const log = new StreamEventLog(
+      wrapSqlStorage(db, undefined, {
+        onRaw: () => {
+          rawReads += 1;
+        },
+        forbidToArray: true,
+      }),
+      "/tests/stream",
+    );
+    const committed = [
+      { ...event(1, "selected"), idempotencyKey: "first" },
+      { ...event(2, "selected"), idempotencyKey: "second" },
+    ];
+    log.insert(committed);
+
+    expect([...log.getByIdempotencyKeys(["first", "second"]).values()]).toEqual(committed);
+    expect(rawReads).toBe(1);
+  });
+
   it("round-trips UTF-8 whose code point spans event chunk rows", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
     const empty = { ...event(1, "events.iterate.com/test/large"), payload: { text: "" } };
