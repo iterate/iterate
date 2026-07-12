@@ -104,6 +104,7 @@ test("stream getEvents defaults to a bounded page and supports event type filter
       payload: { index, marker },
     })),
   );
+  expect(new Set(appendedEvents.map((event) => event.createdAt)).size).toBe(1);
   const firstAppendedOffset = appendedEvents[0]!.offset;
   const afterOffset = firstAppendedOffset - 1;
   const beforeOffset = appendedEvents.at(-1)!.offset + 1;
@@ -128,6 +129,51 @@ test("stream getEvents defaults to a bounded page and supports event type filter
   expect(selectedEvents).toHaveLength(253);
   expect(selectedEvents.every((event) => event.type === selectedType)).toBe(true);
   await expect(stream.getEvents({ limit: 501 })).rejects.toThrow("getEvents limit");
+});
+
+test("variadic ordinary appends preserve the exact circuit-breaker trip event", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/os-port/variadic-breaker/${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `os-stream-breaker-${RUN_SUFFIX}-${marker}` });
+  using stream = project.streams.get(streamPath);
+
+  const [configured] = await stream.append({
+    type: "events.iterate.com/stream/configured",
+    payload: {
+      config: { circuitBreaker: { burstCapacity: 1, refillRatePerMinute: 1 } },
+    },
+  });
+  const burst = await stream.append(
+    ...Array.from({ length: 3 }, (_, index) => ({
+      type: STREAM_EVENT_TYPE,
+      payload: { index, marker },
+    })),
+  );
+
+  expect(burst.map((event) => event.offset)).toEqual([
+    configured!.offset + 1,
+    configured!.offset + 2,
+    configured!.offset + 3,
+  ]);
+  const trippedAtOffset = burst[1]!.offset;
+  const paused = await stream.getEvent({
+    idempotencyKey: `stream-paused:${trippedAtOffset}`,
+  });
+  expect(paused).toMatchObject({
+    offset: burst[2]!.offset + 1,
+    type: "events.iterate.com/stream/paused",
+    payload: { reason: "circuit breaker tripped: burst rate limit exceeded" },
+  });
+  expect((await stream.runtimeState()).coreProcessorState).toMatchObject({
+    maxOffset: paused!.offset,
+    paused: true,
+  });
 });
 
 test("stream subscribe replays history, tails live appends, and unsubscribes", async () => {
@@ -262,6 +308,12 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
     idempotencyKey: `chunk-${marker}`,
     payload: { marker },
   });
+  const [singleDeduped] = await stream.append({
+    type: ephemeralType,
+    ephemeral: true,
+    idempotencyKey: `chunk-${marker}`,
+    payload: { marker },
+  });
   const [after] = await stream.append({
     type: STREAM_EVENT_TYPE,
     payload: { marker, position: "after" },
@@ -270,15 +322,22 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
   // An ordinary commit: consecutive offsets, self-describing flag, and
   // idempotency dedup works (it is a row like any other).
   expect(chunk!.offset).toBe(before!.offset + 1);
+  expect(singleDeduped).toEqual(chunk);
   expect(after!.offset).toBe(chunk!.offset + 1);
   expect(chunk).toMatchObject({ ephemeral: true, type: ephemeralType });
-  const [deduped] = await stream.append({
-    type: ephemeralType,
-    ephemeral: true,
-    idempotencyKey: `chunk-${marker}`,
-    payload: { marker },
-  });
+  const [mixedBefore, deduped, mixedAfter] = await stream.append(
+    { type: STREAM_EVENT_TYPE, payload: { marker, position: "mixed-before" } },
+    {
+      type: ephemeralType,
+      ephemeral: true,
+      idempotencyKey: `chunk-${marker}`,
+      payload: { marker },
+    },
+    { type: STREAM_EVENT_TYPE, payload: { marker, position: "mixed-after" } },
+  );
   expect(deduped!.offset).toBe(chunk!.offset);
+  expect(mixedBefore!.offset).toBe(after!.offset + 1);
+  expect(mixedAfter!.offset).toBe(mixedBefore!.offset + 1);
 
   // Default reads skip it; includeEphemeral opts in.
   const readWindow = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };

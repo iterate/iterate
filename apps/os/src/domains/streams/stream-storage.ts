@@ -1,11 +1,12 @@
 // The stream's append log — and its delivery cursors — in Durable Object SQLite.
 //
 // Storage is normalized into two tables: `events` is the offset-ordered
-// metadata/index, and `event_chunks` holds the full event JSON as bounded
-// UTF-8 byte rows. Durable Object SQLite caps each string/blob/row cell at
-// ~2 MB; BLOB columns do not raise that ceiling, and SQL-side substr(?)
-// chunking would still require binding the oversized value first, so event
-// JSON is chunked in JS.
+// metadata/index plus common event JSON inline, and `event_chunks` holds
+// oversized event JSON as bounded UTF-8 byte rows. Durable Object
+// SQLite caps each string/blob/row cell at ~2 MB; BLOB columns do not raise
+// that ceiling, and SQL-side substr(?) chunking would still require binding
+// the oversized value first, so JSON above the conservative 512 KiB inline
+// ceiling is chunked in JS.
 //
 // A third table, `subscriptions`, holds the delivery spine's cursor rows (see
 // stream-subscribers.ts). They live in the same SQLite as the log on purpose:
@@ -22,56 +23,147 @@
 
 import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import type { StreamEvent } from "./schemas.ts";
-import { StreamEvent as StreamEventSchema } from "./schemas.ts";
+import { parseStreamStoredJsonEvent } from "./stream-event-validation.ts";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
+const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 3;
+// Durable Object SQL currently permits at most 100 bound parameters per query.
+// Keep generated multi-row inserts at that ceiling and bound pending BLOB
+// memory independently: small events fill the row budget, large events flush
+// after at most two full chunks.
+const MAX_SQL_BINDINGS = 100;
+const MAX_PENDING_INSERT_BYTES = EVENT_CHUNK_SIZE * 2;
+// Retain at most one bounded lookahead when it crosses a metadata batch. This
+// avoids serializing medium/large events twice without ever pinning a second
+// arbitrarily large event next to the batch being written.
+const MAX_CARRIED_INSERT_BYTES = MAX_PENDING_INSERT_BYTES;
+const EVENT_INSERT_ROW_WIDTH = 6;
+const CHUNK_INSERT_ROW_WIDTH = 3;
+const MAX_EVENT_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / EVENT_INSERT_ROW_WIDTH);
+const MAX_CHUNK_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / CHUNK_INSERT_ROW_WIDTH);
+const SKIPPED_ACK_ROW_WIDTH = 3;
+const MAX_SKIPPED_ACK_ROWS = Math.floor((MAX_SQL_BINDINGS - 1) / SKIPPED_ACK_ROW_WIDTH);
+const MAX_UNPERSISTED_SKIP_OFFSETS = 64;
+const EVENT_INSERT_STATEMENTS = createInsertStatements(
+  "insert into events (offset, type, created_at, idempotency_key, ephemeral, event_json) values",
+  EVENT_INSERT_ROW_WIDTH,
+  MAX_EVENT_ROWS_PER_INSERT,
+);
+const CHUNK_INSERT_STATEMENTS = createInsertStatements(
+  "insert into event_chunks (offset, chunk_index, chunk_bytes) values",
+  CHUNK_INSERT_ROW_WIDTH,
+  MAX_CHUNK_ROWS_PER_INSERT,
+);
+const SKIPPED_ACK_STATEMENTS = createSkippedAckStatements(MAX_SKIPPED_ACK_ROWS);
 const textEncoder = new TextEncoder();
 
 /**
  * A committed event paired with its serialized byte length (the exact bytes
- * stored in `event_chunks`). Delivery batching sizes batches against the byte
+ * stored inline or in `event_chunks`). Delivery batching sizes batches against the byte
  * cap with these instead of re-stringifying every event on every read.
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
+export type StreamOffsetBounds = { highestOffset: number; highestAssignedOffset: number };
+type EventChunks = ArrayBuffer | ArrayBuffer[];
+type StreamRangeArgs = {
+  afterOffset: number;
+  beforeOffset: number;
+  eventTypes?: readonly string[];
+  limit: number;
+  /** Include ephemeral rows. Default false — ephemeral is opt-in on every range read. */
+  includeEphemeral?: boolean;
+};
+type TransactionRunner = { transactionSync<T>(callback: () => T): T };
+
+const initializedStreamStorage = new WeakSet<SqlStorage>();
+
+function readStreamStorageSchemaVersion(sqlStorage: SqlStorage): number {
+  try {
+    return (
+      sqlStorage
+        .exec<{ version: number }>("select version from stream_storage_schema where singleton = 1")
+        .toArray()[0]?.version ?? 0
+    );
+  } catch {
+    return 0;
+  }
+}
+
+function initializeStreamStorage(sqlStorage: SqlStorage): void {
+  if (initializedStreamStorage.has(sqlStorage)) return;
+  const schemaVersion = readStreamStorageSchemaVersion(sqlStorage);
+  if (schemaVersion === CURRENT_STREAM_STORAGE_SCHEMA_VERSION) {
+    initializedStreamStorage.add(sqlStorage);
+    return;
+  }
+  if (schemaVersion !== 0) {
+    throw new Error(`Unsupported stream storage schema version: ${schemaVersion}`);
+  }
+  sqlStorage.exec(`
+    -- Stream-owned append log metadata. Bounded JSON is inline; oversized JSON is chunked.
+    -- offset is the replay cursor; the partial index below owns keyed dedup/lookups.
+    -- ephemeral marks second-class rows: range reads exclude them unless asked, and
+    -- the stream may evict them in the future. Eviction keeps offsets consumed
+    -- in stream_storage_schema but forgets their idempotency keys.
+    create table events (
+      offset integer primary key,
+      type text not null,
+      created_at text not null,
+      idempotency_key text,
+      ephemeral integer not null default 0,
+      event_json blob
+    )
+  `);
+  sqlStorage.exec(`
+    -- Most facts have no idempotency key. A partial index preserves exact
+    -- uniqueness and point lookups for keyed facts without writing a null
+    -- index entry for every ordinary append.
+    create unique index events_idempotency_key
+    on events(idempotency_key)
+    where idempotency_key is not null
+  `);
+  sqlStorage.exec(`
+    -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
+    -- primary key is the lookup index used by point reads and range replay.
+    create table event_chunks (
+      offset integer not null,
+      chunk_index integer not null,
+      chunk_bytes blob not null,
+      primary key (offset, chunk_index),
+      foreign key (offset) references events(offset) on delete cascade
+    ) without rowid
+  `);
+  sqlStorage.exec(`
+    create table subscriptions (
+      subscription_key text primary key,
+      acked_offset integer not null,
+      attempt integer not null default 0,
+      next_attempt_at integer,
+      last_error text,
+      epoch integer not null default 0,
+      updated_at text not null
+    )
+  `);
+  sqlStorage.exec(`
+    create table stream_storage_schema (
+      singleton integer primary key check (singleton = 1),
+      version integer not null,
+      evicted_offset_floor integer not null
+    )
+  `);
+  sqlStorage.exec(
+    "insert into stream_storage_schema (singleton, version, evicted_offset_floor) values (1, ?, 0)",
+    CURRENT_STREAM_STORAGE_SCHEMA_VERSION,
+  );
+  initializedStreamStorage.add(sqlStorage);
+}
 
 export class StreamEventLog {
   constructor(
     readonly sql: SqlStorage,
-    readonly path: string,
+    _path: string,
   ) {
-    this.sql.exec(`
-      -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
-      -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
-      -- ephemeral marks second-class rows: range reads exclude them unless asked, and
-      -- the stream may evict them in the future. Eviction keeps offsets consumed
-      -- (highestAssignedOffset reads AUTOINCREMENT's sqlite_sequence, which survives
-      -- row deletion) but forgets their idempotency keys.
-      create table if not exists events (
-        offset integer primary key autoincrement,
-        type text not null,
-        created_at text not null,
-        idempotency_key text unique,
-        ephemeral integer not null default 0
-      )
-    `);
-    // Live streams predate the ephemeral column; adopt their table in place.
-    // Synchronous and cheap (one pragma per constructor), same posture as the
-    // create-if-not-exists DDL above.
-    const eventColumns = this.sql.exec<{ name: string }>("pragma table_info(events)").toArray();
-    if (!eventColumns.some((column) => column.name === "ephemeral")) {
-      this.sql.exec("alter table events add column ephemeral integer not null default 0");
-    }
-    this.sql.exec(`
-      -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
-      -- primary key is the lookup index used by point reads and range replay.
-      create table if not exists event_chunks (
-        offset integer not null,
-        chunk_index integer not null,
-        chunk_bytes blob not null,
-        primary key (offset, chunk_index),
-        foreign key (offset) references events(offset) on delete cascade
-      ) without rowid
-    `);
+    initializeStreamStorage(this.sql);
   }
 
   highestOffset(): number {
@@ -83,115 +175,344 @@ export class StreamEventLog {
   }
 
   /**
-   * The highest offset ever INSERTED, even if its row was since deleted —
-   * AUTOINCREMENT's sqlite_sequence row is updated by every insert (explicit
-   * offsets included) and survives row deletion. This is the offset
-   * allocator's recovery floor: a future ephemeral-row eviction sweep may
-   * delete the highest row, and reseeding the allocator from max(offset)
-   * would then reissue offsets that live subscribers already saw.
+   * The highest surviving or explicitly evicted offset. Eviction advances a
+   * durable floor in the same transaction that removes rows; ordinary appends
+   * avoid an allocator-metadata write because their rows already carry the
+   * recovery floor. This prevents a rebuild from reissuing an offset that live
+   * subscribers saw before its ephemeral row was evicted.
    */
   highestAssignedOffset(): number {
-    const sequence =
-      this.sql
-        .exec<{ seq: number | null }>("select seq from sqlite_sequence where name = 'events'")
-        .toArray()[0]?.seq ?? 0;
-    return Math.max(this.highestOffset(), sequence);
+    return this.offsetBounds().highestAssignedOffset;
+  }
+
+  /** One bootstrap snapshot for replay head and never-reuse allocation floor. */
+  offsetBounds(): StreamOffsetBounds {
+    return this.sql
+      .exec<StreamOffsetBounds>(`
+        with event_bounds as (
+          select coalesce(max(offset), 0) as highestOffset
+          from events
+        )
+        select highestOffset,
+               max(
+                 highestOffset,
+                 (select evicted_offset_floor
+                  from stream_storage_schema
+                  where singleton = 1)
+               ) as highestAssignedOffset
+        from event_bounds
+      `)
+      .toArray()[0]!;
+  }
+
+  /**
+   * Evict second-class rows up to an inclusive offset without making their
+   * offsets reusable. Floor advancement, chunk cleanup, and row deletion are
+   * one transaction so interruption leaves either the complete old or new
+   * state. Direct DELETEs are unsupported because they bypass this invariant.
+   */
+  evictEphemeralThrough(maxOffsetInclusive: number, transactionRunner: TransactionRunner): void {
+    if (!Number.isSafeInteger(maxOffsetInclusive) || maxOffsetInclusive < 0) {
+      throw new Error(`Invalid ephemeral eviction offset: ${maxOffsetInclusive}`);
+    }
+    transactionRunner.transactionSync(() => {
+      this.sql.exec(
+        `update stream_storage_schema
+         set evicted_offset_floor = max(
+           evicted_offset_floor,
+           coalesce(
+             (select max(offset)
+              from events
+              where ephemeral = 1 and offset <= ?),
+             0
+           )
+         )
+         where singleton = 1`,
+        maxOffsetInclusive,
+      );
+      // Do not depend on a connection-level foreign_keys pragma for cleanup.
+      this.sql.exec(
+        `delete from event_chunks
+         where offset in (
+           select offset from events where ephemeral = 1 and offset <= ?
+         )`,
+        maxOffsetInclusive,
+      );
+      this.sql.exec("delete from events where ephemeral = 1 and offset <= ?", maxOffsetInclusive);
+    });
   }
 
   /**
    * Returns each event's serialized byte length (the exact bytes written to
-   * `event_chunks`), so the commit path can hand delivery fan-out a sized
+   * SQLite), so the commit path can hand delivery fan-out a sized
    * fresh tail without anyone re-stringifying what was just serialized here.
    */
-  insert(events: readonly StreamEvent[]): number[] {
-    const byteLengths: number[] = [];
-    for (const event of events) {
-      this.sql.exec(
-        "insert into events (offset, type, created_at, idempotency_key, ephemeral) values (?, ?, ?, ?, ?)",
-        event.offset,
-        event.type,
-        event.createdAt,
-        event.idempotencyKey ?? null,
-        event.ephemeral === true ? 1 : 0,
-      );
-      const rawJsonBytes = textEncoder.encode(JSON.stringify(event));
-      byteLengths.push(rawJsonBytes.byteLength);
-      for (const [chunkIndex, chunk] of chunkBytes(rawJsonBytes, EVENT_CHUNK_SIZE)) {
+  insert(
+    events: readonly StreamEvent[],
+    transactionRunner?: TransactionRunner,
+  ): SizedStreamEvent[] {
+    let carriedSerialization: { eventIndex: number; bytes: Uint8Array } | undefined;
+    let serializedPrefix: Uint8Array[] | undefined;
+    if (events.length === 1) {
+      const event = events[0]!;
+      const bytes = textEncoder.encode(JSON.stringify(event));
+      if (bytes.byteLength <= EVENT_CHUNK_SIZE) {
+        // This is the entire commit in one atomic SQLite statement. An
+        // explicit transaction would add begin/commit work without widening
+        // the failure boundary; multi-statement paths below still use it.
         this.sql.exec(
-          "insert into event_chunks (offset, chunk_index, chunk_bytes) values (?, ?, ?)",
+          EVENT_INSERT_STATEMENTS[1]!,
           event.offset,
-          chunkIndex,
-          chunk,
+          event.type,
+          event.createdAt,
+          event.idempotencyKey ?? null,
+          event.ephemeral === true ? 1 : 0,
+          exactArrayBuffer(bytes),
         );
+        return [{ event, byteLength: bytes.byteLength }];
       }
+      // Preserve the large-event path's single-serialization guarantee.
+      carriedSerialization = { eventIndex: 0, bytes };
+    } else if (events.length <= MAX_EVENT_ROWS_PER_INSERT) {
+      const candidate = [] as Uint8Array[];
+      let candidateByteLength = 0;
+      for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+        const bytes = textEncoder.encode(JSON.stringify(events[eventIndex]!));
+        if (
+          bytes.byteLength > EVENT_CHUNK_SIZE ||
+          candidateByteLength + bytes.byteLength > MAX_PENDING_INSERT_BYTES
+        ) {
+          if (bytes.byteLength <= MAX_CARRIED_INSERT_BYTES) {
+            carriedSerialization = { eventIndex, bytes };
+          }
+          break;
+        }
+        candidate.push(bytes);
+        candidateByteLength += bytes.byteLength;
+      }
+
+      if (candidate.length === events.length) {
+        const eventBindings: SqlStorageValue[] = [];
+        const sizedEvents: SizedStreamEvent[] = [];
+        for (let index = 0; index < events.length; index += 1) {
+          const event = events[index]!;
+          const bytes = candidate[index]!;
+          eventBindings.push(
+            event.offset,
+            event.type,
+            event.createdAt,
+            event.idempotencyKey ?? null,
+            event.ephemeral === true ? 1 : 0,
+            exactArrayBuffer(bytes),
+          );
+          sizedEvents.push({ event, byteLength: bytes.byteLength });
+        }
+        this.sql.exec(EVENT_INSERT_STATEMENTS[events.length]!, ...eventBindings);
+        return sizedEvents;
+      }
+      if (candidate.length > 0) serializedPrefix = candidate;
     }
-    return byteLengths;
+
+    const insertBatched = () => {
+      const sizedEvents: SizedStreamEvent[] = [];
+      let batchStart = 0;
+
+      while (batchStart < events.length) {
+        const serializedEvents: Uint8Array[] = [];
+        const eventBindings: SqlStorageValue[] = [];
+        let serializedByteLength = 0;
+        let batchEnd = batchStart;
+        let hasChunkedEvents = false;
+
+        while (batchEnd < events.length && serializedEvents.length < MAX_EVENT_ROWS_PER_INSERT) {
+          const event = events[batchEnd]!;
+          const carried =
+            carriedSerialization?.eventIndex === batchEnd ? carriedSerialization : null;
+          const bytes =
+            serializedPrefix?.[batchEnd] ??
+            carried?.bytes ??
+            textEncoder.encode(JSON.stringify(event));
+          if (carried !== null) carriedSerialization = undefined;
+          if (
+            serializedEvents.length > 0 &&
+            serializedByteLength + bytes.byteLength > MAX_PENDING_INSERT_BYTES
+          ) {
+            if (bytes.byteLength <= MAX_CARRIED_INSERT_BYTES) {
+              carriedSerialization = { eventIndex: batchEnd, bytes };
+            }
+            break;
+          }
+          serializedEvents.push(bytes);
+          eventBindings.push(
+            event.offset,
+            event.type,
+            event.createdAt,
+            event.idempotencyKey ?? null,
+            event.ephemeral === true ? 1 : 0,
+            bytes.byteLength <= EVENT_CHUNK_SIZE ? exactArrayBuffer(bytes) : null,
+          );
+          if (bytes.byteLength > EVENT_CHUNK_SIZE) hasChunkedEvents = true;
+          sizedEvents.push({ event, byteLength: bytes.byteLength });
+          serializedByteLength += bytes.byteLength;
+          batchEnd += 1;
+        }
+
+        this.sql.exec(EVENT_INSERT_STATEMENTS[serializedEvents.length]!, ...eventBindings);
+
+        if (!hasChunkedEvents) {
+          batchStart = batchEnd;
+          continue;
+        }
+
+        let chunkBindings: SqlStorageValue[] = [];
+        let chunkRows = 0;
+        let chunkByteLength = 0;
+        const flushChunks = () => {
+          if (chunkRows === 0) return;
+          this.sql.exec(CHUNK_INSERT_STATEMENTS[chunkRows]!, ...chunkBindings);
+          chunkBindings = [];
+          chunkRows = 0;
+          chunkByteLength = 0;
+        };
+
+        for (let index = 0; index < serializedEvents.length; index += 1) {
+          const rawJsonBytes = serializedEvents[index]!;
+          const event = events[batchStart + index]!;
+          if (rawJsonBytes.byteLength <= EVENT_CHUNK_SIZE) continue;
+
+          let chunkIndex = 0;
+          for (let start = 0; start < rawJsonBytes.byteLength; start += EVENT_CHUNK_SIZE) {
+            const end = Math.min(start + EVENT_CHUNK_SIZE, rawJsonBytes.byteLength);
+            const chunk = new ArrayBuffer(end - start);
+            new Uint8Array(chunk).set(rawJsonBytes.subarray(start, end));
+            if (
+              chunkRows === MAX_CHUNK_ROWS_PER_INSERT ||
+              (chunkRows > 0 && chunkByteLength + chunk.byteLength > MAX_PENDING_INSERT_BYTES)
+            ) {
+              flushChunks();
+            }
+            chunkBindings.push(event.offset, chunkIndex, chunk);
+            chunkRows += 1;
+            chunkByteLength += chunk.byteLength;
+            chunkIndex += 1;
+          }
+        }
+        flushChunks();
+        batchStart = batchEnd;
+      }
+      return sizedEvents;
+    };
+
+    return transactionRunner === undefined
+      ? insertBatched()
+      : transactionRunner.transactionSync(insertBatched);
   }
 
   getByOffset(offset: number): StreamEvent | undefined {
     const row = this.sql
-      .exec<{ offset: number }>("select offset from events where offset = ? limit 1", offset)
+      .exec<{ eventJson: string | null }>(
+        "select cast(event_json as text) as eventJson from events where offset = ?",
+        offset,
+      )
       .toArray()[0];
-    return row === undefined ? undefined : this.#readEventFromChunks(row.offset);
+    if (row === undefined) return undefined;
+    if (row.eventJson !== null) return this.#parseEvent(row.eventJson, 0);
+    const chunked = this.#readChunkedEvents([offset]).get(offset);
+    return chunked === undefined ? undefined : this.#parseEvent(chunked.chunks, chunked.byteLength);
   }
 
   getByIdempotencyKey(idempotencyKey: string): StreamEvent | undefined {
     const row = this.sql
-      .exec<{ offset: number }>(
-        "select offset from events where idempotency_key = ? limit 1",
+      .exec<{ offset: number; eventJson: string | null }>(
+        "select offset, cast(event_json as text) as eventJson from events where idempotency_key = ?",
         idempotencyKey,
       )
       .toArray()[0];
-    return row === undefined ? undefined : this.#readEventFromChunks(row.offset);
-  }
-
-  getRange(args: {
-    afterOffset: number;
-    beforeOffset: number;
-    eventTypes?: readonly string[];
-    limit: number;
-    /** Include ephemeral rows. Default false — ephemeral is opt-in on every range read. */
-    includeEphemeral?: boolean;
-  }): StreamEvent[] {
-    return this.getRangeSized(args).map((sized) => sized.event);
+    if (row === undefined) return undefined;
+    if (row.eventJson !== null) return this.#parseEvent(row.eventJson, 0);
+    const chunked = this.#readChunkedEvents([row.offset]).get(row.offset);
+    return chunked === undefined ? undefined : this.#parseEvent(chunked.chunks, chunked.byteLength);
   }
 
   /**
-   * `getRange` plus each event's serialized byte length, summed from the
-   * chunk rows already in hand — so delivery batching can enforce its byte
-   * cap without re-stringifying every event it just parsed.
+   * Resolves an append batch's durable idempotency hits with one query per 100
+   * keys. Missing keys return no rows; common hits parse directly from the
+   * metadata rows and only oversized hits need a chunk query.
    */
-  getRangeSized(args: {
-    afterOffset: number;
-    beforeOffset: number;
-    eventTypes?: readonly string[];
-    limit: number;
-    includeEphemeral?: boolean;
-  }): SizedStreamEvent[] {
+  getByIdempotencyKeys(idempotencyKeys: readonly string[]): Map<string, StreamEvent> {
+    if (idempotencyKeys.length === 1) {
+      const idempotencyKey = idempotencyKeys[0]!;
+      const event = this.getByIdempotencyKey(idempotencyKey);
+      return event === undefined ? new Map() : new Map([[idempotencyKey, event]]);
+    }
+    const events = new Map<string, StreamEvent>();
+    for (let start = 0; start < idempotencyKeys.length; start += MAX_SQL_BINDINGS) {
+      const keys = idempotencyKeys.slice(start, start + MAX_SQL_BINDINGS);
+      const rows = this.sql
+        .exec<{ offset: number; idempotencyKey: string; eventJson: string | null }>(
+          `
+            select offset, idempotency_key as idempotencyKey,
+              cast(event_json as text) as eventJson
+            from events
+            where idempotency_key in (${keys.map(() => "?").join(", ")})
+            order by offset asc
+          `,
+          ...keys,
+        )
+        .toArray();
+      const chunkedOffsets = rows.filter((row) => row.eventJson === null).map((row) => row.offset);
+      const chunkedEvents = this.#readChunkedEvents(chunkedOffsets);
+      for (const row of rows) {
+        const stored =
+          row.eventJson === null
+            ? chunkedEvents.get(row.offset)
+            : { chunks: row.eventJson, byteLength: 0 };
+        if (stored !== undefined) {
+          events.set(row.idempotencyKey, this.#parseEvent(stored.chunks, stored.byteLength));
+        }
+      }
+    }
+    return events;
+  }
+
+  getRange(args: StreamRangeArgs): StreamEvent[] {
+    return this.#readRange(args, false);
+  }
+
+  /**
+   * `getRange` plus each event's stored byte length, so delivery batching can
+   * enforce its byte cap without re-stringifying every event it just parsed.
+   */
+  getRangeSized(args: StreamRangeArgs): SizedStreamEvent[] {
+    return this.#readRange(args, true);
+  }
+
+  #readRange(args: StreamRangeArgs, includeByteLength: false): StreamEvent[];
+  #readRange(args: StreamRangeArgs, includeByteLength: true): SizedStreamEvent[];
+  #readRange(
+    args: StreamRangeArgs,
+    includeByteLength: boolean,
+  ): Array<SizedStreamEvent | StreamEvent> {
     if (args.eventTypes?.length === 0) return [];
     const eventTypes =
       args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
     const eventTypeClause =
       eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
     const ephemeralClause = args.includeEphemeral === true ? "" : "and ephemeral = 0";
-    // One indexed metadata subquery picks the replay window; the join then streams each
-    // event's chunks in primary-key order (offset, chunk_index).
-    const chunks = this.sql
-      .exec<{ offset: number; chunkBytes: ArrayBuffer }>(
+    // Common rows are complete in this indexed metadata scan. Oversized rows
+    // carry null and are hydrated from bounded chunks below.
+    const byteLengthColumn = includeByteLength ? ", length(event_json) as inlineByteLength" : "";
+    const rows = this.sql
+      .exec<{ offset: number; eventJson: string | null; inlineByteLength?: number | null }>(
         `
-          select selected.offset as offset, event_chunks.chunk_bytes as chunkBytes
-          from (
-            select offset
-            from events
-            where offset > ?
-              and offset < ?
-              ${ephemeralClause}
-              ${eventTypeClause}
-            order by offset asc
-            limit ?
-          ) selected
-          join event_chunks on event_chunks.offset = selected.offset
-          order by selected.offset asc, event_chunks.chunk_index asc
+          select offset, cast(event_json as text) as eventJson${byteLengthColumn}
+          from events
+          where offset > ?
+            and offset < ?
+            ${ephemeralClause}
+            ${eventTypeClause}
+          order by offset asc
+          limit ?
         `,
         args.afterOffset,
         args.beforeOffset,
@@ -199,45 +520,62 @@ export class StreamEventLog {
         args.limit,
       )
       .toArray();
-    const chunksByOffset = new Map<number, ArrayBuffer[]>();
-    for (const chunk of chunks) {
-      const eventChunks = chunksByOffset.get(chunk.offset);
-      if (eventChunks === undefined) {
-        chunksByOffset.set(chunk.offset, [chunk.chunkBytes]);
-      } else {
-        eventChunks.push(chunk.chunkBytes);
+    const chunkedOffsets = rows.filter((row) => row.eventJson === null).map((row) => row.offset);
+    const chunkedEvents = this.#readChunkedEvents(chunkedOffsets);
+    const events: Array<SizedStreamEvent | StreamEvent> = [];
+    for (const row of rows) {
+      const stored =
+        row.eventJson === null
+          ? chunkedEvents.get(row.offset)
+          : { chunks: row.eventJson, byteLength: row.inlineByteLength ?? 0 };
+      if (stored !== undefined) {
+        const event = this.#parseEvent(stored.chunks, stored.byteLength);
+        events.push(includeByteLength ? { event, byteLength: stored.byteLength } : event);
       }
     }
-    return [...chunksByOffset.values()].map((eventChunks) => ({
-      event: this.#parseEvent(eventChunks),
-      byteLength: eventChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0),
-    }));
+    return events;
   }
 
-  #readEventFromChunks(offset: number): StreamEvent {
-    // Do not use group_concat here: it would recreate a multi-MiB SQLite result cell.
-    // Returning bounded chunk rows and joining in JS keeps SQLite row sizes predictable.
-    const chunks = this.sql
-      .exec<{ chunkBytes: ArrayBuffer }>(
-        "select chunk_bytes as chunkBytes from event_chunks where offset = ? order by chunk_index asc",
-        offset,
-      )
-      .toArray()
-      .map((row) => row.chunkBytes);
-    return this.#parseEvent(chunks);
+  #readChunkedEvents(
+    offsets: readonly number[],
+  ): Map<number, { chunks: EventChunks; byteLength: number }> {
+    const events = new Map<number, { chunks: EventChunks; byteLength: number }>();
+    for (let start = 0; start < offsets.length; start += MAX_SQL_BINDINGS) {
+      const batch = offsets.slice(start, start + MAX_SQL_BINDINGS);
+      for (const row of this.sql.exec<{ offset: number; chunkBytes: ArrayBuffer }>(
+        `
+          select offset, chunk_bytes as chunkBytes
+          from event_chunks
+          where offset in (${batch.map(() => "?").join(", ")})
+          order by offset asc, chunk_index asc
+        `,
+        ...batch,
+      )) {
+        const current = events.get(row.offset);
+        if (current === undefined) {
+          events.set(row.offset, { chunks: row.chunkBytes, byteLength: row.chunkBytes.byteLength });
+        } else {
+          current.chunks = appendEventChunk(current.chunks, row.chunkBytes);
+          current.byteLength += row.chunkBytes.byteLength;
+        }
+      }
+    }
+    return events;
   }
 
-  #parseEvent(chunks: ArrayBuffer[]): StreamEvent {
-    const parsed = JSON.parse(decodeChunks(chunks)) as unknown;
-    return StreamEventSchema.parse(addLegacyEventPath(parsed, this.path));
+  #parseEvent(storedJson: string | EventChunks, byteLength: number): StreamEvent {
+    const json = typeof storedJson === "string" ? storedJson : decodeChunks(storedJson, byteLength);
+    const parsed = JSON.parse(json) as unknown;
+    return parseStreamStoredJsonEvent(parsed);
   }
 }
 
 /**
  * One durable subscription's delivery cursor row. `ackedOffset` is exclusive
  * (delivery resumes at +1). For push subscriptions it is the AUTHORITATIVE
- * cursor: it only advances when the receiver's awaited call resolved. For wake
- * subscriptions it is an OBSERVATIONAL watermark: the checkpoint the
+ * cursor: delivery offsets advance only when the receiver's awaited call
+ * resolved; no-side-effect skips may be durably checkpointed up to 64 offsets
+ * behind. For wake subscriptions it is an OBSERVATIONAL watermark: the checkpoint the
  * subscriber reported on the last successful poke, used only for poke
  * coalescing and lag display — the subscriber's own `{offset, state}` snapshot
  * is the truth, and a lost or stale row costs one redundant poke, nothing
@@ -268,8 +606,8 @@ export type SubscriptionCursorRow = {
 export type SubscriptionCursorStore = {
   get(subscriptionKey: string): SubscriptionCursorRow | undefined;
   list(): SubscriptionCursorRow[];
-  /** Create the row if absent (configure); never resets an existing cursor. */
-  ensure(subscriptionKey: string, ackedOffset: number): void;
+  /** Create if absent without resetting; return an immutable caller snapshot. */
+  ensure(subscriptionKey: string, ackedOffset: number): SubscriptionCursorRow;
   /**
    * Successful delivery: advance the cursor (monotonic), clear failure state.
    * With `epoch`, the ack is FENCED: it no-ops unless the row's epoch still
@@ -277,6 +615,14 @@ export type SubscriptionCursorStore = {
    * the delivery was in flight wins over the delivery's ack.
    */
   ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void;
+  /**
+   * Advance across a batch that produced no receiver side effect (selector
+   * miss / ephemeral-only). The in-memory cursor moves immediately; durable
+   * persistence may lag by a bounded window because replaying a skip is safe.
+   */
+  skip(subscriptionKey: string, ackedOffset: number, epoch: number): void;
+  /** Persist pending skip-only cursor progress, when due or unconditionally. */
+  flushSkipped(force?: boolean): void;
   /**
    * Advance the wake lane's observational watermark (monotonic) after a poke
    * whose checkpoint did NOT progress. Clears the retry schedule (the poke
@@ -301,7 +647,7 @@ export type SubscriptionCursorStore = {
 /** SQLite-backed {@link SubscriptionCursorStore}, sharing the stream's own database. */
 export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   static db = defineConfig({
-    // The desired schema now (`sqlfu draft` diffs new migrations against it).
+    // Current schema used by sqlfu's generated query types.
     definitions: sql`
       create table subscriptions (
         subscription_key text primary key,
@@ -313,54 +659,6 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         updated_at text not null
       );
     `,
-    migrations: [
-      {
-        // The #1784 table, verbatim. `if not exists` is load-bearing: live DOs
-        // created their table from raw constructor DDL before sqlfu owned it,
-        // so this migration adopts an existing pre-epoch table as readily as
-        // it creates a fresh one.
-        name: "20260709000001_create_subscriptions",
-        content: sql`
-          create table if not exists subscriptions (
-            subscription_key text primary key,
-            acked_offset integer not null,
-            attempt integer not null default 0,
-            next_attempt_at integer,
-            last_error text,
-            updated_at text not null
-          );
-        `,
-      },
-      {
-        // `epoch` postdates the table (#1784 shipped without it, #1792 queries
-        // it). This is a rebuild rather than `alter table add column` because
-        // the migration meets THREE live shapes with empty sqlfu history: no
-        // table (migration 1 just created it), the pre-epoch #1784 table, and
-        // the with-epoch table #1792-era constructors created — a plain ALTER
-        // would throw "duplicate column name" on the last one. Rows and
-        // cursor progress are preserved; epoch restarts at 0 (the fence value
-        // fresh #1784 rows had). Resetting a with-epoch table's fences is
-        // safe here: this runs in the DO constructor, and no in-flight
-        // delivery (the only reader of a stale epoch) survives a DO restart.
-        name: "20260709000002_add_epoch",
-        content: sql`
-          alter table subscriptions rename to subscriptions_pre_epoch;
-          create table subscriptions (
-            subscription_key text primary key,
-            acked_offset integer not null,
-            attempt integer not null default 0,
-            next_attempt_at integer,
-            last_error text,
-            epoch integer not null default 0,
-            updated_at text not null
-          );
-          insert into subscriptions (subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at)
-          select subscription_key, acked_offset, attempt, next_attempt_at, last_error, updated_at
-          from subscriptions_pre_epoch;
-          drop table subscriptions_pre_epoch;
-        `,
-      },
-    ],
     queries: {
       get: sql.nullableOne<{
         parameters: { subscriptionKey: string };
@@ -390,7 +688,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: { subscriptionKey: string; ackedOffset: number; updatedAt: string };
       }>`
         update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
+        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
         where subscription_key = :subscriptionKey
       `,
       ackFenced: sql.run<{
@@ -402,7 +700,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
+        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null, updated_at = :updatedAt
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       advanceWatermark: sql.run<{
@@ -452,15 +750,17 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   #db: ReturnType<
     typeof SqliteSubscriptionCursorStore.db<ReturnType<typeof createDurableObjectClient>>
   >;
+  readonly #sql: SqlStorage;
+  #cachedRows: Map<string, SubscriptionCursorRow> | undefined;
+  readonly #pendingSkipped = new Map<
+    string,
+    { ackedOffset: number; epoch: number; persistedOffset: number }
+  >();
 
   constructor(sql: SqlStorage) {
-    // {sql} without transactionSync: this store only holds SqlStorage. That
-    // forgoes sqlfu's per-migration transaction, which is fine here — the
-    // constructor is await-free, and Durable Object SQLite commits all writes
-    // in one event-loop task atomically, so a crash mid-migration cannot
-    // persist a half-applied state.
+    this.#sql = sql;
+    initializeStreamStorage(sql);
     this.#db = SqliteSubscriptionCursorStore.db(createDurableObjectClient({ sql }));
-    this.#db.migrate();
   }
 
   #nextEpoch(): number {
@@ -468,73 +768,191 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     return this.#lastEpoch;
   }
 
+  #rows(): Map<string, SubscriptionCursorRow> {
+    if (this.#cachedRows !== undefined) return this.#cachedRows;
+    const rows = new Map<string, SubscriptionCursorRow>();
+    for (const record of this.#db.list()) {
+      const row = rowFromRecord(record);
+      rows.set(row.subscriptionKey, row);
+      this.#lastEpoch = Math.max(this.#lastEpoch, row.epoch);
+    }
+    this.#cachedRows = rows;
+    return rows;
+  }
+
   get(subscriptionKey: string): SubscriptionCursorRow | undefined {
-    const record = this.#db.get({ subscriptionKey });
-    return record ? rowFromRecord(record) : undefined;
+    const row = this.#rows().get(subscriptionKey);
+    return row === undefined ? undefined : { ...row };
   }
 
   list(): SubscriptionCursorRow[] {
-    return this.#db.list().map(rowFromRecord);
+    return [...this.#rows().values()].map((row) => ({ ...row }));
   }
 
-  ensure(subscriptionKey: string, ackedOffset: number): void {
+  ensure(subscriptionKey: string, ackedOffset: number): SubscriptionCursorRow {
+    const rows = this.#rows();
+    const existing = rows.get(subscriptionKey);
+    if (existing !== undefined) return { ...existing };
+    const epoch = this.#nextEpoch();
     this.#db.ensure({
       subscriptionKey,
       ackedOffset,
       // Fresh rows get a fresh epoch, so an ack fenced on a DELETED row's
       // epoch cannot land on a same-key recreation (the remove+recreate
       // deliver:"all" clobber).
-      epoch: this.#nextEpoch(),
+      epoch,
       updatedAt: new Date().toISOString(),
     });
+    const row: SubscriptionCursorRow = {
+      subscriptionKey,
+      ackedOffset,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+      epoch,
+    };
+    rows.set(subscriptionKey, row);
+    return { ...row };
   }
 
   ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
-    const params = { subscriptionKey, ackedOffset, updatedAt: new Date().toISOString() };
+    const row = this.#rows().get(subscriptionKey);
+    if (row === undefined || (epoch !== undefined && row.epoch !== epoch)) return;
+    // The cursor cache is write-through and this method is synchronous, so it
+    // already owns the monotonic maximum; avoid recomputing it in SQLite.
+    const nextOffset = Math.max(row.ackedOffset, ackedOffset);
+    const params = {
+      subscriptionKey,
+      ackedOffset: nextOffset,
+      updatedAt: new Date().toISOString(),
+    };
     if (epoch === undefined) {
       this.#db.ack(params);
     } else {
       this.#db.ackFenced({ ...params, epoch });
     }
+    this.#pendingSkipped.delete(subscriptionKey);
+    row.ackedOffset = nextOffset;
+    row.attempt = 0;
+    row.nextAttemptAt = null;
+    row.lastError = null;
+  }
+
+  skip(subscriptionKey: string, ackedOffset: number, epoch: number): void {
+    const row = this.#rows().get(subscriptionKey);
+    if (row === undefined || row.epoch !== epoch || ackedOffset <= row.ackedOffset) return;
+    const clearsFailure = row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null;
+    const pending = this.#pendingSkipped.get(subscriptionKey);
+    this.#pendingSkipped.set(subscriptionKey, {
+      ackedOffset,
+      epoch,
+      persistedOffset: pending?.persistedOffset ?? row.ackedOffset,
+    });
+    row.ackedOffset = ackedOffset;
+    row.attempt = 0;
+    row.nextAttemptAt = null;
+    row.lastError = null;
+    // A due retry that found only skips consumed the persisted backoff. Do not
+    // leave its old alarm state behind on a quiet stream.
+    if (clearsFailure) this.flushSkipped(true);
+  }
+
+  flushSkipped(force = false): void {
+    if (this.#pendingSkipped.size === 0) return;
+    if (!force) {
+      let checkpointDue = false;
+      for (const pending of this.#pendingSkipped.values()) {
+        if (pending.ackedOffset - pending.persistedOffset >= MAX_UNPERSISTED_SKIP_OFFSETS) {
+          checkpointDue = true;
+          break;
+        }
+      }
+      if (!checkpointDue) return;
+    }
+
+    const pending = [...this.#pendingSkipped.entries()];
+    const updatedAt = new Date().toISOString();
+    for (let start = 0; start < pending.length; start += MAX_SKIPPED_ACK_ROWS) {
+      const batch = pending.slice(start, start + MAX_SKIPPED_ACK_ROWS);
+      const bindings: SqlStorageValue[] = [];
+      for (const [subscriptionKey, row] of batch) {
+        bindings.push(subscriptionKey, row.ackedOffset, row.epoch);
+      }
+      bindings.push(updatedAt);
+      this.#sql.exec(SKIPPED_ACK_STATEMENTS[batch.length]!, ...bindings);
+      for (const [subscriptionKey] of batch) this.#pendingSkipped.delete(subscriptionKey);
+    }
   }
 
   advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
+    const row = this.#rows().get(subscriptionKey);
+    if (row === undefined) return;
+    const nextOffset = Math.max(row.ackedOffset, ackedOffset);
     this.#db.advanceWatermark({
       subscriptionKey,
-      ackedOffset,
+      ackedOffset: nextOffset,
       updatedAt: new Date().toISOString(),
     });
+    this.#pendingSkipped.delete(subscriptionKey);
+    row.ackedOffset = nextOffset;
+    row.nextAttemptAt = null;
   }
 
   nack(
     subscriptionKey: string,
     args: { attempt: number; nextAttemptAt: number; error: string },
   ): void {
+    const row = this.#rows().get(subscriptionKey);
+    if (row === undefined) return;
+    if (this.#pendingSkipped.has(subscriptionKey)) this.flushSkipped(true);
+    const error = args.error.slice(0, 2_000);
     this.#db.nack({
       subscriptionKey,
       attempt: args.attempt,
       nextAttemptAt: args.nextAttemptAt,
       // Bound the stored error so a pathological message cannot bloat the row.
-      error: args.error.slice(0, 2_000),
+      error,
       updatedAt: new Date().toISOString(),
     });
+    row.attempt = args.attempt;
+    row.nextAttemptAt = args.nextAttemptAt;
+    row.lastError = error;
   }
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {
+    const row = this.#rows().get(subscriptionKey);
+    if (row === undefined) return;
+    const epoch = this.#nextEpoch();
     this.#db.setCursor({
       subscriptionKey,
       ackedOffset,
-      epoch: this.#nextEpoch(),
+      epoch,
       updatedAt: new Date().toISOString(),
     });
+    this.#pendingSkipped.delete(subscriptionKey);
+    row.ackedOffset = ackedOffset;
+    row.attempt = 0;
+    row.nextAttemptAt = null;
+    row.lastError = null;
+    row.epoch = epoch;
   }
 
   delete(subscriptionKey: string): void {
+    const rows = this.#rows();
+    if (!rows.has(subscriptionKey)) return;
     this.#db.delete({ subscriptionKey });
+    this.#pendingSkipped.delete(subscriptionKey);
+    rows.delete(subscriptionKey);
   }
 
   minNextAttemptAt(): number | null {
-    return this.#db.minNextAttemptAt().next;
+    let next: number | null = null;
+    for (const row of this.#rows().values()) {
+      if (row.nextAttemptAt !== null && (next === null || row.nextAttemptAt < next)) {
+        next = row.nextAttemptAt;
+      }
+    }
+    return next;
   }
 }
 
@@ -582,31 +1000,65 @@ function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorR
   };
 }
 
-function addLegacyEventPath(value: unknown, path: string): unknown {
-  if (value !== null && typeof value === "object" && !("path" in value)) {
-    return { ...value, path };
-  }
-  return value;
+function createInsertStatements(prefix: string, rowWidth: number, maxRows: number): string[] {
+  const row = `(${Array.from({ length: rowWidth }, () => "?").join(", ")})`;
+  return Array.from({ length: maxRows + 1 }, (_, rowCount) =>
+    rowCount === 0 ? "" : `${prefix} ${Array.from({ length: rowCount }, () => row).join(", ")}`,
+  );
 }
 
-function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {
-  let chunkIndex = 0;
-  for (let start = 0; start < value.byteLength; start += chunkSize) {
-    const end = Math.min(start + chunkSize, value.byteLength);
-    const chunk = new ArrayBuffer(end - start);
-    new Uint8Array(chunk).set(value.subarray(start, end));
-    yield [chunkIndex, chunk];
-    chunkIndex += 1;
+function createSkippedAckStatements(maxRows: number): string[] {
+  return Array.from({ length: maxRows + 1 }, (_, rowCount) => {
+    if (rowCount === 0) return "";
+    const rows = Array.from({ length: rowCount }, () => "(?, ?, ?)").join(", ");
+    return `
+      with skipped(subscription_key, acked_offset, epoch) as (values ${rows})
+      update subscriptions as current
+      set acked_offset = max(current.acked_offset, skipped.acked_offset),
+          attempt = 0,
+          next_attempt_at = null,
+          last_error = null,
+          updated_at = ?
+      from skipped
+      where current.subscription_key = skipped.subscription_key
+        and current.epoch = skipped.epoch
+    `;
+  });
+}
+
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+    return bytes.buffer as ArrayBuffer;
   }
-  if (chunkIndex === 0) yield [0, new ArrayBuffer(0)];
+  const copy = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(copy).set(bytes);
+  return copy;
 }
 
 // Shared across calls: each decode sequence runs synchronously to its final
 // flush inside the single-threaded DO, so no two decodes can interleave.
 const chunkDecoder = new TextDecoder();
 
-function decodeChunks(chunks: ArrayBuffer[]): string {
-  let value = "";
-  for (const chunk of chunks) value += chunkDecoder.decode(chunk, { stream: true });
-  return value + chunkDecoder.decode();
+function appendEventChunk(chunks: EventChunks | undefined, chunk: ArrayBuffer): EventChunks {
+  if (chunks === undefined) return chunk;
+  if (!Array.isArray(chunks)) return [chunks, chunk];
+  chunks.push(chunk);
+  return chunks;
+}
+
+function decodeChunks(chunks: EventChunks, byteLength: number): string {
+  if (!Array.isArray(chunks)) return chunkDecoder.decode(chunks);
+  if (chunks.length >= 3) {
+    const bytes = new Uint8Array(byteLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(new Uint8Array(chunk), offset);
+      offset += chunk.byteLength;
+    }
+    return chunkDecoder.decode(bytes);
+  }
+  const parts: string[] = [];
+  for (const chunk of chunks) parts.push(chunkDecoder.decode(chunk, { stream: true }));
+  parts.push(chunkDecoder.decode());
+  return parts.join("");
 }

@@ -42,6 +42,8 @@ export type EventSelector = z.infer<typeof EventSelector>;
 
 /** A selector compiled to a predicate. `matches` throws only on condition evaluation errors. */
 export type CompiledEventSelector = {
+  /** True when neither event type nor condition can reject an event. */
+  readonly matchesAll: boolean;
   matches(event: StreamEvent): boolean;
 };
 
@@ -85,6 +87,7 @@ export function compileEventSelector(selector: EventSelector | undefined): Compi
     selector?.condition === undefined ? undefined : compileJsonataExpression(selector.condition);
 
   return {
+    matchesAll: eventTypes === undefined && condition === undefined,
     matches(event) {
       if (eventTypes !== undefined && !eventTypes.has(event.type)) return false;
       if (condition !== undefined && condition.evaluate(event) !== true) return false;

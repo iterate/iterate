@@ -1,22 +1,28 @@
 import { DurableObject } from "cloudflare:workers";
-import { z } from "zod";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
+import { parseStreamAppendInput } from "./stream-event-validation.ts";
+import {
+  appendOrdinaryEventToRun,
+  foldOrdinaryEventRun,
+  reduceOrdinaryEventAtTimestamp,
+  type OrdinaryEventRun,
+} from "./stream-ordinary-event-run.ts";
 import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
+  type StreamOffsetBounds,
 } from "./stream-storage.ts";
 import {
   StreamSubscribers,
@@ -140,13 +146,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     // window — the feed is armed before the first user event can land (a
     // voice stream streams from birth) — while remaining ordinary config:
     // one registry, one spine, overridable by re-appending the same key.
+    const wakeInputs: StreamEventInput[] = [];
     if (this.#coreProcessorState.eventCount === 0) {
-      this.append({
+      wakeInputs.push({
         type: "events.iterate.com/stream/created",
         payload: { projectId: this.name.projectId, path: this.name.path },
       });
       if (this.name.projectId !== null) {
-        this.append({
+        wakeInputs.push({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
             subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
@@ -161,10 +168,14 @@ export class StreamDurableObject extends DurableObject<Env> {
         });
       }
     }
-    this.append({
+    wakeInputs.push({
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: crypto.randomUUID() },
     });
+    // A newborn's ordered birth certificate is one commit. Validation and
+    // reduction still run event-by-event, while metadata/chunks share the
+    // append batch instead of paying two SQL inserts per separate append.
+    this.append(...wakeInputs);
   }
 
   /** The DO alarm: the spine's durable retry timer. */
@@ -174,6 +185,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
     this.#subscribers.onAlarm();
+    this.#subscriptionCursorStore.flushSkipped(true);
     this.#flushCoreProcessorState();
   }
 
@@ -223,80 +235,173 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   append(...eventInputs: StreamEventInput[]): StreamEvent[] {
     let workingState = this.#coreProcessorState;
+    let nextOffset = workingState.maxOffset;
     const events: StreamEvent[] = [];
-    const newEvents: StreamEvent[] = [];
-    const reducedEvents: ReducedCoreEvent[] = [];
-    const idempotencyHitsInBatch = new Map<string, StreamEvent>();
+    // Undefined means every result so far is newly committed. Only an actual
+    // idempotency hit splits the input-aligned result from the insert batch.
+    let newEvents: StreamEvent[] | undefined;
+    let reducedEvents: ReducedCoreEvent[] | undefined;
+    let committedAt: string | undefined;
+    let committedAtMs = 0;
+    let idempotencyHitsInBatch: Map<string, StreamEvent> | undefined;
+    let idempotencyKeys: Set<string> | undefined;
+    let ordinaryRun: OrdinaryEventRun | undefined;
+    // The single-event path is already allocation-minimal. Variadic appends
+    // can fold contiguous ordinary events as one state transition because
+    // ordinary facts only advance counters and burn breaker tokens. Flush the
+    // run before every control event so control policy observes exactly the
+    // same preceding state as the event-by-event reducer.
+    const aggregateOrdinaryEvents = eventInputs.length > 1;
+    // Most RPC appends contain one event. Avoid a one-element map result and
+    // batch-key Set on that latency-sensitive path; variadic appends still
+    // parse every input before any lookup or reduction, preserving error order.
+    const singleInput =
+      eventInputs.length === 1 ? parseStreamAppendInput(eventInputs[0]) : undefined;
+    const parsedInputs =
+      singleInput === undefined
+        ? eventInputs.map((eventInput) => {
+            const parsed = parseStreamAppendInput(eventInput);
+            if (parsed.idempotencyKey !== undefined) {
+              (idempotencyKeys ??= new Set()).add(parsed.idempotencyKey);
+            }
+            return parsed;
+          })
+        : undefined;
+    const persistedSingleIdempotencyHit =
+      singleInput?.idempotencyKey === undefined
+        ? undefined
+        : this.#log.getByIdempotencyKey(singleInput.idempotencyKey);
+    const persistedIdempotencyHits =
+      idempotencyKeys === undefined
+        ? undefined
+        : this.#log.getByIdempotencyKeys([...idempotencyKeys]);
 
     // 1. Validate inputs, assign offsets, and reduce state.
-    for (const eventInput of eventInputs) {
+    const inputCount = singleInput === undefined ? parsedInputs!.length : 1;
+    for (let inputIndex = 0; inputIndex < inputCount; inputIndex += 1) {
+      const eventInput = singleInput ?? parsedInputs![inputIndex]!;
       // `offset` is an optional optimistic-concurrency assertion, not part of the
       // event body. Split it off immediately so it never reaches core-event
       // validation or the committed event: `validateAppend` strict-parses the
       // body against the contract schema, which has no `offset` key, so leaving
       // it attached made every asserted append of a core policy event fail with
       // a spurious "Unrecognized key: offset" instead of performing the assertion.
-      const { offset: expectedOffset, ...body } = StreamAppendInput.parse(eventInput);
+      const expectedOffset = eventInput.offset;
+      let body: StreamEventInput = eventInput;
+      // Zod preserves an explicitly present `offset: undefined`; strip by key
+      // presence so local callers cannot leak it into strict core-event parsing.
+      if (Object.hasOwn(eventInput, "offset")) {
+        const { offset: _offset, ...bodyWithoutOffset } = eventInput;
+        body = bodyWithoutOffset;
+      }
 
       if (body.idempotencyKey !== undefined) {
         // Same-batch idempotency should behave like already-persisted idempotency.
         const existing =
-          idempotencyHitsInBatch.get(body.idempotencyKey) ??
-          this.getEvent({ idempotencyKey: body.idempotencyKey });
+          idempotencyHitsInBatch?.get(body.idempotencyKey) ??
+          persistedSingleIdempotencyHit ??
+          persistedIdempotencyHits?.get(body.idempotencyKey);
         if (existing !== undefined) {
           if (expectedOffset !== undefined && expectedOffset !== existing.offset) {
             throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
           }
+          newEvents ??= events.slice();
           events.push(existing);
           continue;
         }
       }
 
+      const isOrdinaryEvent = !body.type.startsWith("events.iterate.com/stream/");
+      if (!isOrdinaryEvent && ordinaryRun !== undefined) {
+        const folded = foldOrdinaryEventRun(ordinaryRun);
+        workingState = folded.state;
+        if (folded.tripped !== undefined) {
+          (reducedEvents ??= []).push(folded.tripped);
+        }
+        ordinaryRun = undefined;
+      }
+
       this.#validateAppend({ event: body, state: workingState });
 
+      // A variadic append is one atomic commit, so all of its new events share
+      // one timestamp. Besides matching that transaction boundary, this avoids
+      // a Date allocation and ISO formatting pass for every event in a burst.
+      if (committedAt === undefined) {
+        const now = new Date();
+        committedAtMs = now.getTime();
+        committedAt = now.toISOString();
+      }
       const committed: StreamEvent = {
         ...body,
-        offset: workingState.maxOffset + 1,
-        createdAt: new Date().toISOString(),
+        offset: nextOffset + 1,
+        createdAt: committedAt,
         path: this.name.path,
       };
       if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
         throw new Error(`expected offset ${committed.offset}, got ${expectedOffset}`);
       }
+      nextOffset = committed.offset;
 
-      const previousState = workingState;
-      workingState = this.#reduce({ event: committed, state: previousState }, "append");
+      if (aggregateOrdinaryEvents && isOrdinaryEvent) {
+        ordinaryRun = appendOrdinaryEventToRun(ordinaryRun, committed, workingState, committedAtMs);
+      } else {
+        const previousState = workingState;
+        workingState = isOrdinaryEvent
+          ? reduceOrdinaryEventAtTimestamp(previousState, committed, committedAtMs)
+          : this.#reduce(
+              { event: committed, state: previousState, timestampMs: committedAtMs },
+              "append",
+            );
 
-      // Core side effects are deferred until after the commit below: they can
-      // call back into stream runtime state, so running them mid-batch would
-      // observe stale `this.#coreProcessorState`.
-      reducedEvents.push({ event: committed, previousState, state: workingState });
+        // Core side effects are deferred until after the commit below: they can
+        // call back into stream runtime state, so running them mid-batch would
+        // observe stale `this.#coreProcessorState`. Ordinary user events have no
+        // post-commit effect unless this exact event trips the circuit breaker;
+        // do not retain two full state snapshots for every event in a large batch.
+        const tripsCircuitBreaker =
+          workingState.circuitBreaker.trippedAtOffset === committed.offset &&
+          previousState.circuitBreaker.trippedAtOffset !== committed.offset;
+        if (!isOrdinaryEvent || tripsCircuitBreaker) {
+          (reducedEvents ??= []).push({ event: committed, previousState, state: workingState });
+        }
+      }
 
       events.push(committed);
-      newEvents.push(committed);
+      newEvents?.push(committed);
       if (committed.idempotencyKey !== undefined) {
-        idempotencyHitsInBatch.set(committed.idempotencyKey, committed);
+        (idempotencyHitsInBatch ??= new Map()).set(committed.idempotencyKey, committed);
       }
     }
 
-    if (newEvents.length === 0) return events;
+    if (ordinaryRun !== undefined) {
+      const folded = foldOrdinaryEventRun(ordinaryRun);
+      workingState = folded.state;
+      if (folded.tripped !== undefined) {
+        (reducedEvents ??= []).push(folded.tripped);
+      }
+    }
+
+    const eventsToInsert = newEvents ?? events;
+    if (eventsToInsert.length === 0) return events;
 
     // 2. Persist event rows and reduced core state. Durable Object SQL storage
-    // runs synchronously in the object's thread; each sql.exec() is atomic and
-    // Output Gates hold responses until writes are durable:
+    // runs synchronously in the object's thread. A bounded append that fits
+    // one INSERT is atomic by itself; the log uses transactionSync for every
+    // multi-statement metadata/chunk batch. Output Gates hold responses until
+    // the write is durable:
     // https://developers.cloudflare.com/durable-objects/api/sql-storage/
     // https://blog.cloudflare.com/sqlite-in-durable-objects/
     // Keep this section await-free: event rows + core state are the append
     // boundary. The KV state checkpoint is DEBOUNCED (see
     // #checkpointCoreProcessorState) — event rows are the durable truth, and
     // boot catch-up folds past a lagging checkpoint by design.
-    const byteLengths = this.#log.insert(newEvents);
+    const freshTail = this.#log.insert(eventsToInsert, this.ctx.storage);
     this.#coreProcessorState = workingState;
-    this.#checkpointCoreProcessorState(newEvents.length);
+    this.#checkpointCoreProcessorState(eventsToInsert.length, committedAtMs);
     this.#metrics.ingress.bump(
-      Date.now(),
-      newEvents.length,
-      byteLengths.reduce((sum, bytes) => sum + bytes, 0),
+      committedAtMs,
+      eventsToInsert.length,
+      freshTail.reduce((sum, entry) => sum + entry.byteLength, 0),
     );
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
@@ -308,15 +413,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     // event-type carve-out the old reconciler carried. The wake hands over the
     // just-committed events (sized by the log write) so caught-up consumers
     // skip the per-lane SQLite re-read.
-    for (const reduced of reducedEvents) this.#processEvent(reduced);
-    this.#subscribers.wake(
-      newEvents.map((event, index) => ({ event, byteLength: byteLengths[index]! })),
-    );
+    if (reducedEvents !== undefined) {
+      for (const reduced of reducedEvents) this.#processEvent(reduced);
+    }
+    this.#subscribers.wake(freshTail);
 
     // Re-arm (or clear) the idle timer against the post-append connection set,
     // so a stream that just went quiet sheds its durable delivery sessions
     // and lets both DOs hibernate.
-    this.#subscribers.armOrClearIdleTimer();
+    this.#subscribers.armOrClearIdleTimer(committedAtMs);
 
     return events;
   }
@@ -331,6 +436,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   ): StreamEvent | undefined {
     if (args.idempotencyKey !== undefined)
       return this.#log.getByIdempotencyKey(args.idempotencyKey);
+    if (args.offset < 1 || args.offset > this.#coreProcessorState.maxOffset) return undefined;
     return this.#log.getByOffset(args.offset);
   }
 
@@ -464,7 +570,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * #1714 parse-poison posture; pre-v10 journal shapes are the expected case).
    */
   #reduce(
-    args: { event: StreamEvent; state: CoreProcessorState },
+    args: { event: StreamEvent; state: CoreProcessorState; timestampMs?: number },
     mode: "append" | "replay",
   ): CoreProcessorState {
     if (mode === "append") return this.#reduceCore(args);
@@ -478,16 +584,29 @@ export class StreamDurableObject extends DurableObject<Env> {
       });
       return this.#reduceCircuitBreaker({
         event: args.event,
-        state: {
-          ...args.state,
-          eventCount: args.state.eventCount + 1,
-          maxOffset: args.event.offset,
-        },
+        state: args.state,
+        advanceCounters: true,
       });
     }
   }
 
-  #reduceCore(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
+  #reduceCore(args: {
+    event: StreamEvent;
+    state: CoreProcessorState;
+    timestampMs?: number;
+  }): CoreProcessorState {
+    // Ordinary events only advance counters and burn a breaker token. Fold
+    // those changes into one state copy; control events below may need an
+    // intermediate counter-advanced state while they update other records.
+    if (!args.event.type.startsWith("events.iterate.com/stream/")) {
+      return this.#reduceCircuitBreaker({
+        event: args.event,
+        state: args.state,
+        timestampMs: args.timestampMs,
+        advanceCounters: true,
+      });
+    }
+
     const parse = CoreProcessorContract.parseEvent;
     let next: CoreProcessorState = {
       ...args.state,
@@ -731,7 +850,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           "events.iterate.com/stream/subscription-configured",
           args.event,
         );
-        this.#subscribers.onSubscriptionConfigured(event.payload, event.offset);
+        this.#subscribers.onSubscriptionConfigured(event.payload, event.offset, DEFER_RECONCILE);
         return;
       }
       case "events.iterate.com/stream/subscription-removed": {
@@ -747,7 +866,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           "events.iterate.com/stream/subscription-resumed",
           args.event,
         );
-        this.#subscribers.onResumed(event.payload.subscriptionKey);
+        this.#subscribers.onResumed(event.payload.subscriptionKey, DEFER_RECONCILE);
         return;
       }
       case "events.iterate.com/stream/subscription-cursor-set": {
@@ -755,7 +874,11 @@ export class StreamDurableObject extends DurableObject<Env> {
           "events.iterate.com/stream/subscription-cursor-set",
           args.event,
         );
-        this.#subscribers.onCursorSet(event.payload.subscriptionKey, event.payload.afterOffset);
+        this.#subscribers.onCursorSet(
+          event.payload.subscriptionKey,
+          event.payload.afterOffset,
+          DEFER_RECONCILE,
+        );
         return;
       }
       case "events.iterate.com/stream/woken":
@@ -780,11 +903,27 @@ export class StreamDurableObject extends DurableObject<Env> {
   #reduceCircuitBreaker(args: {
     event: StreamEvent;
     state: CoreProcessorState;
+    timestampMs?: number;
+    advanceCounters?: boolean;
   }): CoreProcessorState {
-    if (args.event.type === "events.iterate.com/stream/woken") return args.state;
+    if (args.event.type === "events.iterate.com/stream/woken") {
+      if (!args.advanceCounters) return args.state;
+      return {
+        ...args.state,
+        eventCount: args.state.eventCount + 1,
+        maxOffset: args.event.offset,
+      };
+    }
 
-    const timestampMs = Date.parse(args.event.createdAt);
-    if (!Number.isFinite(timestampMs)) return args.state;
+    const timestampMs = args.timestampMs ?? Date.parse(args.event.createdAt);
+    if (!Number.isFinite(timestampMs)) {
+      if (!args.advanceCounters) return args.state;
+      return {
+        ...args.state,
+        eventCount: args.state.eventCount + 1,
+        maxOffset: args.event.offset,
+      };
+    }
     const elapsedMs =
       args.state.circuitBreaker.lastRefillAtMs === null
         ? 0
@@ -796,17 +935,21 @@ export class StreamDurableObject extends DurableObject<Env> {
           elapsedMs * (args.state.circuitBreaker.refillRatePerMinute / 60_000),
       ) - 1;
 
+    const circuitBreaker = {
+      ...args.state.circuitBreaker,
+      availableTokens: tokens,
+      lastRefillAtMs: timestampMs,
+      trippedAtOffset:
+        tokens < 0 && !args.state.paused && args.state.circuitBreaker.trippedAtOffset === null
+          ? args.event.offset
+          : args.state.circuitBreaker.trippedAtOffset,
+    };
+    if (!args.advanceCounters) return { ...args.state, circuitBreaker };
     return {
       ...args.state,
-      circuitBreaker: {
-        ...args.state.circuitBreaker,
-        availableTokens: tokens,
-        lastRefillAtMs: timestampMs,
-        trippedAtOffset:
-          tokens < 0 && !args.state.paused && args.state.circuitBreaker.trippedAtOffset === null
-            ? args.event.offset
-            : args.state.circuitBreaker.trippedAtOffset,
-      },
+      eventCount: args.state.eventCount + 1,
+      maxOffset: args.event.offset,
+      circuitBreaker,
     };
   }
 
@@ -895,18 +1038,30 @@ export class StreamDurableObject extends DurableObject<Env> {
   // ===========================================================================
 
   #readCoreProcessorState(): CoreProcessorState {
-    const stored = this.ctx.storage.kv.get<unknown>("state");
-    const storedVersion = this.ctx.storage.kv.get<unknown>("stateVersion") ?? 1;
+    let stored: unknown;
+    let storedVersion: unknown = 1;
+    // Sync KV list is one storage snapshot/query for both checkpoint keys;
+    // separate point gets pay two storage crossings on every incarnation.
+    for (const [key, value] of this.ctx.storage.kv.list<unknown>({ prefix: "state" })) {
+      if (key === "state") stored = value;
+      else if (key === "stateVersion") storedVersion = value;
+    }
+    // A version observed in durable storage is already written. Only a
+    // legacy/mismatched checkpoint needs the rebuild write below to replace it.
+    this.#stateVersionWritten = storedVersion === CORE_STATE_VERSION;
     // State persisted by a reducer of a different version is incomplete (it
     // was reduced before newer derived fields existed), so it is discarded and
     // rebuilt from the event log rather than trusted.
     const storedStateIsCurrent = stored !== undefined && storedVersion === CORE_STATE_VERSION;
+    const bounds = this.#log.offsetBounds();
     const storedState = storedStateIsCurrent
       ? CoreProcessorContract.stateSchema.parse(stored)
-      : this.#recoverCoreProcessorStateFromEventLog();
+      : bounds.highestOffset === 0
+        ? undefined
+        : CoreProcessorContract.stateSchema.parse({});
     if (storedState === undefined) return CoreProcessorContract.stateSchema.parse({});
 
-    const state = this.#catchUpCoreProcessorState(storedState);
+    const state = this.#catchUpCoreProcessorState(storedState, bounds);
 
     if (!storedStateIsCurrent) {
       // A version-mismatch rebuild replayed the config from the log, but the
@@ -949,9 +1104,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    * correctness. Alarm and idle teardown flush so a stream going quiet
    * checkpoints before it hibernates.
    */
-  #checkpointCoreProcessorState(newEventCount: number): void {
+  #checkpointCoreProcessorState(newEventCount: number, now: number): void {
     this.#eventsSinceCheckpoint += newEventCount;
-    const now = Date.now();
     if (
       this.#eventsSinceCheckpoint < StreamDurableObject.#CHECKPOINT_EVERY_EVENTS &&
       now - this.#checkpointWrittenAtMs < StreamDurableObject.#CHECKPOINT_MAX_LAG_MS
@@ -959,7 +1113,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       this.#checkpointDirty = true;
       return;
     }
-    this.#writeCoreProcessorState(this.#coreProcessorState);
+    this.#writeCoreProcessorState(this.#coreProcessorState, now);
   }
 
   /** Write the checkpoint now if the in-memory state is ahead of it. */
@@ -967,13 +1121,14 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (this.#checkpointDirty) this.#writeCoreProcessorState(this.#coreProcessorState);
   }
 
-  #writeCoreProcessorState(state: CoreProcessorState): void {
+  #writeCoreProcessorState(state: CoreProcessorState, writtenAtMs = Date.now()): void {
     this.ctx.storage.kv.put("state", state);
     this.#checkpointDirty = false;
     this.#eventsSinceCheckpoint = 0;
-    this.#checkpointWrittenAtMs = Date.now();
-    // The version is a constant per deploy; re-putting it on every append is
-    // pure write amplification. Once per incarnation is exactly as durable.
+    this.#checkpointWrittenAtMs = writtenAtMs;
+    // The version is a constant per deploy. A warm activation observed it in
+    // durable storage and sets this flag during read; a rebuild writes it once
+    // after folding the new state shape.
     if (!this.#stateVersionWritten) {
       this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
       this.#stateVersionWritten = true;
@@ -981,8 +1136,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** Fold any event-log rows past the checkpoint into the state (no side effects). */
-  #catchUpCoreProcessorState(state: CoreProcessorState): CoreProcessorState {
-    const highestOffset = this.#log.highestOffset();
+  #catchUpCoreProcessorState(
+    state: CoreProcessorState,
+    bounds: StreamOffsetBounds,
+  ): CoreProcessorState {
+    const { highestOffset, highestAssignedOffset } = bounds;
     let next = state;
     // PAGED, never one monolithic read: this is also the version-bump rebuild
     // path (replay from offset 0), and a capture stream's full log
@@ -1012,20 +1170,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     // rebuild after head-row eviction would reissue offsets that live
     // subscribers already saw (the browser mirror hard-ABORTs on a reused
     // offset carrying different JSON).
-    const assignedFloor = this.#log.highestAssignedOffset();
-    if (assignedFloor > next.maxOffset) next = { ...next, maxOffset: assignedFloor };
+    if (highestAssignedOffset > next.maxOffset) {
+      next = { ...next, maxOffset: highestAssignedOffset };
+    }
     return next;
-  }
-
-  /**
-   * KV state is the fast path, but SQL rows are the durable source of truth.
-   * If a deployed DO has rows but no (current-version) KV state, replay the
-   * event log instead of treating the stream as empty and trying to insert
-   * offset 1 again.
-   */
-  #recoverCoreProcessorStateFromEventLog(): CoreProcessorState | undefined {
-    if (this.#log.highestOffset() === 0) return undefined;
-    return this.#catchUpCoreProcessorState(CoreProcessorContract.stateSchema.parse({}));
   }
 
   // ===========================================================================
@@ -1223,6 +1371,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#subscribers.runIdleTeardownNow();
     // A stream going quiet checkpoints before it hibernates, so the next wake
     // rebuilds from a fresh checkpoint instead of folding the debounce window.
+    this.#subscriptionCursorStore.flushSkipped(true);
     this.#flushCoreProcessorState();
   }
 
@@ -1242,15 +1391,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 }
 
-/**
- * What `append` accepts over the wire: a public event input plus the optional
- * `offset` optimistic-concurrency assertion (split off before validation).
- */
-// Built ONCE: constructing a zod schema per appended event cost ~20µs/event
-// inside the synchronous commit turn (~50x the hoisted parse).
-const StreamAppendInput = StreamEventInputSchema.extend({
-  offset: z.number().int().nonnegative().optional(),
-}).strict();
+const DEFER_RECONCILE = { deferReconcile: true } as const;
 
 /**
  * One committed event with the core state before and after reducing it — what

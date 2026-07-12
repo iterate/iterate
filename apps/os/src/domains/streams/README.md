@@ -155,9 +155,9 @@ depend on an ephemeral row, a future sweep may EVICT them (memory pressure,
 DO-startup cleanup), leaving permanent offset gaps that every read path —
 including the browser mirror — already tolerates. Constraints pre-paid for
 that future sweep: the offset allocator survives head-row eviction
-(`highestAssignedOffset()` reads AUTOINCREMENT's `sqlite_sequence`, which row
-deletion does not reset — reissuing a seen offset would wedge every
-offset-keyed consumer); eviction forgets idempotency keys (a swept key
+(`highestAssignedOffset()` reads the durable floor advanced atomically by the
+eviction operation — reissuing a seen offset would wedge every offset-keyed
+consumer); eviction forgets idempotency keys (a swept key
 dedupes nothing on re-append — so never sweep rows younger than the LLM
 obligation horizon, or a crashed turn's retry re-appends chunks whose old
 copies live on in browser mirrors); and a post-sweep state rebuild counts

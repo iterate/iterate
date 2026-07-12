@@ -62,7 +62,11 @@ import type {
 } from "./core-processor-contract.ts";
 import { StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema } from "./core-processor-contract.ts";
 import { compileEventSelector, type CompiledEventSelector } from "./event-selector.ts";
-import type { SizedStreamEvent, SubscriptionCursorStore } from "./stream-storage.ts";
+import type {
+  SizedStreamEvent,
+  SubscriptionCursorRow,
+  SubscriptionCursorStore,
+} from "./stream-storage.ts";
 import {
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
@@ -251,6 +255,18 @@ type StreamSubscribersHooks = {
   keepAlive(promise: Promise<unknown>): void;
 };
 
+type ControlSideEffectOptions = {
+  /** The enclosing append batch owns the single post-commit reconciliation. */
+  deferReconcile?: boolean;
+};
+
+type ConfiguredSubscribers = CoreProcessorState["configuredSubscribersByKey"];
+type PushDrainStart = {
+  state: CoreProcessorState;
+  entry: ConfiguredSubscribers[string];
+  row: SubscriptionCursorRow;
+};
+
 export class StreamSubscribers {
   readonly #hooks: StreamSubscribersHooks;
   /**
@@ -266,7 +282,9 @@ export class StreamSubscribers {
    */
   readonly #idleTeardownMs: number;
   readonly #connections = new Map<string, Connection>();
+  #configuredConnectionCount = 0;
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
+  #idleDeadlineMs: number | undefined;
 
   // Durable-lane in-memory state. All of it is reconstructible: a DO eviction
   // resets these and the durable rows + folded config re-derive every decision
@@ -280,6 +298,7 @@ export class StreamSubscribers {
    * teardown turn; the final watermark ack below covers the facts.
    */
   #tearingDown = false;
+  #wakeGeneration = 0;
   readonly #pushDrains = new Set<string>();
   /** Bisect state for onPoison:"skip" — current batch ceiling per key. */
   readonly #batchLimits = new Map<string, number>();
@@ -297,6 +316,11 @@ export class StreamSubscribers {
   >();
   /** Last mutual-ping round start — throttles observer-driven sampling. Null until the first round. */
   #lastPingRoundAtMs: number | null = null;
+  /** Compiled selectors for durable push/webhook configs, keyed by the config event offset. */
+  readonly #compiledSelectors = new Map<
+    string,
+    { configOffset: number; selector: CompiledEventSelector }
+  >();
 
   constructor(args: { idleTeardownMs: number; hooks: StreamSubscribersHooks }) {
     this.#hooks = args.hooks;
@@ -312,11 +336,26 @@ export class StreamSubscribers {
    * commit path so caught-up pumps and drains consume them directly instead
    * of re-reading (and re-parsing) them from SQLite once per delivery lane.
    * Correctness is offset-gated, never freshness-gated: `#readBatch` uses the
-   * tail only when its first offset is exactly `afterOffset + 1`, so a stale
-   * tail (more appends since, a rewound cursor) either still IS the right
-   * contiguous window or self-disqualifies and falls back to storage.
+   * tail only when it contains exactly `afterOffset + 1`, so a stale tail
+   * (more appends since, a rewound cursor) either still IS the right contiguous
+   * window or self-disqualifies and falls back to storage. A byte/row-capped
+   * delivery can resume at a later position in the same tail without SQL.
    */
   #freshTail: SizedStreamEvent[] = [];
+  #freshTailProjection:
+    | {
+        afterOffset: number;
+        limit: number;
+        events: StreamEvent[];
+        durableEvents: StreamEvent[];
+        byteLengthByOffset: ReadonlyMap<number, number>;
+        byteLength: number;
+        durableByteLength: number;
+        lastOffset: number | undefined;
+      }
+    | undefined;
+  #configuredSubscribers: ConfiguredSubscribers | undefined;
+  #configuredSubscriberEntries: [string, ConfiguredSubscribers[string]][] = [];
 
   /**
    * Re-arm every live connection's pump and reconcile durable subscriptions
@@ -328,11 +367,20 @@ export class StreamSubscribers {
    * storage round trip.
    */
   wake(freshTail?: SizedStreamEvent[]): void {
-    if (freshTail !== undefined && freshTail.length > 0) this.#freshTail = freshTail;
+    this.#wakeGeneration += 1;
+    if (freshTail !== undefined && freshTail.length > 0) {
+      this.#freshTail = freshTail;
+      this.#freshTailProjection = undefined;
+    }
     for (const connection of this.#connections.values()) connection.wake();
     if (this.#tearingDown) return;
     try {
       this.#reconcileDurable();
+      // Pure selector/ephemeral skips run synchronously until their first
+      // delivery await (usually all the way to the head). Give the cursor
+      // store one chance to checkpoint every lane's accumulated progress as
+      // a multi-row write after reconciliation, instead of one UPDATE each.
+      this.#hooks.store.flushSkipped();
     } catch (error) {
       console.error("stream durable subscription reconcile failed", error);
     }
@@ -387,22 +435,32 @@ export class StreamSubscribers {
    */
   #reconcileDurable(): void {
     const state = this.#hooks.coreState();
-    const now = this.#hooks.now();
+    const configuredEntries = this.#entriesFor(state.configuredSubscribersByKey);
+    let now: number | undefined;
 
-    for (const [subscriptionKey, entry] of Object.entries(state.configuredSubscribersByKey)) {
+    for (const [subscriptionKey, entry] of configuredEntries) {
       const config = entry.latestConfiguredEvent.payload;
       const configOffset = entry.latestConfiguredEvent.offset;
+
+      // These reservations can only be created after this incarnation ensured
+      // the row. Their work already owns delivery, so another cursor clone and
+      // policy calculation on every append cannot affect reconciliation.
+      if (config.delivery.mode === "wake") {
+        if (this.#connections.has(subscriptionKey) || this.#pokesInFlight.has(subscriptionKey)) {
+          continue;
+        }
+      } else if (this.#pushDrains.has(subscriptionKey)) {
+        continue;
+      }
 
       // The per-mode initial-cursor policy lives in ONE place
       // (subscriber-math.initialCursorFor) so this and the config side effect
       // below can never drift.
-      this.#hooks.store.ensure(subscriptionKey, initialCursorFor(config, configOffset));
+      const row = this.#hooks.store.ensure(subscriptionKey, initialCursorFor(config, configOffset));
 
       if (entry.parkedAtOffset !== undefined) continue;
 
-      const row = this.#hooks.store.get(subscriptionKey);
-      if (row === undefined) continue; // unreachable after ensure; defensive
-      if (row.nextAttemptAt !== null && row.nextAttemptAt > now) continue; // alarm owns it
+      if (row.nextAttemptAt !== null && row.nextAttemptAt > (now ??= this.#hooks.now())) continue;
       // "Caught up" trusts the monotonic watermark. A subscriber that
       // discarded its checkpoint (schema-change refold) and lost its
       // connection mid-replay parks here at a partial refold until the next
@@ -411,16 +469,20 @@ export class StreamSubscribers {
       if (row.ackedOffset >= state.maxOffset) continue; // caught up; nothing to say
 
       if (config.delivery.mode === "wake") {
-        if (this.#connections.has(subscriptionKey) || this.#pokesInFlight.has(subscriptionKey)) {
-          continue;
-        }
         this.#poke(subscriptionKey, config.delivery, configOffset);
         continue;
       }
 
-      if (this.#pushDrains.has(subscriptionKey)) continue;
-      this.#drainPush(subscriptionKey);
+      this.#drainPush(subscriptionKey, { state, entry, row });
     }
+  }
+
+  #entriesFor(configuredSubscribers: ConfiguredSubscribers) {
+    if (configuredSubscribers !== this.#configuredSubscribers) {
+      this.#configuredSubscribers = configuredSubscribers;
+      this.#configuredSubscriberEntries = Object.entries(configuredSubscribers);
+    }
+    return this.#configuredSubscriberEntries;
   }
 
   /**
@@ -531,19 +593,32 @@ export class StreamSubscribers {
    * the lanes with acknowledgement semantics, which is exactly why the stream
    * can own their cursors. Push delivers per batch; webhook per event.
    */
-  #drainPush(subscriptionKey: string): void {
+  #drainPush(subscriptionKey: string, start: PushDrainStart): void {
     this.#pushDrains.add(subscriptionKey);
     const work = (async () => {
+      // Reconciliation invokes this async body synchronously through its first
+      // await, so its validated snapshot is exact for iteration one only.
+      let initial: PushDrainStart | undefined = start;
       try {
         for (;;) {
-          const state = this.#hooks.coreState();
-          const entry = state.configuredSubscribersByKey[subscriptionKey];
+          const snapshot = initial;
+          initial = undefined;
+          const state = snapshot?.state ?? this.#hooks.coreState();
+          const entry = snapshot?.entry ?? state.configuredSubscribersByKey[subscriptionKey];
           if (entry === undefined || entry.parkedAtOffset !== undefined) return;
           const config = entry.latestConfiguredEvent.payload;
           if (config.delivery.mode === "wake") return;
-          const row = this.#hooks.store.get(subscriptionKey);
+          const row = snapshot?.row ?? this.#hooks.store.get(subscriptionKey);
           if (row === undefined) return;
           if (row.nextAttemptAt !== null && row.nextAttemptAt > this.#hooks.now()) return;
+          // The core state is reduced synchronously with every commit, so its
+          // head is authoritative for this incarnation. Do not issue a final
+          // empty range query after the previous iteration acked the head.
+          if (row.ackedOffset >= state.maxOffset) return;
+          // Every append/control reconciliation calls wake(). If this value is
+          // unchanged after selection or delivery, the observed head is still
+          // current and a final state/cursor probe cannot discover more work.
+          const wakeGeneration = this.#wakeGeneration;
 
           // Webhook mode IS the push drain pinned to batch size 1: external
           // receivers get single-event POSTs, each ack covers exactly one
@@ -560,30 +635,32 @@ export class StreamSubscribers {
                   this.#batchLimits.get(subscriptionKey) ?? DELIVERY_BATCH_LIMIT,
                   DELIVERY_BATCH_LIMIT,
                 );
-          const sized = this.#readBatch(row.ackedOffset, limit);
-          const lastOffset = sized.at(-1)?.event.offset;
+          const read = this.#readBatch(row.ackedOffset, limit, true);
+          const { events: durable, lastOffset } = read;
           if (lastOffset === undefined) return; // caught up
-          const byteLengthByOffset = new Map(
-            sized.map((entry) => [entry.event.offset, entry.byteLength]),
-          );
 
           // Ephemeral events never reach durable receivers — platform law,
           // enforced as the same skip-not-defer shape selectors use: the raw
           // read advances the cursor over their offsets, delivery drops them.
-          const durable = sized
-            .filter((entry) => entry.event.ephemeral !== true)
-            .map((entry) => entry.event);
-          const { matched, conditionErrors } = this.#applySelector(
-            subscriptionKey,
-            config,
-            durable,
-          );
-          for (const fact of conditionErrors) this.#hooks.appendFact(fact);
+          let matched = durable;
+          if (config.selector !== undefined) {
+            const selected = this.#applySelector(
+              subscriptionKey,
+              entry.latestConfiguredEvent.offset,
+              config,
+              durable,
+            );
+            matched = selected.matched;
+            for (const fact of selected.conditionErrors) this.#hooks.appendFact(fact);
+          }
 
           if (matched.length === 0) {
             // Skip-not-defer: nothing here for this subscriber, but the cursor
             // must advance or the subscription re-reads these events forever.
-            this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+            // No receiver side effect occurred, so persistence can be batched
+            // and boundedly lagged; the in-memory cursor advances immediately.
+            this.#hooks.store.skip(subscriptionKey, lastOffset, row.epoch);
+            if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) return;
             continue;
           }
 
@@ -596,10 +673,13 @@ export class StreamSubscribers {
             payload: entry.latestConfiguredEvent.payload,
           };
 
-          const deliveredBytes = matched.reduce(
-            (sum, event) => sum + (byteLengthByOffset.get(event.offset) ?? 0),
-            0,
-          );
+          const deliveredBytes =
+            matched.length === durable.length
+              ? read.byteLength
+              : matched.reduce(
+                  (sum, event) => sum + (read.byteLengthByOffset.get(event.offset) ?? 0),
+                  0,
+                );
           // Dispatch-time accounting: retries re-send real bytes, so failed
           // attempts count too (the wire carried them either way).
           const dispatchAtMs = this.#hooks.now();
@@ -666,9 +746,11 @@ export class StreamSubscribers {
           this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
+          if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) return;
         }
       } finally {
         this.#pushDrains.delete(subscriptionKey);
+        this.#hooks.store.flushSkipped();
       }
     })();
     this.#hooks.keepAlive(
@@ -685,22 +767,86 @@ export class StreamSubscribers {
    * committed objects are byte-for-byte what a read-back would parse (append
    * strict-parses the body and stamps `path` before commit).
    */
-  #readBatch(afterOffset: number, limit: number): SizedStreamEvent[] {
-    const sized =
-      this.#freshTail[0]?.event.offset === afterOffset + 1
-        ? this.#freshTail.length > limit
-          ? this.#freshTail.slice(0, limit)
-          : this.#freshTail
-        : this.#hooks.readEvents({ afterOffset, limit });
-    if (sized.length <= 1) return sized;
-    let bytes = 0;
-    for (let index = 0; index < sized.length; index += 1) {
-      bytes += sized[index]!.byteLength;
-      if (bytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) {
-        return sized.slice(0, index);
-      }
+  #readBatch(
+    afterOffset: number,
+    limit: number,
+    durableOnly = false,
+  ): {
+    events: StreamEvent[];
+    lastOffset: number | undefined;
+    byteLengthByOffset: ReadonlyMap<number, number>;
+    byteLength: number;
+  } {
+    const firstFreshOffset = this.#freshTail[0]?.event.offset;
+    const freshStart = firstFreshOffset === undefined ? -1 : afterOffset + 1 - firstFreshOffset;
+    const useFreshTail =
+      freshStart >= 0 && this.#freshTail[freshStart]?.event.offset === afterOffset + 1;
+    const cached = this.#freshTailProjection;
+    if (
+      useFreshTail &&
+      cached !== undefined &&
+      cached.afterOffset === afterOffset &&
+      cached.limit === limit
+    ) {
+      return {
+        events: (durableOnly ? cached.durableEvents : cached.events).slice(),
+        lastOffset: cached.lastOffset,
+        byteLengthByOffset: cached.byteLengthByOffset,
+        byteLength: durableOnly ? cached.durableByteLength : cached.byteLength,
+      };
     }
-    return sized;
+    const source = useFreshTail ? this.#freshTail : this.#hooks.readEvents({ afterOffset, limit });
+    const start = useFreshTail ? freshStart : 0;
+    const events: StreamEvent[] = [];
+    let durable: StreamEvent[] | undefined;
+    const byteLengthByOffset = new Map<number, number>();
+    let lastOffset: number | undefined;
+    let bytes = 0;
+    let durableBytes = 0;
+    const count = Math.min(source.length - start, limit);
+    for (let index = 0; index < count; index += 1) {
+      const entry = source[start + index]!;
+      const entryByteLength = entry.byteLength;
+      const nextBytes = bytes + entryByteLength;
+      if (nextBytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) break;
+      events.push(entry.event);
+      byteLengthByOffset.set(entry.event.offset, entryByteLength);
+      lastOffset = entry.event.offset;
+      if (entry.event.ephemeral === true) {
+        durable ??= events.slice(0, -1);
+      } else {
+        durable?.push(entry.event);
+        durableBytes += entryByteLength;
+      }
+      bytes = nextBytes;
+    }
+    const durableEvents = durable ?? events;
+    if (useFreshTail) {
+      // Keep canonical arrays private. Each lane still gets an isolated array,
+      // while aligned raw and durable readers share both scans through slice().
+      this.#freshTailProjection = {
+        afterOffset,
+        limit,
+        events,
+        durableEvents,
+        byteLengthByOffset,
+        byteLength: bytes,
+        durableByteLength: durableBytes,
+        lastOffset,
+      };
+      return {
+        events: (durableOnly ? durableEvents : events).slice(),
+        lastOffset,
+        byteLengthByOffset,
+        byteLength: durableOnly ? durableBytes : bytes,
+      };
+    }
+    return {
+      events: durableOnly ? durableEvents : events,
+      lastOffset,
+      byteLengthByOffset,
+      byteLength: durableOnly ? durableBytes : bytes,
+    };
   }
 
   /**
@@ -710,10 +856,15 @@ export class StreamSubscribers {
    */
   #applySelector(
     subscriptionKey: string,
+    configOffset: number,
     config: SubscriptionConfiguredPayload,
     events: StreamEvent[],
   ): { matched: StreamEvent[]; conditionErrors: StreamEventInput[] } {
-    const selector = compileEventSelector(config.selector);
+    if (config.selector === undefined) {
+      return { matched: events, conditionErrors: [] };
+    }
+    const selector = this.#selectorFor(subscriptionKey, configOffset, config);
+    if (selector.matchesAll) return { matched: events, conditionErrors: [] };
     const matched: StreamEvent[] = [];
     const conditionErrors: StreamEventInput[] = [];
     for (const event of events) {
@@ -737,6 +888,18 @@ export class StreamSubscribers {
       }
     }
     return { matched, conditionErrors };
+  }
+
+  #selectorFor(
+    subscriptionKey: string,
+    configOffset: number,
+    config: SubscriptionConfiguredPayload,
+  ): CompiledEventSelector {
+    const cached = this.#compiledSelectors.get(subscriptionKey);
+    if (cached !== undefined && cached.configOffset === configOffset) return cached.selector;
+    const selector = compileEventSelector(config.selector);
+    this.#compiledSelectors.set(subscriptionKey, { configOffset, selector });
+    return selector;
   }
 
   /**
@@ -892,22 +1055,32 @@ export class StreamSubscribers {
   // ===========================================================================
 
   /** A `subscription-configured` event committed (new or replacing). */
-  onSubscriptionConfigured(payload: SubscriptionConfiguredPayload, eventOffset: number): void {
+  onSubscriptionConfigured(
+    payload: SubscriptionConfiguredPayload,
+    eventOffset: number,
+    options?: ControlSideEffectOptions,
+  ): void {
     const key = payload.subscriptionKey;
+    this.#compiledSelectors.delete(key);
     // A replaced config's live connection belongs to the old config; drop it
     // and let reconcile re-establish against the new one.
     this.#connections.get(key)?.close("replaced");
     const cursor = initialCursorFor(payload, eventOffset);
-    this.#hooks.store.ensure(key, cursor);
-    // An explicit deliver policy on a REPLACEMENT config is a seek; without
-    // one the existing cursor is kept (config update ≠ replay request).
-    if (payload.delivery.mode !== "wake" && payload.deliver !== undefined) {
+    const existing = this.#hooks.store.get(key);
+    if (existing === undefined) {
+      // Fresh rows already have the requested cursor and clean failure state;
+      // do not rewrite the just-inserted row with setCursor + ack.
+      this.#hooks.store.ensure(key, cursor);
+    } else if (payload.delivery.mode !== "wake" && payload.deliver !== undefined) {
+      // An explicit deliver policy on a REPLACEMENT config is a seek; setCursor
+      // also clears its backoff, so a following ack would be redundant.
       this.#hooks.store.setCursor(key, cursor);
+    } else {
+      // Without an explicit replacement seek, preserve the existing cursor
+      // while clearing old-target failure state for an immediate retry.
+      this.#hooks.store.ack(key, existing.ackedOffset);
     }
-    // Fresh config clears any backoff so the new target gets an immediate try.
-    const row = this.#hooks.store.get(key);
-    if (row !== undefined) this.#hooks.store.ack(key, row.ackedOffset);
-    this.wake();
+    if (options?.deferReconcile !== true) this.wake();
   }
 
   /** A `subscription-removed` event committed. Deleting the row is revocation. */
@@ -917,6 +1090,7 @@ export class StreamSubscribers {
     this.#batchLimits.delete(subscriptionKey);
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#subscriptionMetrics.delete(subscriptionKey);
+    this.#compiledSelectors.delete(subscriptionKey);
   }
 
   #subscriptionMetricsFor(subscriptionKey: string) {
@@ -933,9 +1107,13 @@ export class StreamSubscribers {
   }
 
   /** A `subscription-cursor-set` fact committed: the audited seek. */
-  onCursorSet(subscriptionKey: string, afterOffset: number): void {
+  onCursorSet(
+    subscriptionKey: string,
+    afterOffset: number,
+    options?: ControlSideEffectOptions,
+  ): void {
     this.#hooks.store.setCursor(subscriptionKey, afterOffset);
-    this.wake();
+    if (options?.deferReconcile !== true) this.wake();
   }
 
   /**
@@ -944,12 +1122,12 @@ export class StreamSubscribers {
    * un-park — moving the cursor is `subscription-cursor-set`'s job, its own
    * fact; a redrive appends both.
    */
-  onResumed(subscriptionKey: string): void {
+  onResumed(subscriptionKey: string, options?: ControlSideEffectOptions): void {
     const row = this.#hooks.store.get(subscriptionKey);
     if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#batchLimits.delete(subscriptionKey);
-    this.wake();
+    if (options?.deferReconcile !== true) this.wake();
   }
 
   // ===========================================================================
@@ -976,39 +1154,44 @@ export class StreamSubscribers {
     let open = true;
 
     const pump = async () => {
-      if (draining) return;
       draining = true;
       try {
         while (open) {
           let events: StreamEvent[] = [];
           let deliveredBytes = 0;
           if (deliverEvents) {
+            const stateMaxOffset = this.#hooks.coreState().maxOffset;
             // Same byte-capped read as the push drain: a batch of near-2MB
             // events in one live frame would blow the RPC frame limit and turn
-            // into a delivery failure the subscriber can never get past.
-            const readEvents = this.#readBatch(cursor, DELIVERY_BATCH_LIMIT);
-            const lastOffset = readEvents.at(-1)?.event.offset;
-            if (lastOffset === undefined) {
+            // into a delivery failure the subscriber can never get past. The
+            // in-memory head avoids an empty SQLite probe once caught up.
+            const read =
+              cursor < stateMaxOffset
+                ? this.#readBatch(cursor, DELIVERY_BATCH_LIMIT, subscriptionType === "configured")
+                : undefined;
+            if (read?.lastOffset === undefined) {
               // Caught up; the next append wakes us again. The first drain
               // still owes the initial state batch.
               if (!initialBatchPending) return;
             } else {
-              cursor = lastOffset;
+              cursor = read.lastOffset;
               // Configured (wake) connections are a durable lane: ephemeral
               // events are dropped from delivery (the cursor above already
               // advanced over them), so hosted processors structurally never
               // see one. Ephemeral subscriptions receive them, live and on
               // replay.
-              const visible =
-                subscriptionType === "configured"
-                  ? readEvents.filter((entry) => entry.event.ephemeral !== true)
-                  : readEvents;
-              const delivered =
-                args.selector === undefined
+              const visible = read.events;
+              events =
+                args.selector === undefined || args.selector.matchesAll
                   ? visible
-                  : visible.filter((entry) => selectorMatchesSafely(args.selector!, entry.event));
-              events = delivered.map((entry) => entry.event);
-              deliveredBytes = delivered.reduce((sum, entry) => sum + entry.byteLength, 0);
+                  : visible.filter((event) => selectorMatchesSafely(args.selector!, event));
+              deliveredBytes =
+                events.length === visible.length
+                  ? read.byteLength
+                  : events.reduce(
+                      (sum, event) => sum + (read.byteLengthByOffset.get(event.offset) ?? 0),
+                      0,
+                    );
               if (events.length === 0 && !initialBatchPending) continue;
             }
           } else {
@@ -1075,7 +1258,13 @@ export class StreamSubscribers {
       bytesSent: 0,
       settleLatency: new LatencyRing(),
       pingRtt: new LatencyRing(),
-      wake: () => void pump(),
+      // Stay synchronous while a pump owns delivery. Entering an async
+      // function just to hit its draining guard allocates one resolved Promise
+      // per connection on every append burst; the active loop already rereads
+      // the stream head after each delivery yield.
+      wake: () => {
+        if (!draining) void pump();
+      },
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
       close: (reason) => {
@@ -1083,6 +1272,10 @@ export class StreamSubscribers {
         open = false;
         if (this.#connections.get(subscriptionKey) === connection) {
           this.#connections.delete(subscriptionKey);
+          if (subscriptionType === "configured") {
+            this.#configuredConnectionCount -= 1;
+            if (this.#configuredConnectionCount === 0) this.#clearIdleTimer();
+          }
         }
         // The ping stub proxies through the same chain the sink retains
         // (wake lane), so it releases before the sink tears that chain down.
@@ -1105,6 +1298,7 @@ export class StreamSubscribers {
     };
 
     this.#connections.set(subscriptionKey, connection);
+    if (subscriptionType === "configured") this.#configuredConnectionCount += 1;
     this.#hooks.appendFact({
       type: "events.iterate.com/stream/subscriber-connected",
       payload: {
@@ -1260,18 +1454,37 @@ export class StreamSubscribers {
   }
 
   /**
-   * Keep the in-memory idle timer armed only while durable delivery
-   * connections exist (the thing that pins the DO resident). Reset on every
-   * append; cleared once no durable connection remains. No storage writes,
-   * and nothing scheduled against a hibernated DO.
+   * Keep one in-memory idle timer armed while durable delivery connections
+   * exist (the thing that pins the DO resident). Every append advances a
+   * numeric inactivity deadline; the existing timer checks that deadline when
+   * it fires instead of allocating and cancelling one timer per append.
    */
-  armOrClearIdleTimer(): void {
-    if (this.#idleTimer !== undefined) {
-      clearTimeout(this.#idleTimer);
-      this.#idleTimer = undefined;
+  armOrClearIdleTimer(nowMs: number): void {
+    if (this.#configuredConnectionCount === 0) {
+      this.#clearIdleTimer();
+      return;
     }
-    if (this.#configuredConnectionKeys().length === 0) return;
-    this.#idleTimer = setTimeout(() => this.runIdleTeardownNow(), this.#idleTeardownMs);
+    this.#idleDeadlineMs = nowMs + this.#idleTeardownMs;
+    this.#idleTimer ??= setTimeout(() => this.#onIdleTimer(), this.#idleTeardownMs);
+  }
+
+  #onIdleTimer(): void {
+    this.#idleTimer = undefined;
+    const deadline = this.#idleDeadlineMs;
+    if (deadline === undefined) return;
+    const remainingMs = deadline - this.#hooks.now();
+    if (remainingMs > 0) {
+      this.#idleTimer = setTimeout(() => this.#onIdleTimer(), remainingMs);
+      return;
+    }
+    this.#idleDeadlineMs = undefined;
+    this.runIdleTeardownNow();
+  }
+
+  #clearIdleTimer(): void {
+    if (this.#idleTimer !== undefined) clearTimeout(this.#idleTimer);
+    this.#idleTimer = undefined;
+    this.#idleDeadlineMs = undefined;
   }
 
   /**
@@ -1281,7 +1494,7 @@ export class StreamSubscribers {
    * The idle timer's action, also exposed for tests / operator use.
    */
   runIdleTeardownNow(): void {
-    this.#idleTimer = undefined;
+    this.#clearIdleTimer();
     // Snapshot first: close() mutates the connection table. The whole loop is
     // one synchronous DO turn, so nothing foreign can interleave — the only
     // events appended during it are our own subscriber-disconnected facts.

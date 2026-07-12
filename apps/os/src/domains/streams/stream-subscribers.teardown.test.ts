@@ -8,7 +8,7 @@
 // This file drives the real module with a DO-faithful harness: facts land in
 // the log, every fact-append triggers wake(), parked facts fold.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CoreProcessorContract,
   type SubscriptionConfiguredPayload,
@@ -36,17 +36,20 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     get: (k) => rows.get(k),
     list: () => [...rows.values()],
     ensure: (k, acked) => {
-      if (!rows.has(k)) {
+      let row = rows.get(k);
+      if (row === undefined) {
         lastEpoch += 1;
-        rows.set(k, {
+        row = {
           subscriptionKey: k,
           ackedOffset: acked,
           attempt: 0,
           nextAttemptAt: null,
           lastError: null,
           epoch: lastEpoch,
-        });
+        };
+        rows.set(k, row);
       }
+      return { ...row };
     },
     ack: (k, acked, epoch) => {
       const row = rows.get(k);
@@ -57,6 +60,15 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       row.nextAttemptAt = null;
       row.lastError = null;
     },
+    skip: (k, acked, epoch) => {
+      const row = rows.get(k);
+      if (!row || row.epoch !== epoch) return;
+      row.ackedOffset = Math.max(row.ackedOffset, acked);
+      row.attempt = 0;
+      row.nextAttemptAt = null;
+      row.lastError = null;
+    },
+    flushSkipped: () => {},
     advanceWatermark: (k, acked) => {
       const row = rows.get(k);
       if (!row) return;
@@ -182,6 +194,46 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
 }
 
 describe("StreamSubscribers with a DO-faithful (log-appending) harness", () => {
+  it("extends one idle deadline across an append burst without timer churn", async () => {
+    const h = makeFaithfulHarness();
+    h.configured["k"] = {
+      latestConfiguredEvent: {
+        offset: 1,
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: h.wakePayload,
+        createdAt: new Date(1).toISOString(),
+      },
+    };
+    h.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: h.wakePayload,
+    });
+    h.subscribers.onSubscriptionConfigured(h.wakePayload as never, 1);
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    vi.useFakeTimers({ now: 0 });
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      h.subscribers.armOrClearIdleTimer(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+      h.subscribers.armOrClearIdleTimer(30_000);
+
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+      expect(clearTimeoutSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.subscribers.hasConnection("k")).toBe(true);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(h.subscribers.hasConnection("k")).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.subscribers.hasConnection("k")).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
   it("idle teardown does not re-poke off its own disconnect facts", async () => {
     const h = makeFaithfulHarness();
     h.configured["k"] = {

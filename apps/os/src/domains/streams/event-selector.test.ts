@@ -36,17 +36,20 @@ describe("EventSelector schema", () => {
 describe("compileEventSelector", () => {
   it("an undefined selector matches everything", () => {
     const selector = compileEventSelector(undefined);
+    expect(selector.matchesAll).toBe(true);
     expect(selector.matches(evt("a"))).toBe(true);
     expect(selector.matches(evt("b", { anything: 1 }))).toBe(true);
   });
 
   it("an empty selector object matches everything", () => {
     const selector = compileEventSelector({});
+    expect(selector.matchesAll).toBe(true);
     expect(selector.matches(evt("a"))).toBe(true);
   });
 
   it("eventTypes filters by exact type", () => {
     const selector = compileEventSelector({ eventTypes: ["a", "b"] });
+    expect(selector.matchesAll).toBe(false);
     expect(selector.matches(evt("a"))).toBe(true);
     expect(selector.matches(evt("b"))).toBe(true);
     expect(selector.matches(evt("c"))).toBe(false);
@@ -54,12 +57,17 @@ describe("compileEventSelector", () => {
   });
 
   it('"*" anywhere in eventTypes means all types', () => {
-    expect(compileEventSelector({ eventTypes: ["*"] }).matches(evt("anything"))).toBe(true);
-    expect(compileEventSelector({ eventTypes: ["a", "*"] }).matches(evt("b"))).toBe(true);
+    const wildcard = compileEventSelector({ eventTypes: ["*"] });
+    const mixed = compileEventSelector({ eventTypes: ["a", "*"] });
+    expect(wildcard.matchesAll).toBe(true);
+    expect(mixed.matchesAll).toBe(true);
+    expect(wildcard.matches(evt("anything"))).toBe(true);
+    expect(mixed.matches(evt("b"))).toBe(true);
   });
 
   it("a condition must evaluate to exactly `true` — truthy is not enough", () => {
     const truthy = compileEventSelector({ condition: "payload.count" });
+    expect(truthy.matchesAll).toBe(false);
     expect(truthy.matches(evt("a", { count: 1 }))).toBe(false); // 1 is truthy, not `true`
     expect(truthy.matches(evt("a", { count: "yes" }))).toBe(false);
 
