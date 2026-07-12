@@ -1020,6 +1020,9 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
 
     store.skip("k", 100, before.epoch);
     expect(store.get("k")!.ackedOffset).toBe(5);
+
+    store.stageAck("k", 100, before.epoch);
+    expect(store.get("k")!.ackedOffset).toBe(5);
   });
 
   it("persists monotonic fenced and unfenced acknowledgements", () => {
@@ -1162,7 +1165,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     const skippedUpdateBindings: number[] = [];
     const store = new SqliteSubscriptionCursorStore(
       wrapSqlStorage(db, (statement, bindings) => {
-        if (statement.includes("with skipped(subscription_key")) {
+        if (statement.includes("with progress(subscription_key")) {
           skippedUpdateBindings.push(bindings.length);
         }
       }),
@@ -1175,7 +1178,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
       for (let index = 0; index < 100; index += 1) {
         store.skip(`k-${index}`, offset, epochs[index]!);
       }
-      store.flushSkipped();
+      store.flushPending();
     }
     expect(skippedUpdateBindings).toEqual([]);
     expect(store.get("k-0")!.ackedOffset).toBe(63);
@@ -1183,7 +1186,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     for (let index = 0; index < 100; index += 1) {
       store.skip(`k-${index}`, 64, epochs[index]!);
     }
-    store.flushSkipped();
+    store.flushPending();
 
     // 33 rows * 3 bindings = 99, below Cloudflare's 100-binding maximum.
     expect(skippedUpdateBindings).toEqual([99, 99, 99, 3]);
@@ -1195,12 +1198,87 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
     store.ensure("k", 0);
     store.skip("k", 1, store.get("k")!.epoch);
-    store.flushSkipped();
+    store.flushPending();
 
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(0);
 
-    store.flushSkipped(true);
+    store.flushPending("all");
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(1);
+  });
+
+  it("bounds successful push replay to seven batches and flushes the drain tail", () => {
+    const db = new DatabaseSync(":memory:");
+    let progressWrites = 0;
+    const store = new SqliteSubscriptionCursorStore(
+      wrapSqlStorage(db, (statement) => {
+        if (statement.includes("with progress(subscription_key")) progressWrites += 1;
+      }),
+    );
+    const epoch = store.ensure("k", 0).epoch;
+
+    for (let batch = 1; batch < 8; batch += 1) store.stageAck("k", batch * 1_000, epoch);
+    expect(progressWrites).toBe(0);
+    expect(store.get("k")!.ackedOffset).toBe(7_000);
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(0);
+
+    store.stageAck("k", 8_000, epoch);
+    expect(progressWrites).toBe(1);
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(8_000);
+
+    store.stageAck("k", 9_000, epoch);
+    store.flushPending("delivered");
+    expect(progressWrites).toBe(2);
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(9_000);
+  });
+
+  it("keeps skip and delivery checkpoint bounds independent in a mixed run", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    const epoch = store.ensure("k", 0).epoch;
+    store.stageAck("k", 100, epoch);
+    for (let offset = 101; offset < 164; offset += 1) store.skip("k", offset, epoch);
+    store.flushPending();
+
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(0);
+    store.skip("k", 164, epoch);
+    store.flushPending();
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(164);
+  });
+
+  it("flushes delivered progress without forcing unrelated sub-threshold skips", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    const skipEpoch = store.ensure("skip", 0).epoch;
+    const pushEpoch = store.ensure("push", 0).epoch;
+    store.skip("skip", 1, skipEpoch);
+    store.stageAck("push", 1, pushEpoch);
+
+    store.flushPending("delivered");
+    const reloaded = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    expect(reloaded.get("skip")!.ackedOffset).toBe(0);
+    expect(reloaded.get("push")!.ackedOffset).toBe(1);
+  });
+
+  it("resolves staged push progress before failure and lets a seek supersede it", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    let epoch = store.ensure("k", 0).epoch;
+    store.stageAck("k", 100, epoch);
+    store.nack("k", { attempt: 1, nextAttemptAt: 10, error: "retry" });
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")).toMatchObject({
+      ackedOffset: 100,
+      attempt: 1,
+    });
+
+    store.setCursor("k", 2);
+    epoch = store.get("k")!.epoch;
+    store.stageAck("k", 200, epoch);
+    store.setCursor("k", 3);
+    store.flushPending("all");
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")).toMatchObject({
+      ackedOffset: 3,
+      attempt: 0,
+    });
   });
 
   it("retains uncommitted skip progress when a later checkpoint batch fails", () => {
@@ -1209,7 +1287,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     let failSecondCheckpoint = false;
     const store = new SqliteSubscriptionCursorStore(
       wrapSqlStorage(db, (statement) => {
-        if (!statement.includes("with skipped(subscription_key")) return;
+        if (!statement.includes("with progress(subscription_key")) return;
         checkpointCalls += 1;
         if (!failSecondCheckpoint || checkpointCalls !== 2) return;
         failSecondCheckpoint = false;
@@ -1224,21 +1302,21 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
 
     checkpointCalls = 0;
     failSecondCheckpoint = true;
-    expect(() => store.flushSkipped()).toThrow("injected checkpoint failure");
+    expect(() => store.flushPending()).toThrow("injected checkpoint failure");
     const partiallyReloaded = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
     expect(partiallyReloaded.get("k-32")!.ackedOffset).toBe(64);
     expect(partiallyReloaded.get("k-33")!.ackedOffset).toBe(0);
 
-    store.flushSkipped();
+    store.flushPending();
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k-99")!.ackedOffset).toBe(64);
   });
 
   it("lets an immediate delivery ack subsume pending skip progress", () => {
     const db = new DatabaseSync(":memory:");
-    let skippedUpdates = 0;
+    let progressUpdates = 0;
     const store = new SqliteSubscriptionCursorStore(
       wrapSqlStorage(db, (statement) => {
-        if (statement.includes("with skipped(subscription_key")) skippedUpdates += 1;
+        if (statement.includes("with progress(subscription_key")) progressUpdates += 1;
       }),
     );
     store.ensure("k", 0);
@@ -1246,9 +1324,9 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     store.skip("k", 1, epoch);
 
     store.ack("k", 2, epoch);
-    store.flushSkipped(true);
+    store.flushPending("all");
 
-    expect(skippedUpdates).toBe(0);
+    expect(progressUpdates).toBe(0);
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(2);
   });
 

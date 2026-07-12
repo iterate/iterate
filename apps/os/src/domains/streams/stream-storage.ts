@@ -40,9 +40,10 @@ const EVENT_INSERT_ROW_WIDTH = 5;
 const CHUNK_INSERT_ROW_WIDTH = 3;
 const MAX_EVENT_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / EVENT_INSERT_ROW_WIDTH);
 const MAX_CHUNK_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / CHUNK_INSERT_ROW_WIDTH);
-const SKIPPED_ACK_ROW_WIDTH = 3;
-const MAX_SKIPPED_ACK_ROWS = Math.floor(MAX_SQL_BINDINGS / SKIPPED_ACK_ROW_WIDTH);
+const CURSOR_PROGRESS_ROW_WIDTH = 3;
+const MAX_CURSOR_PROGRESS_ROWS = Math.floor(MAX_SQL_BINDINGS / CURSOR_PROGRESS_ROW_WIDTH);
 const MAX_UNPERSISTED_SKIP_OFFSETS = 64;
+const MAX_UNPERSISTED_DELIVERY_BATCHES = 8;
 const EVENT_INSERT_STATEMENTS = createInsertStatements(
   "insert into events (offset, type, idempotency_key, ephemeral, event_json) values",
   EVENT_INSERT_ROW_WIDTH,
@@ -53,7 +54,7 @@ const CHUNK_INSERT_STATEMENTS = createInsertStatements(
   CHUNK_INSERT_ROW_WIDTH,
   MAX_CHUNK_ROWS_PER_INSERT,
 );
-const SKIPPED_ACK_STATEMENTS = createSkippedAckStatements(MAX_SKIPPED_ACK_ROWS);
+const CURSOR_PROGRESS_STATEMENTS = createCursorProgressStatements(MAX_CURSOR_PROGRESS_ROWS);
 const textEncoder = new TextEncoder();
 
 /**
@@ -625,8 +626,9 @@ export class StreamEventLog {
  * One durable subscription's delivery cursor row. `ackedOffset` is exclusive
  * (delivery resumes at +1). For push subscriptions it is the AUTHORITATIVE
  * cursor: delivery offsets advance only when the receiver's awaited call
- * resolved; no-side-effect skips may be durably checkpointed up to 64 offsets
- * behind. For wake subscriptions it is an OBSERVATIONAL watermark: the checkpoint the
+ * resolved; a crash can replay at most seven successful RPC batches. Pure
+ * no-side-effect skips checkpoint in 64-offset chunks at reconciliation
+ * boundaries. For wake subscriptions it is an OBSERVATIONAL watermark: the checkpoint the
  * subscriber reported on the last successful poke, used only for poke
  * coalescing and lag display — the subscriber's own `{offset, state}` snapshot
  * is the truth, and a lost or stale row costs one redundant poke, nothing
@@ -667,13 +669,19 @@ export type SubscriptionCursorStore = {
    */
   ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void;
   /**
+   * Successful internal RPC push delivery. Advance immediately, but permit a
+   * bounded durable lag so consecutive remote calls do not each wait behind a
+   * SQLite output-gate commit. Webhooks use {@link ack} instead.
+   */
+  stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): void;
+  /**
    * Advance across a batch that produced no receiver side effect (selector
    * miss / ephemeral-only). The in-memory cursor moves immediately; durable
    * persistence may lag by a bounded window because replaying a skip is safe.
    */
   skip(subscriptionKey: string, ackedOffset: number, epoch: number): void;
-  /** Persist pending skip-only cursor progress, when due or unconditionally. */
-  flushSkipped(force?: boolean): void;
+  /** Persist pending cursor progress that is due, all progress, or delivered progress. */
+  flushPending(mode?: "due" | "all" | "delivered"): void;
   /**
    * Advance the wake lane's observational watermark (monotonic) after a poke
    * whose checkpoint did NOT progress. Clears the retry schedule (the poke
@@ -798,9 +806,9 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   >;
   readonly #sql: SqlStorage;
   #cachedRows: Map<string, SubscriptionCursorRow> | undefined;
-  readonly #pendingSkipped = new Map<
+  readonly #pendingProgress = new Map<
     string,
-    { ackedOffset: number; epoch: number; persistedOffset: number }
+    { ackedOffset: number; epoch: number; skippedOffsets: number; deliveredBatches: number }
   >();
 
   constructor(sql: SqlStorage) {
@@ -867,7 +875,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     // already owns the monotonic maximum; avoid recomputing it in SQLite.
     const nextOffset = Math.max(row.ackedOffset, ackedOffset);
     if (
-      !this.#pendingSkipped.has(subscriptionKey) &&
+      !this.#pendingProgress.has(subscriptionKey) &&
       nextOffset === row.ackedOffset &&
       row.attempt === 0 &&
       row.nextAttemptAt === null &&
@@ -884,22 +892,43 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     } else {
       this.#db.ackFenced({ ...params, epoch });
     }
-    this.#pendingSkipped.delete(subscriptionKey);
+    this.#pendingProgress.delete(subscriptionKey);
     row.ackedOffset = nextOffset;
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
   }
 
+  stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): void {
+    const row = this.#rows().get(subscriptionKey);
+    if (row === undefined || row.epoch !== epoch) return;
+    const nextOffset = Math.max(row.ackedOffset, ackedOffset);
+    const clearsFailure = row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null;
+    const pending = this.#pendingProgress.get(subscriptionKey);
+    if (nextOffset === row.ackedOffset && pending === undefined && !clearsFailure) return;
+    this.#pendingProgress.set(subscriptionKey, {
+      ackedOffset: nextOffset,
+      epoch,
+      skippedOffsets: pending?.skippedOffsets ?? 0,
+      deliveredBatches: (pending?.deliveredBatches ?? 0) + 1,
+    });
+    row.ackedOffset = nextOffset;
+    row.attempt = 0;
+    row.nextAttemptAt = null;
+    row.lastError = null;
+    this.flushPending(clearsFailure ? "all" : "due");
+  }
+
   skip(subscriptionKey: string, ackedOffset: number, epoch: number): void {
     const row = this.#rows().get(subscriptionKey);
     if (row === undefined || row.epoch !== epoch || ackedOffset <= row.ackedOffset) return;
     const clearsFailure = row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null;
-    const pending = this.#pendingSkipped.get(subscriptionKey);
-    this.#pendingSkipped.set(subscriptionKey, {
+    const pending = this.#pendingProgress.get(subscriptionKey);
+    this.#pendingProgress.set(subscriptionKey, {
       ackedOffset,
       epoch,
-      persistedOffset: pending?.persistedOffset ?? row.ackedOffset,
+      skippedOffsets: (pending?.skippedOffsets ?? 0) + ackedOffset - row.ackedOffset,
+      deliveredBatches: pending?.deliveredBatches ?? 0,
     });
     row.ackedOffset = ackedOffset;
     row.attempt = 0;
@@ -907,31 +936,27 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     row.lastError = null;
     // A due retry that found only skips consumed the persisted backoff. Do not
     // leave its old alarm state behind on a quiet stream.
-    if (clearsFailure) this.flushSkipped(true);
+    if (clearsFailure) this.flushPending("all");
   }
 
-  flushSkipped(force = false): void {
-    if (this.#pendingSkipped.size === 0) return;
-    if (!force) {
-      let checkpointDue = false;
-      for (const pending of this.#pendingSkipped.values()) {
-        if (pending.ackedOffset - pending.persistedOffset >= MAX_UNPERSISTED_SKIP_OFFSETS) {
-          checkpointDue = true;
-          break;
-        }
-      }
-      if (!checkpointDue) return;
-    }
-
-    const pending = [...this.#pendingSkipped.entries()];
-    for (let start = 0; start < pending.length; start += MAX_SKIPPED_ACK_ROWS) {
-      const batch = pending.slice(start, start + MAX_SKIPPED_ACK_ROWS);
+  flushPending(mode: "due" | "all" | "delivered" = "due"): void {
+    if (this.#pendingProgress.size === 0) return;
+    const all = [...this.#pendingProgress.entries()];
+    const checkpointDue = all.some(
+      ([, pending]) =>
+        pending.deliveredBatches >= MAX_UNPERSISTED_DELIVERY_BATCHES ||
+        pending.skippedOffsets >= MAX_UNPERSISTED_SKIP_OFFSETS,
+    );
+    if (mode === "due" && !checkpointDue) return;
+    const pending = mode === "delivered" ? all.filter(([, row]) => row.deliveredBatches > 0) : all;
+    for (let start = 0; start < pending.length; start += MAX_CURSOR_PROGRESS_ROWS) {
+      const batch = pending.slice(start, start + MAX_CURSOR_PROGRESS_ROWS);
       const bindings: SqlStorageValue[] = [];
       for (const [subscriptionKey, row] of batch) {
         bindings.push(subscriptionKey, row.ackedOffset, row.epoch);
       }
-      this.#sql.exec(SKIPPED_ACK_STATEMENTS[batch.length]!, ...bindings);
-      for (const [subscriptionKey] of batch) this.#pendingSkipped.delete(subscriptionKey);
+      this.#sql.exec(CURSOR_PROGRESS_STATEMENTS[batch.length]!, ...bindings);
+      for (const [subscriptionKey] of batch) this.#pendingProgress.delete(subscriptionKey);
     }
   }
 
@@ -940,7 +965,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     if (row === undefined) return;
     const nextOffset = Math.max(row.ackedOffset, ackedOffset);
     if (
-      !this.#pendingSkipped.has(subscriptionKey) &&
+      !this.#pendingProgress.has(subscriptionKey) &&
       nextOffset === row.ackedOffset &&
       row.nextAttemptAt === null
     ) {
@@ -950,7 +975,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       subscriptionKey,
       ackedOffset: nextOffset,
     });
-    this.#pendingSkipped.delete(subscriptionKey);
+    this.#pendingProgress.delete(subscriptionKey);
     row.ackedOffset = nextOffset;
     row.nextAttemptAt = null;
   }
@@ -961,7 +986,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   ): void {
     const row = this.#rows().get(subscriptionKey);
     if (row === undefined) return;
-    if (this.#pendingSkipped.has(subscriptionKey)) this.flushSkipped(true);
+    if (this.#pendingProgress.has(subscriptionKey)) this.flushPending("all");
     const error = args.error.slice(0, 2_000);
     this.#db.nack({
       subscriptionKey,
@@ -984,7 +1009,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       ackedOffset,
       epoch,
     });
-    this.#pendingSkipped.delete(subscriptionKey);
+    this.#pendingProgress.delete(subscriptionKey);
     row.ackedOffset = ackedOffset;
     row.attempt = 0;
     row.nextAttemptAt = null;
@@ -996,7 +1021,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     const rows = this.#rows();
     if (!rows.has(subscriptionKey)) return;
     this.#db.delete({ subscriptionKey });
-    this.#pendingSkipped.delete(subscriptionKey);
+    this.#pendingProgress.delete(subscriptionKey);
     rows.delete(subscriptionKey);
   }
 
@@ -1062,20 +1087,20 @@ function createInsertStatements(prefix: string, rowWidth: number, maxRows: numbe
   );
 }
 
-function createSkippedAckStatements(maxRows: number): string[] {
+function createCursorProgressStatements(maxRows: number): string[] {
   return Array.from({ length: maxRows + 1 }, (_, rowCount) => {
     if (rowCount === 0) return "";
     const rows = Array.from({ length: rowCount }, () => "(?, ?, ?)").join(", ");
     return `
-      with skipped(subscription_key, acked_offset, epoch) as (values ${rows})
+      with progress(subscription_key, acked_offset, epoch) as (values ${rows})
       update subscriptions as current
-      set acked_offset = max(current.acked_offset, skipped.acked_offset),
+      set acked_offset = max(current.acked_offset, progress.acked_offset),
           attempt = 0,
           next_attempt_at = null,
           last_error = null
-      from skipped
-      where current.subscription_key = skipped.subscription_key
-        and current.epoch = skipped.epoch
+      from progress
+      where current.subscription_key = progress.subscription_key
+        and current.epoch = progress.epoch
     `;
   });
 }

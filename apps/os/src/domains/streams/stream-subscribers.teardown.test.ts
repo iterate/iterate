@@ -60,6 +60,14 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       row.nextAttemptAt = null;
       row.lastError = null;
     },
+    stageAck: (k, acked, epoch) => {
+      const row = rows.get(k);
+      if (!row || row.epoch !== epoch) return;
+      row.ackedOffset = Math.max(row.ackedOffset, acked);
+      row.attempt = 0;
+      row.nextAttemptAt = null;
+      row.lastError = null;
+    },
     skip: (k, acked, epoch) => {
       const row = rows.get(k);
       if (!row || row.epoch !== epoch) return;
@@ -68,7 +76,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       row.nextAttemptAt = null;
       row.lastError = null;
     },
-    flushSkipped: () => {},
+    flushPending: () => {},
     advanceWatermark: (k, acked) => {
       const row = rows.get(k);
       if (!row) return;

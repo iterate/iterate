@@ -472,7 +472,7 @@ export class StreamSubscribers {
       // delivery await (usually all the way to the head). Give the cursor
       // store one chance to checkpoint every lane's accumulated progress as
       // a multi-row write after reconciliation, instead of one UPDATE each.
-      this.#hooks.store.flushSkipped();
+      this.#hooks.store.flushPending();
     } catch (error) {
       console.error("stream durable subscription reconcile failed", error);
     }
@@ -846,14 +846,18 @@ export class StreamSubscribers {
           // flight bumped the epoch, and this ack no-ops instead of
           // clobbering it — the next iteration re-reads the row and drains
           // from wherever the seek pointed.
-          this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+          if (config.delivery.mode === "push") {
+            this.#hooks.store.stageAck(subscriptionKey, lastOffset, row.epoch);
+          } else {
+            this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+          }
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
           if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) return;
         }
       } finally {
         this.#pushDrains.delete(subscriptionKey);
-        this.#hooks.store.flushSkipped();
+        this.#hooks.store.flushPending("delivered");
       }
     })();
     this.#hooks.keepAlive(

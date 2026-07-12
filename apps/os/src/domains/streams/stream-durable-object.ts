@@ -190,7 +190,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
     this.#subscribers.onAlarm();
-    this.#subscriptionCursorStore.flushSkipped(true);
+    this.#subscriptionCursorStore.flushPending("all");
     this.#flushCoreProcessorState();
   }
 
@@ -1378,7 +1378,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#subscribers.runIdleTeardownNow();
     // A stream going quiet checkpoints before it hibernates, so the next wake
     // rebuilds from a fresh checkpoint instead of folding the debounce window.
-    this.#subscriptionCursorStore.flushSkipped(true);
+    this.#subscriptionCursorStore.flushPending("all");
     this.#flushCoreProcessorState();
   }
 

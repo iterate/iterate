@@ -56,6 +56,7 @@ function evt(offset: number, type: string, payload?: Record<string, unknown>): S
 class FakeCursorStore implements SubscriptionCursorStore {
   readonly rows = new Map<string, SubscriptionCursorRow>();
   ackCalls = 0;
+  stageAckCalls = 0;
   ensureCalls = 0;
   getCalls = 0;
   setCursorCalls = 0;
@@ -100,11 +101,21 @@ class FakeCursorStore implements SubscriptionCursorStore {
     row.lastError = null;
   }
 
+  stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): void {
+    this.stageAckCalls += 1;
+    const row = this.rows.get(subscriptionKey);
+    if (row === undefined || row.epoch !== epoch) return;
+    row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
+    row.attempt = 0;
+    row.nextAttemptAt = null;
+    row.lastError = null;
+  }
+
   skip(subscriptionKey: string, ackedOffset: number, epoch: number): void {
     this.ack(subscriptionKey, ackedOffset, epoch);
   }
 
-  flushSkipped(): void {}
+  flushPending(): void {}
 
   advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
     const row = this.rows.get(subscriptionKey);
@@ -470,6 +481,8 @@ describe("StreamSubscribers", () => {
       "k",
     );
     expect(h.row("k")).toMatchObject({ ackedOffset: 3, attempt: 0, nextAttemptAt: null });
+    expect(h.store.stageAckCalls).toBe(1);
+    expect(h.store.ackCalls).toBe(0);
 
     h.append(evt(4, "d"), evt(5, "e"));
     h.subscribers.wake();
@@ -1166,6 +1179,8 @@ describe("StreamSubscribers", () => {
     ]);
     expect(h.webhooks.map((call) => call.delivery.event.offset)).toEqual([1, 2, 3]);
     expect(h.row("k")?.ackedOffset).toBe(3);
+    expect(h.store.stageAckCalls).toBe(0);
+    expect(h.store.ackCalls).toBe(3);
     expect(h.pushes).toHaveLength(0); // webhook rides its own dial lane
 
     const first = h.webhooks[0]!.delivery;
