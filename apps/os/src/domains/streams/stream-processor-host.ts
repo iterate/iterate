@@ -531,18 +531,25 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       const entry = requireEntry(name);
       const snapshot = await entry.processor.snapshot();
 
-      // The sink: the one shape every subscriber gives the stream. Batches are
-      // serialized per processor; each batch's promise is RETURNED so the
-      // stream's result-pull observes ingest failures (its liveness signal —
-      // a rejection closes the connection and the spine re-pokes, replaying
-      // from this processor's checkpoint). The chain itself swallows the
-      // rejection so one failed batch never wedges the batches behind it.
+      // Calls on one returned sink are ordered and failure-sticky: after one
+      // ingest rejects, later calls already queued on that connection reject
+      // without processing. A replacement handshake gets a fresh local fence
+      // and replays from the durable checkpoint. The processor-wide chain
+      // still catches the failure so that replacement can resume behind it.
+      let deliveryFailure: { error: unknown } | null = null;
       const sink = (batch: StreamEventBatch) => {
-        const attempt = entry.ingestChain.then(() =>
-          entry.processor.ingest({ events: batch.events, streamMaxOffset: batch.streamMaxOffset }),
-        );
+        const attempt = entry.ingestChain.then(() => {
+          if (deliveryFailure !== null) throw deliveryFailure.error;
+          return entry.processor.ingest({
+            events: batch.events,
+            streamMaxOffset: batch.streamMaxOffset,
+          });
+        });
         entry.ingestChain = attempt.catch((error: unknown) => {
-          console.error(`stream processor "${name}" failed to ingest batch`, error);
+          if (deliveryFailure === null) {
+            deliveryFailure = { error };
+            console.error(`stream processor "${name}" failed to ingest batch`, error);
+          }
         });
         // Tracked, not merely waitUntil'd: the keepalive keeps the DO alive
         // through ingest AND parks its alarm ahead of it, so an eviction

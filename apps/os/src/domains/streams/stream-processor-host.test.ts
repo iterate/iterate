@@ -9,6 +9,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "./processor-contracts.ts";
+import type { StreamEventBatch } from "./rpc-types.ts";
+import type { StreamEvent } from "./schemas.ts";
 import { StreamProcessor, type StreamProcessorConstructorArgs } from "./stream-processor.ts";
 import { PROCESSOR_HOST_REVIVED_EVENT_TYPE } from "./stream-processor-host.ts";
 import { revivalBackoffMs, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
@@ -61,6 +63,78 @@ class Recorder extends StreamProcessor<RecorderContract> {
     await super.processEventBatch(args);
   }
 }
+
+function eventBatch(event: StreamEvent): StreamEventBatch {
+  return {
+    projectId: "prj_test",
+    path: "/agents/test",
+    events: [event],
+    streamMaxOffset: event.offset,
+    state: {},
+  };
+}
+
+describe("wake sink failure fence", () => {
+  it("makes one handshake terminal after the first failed ingest and replays the exact suffix", async () => {
+    const h = createProcessorHostHarness({
+      build: (host) => ({
+        a: host.add((deps) => new Recorder(RecorderA, deps)),
+      }),
+    });
+    const attemptedOffsets: number[] = [];
+    const successfulOffsets: number[] = [];
+    let failOnceAtOffset: number | undefined = 2;
+    const ingest = h.processors.a.ingest.bind(h.processors.a);
+    vi.spyOn(h.processors.a, "ingest").mockImplementation(async (args) => {
+      const offset = args.events[0]?.offset;
+      if (offset !== undefined) attemptedOffsets.push(offset);
+      if (offset === failOnceAtOffset) {
+        failOnceAtOffset = undefined;
+        throw new Error(`injected ingest failure at offset ${offset}`);
+      }
+      await ingest(args);
+      if (offset !== undefined) successfulOffsets.push(offset);
+    });
+    const events = await h.stream.append(
+      { type: PING, payload: {} },
+      { type: PING, payload: {} },
+      { type: PING, payload: {} },
+      { type: PING, payload: {} },
+    );
+    const wake = await h.host.wakeStreamSubscriber({
+      stream: { projectId: "prj_test", path: h.stream.path, streamMaxOffset: 4 },
+      subscriptionKey: "wake:recorder-a",
+      processorSlug: "recorder-a",
+    });
+
+    // Queue every call before the first ingest runs. Once offset 2 fails, this
+    // returned sink is terminal: offsets 3-4 must reject without processing.
+    const firstAttempt = await Promise.allSettled(
+      events.map((event) => wake.sink(eventBatch(event))),
+    );
+    expect(firstAttempt.map(({ status }) => status)).toEqual([
+      "fulfilled",
+      "rejected",
+      "rejected",
+      "rejected",
+    ]);
+    expect(attemptedOffsets).toEqual([1, 2]);
+    expect(successfulOffsets).toEqual([1]);
+    expect((await h.processors.a.snapshot()).offset).toBe(1);
+
+    const replay = await h.host.wakeStreamSubscriber({
+      stream: { projectId: "prj_test", path: h.stream.path, streamMaxOffset: 4 },
+      subscriptionKey: "wake:recorder-a",
+      processorSlug: "recorder-a",
+    });
+    expect(replay.checkpointOffset).toBe(1);
+    await Promise.all(events.slice(1).map((event) => replay.sink(eventBatch(event))));
+
+    expect(attemptedOffsets).toEqual([1, 2, 2, 3, 4]);
+    expect(successfulOffsets).toEqual([1, 2, 3, 4]);
+    expect((await h.processors.a.snapshot()).offset).toBe(4);
+  });
+});
 
 describe("revival", () => {
   it("appends the fact, cold-pulls every processor, and their reconciliations see it", async () => {
