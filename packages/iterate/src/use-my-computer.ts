@@ -21,6 +21,7 @@
 // call announces itself as NDJSON, which is how the app shows "in use".
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 
 import * as prompts from "@clack/prompts";
@@ -45,7 +46,10 @@ const myComputer = {
     const buttonList = buttons.map((b) => `"${escapeForAppleScript(b)}"`).join(", ");
     const { stdout } = await osascript(
       `display dialog "${escapeForAppleScript(question)}" ` +
-        `buttons {${buttonList}} default button "${escapeForAppleScript(buttons.at(-1)!)}" ` +
+        // Default to the FIRST button (the caller's safe/decline option, "No" by
+        // default): this can run arbitrary local Swift, so an accidental Return
+        // must not confirm.
+        `buttons {${buttonList}} default button "${escapeForAppleScript(buttons[0]!)}" ` +
         `with title "iterate · myComputer"`,
     );
     // osascript prints e.g. `button returned:Yes` — hand back just the choice.
@@ -69,12 +73,17 @@ const myComputer = {
   /**
    * A liveness probe, deliberately absent from the declared types so agents
    * never see it. The provider self-calls it over the full agent path to keep
-   * the capability-host warm and detect a dropped mount — see keepMountAlive.
+   * the capability-host warm and detect a dropped mount — see keepMountAlive. It
+   * returns THIS process's mount id so the caller can tell its own live mount
+   * from a different process that grabbed the same name (names collide easily).
    */
   async ["__ping"]() {
-    return { ok: true as const };
+    return MOUNT_ID;
   },
 };
+
+/** Unique per-process id, returned by `__ping`, so keepMountAlive can prove it still owns the mount. */
+const MOUNT_ID = randomUUID();
 
 /** Prose + a type signature so agents (and `__describe()`) know how to call this. */
 const INSTRUCTIONS = `A real person's Mac, shared live from their terminal for as long as \`iterate use-my-computer\` runs.
@@ -164,7 +173,13 @@ type ConnectInput = {
   reauth: () => Promise<ResolvedAuth>;
 };
 
-/** Mount `capability` at `itx.<name>` with freshly-resolved auth and return the live socket stub. */
+/**
+ * Connect (freshly-resolved auth) and mount `capability` at `itx.<name>`. The
+ * provide is timeout-bounded ABOVE connectItx's ~15s WebSocket handshake, and on
+ * ANY failure the session is disposed before we throw — so a slow or failed
+ * attempt can never leak a socket or, worse, complete late and silently replace
+ * the mount from under the keepalive loop.
+ */
 async function connectAndProvide(
   input: ConnectInput,
   name: string,
@@ -177,33 +192,39 @@ async function connectAndProvide(
     projectId: input.projectId,
     headers,
   }) as RpcStub<Project>;
-
-  await itx.provideCapability({
-    type: "live",
-    path: [name],
-    capability,
-    instructions: INSTRUCTIONS,
-    types: TYPES,
-  });
-  return itx;
+  try {
+    await withTimeout(
+      itx.provideCapability({
+        type: "live",
+        path: [name],
+        capability,
+        instructions: INSTRUCTIONS,
+        types: TYPES,
+      }),
+      PROVIDE_TIMEOUT_MS,
+      "provide",
+    );
+    return itx;
+  } catch (error) {
+    disposeItx(itx); // disposing the session cancels the in-flight handshake/provide
+    throw error;
+  }
 }
 
 const HEALTH_CHECK_INTERVAL_MS = 8_000;
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
-// A reconnect includes connectItx's WebSocket handshake (up to ~15s), so this
-// backstop sits ABOVE that — otherwise a handshake that would have succeeded is
-// abandoned mid-flight. connectItx's own handshake timeout rejects a dead
-// endpoint well before this fires, so recoveries never overlap.
-const RECONNECT_TIMEOUT_MS = 30_000;
+// The provide await includes connectItx's ~15s handshake, so its bound sits well
+// above that — a handshake that would have succeeded must not be abandoned.
+const PROVIDE_TIMEOUT_MS = 25_000;
 const RECOVERY_BACKOFF_MS = 3_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Race a promise against a timeout so a STALLED RPC (a wedged connection that
- * never errors) is treated as a failure instead of hanging forever. The
- * abandoned work is caught so a rejection that lands after the timeout can't
- * surface as an unhandled rejection.
+ * never errors) counts as a failure instead of hanging forever. The abandoned
+ * work is caught so a rejection landing after the timeout can't go unhandled;
+ * the caller disposes the underlying session, which actually cancels it.
  */
 function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
   work.catch(() => {});
@@ -227,85 +248,107 @@ function disposeItx(itx: RpcStub<Project>): void {
   }
 }
 
-/** Call the mount over the FULL agent path (`itx.<name>.__ping()`) — the same route an agent uses. */
-function pingMount(itx: RpcStub<Project>, name: string): Promise<void> {
-  const ping = (itx as unknown as Record<string, { __ping(): Promise<{ ok: true }> }>)[
-    name
-  ].__ping();
-  return withTimeout(ping, HEALTH_CHECK_TIMEOUT_MS, "mount ping").then(() => {});
+/** Ping the mount over the FULL agent path; returns the mount id the provider reports. */
+function pingMount(itx: RpcStub<Project>, name: string): Promise<string> {
+  const ping = (itx as unknown as Record<string, { __ping(): Promise<string> }>)[name].__ping();
+  return withTimeout(ping, HEALTH_CHECK_TIMEOUT_MS, "mount ping");
 }
 
 /**
- * Keep the live mount routable for as long as we run, and NEVER return. A live
- * capability's provider ref lives only in the capability-host DO's memory, so a
- * DO eviction or a dropped socket silently takes it "offline" while this process
- * keeps happily running. So we don't just heartbeat — we self-call the mount
- * over the full agent path: that round-trip keeps the host DO warm AND proves it
- * still answers. The first check runs right after the initial provide (no dead
- * startup window); thereafter every few seconds.
+ * Keep the live mount routable for as long as we run. A live capability's
+ * provider ref lives only in the capability-host DO's memory, so a DO eviction or
+ * a dropped socket silently takes it "offline" while this process keeps running.
+ * So every few seconds we self-call the mount over the full agent path: that
+ * round-trip keeps the host DO warm AND proves it still answers AS US — `__ping`
+ * returns our unique id, so a different process that grabbed the same name is
+ * detected rather than mistaken for our own live mount.
  *
- * When a check fails (eviction, a dropped or wedged socket, a deploy) we
- * reconnect FRESH — a new connection, with re-resolved auth so a reconnect past
- * the short access-token TTL still authenticates — provide again, and dispose the
- * old session. Recovery NEVER escapes the loop: a share session ends only when
- * the process does, so a failed round keeps the old stub, backs off, and retries
- * on the next tick. `onReprovided` fires whenever we re-establish it.
+ * States, reported via the callbacks (transitions only, not every retry):
+ * - answers with our id  → live (`onLive`).
+ * - doesn't answer       → dispose the suspect session and reconnect fresh (with
+ *   re-resolved auth, so a reconnect past the token TTL still authenticates);
+ *   `onDegraded` fires once until we're live again. This never throws out of the
+ *   loop — a failed round backs off and retries.
+ * - answers with a DIFFERENT id → another process owns the name; we `onConflict`
+ *   and STOP rather than fight it forever (they'd endlessly replace each other).
  */
 async function keepMountAlive(input: {
-  itx: RpcStub<Project>;
   connect: ConnectInput;
   name: string;
   capability: typeof myComputer;
-  onReprovided?: () => void;
-}): Promise<never> {
-  let itx = input.itx;
+  onLive?: () => void;
+  onDegraded?: () => void;
+  onConflict?: () => void;
+}): Promise<void> {
+  let session: RpcStub<Project> | undefined;
+  let live = false;
   while (true) {
-    try {
-      await pingMount(itx, input.name); // confirms the mount end-to-end + keeps the host warm
-    } catch {
-      // The mount isn't answering. Reconnect fresh (bounded above the handshake
-      // window); on failure keep the old stub, back off, and retry next tick —
-      // this must never throw out of the loop.
-      let fresh: RpcStub<Project> | undefined;
+    if (session === undefined) {
+      // (Re)connect. connectAndProvide self-disposes on failure, so nothing leaks
+      // and no abandoned attempt can late-mount.
       try {
-        fresh = await withTimeout(
-          connectAndProvide(input.connect, input.name, input.capability),
-          RECONNECT_TIMEOUT_MS,
-          "reconnect",
-        );
+        session = await connectAndProvide(input.connect, input.name, input.capability);
       } catch {
-        // couldn't recover this round (transient network / auth / endpoint down)
-      }
-      if (fresh === undefined) {
+        if (live) {
+          live = false;
+          input.onDegraded?.();
+        }
         await sleep(RECOVERY_BACKOFF_MS);
         continue;
       }
-      disposeItx(itx); // replace and free the old session
-      itx = fresh;
-      input.onReprovided?.();
+      live = true;
+      input.onLive?.();
+      await sleep(HEALTH_CHECK_INTERVAL_MS);
+      continue;
+    }
+
+    let observedId: string;
+    try {
+      observedId = await pingMount(session, input.name);
+    } catch {
+      disposeItx(session); // suspect/wedged — disposing cancels the pending ping
+      session = undefined;
+      if (live) {
+        live = false;
+        input.onDegraded?.();
+      }
+      continue; // reconnect immediately
+    }
+    if (observedId !== MOUNT_ID) {
+      input.onConflict?.();
+      disposeItx(session);
+      return; // yield the name; the caller (process/menu bar) decides what's next
+    }
+    if (!live) {
+      live = true;
+      input.onLive?.();
     }
     await sleep(HEALTH_CHECK_INTERVAL_MS);
   }
 }
 
 /**
- * Ask for a name, provide `itx.<name>`, and hold the line until Ctrl-C. Never
- * returns; the caller runs it as the body of a long-lived command.
+ * Ask for a name, provide `itx.<name>`, and hold the line until Ctrl-C (or until
+ * another session takes the name over). The keepalive loop owns the connection.
  */
 export async function shareMyComputer(
   input: ConnectInput & { log?: (message: string) => void },
-): Promise<never> {
+): Promise<void> {
   const log = input.log ?? ((message: string) => console.error(message));
   const name = input.name ?? (await askComputerName());
-  const itx = await connectAndProvide(input, name, myComputer);
-  log(`✅ itx.${name} is live for project ${input.projectId}. Press Ctrl-C to stop sharing.\n`);
-  log(agentPrompt(name));
-  return keepMountAlive({
-    itx,
+  let announced = false;
+  await keepMountAlive({
     connect: input,
     name,
     capability: myComputer,
-    onReprovided: () => log(`↻ re-shared itx.${name} after the mount dropped.`),
+    onLive: () => {
+      if (announced) return void log(`↻ itx.${name} re-shared.`);
+      announced = true;
+      log(`✅ itx.${name} is live for project ${input.projectId}. Press Ctrl-C to stop sharing.\n`);
+      log(agentPrompt(name));
+    },
+    onDegraded: () => log(`… itx.${name} dropped — reconnecting.`),
+    onConflict: () => log(`Another session is now sharing as itx.${name}; stopping this one.`),
   });
 }
 
@@ -316,21 +359,28 @@ export async function shareMyComputer(
  *
  * Out (stdout):
  *   {"type":"status","loggedIn":true,"project":"prj_…","name":"jonasComputer"}
+ *   {"type":"status",…,"reconnecting":true}   // mount dropped; recovering
+ *   {"type":"status",…,"conflict":true}       // another session took the name; stopping
  *   {"type":"call","id":1,"method":"ask","summary":"Deploy to prod?","at":"…"}
  *   {"type":"call-done","id":1,"method":"ask","ok":true,"ms":1234}
  */
-export async function runUseMyComputerJson(input: ConnectInput): Promise<never> {
+export async function runUseMyComputerJson(input: ConnectInput): Promise<void> {
   const name = input.name ?? proposeComputerName();
   const capability = withActivity(myComputer);
-  const itx = await connectAndProvide(input, name, capability);
-  const status = () => emitJson({ type: "status", loggedIn: true, project: input.projectId, name });
-  status();
+  const status = (extra?: Record<string, unknown>) =>
+    emitJson({ type: "status", loggedIn: true, project: input.projectId, name, ...extra });
   // If the menu-bar parent goes away, stdin closes — stop sharing rather than
   // leaving the computer silently lent with no window onto it.
   process.stdin.on("end", () => process.exit(0));
   process.stdin.resume();
-  // Re-emit status on every re-establish so the app knows it's still live.
-  return keepMountAlive({ itx, connect: input, name, capability, onReprovided: status });
+  await keepMountAlive({
+    connect: input,
+    name,
+    capability,
+    onLive: () => status(),
+    onDegraded: () => status({ reconnecting: true }),
+    onConflict: () => status({ conflict: true }),
+  });
 }
 
 /** One NDJSON line to stdout — the machine protocol's only output channel. */
@@ -389,13 +439,19 @@ function withActivity(capability: typeof myComputer): typeof myComputer {
   return wrapped as typeof myComputer;
 }
 
-/** A short, human-readable line describing one call — for the app's activity log. */
+/**
+ * A short, human-readable line describing one call — for the app's activity log.
+ * Total: it must never throw on a malformed argument (that would run BEFORE the
+ * wrapped method's own error handling), so it only reads string fields.
+ */
 function summarizeCall(method: string, arg: unknown): string {
-  const input = (arg ?? {}) as { question?: string; message?: string; code?: string };
-  if (method === "ask") return truncate(input.question ?? "asked a question");
-  if (method === "notify") return truncate(input.message ?? "sent a notification");
+  const str = (value: unknown): string | undefined =>
+    typeof value === "string" ? value : undefined;
+  const input = (arg ?? {}) as Record<string, unknown>;
+  if (method === "ask") return truncate(str(input.question) ?? "asked a question");
+  if (method === "notify") return truncate(str(input.message) ?? "sent a notification");
   if (method === "runSwift") {
-    const lines = (input.code ?? "").split("\n").filter((line) => line.trim() !== "").length;
+    const lines = (str(input.code) ?? "").split("\n").filter((line) => line.trim() !== "").length;
     return `ran ${lines} line${lines === 1 ? "" : "s"} of Swift`;
   }
   return method;
