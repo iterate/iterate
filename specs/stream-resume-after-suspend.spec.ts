@@ -160,14 +160,27 @@ function installSocketKillSwitch(page: Page) {
       }
       return closed;
     };
+    const mutedList: WebSocket[] = [];
     (window as { __muteAllApiSockets?: () => string[] }).__muteAllApiSockets = () => {
       const mutedUrls: string[] = [];
       for (const ws of apiSockets()) {
         mutedUrls.push(ws.url);
         muted.add(ws);
+        mutedList.push(ws);
       }
       return mutedUrls;
     };
+    // The registry sheds sockets on their close event, so this counts sockets
+    // that are genuinely still alive — the leak census. Historically each
+    // eviction left one never-closed corpse behind (eviction closed the fresh
+    // successor instead), so the census grew by one per suspend cycle.
+    (window as { __countLiveApiSockets?: () => number }).__countLiveApiSockets = () =>
+      apiSockets().length;
+    // The sharper invariant: every muted corpse must eventually be CLOSED
+    // (readyState CLOSING/CLOSED). A recovery that dials fresh but strands
+    // the corpse passes a bare census of "small number" — this doesn't.
+    (window as { __mutedApiSocketsStillOpen?: () => number }).__mutedApiSocketsStillOpen = () =>
+      mutedList.filter((ws) => ws.readyState < WebSocket.CLOSING).length;
   });
 }
 
@@ -370,10 +383,13 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // call now hangs; the socket map still holds the corpse, so recovery needs
   // the probe's timeout strikes to declare the transport suspect and evict it
   // (resetTransport) before a fresh dial can land.
+  const socketsBaseline = await page.evaluate(() =>
+    (window as unknown as { __countLiveApiSockets: () => number }).__countLiveApiSockets(),
+  );
   const mutedUrls = await page.evaluate(() =>
     (window as unknown as { __muteAllApiSockets: () => string[] }).__muteAllApiSockets(),
   );
-  console.log(`muted sockets: ${JSON.stringify(mutedUrls)}`);
+  console.log(`muted sockets: ${JSON.stringify(mutedUrls)} (baseline census ${socketsBaseline})`);
   expect(mutedUrls.length, "expected at least one live /api WebSocket to mute").toBeGreaterThan(0);
 
   // Send DURING the outage, before anything has noticed the death. The call
@@ -442,4 +458,38 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     }
     await sentRow.waitFor({ timeout: 30_000 });
   });
+
+  // The real scenario delivers a visibilitychange when the user returns to
+  // the tab; the mute harness kills the network without one, so fire it —
+  // that's what triggers itx-react's resume sweep for sockets no consumer
+  // probes (the GLOBAL context's socket here: the stream runtimes recover
+  // their own project-context socket, but nothing else on this page would
+  // ever find the global corpse).
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+
+  // Leak census, two invariants: (1) every muted corpse was CLOSED — a
+  // recovery that dials fresh but strands the corpse (the #1894 signature)
+  // fails here even when the total count happens to look small; (2) the live
+  // census returned to its pre-mute baseline — no accumulation per cycle.
+  // Window: the resume sweep needs two 5s ping strikes before it evicts.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          (
+            window as unknown as { __mutedApiSocketsStillOpen: () => number }
+          ).__mutedApiSocketsStillOpen(),
+        ),
+      { timeout: 20_000 },
+    )
+    .toBe(0);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          (window as unknown as { __countLiveApiSockets: () => number }).__countLiveApiSockets(),
+        ),
+      { timeout: 10_000 },
+    )
+    .toBeLessThanOrEqual(socketsBaseline);
 });
