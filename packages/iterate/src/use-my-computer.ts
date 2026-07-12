@@ -307,9 +307,10 @@ async function keepMountAlive(input: {
         await sleep(RECOVERY_BACKOFF_MS);
         continue;
       }
-      goLive();
-      await sleep(HEALTH_CHECK_INTERVAL_MS);
-      continue;
+      // Don't declare live yet: fall through to the ping so we confirm the mount
+      // still answers AS US first. Another process could have grabbed the same
+      // name between our provide and now — verifying before goLive means the UI
+      // never flashes "live" for a mount we've already lost.
     }
 
     let observedId: string;
