@@ -76,24 +76,35 @@ type TransactionRunner = { transactionSync<T>(callback: () => T): T };
 
 const initializedStreamStorage = new WeakSet<SqlStorage>();
 
-function readStreamStorageSchemaVersion(sqlStorage: SqlStorage): number {
+type StreamStorageBootstrap = StreamOffsetBounds & { version: number };
+
+function readStreamStorageBootstrap(sqlStorage: SqlStorage): StreamStorageBootstrap | undefined {
   try {
-    return (
-      sqlStorage
-        .exec<{ version: number }>("select version from stream_storage_schema where singleton = 1")
-        .toArray()[0]?.version ?? 0
-    );
+    return sqlStorage
+      .exec<StreamStorageBootstrap>(`
+        with event_bounds as (
+          select coalesce(max(offset), 0) as highestOffset
+          from events
+        )
+        select version,
+               highestOffset,
+               max(highestOffset, evicted_offset_floor) as highestAssignedOffset
+        from stream_storage_schema, event_bounds
+        where singleton = 1
+      `)
+      .toArray()[0];
   } catch {
-    return 0;
+    return undefined;
   }
 }
 
-function initializeStreamStorage(sqlStorage: SqlStorage): void {
-  if (initializedStreamStorage.has(sqlStorage)) return;
-  const schemaVersion = readStreamStorageSchemaVersion(sqlStorage);
+function initializeStreamStorage(sqlStorage: SqlStorage): StreamOffsetBounds | undefined {
+  if (initializedStreamStorage.has(sqlStorage)) return undefined;
+  const bootstrap = readStreamStorageBootstrap(sqlStorage);
+  const schemaVersion = bootstrap?.version ?? 0;
   if (schemaVersion === CURRENT_STREAM_STORAGE_SCHEMA_VERSION) {
     initializedStreamStorage.add(sqlStorage);
-    return;
+    return bootstrap;
   }
   if (schemaVersion !== 0) {
     throw new Error(`Unsupported stream storage schema version: ${schemaVersion}`);
@@ -155,14 +166,17 @@ function initializeStreamStorage(sqlStorage: SqlStorage): void {
     CURRENT_STREAM_STORAGE_SCHEMA_VERSION,
   );
   initializedStreamStorage.add(sqlStorage);
+  return { highestOffset: 0, highestAssignedOffset: 0 };
 }
 
 export class StreamEventLog {
+  #bootstrapOffsetBounds: StreamOffsetBounds | undefined;
+
   constructor(
     readonly sql: SqlStorage,
     _path: string,
   ) {
-    initializeStreamStorage(this.sql);
+    this.#bootstrapOffsetBounds = initializeStreamStorage(this.sql);
   }
 
   highestOffset(): number {
@@ -182,6 +196,18 @@ export class StreamEventLog {
    */
   highestAssignedOffset(): number {
     return this.offsetBounds().highestAssignedOffset;
+  }
+
+  /** Consume the schema check's event bounds, or query when another storage owner initialized first. */
+  takeBootstrapOffsetBounds(): StreamOffsetBounds {
+    const bounds = this.#bootstrapOffsetBounds;
+    this.#bootstrapOffsetBounds = undefined;
+    return bounds === undefined
+      ? this.offsetBounds()
+      : {
+          highestOffset: bounds.highestOffset,
+          highestAssignedOffset: bounds.highestAssignedOffset,
+        };
   }
 
   /** One bootstrap snapshot for replay head and never-reuse allocation floor. */

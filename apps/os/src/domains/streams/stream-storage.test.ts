@@ -107,7 +107,30 @@ describe("StreamEventLog.getRange", () => {
     new StreamEventLog(activationSql, "/tests/stream");
     new SqliteSubscriptionCursorStore(activationSql);
 
-    expect(statements).toEqual(["select version from stream_storage_schema where singleton = 1"]);
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain("select version");
+    expect(statements[0]).toContain("highestOffset");
+  });
+
+  it("reuses the schema snapshot for one activation bounds read", () => {
+    const db = new DatabaseSync(":memory:");
+    const initial = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    initial.insert([event(1, "events.iterate.com/test/selected")]);
+    const statements: string[] = [];
+    const reactivated = new StreamEventLog(
+      wrapSqlStorage(db, (statement) => statements.push(statement)),
+      "/tests/stream",
+    );
+
+    expect(reactivated.takeBootstrapOffsetBounds()).toEqual({
+      highestOffset: 1,
+      highestAssignedOffset: 1,
+    });
+    expect(statements).toHaveLength(1);
+
+    initial.insert([event(2, "events.iterate.com/test/other")]);
+    expect(reactivated.offsetBounds()).toEqual({ highestOffset: 2, highestAssignedOffset: 2 });
+    expect(statements).toHaveLength(2);
   });
 
   it("rejects any event-log schema other than the exact current version", () => {
@@ -749,7 +772,7 @@ describe("StreamEventLog.getRange", () => {
     let boundsQueries = 0;
     const log = new StreamEventLog(
       wrapSqlStorage(db, (statement) => {
-        if (statement.includes("with event_bounds as")) boundsQueries += 1;
+        if (statement.includes("select highestOffset,")) boundsQueries += 1;
       }),
       "/tests/stream",
     );

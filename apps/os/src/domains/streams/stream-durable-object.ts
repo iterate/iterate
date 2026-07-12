@@ -1066,7 +1066,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // was reduced before newer derived fields existed), so it is discarded and
     // rebuilt from the event log rather than trusted.
     const storedStateIsCurrent = stored !== undefined && storedVersion === CORE_STATE_VERSION;
-    const bounds = this.#log.offsetBounds();
+    const bounds = this.#log.takeBootstrapOffsetBounds();
     const storedState = storedStateIsCurrent
       ? CoreProcessorContract.stateSchema.parse(stored)
       : bounds.highestOffset === 0
