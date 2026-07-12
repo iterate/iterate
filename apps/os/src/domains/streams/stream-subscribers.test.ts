@@ -1732,6 +1732,29 @@ describe("StreamSubscribers", () => {
     expect(batches[0]!.events).toEqual([]);
   });
 
+  it("w3. a wake that lands inside a sink keeps the active pump draining", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "first"));
+    const delivered: number[][] = [];
+    let appendedDuringDelivery = false;
+
+    h.subscribers.openEphemeral({
+      subscriptionKey: "reentrant",
+      replayAfterOffset: 0,
+      sink: (batch) => {
+        delivered.push(batch.events.map((event) => event.offset));
+        if (appendedDuringDelivery) return;
+        appendedDuringDelivery = true;
+        const next = evt(2, "second");
+        h.append(next);
+        h.subscribers.wake([{ event: next, byteLength: 64 }]);
+      },
+    });
+    await h.settle();
+
+    expect(delivered).toEqual([[1], [2]]);
+  });
+
   it("x. a receiver-unavailable rejection backs off whole under onPoison skip — no bisect, no skips (the bootstrap window)", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ onPoison: "skip" }), 0);
@@ -1894,6 +1917,7 @@ describe("StreamSubscribers runtime metrics", () => {
 
     h.egressAtMs.length = 0;
     const nowCallsBeforeWake = h.nowCalls();
+    const coreStateCallsBeforeWake = h.coreStateCalls();
     h.advanceTo(1_234);
     const fresh = evt(1, "fresh");
     h.append(fresh);
@@ -1901,6 +1925,8 @@ describe("StreamSubscribers runtime metrics", () => {
     await h.settle();
 
     expect(h.nowCalls() - nowCallsBeforeWake).toBe(2);
+    // One snapshot per lane plus the durable reconciler's one stream snapshot.
+    expect(h.coreStateCalls() - coreStateCallsBeforeWake).toBe(3);
     expect(h.egressAtMs).toEqual([1_234, 1_234]);
     expect(h.subscribers.connectionRuntimeState()).toMatchObject({
       first: { lastDeliveredAt: "1970-01-01T00:00:01.234Z" },

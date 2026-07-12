@@ -361,6 +361,9 @@ export class StreamSubscribers {
   /** Cloudflare may freeze the clock between I/O turns; reuse that exact timestamp's ISO form. */
   #lastFormattedAtMs: number | undefined;
   #lastFormattedAt: string | undefined;
+  /** Aligned durable lanes settle against the same newest event; parse its exact timestamp once. */
+  #lastParsedCreatedAt: string | undefined;
+  #lastParsedCreatedAtMs: number | undefined;
   /** Compiled selectors for durable push/webhook configs, keyed by the config event offset. */
   readonly #compiledSelectors = new Map<
     string,
@@ -378,6 +381,14 @@ export class StreamSubscribers {
       this.#lastFormattedAt = new Date(atMs).toISOString();
     }
     return this.#lastFormattedAt!;
+  }
+
+  #parseCreatedAt(createdAt: string): number {
+    if (createdAt !== this.#lastParsedCreatedAt) {
+      this.#lastParsedCreatedAt = createdAt;
+      this.#lastParsedCreatedAtMs = Date.parse(createdAt);
+    }
+    return this.#lastParsedCreatedAtMs!;
   }
 
   // ===========================================================================
@@ -1328,10 +1339,12 @@ export class StreamSubscribers {
       draining = true;
       try {
         while (open) {
+          const wakeGeneration = this.#wakeGeneration;
+          const currentState = this.#hooks.coreState();
           let events: StreamEvent[] = [];
           let deliveredBytes = 0;
           if (deliverEvents) {
-            const stateMaxOffset = this.#hooks.coreState().maxOffset;
+            const stateMaxOffset = currentState.maxOffset;
             // Same byte-capped read as the push drain: a batch of near-2MB
             // events in one live frame would blow the RPC frame limit and turn
             // into a delivery failure the subscriber can never get past. The
@@ -1375,7 +1388,7 @@ export class StreamSubscribers {
               if (events.length === 0 && !initialBatchPending) continue;
             }
           } else {
-            const stateMaxOffset = this.#hooks.coreState().maxOffset;
+            const stateMaxOffset = currentState.maxOffset;
             if (stateMaxOffset <= cursor && !initialBatchPending) return;
             cursor = stateMaxOffset;
           }
@@ -1386,7 +1399,6 @@ export class StreamSubscribers {
           const dispatchAtMs = this.#hooks.now();
           connection.lastDeliveredAt = this.#formatTimestamp(dispatchAtMs);
           this.#hooks.recordEgress(events.length, deliveredBytes, dispatchAtMs);
-          const currentState = this.#hooks.coreState();
           if (currentState.projectId === undefined || currentState.path === undefined) {
             throw new Error(
               "Cannot deliver stream batch before stream coordinates are initialized.",
@@ -1397,7 +1409,9 @@ export class StreamSubscribers {
           // sample on the stream's own clock. Ephemeral results stay
           // unpulled: no onSettled ever fires there (see subscriber-sinks.ts).
           const newestCreatedAtMs =
-            events.length === 0 ? undefined : Date.parse(events.at(-1)!.createdAt);
+            subscriptionType !== "configured" || events.length === 0
+              ? undefined
+              : this.#parseCreatedAt(events.at(-1)!.createdAt);
           sink(
             {
               projectId: currentState.projectId,
@@ -1419,6 +1433,10 @@ export class StreamSubscribers {
                 },
           );
           await Promise.resolve();
+          // Every append calls wake(). If no wake landed while this pump
+          // yielded and this snapshot was delivered through its head, another
+          // core-state probe can only rediscover the same caught-up state.
+          if (cursor >= currentState.maxOffset && wakeGeneration === this.#wakeGeneration) return;
         }
       } finally {
         draining = false;
