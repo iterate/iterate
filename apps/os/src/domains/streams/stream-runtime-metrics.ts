@@ -100,27 +100,71 @@ export class MinuteBuckets {
   }
 
   lastMinute(nowMs: number): MinuteWindow {
+    const { count, bytes } = this.window(nowMs, 60);
+    return { count, bytes, perSecond: count / 60 };
+  }
+
+  /** Totals over the trailing `seconds` (≤60) — short windows make responsive rates. */
+  window(nowMs: number, seconds: number): { count: number; bytes: number } {
     const nowSecond = Math.floor(nowMs / 1000);
     let count = 0;
     let bytes = 0;
     for (let slot = 0; slot < 60; slot += 1) {
       const second = this.#seconds[slot]!;
-      if (second < 0 || second > nowSecond || second <= nowSecond - 60) continue;
+      if (second < 0 || second > nowSecond || second <= nowSecond - seconds) continue;
       count += this.#counts[slot]!;
       bytes += this.#bytes[slot]!;
     }
-    return { count, bytes, perSecond: count / 60 };
+    return { count, bytes };
+  }
+
+  /**
+   * The raw per-second buckets, oldest→newest, always exactly 60 entries
+   * (silent seconds are zero) — what a UI graphs directly, so the graph is
+   * the measurement rather than a client-side reconstruction of it.
+   */
+  series(nowMs: number): ThroughputSeries {
+    const nowSecond = Math.floor(nowMs / 1000);
+    const counts = new Array<number>(60).fill(0);
+    const bytes = new Array<number>(60).fill(0);
+    for (let slot = 0; slot < 60; slot += 1) {
+      const second = this.#seconds[slot]!;
+      if (second < 0 || second > nowSecond || second <= nowSecond - 60) continue;
+      const index = 59 - (nowSecond - second);
+      counts[index] = this.#counts[slot]!;
+      bytes[index] = this.#bytes[slot]!;
+    }
+    return { counts, bytes };
   }
 }
+
+/** Per-second buckets over the trailing minute, oldest→newest, length 60. */
+export type ThroughputSeries = {
+  counts: number[];
+  bytes: number[];
+};
+
+/**
+ * One direction's throughput report: a responsive trailing-5s rate (the
+ * number UIs show), the full-minute totals, and the raw 1s series for graphs.
+ */
+export type ThroughputReport = {
+  /** Events per second over the trailing 5 seconds. */
+  perSecond5s: number;
+  /** Payload bytes per second over the trailing 5 seconds. */
+  bytesPerSecond5s: number;
+  lastMinute: MinuteWindow;
+  series: ThroughputSeries;
+};
 
 /** What `runtimeState()` reports for the stream's own throughput. */
 export type StreamThroughputMetrics = {
   /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
   measuredSince: string;
   /** Appends committed (all producers). */
-  ingressLastMinute: MinuteWindow;
+  ingress: ThroughputReport;
   /** Deliveries dispatched (all lanes, all subscribers). */
-  egressLastMinute: MinuteWindow;
+  egress: ThroughputReport;
 };
 
 /** The stream Durable Object's in-memory throughput accounting. */
@@ -134,10 +178,19 @@ export class StreamRuntimeMetrics {
   }
 
   report(nowMs: number): StreamThroughputMetrics {
+    const direction = (buckets: MinuteBuckets): ThroughputReport => {
+      const trailing5s = buckets.window(nowMs, 5);
+      return {
+        perSecond5s: trailing5s.count / 5,
+        bytesPerSecond5s: trailing5s.bytes / 5,
+        lastMinute: buckets.lastMinute(nowMs),
+        series: buckets.series(nowMs),
+      };
+    };
     return {
       measuredSince: new Date(this.#measuredSinceMs).toISOString(),
-      ingressLastMinute: this.ingress.lastMinute(nowMs),
-      egressLastMinute: this.egress.lastMinute(nowMs),
+      ingress: direction(this.ingress),
+      egress: direction(this.egress),
     };
   }
 }
