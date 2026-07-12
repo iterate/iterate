@@ -495,13 +495,13 @@ export class StreamEventLog {
     const eventTypeClause =
       eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
     const ephemeralClause = args.includeEphemeral === true ? "" : "and ephemeral = 0";
-    // Common rows are complete in this indexed metadata scan. Oversized rows
-    // carry null and are hydrated from bounded chunks below.
+    // Common rows carry their JSON directly. Oversized rows carry their offset
+    // in the same positional column and are hydrated from bounded chunks below.
     const byteLengthColumn = includeByteLength ? ", length(event_json) as inlineByteLength" : "";
     const rows = this.sql
-      .exec<{ offset: number; eventJson: string | null; inlineByteLength?: number | null }>(
+      .exec(
         `
-          select offset, cast(event_json as text) as eventJson${byteLengthColumn}
+          select coalesce(cast(event_json as text), offset) as eventJsonOrOffset${byteLengthColumn}
           from events
           where offset > ?
             and offset < ?
@@ -515,34 +515,37 @@ export class StreamEventLog {
         ...(eventTypes ?? []),
         args.limit,
       )
-      .toArray();
-    const events: Array<SizedStreamEvent | StreamEvent | undefined> = new Array(rows.length);
-    let chunkedOffsets: number[] | undefined;
-    for (let index = 0; index < rows.length; index += 1) {
-      const row = rows[index]!;
-      if (row.eventJson === null) {
-        (chunkedOffsets ??= []).push(row.offset);
+      .raw<[string | number, number | null]>();
+    const events: Array<SizedStreamEvent | StreamEvent | undefined> = [];
+    let chunkedRows: number[] | undefined;
+    for (const [eventJsonOrOffset, inlineByteLength] of rows) {
+      if (typeof eventJsonOrOffset === "number") {
+        (chunkedRows ??= []).push(events.length, eventJsonOrOffset);
+        events.push(undefined);
         continue;
       }
-      const event = this.#parseEvent(row.eventJson, 0);
-      events[index] = includeByteLength ? { event, byteLength: row.inlineByteLength ?? 0 } : event;
+      const event = this.#parseEvent(eventJsonOrOffset, 0);
+      events.push(includeByteLength ? { event, byteLength: inlineByteLength ?? 0 } : event);
     }
-    if (chunkedOffsets === undefined) {
+    if (chunkedRows === undefined) {
       return events as Array<SizedStreamEvent | StreamEvent>;
     }
 
+    const chunkedOffsets = new Array<number>(chunkedRows.length / 2);
+    for (let index = 1; index < chunkedRows.length; index += 2) {
+      chunkedOffsets[index >> 1] = chunkedRows[index]!;
+    }
     const chunkedEvents = this.#readChunkedEvents(chunkedOffsets);
     let hasMissingChunks = false;
-    for (let index = 0; index < rows.length; index += 1) {
-      const row = rows[index]!;
-      if (row.eventJson !== null) continue;
-      const stored = chunkedEvents.get(row.offset);
+    for (let index = 0; index < chunkedRows.length; index += 2) {
+      const resultIndex = chunkedRows[index]!;
+      const stored = chunkedEvents.get(chunkedRows[index + 1]!);
       if (stored === undefined) {
         hasMissingChunks = true;
         continue;
       }
       const event = this.#parseEvent(stored.chunks, stored.byteLength);
-      events[index] = includeByteLength ? { event, byteLength: stored.byteLength } : event;
+      events[resultIndex] = includeByteLength ? { event, byteLength: stored.byteLength } : event;
     }
     return hasMissingChunks
       ? events.filter((event) => event !== undefined)

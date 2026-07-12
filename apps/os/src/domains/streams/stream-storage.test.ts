@@ -10,20 +10,38 @@ import {
 function wrapSqlStorage(
   db: DatabaseSync,
   onExec?: (sql: string, bindings: readonly SqlStorageValue[]) => void,
+  rangeCursor?: {
+    onRaw(): void;
+    forbidToArray: boolean;
+  },
 ): SqlStorage {
   return {
     exec<T = unknown>(sql: string, ...bindings: (ArrayBuffer | null | number | string)[]) {
       onExec?.(sql, bindings);
-      const rows = db
-        .prepare(sql)
+      const isRangeQuery = sql.includes("from events") && sql.includes("order by offset asc");
+      const statement = db.prepare(sql);
+      const rows = statement
         .all(
           ...bindings.map((binding) =>
             binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding,
           ),
         )
         .map((row) => Object.fromEntries(Object.entries(row).map(fromNodeSqlValue)));
+      const columnNames = statement.columns().map((column) => column.name);
+      const rawRows = rows.map((row) =>
+        columnNames.map((name) => row[name]),
+      ) as SqlStorageValue[][];
       return {
-        toArray: () => rows as T[],
+        toArray: () => {
+          if (isRangeQuery && rangeCursor?.forbidToArray === true) {
+            throw new Error("range query used named-object materialization");
+          }
+          return rows as T[];
+        },
+        raw: <U extends SqlStorageValue[]>() => {
+          if (isRangeQuery) rangeCursor?.onRaw();
+          return (rawRows as U[])[Symbol.iterator]();
+        },
         [Symbol.iterator]: () => (rows as T[])[Symbol.iterator](),
       };
     },
@@ -116,6 +134,24 @@ describe("StreamEventLog.getRange", () => {
       limit: 2,
     });
     expect(offsets(secondPage)).toEqual([3, 4]);
+  });
+
+  it("materializes range reads from positional raw rows", () => {
+    const db = new DatabaseSync(":memory:");
+    let rawReads = 0;
+    const log = new StreamEventLog(
+      wrapSqlStorage(db, undefined, {
+        onRaw: () => {
+          rawReads += 1;
+        },
+        forbidToArray: true,
+      }),
+      "/tests/stream",
+    );
+    log.insert([event(1, "selected"), event(2, "selected")]);
+
+    expect(offsets(read(log, { afterOffset: 0, limit: 2 }))).toEqual([1, 2]);
+    expect(rawReads).toBe(1);
   });
 
   it("filters by event type before applying the limit", () => {
@@ -323,7 +359,7 @@ describe("StreamEventLog.getRange", () => {
       wrapSqlStorage(db, (statement, bindings) => {
         if (
           statement.includes(
-            "select offset, cast(event_json as text) as eventJson\n          from events",
+            "select coalesce(cast(event_json as text), offset) as eventJsonOrOffset\n          from events",
           )
         ) {
           rangeQuery = { statement, bindings };
