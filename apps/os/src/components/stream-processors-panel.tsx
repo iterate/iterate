@@ -206,7 +206,17 @@ export function StreamProcessorsPanel({
     }
 
     if (focused?.kind === "core") {
-      if (streamRuntime !== undefined) {
+      // Error first: with keepPreviousData a failed poll leaves stale data in
+      // place alongside the error, and a metrics drill-in silently rendering
+      // stale state during an outage would be exactly the fake UI this
+      // feature exists to kill.
+      if (streamRuntimeError !== undefined) {
+        setRuntimeStateLoad({
+          status: "error",
+          subscriptionKey: focusedSubscriptionKey,
+          message: streamRuntimeError,
+        });
+      } else if (streamRuntime !== undefined) {
         const coreState = streamRuntime.coreProcessorState;
         setRuntimeStateLoad({
           status: "loaded",
@@ -216,12 +226,6 @@ export function StreamProcessorsPanel({
             runtime: streamRuntime.runtime,
           },
           streamMaxOffset: readNumber(coreState, "maxOffset") ?? 0,
-        });
-      } else if (streamRuntimeError !== undefined) {
-        setRuntimeStateLoad({
-          status: "error",
-          subscriptionKey: focusedSubscriptionKey,
-          message: streamRuntimeError,
         });
       } else {
         setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedSubscriptionKey });
