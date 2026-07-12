@@ -302,6 +302,13 @@ export class StreamSubscribers {
   readonly #pushDrains = new Set<string>();
   /** Bisect state for onPoison:"skip" — current batch ceiling per key. */
   readonly #batchLimits = new Map<string, number>();
+  /**
+   * Row-count estimate for the 1 MiB storage-read cap. The first backlog read
+   * stays allocation-cheap at the full count limit; if its byte scan proves
+   * that was an over-read, later reads fetch only the rows that fit plus one.
+   * The estimate expands geometrically when smaller rows make it conservative.
+   */
+  #storageReadLimitHint: number | undefined;
   /** Consecutive poison skips per key (no intervening success) — see MAX_CONSECUTIVE_SKIPS. */
   readonly #consecutiveSkips = new Map<string, number>();
   /**
@@ -807,7 +814,11 @@ export class StreamSubscribers {
         byteLength: durableOnly ? cached.durableByteLength : cached.byteLength,
       };
     }
-    const source = useFreshTail ? this.#freshTail : this.#hooks.readEvents({ afterOffset, limit });
+    const hintedLimit = this.#storageReadLimitHint;
+    const storageLimit = Math.min(limit, hintedLimit ?? limit);
+    const source = useFreshTail
+      ? this.#freshTail
+      : this.#hooks.readEvents({ afterOffset, limit: storageLimit });
     const start = useFreshTail ? freshStart : 0;
     const events: StreamEvent[] = [];
     let durable: StreamEvent[] | undefined;
@@ -816,12 +827,16 @@ export class StreamSubscribers {
     let lastOffset: number | undefined;
     let bytes = 0;
     let durableBytes = 0;
+    let exceededByteLimit = false;
     const count = Math.min(source.length - start, limit);
     for (let index = 0; index < count; index += 1) {
       const entry = source[start + index]!;
       const entryByteLength = entry.byteLength;
       const nextBytes = bytes + entryByteLength;
-      if (nextBytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) break;
+      if (nextBytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) {
+        exceededByteLimit = true;
+        break;
+      }
       events.push(entry.event);
       eventByteLengths?.push(entryByteLength);
       lastOffset = entry.event.offset;
@@ -836,6 +851,20 @@ export class StreamSubscribers {
         durableBytes += entryByteLength;
       }
       bytes = nextBytes;
+    }
+    if (!useFreshTail && limit === DELIVERY_BATCH_LIMIT) {
+      if (exceededByteLimit) {
+        this.#storageReadLimitHint = Math.max(2, events.length + 1);
+      } else if (
+        hintedLimit !== undefined &&
+        storageLimit < limit &&
+        source.length === storageLimit
+      ) {
+        const expanded = Math.min(limit, storageLimit * 2);
+        this.#storageReadLimitHint = expanded === limit ? undefined : expanded;
+      } else if (storageLimit === limit) {
+        this.#storageReadLimitHint = undefined;
+      }
     }
     const durableEvents = durable ?? events;
     const durableByteLengths = durableEventByteLengths ?? eventByteLengths;

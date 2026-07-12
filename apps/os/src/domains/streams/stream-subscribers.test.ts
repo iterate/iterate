@@ -180,6 +180,8 @@ function makeHarness() {
   const pushes: StreamPushEventBatch[] = [];
   const pushOutcomes: ("resolved" | "rejected")[] = [];
   const webhooks: { url: string; delivery: StreamWebhookDelivery }[] = [];
+  const storageReadLimits: number[] = [];
+  const eventByteLengths = new Map<number, number>();
 
   // Scripted behaviors, swappable per test. The dial wrapper below records
   // every invocation regardless of the scripted outcome.
@@ -224,10 +226,14 @@ function makeHarness() {
     hooks: {
       readEvents: ({ afterOffset, limit }) => {
         storageReads += 1;
+        storageReadLimits.push(limit);
         return log
           .filter((event) => event.offset > afterOffset)
           .slice(0, limit)
-          .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
+          .map((event) => ({
+            event,
+            byteLength: eventByteLengths.get(event.offset) ?? JSON.stringify(event).length,
+          }));
       },
       coreState: (): CoreProcessorState => {
         coreStateCalls += 1;
@@ -287,6 +293,10 @@ function makeHarness() {
     settle,
     append: (...events: StreamEvent[]) => log.push(...events),
     storageReads: () => storageReads,
+    storageReadLimits,
+    setEventByteLength: (offset: number, byteLength: number) => {
+      eventByteLengths.set(offset, byteLength);
+    },
     now: () => now,
     nowCalls: () => nowCalls,
     coreStateCalls: () => coreStateCalls,
@@ -1408,7 +1418,30 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1a. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
+  it("w1a. storage backlog reads shrink after byte over-read and expand for smaller rows", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    const backlog = Array.from({ length: 10 }, (_, index) => evt(index + 1, "event"));
+    h.append(...backlog);
+    h.setEventByteLength(1, DELIVERY_BATCH_BYTE_LIMIT);
+    h.setEventByteLength(2, DELIVERY_BATCH_BYTE_LIMIT);
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [1],
+      [2],
+      [3, 4],
+      [5, 6, 7, 8],
+      [9, 10],
+    ]);
+    expect(h.storageReadLimits).toEqual([1000, 2, 2, 4, 8]);
+    expect(h.egress.every(({ bytes }) => bytes <= DELIVERY_BATCH_BYTE_LIMIT)).toBe(true);
+    expect(h.row("k")?.ackedOffset).toBe(10);
+  });
+
+  it("w1b. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
     const h = makeHarness();
     const subscriptionCount = 100;
     for (let index = 0; index < subscriptionCount; index += 1) {
@@ -1449,7 +1482,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1b. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
+  it("w1c. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
     const h = makeHarness();
     const all = makeSink();
     const selected = makeSink();
@@ -1481,7 +1514,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1c. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
+  it("w1d. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
     const fresh = [
