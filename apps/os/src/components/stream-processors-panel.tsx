@@ -555,14 +555,18 @@ function ProcessorEntryButton({
   onFocus: (subscriptionKey: string) => void;
 }) {
   // Real numbers only: the ping RTT when the subscriber answers pings, else
-  // the last commit→settled sample (wake) or delivery-call duration
-  // (push/webhook). "—" until data exists — never a synthesized value.
-  const rttMs = entry.connected
-    ? (entry.runtimeConnection?.pingRttMs?.last ??
-      entry.runtimeConnection?.settleLatencyMs?.last ??
-      entry.runtimeSubscription?.deliveryDurationMs?.last ??
-      null)
-    : null;
+  // the last commit→settled sample (wake). Push/webhook subscribers never
+  // hold a live connection, so their delivery-call duration shows regardless
+  // of `connected` — it's the last acked delivery's real round trip. "—"
+  // until data exists — never a synthesized value.
+  const rttMs =
+    (entry.connected
+      ? (entry.runtimeConnection?.pingRttMs?.last ??
+        entry.runtimeConnection?.settleLatencyMs?.last ??
+        null)
+      : null) ??
+    entry.runtimeSubscription?.deliveryDurationMs?.last ??
+    null;
   // Live connection cursor first: the wake lane's spine row is an
   // OBSERVATIONAL watermark that deliberately goes stale while a connection
   // streams (see stream-subscribers.ts #poke), so a healthy connected
