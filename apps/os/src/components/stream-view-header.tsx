@@ -21,7 +21,7 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { StreamPathPill } from "~/components/stream-path-pill.tsx";
-import { PresenceAvatar } from "~/components/stream-processors-panel.tsx";
+import { PresenceAvatar } from "~/components/stream-state-panel.tsx";
 import { feedFiltersActive } from "~/lib/stream-feed-filters.ts";
 import {
   presenceLabel,
@@ -87,6 +87,11 @@ export function StreamViewHeader({
     closeEventsSheet,
   } = useStreamViewPanels();
   const caps = modeCapabilities(search, streamPath);
+  // Presence = who is here NOW. The reduced roster keeps disconnected
+  // entries (the panel needs them for asleep/parked rows), but avatars and
+  // the +N overflow must not count corpses — a listing stream accumulates
+  // every browser tab that ever visited.
+  const connectedPresence = presence.filter((entry) => entry.connected);
   const toolsOpen = search.filter === true;
   const showFilterToggle = eventsToggle == null && caps.filters;
   const filtersActive = feedFiltersActive(search, streamPath);
@@ -100,9 +105,9 @@ export function StreamViewHeader({
       />
 
       <div className="ml-auto flex items-center gap-3">
-        {presence.length === 0 ? null : (
+        {connectedPresence.length === 0 ? null : (
           <div className="flex items-center pl-1.5">
-            {presence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => {
+            {connectedPresence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => {
               const selected = entry.subscriptionKey === focusedProcessorKey;
               return (
                 <button
@@ -120,14 +125,14 @@ export function StreamViewHeader({
                 </button>
               );
             })}
-            {presence.length > MAX_PRESENCE_AVATARS ? (
+            {connectedPresence.length > MAX_PRESENCE_AVATARS ? (
               <button
                 type="button"
-                title="All processors"
+                title="Stream state"
                 onClick={openProcessorsOverview}
                 className="-ml-1.5 grid size-6 place-items-center rounded-full border-2 border-background bg-muted font-mono text-[9px] font-bold text-muted-foreground"
               >
-                +{presence.length - MAX_PRESENCE_AVATARS}
+                +{connectedPresence.length - MAX_PRESENCE_AVATARS}
               </button>
             ) : null}
           </div>
@@ -135,7 +140,7 @@ export function StreamViewHeader({
         <Button
           variant="ghost"
           size="sm"
-          title="Stream health & processors"
+          title="Stream state"
           onClick={openProcessorsOverview}
           className="font-mono text-xs font-normal text-muted-foreground"
         >

@@ -45,6 +45,7 @@ export function emptyStreamRuntimeState() {
         ingress: emptyThroughputReport(),
         egress: emptyThroughputReport(),
       },
+      storageSizeBytes: 0,
     },
   };
 }

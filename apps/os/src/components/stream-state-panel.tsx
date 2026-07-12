@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronLeftIcon, DatabaseZapIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import type {
   AgentUiPresenceEntry,
   AgentUiProcessorAnnouncement,
@@ -65,11 +66,11 @@ export function PresenceAvatar({
 // ---------------------------------------------------------------------------
 
 /**
- * One abstraction for presence, metrics, and processor detail — everything is
- * a facet of "the stream's consumers". Overview lists every consumer with
- * REAL RTT/lag from the stream's runtime table (polled while open — the poll
- * is also what drives the stream's observer-gated ping sampling); clicking
- * one drills into its announced contract and self-reported metrics.
+ * The Stream state sheet: the stream's vitals (age, storage, events, live
+ * throughput/latency) plus every subscriber — with REAL RTT/lag from the
+ * stream's runtime table (polled while open — the poll is also what drives
+ * the stream's observer-gated ping sampling). Clicking a subscriber drills
+ * into its announced contract and self-reported metrics.
  */
 export type StreamRuntimeDebugState = Awaited<ReturnType<Stream["runtimeState"]>>;
 
@@ -124,7 +125,7 @@ type ProcessorRuntimeStateResult = {
   streamMaxOffset: number;
 };
 
-export function StreamProcessorsPanel({
+export function StreamStatePanel({
   open,
   onOpenChange,
   presence,
@@ -162,7 +163,7 @@ export function StreamProcessorsPanel({
   // this call). keepPreviousData swaps polls in place instead of flashing a
   // loading state.
   const streamRuntimeQuery = useQuery({
-    queryKey: ["stream-processors-panel-runtime", streamPath],
+    queryKey: ["stream-state-panel-runtime", streamPath],
     queryFn: getStreamRuntimeState,
     enabled: open,
     refetchInterval: STREAM_RUNTIME_POLL_MS,
@@ -287,7 +288,7 @@ export function StreamProcessorsPanel({
         className="flex h-full w-full flex-col gap-0 p-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]"
       >
         <SheetTitle className="sr-only">
-          {focused == null ? "Processors" : `Processor ${presenceLabel(focused)}`}
+          {focused == null ? "Stream state" : `Subscriber ${presenceLabel(focused)}`}
         </SheetTitle>
         {focused == null ? (
           <ProcessorsOverview
@@ -302,7 +303,7 @@ export function StreamProcessorsPanel({
             onRefreshStreamRuntime={() => void streamRuntimeQuery.refetch()}
             streamRuntimeFetching={streamRuntimeQuery.isFetching}
             streamRuntimeError={streamRuntimeError}
-            throughput={streamRuntime?.runtime.metrics}
+            streamRuntime={streamRuntime}
           />
         ) : (
           <ProcessorDetail
@@ -345,7 +346,7 @@ function ProcessorsOverview({
   onRefreshStreamRuntime,
   streamRuntimeFetching,
   streamRuntimeError,
-  throughput,
+  streamRuntime,
 }: {
   entries: readonly ProcessorPanelEntry[];
   metrics: BrowserStreamMetricsView;
@@ -358,113 +359,57 @@ function ProcessorsOverview({
   onRefreshStreamRuntime: () => void;
   streamRuntimeFetching: boolean;
   streamRuntimeError: string | undefined;
-  throughput: StreamRuntimeDebugState["runtime"]["metrics"] | undefined;
+  streamRuntime: StreamRuntimeDebugState | undefined;
 }) {
   const [clearState, setClearState] = useState<"idle" | "clearing" | "error">("idle");
-  const points = sparklinePoints(metrics.spark, 368, 44);
-  const area = `2,42 ${points} 366,42`;
+  const [graphMode, setGraphMode] = useState<"throughput" | "latency">("throughput");
   const sections = processorEntrySections(entries);
   const rtt = metrics.transportRttMs;
   const subscriber = metrics.subscriber;
+  const throughput = streamRuntime?.runtime.metrics;
+  const coreState = streamRuntime?.coreProcessorState;
+  const createdAt = readRuntimeRecord(coreState)?.createdAt;
+  const serverEventCount = readNumber(coreState, "eventCount");
+  const headOffset = readNumber(coreState, "maxOffset");
+  const storageSizeBytes = streamRuntime?.runtime.storageSizeBytes;
+  const latencyPoints = sparklinePoints(metrics.spark, 368, 44);
 
   return (
     <>
       <div className="flex shrink-0 items-center gap-2 px-5 pb-2 pt-4">
         <div className="min-w-0 flex-1">
-          <div className="text-base font-semibold">Processors</div>
-          <div className="text-xs text-muted-foreground">
-            presence · metrics · state, per consumer
-          </div>
+          <div className="text-base font-semibold">Stream state</div>
+          <div className="text-xs text-muted-foreground">vitals · metrics · subscribers</div>
         </div>
         <PanelCloseButton onClose={onClose} />
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 pt-2">
         <div className="rounded-2xl bg-muted/40 px-4 py-3.5">
-          <div className="flex items-baseline justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Connection RTT
-            </span>
-            <span className="font-mono text-[10px] text-muted-foreground/70">
-              this browser · sampled each poll
-            </span>
-          </div>
-          <div className="mt-2 flex items-end gap-3">
-            <span className="font-mono text-2xl font-semibold leading-none">
-              {rtt === null ? "—" : rtt.last}
-              <span className="text-xs text-muted-foreground">ms</span>
-            </span>
-            {metrics.spark.length === 0 ? (
-              <span className="flex-1 pb-1 text-xs text-muted-foreground/70">measuring…</span>
-            ) : (
-              <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
-                <polygon points={area} className="fill-emerald-500/10" />
-                <polyline
-                  points={points}
-                  fill="none"
-                  className="stroke-emerald-600"
-                  strokeWidth="1.5"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            )}
-          </div>
-          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+          <div className="flex flex-wrap gap-x-5 gap-y-2">
             <MetricStat
-              label="p50 · 32 samples"
-              title="Median of the last 32 RTT samples"
-              value={rtt === null ? "—" : `${rtt.p50}ms`}
+              label="age"
+              title={
+                typeof createdAt === "string" ? `Created ${createdAt}` : "Stream creation time"
+              }
+              value={typeof createdAt === "string" ? sinceLabel(createdAt) : "—"}
             />
             <MetricStat
-              label="p95 · 32 samples"
-              title="95th percentile (nearest-rank) of the last 32 RTT samples"
-              value={rtt === null ? "—" : `${rtt.p95}ms`}
-            />
-            <MetricStat
-              label="append · last"
-              title="Most recent append call → commit acknowledged (this browser's own appends)"
+              label="events"
+              title="Events committed over the stream's lifetime"
               value={
-                subscriber?.appendRoundTripMs == null
-                  ? "—"
-                  : `${subscriber.appendRoundTripMs.last}ms`
+                serverEventCount === null ? `${eventCount}` : serverEventCount.toLocaleString()
               }
             />
             <MetricStat
-              label="own loop · last"
-              title="Most recent append call → this browser's own subscription ingested the committed event"
-              value={
-                subscriber?.consumeOwnAppendMs == null
-                  ? "—"
-                  : `${subscriber.consumeOwnAppendMs.last}ms`
-              }
+              label="head"
+              title="Stream head offset"
+              value={headOffset === null ? `#${eventCount}` : `#${headOffset}`}
             />
-          </div>
-
-          <div className="mt-4 flex items-baseline justify-between border-t border-border/60 pt-3">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Throughput
-            </span>
-            <span className="font-mono text-[10px] text-muted-foreground/70">
-              this stream · 1s buckets · last 60s
-            </span>
-          </div>
-          {throughput === undefined ? (
-            <div className="mt-2 h-11 text-xs text-muted-foreground/70">measuring…</div>
-          ) : (
-            <div className="mt-2 flex items-end gap-3">
-              <span
-                className="font-mono text-2xl font-semibold leading-none"
-                title="Appends committed per second, trailing 5s"
-              >
-                {formatRate(throughput.ingress.perSecond5s)}
-                <span className="text-xs text-muted-foreground">ev/s</span>
-              </span>
-              <ThroughputGraph
-                ingress={throughput.ingress.series.counts}
-                egress={throughput.egress.series.counts}
-              />
-            </div>
-          )}
-          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+            <MetricStat
+              label="storage"
+              title="Stream Durable Object SQLite size (event log + delivery spine)"
+              value={storageSizeBytes === undefined ? "—" : formatFileSize(storageSizeBytes)}
+            />
             <MetricStat
               label="in · 5s"
               title="Bytes appended per second, trailing 5s"
@@ -484,15 +429,23 @@ function ProcessorsOverview({
               }
             />
             <MetricStat
-              label="events · 60s"
-              title="Appends committed in the last minute (delivered in the last minute in parens)"
+              label="append · last"
+              title="Most recent append call → commit acknowledged (this browser's own appends)"
               value={
-                throughput === undefined
+                subscriber?.appendRoundTripMs == null
                   ? "—"
-                  : `${throughput.ingress.lastMinute.count} (${throughput.egress.lastMinute.count} out)`
+                  : `${subscriber.appendRoundTripMs.last}ms`
               }
             />
-            <MetricStat label="head" title="Stream head offset" value={`#${eventCount}`} />
+            <MetricStat
+              label="own loop · last"
+              title="Most recent append call → this browser's own subscription ingested the committed event"
+              value={
+                subscriber?.consumeOwnAppendMs == null
+                  ? "—"
+                  : `${subscriber.consumeOwnAppendMs.last}ms`
+              }
+            />
             <MetricStat
               label="measuring"
               title={
@@ -502,6 +455,64 @@ function ProcessorsOverview({
               }
               value={throughput === undefined ? "—" : sinceLabel(throughput.measuredSince)}
             />
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/60 pt-3">
+            <NativeSelect
+              size="sm"
+              aria-label="Graph metric"
+              value={graphMode}
+              onChange={(changeEvent) =>
+                setGraphMode(changeEvent.target.value === "latency" ? "latency" : "throughput")
+              }
+              className="w-auto"
+            >
+              <NativeSelectOption value="throughput">Throughput</NativeSelectOption>
+              <NativeSelectOption value="latency">Latency</NativeSelectOption>
+            </NativeSelect>
+            <span className="font-mono text-[10px] text-muted-foreground/70">
+              {graphMode === "throughput"
+                ? "appends (area) · deliveries (dashed) · 1s buckets · last 60s"
+                : `this browser's RTT · sampled each poll · p50 ${rtt === null ? "—" : `${rtt.p50}ms`} · p95 ${rtt === null ? "—" : `${rtt.p95}ms`}`}
+            </span>
+          </div>
+          <div className="mt-2 flex items-end gap-3">
+            <span className="font-mono text-2xl font-semibold leading-none">
+              {graphMode === "throughput" ? (
+                <>
+                  {throughput === undefined ? "—" : formatRate(throughput.ingress.perSecond5s)}
+                  <span className="text-xs text-muted-foreground">ev/s · 5s</span>
+                </>
+              ) : (
+                <>
+                  {rtt === null ? "—" : rtt.last}
+                  <span className="text-xs text-muted-foreground">ms</span>
+                </>
+              )}
+            </span>
+            {graphMode === "throughput" ? (
+              throughput === undefined ? (
+                <span className="flex-1 pb-1 text-xs text-muted-foreground/70">measuring…</span>
+              ) : (
+                <ThroughputGraph
+                  ingress={throughput.ingress.series.counts}
+                  egress={throughput.egress.series.counts}
+                />
+              )
+            ) : metrics.spark.length === 0 ? (
+              <span className="flex-1 pb-1 text-xs text-muted-foreground/70">measuring…</span>
+            ) : (
+              <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
+                <polygon points={`2,42 ${latencyPoints} 366,42`} className="fill-emerald-500/10" />
+                <polyline
+                  points={latencyPoints}
+                  fill="none"
+                  className="stroke-emerald-600"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
           </div>
           <div className="mt-3 flex justify-end">
             <Button
@@ -785,9 +796,10 @@ function buildProcessorPanelEntries(
       connected: runtimeSubscription?.connected ?? false,
       direction: "outbound",
       description:
-        config.deliveryMode === "wake"
+        config.deliveryLabel ??
+        (config.deliveryMode === "wake"
           ? "Durable wake processor"
-          : `Durable ${config.deliveryMode} subscriber`,
+          : `Durable ${config.deliveryMode} subscriber`),
       subscriptionType: "configured",
       deliveryMode: config.deliveryMode,
       configuredAtOffset: config.configuredAtOffset,
@@ -872,9 +884,15 @@ function readCoreConnections(value: unknown): Record<string, Record<string, unkn
   );
 }
 
-function readConfiguredSubscribers(
-  value: unknown,
-): Record<string, { deliveryMode: "wake" | "push" | "webhook"; configuredAtOffset?: number }> {
+function readConfiguredSubscribers(value: unknown): Record<
+  string,
+  {
+    deliveryMode: "wake" | "push" | "webhook";
+    configuredAtOffset?: number;
+    /** The delivery target as the itx call (or webhook POST) it actually is. */
+    deliveryLabel?: string;
+  }
+> {
   const record = readRuntimeRecord(value);
   const configured = readRuntimeRecord(record?.configuredSubscribersByKey);
   if (configured == null) return {};
@@ -886,9 +904,57 @@ function readConfiguredSubscribers(
       const mode = delivery?.mode;
       if (mode !== "wake" && mode !== "push" && mode !== "webhook") return [];
       const configuredAtOffset = readNumber(latest, "offset") ?? undefined;
-      return [[key, { deliveryMode: mode, configuredAtOffset }]];
+      const deliveryLabel =
+        mode === "webhook"
+          ? typeof delivery?.url === "string"
+            ? `POST ${delivery.url}`
+            : undefined
+          : formatItxExpression(delivery?.expression);
+      return [
+        [
+          key,
+          {
+            deliveryMode: mode,
+            configuredAtOffset,
+            ...(deliveryLabel === undefined ? {} : { deliveryLabel }),
+          },
+        ],
+      ];
     }),
   );
+}
+
+/**
+ * A persisted delivery expression rendered as the itx call it names:
+ * `["processEventBatch"]` → `itx.processEventBatch()`,
+ * `["streams", ["get", "/x"], "acceptCrossPost"]` →
+ * `itx.streams.get("/x").acceptCrossPost()` — subscribers are labeled by
+ * what the stream actually dials, not a generic lane name.
+ */
+function formatItxExpression(expression: unknown): string | undefined {
+  if (!Array.isArray(expression) || expression.length === 0) return undefined;
+  const steps: string[] = [];
+  for (const step of expression) {
+    if (typeof step === "string") {
+      steps.push(step);
+    } else if (Array.isArray(step) && typeof step[0] === "string") {
+      const args = step
+        .slice(1)
+        .map((arg) => {
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return "…";
+          }
+        })
+        .join(", ");
+      steps.push(`${step[0]}(${args})`);
+    } else {
+      return undefined;
+    }
+  }
+  const call = steps.join(".");
+  return `itx.${call.endsWith(")") ? call : `${call}()`}`;
 }
 
 function readSubscriptionType(
@@ -1015,7 +1081,7 @@ function ProcessorDetail({
   return (
     <>
       <div className="flex shrink-0 items-center gap-2.5 px-4 pb-2 pt-3.5">
-        <Button variant="ghost" size="icon-sm" title="All processors" onClick={onBack}>
+        <Button variant="ghost" size="icon-sm" title="Stream state overview" onClick={onBack}>
           <ChevronLeftIcon />
         </Button>
         <PresenceAvatar
