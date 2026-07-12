@@ -148,25 +148,34 @@ function agentPrompt(name: string): string {
   ].join("\n");
 }
 
+/** Freshly-resolved credentials for one (re)connect. */
+type ResolvedAuth = { auth: ItxAuthCredentials; headers?: Record<string, string> };
+
 type ConnectInput = {
-  auth: ItxAuthCredentials;
   baseUrl: string;
   projectId: string;
-  headers?: Record<string, string>;
   name?: string;
+  /**
+   * Re-resolve (and refresh) credentials — called before EVERY (re)connect. The
+   * OS access token has a short (~15-minute) TTL, so a reconnect that reused the
+   * token captured at launch would fail once it expires; re-resolving picks up a
+   * refreshed token so extended sharing survives reconnects.
+   */
+  reauth: () => Promise<ResolvedAuth>;
 };
 
-/** Mount `capability` at `itx.<name>` and return the live socket stub. */
+/** Mount `capability` at `itx.<name>` with freshly-resolved auth and return the live socket stub. */
 async function connectAndProvide(
   input: ConnectInput,
   name: string,
   capability: typeof myComputer,
 ): Promise<RpcStub<Project>> {
+  const { auth, headers } = await input.reauth();
   const itx = connectItx({
-    auth: input.auth,
+    auth,
     baseUrl: input.baseUrl,
     projectId: input.projectId,
-    headers: input.headers,
+    headers,
   }) as RpcStub<Project>;
 
   await itx.provideCapability({
@@ -181,44 +190,66 @@ async function connectAndProvide(
 
 const HEALTH_CHECK_INTERVAL_MS = 8_000;
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
+// A reconnect includes connectItx's WebSocket handshake (up to ~15s), so this
+// backstop sits ABOVE that — otherwise a handshake that would have succeeded is
+// abandoned mid-flight. connectItx's own handshake timeout rejects a dead
+// endpoint well before this fires, so recoveries never overlap.
+const RECONNECT_TIMEOUT_MS = 30_000;
+const RECOVERY_BACKOFF_MS = 3_000;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Call the mount over the FULL agent path (`itx.<name>.__ping()`) — the same
- * route an agent uses — bounded by a timeout so a STALLED round-trip (a wedged
- * connection that never errors) is treated as a failure and triggers recovery,
- * instead of hanging the keepalive loop forever.
+ * Race a promise against a timeout so a STALLED RPC (a wedged connection that
+ * never errors) is treated as a failure instead of hanging forever. The
+ * abandoned work is caught so a rejection that lands after the timeout can't
+ * surface as an unhandled rejection.
  */
-async function pingMount(itx: RpcStub<Project>, name: string): Promise<void> {
-  const ping = (itx as unknown as Record<string, { __ping(): Promise<{ ok: true }> }>)[
-    name
-  ].__ping();
-  ping.catch(() => {}); // a rejection that lands after we've timed out must not go unhandled
+function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  work.catch(() => {});
   let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      ping,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("mount ping timed out")),
-          HEALTH_CHECK_TIMEOUT_MS,
-        );
-      }),
-    ]);
-  } finally {
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    }),
+  ]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
+/** Best-effort close of a capnweb session's socket, so recoveries don't leak connections. */
+function disposeItx(itx: RpcStub<Project>): void {
+  try {
+    (itx as unknown as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+  } catch {
+    // already gone
   }
 }
 
+/** Call the mount over the FULL agent path (`itx.<name>.__ping()`) — the same route an agent uses. */
+function pingMount(itx: RpcStub<Project>, name: string): Promise<void> {
+  const ping = (itx as unknown as Record<string, { __ping(): Promise<{ ok: true }> }>)[
+    name
+  ].__ping();
+  return withTimeout(ping, HEALTH_CHECK_TIMEOUT_MS, "mount ping").then(() => {});
+}
+
 /**
- * Keep the live mount routable for as long as we run, and never return. A live
+ * Keep the live mount routable for as long as we run, and NEVER return. A live
  * capability's provider ref lives only in the capability-host DO's memory, so a
  * DO eviction or a dropped socket silently takes it "offline" while this process
- * keeps happily running. So we don't just heartbeat — every few seconds we
- * self-call the mount over the full agent path: that round-trip keeps the host
- * DO warm AND proves the mount still answers. If it doesn't, we re-provide on the
- * current socket (recovers a DO eviction that dropped the ref but left our
- * connection intact); if THAT fails the connection is dead, so we reconnect and
- * provide fresh. `onReprovided` fires whenever we had to re-establish it.
+ * keeps happily running. So we don't just heartbeat — we self-call the mount
+ * over the full agent path: that round-trip keeps the host DO warm AND proves it
+ * still answers. The first check runs right after the initial provide (no dead
+ * startup window); thereafter every few seconds.
+ *
+ * When a check fails (eviction, a dropped or wedged socket, a deploy) we
+ * reconnect FRESH — a new connection, with re-resolved auth so a reconnect past
+ * the short access-token TTL still authenticates — provide again, and dispose the
+ * old session. Recovery NEVER escapes the loop: a share session ends only when
+ * the process does, so a failed round keeps the old stub, backs off, and retries
+ * on the next tick. `onReprovided` fires whenever we re-establish it.
  */
 async function keepMountAlive(input: {
   itx: RpcStub<Project>;
@@ -228,28 +259,32 @@ async function keepMountAlive(input: {
   onReprovided?: () => void;
 }): Promise<never> {
   let itx = input.itx;
-  const provide = (stub: RpcStub<Project>) =>
-    stub.provideCapability({
-      type: "live",
-      path: [input.name],
-      capability: input.capability,
-      instructions: INSTRUCTIONS,
-      types: TYPES,
-    });
   while (true) {
-    await new Promise((resolve) => setTimeout(resolve, HEALTH_CHECK_INTERVAL_MS));
     try {
-      await pingMount(itx, input.name);
-      continue; // mount answered — still live
+      await pingMount(itx, input.name); // confirms the mount end-to-end + keeps the host warm
     } catch {
-      // Mount not answering: re-provide on the current socket, else reconnect.
+      // The mount isn't answering. Reconnect fresh (bounded above the handshake
+      // window); on failure keep the old stub, back off, and retry next tick —
+      // this must never throw out of the loop.
+      let fresh: RpcStub<Project> | undefined;
       try {
-        await provide(itx);
+        fresh = await withTimeout(
+          connectAndProvide(input.connect, input.name, input.capability),
+          RECONNECT_TIMEOUT_MS,
+          "reconnect",
+        );
       } catch {
-        itx = await connectAndProvide(input.connect, input.name, input.capability);
+        // couldn't recover this round (transient network / auth / endpoint down)
       }
+      if (fresh === undefined) {
+        await sleep(RECOVERY_BACKOFF_MS);
+        continue;
+      }
+      disposeItx(itx); // replace and free the old session
+      itx = fresh;
       input.onReprovided?.();
     }
+    await sleep(HEALTH_CHECK_INTERVAL_MS);
   }
 }
 
