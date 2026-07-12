@@ -1481,6 +1481,32 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
+  it("w1c. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
+    const fresh = [
+      evt(1, "other"),
+      evt(2, "selected"),
+      { ...evt(3, "selected"), ephemeral: true as const },
+      evt(4, "selected"),
+    ];
+    h.append(...fresh);
+
+    h.subscribers.wake([
+      { event: fresh[0]!, byteLength: 11 },
+      { event: fresh[1]!, byteLength: 17 },
+      { event: fresh[2]!, byteLength: 23 },
+      { event: fresh[3]!, byteLength: 29 },
+    ]);
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([2, 4]);
+    expect(h.egress).toEqual([{ count: 2, bytes: 46 }]);
+    expect(h.row("k")?.ackedOffset).toBe(4);
+    expect(h.storageReads()).toBe(0);
+  });
+
   it("w2. a connection already at the in-memory head skips the initial storage probe", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"));

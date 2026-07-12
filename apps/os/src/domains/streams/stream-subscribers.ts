@@ -346,10 +346,11 @@ export class StreamSubscribers {
     | {
         afterOffset: number;
         limit: number;
-        includesByteLengthByOffset: boolean;
+        includesEventByteLengths: boolean;
         events: StreamEvent[];
         durableEvents: StreamEvent[];
-        byteLengthByOffset: ReadonlyMap<number, number> | undefined;
+        eventByteLengths: readonly number[] | undefined;
+        durableEventByteLengths: readonly number[] | undefined;
         byteLength: number;
         durableByteLength: number;
         lastOffset: number | undefined;
@@ -653,9 +654,16 @@ export class StreamSubscribers {
           // enforced as the same skip-not-defer shape selectors use: the raw
           // read advances the cursor over their offsets, delivery drops them.
           let matched = durable;
+          let matchedByteLength: number | undefined;
           if (selector !== undefined) {
-            const selected = this.#applySelector(subscriptionKey, selector, durable);
+            const selected = this.#applySelector(
+              subscriptionKey,
+              selector,
+              durable,
+              read.eventByteLengths,
+            );
             matched = selected.matched;
+            matchedByteLength = selected.matchedByteLength;
             for (const fact of selected.conditionErrors) this.#hooks.appendFact(fact);
           }
 
@@ -681,7 +689,7 @@ export class StreamSubscribers {
           const deliveredBytes =
             matched.length === durable.length
               ? read.byteLength
-              : selectedByteLength(matched, read.byteLengthByOffset);
+              : (matchedByteLength ?? missingFilteredByteLength());
           // Dispatch-time accounting: retries re-send real bytes, so failed
           // attempts count too (the wire carried them either way).
           const dispatchAtMs = this.#hooks.now();
@@ -773,11 +781,11 @@ export class StreamSubscribers {
     afterOffset: number,
     limit: number,
     durableOnly = false,
-    includeByteLengthByOffset = false,
+    includeEventByteLengths = false,
   ): {
     events: StreamEvent[];
     lastOffset: number | undefined;
-    byteLengthByOffset: ReadonlyMap<number, number> | undefined;
+    eventByteLengths: readonly number[] | undefined;
     byteLength: number;
   } {
     const firstFreshOffset = this.#freshTail[0]?.event.offset;
@@ -790,12 +798,12 @@ export class StreamSubscribers {
       cached !== undefined &&
       cached.afterOffset === afterOffset &&
       cached.limit === limit &&
-      cached.includesByteLengthByOffset === includeByteLengthByOffset
+      cached.includesEventByteLengths === includeEventByteLengths
     ) {
       return {
         events: (durableOnly ? cached.durableEvents : cached.events).slice(),
         lastOffset: cached.lastOffset,
-        byteLengthByOffset: cached.byteLengthByOffset,
+        eventByteLengths: durableOnly ? cached.durableEventByteLengths : cached.eventByteLengths,
         byteLength: durableOnly ? cached.durableByteLength : cached.byteLength,
       };
     }
@@ -803,7 +811,8 @@ export class StreamSubscribers {
     const start = useFreshTail ? freshStart : 0;
     const events: StreamEvent[] = [];
     let durable: StreamEvent[] | undefined;
-    const byteLengthByOffset = includeByteLengthByOffset ? new Map<number, number>() : undefined;
+    const eventByteLengths: number[] | undefined = includeEventByteLengths ? [] : undefined;
+    let durableEventByteLengths: number[] | undefined;
     let lastOffset: number | undefined;
     let bytes = 0;
     let durableBytes = 0;
@@ -814,27 +823,33 @@ export class StreamSubscribers {
       const nextBytes = bytes + entryByteLength;
       if (nextBytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) break;
       events.push(entry.event);
-      byteLengthByOffset?.set(entry.event.offset, entryByteLength);
+      eventByteLengths?.push(entryByteLength);
       lastOffset = entry.event.offset;
       if (entry.event.ephemeral === true) {
         durable ??= events.slice(0, -1);
+        if (eventByteLengths !== undefined) {
+          durableEventByteLengths ??= eventByteLengths.slice(0, -1);
+        }
       } else {
         durable?.push(entry.event);
+        durableEventByteLengths?.push(entryByteLength);
         durableBytes += entryByteLength;
       }
       bytes = nextBytes;
     }
     const durableEvents = durable ?? events;
+    const durableByteLengths = durableEventByteLengths ?? eventByteLengths;
     if (useFreshTail) {
       // Keep canonical arrays private. Each lane still gets an isolated array,
       // while aligned raw and durable readers share both scans through slice().
       this.#freshTailProjection = {
         afterOffset,
         limit,
-        includesByteLengthByOffset: includeByteLengthByOffset,
+        includesEventByteLengths: includeEventByteLengths,
         events,
         durableEvents,
-        byteLengthByOffset,
+        eventByteLengths,
+        durableEventByteLengths: durableByteLengths,
         byteLength: bytes,
         durableByteLength: durableBytes,
         lastOffset,
@@ -842,14 +857,14 @@ export class StreamSubscribers {
       return {
         events: (durableOnly ? durableEvents : events).slice(),
         lastOffset,
-        byteLengthByOffset,
+        eventByteLengths: durableOnly ? durableByteLengths : eventByteLengths,
         byteLength: durableOnly ? durableBytes : bytes,
       };
     }
     return {
       events: durableOnly ? durableEvents : events,
       lastOffset,
-      byteLengthByOffset,
+      eventByteLengths: durableOnly ? durableByteLengths : eventByteLengths,
       byteLength: durableOnly ? durableBytes : bytes,
     };
   }
@@ -863,13 +878,28 @@ export class StreamSubscribers {
     subscriptionKey: string,
     selector: CompiledEventSelector,
     events: StreamEvent[],
-  ): { matched: StreamEvent[]; conditionErrors: StreamEventInput[] } {
-    if (selector.matchesAll) return { matched: events, conditionErrors: [] };
+    eventByteLengths: readonly number[] | undefined,
+  ): {
+    matched: StreamEvent[];
+    matchedByteLength: number | undefined;
+    conditionErrors: StreamEventInput[];
+  } {
+    if (selector.matchesAll) {
+      return { matched: events, matchedByteLength: undefined, conditionErrors: [] };
+    }
+    if (eventByteLengths === undefined || eventByteLengths.length !== events.length) {
+      missingFilteredByteLength();
+    }
     const matched: StreamEvent[] = [];
     const conditionErrors: StreamEventInput[] = [];
-    for (const event of events) {
+    let matchedByteLength = 0;
+    for (let index = 0; index < events.length; index += 1) {
+      const event = events[index]!;
       try {
-        if (selector.matches(event)) matched.push(event);
+        if (selector.matches(event)) {
+          matched.push(event);
+          matchedByteLength += eventByteLengths[index]!;
+        }
       } catch (error) {
         // Never record a condition failure ABOUT an error fact: those facts
         // land on this same stream, so a condition that throws on the
@@ -887,7 +917,7 @@ export class StreamSubscribers {
         });
       }
     }
-    return { matched, conditionErrors };
+    return { matched, matchedByteLength, conditionErrors };
   }
 
   #selectorFor(
@@ -1186,14 +1216,14 @@ export class StreamSubscribers {
               // see one. Ephemeral subscriptions receive them, live and on
               // replay.
               const visible = read.events;
-              events =
-                args.selector === undefined || args.selector.matchesAll
-                  ? visible
-                  : visible.filter((event) => selectorMatchesSafely(args.selector!, event));
-              deliveredBytes =
-                events.length === visible.length
-                  ? read.byteLength
-                  : selectedByteLength(events, read.byteLengthByOffset);
+              if (args.selector === undefined || args.selector.matchesAll) {
+                events = visible;
+                deliveredBytes = read.byteLength;
+              } else {
+                const selected = selectEventsSafely(args.selector, visible, read.eventByteLengths);
+                events = selected.events;
+                deliveredBytes = selected.byteLength;
+              }
               if (events.length === 0 && !initialBatchPending) continue;
             }
           } else {
@@ -1605,16 +1635,27 @@ function selectorMatchesSafely(selector: CompiledEventSelector, event: StreamEve
   }
 }
 
-function selectedByteLength(
+function selectEventsSafely(
+  selector: CompiledEventSelector,
   events: readonly StreamEvent[],
-  byteLengthByOffset: ReadonlyMap<number, number> | undefined,
-): number {
-  if (byteLengthByOffset === undefined) {
-    throw new Error("Filtered stream delivery requires per-event byte lengths.");
+  eventByteLengths: readonly number[] | undefined,
+): { events: StreamEvent[]; byteLength: number } {
+  if (eventByteLengths === undefined || eventByteLengths.length !== events.length) {
+    missingFilteredByteLength();
   }
+  const selected: StreamEvent[] = [];
   let byteLength = 0;
-  for (const event of events) byteLength += byteLengthByOffset.get(event.offset) ?? 0;
-  return byteLength;
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]!;
+    if (!selectorMatchesSafely(selector, event)) continue;
+    selected.push(event);
+    byteLength += eventByteLengths[index]!;
+  }
+  return { events: selected, byteLength };
+}
+
+function missingFilteredByteLength(): never {
+  throw new Error("Filtered stream delivery requires aligned per-event byte lengths.");
 }
 
 function errorMessage(error: unknown): string {
