@@ -654,7 +654,7 @@ describe("StreamEventLog.getRange", () => {
     );
     expect(
       db.prepare("select version, evicted_offset_floor as floor from stream_storage_schema").get(),
-    ).toEqual({ version: 4, floor: 0 });
+    ).toEqual({ version: 5, floor: 0 });
     expect(
       db
         .prepare(
@@ -844,10 +844,9 @@ describe("SqliteSubscriptionCursorStore schema", () => {
       "next_attempt_at",
       "last_error",
       "epoch",
-      "updated_at",
     ]);
     expect(db.prepare("select version from stream_storage_schema").get()).toEqual({
-      version: 4,
+      version: 5,
     });
   });
 
@@ -878,10 +877,10 @@ describe("SqliteSubscriptionCursorStore schema", () => {
     const db = new DatabaseSync(":memory:");
     const sql = wrapSqlStorage(db);
     new SqliteSubscriptionCursorStore(sql);
-    db.exec("update stream_storage_schema set version = 3 where singleton = 1");
+    db.exec("update stream_storage_schema set version = 4 where singleton = 1");
 
     expect(() => new SqliteSubscriptionCursorStore(wrapSqlStorage(db))).toThrow(
-      "Unsupported stream storage schema version: 3",
+      "Unsupported stream storage schema version: 4",
     );
   });
 });
@@ -927,6 +926,34 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     const reloaded = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
     expect(reloaded.get("fenced")!.ackedOffset).toBe(10);
     expect(reloaded.get("unfenced")!.ackedOffset).toBe(10);
+  });
+
+  it("elides only acknowledgements that cannot change durable cursor state", () => {
+    const db = new DatabaseSync(":memory:");
+    let writes = 0;
+    const store = new SqliteSubscriptionCursorStore(
+      wrapSqlStorage(db, (statement) => {
+        if (statement.trimStart().startsWith("update subscriptions")) writes += 1;
+      }),
+    );
+    const row = store.ensure("k", 3);
+    writes = 0;
+
+    store.ack("k", 3, row.epoch);
+    store.ack("k", 2);
+    store.advanceWatermark("k", 3);
+    expect(writes).toBe(0);
+
+    store.nack("k", { attempt: 1, nextAttemptAt: 10, error: "retry" });
+    writes = 0;
+    store.ack("k", 3, row.epoch);
+    expect(writes).toBe(1);
+    expect(store.get("k")).toMatchObject({
+      ackedOffset: 3,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
   });
 
   it("remove+recreate mints a fresh epoch, so a dead subscription's ack cannot land", () => {
@@ -1048,8 +1075,8 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     }
     store.flushSkipped();
 
-    // 33 rows * 3 bindings + one shared timestamp = Cloudflare's 100 max.
-    expect(skippedUpdateBindings).toEqual([100, 100, 100, 4]);
+    // 33 rows * 3 bindings = 99, below Cloudflare's 100-binding maximum.
+    expect(skippedUpdateBindings).toEqual([99, 99, 99, 3]);
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k-99")!.ackedOffset).toBe(64);
   });
 
