@@ -859,16 +859,40 @@ function compareProcessorEntries(a: ProcessorPanelEntry, b: ProcessorPanelEntry)
   );
 }
 
+/**
+ * The row status speaks the subscription machinery's own vocabulary: durable
+ * subscriptions are desired state from a `subscription-configured` fact, and
+ * a missing live connection is a NORMAL spine state, not a vague sleep —
+ * wake mode gets re-poked when the watermark lags, push/webhook cursors are
+ * either acked to head, mid-drain, or in retry backoff, and `parked` is the
+ * spine's own give-up fact.
+ */
 function processorEntryStatus(entry: ProcessorPanelEntry, busy: boolean): string {
   if (entry.kind === "core") return "running";
   if (entry.connected) {
     if (busy && isLlmish(entry)) return "processing";
     return entry.subscriptionType === "configured" ? "connected durable" : "connected ephemeral";
   }
-  if (entry.runtimeSubscription?.parkedAtOffset != null) {
-    return `parked at #${entry.runtimeSubscription.parkedAtOffset}`;
+  const subscription = entry.runtimeSubscription;
+  if (subscription?.parkedAtOffset != null) {
+    return `subscription-parked at #${subscription.parkedAtOffset}`;
   }
-  if (entry.subscriptionType === "configured") return "configured asleep";
+  if (entry.subscriptionType === "configured") {
+    const configured =
+      entry.configuredAtOffset == null ? "configured" : `configured #${entry.configuredAtOffset}`;
+    if (subscription != null && subscription.nextAttemptAt !== null) {
+      return `${configured} · retry backoff (attempt ${subscription.attempt})`;
+    }
+    if (entry.deliveryMode === "wake") {
+      return `${configured} · poked on next append`;
+    }
+    if (subscription != null) {
+      return subscription.lag === 0
+        ? `${configured} · acked to head`
+        : `${configured} · draining, lag ${subscription.lag}`;
+    }
+    return configured;
+  }
   return "disconnected";
 }
 
