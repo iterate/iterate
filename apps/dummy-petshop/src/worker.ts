@@ -42,6 +42,8 @@ import {
   DEFAULT_CLIENT_ID,
   DEFAULT_CLIENT_SECRET,
   DEFAULT_INSTALLATION_ID,
+  type OauthClient,
+  type PetshopState,
   PetshopStateDurableObject,
 } from "./state.ts";
 
@@ -172,11 +174,11 @@ const INDEX = dedent`
      (apps/os/docs/integrations-and-secrets-design.md §7 S0)
 
   GET  /.well-known/oauth-protected-resource[/mcp]  RFC 9728 — /mcp's resource + this origin as its auth server
-  GET  /.well-known/oauth-authorization-server      RFC 8414 — authorize/token/register endpoints, PKCE S256, client_secret_basic
-  POST /oauth/register      RFC 7591 dynamic client registration → {client_id, client_secret, …} (confidential client)
-  GET  /oauth/authorize     ?client_id&redirect_uri&state[&code_challenge] — consent page; add &approve=1[&user=x] to skip it (test lane)
+  GET  /.well-known/oauth-authorization-server      RFC 8414 — authorize/token/register endpoints, PKCE S256, auth methods none + client_secret_basic
+  POST /oauth/register      RFC 7591 dynamic client registration → a client pinned to its redirect_uris; token_endpoint_auth_method "none" ⇒ public (no secret, PKCE), else confidential
+  GET  /oauth/authorize     ?client_id&redirect_uri&state[&code_challenge] — consent page; add &approve=1[&user=x] to skip it (test lane); a DCR client's redirect_uri must be one it registered
   POST /oauth/authorize     consent form submit → 302 redirect_uri?code=…&state=…
-  POST /oauth/token         grant_type=authorization_code | refresh_token; HTTP Basic client auth (RFC 6749 §2.3.1); PKCE code_verifier required when the code carried a challenge (RFC 7636)
+  POST /oauth/token         grant_type=authorization_code | refresh_token; confidential = HTTP Basic (RFC 6749 §2.3.1), public = client_id in the body; PKCE code_verifier required for public clients (and any code that carried a challenge, RFC 7636)
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "correct-horse"
   POST /graphql             GraphQL session-login door: NewSession (any username, password "${GRAPHQL_LOGIN_PASSWORD}")
                             → sealed ~${GRAPHQL_SESSION_TTL_SECONDS}s session token, valid as an ordinary bearer on /api/*
@@ -258,14 +260,19 @@ function consentPage(params: {
   `;
 }
 
-/** The authorize-time validations: registered client_id, absolute redirect_uri. Null when acceptable. */
+/** The authorize-time validations: registered client_id, absolute redirect_uri,
+ * and — for a dynamically-registered client — exact membership in the redirect
+ * URIs it registered (RFC 7591 / the MCP authorization spec; prevents an
+ * open-redirect / code-theft hole). Seeded/backdoor clients register none and
+ * accept any absolute URI. Null when acceptable. */
 async function authorizeRejection(
   deps: PetshopDeps,
   clientId: string,
   redirectUri: string,
 ): Promise<Response | null> {
   const state = await deps.state.getState();
-  if (!state.clients[clientId]) {
+  const client = state.clients[clientId];
+  if (!client) {
     return json(
       {
         error: "invalid_request",
@@ -277,6 +284,19 @@ async function authorizeRejection(
   if (!URL.canParse(redirectUri)) {
     return json(
       { error: "invalid_request", error_description: "redirect_uri must be an absolute URL" },
+      400,
+    );
+  }
+  if (
+    client.redirectUris &&
+    client.redirectUris.length > 0 &&
+    !client.redirectUris.includes(redirectUri)
+  ) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "redirect_uri is not registered for this client",
+      },
       400,
     );
   }
@@ -326,8 +346,9 @@ function protectedResourceMetadata(origin: string) {
 }
 
 /** RFC 8414: the endpoints an MCP OAuth client discovers to register, start the
- * code+PKCE flow, and exchange/refresh tokens. Clients authenticate at the
- * token endpoint with HTTP Basic (client_secret_basic) and MUST use PKCE S256. */
+ * code+PKCE flow, and exchange/refresh tokens. Supports both a public client
+ * (token_endpoint_auth_method "none" + PKCE — the standard MCP shape) and a
+ * confidential one (client_secret_basic). PKCE S256 either way. */
 function authorizationServerMetadata(origin: string) {
   return {
     issuer: origin,
@@ -337,16 +358,16 @@ function authorizationServerMetadata(origin: string) {
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: ["client_secret_basic"],
+    token_endpoint_auth_methods_supported: ["none", "client_secret_basic"],
     scopes_supported: ["pets:read", "pets:write"],
   };
 }
 
 /** RFC 7591 dynamic client registration: the client POSTs its redirect_uris (+
- * optional metadata) and petshop mints a fresh confidential client. Permissive
- * on redirect_uris (this is a fake provider) but it returns a real
- * client_secret the token endpoint then enforces via Basic auth, exactly like a
- * production server. */
+ * optional metadata) and petshop mints a fresh client, PINNED to exactly those
+ * redirect URIs. `token_endpoint_auth_method: "none"` mints a public client (no
+ * secret, PKCE-authenticated — the standard MCP shape); anything else mints a
+ * confidential client whose secret the token endpoint enforces via Basic auth. */
 async function registerOAuthClient(request: Request, deps: PetshopDeps): Promise<Response> {
   const body = await readJson(request);
   const redirectUris = Array.isArray(body.redirect_uris)
@@ -358,16 +379,20 @@ async function registerOAuthClient(request: Request, deps: PetshopDeps): Promise
       400,
     );
   }
-  const { clientId, clientSecret } = await deps.state.createClient({});
+  const isPublic = body.token_endpoint_auth_method === "none";
+  const { clientId, clientSecret } = await deps.state.createClient({
+    redirectUris,
+    ...(isPublic ? { public: true } : {}),
+  });
   return json(
     {
       client_id: clientId,
-      client_secret: clientSecret,
+      ...(isPublic ? {} : { client_secret: clientSecret }),
       client_id_issued_at: nowSeconds(),
       // 0 = never expires (RFC 7591 §3.2.1).
-      client_secret_expires_at: 0,
+      ...(isPublic ? {} : { client_secret_expires_at: 0 }),
       redirect_uris: redirectUris,
-      token_endpoint_auth_method: "client_secret_basic",
+      token_endpoint_auth_method: isPublic ? "none" : "client_secret_basic",
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       client_name: typeof body.client_name === "string" ? body.client_name : "mcp-client",
@@ -433,19 +458,15 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
       500,
     );
   }
-  const credentials = basicClientCredentials(request);
-  const state = await deps.state.getState();
-  const client = credentials ? state.clients[credentials.clientId] : undefined;
-  if (!credentials || !client || client.clientSecret !== credentials.clientSecret) {
-    return json({ error: "invalid_client" }, 401, {
-      "www-authenticate": 'Basic realm="dummy-petshop"',
-    });
-  }
   const form = new URLSearchParams(await request.text());
+  const state = await deps.state.getState();
+  const auth = authenticateTokenClient(request, form, state);
+  if (auth instanceof Response) return auth;
+  const { clientId, client } = auth;
   const grantType = form.get("grant_type");
   if (grantType === "authorization_code") {
     const code = await unseal<CodePayload>(form.get("code") ?? "", deps.sealKey);
-    if (!code || code.t !== "code" || code.clientId !== credentials.clientId) {
+    if (!code || code.t !== "code" || code.clientId !== clientId) {
       return json({ error: "invalid_grant" }, 400);
     }
     if (code.exp < nowSeconds()) {
@@ -454,9 +475,15 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     if (code.redirectUri !== (form.get("redirect_uri") ?? "")) {
       return json({ error: "invalid_grant", error_description: "redirect_uri mismatch" }, 400);
     }
-    // PKCE (RFC 7636): a code minted with a challenge is only redeemable by the
-    // holder of the matching verifier. Absent a challenge (the legacy
-    // consent-only lane) no verifier is required, so existing e2e stays green.
+    // PKCE (RFC 7636). A public client has no secret, so PKCE is its ONLY proof
+    // and is mandatory. A confidential client is verified when it sent a
+    // challenge (the legacy consent-only lane sends none — no verifier required).
+    if (client.public && code.codeChallenge === undefined) {
+      return json(
+        { error: "invalid_grant", error_description: "PKCE is required for public clients" },
+        400,
+      );
+    }
     if (code.codeChallenge !== undefined) {
       const verifier = form.get("code_verifier") ?? "";
       if (!verifier || (await pkceS256(verifier)) !== code.codeChallenge) {
@@ -475,7 +502,7 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     // snapshot — stamping the stale epoch would mint a token that 401s at once.
     return issueTokens({
       sub: code.sub,
-      clientId: credentials.clientId,
+      clientId,
       ttlSeconds: client.accessTokenTtlSeconds,
       epoch: (await deps.state.getState()).accessTokenEpoch,
       sealKey: deps.sealKey,
@@ -483,7 +510,7 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
   }
   if (grantType === "refresh_token") {
     const refresh = await unseal<RefreshPayload>(form.get("refresh_token") ?? "", deps.sealKey);
-    if (!refresh || refresh.t !== "refresh" || refresh.clientId !== credentials.clientId) {
+    if (!refresh || refresh.t !== "refresh" || refresh.clientId !== clientId) {
       return json({ error: "invalid_grant" }, 400);
     }
     // Re-read fresh state so the revocation check and the stamped epoch agree
@@ -494,13 +521,37 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     }
     return issueTokens({
       sub: refresh.sub,
-      clientId: credentials.clientId,
+      clientId,
       ttlSeconds: client.accessTokenTtlSeconds,
       epoch: current.accessTokenEpoch,
       sealKey: deps.sealKey,
     });
   }
   return json({ error: "unsupported_grant_type" }, 400);
+}
+
+/** Authenticate the token-endpoint caller: a confidential client presents HTTP
+ * Basic (RFC 6749 §2.3.1); a public client presents client_id in the body, its
+ * PKCE verifier standing in for a secret (verified per authorization_code grant).
+ * Returns the resolved client, or a 401 Response. */
+function authenticateTokenClient(
+  request: Request,
+  form: URLSearchParams,
+  state: PetshopState,
+): { clientId: string; client: OauthClient } | Response {
+  const unauthorized = () =>
+    json({ error: "invalid_client" }, 401, { "www-authenticate": 'Basic realm="dummy-petshop"' });
+  const basic = basicClientCredentials(request);
+  if (basic) {
+    const client = state.clients[basic.clientId];
+    if (!client || client.public || client.clientSecret !== basic.clientSecret)
+      return unauthorized();
+    return { clientId: basic.clientId, client };
+  }
+  const clientId = form.get("client_id") ?? "";
+  const client = state.clients[clientId];
+  if (!client || !client.public) return unauthorized();
+  return { clientId, client };
 }
 
 /**

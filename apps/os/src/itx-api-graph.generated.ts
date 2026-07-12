@@ -1292,9 +1292,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "McpBeginOAuthInput",
     kind: "typeAlias",
     sourceText:
-      "/** Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to,\n * an optional secret path to store the token at (defaults to `/secrets/mcp/<host>`),\n * and an optional OAuth scope to request. */\nexport type McpBeginOAuthInput = {\n  /** The MCP server's URL (the same URL you would pass to `connect`). */\n  url: string;\n  /** Where the resulting token is stored write-only. Defaults to `/secrets/mcp/<host>`. */\n  path?: string;\n  /** OAuth scope to request; the server's default is used when omitted. */\n  scope?: string;\n};",
+      "/** Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to,\n * the secret path to store the resulting token at, and an optional OAuth scope. */\nexport type McpBeginOAuthInput = {\n  /** The MCP server's URL (the same URL you would pass to `connect`). */\n  url: string;\n  /** Where the resulting token is stored write-only, e.g. `/secrets/mcp/cloudflare`. */\n  path: string;\n  /** OAuth scope to request; the server's default is used when omitted. */\n  scope?: string;\n};",
     summary:
-      "Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to, an optional secret path to store the token at (defaults to `/secrets/mcp/<host>`), and an optional OAuth scope to request.",
+      "Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to, the secret path to store the resulting token at, and an optional OAuth scope.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

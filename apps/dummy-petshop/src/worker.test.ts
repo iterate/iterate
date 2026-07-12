@@ -601,7 +601,7 @@ describe("mcp oauth (RFC 9728 / 8414 / 7591 + PKCE)", () => {
       token_endpoint: `${ORIGIN}/oauth/token`,
       registration_endpoint: `${ORIGIN}/oauth/register`,
       code_challenge_methods_supported: ["S256"],
-      token_endpoint_auth_methods_supported: ["client_secret_basic"],
+      token_endpoint_auth_methods_supported: ["none", "client_secret_basic"],
     });
   });
 
@@ -699,5 +699,87 @@ describe("mcp oauth (RFC 9728 / 8414 / 7591 + PKCE)", () => {
     });
     expect(missing.status).toBe(400);
     expect(await missing.json()).toMatchObject({ error: "invalid_grant" });
+  });
+
+  test("public client (token_endpoint_auth_method none): no secret, client_id + PKCE at token", async () => {
+    const shop = makeShop();
+    const registration = (await (
+      await shop("/oauth/register", {
+        ...postJson({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: "none" }),
+      })
+    ).json()) as { client_id: string; client_secret?: string; token_endpoint_auth_method: string };
+    // A public client gets no secret back.
+    expect(registration.client_secret).toBeUndefined();
+    expect(registration.token_endpoint_auth_method).toBe("none");
+
+    const verifier = "verifier-" + "p".repeat(50);
+    const location = await approve(shop, {
+      client_id: registration.client_id,
+      redirect_uri: REDIRECT_URI,
+      code_challenge: await pkceS256(verifier),
+    });
+    // No Basic auth — the client identifies itself with client_id in the body.
+    const token = await shop("/oauth/token", {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: registration.client_id,
+        code: location.searchParams.get("code") ?? "",
+        redirect_uri: REDIRECT_URI,
+        code_verifier: verifier,
+      }),
+    });
+    expect(token.status).toBe(200);
+    const tokens = (await token.json()) as { access_token: string; refresh_token: string };
+    expect((await shop("/api/me", bearer(tokens.access_token))).status).toBe(200);
+
+    // Public-client refresh: client_id in the body, still no Basic auth.
+    const refreshed = await shop("/oauth/token", {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: registration.client_id,
+        refresh_token: tokens.refresh_token,
+      }),
+    });
+    expect(refreshed.status).toBe(200);
+  });
+
+  test("a public client with no PKCE verifier is rejected", async () => {
+    const shop = makeShop();
+    const registration = (await (
+      await shop("/oauth/register", {
+        ...postJson({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: "none" }),
+      })
+    ).json()) as { client_id: string };
+    // No code_challenge at authorize → the public code has no PKCE binding.
+    const location = await approve(shop, {
+      client_id: registration.client_id,
+      redirect_uri: REDIRECT_URI,
+    });
+    const token = await shop("/oauth/token", {
+      method: "POST",
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: registration.client_id,
+        code: location.searchParams.get("code") ?? "",
+        redirect_uri: REDIRECT_URI,
+      }),
+    });
+    expect(token.status).toBe(400);
+    expect(await token.json()).toMatchObject({ error: "invalid_grant" });
+  });
+
+  test("a dynamically-registered client is pinned to its redirect URIs", async () => {
+    const shop = makeShop();
+    const client = (await (
+      await shop("/oauth/register", { ...postJson({ redirect_uris: [REDIRECT_URI] }) })
+    ).json()) as { client_id: string };
+    // An unregistered redirect_uri is refused (no open redirect).
+    const rejected = await shop(
+      `/oauth/authorize?client_id=${client.client_id}&redirect_uri=${encodeURIComponent("https://evil.example/steal")}&approve=1`,
+    );
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ error: "invalid_request" });
   });
 });

@@ -25,13 +25,12 @@ export type McpClientConnectInput = {
 export type McpClientRpc = object;
 
 /** Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to,
- * an optional secret path to store the token at (defaults to `/secrets/mcp/<host>`),
- * and an optional OAuth scope to request. */
+ * the secret path to store the resulting token at, and an optional OAuth scope. */
 export type McpBeginOAuthInput = {
   /** The MCP server's URL (the same URL you would pass to `connect`). */
   url: string;
-  /** Where the resulting token is stored write-only. Defaults to `/secrets/mcp/<host>`. */
-  path?: string;
+  /** Where the resulting token is stored write-only, e.g. `/secrets/mcp/cloudflare`. */
+  path: string;
   /** OAuth scope to request; the server's default is used when omitted. */
   scope?: string;
 };

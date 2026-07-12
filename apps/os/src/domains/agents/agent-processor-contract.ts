@@ -174,7 +174,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // If the user pastes a key into chat anyway, that is fine: store it and proceed —",
   "  // unblocking them comes first. But a pasted key sat in the transcript, so advise them",
   "  // to roll it and collect the replacement through the same link (it updates existing secrets too).",
-  "  // MCP server needs OAuth (connect 401s with a WWW-Authenticate challenge, e.g. Cloudflare's)? itx.mcp.beginOAuth({ url })",
+  "  // MCP server needs OAuth (connect 401s with WWW-Authenticate, e.g. Cloudflare's)? itx.mcp.beginOAuth({ url, path })",
   '  // returns a sign-in link; after the user signs in, connect with field "accessToken". Full flow: `connect-mcp-oauth`.',
   "",
   "  // LATER / RECURRING — the script string runs later with full project access:",

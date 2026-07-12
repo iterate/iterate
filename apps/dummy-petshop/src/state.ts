@@ -30,6 +30,14 @@ export const DEFAULT_INSTALLATION_ID = "petshop-installation";
 export interface OauthClient {
   clientSecret: string;
   accessTokenTtlSeconds: number;
+  /** RFC 7591 dynamically-registered redirect URIs. Empty for the seeded/backdoor
+   * clients (they accept any absolute redirect_uri); a DCR client is pinned to
+   * exactly what it registered. */
+  redirectUris?: string[];
+  /** A public client (token_endpoint_auth_method "none", the standard MCP shape)
+   * has no secret and authenticates at the token endpoint with PKCE + its
+   * client_id in the body instead of HTTP Basic. */
+  public?: boolean;
 }
 
 /**
@@ -136,13 +144,18 @@ export class PetshopStateDurableObject extends DurableObject {
 
   async createClient(input: {
     accessTokenTtlSeconds?: number;
+    redirectUris?: string[];
+    public?: boolean;
   }): Promise<{ clientId: string; clientSecret: string }> {
     const state = await this.#load();
     const clientId = `petshop-client-${crypto.randomUUID().slice(0, 8)}`;
-    const clientSecret = crypto.randomUUID();
+    // A public client has no usable secret; a confidential one authenticates with it.
+    const clientSecret = input.public ? "" : crypto.randomUUID();
     state.clients[clientId] = {
       clientSecret,
       accessTokenTtlSeconds: input.accessTokenTtlSeconds ?? DEFAULT_ACCESS_TTL_SECONDS,
+      ...(input.redirectUris ? { redirectUris: input.redirectUris } : {}),
+      ...(input.public ? { public: true } : {}),
     };
     await this.#save(state);
     return { clientId, clientSecret };

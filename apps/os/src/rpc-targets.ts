@@ -216,11 +216,7 @@ import type {
   McpClientConnectInput,
   McpClientRpc,
 } from "./domains/itx/mcp-client.ts";
-import {
-  beginMcpOAuth,
-  defaultMcpSecretPath,
-  fetchLikeFromFetcher,
-} from "./domains/itx/mcp-oauth.ts";
+import { beginMcpOAuth, fetchLikeFromFetcher } from "./domains/itx/mcp-oauth.ts";
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
 import type { ProjectListEntry } from "./project-deployment-status.ts";
 import type {
@@ -5561,9 +5557,10 @@ function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
 
 type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 
-/** The MCP collection also needs the calling project + scope so beginOAuth can
- * mint the callback URL, store the token, and notify the calling agent. */
-type McpClientCollectionDeps = McpClientDeps & { projectId: string; scopePath: string };
+/** The MCP collection needs the calling project + scope (so beginOAuth can mint
+ * the callback URL, store the token, and notify the calling agent) on top of the
+ * egress every client call uses. */
+type McpClientCollectionDeps = { egress: Fetcher; projectId: string; scopePath: string };
 
 // Exa's hosted MCP server works unauthenticated (rate-limited, and the shared
 // free pool exhausts fast); pre-connecting it gives every project web search
@@ -5622,7 +5619,7 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
         "This deployment cannot name its own base URL, so it cannot host the OAuth callback.",
       );
     }
-    const path = normalizeSecretPath(input.path ?? defaultMcpSecretPath(input.url));
+    const path = normalizeSecretPath(input.path);
     const result = await beginMcpOAuth({
       mcpUrl: input.url,
       path,

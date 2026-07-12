@@ -982,7 +982,11 @@ return {
 // ---- TURN 1: mint the sign-in link, send it, END YOUR TURN ----
 const mcpUrl = vars.mcpUrl ?? "https://mcp.cloudflare.com/mcp";
 
-const { authorizationUrl, path } = await itx.mcp.beginOAuth({ url: mcpUrl });
+// You choose where the token lands (like a secret path); pick something memorable.
+const { authorizationUrl, path } = await itx.mcp.beginOAuth({
+  url: mcpUrl,
+  path: vars.path ?? "/secrets/mcp/cloudflare",
+});
 
 await itx.chat.sendMessage(
   "That server uses OAuth. [Click here to sign in](" + authorizationUrl + ") — " +
