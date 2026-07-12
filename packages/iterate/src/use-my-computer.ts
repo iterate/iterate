@@ -281,7 +281,21 @@ async function keepMountAlive(input: {
   onConflict?: () => void;
 }): Promise<void> {
   let session: RpcStub<Project> | undefined;
-  let live = false;
+  // Report transitions only — including the FIRST connect. `undefined` until we
+  // report either state, so a failed initial connect still surfaces `onDegraded`
+  // (not a silent "Starting…" while the CLI retries in the background).
+  let reported: "live" | "down" | undefined;
+  const goLive = () => {
+    if (reported === "live") return;
+    reported = "live";
+    input.onLive?.();
+  };
+  const goDown = () => {
+    if (reported === "down") return;
+    reported = "down";
+    input.onDegraded?.();
+  };
+
   while (true) {
     if (session === undefined) {
       // (Re)connect. connectAndProvide self-disposes on failure, so nothing leaks
@@ -289,15 +303,11 @@ async function keepMountAlive(input: {
       try {
         session = await connectAndProvide(input.connect, input.name, input.capability);
       } catch {
-        if (live) {
-          live = false;
-          input.onDegraded?.();
-        }
+        goDown();
         await sleep(RECOVERY_BACKOFF_MS);
         continue;
       }
-      live = true;
-      input.onLive?.();
+      goLive();
       await sleep(HEALTH_CHECK_INTERVAL_MS);
       continue;
     }
@@ -308,10 +318,7 @@ async function keepMountAlive(input: {
     } catch {
       disposeItx(session); // suspect/wedged — disposing cancels the pending ping
       session = undefined;
-      if (live) {
-        live = false;
-        input.onDegraded?.();
-      }
+      goDown();
       continue; // reconnect immediately
     }
     if (observedId !== MOUNT_ID) {
@@ -319,10 +326,7 @@ async function keepMountAlive(input: {
       disposeItx(session);
       return; // yield the name; the caller (process/menu bar) decides what's next
     }
-    if (!live) {
-      live = true;
-      input.onLive?.();
-    }
+    goLive();
     await sleep(HEALTH_CHECK_INTERVAL_MS);
   }
 }
