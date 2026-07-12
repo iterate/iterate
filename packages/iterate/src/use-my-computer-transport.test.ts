@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebSocketServer } from "ws";
 import { openSocketBridge, proxyLocalHttp, stripHopByHop } from "./use-my-computer-transport.ts";
@@ -82,11 +82,13 @@ describe("proxyLocalHttp", () => {
   });
 
   test("returns 502 when the server resets mid-body", async () => {
-    const port = await startHttp((req, res) => {
+    const port = await startHttp((_req, res) => {
+      // Promise 100 bytes, flush a few, then reset AFTER a tick so the initial
+      // fetch() resolves with headers and the failure lands in arrayBuffer() —
+      // pinning the body-read side of the 502 boundary, not the connect side.
       res.writeHead(200, { "content-length": "100" });
       res.write("partial");
-      // Destroy the socket before the promised body arrives.
-      req.socket.destroy();
+      setTimeout(() => res.socket?.destroy(), 50);
     });
     const response = await proxyLocalHttp(
       `http://127.0.0.1:${port}`,
@@ -95,32 +97,39 @@ describe("proxyLocalHttp", () => {
     expect(response.status).toBe(502);
   });
 
-  test("rewrites a loopback Location onto the public origin — and respects the port boundary", async () => {
+  test("rewrites an absolute, path-relative, or protocol-relative loopback Location onto the public origin", async () => {
+    let location = "";
     const port = await startHttp((_req, res) => {
-      // Redirect back to the local origin; must land on the public host.
-      res.writeHead(302, { location: `http://127.0.0.1:${port}/login?next=/` });
+      res.writeHead(302, { location });
       res.end();
     });
-    const response = await proxyLocalHttp(
-      `http://127.0.0.1:${port}`,
-      new Request("https://slug.iterate.app/protected"),
-    );
-    expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe("https://slug.iterate.app/login?next=/");
+    const local = `http://127.0.0.1:${port}`;
+    for (const loc of [
+      `${local}/login?next=/`,
+      "/login?next=/",
+      `//127.0.0.1:${port}/login?next=/`,
+    ]) {
+      location = loc;
+      const response = await proxyLocalHttp(
+        local,
+        new Request("https://slug.iterate.app/protected"),
+      );
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("https://slug.iterate.app/login?next=/");
+    }
   });
 
-  test("does not rewrite a Location to a different port that shares a prefix", async () => {
-    // origin :3000 must not match a Location on :30001 (the startsWith bug).
+  test("does not rewrite a Location on a different port that shares a numeric prefix", async () => {
+    // The exact `startsWith` bug: origin `:<port>` must not match `:<port>0`.
     const port = await startHttp((_req, res) => {
-      res.writeHead(302, { location: "http://127.0.0.1:30001/elsewhere" });
+      res.writeHead(302, { location: `http://127.0.0.1:${port}0/elsewhere` });
       res.end();
     });
     const response = await proxyLocalHttp(
       `http://127.0.0.1:${port}`,
       new Request("https://slug.iterate.app/"),
     );
-    // The proxied origin is `port` (random), not 30001, so the Location is left alone.
-    expect(response.headers.get("location")).toBe("http://127.0.0.1:30001/elsewhere");
+    expect(response.headers.get("location")).toBe(`http://127.0.0.1:${port}0/elsewhere`);
   });
 
   test("gives HEAD a null body and keeps its content-length metadata", async () => {
@@ -219,6 +228,33 @@ describe("openSocketBridge", () => {
     expect(closeInfo).toMatchObject({ code: 1000 });
     expect(calledAfterDispose).toBe(false);
     await bridge.close();
+  });
+
+  test("a rejected delivery tears the bridge down and disposes the ignored RPC result", async () => {
+    // A frame callback whose delivery result is a rejected, disposable thenable
+    // (a dead remote stub): the pump must observe the rejection as the corpse
+    // signal (shutdown → local socket closes) and dispose the ignored result.
+    let resultDisposed = false;
+    const port = await startWs((socket) => socket.send("frame"));
+    const bridge = await openSocketBridge({
+      port,
+      onMessage: () =>
+        Object.assign(Promise.reject(new Error("dead stub")), {
+          [Symbol.dispose]() {
+            resultDisposed = true;
+          },
+        }),
+    });
+    // The rejected delivery runs shutdown(), which closes the local socket.
+    await vi_waitFor(async () => {
+      try {
+        await bridge.send("x");
+        return false;
+      } catch {
+        return true; // socket no longer OPEN → shutdown happened
+      }
+    });
+    await vi_waitFor(() => resultDisposed);
   });
 });
 

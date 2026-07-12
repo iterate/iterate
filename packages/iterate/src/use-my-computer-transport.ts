@@ -11,7 +11,11 @@
 
 import WebSocket from "ws";
 
-import { isThenable, retainCallback } from "../../../apps/os/src/lib/rpc/retain.ts";
+import {
+  disposeIgnoredRpcResult,
+  isThenable,
+  retainCallback,
+} from "../../../apps/os/src/lib/rpc/retain.ts";
 
 // ── HTTP: reverse proxy to a local server ────────────────────────────────────
 
@@ -68,12 +72,13 @@ export async function proxyLocalHttp(origin: string, request: Request): Promise<
   const requestBody =
     request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
 
+  const upstreamUrl = `${origin}${incoming.pathname}${incoming.search}`;
   // Everything that can fail against the local server stays inside the 502
   // boundary: the initial connection AND streaming the body (a server that
   // sends headers then resets must not surface as an opaque worker error).
   let response: Response;
   try {
-    response = await fetch(`${origin}${incoming.pathname}${incoming.search}`, {
+    response = await fetch(upstreamUrl, {
       method: request.method,
       headers,
       body: requestBody,
@@ -103,7 +108,7 @@ export async function proxyLocalHttp(origin: string, request: Request): Promise<
     outHeaders.delete("content-encoding");
     outHeaders.delete("content-length");
   }
-  rewriteLocalRedirect(outHeaders, origin, incoming.origin);
+  rewriteLocalRedirect(outHeaders, origin, upstreamUrl, incoming.origin);
   return new Response(responseBody, {
     status: response.status,
     statusText: response.statusText,
@@ -118,13 +123,23 @@ function unreachable(origin: string, error: unknown): Response {
   });
 }
 
-/** Rewrite a `Location` pointing at the local origin onto the public origin. */
-function rewriteLocalRedirect(headers: Headers, localOrigin: string, publicOrigin: string): void {
+/**
+ * Rewrite a `Location` that resolves to the local origin onto the public origin.
+ * Resolving against the upstream URL (not just parsing absolute) also catches
+ * protocol-relative (`//127.0.0.1:port/…`) and path-relative redirects, which
+ * would otherwise silently point the public browser at the Mac's loopback.
+ */
+function rewriteLocalRedirect(
+  headers: Headers,
+  localOrigin: string,
+  upstreamUrl: string,
+  publicOrigin: string,
+): void {
   const location = headers.get("location");
   if (!location) return;
   let target: URL;
   try {
-    target = new URL(location); // relative Location throws — the browser already resolves it correctly
+    target = new URL(location, upstreamUrl);
   } catch {
     return;
   }
@@ -206,13 +221,26 @@ export async function openSocketBridge({
   onFrame?.onRpcBroken?.(() => shutdown());
   onSocketClose?.onRpcBroken?.(() => shutdown());
 
+  // Deliver one value to a retained callback, following the canonical sink
+  // discipline (subscriber-sinks.ts): a synchronous throw or a rejected delivery
+  // means the stub is a corpse — tear the bridge down rather than swallowing it;
+  // and the ignored RPC result is disposed (dropping it leaks a remote
+  // reference, one per frame otherwise).
   const deliver = (callback: ((arg: never) => unknown) | undefined, arg: unknown) => {
     if (disposed || !callback) return;
+    let result: unknown;
     try {
-      const result = callback(arg as never);
-      if (isThenable(result)) void Promise.resolve(result).catch(() => {});
+      result = callback(arg as never);
     } catch {
-      // A broken callback must not kill the pump.
+      shutdown();
+      return;
+    }
+    if (isThenable(result)) {
+      void Promise.resolve(result)
+        .then(undefined, () => shutdown())
+        .finally(() => disposeIgnoredRpcResult(result));
+    } else {
+      disposeIgnoredRpcResult(result);
     }
   };
 
@@ -248,13 +276,15 @@ export async function openSocketBridge({
     },
     /**
      * Close the local socket. If it's live, the socket's own `close` event drives
-     * delivery + shutdown; if it's already closed, shut down directly so the
-     * callbacks are still released.
+     * delivery + shutdown. While it's already CLOSING, this is a no-op — the
+     * pending `close` event will still deliver `onClose` (running shutdown here
+     * would dispose the callback before that fires). Only if it's fully CLOSED
+     * (no `close` event coming) do we shut down directly to release callbacks.
      */
     close: async (input?: { code?: number; reason?: string }) => {
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close(input?.code ?? 1000, input?.reason ?? "");
-      } else {
+      } else if (socket.readyState === WebSocket.CLOSED) {
         shutdown();
       }
       return { ok: true as const };
