@@ -9,7 +9,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { seedPets } from "./pets.ts";
-import { randomSealKey } from "./seal.ts";
+import { pkceS256, randomSealKey } from "./seal.ts";
 import {
   DEFAULT_ACCESS_TTL_SECONDS,
   DEFAULT_CLIENT_ID,
@@ -50,7 +50,13 @@ const basicAuth = (clientId: string, clientSecret: string) =>
 
 async function approve(
   shop: Shop,
-  fields: { client_id: string; redirect_uri: string; state?: string; user?: string },
+  fields: {
+    client_id: string;
+    redirect_uri: string;
+    state?: string;
+    user?: string;
+    code_challenge?: string;
+  },
 ): Promise<URL> {
   const response = await shop("/oauth/authorize", {
     method: "POST",
@@ -562,5 +568,136 @@ describe("backdoor lock", () => {
     ).toBe(200);
     // The rest of the shop stays open.
     expect((await shop("/")).status).toBe(200);
+  });
+});
+
+describe("mcp oauth (RFC 9728 / 8414 / 7591 + PKCE)", () => {
+  const ORIGIN = "https://petshop.example";
+
+  test("unauthorized /mcp answers 401 pointing at protected-resource metadata", async () => {
+    const shop = makeShop();
+    const response = await shop("/mcp", { method: "POST" });
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toBe(
+      `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`,
+    );
+  });
+
+  test("discovery documents name the resource, auth server, and endpoints", async () => {
+    const shop = makeShop();
+    for (const path of [
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-protected-resource/mcp",
+    ]) {
+      expect(await (await shop(path)).json()).toEqual({
+        resource: `${ORIGIN}/mcp`,
+        authorization_servers: [ORIGIN],
+      });
+    }
+    const as = await (await shop("/.well-known/oauth-authorization-server")).json();
+    expect(as).toMatchObject({
+      issuer: ORIGIN,
+      authorization_endpoint: `${ORIGIN}/oauth/authorize`,
+      token_endpoint: `${ORIGIN}/oauth/token`,
+      registration_endpoint: `${ORIGIN}/oauth/register`,
+      code_challenge_methods_supported: ["S256"],
+      token_endpoint_auth_methods_supported: ["client_secret_basic"],
+    });
+  });
+
+  test("dynamic registration mints a confidential client", async () => {
+    const shop = makeShop();
+    const response = await shop("/oauth/register", {
+      ...postJson({ redirect_uris: [REDIRECT_URI], client_name: "iterate" }),
+    });
+    expect(response.status).toBe(201);
+    const client = (await response.json()) as { client_id: string; client_secret: string };
+    expect(client.client_id).toMatch(/^petshop-client-/);
+    expect(client.client_secret).toBeTruthy();
+    // The minted client is real: it works as a token-endpoint credential.
+    const tokens = await connect(shop, {
+      clientId: client.client_id,
+      clientSecret: client.client_secret,
+    });
+    expect(tokens.access_token).toBeTruthy();
+  });
+
+  test("register with no absolute redirect_uri is rejected", async () => {
+    const shop = makeShop();
+    const response = await shop("/oauth/register", { ...postJson({ redirect_uris: [] }) });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "invalid_redirect_uri" });
+  });
+
+  test("full PKCE code flow: register → authorize(challenge) → token(verifier) → /mcp", async () => {
+    const shop = makeShop();
+    const client = (await (
+      await shop("/oauth/register", { ...postJson({ redirect_uris: [REDIRECT_URI] }) })
+    ).json()) as { client_id: string; client_secret: string };
+
+    const verifier = "verifier-" + "a".repeat(50);
+    const challenge = await pkceS256(verifier);
+    const location = await approve(shop, {
+      client_id: client.client_id,
+      redirect_uri: REDIRECT_URI,
+      code_challenge: challenge,
+    });
+
+    // The right verifier redeems the code.
+    const good = await exchange(shop, {
+      clientId: client.client_id,
+      clientSecret: client.client_secret,
+      body: {
+        grant_type: "authorization_code",
+        code: location.searchParams.get("code") ?? "",
+        redirect_uri: REDIRECT_URI,
+        code_verifier: verifier,
+      },
+    });
+    expect(good.status).toBe(200);
+    const tokens = (await good.json()) as { access_token: string };
+    const mcp = await shop("/mcp", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.access_token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "t", version: "1" },
+        },
+      }),
+    });
+    expect(mcp.status).toBe(200);
+  });
+
+  test("a code minted with a challenge is not redeemable without the verifier", async () => {
+    const shop = makeShop();
+    const client = (await (
+      await shop("/oauth/register", { ...postJson({ redirect_uris: [REDIRECT_URI] }) })
+    ).json()) as { client_id: string; client_secret: string };
+    const challenge = await pkceS256("the-real-verifier-" + "z".repeat(40));
+    const location = await approve(shop, {
+      client_id: client.client_id,
+      redirect_uri: REDIRECT_URI,
+      code_challenge: challenge,
+    });
+    const missing = await exchange(shop, {
+      clientId: client.client_id,
+      clientSecret: client.client_secret,
+      body: {
+        grant_type: "authorization_code",
+        code: location.searchParams.get("code") ?? "",
+        redirect_uri: REDIRECT_URI,
+      },
+    });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ error: "invalid_grant" });
   });
 });

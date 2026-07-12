@@ -210,7 +210,17 @@ import type {
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
-import type { McpClientConnectInput, McpClientRpc } from "./domains/itx/mcp-client.ts";
+import type {
+  McpBeginOAuthInput,
+  McpBeginOAuthResult,
+  McpClientConnectInput,
+  McpClientRpc,
+} from "./domains/itx/mcp-client.ts";
+import {
+  beginMcpOAuth,
+  defaultMcpSecretPath,
+  fetchLikeFromFetcher,
+} from "./domains/itx/mcp-oauth.ts";
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
 import type { ProjectListEntry } from "./project-deployment-status.ts";
 import type {
@@ -4387,6 +4397,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get mcp(): McpClientCollectionRpcTarget {
     return new McpClientCollectionRpcTarget({
       egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
+      projectId: this.#props.projectId,
+      // Makes beginOAuth links notify the calling agent when the flow completes.
+      scopePath: this.#props.capabilityHost.path,
     });
   }
 
@@ -5548,6 +5561,10 @@ function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
 
 type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 
+/** The MCP collection also needs the calling project + scope so beginOAuth can
+ * mint the callback URL, store the token, and notify the calling agent. */
+type McpClientCollectionDeps = McpClientDeps & { projectId: string; scopePath: string };
+
 // Exa's hosted MCP server works unauthenticated (rate-limited, and the shared
 // free pool exhausts fast); pre-connecting it gives every project web search
 // with zero setup. When the deployment has a first-party Exa key
@@ -5567,22 +5584,57 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Ad-hoc MCP clients: connect({ url }) returns a client whose dotted calls are tool invocations; exa is the built-in Exa web-search server.",
+        "Ad-hoc MCP clients: connect({ url }) returns a client whose dotted calls are tool invocations; exa is the built-in Exa web-search server. For a server that needs OAuth, beginOAuth({ url }) returns a sign-in link that stores a token you then connect with.",
       children: {
         connect: "Connect to an MCP server by URL.",
+        beginOAuth: "Start the OAuth sign-in for an OAuth-protected MCP server; returns a link.",
         exa: "The public Exa MCP server (web_search_exa, web_fetch_exa).",
       },
       parent: "a project itx (itx.mcp)",
     });
   }
 
-  constructor(readonly props: McpClientDeps) {
+  constructor(readonly props: McpClientCollectionDeps) {
     super();
   }
 
   /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */
   connect(input: McpClientConnectInput): Promise<McpClientRpc> {
     return McpClientRpcTarget.connect(input, this.props);
+  }
+
+  /**
+   * Begin the OAuth sign-in for an OAuth-protected MCP server (one whose
+   * unauthenticated request answers 401 with a `WWW-Authenticate` challenge —
+   * e.g. Cloudflare's mcp.cloudflare.com). Discovers the server's OAuth
+   * endpoints, registers a client, and returns a `{ authorizationUrl, path }`:
+   * send `authorizationUrl` to the user ("click here to connect"). When they
+   * sign in, the token is stored write-only at `path` and — if you are an agent
+   * — you are messaged so you can continue. Then connect like any bearer MCP:
+   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret({ path:
+   * "<path>", field: "accessToken" })' } })`. For a server that just wants a
+   * bearer token you already hold, use `itx.secrets.collectFromUser` instead.
+   */
+  async beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult> {
+    const baseUrl = parseConfig(env).baseUrl;
+    if (!baseUrl) {
+      throw new Error(
+        "This deployment cannot name its own base URL, so it cannot host the OAuth callback.",
+      );
+    }
+    const path = normalizeSecretPath(input.path ?? defaultMcpSecretPath(input.url));
+    const result = await beginMcpOAuth({
+      mcpUrl: input.url,
+      path,
+      redirectUri: `${baseUrl.replace(/\/$/, "")}/api/mcp-oauth/callback`,
+      ...(input.scope ? { scope: input.scope } : {}),
+      // An agent scope gets messaged when the user finishes signing in.
+      ...(this.props.scopePath.startsWith("/agents/") ? { notify: this.props.scopePath } : {}),
+      projectId: this.props.projectId,
+      encryptionKey: env.SECRET_ENCRYPTION_KEY,
+      fetchFn: fetchLikeFromFetcher(this.props.egress),
+    });
+    return { authorizationUrl: result.authorizationUrl, path: result.path };
   }
 
   /**

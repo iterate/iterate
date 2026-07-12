@@ -967,6 +967,55 @@ return {
 `.trim(),
   },
   {
+    id: "connect-mcp-oauth",
+    e2eProven: false,
+    title: "Connect an OAuth-protected MCP server (the sign-in flow)",
+    description:
+      'The full flow for an MCP server that needs OAuth — one whose unauthenticated request answers 401 with a WWW-Authenticate challenge (Cloudflare\'s mcp.cloudflare.com, the dummy petshop /mcp, most hosted MCP servers). There is no token to paste: the user must sign in at the provider. itx.mcp.beginOAuth({ url }) discovers the server\'s OAuth endpoints, registers a client, and returns { authorizationUrl, path } — send authorizationUrl to the user ("click here to connect"). When they sign in, the token is stored write-only at `path` and, because you called it from your agent scope, you are messaged so you continue. Then connect like any bearer MCP, referencing the token with a getSecret placeholder on field "accessToken". (If a plain bearer token you already hold is enough, use itx.secrets.collectFromUser instead.) Needs a human to sign in — interactive-only.',
+    context: "agent",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Scenario: the user said "connect me to the Cloudflare MCP server". Trying to
+// connect first fails with an auth challenge — that means OAuth, not a token
+// you can ask for.
+//
+// ---- TURN 1: mint the sign-in link, send it, END YOUR TURN ----
+const mcpUrl = vars.mcpUrl ?? "https://mcp.cloudflare.com/mcp";
+
+const { authorizationUrl, path } = await itx.mcp.beginOAuth({ url: mcpUrl });
+
+await itx.chat.sendMessage(
+  "That server uses OAuth. [Click here to sign in](" + authorizationUrl + ") — " +
+    "you authorize it on the provider's own page; I never see your password or token. " +
+    "I'll continue automatically once you're done.",
+);
+// End the turn WITHOUT waiting: signing in messages you back, which starts your
+// next turn. Remember \`path\` (it is /secrets/mcp/<host> unless you passed one).
+return;
+
+// ---- TURN 2 (after "The OAuth connection to ... is done" arrives) ----
+// The token is stored write-only and auto-refreshes. Connect referencing it
+// with a getSecret placeholder — note field: "accessToken" (the material is a
+// token bundle, not a bare string):
+//
+// const cf = await itx.mcp.connect({
+//   url: mcpUrl,
+//   headers: { authorization: 'Bearer getSecret({ path: "' + path + '", field: "accessToken" })' },
+// });
+// return await cf.__describe(); // the server's tools — then call them by name
+//
+// To make it durable (discoverable + callable as itx.cloudflare.<tool>() by
+// future turns), mount the same recipe:
+// await itx.provideCapability({
+//   expression: ["mcp", ["connect", { url: mcpUrl,
+//     headers: { authorization: 'Bearer getSecret({ path: "' + path + '", field: "accessToken" })' } }]],
+//   instructions: "Cloudflare MCP server (OAuth). Tool names discovered from the server.",
+//   path: ["cloudflare"],
+//   type: "itx-expression",
+// });
+`.trim(),
+  },
+  {
     id: "typed-capability-mount",
     title: "Mount a capability with types, then discover and typecheck against it",
     description:

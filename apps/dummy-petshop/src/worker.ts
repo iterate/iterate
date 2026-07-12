@@ -29,7 +29,7 @@ import { verifyAppJwt } from "./github-app.ts";
 import { handleMcpRequest } from "./mcp.ts";
 import { type Pet, seedPets } from "./pets.ts";
 import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
-import { hmacSha256Hex, nowSeconds, seal, unseal } from "./seal.ts";
+import { hmacSha256Hex, nowSeconds, pkceS256, seal, unseal } from "./seal.ts";
 import {
   GRAPHQL_LOGIN_PASSWORD,
   GRAPHQL_SESSION_TTL_SECONDS,
@@ -103,6 +103,10 @@ interface CodePayload {
   clientId: string;
   redirectUri: string;
   exp: number;
+  /** PKCE S256 challenge (RFC 7636) when the client sent one at /oauth/authorize.
+   * The token endpoint requires the matching code_verifier when this is present;
+   * absent for the legacy consent-only lane, which keeps existing e2e green. */
+  codeChallenge?: string;
 }
 
 /** Sealed access token; `epoch` must still equal the state's accessTokenEpoch. */
@@ -167,9 +171,12 @@ const INDEX = dedent`
   🐾 dummy-petshop — a fake third party for integrations & secrets e2e
      (apps/os/docs/integrations-and-secrets-design.md §7 S0)
 
-  GET  /oauth/authorize     ?client_id&redirect_uri&state — consent page; add &approve=1[&user=x] to skip it (test lane)
+  GET  /.well-known/oauth-protected-resource[/mcp]  RFC 9728 — /mcp's resource + this origin as its auth server
+  GET  /.well-known/oauth-authorization-server      RFC 8414 — authorize/token/register endpoints, PKCE S256, client_secret_basic
+  POST /oauth/register      RFC 7591 dynamic client registration → {client_id, client_secret, …} (confidential client)
+  GET  /oauth/authorize     ?client_id&redirect_uri&state[&code_challenge] — consent page; add &approve=1[&user=x] to skip it (test lane)
   POST /oauth/authorize     consent form submit → 302 redirect_uri?code=…&state=…
-  POST /oauth/token         grant_type=authorization_code | refresh_token; HTTP Basic client auth (RFC 6749 §2.3.1)
+  POST /oauth/token         grant_type=authorization_code | refresh_token; HTTP Basic client auth (RFC 6749 §2.3.1); PKCE code_verifier required when the code carried a challenge (RFC 7636)
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "correct-horse"
   POST /graphql             GraphQL session-login door: NewSession (any username, password "${GRAPHQL_LOGIN_PASSWORD}")
                             → sealed ~${GRAPHQL_SESSION_TTL_SECONDS}s session token, valid as an ordinary bearer on /api/*
@@ -183,7 +190,7 @@ const INDEX = dedent`
   GET  /openapi.json        OpenAPI 3.1 doc for the typed pets API (listPets/getPet/createPet)
   POST /rpc/*               oRPC handler for the pets API (what an @orpc/client talks); bearer-protected
   GET|POST /api/v2/*        the same pets procedures served REST-shaped (per the OpenAPI doc)
-  GET|POST /mcp             MCP server (streamable HTTP): tools list_pets, get_pet, create_pet; bearer-protected
+  GET|POST /mcp             MCP server (streamable HTTP): tools list_pets, get_pet, create_pet; bearer-protected — an unauthorized call answers 401 + WWW-Authenticate pointing at the RFC 9728 metadata above (OAuth-protected MCP server)
   GET  /gateway               (websocket) — token in the first {op:identify, token} FRAME (Discord shape)
   GET  /gateway-header        (websocket) — token in the Authorization: Bearer UPGRADE header (OpenAI-Realtime shape)
   GET  /gateway-subprotocol   (websocket) — token in Sec-WebSocket-Protocol as "petshop.access-token.<token>" (browser-WS shape)
@@ -206,14 +213,24 @@ const INDEX = dedent`
   installation tokens live ${INSTALLATION_TOKEN_TTL_SECONDS}s · App JWTs verify RS256 over header.payload and App webhooks sign x-hub-signature-256.
 `;
 
-function consentPage(params: { clientId: string; redirectUri: string; state: string }): string {
+function consentPage(params: {
+  clientId: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge: string;
+}): string {
   const hidden = (
     [
       ["client_id", params.clientId],
       ["redirect_uri", params.redirectUri],
       ["state", params.state],
+      // PKCE challenge rides through the consent POST so the browser lane
+      // (human clicks Approve) proves the same code_verifier at token time
+      // as the consent-free &approve=1 lane.
+      ["code_challenge", params.codeChallenge],
     ] as const
   )
+    .filter(([, value]) => value !== "")
     .map(([name, value]) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}" />`)
     .join("\n");
   return dedent`
@@ -267,7 +284,13 @@ async function authorizeRejection(
 }
 
 async function mintCodeRedirect(
-  params: { clientId: string; redirectUri: string; state: string; user: string },
+  params: {
+    clientId: string;
+    redirectUri: string;
+    state: string;
+    user: string;
+    codeChallenge: string;
+  },
   deps: PetshopDeps,
 ): Promise<Response> {
   const payload: CodePayload = {
@@ -277,11 +300,80 @@ async function mintCodeRedirect(
     clientId: params.clientId,
     redirectUri: params.redirectUri,
     exp: nowSeconds() + CODE_TTL_SECONDS,
+    ...(params.codeChallenge ? { codeChallenge: params.codeChallenge } : {}),
   };
   const target = new URL(params.redirectUri);
   target.searchParams.set("code", await seal(payload, deps.sealKey));
   if (params.state) target.searchParams.set("state", params.state);
   return Response.redirect(target.toString(), 302);
+}
+
+// ---------------------------------------------------------------------------
+// MCP OAuth discovery (RFC 9728 protected-resource + RFC 8414 auth-server
+// metadata + RFC 7591 dynamic client registration). These make /mcp a
+// standards "OAuth-protected MCP server": a client that hits /mcp unauthorized
+// reads the WWW-Authenticate `resource_metadata` URL, discovers this origin as
+// its own authorization server, registers a client, and runs the code+PKCE
+// flow against the endpoints already served above. This is the door the OS
+// outbound MCP-OAuth flow (itx.mcp.beginOAuth) is proven against.
+// ---------------------------------------------------------------------------
+
+/** RFC 9728: /mcp is the protected resource and this same origin is its
+ * authorization server. Served at both /.well-known/oauth-protected-resource
+ * and the resource-suffixed /.well-known/oauth-protected-resource/mcp. */
+function protectedResourceMetadata(origin: string) {
+  return { resource: `${origin}/mcp`, authorization_servers: [origin] };
+}
+
+/** RFC 8414: the endpoints an MCP OAuth client discovers to register, start the
+ * code+PKCE flow, and exchange/refresh tokens. Clients authenticate at the
+ * token endpoint with HTTP Basic (client_secret_basic) and MUST use PKCE S256. */
+function authorizationServerMetadata(origin: string) {
+  return {
+    issuer: origin,
+    authorization_endpoint: `${origin}/oauth/authorize`,
+    token_endpoint: `${origin}/oauth/token`,
+    registration_endpoint: `${origin}/oauth/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: ["client_secret_basic"],
+    scopes_supported: ["pets:read", "pets:write"],
+  };
+}
+
+/** RFC 7591 dynamic client registration: the client POSTs its redirect_uris (+
+ * optional metadata) and petshop mints a fresh confidential client. Permissive
+ * on redirect_uris (this is a fake provider) but it returns a real
+ * client_secret the token endpoint then enforces via Basic auth, exactly like a
+ * production server. */
+async function registerOAuthClient(request: Request, deps: PetshopDeps): Promise<Response> {
+  const body = await readJson(request);
+  const redirectUris = Array.isArray(body.redirect_uris)
+    ? body.redirect_uris.filter((value): value is string => typeof value === "string")
+    : [];
+  if (redirectUris.length === 0 || !redirectUris.every((value) => URL.canParse(value))) {
+    return json(
+      { error: "invalid_redirect_uri", error_description: "redirect_uris must be absolute URLs" },
+      400,
+    );
+  }
+  const { clientId, clientSecret } = await deps.state.createClient({});
+  return json(
+    {
+      client_id: clientId,
+      client_secret: clientSecret,
+      client_id_issued_at: nowSeconds(),
+      // 0 = never expires (RFC 7591 §3.2.1).
+      client_secret_expires_at: 0,
+      redirect_uris: redirectUris,
+      token_endpoint_auth_method: "client_secret_basic",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      client_name: typeof body.client_name === "string" ? body.client_name : "mcp-client",
+    },
+    201,
+  );
 }
 
 /** RFC 6749 §2.3.1 HTTP Basic client auth — the required-to-support method the OS side's Basic-auth header placeholder exercises. */
@@ -361,6 +453,18 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
     }
     if (code.redirectUri !== (form.get("redirect_uri") ?? "")) {
       return json({ error: "invalid_grant", error_description: "redirect_uri mismatch" }, 400);
+    }
+    // PKCE (RFC 7636): a code minted with a challenge is only redeemable by the
+    // holder of the matching verifier. Absent a challenge (the legacy
+    // consent-only lane) no verifier is required, so existing e2e stays green.
+    if (code.codeChallenge !== undefined) {
+      const verifier = form.get("code_verifier") ?? "";
+      if (!verifier || (await pkceS256(verifier)) !== code.codeChallenge) {
+        return json(
+          { error: "invalid_grant", error_description: "PKCE code_verifier mismatch" },
+          400,
+        );
+      }
     }
     // Single-use: a replayed code is rejected (RFC 6749 §4.1.2).
     if (!(await deps.state.consumeAuthorizationCode(code.jti))) {
@@ -837,11 +941,23 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
   if (key === "GET /") {
     return new Response(INDEX, { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
+  // MCP OAuth discovery documents (served unauthenticated, by spec).
+  if (
+    key === "GET /.well-known/oauth-protected-resource" ||
+    key === "GET /.well-known/oauth-protected-resource/mcp"
+  ) {
+    return json(protectedResourceMetadata(url.origin));
+  }
+  if (key === "GET /.well-known/oauth-authorization-server") {
+    return json(authorizationServerMetadata(url.origin));
+  }
+  if (key === "POST /oauth/register") return registerOAuthClient(request, deps);
   if (key === "GET /oauth/authorize") {
     const params = {
       clientId: url.searchParams.get("client_id") ?? "",
       redirectUri: url.searchParams.get("redirect_uri") ?? "",
       state: url.searchParams.get("state") ?? "",
+      codeChallenge: url.searchParams.get("code_challenge") ?? "",
     };
     const rejection = await authorizeRejection(deps, params.clientId, params.redirectUri);
     if (rejection) return rejection;
@@ -861,6 +977,7 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
       redirectUri: String(form.get("redirect_uri") ?? ""),
       state: String(form.get("state") ?? ""),
       user: String(form.get("user") ?? ""),
+      codeChallenge: String(form.get("code_challenge") ?? ""),
     };
     const rejection = await authorizeRejection(deps, params.clientId, params.redirectUri);
     return rejection ?? (await mintCodeRedirect(params, deps));
@@ -919,7 +1036,13 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
   }
   if (url.pathname === "/mcp") {
     const grant = await accessGrant(request, deps);
-    if (!grant) return json({ error: "invalid_token" }, 401);
+    if (!grant) {
+      // Point an unauthorized MCP client at its protected-resource metadata
+      // (RFC 9728 §5.1) so it can discover this origin's OAuth endpoints.
+      return json({ error: "invalid_token" }, 401, {
+        "www-authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource/mcp"`,
+      });
+    }
     return handleMcpRequest(request, { owner: grant.sub, pets: deps.pets });
   }
   // The WebSocket gateways (§9 D6). Three shapes, same sealed access token,

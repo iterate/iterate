@@ -99,3 +99,15 @@ export async function hmacSha256Hex(secret: string, payload: string): Promise<st
 export function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
+
+/**
+ * PKCE S256 challenge for a verifier: base64url(SHA-256(verifier)) (RFC 7636
+ * §4.2). The MCP OAuth client sends `code_challenge` at /oauth/authorize and
+ * the matching `code_verifier` at /oauth/token; the token endpoint recomputes
+ * this and compares, so a leaked authorization code is useless without the
+ * verifier that never left the client.
+ */
+export async function pkceS256(verifier: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(verifier)));
+  return b64url(digest);
+}

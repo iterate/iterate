@@ -24,6 +24,29 @@ export type McpClientConnectInput = {
  */
 export type McpClientRpc = object;
 
+/** Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to,
+ * an optional secret path to store the token at (defaults to `/secrets/mcp/<host>`),
+ * and an optional OAuth scope to request. */
+export type McpBeginOAuthInput = {
+  /** The MCP server's URL (the same URL you would pass to `connect`). */
+  url: string;
+  /** Where the resulting token is stored write-only. Defaults to `/secrets/mcp/<host>`. */
+  path?: string;
+  /** OAuth scope to request; the server's default is used when omitted. */
+  scope?: string;
+};
+
+/** Result of `itx.mcp.beginOAuth`: a link to send the user through, and the
+ * secret path the token lands at once they finish. */
+export type McpBeginOAuthResult = {
+  /** Send this to the user. Signing in there stores the token and (for an agent)
+   * messages you back so you can continue. */
+  authorizationUrl: string;
+  /** The `/secrets/…` path the token is stored at. Connect afterwards with
+   * `headers: { authorization: 'Bearer getSecret({ path: "<path>", field: "accessToken" })' }`. */
+  path: string;
+};
+
 const CLIENT_INFO = {
   name: "itx-mcp-client",
   version: "1.0.0",

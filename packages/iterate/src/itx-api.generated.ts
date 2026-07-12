@@ -764,6 +764,19 @@ export interface McpClientCollection {
   /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */
   connect(input: McpClientConnectInput): Promise<McpClientRpc>;
   /**
+   * Begin the OAuth sign-in for an OAuth-protected MCP server (one whose
+   * unauthenticated request answers 401 with a `WWW-Authenticate` challenge —
+   * e.g. Cloudflare's mcp.cloudflare.com). Discovers the server's OAuth
+   * endpoints, registers a client, and returns a `{ authorizationUrl, path }`:
+   * send `authorizationUrl` to the user ("click here to connect"). When they
+   * sign in, the token is stored write-only at `path` and — if you are an agent
+   * — you are messaged so you can continue. Then connect like any bearer MCP:
+   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret({ path:
+   * "<path>", field: "accessToken" })' } })`. For a server that just wants a
+   * bearer token you already hold, use `itx.secrets.collectFromUser` instead.
+   */
+  beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult>;
+  /**
    * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every
    * project: web search and page reading as flat tool calls.
    * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;
@@ -2062,6 +2075,29 @@ export type McpClientConnectInput = {
  * fallback, so this contract deliberately does not re-declare a fixed surface.
  */
 export type McpClientRpc = object;
+
+/** Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to,
+ * an optional secret path to store the token at (defaults to `/secrets/mcp/<host>`),
+ * and an optional OAuth scope to request. */
+export type McpBeginOAuthInput = {
+  /** The MCP server's URL (the same URL you would pass to `connect`). */
+  url: string;
+  /** Where the resulting token is stored write-only. Defaults to `/secrets/mcp/<host>`. */
+  path?: string;
+  /** OAuth scope to request; the server's default is used when omitted. */
+  scope?: string;
+};
+
+/** Result of `itx.mcp.beginOAuth`: a link to send the user through, and the
+ * secret path the token lands at once they finish. */
+export type McpBeginOAuthResult = {
+  /** Send this to the user. Signing in there stores the token and (for an agent)
+   * messages you back so you can continue. */
+  authorizationUrl: string;
+  /** The `/secrets/…` path the token is stored at. Connect afterwards with
+   * `headers: { authorization: 'Bearer getSecret({ path: "<path>", field: "accessToken" })' }`. */
+  path: string;
+};
 
 /** Input to `itx.openapi.connect`: the OpenAPI spec URL to fetch, an optional
  * `baseUrl` overriding the spec's server, and extra headers (auth) sent with
