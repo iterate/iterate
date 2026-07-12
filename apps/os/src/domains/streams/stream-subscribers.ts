@@ -346,9 +346,10 @@ export class StreamSubscribers {
     | {
         afterOffset: number;
         limit: number;
+        includesByteLengthByOffset: boolean;
         events: StreamEvent[];
         durableEvents: StreamEvent[];
-        byteLengthByOffset: ReadonlyMap<number, number>;
+        byteLengthByOffset: ReadonlyMap<number, number> | undefined;
         byteLength: number;
         durableByteLength: number;
         lastOffset: number | undefined;
@@ -635,7 +636,16 @@ export class StreamSubscribers {
                   this.#batchLimits.get(subscriptionKey) ?? DELIVERY_BATCH_LIMIT,
                   DELIVERY_BATCH_LIMIT,
                 );
-          const read = this.#readBatch(row.ackedOffset, limit, true);
+          const selector =
+            config.selector === undefined
+              ? undefined
+              : this.#selectorFor(subscriptionKey, entry.latestConfiguredEvent.offset, config);
+          const read = this.#readBatch(
+            row.ackedOffset,
+            limit,
+            true,
+            selector !== undefined && !selector.matchesAll,
+          );
           const { events: durable, lastOffset } = read;
           if (lastOffset === undefined) return; // caught up
 
@@ -643,13 +653,8 @@ export class StreamSubscribers {
           // enforced as the same skip-not-defer shape selectors use: the raw
           // read advances the cursor over their offsets, delivery drops them.
           let matched = durable;
-          if (config.selector !== undefined) {
-            const selected = this.#applySelector(
-              subscriptionKey,
-              entry.latestConfiguredEvent.offset,
-              config,
-              durable,
-            );
+          if (selector !== undefined) {
+            const selected = this.#applySelector(subscriptionKey, selector, durable);
             matched = selected.matched;
             for (const fact of selected.conditionErrors) this.#hooks.appendFact(fact);
           }
@@ -676,10 +681,7 @@ export class StreamSubscribers {
           const deliveredBytes =
             matched.length === durable.length
               ? read.byteLength
-              : matched.reduce(
-                  (sum, event) => sum + (read.byteLengthByOffset.get(event.offset) ?? 0),
-                  0,
-                );
+              : selectedByteLength(matched, read.byteLengthByOffset);
           // Dispatch-time accounting: retries re-send real bytes, so failed
           // attempts count too (the wire carried them either way).
           const dispatchAtMs = this.#hooks.now();
@@ -771,10 +773,11 @@ export class StreamSubscribers {
     afterOffset: number,
     limit: number,
     durableOnly = false,
+    includeByteLengthByOffset = false,
   ): {
     events: StreamEvent[];
     lastOffset: number | undefined;
-    byteLengthByOffset: ReadonlyMap<number, number>;
+    byteLengthByOffset: ReadonlyMap<number, number> | undefined;
     byteLength: number;
   } {
     const firstFreshOffset = this.#freshTail[0]?.event.offset;
@@ -786,7 +789,8 @@ export class StreamSubscribers {
       useFreshTail &&
       cached !== undefined &&
       cached.afterOffset === afterOffset &&
-      cached.limit === limit
+      cached.limit === limit &&
+      cached.includesByteLengthByOffset === includeByteLengthByOffset
     ) {
       return {
         events: (durableOnly ? cached.durableEvents : cached.events).slice(),
@@ -799,7 +803,7 @@ export class StreamSubscribers {
     const start = useFreshTail ? freshStart : 0;
     const events: StreamEvent[] = [];
     let durable: StreamEvent[] | undefined;
-    const byteLengthByOffset = new Map<number, number>();
+    const byteLengthByOffset = includeByteLengthByOffset ? new Map<number, number>() : undefined;
     let lastOffset: number | undefined;
     let bytes = 0;
     let durableBytes = 0;
@@ -810,7 +814,7 @@ export class StreamSubscribers {
       const nextBytes = bytes + entryByteLength;
       if (nextBytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) break;
       events.push(entry.event);
-      byteLengthByOffset.set(entry.event.offset, entryByteLength);
+      byteLengthByOffset?.set(entry.event.offset, entryByteLength);
       lastOffset = entry.event.offset;
       if (entry.event.ephemeral === true) {
         durable ??= events.slice(0, -1);
@@ -827,6 +831,7 @@ export class StreamSubscribers {
       this.#freshTailProjection = {
         afterOffset,
         limit,
+        includesByteLengthByOffset: includeByteLengthByOffset,
         events,
         durableEvents,
         byteLengthByOffset,
@@ -856,14 +861,9 @@ export class StreamSubscribers {
    */
   #applySelector(
     subscriptionKey: string,
-    configOffset: number,
-    config: SubscriptionConfiguredPayload,
+    selector: CompiledEventSelector,
     events: StreamEvent[],
   ): { matched: StreamEvent[]; conditionErrors: StreamEventInput[] } {
-    if (config.selector === undefined) {
-      return { matched: events, conditionErrors: [] };
-    }
-    const selector = this.#selectorFor(subscriptionKey, configOffset, config);
     if (selector.matchesAll) return { matched: events, conditionErrors: [] };
     const matched: StreamEvent[] = [];
     const conditionErrors: StreamEventInput[] = [];
@@ -1167,7 +1167,12 @@ export class StreamSubscribers {
             // in-memory head avoids an empty SQLite probe once caught up.
             const read =
               cursor < stateMaxOffset
-                ? this.#readBatch(cursor, DELIVERY_BATCH_LIMIT, subscriptionType === "configured")
+                ? this.#readBatch(
+                    cursor,
+                    DELIVERY_BATCH_LIMIT,
+                    subscriptionType === "configured",
+                    args.selector !== undefined && !args.selector.matchesAll,
+                  )
                 : undefined;
             if (read?.lastOffset === undefined) {
               // Caught up; the next append wakes us again. The first drain
@@ -1188,10 +1193,7 @@ export class StreamSubscribers {
               deliveredBytes =
                 events.length === visible.length
                   ? read.byteLength
-                  : events.reduce(
-                      (sum, event) => sum + (read.byteLengthByOffset.get(event.offset) ?? 0),
-                      0,
-                    );
+                  : selectedByteLength(events, read.byteLengthByOffset);
               if (events.length === 0 && !initialBatchPending) continue;
             }
           } else {
@@ -1601,6 +1603,18 @@ function selectorMatchesSafely(selector: CompiledEventSelector, event: StreamEve
   } catch {
     return false;
   }
+}
+
+function selectedByteLength(
+  events: readonly StreamEvent[],
+  byteLengthByOffset: ReadonlyMap<number, number> | undefined,
+): number {
+  if (byteLengthByOffset === undefined) {
+    throw new Error("Filtered stream delivery requires per-event byte lengths.");
+  }
+  let byteLength = 0;
+  for (const event of events) byteLength += byteLengthByOffset.get(event.offset) ?? 0;
+  return byteLength;
 }
 
 function errorMessage(error: unknown): string {

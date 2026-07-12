@@ -12,6 +12,7 @@ import type {
   SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
+import { compileEventSelector } from "./event-selector.ts";
 import type {
   StreamEventBatch,
   StreamPushEventBatch,
@@ -1445,6 +1446,38 @@ describe("StreamSubscribers", () => {
     ).toBe(true);
     expect(h.row("k-0")?.ackedOffset).toBe(500);
     expect(h.row("k-99")?.ackedOffset).toBe(500);
+    expect(h.storageReads()).toBe(0);
+  });
+
+  it("w1b. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
+    const h = makeHarness();
+    const all = makeSink();
+    const selected = makeSink();
+    h.subscribers.openEphemeral({ subscriptionKey: "all", sink: all.sink, replayAfterOffset: 0 });
+    h.subscribers.openEphemeral({
+      subscriptionKey: "selected",
+      sink: selected.sink,
+      replayAfterOffset: 0,
+      selector: compileEventSelector({ eventTypes: ["selected"] }),
+    });
+    await h.settle();
+    h.egress.length = 0;
+
+    const fresh = [evt(1, "other"), evt(2, "selected"), evt(3, "other")];
+    h.append(...fresh);
+    h.subscribers.wake([
+      { event: fresh[0]!, byteLength: 11 },
+      { event: fresh[1]!, byteLength: 17 },
+      { event: fresh[2]!, byteLength: 23 },
+    ]);
+    await h.settle();
+
+    expect(all.batches.at(-1)!.events.map((event) => event.offset)).toEqual([1, 2, 3]);
+    expect(selected.batches.at(-1)!.events.map((event) => event.offset)).toEqual([2]);
+    expect(h.egress).toEqual([
+      { count: 3, bytes: 51 },
+      { count: 1, bytes: 17 },
+    ]);
     expect(h.storageReads()).toBe(0);
   });
 
