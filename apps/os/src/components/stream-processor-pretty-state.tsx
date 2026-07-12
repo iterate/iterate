@@ -1,5 +1,5 @@
 // Pretty renderers for a processor's reduced state — the panel's drill-in
-// view (stream-processors-panel.tsx) delegates here. Split out so the panel
+// view (stream-state-panel.tsx) delegates here. Split out so the panel
 // stays the orchestration/overview surface and the per-processor render
 // heuristics (which grow one renderer per interesting processor) live in one
 // focused module. Everything reads UNKNOWN state defensively: reduced state
