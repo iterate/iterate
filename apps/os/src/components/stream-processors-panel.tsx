@@ -1165,13 +1165,10 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
           />
           <RuntimeStateStat
             label="delivered"
-            value={
-              connection != null
-                ? `${connection.eventsSent} ev`
-                : runtime?.bytesSent != null
-                  ? formatBytes(runtime.bytesSent)
-                  : "—"
-            }
+            // Events delivered, live-connection lanes only: push/webhook
+            // subscriptions track bytes (the adjacent stat), not an event
+            // count — a dash beats relabeling bytes as events.
+            value={connection != null ? `${connection.eventsSent} ev` : "—"}
           />
           <RuntimeStateStat
             label="bytes"
