@@ -975,7 +975,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamPushEventBatch",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The batch a PUSH subscription\'s receiver is invoked with: the delivery\n * coordinates and events, plus the fields an at-least-once stateless receiver\n * needs to dedupe and self-configure. Deliberately NOT the live lanes\'\n * {@link StreamEventBatch}: push receivers include userspace project workers\n * and sibling streams, and the folded core state — other subscriptions\'\n * delivery expressions, park errors, the presence roster — is internal to the\n * deployment (the webhook envelope strips it for the same reason). Live sinks\n * (ephemeral subscribers, wake-mode processors) still get state-carrying\n * batches: they are the lanes that paint from state.\n */\nexport type StreamPushEventBatch = {\n  projectId: string | null;\n  path: string;\n  events: StreamEvent[];\n  streamMaxOffset: number;\n  subscriptionKey: SubscriptionKey;\n  /**\n   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),\n   * so receivers can dedupe redeliveries even without per-event bookkeeping.\n   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)\n   */\n  deliveryId: string;\n  /** 1-based consecutive attempt count for this batch. */\n  attempt: number;\n  /**\n   * The committed `subscription-configured` event this delivery serves — so a\n   * receiver can configure itself from committed stream state without a\n   * side-channel registry (which stream, which selector, whose params).\n   * Narrowed to the fields the fold stores; an honest shape instead of a\n   * `StreamEvent` cast that pretends metadata/source survived.\n   */\n  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;\n};',
+      '/**\n * The batch a PUSH subscription\'s receiver is invoked with: the delivery\n * coordinates and events, plus the fields an at-least-once stateless receiver\n * needs to dedupe and self-configure. Deliberately NOT the ephemeral live\n * lane\'s {@link StreamEventBatch}: push receivers include userspace project\n * workers and sibling streams, and the folded core state — other\n * subscriptions\' delivery expressions, park errors, the presence roster — is\n * internal to the deployment (the webhook envelope strips it for the same\n * reason). Ephemeral subscribers still get state-carrying batches so they can\n * paint from state; hosted wake processors get the compact internal batch\n * above.\n */\nexport type StreamPushEventBatch = {\n  projectId: string | null;\n  path: string;\n  events: StreamEvent[];\n  streamMaxOffset: number;\n  subscriptionKey: SubscriptionKey;\n  /**\n   * Stable across retries of the same batch (`${subscriptionKey}:${firstOffset}-${lastOffset}`),\n   * so receivers can dedupe redeliveries even without per-event bookkeeping.\n   * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)\n   */\n  deliveryId: string;\n  /** 1-based consecutive attempt count for this batch. */\n  attempt: number;\n  /**\n   * The committed `subscription-configured` event this delivery serves — so a\n   * receiver can configure itself from committed stream state without a\n   * side-channel registry (which stream, which selector, whose params).\n   * Narrowed to the fields the fold stores; an honest shape instead of a\n   * `StreamEvent` cast that pretends metadata/source survived.\n   */\n  configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;\n};',
     summary:
       "The batch a PUSH subscription's receiver is invoked with: the delivery coordinates and events, plus the fields an at-least-once stateless receiver needs to dedupe and self-configure.",
     memberSummaries: {},
@@ -1023,10 +1023,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamSubscriberWakeResponse",
     kind: "typeAlias",
     sourceText:
-      "/**\n * What the poked subscriber hands back — the entire handshake in one return\n * value. The stream retains `sink` (ownership of a returned stub transfers to\n * the caller) and streams one-way batches into it from `checkpointOffset + 1`;\n * there is no subscribe-back call and therefore no handshake race to fence.\n */\nexport type StreamSubscriberWakeResponse = {\n  /** The processor's durable checkpoint offset — replay resumes after it. */\n  checkpointOffset: number;\n  /** The live delivery callback the stream retains and invokes per batch. */\n  sink: ProcessEventBatch;\n  /**\n   * Serializable subscriber identity (validated against\n   * `StreamSubscriberDescriptor` by the stream) appended as the\n   * subscriber-connected presence fact; carries the processor's contract\n   * announcement for the stream's `processorsBySlug` registry.\n   */\n  subscriber?: unknown;\n  /** Live runtime-state capability, retained for the connection lifetime. */\n  getRuntimeState?: GetProcessorRuntimeState;\n  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */\n  ping?: StreamSubscriberPing;\n};",
+      "/**\n * What the poked subscriber hands back — the entire handshake in one return\n * value. The stream retains `sink` (ownership of a returned stub transfers to\n * the caller) and streams one-way batches into it from `checkpointOffset + 1`;\n * there is no subscribe-back call and therefore no handshake race to fence.\n */\nexport type StreamSubscriberWakeResponse = {\n  /** The processor's durable checkpoint offset — replay resumes after it. */\n  checkpointOffset: number;\n  /** The live delivery callback the stream retains and invokes per batch. */\n  sink: ProcessStreamProcessorEventBatch;\n  /**\n   * Serializable subscriber identity (validated against\n   * `StreamSubscriberDescriptor` by the stream) appended as the\n   * subscriber-connected presence fact; carries the processor's contract\n   * announcement for the stream's `processorsBySlug` registry.\n   */\n  subscriber?: unknown;\n  /** Live runtime-state capability, retained for the connection lifetime. */\n  getRuntimeState?: GetProcessorRuntimeState;\n  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */\n  ping?: StreamSubscriberPing;\n};",
     summary: "What the poked subscriber hands back — the entire handshake in one return value.",
     memberSummaries: {},
-    referencedTypeNames: ["ProcessEventBatch", "GetProcessorRuntimeState", "StreamSubscriberPing"],
+    referencedTypeNames: [
+      "ProcessStreamProcessorEventBatch",
+      "GetProcessorRuntimeState",
+      "StreamSubscriberPing",
+    ],
   },
   {
     name: "LiveUpdate",
@@ -1621,6 +1625,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "ProcessStreamProcessorEventBatch",
+    kind: "typeAlias",
+    sourceText:
+      "/** Wake-handshake callback consumed by a hosted stream processor. */\nexport type ProcessStreamProcessorEventBatch = (batch: StreamProcessorEventBatch) => unknown;",
+    summary: "Wake-handshake callback consumed by a hosted stream processor.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamProcessorEventBatch"],
+  },
+  {
     name: "LiveStatePatch",
     kind: "typeAlias",
     sourceText:
@@ -1886,6 +1899,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "The mutual ping's reply half: the responder echoes `t0` and reports when it received the request (`t1`) and sent the reply (`t2`) on ITS clock.",
     memberSummaries: {},
     referencedTypeNames: [],
+  },
+  {
+    name: "StreamProcessorEventBatch",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * Compact internal batch for a hosted stream processor. The wake handshake\n * already identifies the stream and processor, while the host ingests only\n * events plus the raw stream head. Sending the stream's full reduced state on\n * every durable RPC call duplicated an unused, potentially large object.\n */\nexport type StreamProcessorEventBatch = { events: StreamEvent[]; streamMaxOffset: number };",
+    summary: "Compact internal batch for a hosted stream processor.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamEvent"],
   },
   {
     name: "AgentPolicyEventInput",

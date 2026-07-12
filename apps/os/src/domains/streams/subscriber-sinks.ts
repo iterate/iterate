@@ -34,7 +34,9 @@ import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
+  ProcessStreamProcessorEventBatch,
   ProcessorRuntimeState,
+  StreamEventBatch,
   StreamPingInput,
   StreamPingReply,
   StreamPushEventBatch,
@@ -51,6 +53,15 @@ import type { SubscriberDial } from "./stream-subscribers.ts";
  * sharing mutable context across results that may settle out of order.
  */
 export type DeliverySettled = (outcome: "ok" | "error", newestCreatedAtMs: number) => void;
+
+type RetainProcessEventBatchOptions = {
+  onDeliveryError?: (error: unknown) => void;
+  /**
+   * Runs after the retained stub is disposed. The wake dial uses this to tie
+   * the loopback chain that supplied the sink to the sink's lifetime.
+   */
+  onDisposed?: () => void;
+};
 
 /** The pump-facing delivery callback: fire-and-forget, disposable, broken-transport aware. */
 export type RetainedProcessEventBatch = ((
@@ -84,21 +95,36 @@ export type RetainedProcessEventBatch = ((
  */
 export function retainProcessEventBatch(
   processEventBatch: ProcessEventBatch,
-  opts: {
-    onDeliveryError?: (error: unknown) => void;
-    /**
-     * Runs after the retained stub is disposed — the hook that lets a caller
-     * tie OTHER stubs' lifetimes to this sink's (the wake dial parks the
-     * loopback chain that carried the sink here, so the chain outlives every
-     * batch call but not the connection).
-     */
-    onDisposed?: () => void;
-  } = {},
+  opts: RetainProcessEventBatchOptions = {},
+): RetainedProcessEventBatch {
+  return retainProjectedProcessEventBatch(processEventBatch, opts, (batch) => batch);
+}
+
+const compactProcessorBatch = ({
+  events,
+  streamMaxOffset,
+}: StreamEventBatch): Parameters<ProcessStreamProcessorEventBatch>[0] => ({
+  events,
+  streamMaxOffset,
+});
+
+/** Retains a wake processor sink while stripping fields its host never consumes. */
+export function retainStreamProcessorEventBatch(
+  processEventBatch: ProcessStreamProcessorEventBatch,
+  opts: RetainProcessEventBatchOptions = {},
+): RetainedProcessEventBatch {
+  return retainProjectedProcessEventBatch(processEventBatch, opts, compactProcessorBatch);
+}
+
+function retainProjectedProcessEventBatch<WireBatch>(
+  processEventBatch: (batch: WireBatch) => unknown,
+  opts: RetainProcessEventBatchOptions,
+  projectBatch: (batch: StreamEventBatch) => WireBatch,
 ): RetainedProcessEventBatch {
   // `retainCallback` owns the transport dance (dup, idempotent dispose, and
   // the defensive onRpcBroken wiring — see lib/rpc/retain.ts for why that
   // wiring is subtle); this layer adds only the pump's delivery semantics.
-  const retained = retainCallback<Parameters<ProcessEventBatch>[0]>(processEventBatch);
+  const retained = retainCallback<WireBatch>(processEventBatch);
   const onDeliveryError = opts.onDeliveryError;
   let pendingDeliveries = 0;
   const callback: RetainedProcessEventBatch = Object.assign(
@@ -109,7 +135,7 @@ export function retainProcessEventBatch(
     ) => {
       let result: unknown;
       try {
-        result = retained(batch);
+        result = retained(projectBatch(batch));
       } catch (error) {
         // A disposed/broken stub can throw synchronously at call time.
         onDeliveryError?.(error);
@@ -329,7 +355,7 @@ export function createSubscriberDial(deps: {
       }
       return {
         checkpointOffset: response.checkpointOffset,
-        sink: retainProcessEventBatch(response.sink, {
+        sink: retainStreamProcessorEventBatch(response.sink, {
           onDeliveryError: (error) => deps.onDurableDeliveryError(request.subscriptionKey, error),
           onDisposed: dispose,
         }),

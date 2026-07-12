@@ -59,7 +59,7 @@ import type { Stream } from "../../itx-api.generated.ts";
 import { LiveState } from "../../lib/live-state/engine.ts";
 import type {
   GetProcessorRuntimeState,
-  StreamEventBatch,
+  StreamProcessorEventBatch,
   StreamPingInput,
   StreamSubscriberPing,
   StreamSubscriberWakeRequest,
@@ -110,7 +110,7 @@ export type AnyHostedProcessor = {
     events: Record<string, { description?: string; payloadSchema?: unknown }>;
   };
   ingest(args: {
-    events: readonly StreamEventBatch["events"][number][];
+    events: readonly StreamProcessorEventBatch["events"][number][];
     streamMaxOffset: number;
   }): Promise<void>;
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
@@ -537,7 +537,7 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       // and replays from the durable checkpoint. The processor-wide chain
       // still catches the failure so that replacement can resume behind it.
       let deliveryFailure: { error: unknown } | null = null;
-      const sink = (batch: StreamEventBatch) => {
+      const sink = (batch: StreamProcessorEventBatch) => {
         const attempt = entry.ingestChain.then(() => {
           if (deliveryFailure !== null) throw deliveryFailure.error;
           return entry.processor.ingest({

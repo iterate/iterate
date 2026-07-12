@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { retainProcessEventBatch } from "./subscriber-sinks.ts";
+import type { StreamEventBatch } from "./rpc-types.ts";
+import { retainProcessEventBatch, retainStreamProcessorEventBatch } from "./subscriber-sinks.ts";
 
 const batch = {} as Parameters<ReturnType<typeof retainProcessEventBatch>>[0];
 
@@ -110,5 +111,24 @@ describe("retainProcessEventBatch", () => {
     expect(onSettled).toHaveBeenCalledWith("ok", 789);
     expect(sink.pendingDeliveries?.()).toBe(0);
     expect(dispose).toHaveBeenCalledOnce();
+  });
+});
+
+describe("retainStreamProcessorEventBatch", () => {
+  it("sends only the fields consumed by the hosted processor", () => {
+    const received = vi.fn();
+    const sink = retainStreamProcessorEventBatch(received);
+    const fullBatch: StreamEventBatch = {
+      projectId: "prj_test",
+      path: "/agents/test",
+      events: [],
+      streamMaxOffset: 42,
+      state: { configuredSubscribersByKey: { large: "unused" } },
+    };
+
+    sink(fullBatch);
+
+    expect(received).toHaveBeenCalledOnce();
+    expect(received).toHaveBeenCalledWith({ events: [], streamMaxOffset: 42 });
   });
 });

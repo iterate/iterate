@@ -117,15 +117,27 @@ export type StreamEventBatch = {
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
 /**
+ * Compact internal batch for a hosted stream processor. The wake handshake
+ * already identifies the stream and processor, while the host ingests only
+ * events plus the raw stream head. Sending the stream's full reduced state on
+ * every durable RPC call duplicated an unused, potentially large object.
+ */
+export type StreamProcessorEventBatch = Pick<StreamEventBatch, "events" | "streamMaxOffset">;
+
+/** Wake-handshake callback consumed by a hosted stream processor. */
+export type ProcessStreamProcessorEventBatch = (batch: StreamProcessorEventBatch) => unknown;
+
+/**
  * The batch a PUSH subscription's receiver is invoked with: the delivery
  * coordinates and events, plus the fields an at-least-once stateless receiver
- * needs to dedupe and self-configure. Deliberately NOT the live lanes'
- * {@link StreamEventBatch}: push receivers include userspace project workers
- * and sibling streams, and the folded core state — other subscriptions'
- * delivery expressions, park errors, the presence roster — is internal to the
- * deployment (the webhook envelope strips it for the same reason). Live sinks
- * (ephemeral subscribers, wake-mode processors) still get state-carrying
- * batches: they are the lanes that paint from state.
+ * needs to dedupe and self-configure. Deliberately NOT the ephemeral live
+ * lane's {@link StreamEventBatch}: push receivers include userspace project
+ * workers and sibling streams, and the folded core state — other
+ * subscriptions' delivery expressions, park errors, the presence roster — is
+ * internal to the deployment (the webhook envelope strips it for the same
+ * reason). Ephemeral subscribers still get state-carrying batches so they can
+ * paint from state; hosted wake processors get the compact internal batch
+ * above.
  */
 export type StreamPushEventBatch = {
   projectId: string | null;
@@ -221,7 +233,7 @@ export type StreamSubscriberWakeResponse = {
   /** The processor's durable checkpoint offset — replay resumes after it. */
   checkpointOffset: number;
   /** The live delivery callback the stream retains and invokes per batch. */
-  sink: ProcessEventBatch;
+  sink: ProcessStreamProcessorEventBatch;
   /**
    * Serializable subscriber identity (validated against
    * `StreamSubscriberDescriptor` by the stream) appended as the

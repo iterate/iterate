@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "./processor-contracts.ts";
-import type { StreamEventBatch } from "./rpc-types.ts";
+import type { StreamProcessorEventBatch } from "./rpc-types.ts";
 import type { StreamEvent } from "./schemas.ts";
 import { StreamProcessor, type StreamProcessorConstructorArgs } from "./stream-processor.ts";
 import { PROCESSOR_HOST_REVIVED_EVENT_TYPE } from "./stream-processor-host.ts";
@@ -64,13 +64,10 @@ class Recorder extends StreamProcessor<RecorderContract> {
   }
 }
 
-function eventBatch(event: StreamEvent): StreamEventBatch {
+function eventBatch(event: StreamEvent): StreamProcessorEventBatch {
   return {
-    projectId: "prj_test",
-    path: "/agents/test",
     events: [event],
     streamMaxOffset: event.offset,
-    state: {},
   };
 }
 
