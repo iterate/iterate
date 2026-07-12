@@ -427,8 +427,18 @@ final class ComputerController: ObservableObject {
     let session = generation
     stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
       let chunk = handle.availableData
-      if chunk.isEmpty {  // EOF: clear the handler so it stops busy-looping
+      if chunk.isEmpty {  // EOF — the child closed stdout, i.e. it has exited.
         handle.readabilityHandler = nil
+        DispatchQueue.main.async {
+          // Tear down HERE, on EOF, NOT in terminationHandler. EOF is delivered on
+          // this same handle after every data chunk, so a final `conflict` status
+          // line is ingested (and sets the takeover message) before we exit.
+          // Terminating off the process's death instead is a separate event that
+          // can win the race, bump `generation`, and drop that last line —
+          // leaving the generic "Stopped sharing" instead of the takeover error.
+          guard let self, self.generation == session else { return }
+          self.watcherExited()
+        }
         return
       }
       DispatchQueue.main.async {
@@ -437,11 +447,12 @@ final class ComputerController: ObservableObject {
       }
     }
     process.terminationHandler = { [weak self] _ in
+      // Teardown is driven by stdout EOF (above), which is ordered after the
+      // child's final line; just release the finished process here. A late
+      // callback from a process we already replaced is voided by the guard.
       DispatchQueue.main.async {
-        // Guard on the session: a late callback from a process we already
-        // replaced must not tear down the new one.
         guard let self, self.generation == session else { return }
-        self.watcherExited()
+        self.process = nil
       }
     }
     do {

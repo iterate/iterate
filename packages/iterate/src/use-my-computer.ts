@@ -390,6 +390,11 @@ export async function runUseMyComputerJson(input: ConnectInput): Promise<void> {
   // `process.stdin.resume()` above holds the event loop open, so return alone
   // would leave the CLI running with no active share — exit explicitly. (The menu
   // bar also kills the child on `conflict`; this covers running --json directly.)
+  // Flush stdout first: process.exit can truncate a buffered pipe write, and the
+  // final `conflict` line is what the menu bar reads to show the takeover message
+  // (its teardown is ordered on that line's EOF). The callback fires once every
+  // prior write has drained to the pipe.
+  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
   process.exit(0);
 }
 
