@@ -122,7 +122,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           console.error("stream delivery fact append failed", { type: event.type, error });
         }
       },
-      recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
+      recordEgress: (count, bytes, atMs) => this.#metrics.egress.bump(atMs, count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
       armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),

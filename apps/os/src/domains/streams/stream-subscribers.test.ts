@@ -174,6 +174,7 @@ function makeHarness() {
   const armedAlarms: number[] = [];
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
+  const egressAtMs: number[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
 
   const pokes: StreamSubscriberWakeRequest[] = [];
@@ -260,7 +261,10 @@ function makeHarness() {
           if (entry !== undefined) entry.parkedAtOffset = payload.atOffset;
         }
       },
-      recordEgress: (count, bytes) => egress.push({ count, bytes }),
+      recordEgress: (count, bytes, atMs) => {
+        egress.push({ count, bytes });
+        egressAtMs.push(atMs);
+      },
       now: () => {
         nowCalls += 1;
         return now;
@@ -287,6 +291,7 @@ function makeHarness() {
     facts,
     armedAlarms,
     egress,
+    egressAtMs,
     pokes,
     pushes,
     pushOutcomes,
@@ -1879,6 +1884,30 @@ describe("StreamSubscribers", () => {
 // ---------------------------------------------------------------------------
 
 describe("StreamSubscribers runtime metrics", () => {
+  it("reuses each lane dispatch timestamp without assuming the clock advances", async () => {
+    const h = makeHarness();
+    const first = makeSink();
+    const second = makeSink();
+    h.subscribers.openEphemeral({ subscriptionKey: "first", sink: first.sink });
+    h.subscribers.openEphemeral({ subscriptionKey: "second", sink: second.sink });
+    await h.settle();
+
+    h.egressAtMs.length = 0;
+    const nowCallsBeforeWake = h.nowCalls();
+    h.advanceTo(1_234);
+    const fresh = evt(1, "fresh");
+    h.append(fresh);
+    h.subscribers.wake([{ event: fresh, byteLength: 64 }]);
+    await h.settle();
+
+    expect(h.nowCalls() - nowCallsBeforeWake).toBe(2);
+    expect(h.egressAtMs).toEqual([1_234, 1_234]);
+    expect(h.subscribers.connectionRuntimeState()).toMatchObject({
+      first: { lastDeliveredAt: "1970-01-01T00:00:01.234Z" },
+      second: { lastDeliveredAt: "1970-01-01T00:00:01.234Z" },
+    });
+  });
+
   it("connections report real lag, delivered events, and delivered bytes", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));

@@ -242,9 +242,10 @@ type StreamSubscribersHooks = {
   appendFact(event: StreamEventInput): void;
   /**
    * Delivery-throughput accounting: called once per dispatched delivery with
-   * the event count and serialized payload bytes it carried (all lanes).
+   * the event count, serialized payload bytes, and exact dispatch timestamp
+   * it carried (all lanes).
    */
-  recordEgress(count: number, bytes: number): void;
+  recordEgress(count: number, bytes: number, atMs: number): void;
   /** Injected clock (epoch ms). */
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
@@ -357,6 +358,9 @@ export class StreamSubscribers {
   >();
   /** Last mutual-ping round start — throttles observer-driven sampling. Null until the first round. */
   #lastPingRoundAtMs: number | null = null;
+  /** Cloudflare may freeze the clock between I/O turns; reuse that exact timestamp's ISO form. */
+  #lastFormattedAtMs: number | undefined;
+  #lastFormattedAt: string | undefined;
   /** Compiled selectors for durable push/webhook configs, keyed by the config event offset. */
   readonly #compiledSelectors = new Map<
     string,
@@ -366,6 +370,14 @@ export class StreamSubscribers {
   constructor(args: { idleTeardownMs: number; hooks: StreamSubscribersHooks }) {
     this.#hooks = args.hooks;
     this.#idleTeardownMs = args.idleTeardownMs;
+  }
+
+  #formatTimestamp(atMs: number): string {
+    if (atMs !== this.#lastFormattedAtMs) {
+      this.#lastFormattedAtMs = atMs;
+      this.#lastFormattedAt = new Date(atMs).toISOString();
+    }
+    return this.#lastFormattedAt!;
   }
 
   // ===========================================================================
@@ -735,7 +747,7 @@ export class StreamSubscribers {
           // Dispatch-time accounting: retries re-send real bytes, so failed
           // attempts count too (the wire carried them either way).
           const dispatchAtMs = this.#hooks.now();
-          this.#hooks.recordEgress(matched.length, deliveredBytes);
+          this.#hooks.recordEgress(matched.length, deliveredBytes, dispatchAtMs);
           try {
             if (config.delivery.mode === "webhook") {
               if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
@@ -1371,8 +1383,9 @@ export class StreamSubscribers {
           connection.batchesSent += 1;
           connection.eventsSent += events.length;
           connection.bytesSent += deliveredBytes;
-          connection.lastDeliveredAt = new Date(this.#hooks.now()).toISOString();
-          this.#hooks.recordEgress(events.length, deliveredBytes);
+          const dispatchAtMs = this.#hooks.now();
+          connection.lastDeliveredAt = this.#formatTimestamp(dispatchAtMs);
+          this.#hooks.recordEgress(events.length, deliveredBytes, dispatchAtMs);
           const currentState = this.#hooks.coreState();
           if (currentState.projectId === undefined || currentState.path === undefined) {
             throw new Error(
@@ -1412,9 +1425,10 @@ export class StreamSubscribers {
       }
     };
 
+    const startedAtMs = this.#hooks.now();
     const connection: Connection = {
       subscriptionType,
-      startedAt: new Date(this.#hooks.now()).toISOString(),
+      startedAt: this.#formatTimestamp(startedAtMs),
       ...(args.presence === undefined ? {} : { subscriber: args.presence }),
       getProcessorRuntimeState: retainGetProcessorRuntimeState(args.getRuntimeState),
       ping: retainSubscriberPing(args.ping),
