@@ -1158,10 +1158,12 @@ export class StreamSubscribers {
   /**
    * One throttled mutual-ping round over every live connection that supplied
    * a ping capability. Observer-driven: `runtimeState()` triggers it, so RTT
-   * sampling runs only while someone is actually watching — an idle fleet is
-   * never pinged. Purely observational: a failed/garbage/slow ping drops the
-   * sample and NOTHING else (liveness stays owned by result-pulling and
-   * onRpcBroken); it never wakes pumps and never re-arms the idle timer.
+   * sampling runs only while something is reading runtime state — the debug
+   * panel's poll, or a live browser tab's ~10s liveness probe. A stream with
+   * no browser attached and no debug observer is never pinged. Purely
+   * observational: a failed/garbage/slow ping drops the sample and NOTHING
+   * else (liveness stays owned by result-pulling and onRpcBroken); it never
+   * wakes pumps and never re-arms the idle timer.
    */
   samplePingsSoon(): void {
     const now = this.#hooks.now();
