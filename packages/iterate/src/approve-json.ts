@@ -49,6 +49,9 @@ import {
 
 const RESOLUTION_TYPES = [EVENT.settled, EVENT.rejected];
 
+/** Back-off before re-arming a settlement watch after a transient read error. */
+const SETTLEMENT_RETRY_MS = 2_000;
+
 function emit(line: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(line)}\n`);
 }
@@ -89,6 +92,11 @@ export async function runApprovalJson(input: {
   // watched, the door (via awaitSettlement) is the sole authority on the row's
   // outcome — the tail does NOT surface raw settled/rejected for it.
   const watching = new Set<number>();
+  // Offsets we've appended a decision for that the tail hasn't resolved yet.
+  // Guards against two rapid decision lines for one offset both passing the
+  // `resolved` check before the first append is observed — which would pop Touch
+  // ID twice or append an approve/reject contradiction.
+  const decided = new Set<number>();
 
   // Watch the door's verdict for a granted request and emit the authoritative
   // outcome exactly once. awaitSettlement treats a `settled` as final over a
@@ -100,24 +108,43 @@ export async function runApprovalJson(input: {
     // A dedicated handle so a settlement wait never queues behind the tail or an
     // append on their handles.
     const watchStream = project.streams.get("/") as unknown as RpcStub<Stream>;
-    void awaitSettlement(watchStream, offset).then((settlement) => {
-      watching.delete(offset);
-      if (settlement.kind === "unsettled") {
-        // The grant didn't take (unenrolled/revoked key) and the hold is still
-        // open — clear the spinner so Approve/Reject return, like the terminal.
-        emit({ type: "unsettled", offset });
+    void (async () => {
+      // A grant has been seen, so from here the door is the SOLE authority for
+      // this row. A transient read failure (`error`) must NOT end the watch: that
+      // would hand the row back to the live tail, which treats a raw reject as
+      // terminal — a stray veto could then be reported while the door is still
+      // committing a release. So on `error` we keep the watch (and the `decided`
+      // claim) and re-arm; only a genuine settlement, or the door ignoring an
+      // unverifiable grant (`unsettled`), ends the watch. A row nothing ever
+      // settles re-arms until the request expires, when the door appends its
+      // terminal event.
+      while (true) {
+        const settlement = await awaitSettlement(watchStream, offset);
+        if (settlement.kind === "error") {
+          await new Promise((resolve) => setTimeout(resolve, SETTLEMENT_RETRY_MS));
+          continue;
+        }
+        watching.delete(offset);
+        if (settlement.kind === "unsettled") {
+          // The grant didn't take (unenrolled/revoked key) and the hold is still
+          // open — clear the decided-claim so Approve/Reject can be used again,
+          // like the terminal.
+          decided.delete(offset);
+          emit({ type: "unsettled", offset });
+          return;
+        }
+        resolved.add(offset);
+        pending.delete(offset);
+        if (settlement.kind === "released") {
+          emit({ type: "settled", offset, outcome: "released", status: settlement.status });
+        } else if (settlement.kind === "delivery-failed") {
+          emit({ type: "settled", offset, outcome: "delivery-failed", error: settlement.error });
+        } else {
+          emit({ type: "settled", offset, outcome: "rejected", reason: settlement.reason });
+        }
         return;
       }
-      resolved.add(offset);
-      pending.delete(offset);
-      if (settlement.kind === "released") {
-        emit({ type: "settled", offset, outcome: "released", status: settlement.status });
-      } else if (settlement.kind === "delivery-failed") {
-        emit({ type: "settled", offset, outcome: "delivery-failed", error: settlement.error });
-      } else {
-        emit({ type: "settled", offset, outcome: "rejected", reason: settlement.reason });
-      }
-    });
+    })();
   }
 
   // Reconcile the backlog: replay history once, emit still-open requests (a
@@ -135,9 +162,13 @@ export async function runApprovalJson(input: {
   // signatures must not race. Each line chains after the last; handleDecision
   // never throws, so the chain never breaks.
   let decisions: Promise<void> = Promise.resolve();
-  createInterface({ input: process.stdin }).on("line", (raw) => {
+  const stdin = createInterface({ input: process.stdin });
+  stdin.on("line", (raw) => {
     decisions = decisions.then(() => handleDecision(raw));
   });
+  // The menu bar is our parent; if it dies, stdin closes. Stop rather than
+  // linger with a live WebSocket and approval authority nobody is watching.
+  stdin.on("close", () => process.exit(0));
 
   async function handleDecision(raw: string): Promise<void> {
     const trimmed = raw.trim();
@@ -151,32 +182,35 @@ export async function runApprovalJson(input: {
     }
     const offset = decision.offset;
     if (typeof offset !== "number") return;
-    // The door acts on the first resolution; once a request has settled or been
-    // rejected, a late decision (e.g. Reject on a stale notification banner after
-    // a grant already released) can't take effect and must not append a
-    // contradictory event. Refuse it — the row is already gone from the view.
-    if (resolved.has(offset)) {
-      emit({ type: "error", offset, message: "already resolved" });
+    // The door acts on the first resolution; once a request has settled/rejected
+    // (resolved) or we've already appended a decision for it (decided, awaiting
+    // the door), a second decision can't take effect and must not append a
+    // contradictory event or pop Touch ID again. Refuse it.
+    if (resolved.has(offset) || decided.has(offset)) {
+      emit({ type: "error", offset, message: "already decided" });
       return;
     }
+    if (decision.decision !== "granted" && decision.decision !== "rejected") {
+      emit({ type: "error", offset, message: `unknown decision "${decision.decision}"` });
+      return;
+    }
+    if (decision.decision === "granted" && !pending.has(offset)) {
+      emit({ type: "error", offset, message: "no such pending request" });
+      return;
+    }
+    // Claim the offset BEFORE any async work so a second line queued right behind
+    // this one is refused above; release it only if the append fails.
+    decided.add(offset);
     try {
       if (decision.decision === "rejected") {
         await reject(appendStream, offset);
-      } else if (decision.decision === "granted") {
-        const payload = pending.get(offset);
-        if (payload === undefined) {
-          emit({ type: "error", offset, message: "no such pending request" });
-          return;
-        }
-        // Signs on the enclave path — Touch ID pops here.
-        await grant({ stream: appendStream, projectId: input.projectId, key, offset, payload });
       } else {
-        // Any decision we can't act on still gets an offset-bearing error so
-        // the app clears that row's spinner instead of spinning forever.
-        emit({ type: "error", offset, message: `unknown decision "${decision.decision}"` });
+        // Signs on the enclave path — Touch ID pops here.
+        const payload = pending.get(offset)!;
+        await grant({ stream: appendStream, projectId: input.projectId, key, offset, payload });
       }
     } catch (error) {
-      // Every failure carries the offset so the app can clear that row.
+      decided.delete(offset); // the append failed — allow another attempt
       emit({
         type: "error",
         offset,
