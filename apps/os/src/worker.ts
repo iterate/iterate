@@ -27,6 +27,7 @@ import {
   workerBuildingResponse,
 } from "./domains/workers/worker-fetch-dispatch.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
+import { CAPABILITY_FETCH_DISPATCH_HEADER } from "./domains/capability-host/capability-url.ts";
 import { UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
 import { defaultProjectWorkerRef } from "./domains/repos/utils.ts";
 import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
@@ -264,6 +265,7 @@ function stripInternalHeaders(request: Request) {
   headers.delete("x-itx-project-id");
   headers.delete("x-iterate-url-prefix");
   headers.delete(WORKER_FETCH_DISPATCH_HEADER);
+  headers.delete(CAPABILITY_FETCH_DISPATCH_HEADER);
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
   return new Request(request, { headers });

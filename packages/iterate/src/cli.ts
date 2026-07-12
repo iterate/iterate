@@ -1075,7 +1075,7 @@ const launcherProcedures = {
     )
     .meta({
       description:
-        "Share THIS computer with a project's agents as itx.myComputer (native dialogs, notifications, Swift). Runs until Ctrl-C.",
+        "Share THIS computer with a project's agents as itx.<name> (native dialogs, notifications, Swift), and optionally lend a local server at http://<name>.iterate/ (HTTP + WebSockets). Runs until Ctrl-C.",
     })
     .handler(async ({ input }) => {
       const resolved = resolveConfig(process.cwd(), { throw: true });

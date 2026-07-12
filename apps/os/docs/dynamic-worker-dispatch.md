@@ -108,58 +108,82 @@ request":
   close to a WebSocket reconnect loop. RPC callers of `workers.get` still
   get the named `WorkerBuildInProgressError` instead.
 
-## Live capabilities and WebSockets: the specification, and today's boundary
+## Live capabilities over the fetch lane: capability URLs
 
-The behavior we want: a live capability whose `fetch(request)` upgrades —
-provided over Cap'n Web from, say, a Node process — backs a project app host
-directly, with the app's own fetch just forwarding
-(`itx.wsbackend.fetch(req)`). That is written down as a **`test.fails`
-specification** in `e2e/vitest/live-capability-websocket.e2e.test.ts`; when
-it starts passing, the platform grew the feature and the assertion flips
-loudly.
+A live capability is normally reached by RPC (`itx.<name>.method(...)`), which
+carries data but never a socket. To give a live capability the fetch lane's
+physics — streaming, and crucially WebSocket upgrades — mount it as
+**`addressable`** and reach it by **URL** instead of by itx path:
 
-Today it stops one hop short, and the same file pins the boundary with a
-passing test:
+```
+fetch("http://<name>.iterate/…", req)   // from project worker code
+```
+
+`.iterate` is the internal host suffix (never DNS-routable — the same suffix the
+Durable Object name codec uses). The grammar is `<cap>.<projectId>.iterate`, or
+the short `<cap>.iterate` (the caller's own project); the request path/query
+ride the URL path, the capability name is the host label. DNS lowercases the
+host, so mounts resolve case-insensitively (`itx.jonasComputer` ↔
+`jonascomputer.<project>.iterate`). The parse + dispatch header live in
+`domains/capability-host/capability-url.ts`.
+
+Why a URL and not a method: **the URL changes the transport class from RPC to
+fetch-native.** Every hop is a real stub fetch — project egress
+(`ProjectDurableObject.fetch`) recognizes an `.iterate` host and dials the
+capability host DO (`CAPABILITY_HOST.getByName(...).fetch`), carrying the
+resolved capability path in `x-iterate-capability-dispatch` (internal, stripped
+at the trust boundary). The capability host DO is a real workerd object
+(`serveCapabilityFetch`), so:
+
+- **Plain HTTP** calls the provider's `fetch(request)` — the `Request`/`Response`
+  copies serialize over the provider's connection, the same transport as
+  `itx.<name>.fetch(req)`, just reached by URL.
+- **A WebSocket upgrade terminates AT the capability host DO** (`WebSocketPair`,
+  a real 101 established at a real object's fetch) and bridges FRAMES to the
+  provider via its `connectSocket({ onMessage, onClose }) → { send, close }`.
+  The socket never crosses an RPC hop; only frames (callback invocations) do.
+  This is the by-hand frame bridge the old recipe required, now run by the
+  platform. The teardown discipline is the same: `close()` is the only
+  cross-RPC teardown (a returned value's `[Symbol.dispose]` is dropped by
+  capnweb's by-value return serialization), awaited before the per-socket handle
+  is disposed; callback stubs stay live for the socket's lifetime because a DO's
+  I/O context spans the socket and capnweb keeps the `dup()`'d callbacks alive.
+
+Cross-project access is structurally impossible: the egress hop dials the
+capability host under the CALLER's own projectId, and an explicit projectId in
+the URL must match it. `addressable` is opt-in on `provideCapability` — an
+ordinary live mount is not URL-reachable.
+
+`iterate use-my-computer` is the shipped provider
+(packages/iterate/src/use-my-computer.ts): `myComputerProvision(name,
+{ exposePort })` mounts `addressable` and lends the local port, so a project
+worker's whole homepage — HTTP and its `/ws` upgrade alike — is one forward,
+`return fetch(new Request("http://<name>.iterate" + path + search, req))`.
+`e2e/vitest/live-capability-fetcher.e2e.test.ts` proves both, end to end.
+
+## The RPC boundary that remains (the deferred specification)
+
+Capability URLs give the fetch lane's physics to a live capability, but they do
+NOT make the RPC path carry a socket. Forwarding `itx.wsbackend.fetch(req)`
+where the provider returns a socket-carrying `Response` still dies at the first
+internal workerd RPC hop:
 
 - Non-upgrade HTTP through a live capability's fetch works — `Request` and
   `Response` serialize over capability dispatch.
-- An upgrade response does not: the capnweb fork tunnels the socket across
-  the **session** as a stream pair (`websocket-streams.ts`), then
-  materializes a real WebSocket at the session endpoint — and the first
-  internal workerd RPC hop after that refuses it (the DataCloneError,
-  asserted verbatim).
+- An upgrade response does not: the capnweb fork tunnels the socket across the
+  **session** as a stream pair (`websocket-streams.ts`), then materializes a
+  real WebSocket at the session endpoint — and the first internal workerd RPC
+  hop after that refuses it (the DataCloneError, asserted verbatim).
 
-The missing piece is keeping the socket in stream-pair (or callback) form
-across internal hops and materializing only at the fetch-lane exit. Until
-then, a determined userspace can bridge a socket over capability dispatch
-today by hand — frames as paired callback stubs in each direction, since
-functions chain through every hop; mind that RPC params are released on
-return, so a provider must `dup()` callbacks it keeps — but that pattern is
-deliberately not blessed here: the specification above is the intended shape.
-
-Both halves of that story now have a shipped existence proof in
-`iterate use-my-computer` (packages/iterate/src/use-my-computer.ts), proven
-end to end by `e2e/vitest/live-capability-fetcher.e2e.test.ts`:
-
-- `getFetcher({ port })` is the HTTP half: a live-capability method returning
-  `{ fetch(request) }` that proxies to a server on the provider's machine. A
-  project worker's homepage can be
-  `return (await itx.myComputer.getFetcher({ port })).fetch(req)` — the
-  `Request` copy rides capability dispatch out, the `Response` copy rides
-  back. It refuses upgrade requests with a teaching error instead of letting
-  them die deep in the mesh.
-- `connectSocket({ port, path, onMessage })` is the by-hand frame bridge: the
-  provider opens the real socket locally and hands back a `{ send, close }`
-  handle, delivering incoming frames to the `onMessage` callback; a Durable
-  Object app terminates the browser's socket with `WebSocketPair` and pumps
-  frames through the handle. Three findings the e2e pins: callback stubs
-  (`onMessage`) do chain CLI→host→DO and stay live for the socket's lifetime
-  once the provider `dup()`s them; a Durable Object can keep the handle across
-  events (its I/O context spans the socket's life) where a stateless worker
-  could not; and cross-RPC teardown must be the string-keyed `close()` (a
-  returned value's `[Symbol.dispose]` is dropped by capnweb's by-value return
-  serialization), awaited before the DO disposes the itx stub the handle rides
-  on — disposing first aborts the close in flight and the local socket lingers.
+That boundary is pinned by a passing test, and the socket-over-RPC dream it
+guards is a **`test.fails` specification**, both in
+`e2e/vitest/live-capability-websocket.e2e.test.ts`. Making the spec pass would
+need the fork to stay in stream-pair form until the fetch-lane exit (a capnweb
+`makeUpgradeResponse` change) — deliberately not done, because the
+capability-URL form above already delivers the user-facing outcome (websockets
+to a live capability) by terminating the upgrade at a real DO and bridging
+frames. The two mechanisms address the socket differently; the URL form is the
+shipped one.
 
 ## Rules of thumb
 

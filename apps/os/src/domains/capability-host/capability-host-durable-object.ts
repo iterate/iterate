@@ -17,6 +17,7 @@ import {
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
+import { takeCapabilityDispatch } from "./capability-url.ts";
 
 type ScriptExecutionEntrypoint = {
   run(code: string): Promise<unknown>;
@@ -119,6 +120,26 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   get processor() {
     return new StreamProcessorRpcTarget(this.#capabilityHostProcessor);
+  }
+
+  /**
+   * Serve an addressable capability by URL. Reached over the fetch-native lane
+   * (project egress recognizes `<name>.iterate` hosts and dials this fetch),
+   * carrying the resolved capability path in the dispatch header. Because this
+   * is a real DO-stub fetch, a WebSocket upgrade is still live here and can
+   * terminate at this Durable Object — see serveCapabilityFetch.
+   */
+  fetch(request: Request): Promise<Response> {
+    const taken = takeCapabilityDispatch(request);
+    if (taken === null) {
+      return Promise.resolve(
+        new Response("capability fetch requires a dispatch header", { status: 400 }),
+      );
+    }
+    return this.#capabilityHostProcessor.serveCapabilityFetch({
+      capabilityPath: taken.capabilityPath,
+      request: taken.request,
+    });
   }
 
   // Return types are pinned shallow so `DurableObjectStub<CapabilityHostDurableObject>`

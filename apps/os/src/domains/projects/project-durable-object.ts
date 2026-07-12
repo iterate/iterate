@@ -17,6 +17,11 @@ import type {
 } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
+import {
+  parseCapabilityUrl,
+  withCapabilityDispatchHeader,
+  type CapabilityUrl,
+} from "../capability-host/capability-url.ts";
 import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.ts";
 import {
   platformReferencesFromHeaders,
@@ -219,12 +224,37 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    // Capability URLs (`http://<name>.iterate/…`) are internal platform
+    // addressing, not external egress — route them to the capability host
+    // before the egress interceptor or approval gate ever sees them.
+    const capabilityUrl = parseCapabilityUrl(request.url);
+    if (capabilityUrl !== null) return await this.#serveCapabilityUrl(capabilityUrl, request);
+
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
       // receive raw secret material, only getSecret(...) placeholders.
       return await this.#egressInterceptor.value(request);
     }
     return this.#egressWithApprovalGate(request);
+  }
+
+  /**
+   * Route a capability URL to the addressable capability's host Durable Object.
+   * A capability URL only reaches capabilities in the caller's OWN project: an
+   * explicit projectId must match this project (the short form inherits it), so
+   * cross-project access is structurally impossible. The host DO's fetch is a
+   * real stub fetch, so a WebSocket upgrade survives all the way to it.
+   */
+  async #serveCapabilityUrl(parsed: CapabilityUrl, request: Request): Promise<Response> {
+    if (parsed.projectId !== null && parsed.projectId !== this.#name.projectId) {
+      return new Response("capability URL projectId does not match this project", { status: 403 });
+    }
+    const host = this.env.CAPABILITY_HOST.getByName(
+      DurableObjectNameCodec.stringify({ projectId: this.#name.projectId, path: parsed.scope }),
+    ) as unknown as { fetch(request: Request): Promise<Response> };
+    return await host.fetch(
+      withCapabilityDispatchHeader(request, { capabilityPath: parsed.capabilityPath }),
+    );
   }
 
   /**

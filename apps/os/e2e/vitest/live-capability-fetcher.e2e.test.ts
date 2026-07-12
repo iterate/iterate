@@ -4,31 +4,28 @@ import WebSocket, { WebSocketServer } from "ws";
 import { myComputerProvision } from "../../../../packages/iterate/src/use-my-computer.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
-// `iterate use-my-computer` grew two lanes that lend a SERVER on the human's
-// machine to their project, and this file proves both with the real capability
-// object (myComputerProvision — the exact input the CLI sends; this vitest
-// process stands in for the Mac):
+// `iterate use-my-computer` can lend the SERVER on the human's machine to their
+// project BY URL, and this proves it end to end with the real capability object
+// (myComputerProvision — the exact input the CLI sends; this vitest process
+// stands in for the Mac). The mount is `addressable`, so it answers at
+// http://<name>.iterate/ :
 //
-//   1. getFetcher({ port }) — the project homepage IS the human's local server:
-//      the worker's fetch forwards `itx.<name>.getFetcher({port}).fetch(req)`,
-//      the Request rides capability dispatch to this process, the fetch hits
-//      127.0.0.1:<port>, and the Response rides back. Plain HTTP only — an
-//      upgrade can never cross capability dispatch (the socket-carrying
-//      Response dies on workerd's internal RPC hops; pinned with a teaching
-//      error here and with the raw DataCloneError in
-//      live-capability-websocket.e2e.test.ts).
+//   // a project worker's whole homepage:
+//   fetch(new Request("http://testComputer.iterate/…", req))
 //
-//   2. connectSocket({ port, path }) — WebSockets work anyway, by bridging
-//      FRAMES instead of carrying the socket: a Durable Object app terminates
-//      the browser's socket with WebSocketPair and pumps text frames through a
-//      capability handle (send / onMessage callback), while the real socket to
-//      the local server lives on the Mac. dynamic-worker-dispatch.md calls this
-//      exact shape out as the workable-today form of the `test.fails`
-//      specification next door.
+// Because every hop is a real fetch(), ONE forward serves both the homepage
+// (HTTP) and its /ws upgrade: project egress → the capability host Durable
+// Object, which terminates the WebSocket (WebSocketPair) and bridges frames to
+// the Mac. The RPC path (itx.<name>.fetch) carries the HTTP but never the
+// upgrade — that boundary is pinned in live-capability-websocket.e2e.test.ts;
+// the URL form is what makes the upgrade work.
 
-/** The "server on the human's Mac": plain HTTP with a recognizable body. */
-function startLocalHttpServer(marker: string): Promise<{ port: number; server: Server }> {
-  const server = createServer((request, response) => {
+/** The "server on the human's Mac": a dev-server-like combined HTTP + WebSocket
+ * origin on ONE port — HTML on GET, greet-then-echo on a /ws upgrade. */
+function startLocalServer(
+  marker: string,
+): Promise<{ port: number; http: Server; ws: WebSocketServer }> {
+  const http = createServer((request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(
       `<!doctype html><html><body><h1>hello from the mac ${marker}</h1>` +
@@ -37,166 +34,53 @@ function startLocalHttpServer(marker: string): Promise<{ port: number; server: S
         `</body></html>`,
     );
   });
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        reject(new Error("no port"));
-        return;
-      }
-      resolve({ port: address.port, server });
-    });
-  });
-}
-
-/** A local WebSocket server: greets on connect, then echoes frames prefixed. */
-function startLocalWsServer(): Promise<{ port: number; server: WebSocketServer }> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  server.on("connection", (socket) => {
+  // Attach the WebSocket server to the SAME http server, so http and ws share one
+  // port — exactly like a real dev server with HMR.
+  const ws = new WebSocketServer({ server: http });
+  ws.on("connection", (socket) => {
     socket.send("local-hello");
     socket.on("message", (data) => socket.send(`local-echo:${String(data)}`));
   });
   return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.once("listening", () => {
-      resolve({ port: (server.address() as { port: number }).port, server });
+    http.once("error", reject);
+    http.listen(0, "127.0.0.1", () => {
+      const address = http.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("no port"));
+        return;
+      }
+      resolve({ port: address.port, http, ws });
     });
   });
 }
 
 /**
- * Await a node http / ws server's full shutdown. A WebSocketServer won't close
- * while a client socket is open — here that's the bridge's still-live provider
- * socket (the browser-close → DO → handle.close() teardown races this, and a
- * hibernated DO may never run it at all) — so terminate any clients first.
- * That abrupt close also drives the provider's own socket-close teardown.
+ * Await full shutdown. A WebSocketServer won't close while a client socket is
+ * open — here the bridge's still-live provider socket (a hibernated capability
+ * host may never run its close) — so terminate any clients first. That abrupt
+ * close also drives the provider's own socket-close teardown.
  */
-function closeServer(server: {
-  close(cb?: (error?: Error) => void): void;
-  clients?: Set<{ terminate(): void }>;
-}): Promise<void> {
-  for (const client of server.clients ?? []) client.terminate();
-  return new Promise((resolve) => server.close(() => resolve()));
+function closeLocalServer(server: { http: Server; ws: WebSocketServer }): Promise<void> {
+  for (const client of server.ws.clients) client.terminate();
+  return new Promise((resolve) => {
+    server.ws.close(() => server.http.close(() => resolve()));
+  });
 }
 
 /**
- * The demo worker committed to the test project: the homepage forwards to the
- * human's HTTP server through getFetcher; the wsbridge app terminates browser
- * WebSockets and bridges frames through connectSocket. Mirrors the seeded
- * template's shape (iterate/sdk base classes, x-iterate-app routing).
+ * The demo worker committed to the test project: ONE fetch() forwards
+ * everything — the homepage and the /ws upgrade alike — to the addressable
+ * capability by URL. The whole WsBridgeApp + getFetcher/connectSocket dance is
+ * gone; the platform runs it. `testComputer` (a camelCase mount) is reached at
+ * the lowercased URL host, proving case-insensitive capability resolution.
  */
-function demoWorkerSource(input: { name: string; httpPort: number; wsPort: number }): string {
-  return `import { IterateDurableObject, IterateWorkerEntrypoint } from "iterate/sdk";
+function demoWorkerSource(name: string): string {
+  return `import { IterateWorkerEntrypoint } from "iterate/sdk";
 
-// Demo (live-capability-fetcher e2e): the homepage IS a server on the human's
-// machine, and the wsbridge app carries WebSockets to it frame-by-frame.
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   async fetch(req: Request): Promise<Response> {
-    const app = req.headers.get("x-iterate-app");
-    if (app === "wsbridge") {
-      return this.fetchDynamicWorker(req, {
-        type: "stateful",
-        path: "/",
-        className: "WsBridgeApp",
-        durableWorkerKey: "app-wsbridge",
-        source: {
-          files: { type: "repo", repoPath: "/repos/config" },
-          options: { entryPoint: "worker.ts" },
-        },
-      });
-    }
-    if (app) return new Response("unknown app: " + app, { status: 404 });
-
-    // THE DEMO: serve the project homepage straight from the shared computer.
-    const itx = await this.env.ITX.get();
-    try {
-      const computer = (itx as any).${input.name};
-      const fetcher = await computer.getFetcher({ port: ${input.httpPort} });
-      return await fetcher.fetch(req);
-    } finally {
-      try {
-        (itx as any)[Symbol.dispose]?.();
-      } catch {}
-    }
-  }
-}
-
-// The socket itself can never cross RPC hops, so this Durable Object holds the
-// browser's end (WebSocketPair) and exchanges FRAMES with the shared computer:
-// browser frames go out through handle.send, local-server frames come back
-// through the onMessage callback. Durable Objects share one I/O context across
-// events, which is what lets the handle and callbacks outlive the upgrade
-// request.
-export class WsBridgeApp extends IterateDurableObject {
-  async fetch(req: Request): Promise<Response> {
-    if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-      return new Response("expected websocket", { status: 426 });
-    }
-    const pair = new WebSocketPair();
-    const server = pair[1];
-    server.accept();
-
-    // Held (not disposed at request end): the bridge lives as long as the
-    // browser's socket does. connectSocket's onMessage delivers local-server
-    // frames; the browser's frames go out through handle.send.
-    const itx = await this.env.ITX.get();
-    let handle: any;
-    try {
-      handle = await (itx as any).${input.name}.connectSocket({
-        port: ${input.wsPort},
-        path: "/",
-        onMessage: (data: string) => {
-          try {
-            server.send(data);
-          } catch {}
-        },
-        onClose: () => {
-          try {
-            server.close(1000, "local server closed");
-          } catch {}
-        },
-      });
-    } catch (error) {
-      // Nothing to bridge to: close the pair we accepted and release itx.
-      try {
-        server.close(1011, "bridge failed");
-      } catch {}
-      try {
-        (itx as any)[Symbol.dispose]?.();
-      } catch {}
-      return new Response("bridge failed: " + String(error), { status: 502 });
-    }
-
-    // One idempotent teardown for both close and error: close the bridge, then
-    // release the itx stub. Ordering matters — handle.close() is an RPC that
-    // rides on this itx session, so we must AWAIT it (the provider closes the
-    // Mac's socket) before disposing the session; disposing first aborts the
-    // close in flight and the Mac's socket lingers. (Symbol.dispose on the
-    // returned handle is dropped by capnweb's by-value return serialization, so
-    // close() — a real string-keyed method — is the only cross-RPC teardown.)
-    let torn = false;
-    const teardown = async () => {
-      if (torn) return;
-      torn = true;
-      try {
-        await handle.close({});
-      } catch {}
-      try {
-        (itx as any)[Symbol.dispose]?.();
-      } catch {}
-    };
-    server.addEventListener("message", (event) => {
-      void handle.send(String(event.data)).catch(() => {
-        try {
-          server.close(1011, "bridge send failed");
-        } catch {}
-      });
-    });
-    server.addEventListener("close", teardown);
-    server.addEventListener("error", teardown);
-
-    return new Response(null, { status: 101, webSocket: pair[0] });
+    const url = new URL(req.url);
+    return fetch(new Request(\`http://${name}.iterate\${url.pathname}\${url.search}\`, req));
   }
 }
 `;
@@ -213,30 +97,33 @@ function projectHosts() {
   return { base, isLocal, projectBase };
 }
 
-test("the homepage is a server on the human's machine: getFetcher proxies HTTP end to end", async () => {
+test("the homepage AND its websocket are a server on the human's machine, reached by URL", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
-  const slug = `mac-fetch-${marker}`;
+  const slug = `mac-url-${marker}`;
   const name = "testComputer";
 
-  const { port, server } = await startLocalHttpServer(marker);
-  const { port: wsPort, server: wsServer } = await startLocalWsServer();
+  const local = await startLocalServer(marker);
   try {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = itx.projects.create({ slug });
     const { projectId } = await project.__describe();
 
-    // The REAL capability, provided exactly as the CLI provides it — including
-    // the types string, so the typed-mount gate compiles the new declaration.
-    using _provision = await project.provideCapability(myComputerProvision(name));
+    // The REAL capability, provided exactly as the CLI provides it: addressable,
+    // bound to the local server's port, with the types string the typed-mount
+    // gate compiles.
+    using _provision = await project.provideCapability(
+      myComputerProvision(name, { exposePort: local.port }),
+    );
 
     await project.repo.commitFiles({
-      message: "homepage = the human's local server (live-capability-fetcher e2e)",
-      changes: [{ path: "worker.ts", content: demoWorkerSource({ name, httpPort: port, wsPort }) }],
+      message: "homepage = the human's local server, by URL (live-capability url e2e)",
+      changes: [{ path: "worker.ts", content: demoWorkerSource(name) }],
     });
 
+    // ── HTTP: the homepage IS the human's server ──────────────────────────────
     // The commit triggers a cold rebuild: retry through building 503s (and the
-    // stale pre-commit build's homepage) until the local server's body shows.
+    // stale pre-commit homepage) until the local server's body shows.
     const deadline = Date.now() + 120_000;
     let body = "";
     for (;;) {
@@ -250,66 +137,19 @@ test("the homepage is a server on the human's machine: getFetcher proxies HTTP e
       }
       await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
-    // Path + query traveled to the Mac; the original host arrived as
-    // x-forwarded-host.
+    // Path + query traveled to the Mac; the request arrived with a forwarded host.
     expect(body).toContain('data-path="/proxied?q=1"');
     expect(body).toMatch(/data-forwarded-host="[^"]+"/);
 
-    // The boundary, taught not tripped: an upgrade through the fetcher fails
-    // with the capability's own explanation, not a deep DataCloneError.
-    const fetcher = await (
-      project as unknown as {
-        testComputer: {
-          getFetcher(input: { port: number }): Promise<{ fetch(req: Request): Promise<Response> }>;
-        };
-      }
-    ).testComputer.getFetcher({ port });
-    const outcome = await (async () => {
-      try {
-        await fetcher.fetch(
-          new Request("https://mac.example.com/ws", { headers: { upgrade: "websocket" } }),
-        );
-        return "upgrade unexpectedly succeeded";
-      } catch (error) {
-        return error instanceof Error ? error.message : String(error);
-      }
-    })();
-    expect(outcome).toContain("cannot carry a WebSocket upgrade");
-  } finally {
-    await closeServer(server);
-    await closeServer(wsServer);
-  }
-});
-
-test("WebSockets work through the bridge: frames pump between a browser socket and the Mac's server", async () => {
-  const marker = crypto.randomUUID().slice(0, 8);
-  const slug = `mac-ws-${marker}`;
-  const name = "testComputer";
-
-  const { port, server } = await startLocalHttpServer(marker);
-  const { port: wsPort, server: wsServer } = await startLocalWsServer();
-  try {
-    using session = withItxSession();
-    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug });
-    await project.__describe();
-
-    using _provision = await project.provideCapability(myComputerProvision(name));
-
-    await project.repo.commitFiles({
-      message: "wsbridge app (live-capability-fetcher e2e)",
-      changes: [{ path: "worker.ts", content: demoWorkerSource({ name, httpPort: port, wsPort }) }],
-    });
-
+    // ── WebSocket: the SAME URL forward carries the upgrade ──────────────────
     const { base, isLocal, projectBase } = projectHosts();
-    const appHost = `wsbridge--${slug}`;
     const connect = () =>
       isLocal
         ? new WebSocket(`ws://${base.host}/ws`, {
             handshakeTimeout: 20_000,
-            headers: { host: `${appHost}.localhost${base.port ? `:${base.port}` : ""}` },
+            headers: { host: `${slug}.localhost${base.port ? `:${base.port}` : ""}` },
           })
-        : new WebSocket(`wss://${appHost}.${projectBase}/ws`, { handshakeTimeout: 20_000 });
+        : new WebSocket(`wss://${slug}.${projectBase}/ws`, { handshakeTimeout: 20_000 });
 
     const openSocket = (ws: WebSocket) =>
       new Promise<WebSocket>((resolve, reject) => {
@@ -325,17 +165,16 @@ test("WebSockets work through the bridge: frames pump between a browser socket a
         ws.once("error", reject);
       });
 
-    // Retry ONLY the cold-build 503 (the router's building page); a real
-    // failure such as a 502 from the bridge surfaces immediately instead of
-    // spinning for two minutes.
+    // Retry ONLY the cold-build 503 (the router's building page); a real failure
+    // such as a 502/501 from the bridge surfaces immediately.
     const openSocketReady = async () => {
-      const deadline = Date.now() + 120_000;
+      const wsDeadline = Date.now() + 60_000;
       for (;;) {
         try {
           return await openSocket(connect());
         } catch (error) {
           const status = (error as { status?: number }).status;
-          if (status !== 503 || Date.now() > deadline) throw error;
+          if (status !== 503 || Date.now() > wsDeadline) throw error;
           await new Promise((resolve) => setTimeout(resolve, 2_000));
         }
       }
@@ -350,11 +189,11 @@ test("WebSockets work through the bridge: frames pump between a browser socket a
         wake?.();
       });
       const waitForMessage = async (predicate: (m: string) => boolean) => {
-        const deadline = Date.now() + 30_000;
+        const msgDeadline = Date.now() + 30_000;
         for (;;) {
           const hit = messages.find(predicate);
           if (hit) return hit;
-          if (Date.now() > deadline) {
+          if (Date.now() > msgDeadline) {
             throw new Error(`no matching frame; saw ${JSON.stringify(messages)}`);
           }
           await new Promise<void>((resolve) => {
@@ -364,12 +203,10 @@ test("WebSockets work through the bridge: frames pump between a browser socket a
         }
       };
 
-      // Mac → browser, unprompted: the local server greets on connect, and the
-      // greeting crosses the bridge via the onMessage callback chain.
+      // Mac → browser, unprompted: the local server greets on connect, crossing
+      // the bridge via the onMessage callback chain.
       expect(await waitForMessage((m) => m === "local-hello")).toBe("local-hello");
-
-      // Browser → Mac → browser: a frame out through handle.send, echoed by
-      // the local server, back through the callback.
+      // Browser → Mac → browser: a frame out through the bridge, echoed back.
       socket.send(`ping-${marker}`);
       expect(await waitForMessage((m) => m === `local-echo:ping-${marker}`)).toBe(
         `local-echo:ping-${marker}`,
@@ -377,17 +214,11 @@ test("WebSockets work through the bridge: frames pump between a browser socket a
     } finally {
       socket.close();
     }
-    // Teardown note: closing the browser socket does NOT reliably drain the
-    // Mac's socket in local dev — the DO's close listener (and its
-    // handle.close()) doesn't fire once the upgrade request has returned (the
-    // isolate is done with that request), so the provider socket lingers until
-    // closeServer force-terminates it. That terminate is not just hang
-    // avoidance: it drives the provider's OWN socket-close teardown (dispose
-    // the retained callbacks), which is the cleanup the provider can guarantee
-    // without depending on the DO. The provider's other guaranteed lane is
-    // closeAllBridges when the CLI's connection to OS drops.
+    // Teardown note: closing the browser socket does NOT reliably drain the Mac's
+    // socket in local dev — the capability host's close listener may not run once
+    // the upgrade request has returned — so closeLocalServer force-terminates it,
+    // which also drives the provider's own socket-close teardown.
   } finally {
-    await closeServer(server);
-    await closeServer(wsServer);
+    await closeLocalServer(local);
   }
 });

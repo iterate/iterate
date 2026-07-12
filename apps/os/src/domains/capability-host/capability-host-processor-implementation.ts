@@ -322,6 +322,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       }
       const flattenNestedPath = input.flattenNestedPaths === true;
       record = {
+        addressable: input.addressable === true ? true : undefined,
         flattenNestedPaths: flattenNestedPath ? true : undefined,
         instructions: input.instructions,
         path,
@@ -504,6 +505,146 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
     }
     return await live.invoke(hit.rest, args);
+  }
+
+  // ── Capability URLs: serve an addressable live capability over fetch() ──────
+  // `fetch("http://<name>.iterate/…")` lands here (project egress → this DO's
+  // fetch → serveCapabilityFetch). Because every hop was a real stub fetch, a
+  // WebSocket upgrade is still live when it arrives and can terminate at this
+  // Durable Object — which the RPC path (`invokeCapability`) can never do.
+
+  async serveCapabilityFetch({
+    capabilityPath,
+    request,
+  }: {
+    capabilityPath: string[];
+    request: Request;
+  }): Promise<Response> {
+    const record = this.#resolveAddressableCapability(capabilityPath);
+    if (!record) {
+      // v1 addresses root-scope mounts only; the egress hop dials the mount's
+      // scope directly, so a miss here is a genuine 404 (no parent chaining).
+      return new Response(`no addressable capability "${capabilityPath.join(".")}"`, {
+        status: 404,
+      });
+    }
+    const live = this.#liveCapabilities.get(liveKey(record.path));
+    if (!live) {
+      // Same staleness contract as invokeCapability: the record is durable, but
+      // calls need the provider's live connection.
+      return new Response(`capability "${record.path.join(".")}" is offline`, { status: 503 });
+    }
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      // Plain HTTP: the provider's fetch(request) runs in its process and the
+      // Response copy serializes back — the same transport as
+      // itx.<name>.fetch(req), just reached by URL.
+      return (await live.invoke(["fetch"], [request])) as Response;
+    }
+    return await this.#bridgeCapabilityWebSocket(live, request);
+  }
+
+  /**
+   * The addressable live mount for a capability URL's host labels, matched
+   * case-INSENSITIVELY: DNS lowercases the URL host, but mounts are camelCase
+   * (itx.jonasComputer is reached at jonascomputer.<project>.iterate).
+   */
+  #resolveAddressableCapability(labels: string[]): CapabilityRecord | null {
+    const wanted = labels.map((label) => label.toLowerCase());
+    for (const record of this.state.capabilities) {
+      if (record.type !== "live" || record.addressable !== true) continue;
+      if (record.path.length !== wanted.length) continue;
+      if (record.path.every((segment, index) => segment.toLowerCase() === wanted[index])) {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Terminate a WebSocket upgrade at THIS Durable Object and bridge FRAMES to
+   * the provider. The socket can never cross an internal RPC hop, so the 101 is
+   * established here (a real workerd object, top of stack) and the provider's
+   * `connectSocket({ onMessage, onClose }) → { send, close }` carries frames:
+   * browser frames go out via send(), local-server frames come back through the
+   * onMessage callback (capnweb keeps the callbacks live for the socket's life,
+   * and this DO's I/O context spans the socket). This is the WsBridgeApp recipe
+   * the platform now runs for you.
+   */
+  async #bridgeCapabilityWebSocket(live: LiveCapability, request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    server.accept();
+
+    type SocketBridge = {
+      send(data: string): Promise<unknown>;
+      close(input?: { code?: number; reason?: string }): Promise<unknown>;
+    } & Partial<Disposable>;
+
+    let bridge: SocketBridge;
+    try {
+      bridge = (await live.invoke(
+        ["connectSocket"],
+        [
+          {
+            path: `${url.pathname}${url.search}`,
+            onMessage: (data: string) => {
+              try {
+                server.send(data);
+              } catch {}
+            },
+            onClose: ({ code, reason }: { code: number; reason: string }) => {
+              try {
+                server.close(code, reason);
+              } catch {}
+            },
+          },
+        ],
+      )) as SocketBridge;
+    } catch (error) {
+      // Addressable, but this capability does not bridge WebSockets.
+      try {
+        server.close(1011, "no socket bridge");
+      } catch {}
+      return new Response(
+        `capability does not support WebSocket upgrades: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { status: 501 },
+      );
+    }
+
+    let torn = false;
+    const teardown = async (code?: number, reason?: string) => {
+      if (torn) return;
+      torn = true;
+      // close() is an RPC on the provider's connection — AWAIT it (so the
+      // provider closes its local socket) before disposing the per-socket
+      // handle; the handle's Symbol.dispose is dropped by capnweb's by-value
+      // return serialization, so close() is the real cross-RPC teardown.
+      try {
+        await bridge.close(code === undefined ? undefined : { code, reason });
+      } catch {}
+      try {
+        bridge[Symbol.dispose]?.();
+      } catch {}
+    };
+    server.addEventListener("message", (event) => {
+      // v1 bridges text frames (the provider's send is string-typed); binary
+      // frames are dropped rather than silently corrupted.
+      if (typeof event.data === "string") {
+        void bridge.send(event.data).catch(() => {
+          try {
+            server.close(1011, "bridge send failed");
+          } catch {}
+        });
+      }
+    });
+    server.addEventListener("close", (event) => void teardown(event.code, event.reason));
+    server.addEventListener("error", () => void teardown());
+
+    return new Response(null, { status: 101, webSocket: client });
   }
 
   /**

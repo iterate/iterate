@@ -20,6 +20,7 @@ const ItxExpressionFields = {
 const CapabilityProvidedPayload = z.discriminatedUnion("type", [
   z.strictObject({
     ...CapabilityMetadata,
+    addressable: z.boolean().optional(),
     flattenNestedPaths: z.boolean().optional(),
     path: z.array(z.string()),
     type: z.literal("live"),
@@ -35,6 +36,7 @@ const CapabilityProvidedPayload = z.discriminatedUnion("type", [
 const CapabilityRecord = z.discriminatedUnion("type", [
   z.strictObject({
     ...CapabilityMetadata,
+    addressable: z.boolean().optional(),
     flattenNestedPaths: z.boolean().optional(),
     path: z.array(z.string()),
     providedAtOffset: z.number().int().nonnegative(),
@@ -64,7 +66,7 @@ export const DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS = 15 * 60_000;
 
 export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
-  version: "0.1.0",
+  version: "0.2.0",
   description: "A tiny dynamic capability table and script execution journal.",
   stateSchema: z.object({
     capabilities: z.array(CapabilityRecord).default([]),
@@ -99,6 +101,16 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
           payload: {
             instructions: "Call tools.weather.forecast({ city }) for a 3-day forecast.",
             path: ["tools", "weather"],
+            type: "live",
+          },
+        },
+        {
+          description:
+            'An addressable live capability (a server on the provider\'s machine): reachable by URL as fetch("http://mycomputer.iterate/…"), which — unlike the itx RPC path — carries WebSocket upgrades.',
+          payload: {
+            addressable: true,
+            instructions: "A local dev server, reachable at http://mycomputer.iterate/",
+            path: ["myComputer"],
             type: "live",
           },
         },

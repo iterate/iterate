@@ -45,6 +45,15 @@ export type FlattenedCapabilityTarget = {
  */
 export type ProvideCapabilityInput =
   | {
+      /**
+       * Expose this mount's `fetch(request)` handler as a URL origin: a project
+       * can then `fetch("http://<name>.iterate/…")` instead of calling
+       * `itx.<name>.fetch(...)` over RPC. The URL form rides real fetch() hops,
+       * so — unlike RPC — a WebSocket upgrade survives (it terminates at the
+       * capability host and bridges frames to the provider via `connectSocket`).
+       * See apps/os/domains/capability-host/capability-url.ts.
+       */
+      addressable?: boolean;
       capability: unknown;
       flattenNestedPaths?: false;
       instructions?: string;
@@ -53,6 +62,7 @@ export type ProvideCapabilityInput =
       types?: string;
     }
   | {
+      addressable?: boolean;
       capability: FlattenedCapabilityTarget;
       flattenNestedPaths: true;
       instructions?: string;
@@ -72,6 +82,7 @@ export type ProvideCapabilityInput =
 /** Event payload stored when a capability is mounted on an ITX stream. */
 export type CapabilityProvidedPayload =
   | {
+      addressable?: boolean;
       flattenNestedPaths?: boolean;
       instructions?: string;
       path: string[];

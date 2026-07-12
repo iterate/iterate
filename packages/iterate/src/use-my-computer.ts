@@ -31,121 +31,123 @@ import type { ItxAuthCredentials, Project } from "./itx-api.generated.ts";
 import { run } from "./run-command.ts";
 import { closeAllBridges, openSocketBridge, proxyLocalHttp } from "./use-my-computer-transport.ts";
 
+// The methods we lend to the project. Each becomes callable by agents as
+// `itx.<name>.<method>(...)`; capnweb ships the *call* over this process's
+// socket, so the body runs locally — native macOS dialogs and all.
+
+/** Pop a native dialog on screen and return which button the human clicked. */
+async function ask({
+  question,
+  buttons = ["No", "Yes"],
+}: {
+  question: string;
+  buttons?: string[];
+}) {
+  // AppleScript's `display dialog` supports one to three buttons.
+  if (buttons.length < 1 || buttons.length > 3) {
+    throw new Error("ask() needs 1–3 buttons (AppleScript dialogs cap at three).");
+  }
+  const buttonList = buttons.map((b) => `"${escapeForAppleScript(b)}"`).join(", ");
+  const { stdout } = await osascript(
+    `display dialog "${escapeForAppleScript(question)}" ` +
+      `buttons {${buttonList}} default button "${escapeForAppleScript(buttons.at(-1)!)}" ` +
+      `with title "iterate · myComputer"`,
+  );
+  // osascript prints e.g. `button returned:Yes` — hand back just the choice.
+  return { answer: stdout.trim().replace(/^button returned:/, "") };
+}
+
+/** Show a desktop notification. */
+async function notify({ message, title = "iterate" }: { message: string; title?: string }) {
+  await osascript(
+    `display notification "${escapeForAppleScript(message)}" with title "${escapeForAppleScript(title)}"`,
+  );
+  return { ok: true as const };
+}
+
+/** Run arbitrary Swift and return its output — full power, when an agent needs it. */
+async function runSwift({ code }: { code: string }) {
+  // `swift -` reads a whole program from stdin and runs it.
+  return await run("swift", ["-"], code);
+}
+
+/** The human-interaction methods, always present — callable as itx.<name>.<method>(). */
+const baseMethods = { ask, notify, runSwift };
+
 /**
- * The object we lend to the project. Each method becomes callable by agents as
- * `itx.myComputer.<method>(...)`. capnweb ships the *call* over this process's
- * socket, so the body runs locally — native macOS dialogs and all.
+ * Lend the server on ONE local port as a URL origin. These are the PLATFORM's
+ * to call, not agents': a project reaches them by URL —
+ * `fetch("http://<name>.iterate/…", req)` — never `itx.<name>.fetch(...)`.
+ * - fetch(request) proxies each request to http://127.0.0.1:<port>.
+ * - connectSocket({ path, onMessage, onClose }) opens a real WebSocket to the
+ *   local server and bridges FRAMES; the capability host terminates the
+ *   browser's socket (WebSocketPair) and pumps frames through this handle,
+ *   because the socket itself can never cross an RPC hop.
  */
-const myComputer = {
-  /** Pop a native dialog on screen and return which button the human clicked. */
-  async ask({ question, buttons = ["No", "Yes"] }: { question: string; buttons?: string[] }) {
-    // AppleScript's `display dialog` supports one to three buttons.
-    if (buttons.length < 1 || buttons.length > 3) {
-      throw new Error("ask() needs 1–3 buttons (AppleScript dialogs cap at three).");
-    }
-    const buttonList = buttons.map((b) => `"${escapeForAppleScript(b)}"`).join(", ");
-    const { stdout } = await osascript(
-      `display dialog "${escapeForAppleScript(question)}" ` +
-        `buttons {${buttonList}} default button "${escapeForAppleScript(buttons.at(-1)!)}" ` +
-        `with title "iterate · myComputer"`,
-    );
-    // osascript prints e.g. `button returned:Yes` — hand back just the choice.
-    return { answer: stdout.trim().replace(/^button returned:/, "") };
-  },
+function addressableOrigin(port: number, host = "127.0.0.1") {
+  const origin = `http://${host}:${port}`;
+  return {
+    fetch: (request: Request) => proxyLocalHttp(origin, request),
+    connectSocket: (input: {
+      path?: string;
+      onMessage?: (data: string) => unknown;
+      onClose?: (info: { code: number; reason: string }) => unknown;
+    }) => openSocketBridge({ ...input, port, host }),
+  };
+}
 
-  /** Show a desktop notification. */
-  async notify({ message, title = "iterate" }: { message: string; title?: string }) {
-    await osascript(
-      `display notification "${escapeForAppleScript(message)}" with title "${escapeForAppleScript(title)}"`,
-    );
-    return { ok: true as const };
-  },
+/**
+ * The object `iterate use-my-computer` lends. With `exposePort`, it also lends
+ * the server on that local port as an addressable URL origin (HTTP + WebSocket).
+ */
+export function createMyComputer(options: { exposePort?: number } = {}) {
+  return options.exposePort === undefined
+    ? { ...baseMethods }
+    : { ...baseMethods, ...addressableOrigin(options.exposePort) };
+}
 
-  /** Run arbitrary Swift and return its output — full power, when an agent needs it. */
-  async runSwift({ code }: { code: string }) {
-    // `swift -` reads a whole program from stdin and runs it.
-    return await run("swift", ["-"], code);
-  },
-
-  /**
-   * Lend a server running on this machine to the project: returns
-   * `{ fetch(request) }` that proxies each request to
-   * `http://127.0.0.1:<port>`. A project worker's homepage can literally be
-   * `return (await itx.myComputer.getFetcher({ port })).fetch(req)` — the
-   * Request rides capability dispatch here, the fetch happens on this Mac,
-   * and the Response rides back. Plain HTTP only: capability dispatch is RPC,
-   * and a socket-carrying Response cannot cross workerd's internal hops
-   * (apps/os/docs/dynamic-worker-dispatch.md) — WebSocket upgrades get a
-   * teaching error pointing at connectSocket.
-   */
-  async getFetcher({ port, host = "127.0.0.1" }: { port: number; host?: string }) {
-    const origin = `http://${host}:${port}`;
-    return { fetch: (request: Request) => proxyLocalHttp(origin, request) };
-  },
-
-  /**
-   * The WebSocket lane getFetcher cannot offer: open a real socket to a server
-   * on this machine and bridge FRAMES over capability dispatch. Returns a
-   * bridge — `send(data)` pushes a frame to the local server, `close()` hangs
-   * up — while incoming frames (and the eventual close) reach the `onMessage` /
-   * `onClose` callbacks. The socket can never cross the RPC mesh, so a Durable
-   * Object app terminates the browser's WebSocket with WebSocketPair and pumps
-   * frames both ways through this bridge. See `openSocketBridge` for the
-   * ownership/teardown contract.
-   */
-  async connectSocket(input: {
-    port: number;
-    path?: string;
-    host?: string;
-    onMessage?: (data: string) => unknown;
-    onClose?: (info: { code: number; reason: string }) => unknown;
-  }) {
-    return await openSocketBridge(input);
-  },
-};
+export type MyComputer = ReturnType<typeof createMyComputer>;
 
 /**
  * The exact provideCapability input `iterate use-my-computer` sends — exported
  * so the e2e suite provides the REAL capability (object, instructions, types)
- * from its own process and proves the fetcher + socket bridge end to end
- * (apps/os/e2e/vitest/live-capability-fetcher.e2e.test.ts).
+ * from its own process and proves URL addressing end to end
+ * (apps/os/e2e/vitest/live-capability-fetcher.e2e.test.ts). `exposePort` makes
+ * the mount `addressable` and lends that local port at http://<name>.iterate/.
  */
-export function myComputerProvision(name: string) {
+export function myComputerProvision(name: string, options: { exposePort?: number } = {}) {
   return {
     type: "live" as const,
     path: [name],
-    capability: myComputer,
-    instructions: INSTRUCTIONS,
+    capability: createMyComputer(options),
+    addressable: options.exposePort !== undefined,
+    instructions: instructionsFor(name, options.exposePort !== undefined),
     types: TYPES,
   };
 }
 
-/** Prose + a type signature so agents (and `__describe()`) know how to call this. */
-const INSTRUCTIONS = `A real person's Mac, shared live from their terminal for as long as \`iterate use-my-computer\` runs.
+/** Prose so agents (and `__describe()`) know how to drive this. */
+function instructionsFor(name: string, addressable: boolean): string {
+  const base = `A real person's Mac, shared live from their terminal for as long as \`iterate use-my-computer\` runs.
 - ask({ question, buttons? }) pops a native dialog on their screen and returns { answer } — the button they clicked. Perfect for a quick human yes/no or choice.
 - notify({ message, title? }) shows a desktop notification.
-- runSwift({ code }) runs Swift on their Mac and returns { stdout, stderr, exitCode }. It has full access to their files, GUI and network, so ask before doing anything destructive.
-- getFetcher({ port }) lends a server running on their machine: the returned { fetch } proxies each Request to http://127.0.0.1:<port> on their Mac and returns the Response. A worker's fetch handler can forward straight through — e.g. \`return (await itx.myComputer.getFetcher({ port: 3000 })).fetch(req)\` serves their local dev server on a project host. HTTP only; WebSocket upgrades throw a teaching error.
-- connectSocket({ port, path?, onMessage?, onClose? }) opens a real WebSocket to a local server and bridges FRAMES over this capability: onMessage receives each incoming frame, and the returned bridge has send(data) and close(). Terminate the browser's socket in a Durable Object app and pump frames through this bridge — the socket itself can never cross RPC.`;
+- runSwift({ code }) runs Swift on their Mac and returns { stdout, stderr, exitCode }. It has full access to their files, GUI and network, so ask before doing anything destructive.`;
+  if (!addressable) return base;
+  const url = `http://${name.toLowerCase()}.iterate`;
+  return `${base}
+
+This computer also lends a local server, reachable by URL (not by an itx method): fetch \`${url}/…\` from a project worker. A worker's fetch handler can forward straight through — \`const u = new URL(req.url); return fetch(new Request("${url}" + u.pathname + u.search, req));\` serves their local dev server on a project host. Unlike the itx RPC path, the URL carries WebSocket upgrades (HMR, live reload) too.`;
+}
 
 // A capability `types` string must be a valid TS declaration named `Capability`
-// (the egress/capability host typechecks it before mounting) — not a bare object
-// literal, which fails to compile and aborts the mount.
+// (the capability host typechecks it before mounting) — not a bare object
+// literal, which fails to compile and aborts the mount. The addressable origin
+// (fetch/connectSocket) is reached by URL, not as an itx method, so it is
+// described in the instructions above rather than declared here.
 const TYPES = `export type Capability = {
   ask(input: { question: string; buttons?: string[] }): Promise<{ answer: string }>;
   notify(input: { message: string; title?: string }): Promise<{ ok: true }>;
   runSwift(input: { code: string }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
-  getFetcher(input: { port: number; host?: string }): Promise<{ fetch(request: Request): Promise<Response> }>;
-  connectSocket(input: {
-    port: number;
-    path?: string;
-    host?: string;
-    onMessage?: (data: string) => unknown;
-    onClose?: (info: { code: number; reason: string }) => unknown;
-  }): Promise<{
-    send(data: string): Promise<{ ok: true }>;
-    close(input?: { code?: number; reason?: string }): Promise<{ ok: true }>;
-  }>;
 };`;
 
 /**
@@ -174,6 +176,35 @@ async function askComputerName(): Promise<string> {
   return answer.trim();
 }
 
+/**
+ * Optionally lend a local server (a dev server, an API) at the capability's URL.
+ * Blank skips it; a port number makes the mount addressable at
+ * http://<name>.iterate/. Non-interactive callers pass `exposePort` explicitly.
+ */
+async function askExposePort(): Promise<number | undefined> {
+  if (!process.stdin.isTTY) return undefined;
+  const answer = await prompts.text({
+    message:
+      "Lend a local server too? Enter its port (or leave blank) — reachable at http://<name>.iterate/",
+    placeholder: "",
+    defaultValue: "",
+    validate: (value) => {
+      const trimmed = (value ?? "").trim();
+      if (trimmed === "") return undefined;
+      const port = Number(trimmed);
+      return /^\d+$/.test(trimmed) && port > 0 && port < 65536
+        ? undefined
+        : "Enter a port number 1–65535, or leave blank to skip.";
+    },
+  });
+  if (prompts.isCancel(answer)) {
+    prompts.cancel("Cancelled.");
+    process.exit(0);
+  }
+  const trimmed = answer.trim();
+  return trimmed === "" ? undefined : Number(trimmed);
+}
+
 /** "Jonas’s-MacBook-Pro.local" → "jonasComputer". A friendly default, always editable. */
 function proposeComputerName(): string {
   const firstWord = hostname()
@@ -188,7 +219,7 @@ function proposeComputerName(): string {
  * A line the human can paste to an agent so it knows this capability exists.
  * `itx.<name>.__describe()` then teaches the agent exactly how to drive it.
  */
-function agentPrompt(name: string): string {
+function agentPrompt(name: string, addressable: boolean): string {
   const kind = /macbook/i.test(hostname())
     ? "a MacBook"
     : process.platform === "darwin"
@@ -196,14 +227,20 @@ function agentPrompt(name: string): string {
       : "their computer";
   const owner = /^(.+?)(computer|mac|laptop|machine)$/i.exec(name)?.[1];
   const whose = owner ? `${owner[0].toUpperCase()}${owner.slice(1)}’s computer` : name;
-  return [
+  const lines = [
     "📋 Paste this to an agent so it knows it can use your computer:",
     "",
     `   By the way, you can use \`itx.${name}\` to interact with ${whose} (${kind}).`,
     `   Call \`itx.${name}.__describe()\` first to learn how it works — it can ask you`,
-    `   questions with native dialogs, send notifications, run Swift, and lend`,
-    `   local servers (getFetcher/connectSocket proxy HTTP and WebSockets to a port).`,
-  ].join("\n");
+    `   questions with native dialogs, send notifications, and run Swift.`,
+  ];
+  if (addressable) {
+    lines.push(
+      `   It also serves a local server at http://${name.toLowerCase()}.iterate/ — a worker can`,
+      `   \`return fetch("http://${name.toLowerCase()}.iterate/", req)\` to show it (HTTP + WebSockets).`,
+    );
+  }
+  return lines.join("\n");
 }
 
 type ConnectInput = {
@@ -212,14 +249,20 @@ type ConnectInput = {
   projectId: string;
   headers?: Record<string, string>;
   name?: string;
+  /** Also lend the local server on this port at http://<name>.iterate/. */
+  exposePort?: number;
 };
 
-/** Mount `capability` at `itx.<name>` and return the live socket stub. */
+/** Mount the capability at `itx.<name>` and return the live socket stub. */
 async function connectAndProvide(
   input: ConnectInput,
   name: string,
-  capability: typeof myComputer,
+  options: { exposePort?: number; wrapActivity?: boolean },
 ): Promise<RpcStub<Project>> {
+  const provision = myComputerProvision(name, { exposePort: options.exposePort });
+  const capability = options.wrapActivity
+    ? withActivity(provision.capability)
+    : provision.capability;
   const itx = connectItx({
     auth: input.auth,
     baseUrl: input.baseUrl,
@@ -227,7 +270,7 @@ async function connectAndProvide(
     headers: input.headers,
   }) as RpcStub<Project>;
 
-  await itx.provideCapability({ ...myComputerProvision(name), capability });
+  await itx.provideCapability({ ...provision, capability });
   return itx;
 }
 
@@ -258,9 +301,10 @@ export async function shareMyComputer(
 ): Promise<never> {
   const log = input.log ?? ((message: string) => console.error(message));
   const name = input.name ?? (await askComputerName());
-  const itx = await connectAndProvide(input, name, myComputer);
+  const exposePort = input.exposePort ?? (await askExposePort());
+  const itx = await connectAndProvide(input, name, { exposePort });
   log(`✅ itx.${name} is live for project ${input.projectId}. Press Ctrl-C to stop sharing.\n`);
-  log(agentPrompt(name));
+  log(agentPrompt(name, exposePort !== undefined));
   return holdWarm(itx);
 }
 
@@ -276,7 +320,10 @@ export async function shareMyComputer(
  */
 export async function runUseMyComputerJson(input: ConnectInput): Promise<never> {
   const name = input.name ?? proposeComputerName();
-  const itx = await connectAndProvide(input, name, withActivity(myComputer));
+  const itx = await connectAndProvide(input, name, {
+    exposePort: input.exposePort,
+    wrapActivity: true,
+  });
   emitJson({ type: "status", loggedIn: true, project: input.projectId, name });
   // If the menu-bar parent goes away, stdin closes — stop sharing rather than
   // leaving the computer silently lent with no window onto it.
@@ -301,14 +348,13 @@ export function emitComputerNeedsLogin(): void {
  * behaviour is otherwise identical: the wrapped method awaits the real one and
  * returns (or rethrows) exactly what it did.
  */
-function withActivity(capability: typeof myComputer): typeof myComputer {
+/** Methods worth surfacing in the menu-bar activity log — the human actions.
+ * The addressable origin (fetch/connectSocket) is high-frequency transport and
+ * passes through unannounced. */
+const ANNOUNCED_METHODS = new Set(["ask", "notify", "runSwift"]);
+
+function withActivity(capability: MyComputer): MyComputer {
   let nextId = 0;
-  // Each capability method takes exactly one argument and announces itself as
-  // it runs. The returned transport handles (getFetcher's { fetch }, the frame
-  // bridge) pass through untouched: per-request activity would mean reflecting
-  // over their methods, which changes what capnweb serializes back — the
-  // top-level getFetcher/connectSocket line is enough to show the computer's
-  // in use.
   const announce = (method: string, fn: (arg: never) => Promise<unknown>) => {
     return async (arg: never) => {
       const id = (nextId += 1);
@@ -337,31 +383,25 @@ function withActivity(capability: typeof myComputer): typeof myComputer {
       }
     };
   };
-  const wrapped = {} as Record<string, (arg: never) => Promise<unknown>>;
+  // Announce the human actions; pass the addressable origin's fetch/connectSocket
+  // through untouched (announcing every proxied request would flood the log).
+  const wrapped: Record<string, unknown> = { ...capability };
   for (const [method, fn] of Object.entries(capability)) {
-    wrapped[method] = announce(method, fn);
+    if (ANNOUNCED_METHODS.has(method) && typeof fn === "function") {
+      wrapped[method] = announce(method, fn as (arg: never) => Promise<unknown>);
+    }
   }
-  return wrapped as typeof myComputer;
+  return wrapped as MyComputer;
 }
 
 /** A short, human-readable line describing one call — for the app's activity log. */
 function summarizeCall(method: string, arg: unknown): string {
-  const input = (arg ?? {}) as {
-    question?: string;
-    message?: string;
-    code?: string;
-    port?: number;
-    path?: string;
-  };
+  const input = (arg ?? {}) as { question?: string; message?: string; code?: string };
   if (method === "ask") return truncate(input.question ?? "asked a question");
   if (method === "notify") return truncate(input.message ?? "sent a notification");
   if (method === "runSwift") {
     const lines = (input.code ?? "").split("\n").filter((line) => line.trim() !== "").length;
     return `ran ${lines} line${lines === 1 ? "" : "s"} of Swift`;
-  }
-  if (method === "getFetcher") return `lent an HTTP fetcher to localhost:${input.port}`;
-  if (method === "connectSocket") {
-    return `opened a WebSocket to localhost:${input.port}${input.path ?? "/"}`;
   }
   return method;
 }

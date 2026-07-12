@@ -2,25 +2,28 @@ import { expect, test } from "vitest";
 import WebSocket from "ws";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
-// THE DESIRED BEHAVIOR (not yet implemented — see `test.fails` below): a live
-// capability whose `fetch(request)` upgrades WebSockets, provided over Cap'n
-// Web from this vitest process, serves a project app host end to end:
+// TWO boundaries live here.
 //
-//   using _ = await project.provideCapability({
-//     path: ["wsbackend"],
-//     type: "live",
-//     capability: { fetch: myUpgradingFetchHandler },
-//   });
-//   // + an app whose fetch just forwards: itx.wsbackend.fetch(req)
+// 1. THE PIN (passing): a live capability whose `fetch(request)` returns a
+//    socket-carrying Response cannot be forwarded over the RPC path
+//    (`itx.wsbackend.fetch(req)`). Our capnweb fork tunnels the socket across
+//    the Cap'n Web session as a stream pair (websocket-streams.ts), but
+//    materializes a real WebSocket at the session endpoint, and the internal
+//    workerd RPC hops to the app isolate refuse to serialize it
+//    (DataCloneError). That is why the RPC path can never carry an upgrade.
 //
-// What stands in the way (docs/dynamic-worker-dispatch.md): our capnweb fork
-// tunnels the socket across the Cap'n Web session as a stream pair
-// (websocket-streams.ts), but it materializes a real WebSocket at the session
-// endpoint, and the internal workerd RPC hops between there and the app
-// isolate refuse to serialize it. The passing test below pins that exact
-// boundary; the failing test is the specification. When the mesh learns to
-// carry the socket (e.g. by staying in stream-pair form until the fetch-lane
-// exit), the `test.fails` flips and this file is the to-do list.
+// 2. THE SPEC (test.fails): making that SAME RPC forward carry the socket end to
+//    end would need the fork to stay in stream-pair form until the fetch-lane
+//    exit (a capnweb `makeUpgradeResponse` change) — deliberately NOT done, so
+//    it stays a failing specification.
+//
+// The user-facing goal — "a server on the human's machine serves WebSockets to
+// a project" — is met a DIFFERENT, shipped way: address the capability by URL
+// (an `addressable` mount + `fetch("http://<name>.iterate/…")`). The URL rides
+// real fetch() hops and terminates the upgrade at the capability host Durable
+// Object, bridging frames to the provider. That path is proven in
+// live-capability-fetcher.e2e.test.ts. So the RPC boundary below is real and
+// permanent; websockets-to-a-live-capability simply travel by URL, not by RPC.
 
 /** The WebSocket surface the fork's tunnel needs on the provider side
  * (`WebSocketLike` in capnweb's websocket-streams.ts). Node has no
