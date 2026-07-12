@@ -299,6 +299,10 @@ function reportSettlement(offset: number, settlement: Settlement) {
       return prompts.log.warn(
         `Grant appended, but #${offset} has not settled — the egress door may have ignored an unverifiable signature, or the hold already expired.`,
       );
+    case "error":
+      return prompts.log.error(
+        `Couldn't read #${offset}'s outcome (${settlement.message}). The grant may still be settling — check before deciding again.`,
+      );
   }
 }
 
