@@ -25,6 +25,7 @@ import { hostname } from "node:os";
 
 import * as prompts from "@clack/prompts";
 import type { RpcStub } from "capnweb";
+import WebSocket from "ws";
 
 import { connectItx } from "../../../apps/os/src/itx-client.ts";
 import type { ItxAuthCredentials, Project } from "./itx-api.generated.ts";
@@ -65,13 +66,196 @@ const myComputer = {
     // `swift -` reads a whole program from stdin and runs it.
     return await run("swift", ["-"], code);
   },
+
+  /**
+   * Lend a server running on this machine to the project: returns
+   * `{ fetch(request) }` that proxies each request to
+   * `http://127.0.0.1:<port>`. A project worker's homepage can literally be
+   * `return (await itx.myComputer.getFetcher({ port })).fetch(req)` — the
+   * Request rides capability dispatch here, the fetch happens on this Mac,
+   * and the Response rides back. Plain HTTP only: capability dispatch is RPC,
+   * and a socket-carrying Response cannot cross workerd's internal hops
+   * (apps/os/docs/dynamic-worker-dispatch.md) — WebSocket upgrades get a
+   * teaching error pointing at connectSocket.
+   */
+  async getFetcher({ port, host = "127.0.0.1" }: { port: number; host?: string }) {
+    const origin = `http://${host}:${port}`;
+    return {
+      fetch: async (request: Request): Promise<Response> => {
+        if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+          throw new Error(
+            `getFetcher().fetch cannot carry a WebSocket upgrade: the 101 response's socket ` +
+              `cannot cross RPC hops between the platform and this machine. ` +
+              `Terminate the socket in a Durable Object app and bridge frames with ` +
+              `connectSocket({ port, path }) instead.`,
+          );
+        }
+        const incoming = new URL(request.url);
+        // Re-aim at the local server: same path + query, local origin. The
+        // original host arrives as x-forwarded-host (undici refuses a bare
+        // `host` override and drops it silently).
+        const headers = new Headers(request.headers);
+        headers.set("x-forwarded-host", incoming.host);
+        headers.delete("host");
+        const body =
+          request.method === "GET" || request.method === "HEAD"
+            ? undefined
+            : await request.arrayBuffer();
+        const response = await fetch(`${origin}${incoming.pathname}${incoming.search}`, {
+          method: request.method,
+          headers,
+          body,
+          // Pass redirects through untouched so the browser sees them.
+          redirect: "manual",
+        });
+        // undici decompresses bodies but keeps the encoding headers; re-serving
+        // those verbatim corrupts the hop back. Buffer the (now-plain) body and
+        // drop the stale framing headers.
+        const outHeaders = new Headers(response.headers);
+        outHeaders.delete("content-encoding");
+        outHeaders.delete("content-length");
+        outHeaders.delete("transfer-encoding");
+        const nullBody =
+          response.status === 204 || response.status === 205 || response.status === 304;
+        return new Response(nullBody ? null : await response.arrayBuffer(), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: outHeaders,
+        });
+      },
+    };
+  },
+
+  /**
+   * The WebSocket lane getFetcher cannot offer: open a real socket to a server
+   * on this machine and bridge FRAMES over capability dispatch. Returns a
+   * handle — `send(data)` pushes a frame to the local server, `receive()`
+   * long-polls frames coming back (plus a `closed` marker), `close()` hangs
+   * up. If an `onMessage` callback is passed, incoming frames are also pushed
+   * to it live (functions chain through every RPC hop; we dup() them here
+   * because RPC params are released when this call returns).
+   *
+   * A Durable Object app terminates the browser's WebSocket with
+   * WebSocketPair and pumps frames both ways through this handle — that is
+   * how "WebSockets to a server on my Mac" works today, since the socket
+   * itself can never cross the RPC mesh.
+   */
+  async connectSocket({
+    port,
+    path = "/",
+    host = "127.0.0.1",
+    onMessage,
+    onClose,
+  }: {
+    port: number;
+    path?: string;
+    host?: string;
+    onMessage?: (data: string) => unknown;
+    onClose?: (info: { code: number; reason: string }) => unknown;
+  }) {
+    const socket = new WebSocket(`ws://${host}:${port}${path}`);
+    // Callback stubs arrive as RPC params, which are released on return —
+    // dup() keeps them alive for the socket's lifetime (dynamic-worker-dispatch.md).
+    const keptMessage = dupCallback(onMessage);
+    const keptClose = dupCallback(onClose);
+
+    const buffered: string[] = [];
+    let closed: { code: number; reason: string } | undefined;
+    let wake: (() => void) | undefined;
+    const notify = () => {
+      wake?.();
+      wake = undefined;
+    };
+
+    socket.on("message", (data) => {
+      const text = String(data);
+      if (keptMessage) {
+        // Push lane: fire-and-forget; a broken callback must not kill the pump.
+        void Promise.resolve()
+          .then(() => keptMessage(text))
+          .catch(() => {});
+      }
+      buffered.push(text);
+      notify();
+    });
+    socket.on("close", (code, reason) => {
+      closed = { code, reason: String(reason) };
+      if (keptClose) {
+        void Promise.resolve()
+          .then(() => keptClose(closed!))
+          .catch(() => {});
+      }
+      notify();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", () => resolve());
+      socket.once("error", (error) => reject(error));
+    });
+
+    return {
+      /** Push one text frame to the local server. */
+      send: async (data: string) => {
+        if (closed) throw new Error(`socket already closed (${closed.code})`);
+        socket.send(data);
+        return { ok: true as const };
+      },
+      /**
+       * Long-poll the frames received since the last call. Resolves as soon as
+       * at least one frame (or the close) arrives, or with an empty list after
+       * `timeoutMs`. `closed` reports the local server hanging up.
+       */
+      receive: async ({ timeoutMs = 20_000 }: { timeoutMs?: number } = {}) => {
+        if (buffered.length === 0 && !closed) {
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+            setTimeout(resolve, timeoutMs);
+          });
+        }
+        return { frames: buffered.splice(0), closed };
+      },
+      /** Close the local socket. */
+      close: async (input?: { code?: number; reason?: string }) => {
+        socket.close(input?.code ?? 1000, input?.reason ?? "");
+        return { ok: true as const };
+      },
+    };
+  },
 };
+
+/**
+ * Keep a callback stub usable past this RPC's return: capnweb releases params
+ * when the call resolves, so a provider that stores one must dup() it. Plain
+ * local functions (unit tests) have no dup and pass through unchanged.
+ */
+function dupCallback<T extends (...args: never[]) => unknown>(callback: T | undefined) {
+  if (!callback) return undefined;
+  return (callback as unknown as { dup?: () => T }).dup?.() ?? callback;
+}
+
+/**
+ * The exact provideCapability input `iterate use-my-computer` sends — exported
+ * so the e2e suite provides the REAL capability (object, instructions, types)
+ * from its own process and proves the fetcher + socket bridge end to end
+ * (apps/os/e2e/vitest/live-capability-fetcher.e2e.test.ts).
+ */
+export function myComputerProvision(name: string) {
+  return {
+    type: "live" as const,
+    path: [name],
+    capability: myComputer,
+    instructions: INSTRUCTIONS,
+    types: TYPES,
+  };
+}
 
 /** Prose + a type signature so agents (and `__describe()`) know how to call this. */
 const INSTRUCTIONS = `A real person's Mac, shared live from their terminal for as long as \`iterate use-my-computer\` runs.
 - ask({ question, buttons? }) pops a native dialog on their screen and returns { answer } — the button they clicked. Perfect for a quick human yes/no or choice.
 - notify({ message, title? }) shows a desktop notification.
-- runSwift({ code }) runs Swift on their Mac and returns { stdout, stderr, exitCode }. It has full access to their files, GUI and network, so ask before doing anything destructive.`;
+- runSwift({ code }) runs Swift on their Mac and returns { stdout, stderr, exitCode }. It has full access to their files, GUI and network, so ask before doing anything destructive.
+- getFetcher({ port }) lends a server running on their machine: the returned { fetch } proxies each Request to http://127.0.0.1:<port> on their Mac and returns the Response. A worker's fetch handler can forward straight through — e.g. \`return (await itx.myComputer.getFetcher({ port: 3000 })).fetch(req)\` serves their local dev server on a project host. HTTP only; WebSocket upgrades throw a teaching error.
+- connectSocket({ port, path?, onMessage?, onClose? }) opens a real WebSocket to a local server and bridges FRAMES over this capability: the returned handle has send(data), receive({ timeoutMs? }) → { frames, closed? } (long-poll), and close(). Terminate the browser's socket in a Durable Object app and pump frames through this handle — the socket itself can never cross RPC.`;
 
 // A capability `types` string must be a valid TS declaration named `Capability`
 // (the egress/capability host typechecks it before mounting) — not a bare object
@@ -80,6 +264,18 @@ const TYPES = `export type Capability = {
   ask(input: { question: string; buttons?: string[] }): Promise<{ answer: string }>;
   notify(input: { message: string; title?: string }): Promise<{ ok: true }>;
   runSwift(input: { code: string }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  getFetcher(input: { port: number; host?: string }): Promise<{ fetch(request: Request): Promise<Response> }>;
+  connectSocket(input: {
+    port: number;
+    path?: string;
+    host?: string;
+    onMessage?: (data: string) => unknown;
+    onClose?: (info: { code: number; reason: string }) => unknown;
+  }): Promise<{
+    send(data: string): Promise<{ ok: true }>;
+    receive(input?: { timeoutMs?: number }): Promise<{ frames: string[]; closed?: { code: number; reason: string } }>;
+    close(input?: { code?: number; reason?: string }): Promise<{ ok: true }>;
+  }>;
 };`;
 
 /**
@@ -97,7 +293,7 @@ async function askComputerName(): Promise<string> {
     placeholder: proposed,
     defaultValue: proposed,
     validate: (value) =>
-      /^[a-zA-Z][a-zA-Z0-9]*$/.test(value.trim())
+      /^[a-zA-Z][a-zA-Z0-9]*$/.test((value ?? "").trim())
         ? undefined
         : "Use a camelCase name: letters and digits, starting with a letter (e.g. jonasComputer).",
   });
@@ -135,7 +331,8 @@ function agentPrompt(name: string): string {
     "",
     `   By the way, you can use \`itx.${name}\` to interact with ${whose} (${kind}).`,
     `   Call \`itx.${name}.__describe()\` first to learn how it works — it can ask you`,
-    `   questions with native dialogs, send notifications, and run Swift.`,
+    `   questions with native dialogs, send notifications, run Swift, and lend`,
+    `   local servers (getFetcher/connectSocket proxy HTTP and WebSockets to a port).`,
   ].join("\n");
 }
 
@@ -160,13 +357,7 @@ async function connectAndProvide(
     headers: input.headers,
   }) as RpcStub<Project>;
 
-  await itx.provideCapability({
-    type: "live",
-    path: [name],
-    capability,
-    instructions: INSTRUCTIONS,
-    types: TYPES,
-  });
+  await itx.provideCapability({ ...myComputerProvision(name), capability });
   return itx;
 }
 
@@ -232,9 +423,8 @@ export function emitComputerNeedsLogin(): void {
  */
 function withActivity(capability: typeof myComputer): typeof myComputer {
   let nextId = 0;
-  const wrapped = {} as Record<string, (arg: never) => Promise<unknown>>;
-  for (const [method, fn] of Object.entries(capability)) {
-    wrapped[method] = async (arg: never) => {
+  const announce = (method: string, fn: (arg: never) => Promise<unknown>) => {
+    return async (arg: never) => {
       const id = (nextId += 1);
       emitJson({
         type: "call",
@@ -247,7 +437,7 @@ function withActivity(capability: typeof myComputer): typeof myComputer {
       try {
         const result = await fn(arg);
         emitJson({ type: "call-done", id, method, ok: true, ms: Date.now() - startedAt });
-        return result;
+        return wrapHandle(method, result);
       } catch (error) {
         emitJson({
           type: "call-done",
@@ -260,19 +450,57 @@ function withActivity(capability: typeof myComputer): typeof myComputer {
         throw error;
       }
     };
+  };
+  // getFetcher/connectSocket return HANDLES whose methods carry the real
+  // traffic — wrap those one level deep too (as `getFetcher.fetch` etc.), or
+  // the app's activity log goes blind to the busiest lane. `receive` is a
+  // long-poll and would announce a line every ~20s doing nothing: skip it.
+  const wrapHandle = (method: string, result: unknown): unknown => {
+    if (result === null || typeof result !== "object") return result;
+    const entries = Object.entries(result as Record<string, unknown>);
+    if (!entries.some(([, value]) => typeof value === "function")) return result;
+    return Object.fromEntries(
+      entries.map(([key, value]) => [
+        key,
+        typeof value === "function" && key !== "receive"
+          ? announce(`${method}.${key}`, value as (arg: never) => Promise<unknown>)
+          : value,
+      ]),
+    );
+  };
+  const wrapped = {} as Record<string, (arg: never) => Promise<unknown>>;
+  for (const [method, fn] of Object.entries(capability)) {
+    wrapped[method] = announce(method, fn);
   }
   return wrapped as typeof myComputer;
 }
 
 /** A short, human-readable line describing one call — for the app's activity log. */
 function summarizeCall(method: string, arg: unknown): string {
-  const input = (arg ?? {}) as { question?: string; message?: string; code?: string };
+  const input = (arg ?? {}) as {
+    question?: string;
+    message?: string;
+    code?: string;
+    port?: number;
+    path?: string;
+  };
   if (method === "ask") return truncate(input.question ?? "asked a question");
   if (method === "notify") return truncate(input.message ?? "sent a notification");
   if (method === "runSwift") {
     const lines = (input.code ?? "").split("\n").filter((line) => line.trim() !== "").length;
     return `ran ${lines} line${lines === 1 ? "" : "s"} of Swift`;
   }
+  if (method === "getFetcher") return `lent an HTTP fetcher to localhost:${input.port}`;
+  if (method === "getFetcher.fetch") {
+    const request = arg as { method?: string; url?: string } | undefined;
+    const path = request?.url ? new URL(request.url).pathname : "?";
+    return truncate(`${request?.method ?? "GET"} ${path}`);
+  }
+  if (method === "connectSocket") {
+    return `opened a WebSocket to localhost:${input.port}${input.path ?? "/"}`;
+  }
+  if (method === "connectSocket.send") return truncate(`ws → ${String(arg ?? "")}`);
+  if (method === "connectSocket.close") return "closed the WebSocket";
   return method;
 }
 

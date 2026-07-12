@@ -1007,6 +1007,9 @@ importers:
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.16
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       tsdown:
         specifier: 0.22.2
         version: 0.22.2(@typescript/native-preview@7.0.0-dev.20260624.1)(oxc-resolver@11.19.1)(tsx@4.21.0)(typescript@5.9.3)

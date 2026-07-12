@@ -137,6 +137,26 @@ functions chain through every hop; mind that RPC params are released on
 return, so a provider must `dup()` callbacks it keeps — but that pattern is
 deliberately not blessed here: the specification above is the intended shape.
 
+Both halves of that story now have a shipped existence proof in
+`iterate use-my-computer` (packages/iterate/src/use-my-computer.ts), proven
+end to end by `e2e/vitest/live-capability-fetcher.e2e.test.ts`:
+
+- `getFetcher({ port })` is the HTTP half: a live-capability method returning
+  `{ fetch(request) }` that proxies to a server on the provider's machine. A
+  project worker's homepage can be
+  `return (await itx.myComputer.getFetcher({ port })).fetch(req)` — the
+  `Request` copy rides capability dispatch out, the `Response` copy rides
+  back. It refuses upgrade requests with a teaching error instead of letting
+  them die deep in the mesh.
+- `connectSocket({ port, path, onMessage })` is the by-hand frame bridge: the
+  provider opens the real socket locally and hands back a
+  `{ send, receive, close }` handle; a Durable Object app terminates the
+  browser's socket with `WebSocketPair` and pumps frames through the handle.
+  Two findings the e2e pins: callback stubs (`onMessage`) do chain CLI→host→DO
+  and stay live for the socket's lifetime once the provider `dup()`s them, and
+  a Durable Object can keep the handle across events (its I/O context spans
+  the socket's life) — a stateless worker could not.
+
 ## Rules of thumb
 
 - Serving HTTP from a dynamic worker? Implement the class's `fetch` handler —

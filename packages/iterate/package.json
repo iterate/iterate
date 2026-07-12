@@ -74,6 +74,7 @@
     "@iterate-com/ui": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
+    "@types/ws": "^8.18.1",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
     "vitest": "4.0.15"
