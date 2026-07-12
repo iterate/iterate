@@ -15,10 +15,19 @@ describe("LatencyRing", () => {
     expect(new LatencyRing().stats()).toBeNull();
   });
 
-  it("tracks last/lastAt and percentiles over recorded samples", () => {
+  it("tracks last/lastAt and nearest-rank percentiles over recorded samples", () => {
     const ring = new LatencyRing();
     for (const [index, ms] of [10, 20, 30, 40].entries()) ring.record(ms, 1_000 + index);
-    expect(ring.stats()).toEqual({ last: 40, p50: 20, p95: 30, samples: 4, lastAt: 1_003 });
+    // Nearest-rank: p95 over few samples reports the WORST candidate — a
+    // small dashboard ring must not hide its spike.
+    expect(ring.stats()).toEqual({ last: 40, p50: 20, p95: 40, samples: 4, lastAt: 1_003 });
+  });
+
+  it("p95 reports the slower sample even with only two samples", () => {
+    const ring = new LatencyRing();
+    ring.record(10, 1);
+    ring.record(500, 2);
+    expect(ring.stats()).toMatchObject({ p50: 10, p95: 500 });
   });
 
   it("evicts oldest samples past capacity", () => {

@@ -54,6 +54,8 @@ export class SubscriberMetrics {
   #batchesIngested = 0;
   #eventsIngested = 0;
   #clockOffsetMs: number | null = null;
+  /** Highest offset this host has ingested through (see noteBatchIngested). */
+  #ingestedThroughOffset = 0;
   /** Own appends awaiting their loop-back delivery: committed offset + call-start time. */
   #pendingOwnAppends: { offset: number; t0: number }[] = [];
 
@@ -69,6 +71,14 @@ export class SubscriberMetrics {
    */
   noteAppendCommitted(args: { maxCommittedOffset: number; t0: number; atMs: number }): void {
     this.#appendRoundTrip.record(args.atMs - args.t0, args.atMs);
+    // The stream fans out BEFORE the append call returns, so our own
+    // subscription may have ingested the offset already — in that case the
+    // loop closed the moment both halves were done, which is now. Only a
+    // still-unseen offset goes on the pending list.
+    if (args.maxCommittedOffset <= this.#ingestedThroughOffset) {
+      this.#consumeOwnAppend.record(args.atMs - args.t0, args.atMs);
+      return;
+    }
     this.#pendingOwnAppends.push({ offset: args.maxCommittedOffset, t0: args.t0 });
     if (this.#pendingOwnAppends.length > MAX_PENDING_OWN_APPENDS) {
       this.#pendingOwnAppends.splice(0, this.#pendingOwnAppends.length - MAX_PENDING_OWN_APPENDS);
@@ -88,6 +98,7 @@ export class SubscriberMetrics {
   }): void {
     this.#batchesIngested += 1;
     this.#eventsIngested += args.eventCount;
+    this.#ingestedThroughOffset = Math.max(this.#ingestedThroughOffset, args.ingestedThroughOffset);
     this.#ingest.record(args.atMs - args.ingestStartedAtMs, args.atMs);
     if (args.newestEventCreatedAtMs !== undefined && Number.isFinite(args.newestEventCreatedAtMs)) {
       const hostNowOnStreamClock = args.atMs - (this.#clockOffsetMs ?? 0);

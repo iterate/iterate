@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
+import { emptyStreamRuntimeState } from "../streams/test-helpers.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 import { PrAgentProcessor } from "./pr-agent-processor-implementation.ts";
 import {
@@ -113,18 +114,7 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return {
-      coreProcessorState: null,
-      runtime: {
-        connections: {},
-        subscriptions: {},
-        metrics: {
-          measuredSince: new Date(0).toISOString(),
-          ingressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
-          egressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
-        },
-      },
-    };
+    return emptyStreamRuntimeState();
   }
 
   async subscribe(): Promise<never> {

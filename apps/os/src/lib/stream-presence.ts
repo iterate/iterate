@@ -69,15 +69,6 @@ export function sparklinePoints(values: readonly number[], width: number, height
     .join(" ");
 }
 
-/** Human bytes-per-second for the throughput stats ("—" when nothing flowed). */
-export function formatBytesPerSecond(bytesPerMinute: number): string {
-  const perSecond = bytesPerMinute / 60;
-  if (perSecond <= 0) return "0 B/s";
-  if (perSecond < 1024) return `${Math.round(perSecond)} B/s`;
-  if (perSecond < 1024 * 1024) return `${(perSecond / 1024).toFixed(1)} KB/s`;
-  return `${(perSecond / (1024 * 1024)).toFixed(1)} MB/s`;
-}
-
 // ---------------------------------------------------------------------------
 // Presence avatars
 // ---------------------------------------------------------------------------

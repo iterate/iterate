@@ -365,6 +365,7 @@ export function ProjectStreamView({
       onClearClientDatabase={clearClientDatabases}
       getProcessorRuntimeState={getProcessorRuntimeState}
       getStreamRuntimeState={getStreamRuntimeState}
+      streamPath={streamPath}
     />
   );
 

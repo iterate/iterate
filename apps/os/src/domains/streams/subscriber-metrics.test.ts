@@ -70,6 +70,29 @@ describe("SubscriberMetrics", () => {
     expect(metrics.report().consumeOwnAppendMs).toMatchObject({ samples: 2 });
   });
 
+  it("closes the loop immediately when ingest already passed the offset (fan-out beats the append ack)", () => {
+    const metrics = new SubscriberMetrics(T0);
+    // The stream fans out post-commit BEFORE answering the appender: this
+    // host ingests offset 7 before its own append call returns.
+    metrics.noteBatchIngested({
+      ingestedThroughOffset: 7,
+      eventCount: 1,
+      ingestStartedAtMs: T0 + 20,
+      atMs: T0 + 30,
+    });
+    metrics.noteAppendCommitted({ maxCommittedOffset: 7, t0: T0, atMs: T0 + 45 });
+    // Both halves were done at ack time: the sample spans t0 → ack.
+    expect(metrics.report().consumeOwnAppendMs).toMatchObject({ last: 45, samples: 1 });
+    // Nothing left pending to mis-settle against a later unrelated batch.
+    metrics.noteBatchIngested({
+      ingestedThroughOffset: 100,
+      eventCount: 1,
+      ingestStartedAtMs: T0 + 900,
+      atMs: T0 + 901,
+    });
+    expect(metrics.report().consumeOwnAppendMs).toMatchObject({ samples: 1 });
+  });
+
   it("caps pending own-append correlations, dropping oldest first", () => {
     const metrics = new SubscriberMetrics(T0);
     for (let index = 0; index < 20; index += 1) {

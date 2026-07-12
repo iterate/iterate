@@ -82,6 +82,7 @@ const DeliveryExpression = ItxExpression.refine(
 );
 
 export const StreamSubscriptionType = z.enum(["configured", "ephemeral"]);
+/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
 export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
 
 /**
@@ -131,6 +132,7 @@ const SubscriptionDelivery = z.discriminatedUnion("mode", [
   z.strictObject({ mode: z.literal("webhook"), url: z.url({ protocol: /^https?$/ }) }),
 ]);
 
+/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
 export type SubscriptionDelivery = z.infer<typeof SubscriptionDelivery>;
 
 /**
@@ -265,6 +267,7 @@ export const StreamSubscriberDescriptor = z.object({
     .optional(),
 });
 
+/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
 export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescriptor>;
 
 export const StreamSubscriberDisconnectReason = z.enum([

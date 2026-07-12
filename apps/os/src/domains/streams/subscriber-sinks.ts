@@ -34,6 +34,7 @@ import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
+  ProcessorRuntimeState,
   StreamPingInput,
   StreamPingReply,
   StreamPushEventBatch,
@@ -158,20 +159,27 @@ export function retainProcessEventBatch(
   return callback;
 }
 
-/** Retains a hosted processor's live runtime-state capability for the connection lifetime. */
-export function retainGetProcessorRuntimeState(
-  getRuntimeState: GetProcessorRuntimeState | undefined,
-): (GetProcessorRuntimeState & Disposable) | undefined {
-  if (getRuntimeState === undefined) return undefined;
-  const retained = retainCallback<void>(getRuntimeState);
+/**
+ * Retains a request/response capability for a connection lifetime: unlike the
+ * fire-and-forget sink, these calls PULL their results (that's their whole
+ * point) and dispose the result stub after the value lands. One helper for
+ * every such capability so the retain→call→pull→dispose dance exists once.
+ */
+function retainPulledCall<In, Out>(
+  callback: ((input: In) => Out | Promise<Out>) | undefined,
+): (((input: In) => Out | Promise<Out>) & Disposable) | undefined {
+  if (callback === undefined || typeof callback !== "function") return undefined;
+  const retained = retainCallback<In>(callback);
   return Object.assign(
-    () => {
-      const result = retained(undefined) as ReturnType<GetProcessorRuntimeState>;
+    (input: In) => {
+      const result = retained(input);
       if (isThenable(result)) {
-        return Promise.resolve(result).finally(() => disposeIgnoredRpcResult(result));
+        return Promise.resolve(result).finally(() =>
+          disposeIgnoredRpcResult(result),
+        ) as Promise<Out>;
       }
       disposeIgnoredRpcResult(result);
-      return result;
+      return result as Out;
     },
     {
       [Symbol.dispose]() {
@@ -181,34 +189,32 @@ export function retainGetProcessorRuntimeState(
   );
 }
 
+/** Retains a hosted processor's live runtime-state capability for the connection lifetime. */
+export function retainGetProcessorRuntimeState(
+  getRuntimeState: GetProcessorRuntimeState | undefined,
+): (GetProcessorRuntimeState & Disposable) | undefined {
+  const retained = retainPulledCall<void, ProcessorRuntimeState>(getRuntimeState);
+  if (retained === undefined) return undefined;
+  return Object.assign(() => retained(undefined), {
+    [Symbol.dispose]: () => retained[Symbol.dispose](),
+  });
+}
+
 /**
  * Retains a subscriber's ping capability for the connection lifetime (see
- * {@link StreamSubscriberPing} in rpc-types.ts). The call pulls the reply —
- * that's the whole point of a ping — and disposes the result stub after.
+ * {@link StreamSubscriberPing} in rpc-types.ts).
  */
 export function retainSubscriberPing(
   ping: StreamSubscriberPing | undefined,
-): (((input: StreamPingInput) => Promise<StreamPingReply>) & Disposable) | undefined {
-  if (ping === undefined || typeof ping !== "function") return undefined;
-  const retained = retainCallback<StreamPingInput>(ping);
-  return Object.assign(
-    async (input: StreamPingInput) => {
-      const result = retained(input);
-      if (isThenable(result)) {
-        return Promise.resolve(result).finally(() =>
-          disposeIgnoredRpcResult(result),
-        ) as Promise<StreamPingReply>;
-      }
-      disposeIgnoredRpcResult(result);
-      return result as StreamPingReply;
-    },
-    {
-      [Symbol.dispose]() {
-        retained[Symbol.dispose]();
-      },
-    },
-  );
+): RetainedSubscriberPing | undefined {
+  return retainPulledCall<StreamPingInput, StreamPingReply>(ping);
 }
+
+/** A retained ping: callable like the raw capability, disposable with its connection. */
+export type RetainedSubscriberPing = ((
+  input: StreamPingInput,
+) => StreamPingReply | Promise<StreamPingReply>) &
+  Disposable;
 
 // =============================================================================
 // The dial: how the spine reaches subscribers over real transports.

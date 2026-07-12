@@ -467,6 +467,8 @@ describe("subscriber metrics", () => {
     expect(metrics.ingestMs).not.toBeNull();
     expect(metrics.deliveryAgeMs).not.toBeNull();
     expect(metrics.consumeOwnAppendMs).toBeNull(); // no own appends were made
-    expect(metrics.clockOffsetMs).not.toBeNull(); // the ping above fed it
+    // Same clock domain as the stream: the ping answers but deliberately does
+    // NOT record a clock offset (raw t1−t0 would book transport delay as skew).
+    expect(metrics.clockOffsetMs).toBeNull();
   });
 });

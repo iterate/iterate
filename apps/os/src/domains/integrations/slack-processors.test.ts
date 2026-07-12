@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
+import { emptyStreamRuntimeState } from "../streams/test-helpers.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,
@@ -111,18 +112,7 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return {
-      coreProcessorState: null,
-      runtime: {
-        connections: {},
-        subscriptions: {},
-        metrics: {
-          measuredSince: new Date(0).toISOString(),
-          ingressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
-          egressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
-        },
-      },
-    };
+    return emptyStreamRuntimeState();
   }
 
   async subscribe(): Promise<never> {

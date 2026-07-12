@@ -14,17 +14,16 @@ const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
 /**
  * How a domain page lets its stream view send chat messages (agents only).
- * Submit handlers may return the committed event — the composer then feeds
- * the store's consume-own-append metric (real append→observed latency).
+ * Submit handlers return the committed event: the composer feeds its offset
+ * into the store's consume-own-append metric (real append→observed latency),
+ * and requiring the return means a handler cannot silently opt the metric
+ * out by forgetting it.
  */
 export type StreamMessageComposer = {
   placeholder?: string;
   onInterrupt?: (llmRequestOffset: number) => Promise<void>;
-  onSubmit: (message: string) => Promise<StreamEvent | undefined | void>;
-  onSubmitFiles?: (input: {
-    files: File[];
-    message: string;
-  }) => Promise<StreamEvent | undefined | void>;
+  onSubmit: (message: string) => Promise<StreamEvent>;
+  onSubmitFiles?: (input: { files: File[]; message: string }) => Promise<StreamEvent>;
 };
 
 /**
@@ -93,13 +92,17 @@ export function StreamViewComposer({
     const trimmed = messageText.trim();
     if (messageComposer == null) return;
     const { onSubmit, onSubmitFiles } = messageComposer;
+    // Time the whole submit: this is the real consume-own-append t0, and the
+    // committed offset the handler returns is what closes the loop when this
+    // tab's own subscription ingests past it.
+    const measured = async (submit: () => Promise<StreamEvent>) => {
+      const t0 = Date.now();
+      const committed = await submit();
+      store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
+    };
     if (selectedFiles.length > 0 && onSubmitFiles != null) {
       await runSubmit(async () => {
-        const t0 = Date.now();
-        const committed = await onSubmitFiles({ files: selectedFiles, message: trimmed });
-        if (typeof committed?.offset === "number") {
-          store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
-        }
+        await measured(() => onSubmitFiles({ files: selectedFiles, message: trimmed }));
         setMessageText("");
         setSelectedFiles([]);
         setFileError(undefined);
@@ -109,14 +112,7 @@ export function StreamViewComposer({
     }
     if (!trimmed) return;
     await runSubmit(async () => {
-      // Time the whole submit: this is the real consume-own-append t0. The
-      // handler returning the committed event is what closes the loop when
-      // this tab's own subscription ingests past its offset.
-      const t0 = Date.now();
-      const committed = await onSubmit(trimmed);
-      if (typeof committed?.offset === "number") {
-        store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
-      }
+      await measured(() => onSubmit(trimmed));
       setMessageText("");
       onNudgeDeliveries();
     });

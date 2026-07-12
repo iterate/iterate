@@ -53,10 +53,14 @@ export class LatencyRing {
   stats(): LatencyStats | null {
     if (this.#samples.length === 0) return null;
     const sorted = [...this.#samples].sort((a, b) => a - b);
+    // Nearest-rank percentile (ceil(q·n) − 1): with few samples this reports
+    // the WORST candidate rather than the best — a dashboard ring mostly
+    // holds few samples, and a p95 that hides the spike is a lie.
+    const rank = (q: number) => sorted[Math.max(0, Math.ceil(q * sorted.length) - 1)]!;
     return {
       last: this.#last,
-      p50: sorted[Math.floor((sorted.length - 1) * 0.5)]!,
-      p95: sorted[Math.floor((sorted.length - 1) * 0.95)]!,
+      p50: rank(0.5),
+      p95: rank(0.95),
       samples: sorted.length,
       lastAt: this.#lastAt,
     };

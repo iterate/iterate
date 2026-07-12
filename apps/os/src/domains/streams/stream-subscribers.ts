@@ -46,8 +46,6 @@ import type {
   ProcessEventBatch,
   ProcessorRuntimeState,
   StreamEventBatch,
-  StreamPingInput,
-  StreamPingReply,
   StreamPushEventBatch,
   StreamSubscriberPing,
   StreamSubscriberWakeRequest,
@@ -70,6 +68,7 @@ import {
   retainProcessEventBatch,
   retainSubscriberPing,
   type RetainedProcessEventBatch,
+  type RetainedSubscriberPing,
 } from "./subscriber-sinks.ts";
 import { LatencyRing, pingRoundTrip, type LatencyStats } from "./stream-runtime-metrics.ts";
 import {
@@ -162,7 +161,7 @@ type Connection = {
   /** Mutual-ping RTT samples for this connection. */
   readonly pingRtt: LatencyRing;
   /** Retained ping capability; absent for subscribers that supplied none. */
-  ping?: ((input: StreamPingInput) => Promise<StreamPingReply>) & Disposable;
+  ping?: RetainedSubscriberPing;
   getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
   /** Re-arm the delivery pump after events are committed. Idempotent while draining. */
   wake(): void;
@@ -1179,7 +1178,9 @@ export class StreamSubscribers {
       const t0 = this.#hooks.now();
       const work = (async () => {
         try {
-          const reply = await withTimeout(ping({ t0 }), PING_TIMEOUT_MS);
+          const reply = await withDeliveryTimeout(Promise.resolve(ping({ t0 })), "ping", {
+            timeoutMs: PING_TIMEOUT_MS,
+          });
           const t3 = this.#hooks.now();
           if (
             typeof reply?.t1 !== "number" ||
@@ -1337,21 +1338,6 @@ const PING_ROUND_MIN_INTERVAL_MS = 5_000;
 /** Bound on one ping attempt — a reply slower than this isn't a useful RTT sample. */
 const PING_TIMEOUT_MS = 10_000;
 
-/** Plain bounded await for observational calls (no late-resolve bookkeeping needed). */
-async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function withDeliveryTimeout<T>(
   promise: Promise<T>,
   label: string,
@@ -1359,8 +1345,11 @@ async function withDeliveryTimeout<T>(
     /** Runs iff the underlying promise RESOLVES after the timeout already won
      * the race — the caller's chance to dispose late-arriving resources. */
     onLateResolve?: (value: T) => void;
+    /** Override for callers with their own bound (pings); deliveries use the default. */
+    timeoutMs?: number;
   } = {},
 ): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? DELIVERY_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   if (opts.onLateResolve !== undefined) {
@@ -1381,8 +1370,8 @@ async function withDeliveryTimeout<T>(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
-          reject(new Error(`${label} timed out after ${DELIVERY_TIMEOUT_MS}ms`));
-        }, DELIVERY_TIMEOUT_MS);
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
       }),
     ]);
   } finally {

@@ -20,6 +20,26 @@ import {
   type StreamProcessorHost,
 } from "./stream-processor-host.ts";
 
+/**
+ * The empty `runtimeState()` answer every test MemoryStream serves. ONE home
+ * on purpose: a change to the runtime shape becomes a one-line edit here
+ * instead of the same mechanical edit in every test double.
+ */
+export function emptyStreamRuntimeState() {
+  return {
+    coreProcessorState: null,
+    runtime: {
+      connections: {},
+      subscriptions: {},
+      metrics: {
+        measuredSince: new Date(0).toISOString(),
+        ingressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
+        egressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
+      },
+    },
+  };
+}
+
 export class MemoryStream implements Stream {
   events: StreamEvent[] = [];
   /** Injectable clock for createdAt stamps; harnesses point it at virtual time. */
@@ -120,18 +140,7 @@ export class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return {
-      coreProcessorState: null,
-      runtime: {
-        connections: {},
-        subscriptions: {},
-        metrics: {
-          measuredSince: new Date(0).toISOString(),
-          ingressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
-          egressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
-        },
-      },
-    };
+    return emptyStreamRuntimeState();
   }
 
   async subscribe(): Promise<never> {

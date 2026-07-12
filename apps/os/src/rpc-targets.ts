@@ -244,6 +244,11 @@ import type {
   WakeableStreamProcessorRpc,
 } from "./domains/streams/rpc-types.ts";
 import { StreamReceiverUnavailableError } from "./domains/streams/rpc-types.ts";
+import type {
+  ConnectionRuntimeState,
+  SubscriptionRuntimeState,
+} from "./domains/streams/stream-subscribers.ts";
+import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-metrics.ts";
 import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
 import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
@@ -490,62 +495,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
-      connections: Record<
-        string,
-        {
-          subscriptionType: "configured" | "ephemeral";
-          startedAt: string;
-          cursor: number;
-          lag: number;
-          batchesSent: number;
-          eventsSent: number;
-          bytesSent: number;
-          lastDeliveredAt?: string;
-          settleLatencyMs?: {
-            last: number;
-            p50: number;
-            p95: number;
-            samples: number;
-            lastAt: number;
-          };
-          pingRttMs?: { last: number; p50: number; p95: number; samples: number; lastAt: number };
-          subscriber?: unknown;
-          hasPendingDelivery: boolean;
-        }
-      >;
-      subscriptions: Record<
-        string,
-        {
-          mode: "wake" | "push" | "webhook";
-          ackedOffset: number;
-          lag: number;
-          attempt: number;
-          nextAttemptAt: number | null;
-          lastError: string | null;
-          parkedAtOffset: number | null;
-          connected: boolean;
-          bytesSent?: number;
-          settleLatencyMs?: {
-            last: number;
-            p50: number;
-            p95: number;
-            samples: number;
-            lastAt: number;
-          };
-          deliveryDurationMs?: {
-            last: number;
-            p50: number;
-            p95: number;
-            samples: number;
-            lastAt: number;
-          };
-        }
-      >;
-      metrics: {
-        measuredSince: string;
-        ingressLastMinute: { count: number; bytes: number; perSecond: number };
-        egressLastMinute: { count: number; bytes: number; perSecond: number };
-      };
+      connections: Record<string, ConnectionRuntimeState>;
+      subscriptions: Record<string, SubscriptionRuntimeState>;
+      metrics: StreamThroughputMetrics;
     };
   }> {
     return this.durableObjectStub.runtimeState();

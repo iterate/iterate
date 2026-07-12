@@ -13,10 +13,14 @@
 // hosts the processor over a fresh subscription, mirroring the Durable-Object-side
 // stream processor host.
 
-import type { ProcessorRuntimeState, StreamPingInput, SubscriptionKey } from "../../rpc-types.ts";
+import type { ProcessorRuntimeState, SubscriptionKey } from "../../rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "../../schemas.ts";
 import type { Stream } from "../../../../itx-api.generated.ts";
-import { announceContract, type AnyHostedProcessor } from "../../stream-processor-host.ts";
+import {
+  announceContract,
+  hostRuntimeCapabilities,
+  type AnyHostedProcessor,
+} from "../../stream-processor-host.ts";
 import { LatencyRing, type LatencyStats } from "../../stream-runtime-metrics.ts";
 import type { SubscriberMetricsReport } from "../../subscriber-metrics.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
@@ -387,11 +391,27 @@ function createStreamRuntime(
   // self-measured metrics, honestly.
   let currentProcessor: BrowserHostedProcessor | undefined;
 
-  /** Time one RPC into the transport-RTT ring (success only). */
+  /** The one builder for this browser's measured metrics (store API + debug registry). */
+  function readMetrics(): BrowserStreamMetrics {
+    return {
+      transportRttMs: transportRtt.stats(),
+      subscriber: currentProcessor?.subscriberMetrics.report(),
+    };
+  }
+
+  /**
+   * Time one RPC into the transport-RTT ring. Success only — and bounded:
+   * callers race these calls against timeouts, and a call the caller already
+   * abandoned can still resolve much later (a half-open socket healing).
+   * Recording that late duration would poison the ring with a sample the
+   * user never experienced as a success, so anything slower than the
+   * liveness probe's own deadline is treated as a failure, not a sample.
+   */
   function timed<T>(promise: Promise<T>): Promise<T> {
     const t0 = Date.now();
     return promise.then((value) => {
-      transportRtt.record(Date.now() - t0, Date.now());
+      const elapsed = Date.now() - t0;
+      if (elapsed <= LIVENESS_PROBE_TIMEOUT_MS) transportRtt.record(elapsed, Date.now());
       return value;
     });
   }
@@ -836,7 +856,6 @@ function createStreamRuntime(
           sql,
           subscriptionKey,
         });
-        currentProcessor = processor;
         // The checkpoint read goes to the shared db worker; an un-deadlined
         // hang here would park the runtime as a forever-"leader" with no
         // subscription, no probe, and no error.
@@ -893,6 +912,7 @@ function createStreamRuntime(
         }
         lastDeliveredOffset = catchUpOffset;
         return {
+          processor,
           replayAfterOffset: catchUpOffset,
           subscriber: {
             description: "browser",
@@ -900,31 +920,18 @@ function createStreamRuntime(
               announcement: announceContract(processor.contract),
             },
           },
-          // The live capability rides as a SIBLING of the serializable
-          // descriptor — the same position the wake handshake gives it.
-          // Merged host-side (not inside getRuntimeState) so a processor
-          // override with its own `runtime` bag cannot drop the metrics.
-          getRuntimeState: async () => {
-            const state = await processor.getRuntimeState();
-            const metrics = processor.subscriberMetrics?.report();
-            return metrics === undefined
-              ? state
-              : { ...state, runtime: { ...state.runtime, metrics } };
-          },
-          // The mutual ping's responder half: the stream measures its RTT to
-          // this tab, and the observed timestamps (plus half our own measured
-          // RTT as the one-way estimate) give the processor its clock-offset
-          // correction for delivery ages.
-          ping: (input: StreamPingInput) => {
-            const t1 = Date.now();
-            const rtt = transportRtt.stats();
-            processor.subscriberMetrics?.notePingObserved({
-              t0: input.t0,
-              t1,
-              ...(rtt === null ? {} : { oneWayEstimateMs: rtt.p50 / 2 }),
-            });
-            return { t0: input.t0, t1, t2: Date.now() };
-          },
+          // The live capabilities ride as SIBLINGS of the serializable
+          // descriptor — the same position the wake handshake gives them,
+          // built by the same shared helper so the two hosts cannot drift.
+          // Half our measured transport RTT is the one-way estimate that
+          // turns observed pings into the clock-offset correction.
+          ...hostRuntimeCapabilities(processor, {
+            now: () => Date.now(),
+            oneWayEstimateMs: () => {
+              const rtt = transportRtt.stats();
+              return rtt === null ? undefined : rtt.p50 / 2;
+            },
+          }),
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
@@ -934,9 +941,9 @@ function createStreamRuntime(
             ingestWithSelfHeal(processor, batch, election),
         };
       })
-      .then((ready) => {
+      .then(async (ready) => {
         if (ready === undefined || !ownsRuntime()) return undefined;
-        return withDeadline(
+        const handle = await withDeadline(
           "subscribe",
           election.connection.subscribe({
             subscriptionKey,
@@ -947,14 +954,20 @@ function createStreamRuntime(
             ping: ready.ping,
           }),
         );
+        return { handle, processor: ready.processor };
       })
-      .then((handle) => {
-        if (handle === undefined) return;
+      .then((subscribed) => {
+        if (subscribed === undefined) return;
+        const { handle, processor } = subscribed;
         if (!ownsRuntime()) {
           handle.unsubscribe();
           return;
         }
         subscriptionHandle = handle;
+        // Assigned only once the subscription is LIVE: an election that bails
+        // mid-chain must not leave metrics/appendBatch attributing samples to
+        // a processor that never subscribed (Bugbot round 2).
+        currentProcessor = processor;
         snapshot = { ...snapshot, connectionError: undefined, connectionStatus: "subscribed" };
         emitSnapshot();
         startLivenessProbe(election.connection);
@@ -1069,7 +1082,7 @@ function createStreamRuntime(
     // In-flight own-append correlations belong to the dying subscription; the
     // fresh election replays, and a replayed delivery must not close a stale
     // loop with an inflated sample.
-    currentProcessor?.subscriberMetrics?.clearPendingAppends();
+    currentProcessor?.subscriberMetrics.clearPendingAppends();
     currentProcessor = undefined;
     snapshot = { ...snapshot, subscriptionStatus: "idle" };
     if (!disposed) emitSnapshot();
@@ -1346,10 +1359,7 @@ function createStreamRuntime(
     hasConnection: stream !== undefined,
     hasSubscription: subscriptionHandle !== undefined,
     hasHostedProcessor: currentProcessor !== undefined,
-    metrics: {
-      transportRttMs: transportRtt.stats(),
-      subscriber: currentProcessor?.subscriberMetrics?.report() ?? null,
-    },
+    metrics: readMetrics(),
     listeners: listeners.size,
   }));
 
@@ -1460,7 +1470,7 @@ function createStreamRuntime(
               0,
             );
             if (maxCommittedOffset > 0) {
-              currentProcessor?.subscriberMetrics?.noteAppendCommitted({
+              currentProcessor?.subscriberMetrics.noteAppendCommitted({
                 maxCommittedOffset,
                 t0,
                 atMs: Date.now(),
@@ -1485,13 +1495,10 @@ function createStreamRuntime(
         timed(Promise.resolve(rpc.runtimeState() as Promise<StreamServerRuntimeState>)),
       );
     },
-    metrics: () => ({
-      transportRttMs: transportRtt.stats(),
-      subscriber: currentProcessor?.subscriberMetrics?.report(),
-    }),
+    metrics: readMetrics,
     noteExternalAppend({ maxCommittedOffset, t0 }) {
       if (!Number.isFinite(maxCommittedOffset) || maxCommittedOffset <= 0) return;
-      currentProcessor?.subscriberMetrics?.noteAppendCommitted({
+      currentProcessor?.subscriberMetrics.noteAppendCommitted({
         maxCommittedOffset,
         t0,
         atMs: Date.now(),
