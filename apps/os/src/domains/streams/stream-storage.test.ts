@@ -18,7 +18,9 @@ function wrapSqlStorage(
   return {
     exec<T = unknown>(sql: string, ...bindings: (ArrayBuffer | null | number | string)[]) {
       onExec?.(sql, bindings);
-      const isRangeQuery = sql.includes("from events") && sql.includes("order by offset asc");
+      const isRawRowQuery =
+        sql.includes("from events") &&
+        (sql.includes("order by offset asc") || sql.includes("where idempotency_key in"));
       const statement = db.prepare(sql);
       const rows = statement
         .all(
@@ -33,13 +35,13 @@ function wrapSqlStorage(
       ) as SqlStorageValue[][];
       return {
         toArray: () => {
-          if (isRangeQuery && rangeCursor?.forbidToArray === true) {
+          if (isRawRowQuery && rangeCursor?.forbidToArray === true) {
             throw new Error("range query used named-object materialization");
           }
           return rows as T[];
         },
         raw: <U extends SqlStorageValue[]>() => {
-          if (isRangeQuery) rangeCursor?.onRaw();
+          if (isRawRowQuery) rangeCursor?.onRaw();
           return (rawRows as U[])[Symbol.iterator]();
         },
         [Symbol.iterator]: () => (rows as T[])[Symbol.iterator](),
@@ -499,8 +501,36 @@ describe("StreamEventLog.getRange", () => {
     const hits = log.getByIdempotencyKeys(keys);
 
     expect(selects).toEqual([100, 100, 20]);
-    expect([...hits.keys()]).toEqual(committedEvents.map((entry) => entry.idempotencyKey));
-    expect([...hits.values()]).toEqual(committedEvents);
+    expect(hits.size).toBe(committedEvents.length);
+    for (const event of committedEvents) expect(hits.get(event.idempotencyKey)).toEqual(event);
+  });
+
+  it("does not sort batched idempotency hits that callers resolve by key", () => {
+    const db = new DatabaseSync(":memory:");
+    let lookup: { statement: string; bindings: readonly SqlStorageValue[] } | undefined;
+    const log = new StreamEventLog(
+      wrapSqlStorage(db, (statement, bindings) => {
+        if (statement.includes("where idempotency_key in")) lookup = { statement, bindings };
+      }),
+      "/tests/stream",
+    );
+    log.insert([
+      { ...event(1, "selected"), idempotencyKey: "first" },
+      { ...event(2, "selected"), idempotencyKey: "second" },
+    ]);
+
+    expect(log.getByIdempotencyKeys(["second", "first"]).size).toBe(2);
+    expect(lookup).toBeDefined();
+    const plan = db
+      .prepare(`explain query plan ${lookup!.statement}`)
+      .all(
+        ...lookup!.bindings.map((binding) =>
+          binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding,
+        ),
+      )
+      .map((row) => String(row.detail));
+    expect(plan).toContain("SEARCH events USING INDEX events_idempotency_key (idempotency_key=?)");
+    expect(plan.some((detail) => detail.includes("USE TEMP B-TREE"))).toBe(false);
   });
 
   it("materializes batched idempotency hits from positional raw rows", () => {
@@ -568,9 +598,8 @@ describe("StreamEventLog.getRange", () => {
       { offset: 3, is_inline: 1 },
     ]);
     expect(log.getRangeSized({ afterOffset: 0, beforeOffset: 4, limit: 3 })).toEqual(inserted);
-    expect([...log.getByIdempotencyKeys(["small-3", "large-2", "small-1"]).values()]).toEqual(
-      committedEvents,
-    );
+    const hits = log.getByIdempotencyKeys(["small-3", "large-2", "small-1"]);
+    for (const event of committedEvents) expect(hits.get(event.idempotencyKey)).toEqual(event);
   });
 
   it("chunks by UTF-8 bytes when character length remains below the threshold", () => {

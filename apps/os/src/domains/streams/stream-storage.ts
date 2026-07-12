@@ -478,15 +478,13 @@ export class StreamEventLog {
               cast(event_json as text) as eventJson
             from events
             where idempotency_key in (${keys.map(() => "?").join(", ")})
-            order by offset asc
           `,
           ...keys,
         )
         .raw<[number, string, string | null]>()) {
         const [offset, idempotencyKey, eventJson] = row;
         if (eventJson === null) {
-          // Establish insertion order now; replacing this placeholder after
-          // chunk hydration keeps the map in durable offset order.
+          // Reserve the key now so chunk hydration can replace it in place.
           events.set(idempotencyKey, undefined);
           (chunkedRows ??= []).push([offset, idempotencyKey]);
         } else {
