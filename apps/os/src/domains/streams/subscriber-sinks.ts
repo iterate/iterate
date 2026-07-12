@@ -102,9 +102,11 @@ export function retainProcessEventBatch(
 
 const compactProcessorBatch = ({
   events,
+  deliveryThroughOffset,
   streamMaxOffset,
 }: StreamEventBatch): Parameters<ProcessStreamProcessorEventBatch>[0] => ({
   events,
+  deliveryThroughOffset,
   streamMaxOffset,
 });
 

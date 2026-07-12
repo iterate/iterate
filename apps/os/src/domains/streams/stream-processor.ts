@@ -127,7 +127,7 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
     streamMaxOffset: number;
     /**
      * The offset this batch will checkpoint through once all blocking work
-     * completes — the last event offset in the batch, not this event's offset.
+     * completes. Filtered delivery can scan beyond the last delivered event.
      */
     checkpointOffset: number;
   };
@@ -142,7 +142,7 @@ type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
    * (`super.processEventBatch(args)` keeps it running).
    */
   append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
-  /** New events past the checkpoint, in stream order, consumed or not. */
+  /** Newly delivered events past the checkpoint, in stream order. */
   events: readonly StreamEvent[];
   /** The consumed subset of `events`, each with its reduction result. */
   reducedEvents: readonly ReducedEvent<Contract>[];
@@ -173,14 +173,17 @@ export type StreamProcessorRuntimeState<State> = ProcessorRuntimeState<State> & 
   snapshot: StreamProcessorSnapshot<State>;
 };
 
-/** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
- *  when a delivered event matches, and an optional timeout handle to clear on
- *  resolution (so a satisfied waiter never later rejects). */
+/** A pending event-predicate or durable-checkpoint waiter. */
 type EventWaiter = {
-  predicate: (event: StreamEvent) => boolean;
   reject: (error: unknown) => void;
   resolve: () => void;
   timer?: ReturnType<typeof setTimeout>;
+} & ({ predicate: (event: StreamEvent) => boolean } | { offset: number });
+
+type ScannedEventBatch = {
+  events: readonly StreamEvent[];
+  deliveryThroughOffset: number;
+  streamMaxOffset: number;
 };
 
 /**
@@ -317,11 +320,26 @@ export abstract class StreamProcessor<
   }
 
   /**
-   * The host-facing sink. Batches are serialized in memory: a later batch never
-   * starts until the previous one completed or failed. Do not override this —
-   * extend `processEventBatch` instead.
+   * The unfiltered host-facing sink. The checkpoint advances through the last
+   * delivered event. Batches are serialized in memory: a later batch never
+   * starts until the previous one completed or failed. Do not override this.
    */
   async ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void> {
+    return await this.#enqueueIngest({
+      ...args,
+      deliveryThroughOffset: args.events.at(-1)?.offset ?? 0,
+    });
+  }
+
+  /**
+   * Ingests a filtered delivery and checkpoints every offset the stream
+   * actually scanned, including omitted event types and ephemeral rows.
+   */
+  async ingestThrough(args: ScannedEventBatch): Promise<void> {
+    return await this.#enqueueIngest(args);
+  }
+
+  async #enqueueIngest(args: ScannedEventBatch): Promise<void> {
     const next = this.#processing.then(() => this.#ingest(args));
     this.#processing = next.catch(() => undefined);
     return await next;
@@ -339,12 +357,10 @@ export abstract class StreamProcessor<
    * read is guaranteed to see your write.
    *
    * `{ offset }` short-circuits when the checkpoint is already at/past the
-   * offset, otherwise waits for the first delivered event at or beyond it. The
-   * predicate form only observes FUTURE deliveries (it does not scan history).
-   * Keying on the delivered event — not on a state change — matters: the
-   * checkpoint advances for every event including ones `reduce` ignores, so
-   * this resolves even when the matched event produced no state change (where
-   * waiting on `onStateChange` would hang).
+   * offset, otherwise waits for the durable checkpoint to reach it. The
+   * predicate form only observes FUTURE delivered events (it does not scan
+   * history). Keying the offset form on the checkpoint rather than a state
+   * change also covers filtered scans and events that `reduce` ignores.
    *
    * `predicate` runs on every newly delivered event (consumed or not). If it
    * throws, only that waiter rejects. `timeoutMs` bounds the wait: on timeout
@@ -363,14 +379,13 @@ export abstract class StreamProcessor<
     if ("offset" in args) {
       await this.#loadState();
       if (this.#checkpointOffset >= args.offset) return;
-      const { offset, timeoutMs } = args;
-      // No await between the check above and registering the waiter below, so a
-      // batch cannot advance the checkpoint past `offset` in the gap and be missed.
-      return await this.waitUntilEvent({ predicate: (event) => event.offset >= offset, timeoutMs });
     }
-    const { predicate, timeoutMs } = args;
+    const { timeoutMs } = args;
     await new Promise<void>((resolve, reject) => {
-      const waiter: EventWaiter = { predicate, reject, resolve };
+      const waiter: EventWaiter =
+        "offset" in args
+          ? { offset: args.offset, reject, resolve }
+          : { predicate: args.predicate, reject, resolve };
       this.#eventWaiters.add(waiter);
       if (timeoutMs !== undefined) {
         waiter.timer = setTimeout(() => {
@@ -503,9 +518,24 @@ export abstract class StreamProcessor<
     });
   }
 
-  async #ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void> {
+  async #ingest(args: ScannedEventBatch): Promise<void> {
     const ingestStartedAtMs = Date.now();
     await this.#loadState();
+
+    if (
+      !Number.isSafeInteger(args.deliveryThroughOffset) ||
+      args.deliveryThroughOffset < 0 ||
+      args.deliveryThroughOffset > args.streamMaxOffset
+    ) {
+      throw new Error(
+        `Invalid deliveryThroughOffset ${args.deliveryThroughOffset} for stream head ${args.streamMaxOffset}.`,
+      );
+    }
+    if (args.events.some((event) => event.offset > args.deliveryThroughOffset)) {
+      throw new Error(
+        `Delivered event exceeds deliveryThroughOffset ${args.deliveryThroughOffset}.`,
+      );
+    }
 
     const previousState = this.#getState();
     let state = previousState;
@@ -529,7 +559,9 @@ export abstract class StreamProcessor<
       state = reduction.state;
     }
 
-    if (events.length === 0) return;
+    checkpointOffset = Math.max(checkpointOffset, args.deliveryThroughOffset);
+
+    if (checkpointOffset <= this.#checkpointOffset) return;
 
     const blockingWork: Promise<unknown>[] = [];
     try {
@@ -546,7 +578,7 @@ export abstract class StreamProcessor<
         },
         runInBackground: (work) => this.runInBackground(work),
       };
-      await this.processEventBatch(batchArgs);
+      if (events.length > 0) await this.processEventBatch(batchArgs);
       // Reconciliation sees only at-head folds; the final catch-up page
       // qualifies by construction (see the reconcile doc comment).
       if (checkpointOffset >= args.streamMaxOffset) {
@@ -576,7 +608,9 @@ export abstract class StreamProcessor<
     this.#hasLoaded = true;
     // The checkpoint is durable and the state advanced — the batch is
     // genuinely CONSUMED, which is the moment self-measured metrics report.
-    const newestEventCreatedAtMs = Date.parse(events.at(-1)!.createdAt);
+    const newestEventCreatedAt = events.at(-1)?.createdAt;
+    const newestEventCreatedAtMs =
+      newestEventCreatedAt === undefined ? Number.NaN : Date.parse(newestEventCreatedAt);
     this.subscriberMetrics.noteBatchIngested({
       ingestedThroughOffset: checkpointOffset,
       ...(Number.isFinite(newestEventCreatedAtMs) ? { newestEventCreatedAtMs } : {}),
@@ -587,7 +621,7 @@ export abstract class StreamProcessor<
     if (!Object.is(previousState, state)) {
       this.#notifyStateChange({ offset: checkpointOffset, state });
     }
-    this.#resolveEventWaiters(events);
+    this.#resolveEventWaiters(events, checkpointOffset);
 
     // Record skipped unparseable events AFTER the checkpoint commits, in the
     // background: the raw event in the log is the authoritative record and the
@@ -691,14 +725,16 @@ export abstract class StreamProcessor<
     });
   }
 
-  // Settle `waitUntilEvent` waiters whose predicate matches a just-delivered
-  // event. Runs after the durable write + checkpoint advance, so `this.state` is
-  // current when a waiter's promise resolves (the read-your-writes guarantee).
-  #resolveEventWaiters(events: readonly StreamEvent[]): void {
+  // Settle predicate waiters from delivered events and offset waiters from the
+  // durable checkpoint. Runs after the write, preserving read-your-writes.
+  #resolveEventWaiters(events: readonly StreamEvent[], checkpointOffset: number): void {
     for (const waiter of this.#eventWaiters) {
       let matched = false;
       try {
-        matched = events.some(waiter.predicate);
+        matched =
+          "offset" in waiter
+            ? checkpointOffset >= waiter.offset
+            : events.some((event) => waiter.predicate(event));
       } catch (error) {
         this.#eventWaiters.delete(waiter);
         if (waiter.timer !== undefined) clearTimeout(waiter.timer);

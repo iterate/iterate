@@ -1875,7 +1875,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamEventBatch",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Batch delivered to stream processors and live subscribers.\n *\n * Kept named because callback retention, processor hosts, and tests all depend\n * on the same cross-RPC batch envelope.\n */\nexport type StreamEventBatch = {\n  projectId: string | null;\n  path: string;\n  events: StreamEvent[];\n  streamMaxOffset: number;\n  state: unknown;\n};",
+      "/**\n * Batch delivered to stream processors and live subscribers.\n *\n * Kept named because callback retention, processor hosts, and tests all depend\n * on the same cross-RPC batch envelope.\n */\nexport type StreamEventBatch = {\n  projectId: string | null;\n  path: string;\n  events: StreamEvent[];\n  /** Highest contiguous stream offset this delivery scanned through. */\n  deliveryThroughOffset: number;\n  streamMaxOffset: number;\n  state: unknown;\n};",
     summary: "Batch delivered to stream processors and live subscribers.",
     memberSummaries: {},
     referencedTypeNames: ["StreamEvent"],
@@ -1904,7 +1904,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamProcessorEventBatch",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Compact internal batch for a hosted stream processor. The wake handshake\n * already identifies the stream and processor, while the host ingests only\n * events plus the raw stream head. Sending the stream's full reduced state on\n * every durable RPC call duplicated an unused, potentially large object.\n */\nexport type StreamProcessorEventBatch = { events: StreamEvent[]; streamMaxOffset: number };",
+      "/**\n * Compact internal batch for a hosted stream processor. The wake handshake\n * already identifies the stream and processor, while the host ingests only\n * events plus the raw stream head. Sending the stream's full reduced state on\n * every durable RPC call duplicated an unused, potentially large object.\n */\nexport type StreamProcessorEventBatch = {\n  events: StreamEvent[];\n  deliveryThroughOffset: number;\n  streamMaxOffset: number;\n};",
     summary: "Compact internal batch for a hosted stream processor.",
     memberSummaries: {},
     referencedTypeNames: ["StreamEvent"],

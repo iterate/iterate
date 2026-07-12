@@ -122,6 +122,7 @@ describe("retainStreamProcessorEventBatch", () => {
       projectId: "prj_test",
       path: "/agents/test",
       events: [],
+      deliveryThroughOffset: 42,
       streamMaxOffset: 42,
       state: { configuredSubscribersByKey: { large: "unused" } },
     };
@@ -129,6 +130,10 @@ describe("retainStreamProcessorEventBatch", () => {
     sink(fullBatch);
 
     expect(received).toHaveBeenCalledOnce();
-    expect(received).toHaveBeenCalledWith({ events: [], streamMaxOffset: 42 });
+    expect(received).toHaveBeenCalledWith({
+      events: [],
+      deliveryThroughOffset: 42,
+      streamMaxOffset: 42,
+    });
   });
 });

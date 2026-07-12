@@ -1424,7 +1424,13 @@ export class StreamSubscribers {
                 events = selected.matched;
                 deliveredBytes = selected.matchedByteLength ?? missingFilteredByteLength();
               }
-              if (events.length === 0 && !initialBatchPending) continue;
+              if (
+                events.length === 0 &&
+                !initialBatchPending &&
+                subscriptionType !== "configured"
+              ) {
+                continue;
+              }
             }
           } else {
             const stateMaxOffset = currentState.maxOffset;
@@ -1456,6 +1462,7 @@ export class StreamSubscribers {
               projectId: currentState.projectId,
               path: currentState.path,
               events,
+              deliveryThroughOffset: cursor,
               streamMaxOffset: currentState.maxOffset,
               // Read in the same synchronous block as streamMaxOffset, so the
               // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).

@@ -260,9 +260,9 @@ contract announcement. There is no subscribe-back call, so there is no
 handshake race — and no generation fencing, no supersede machinery, no
 host-side idle timer. Failure handling is structural: a rejected batch result
 closes the connection, the spine's watermark shows lag, and the next
-poke-with-backoff replays from the host's checkpoint (`ingest` is internally
-serialized and offset-deduped, so a dying sink overlapping its replacement is
-harmless).
+poke-with-backoff replays from the host's checkpoint (`ingestThrough` is
+internally serialized and checkpoints the stream's contiguous scanned-through
+offset, so a dying sink overlapping its replacement is harmless).
 
 Both sides still hibernate: the stream severs idle durable connections with
 an in-memory timer (never an alarm — the retained stubs it tears down die

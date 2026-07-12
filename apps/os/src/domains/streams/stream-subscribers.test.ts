@@ -1960,7 +1960,12 @@ describe("StreamSubscribers", () => {
 
     h.subscribers.wake();
     await h.settle();
-    expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([1, 3]);
+    expect(
+      batches.map((batch) => ({
+        offsets: batch.events.map((event) => event.offset),
+        deliveryThroughOffset: batch.deliveryThroughOffset,
+      })),
+    ).toEqual([{ offsets: [1, 3], deliveryThroughOffset: 3 }]);
 
     // Ephemeral-only append while connected, delivered through the FRESH TAIL
     // fast path (what the DO's commit hands over — raw, flags included): the
@@ -1969,7 +1974,15 @@ describe("StreamSubscribers", () => {
     h.append(fresh);
     h.subscribers.wake([{ event: fresh, byteLength: 64 }]);
     await h.settle();
-    expect(batches.flatMap((batch) => batch.events).map((event) => event.offset)).toEqual([1, 3]);
+    expect(
+      batches.map((batch) => ({
+        offsets: batch.events.map((event) => event.offset),
+        deliveryThroughOffset: batch.deliveryThroughOffset,
+      })),
+    ).toEqual([
+      { offsets: [1, 3], deliveryThroughOffset: 3 },
+      { offsets: [], deliveryThroughOffset: 4 },
+    ]);
   });
 });
 

@@ -2900,6 +2900,8 @@ export type StreamEventBatch = {
   projectId: string | null;
   path: string;
   events: StreamEvent[];
+  /** Highest contiguous stream offset this delivery scanned through. */
+  deliveryThroughOffset: number;
   streamMaxOffset: number;
   state: unknown;
 };
@@ -2927,7 +2929,11 @@ export type StreamPingReply = { t0: number; t1: number; t2: number };
  * events plus the raw stream head. Sending the stream's full reduced state on
  * every durable RPC call duplicated an unused, potentially large object.
  */
-export type StreamProcessorEventBatch = { events: StreamEvent[]; streamMaxOffset: number };
+export type StreamProcessorEventBatch = {
+  events: StreamEvent[];
+  deliveryThroughOffset: number;
+  streamMaxOffset: number;
+};
 
 /** The policy events an agent is born with, as append inputs. Typed
  * structurally (not against the full event catalog) so the SDK projection

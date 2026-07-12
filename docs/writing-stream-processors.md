@@ -27,12 +27,12 @@ A processor is two halves plus a comparison:
   class calls `reconcile` only for AT-HEAD batches (`checkpointOffset >=
 streamMaxOffset`), so overrides never need their own gate: a mid-catch-up
   fold shows obligations whose outcomes sit in the next page, and acting on
-  it would re-drive real vendor calls. The final catch-up page qualifies by
-  construction; wake-lane push batches are consumes-filtered yet stamped with
-  the raw head, so the host runs a trailing unfiltered catch-up after any
-  behind batch — recovery always gets its pass. (Older processors spell the
-  same thing as a `processEventBatch` override with a hand-written at-head
-  gate; the gate semantics are identical, and they should migrate to
+  it would re-drive real vendor calls. Each wake-lane batch carries the highest
+  contiguous offset the stream scanned, including filtered and ephemeral rows,
+  so the final page checkpoints through the raw head and recovery always gets
+  its reconciliation pass without a second journal read. (Older processors
+  spell the same thing as a `processEventBatch` override with a hand-written
+  at-head gate; the gate semantics are identical, and they should migrate to
   `reconcile` when touched.)
 
 The reference implementations, in reading order:

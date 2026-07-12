@@ -104,6 +104,8 @@ export type StreamEventBatch = {
   projectId: string | null;
   path: string;
   events: StreamEvent[];
+  /** Highest contiguous stream offset this delivery scanned through. */
+  deliveryThroughOffset: number;
   streamMaxOffset: number;
   state: unknown;
 };
@@ -122,7 +124,10 @@ export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
  * events plus the raw stream head. Sending the stream's full reduced state on
  * every durable RPC call duplicated an unused, potentially large object.
  */
-export type StreamProcessorEventBatch = Pick<StreamEventBatch, "events" | "streamMaxOffset">;
+export type StreamProcessorEventBatch = Pick<
+  StreamEventBatch,
+  "events" | "deliveryThroughOffset" | "streamMaxOffset"
+>;
 
 /** Wake-handshake callback consumed by a hosted stream processor. */
 export type ProcessStreamProcessorEventBatch = (batch: StreamProcessorEventBatch) => unknown;

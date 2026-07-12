@@ -67,6 +67,7 @@ class Recorder extends StreamProcessor<RecorderContract> {
 function eventBatch(event: StreamEvent): StreamProcessorEventBatch {
   return {
     events: [event],
+    deliveryThroughOffset: event.offset,
     streamMaxOffset: event.offset,
   };
 }
@@ -81,15 +82,15 @@ describe("wake sink failure fence", () => {
     const attemptedOffsets: number[] = [];
     const successfulOffsets: number[] = [];
     let failOnceAtOffset: number | undefined = 2;
-    const ingest = h.processors.a.ingest.bind(h.processors.a);
-    vi.spyOn(h.processors.a, "ingest").mockImplementation(async (args) => {
+    const ingestThrough = h.processors.a.ingestThrough.bind(h.processors.a);
+    vi.spyOn(h.processors.a, "ingestThrough").mockImplementation(async (args) => {
       const offset = args.events[0]?.offset;
       if (offset !== undefined) attemptedOffsets.push(offset);
       if (offset === failOnceAtOffset) {
         failOnceAtOffset = undefined;
         throw new Error(`injected ingest failure at offset ${offset}`);
       }
-      await ingest(args);
+      await ingestThrough(args);
       if (offset !== undefined) successfulOffsets.push(offset);
     });
     const events = await h.stream.append(
@@ -253,89 +254,32 @@ describe("lost-alarm self-healing", () => {
 });
 
 describe("filtered wake-lane delivery", () => {
-  it("a consumes-filtered batch left behind the head gets a trailing unfiltered catch-up", async () => {
-    // Production's wake lane filters delivered events through the contract's
-    // consumes list but stamps batches with the RAW head. A non-consumed tail
-    // event (a presence fact, another processor's chunk) therefore leaves the
-    // checkpoint legitimately behind streamMaxOffset with no further delivery
-    // coming — and the reconcilers' at-head gate defers on such folds. The
-    // host must converge it: a trailing unfiltered catch-up after the behind
-    // batch. Without it, this is the review-round-2 forever-wedge.
+  it("checkpoints through a filtered tail without a second journal read", async () => {
     const h = createProcessorHostHarness({
       build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
     });
     const [ping] = await h.stream.append({ type: PING, payload: {} });
     await h.stream.append({ type: "events.iterate.com/other/presence-fact", payload: {} });
-
-    const wake = await h.host.wakeStreamSubscriber({
-      stream: { projectId: "prj_test", path: h.stream.path, streamMaxOffset: 2 },
-      subscriptionKey: "wake:recorder-a",
-      processorSlug: "recorder-a",
-    });
-    // The spine's filtered delivery: only the consumed event, raw head as max.
-    await wake.sink({
-      projectId: "prj_test",
-      path: h.stream.path,
-      events: [ping!],
-      streamMaxOffset: 2,
-    } as Parameters<typeof wake.sink>[0]);
-
-    // The trailing catch-up pulls the non-consumed tail; the checkpoint
-    // reaches the true head, so the deferred reconciliation ran at-head.
-    await vi.waitFor(async () => {
-      expect((await h.processors.a.snapshot()).offset).toBe(2);
-    });
-    const lastBatch = h.processors.a.batches.at(-1)!;
-    expect(lastBatch).toContain("events.iterate.com/other/presence-fact");
-  });
-
-  it("a failed trailing pull reads as a FAILURE; the next fire revives and converges", async () => {
-    // The trailing pull is the ONLY delivery owed for a non-consumed tail. If
-    // its failure settled clean, the keepalive would disarm with the
-    // checkpoint stranded behind the at-head gate and no future dial owed —
-    // the zero-lag wedge reborn one layer up. It must poison the quiet-clean
-    // window instead, so the alarm's next fire takes the revival lane, whose
-    // unfiltered catch-up is the pull's retry.
-    const h = createProcessorHostHarness({
-      build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
-    });
-    const [ping] = await h.stream.append({ type: PING, payload: {} });
-    await h.stream.append({ type: "events.iterate.com/other/presence-fact", payload: {} });
-    const wake = await h.host.wakeStreamSubscriber({
-      stream: { projectId: "prj_test", path: h.stream.path, streamMaxOffset: 2 },
-      subscriptionKey: "wake:recorder-a",
-      processorSlug: "recorder-a",
-    });
-
-    // One transient stream-read failure, timed to hit exactly the trailing pull.
-    const readEvents = h.stream.readEvents.bind(h.stream);
-    let readFailures = 0;
-    h.stream.readEvents = (input) => {
-      if (readFailures === 0) {
-        readFailures += 1;
-        throw new Error("transient stream read failure");
-      }
-      return readEvents(input);
+    let reads = 0;
+    h.stream.readEvents = () => {
+      reads += 1;
+      throw new Error("filtered delivery must not pull the journal again");
     };
-    await wake.sink({
-      projectId: "prj_test",
-      path: h.stream.path,
-      events: [ping!],
-      streamMaxOffset: 2,
-    } as Parameters<typeof wake.sink>[0]);
-    await vi.waitFor(() => expect(readFailures).toBe(1));
-    expect((await h.processors.a.snapshot()).offset).toBe(1); // stranded behind head
-    expect(h.store.alarm.at).not.toBeNull();
 
-    await h.advance(60_000);
-    // Not a quiet-clean disarm: the fire revived, and the revival's catch-up
-    // (stream healed) pulled the tail plus its own fact through to head…
-    expect(h.stream.events.some((event) => event.type === PROCESSOR_HOST_REVIVED_EVENT_TYPE)).toBe(
-      true,
-    );
-    expect((await h.processors.a.snapshot()).offset).toBe(3);
-    // …and the confirmation fire then stood the alarm down for good.
-    expect(h.store.alarm.at).toBeNull();
+    const wake = await h.host.wakeStreamSubscriber({
+      stream: { projectId: "prj_test", path: h.stream.path, streamMaxOffset: 2 },
+      subscriptionKey: "wake:recorder-a",
+      processorSlug: "recorder-a",
+    });
+    await wake.sink({
+      events: [ping!],
+      deliveryThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
+
+    await expect(h.processors.a.snapshot()).resolves.toMatchObject({ offset: 2 });
+    expect(h.processors.a.batches.at(-1)).toEqual([PING]);
+    expect(reads).toBe(0);
   });
 });
 
@@ -520,11 +464,10 @@ describe("subscriber metrics", () => {
     expect(reply.t2).toBeGreaterThanOrEqual(reply.t1);
 
     await wake.sink({
-      projectId: "prj_test",
-      path: h.stream.path,
       events: [ping!],
+      deliveryThroughOffset: 1,
       streamMaxOffset: 1,
-    } as Parameters<typeof wake.sink>[0]);
+    });
     await vi.waitFor(async () => {
       expect((await h.processors.a.snapshot()).offset).toBe(1);
     });

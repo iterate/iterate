@@ -165,7 +165,7 @@ State machine (diagram goes in the README):
 subscribe-back race that motivated generation fencing:
 
 ```ts
-// subscriber side (host); processors are untouched — the host wraps ingest
+// subscriber side (host); the host checkpoints the stream's scanned-through offset
 async wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<{
   checkpointOffset: number,                    // from the processor's own snapshot
   sink: (batch: StreamDeliveryBatch) => void,  // ONE plain async function — no RpcTarget subclass,
@@ -176,7 +176,8 @@ async wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<{
 ```
 
 The stream retains the returned sink (ownership transfers with the return value — no dup dance),
-streams one-way batches from `checkpointOffset + 1`, pulls each batch's resolve as the liveness
+streams one-way batches from `checkpointOffset + 1`, and includes the highest contiguous offset
+scanned even when filtering leaves the batch empty. It pulls each batch's resolve as the liveness
 signal (R2), and on rejection: dispose sink → spine sees watermark lag → poke with backoff. Sink
 replacement is unambiguous — the stream initiated the poke and owns both incarnations —so
 `supersedeConnection`, generation fencing, and the trusted-internal `subscribe({configured: true})`

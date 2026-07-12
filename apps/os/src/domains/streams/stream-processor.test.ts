@@ -111,6 +111,69 @@ describe("StreamProcessor.observeStateChanges", () => {
   });
 });
 
+describe("StreamProcessor.ingestThrough", () => {
+  it("durably checkpoints a filtered scan through omitted events and reconciles at head", async () => {
+    nextOffset = 0;
+    const writes: { offset: number; state: { count: number } }[] = [];
+    const reconciledOffsets: number[] = [];
+    class ScannedCounter extends CounterProcessor {
+      protected override async reconcile(
+        args: Parameters<StreamProcessor<typeof CounterContract>["reconcile"]>[0],
+      ): Promise<void> {
+        reconciledOffsets.push(args.checkpointOffset);
+      }
+    }
+    const processor = new ScannedCounter({
+      stream: neverStream,
+      path: "/tests/counter",
+      projectId: null,
+      writeState: (snapshot) => void writes.push(snapshot),
+    });
+    const caughtUp = processor.waitUntilEvent({ offset: 3 });
+    await Promise.resolve();
+
+    await processor.ingestThrough({
+      events: [incrementedEvent(2, 1)],
+      deliveryThroughOffset: 3,
+      streamMaxOffset: 3,
+    });
+
+    await expect(caughtUp).resolves.toBeUndefined();
+    await expect(processor.snapshot()).resolves.toEqual({ offset: 3, state: { count: 2 } });
+    expect(writes).toEqual([{ offset: 3, state: { count: 2 } }]);
+    expect(reconciledOffsets).toEqual([3]);
+
+    await processor.ingestThrough({
+      events: [incrementedEvent(2, 1)],
+      deliveryThroughOffset: 3,
+      streamMaxOffset: 3,
+    });
+    expect(writes).toHaveLength(1);
+    expect(reconciledOffsets).toHaveLength(1);
+  });
+
+  it("keeps a checkpoint-only scan retryable when persistence fails", async () => {
+    let failWrite = true;
+    const processor = new CounterProcessor({
+      stream: neverStream,
+      path: "/tests/counter",
+      projectId: null,
+      writeState: () => {
+        if (failWrite) throw new Error("checkpoint write failed");
+      },
+    });
+
+    await expect(
+      processor.ingestThrough({ events: [], deliveryThroughOffset: 2, streamMaxOffset: 2 }),
+    ).rejects.toThrow("checkpoint write failed");
+    await expect(processor.snapshot()).resolves.toEqual({ offset: 0, state: { count: 0 } });
+
+    failWrite = false;
+    await processor.ingestThrough({ events: [], deliveryThroughOffset: 2, streamMaxOffset: 2 });
+    await expect(processor.snapshot()).resolves.toEqual({ offset: 2, state: { count: 0 } });
+  });
+});
+
 // Streams accept raw appends by design, so a committed event can carry a
 // consumed TYPE with a shape the contract rejects. These tests pin the
 // skip-and-record behavior: the fold advances past the event (no wedged

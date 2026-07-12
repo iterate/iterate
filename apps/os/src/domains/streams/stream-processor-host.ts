@@ -113,6 +113,7 @@ export type AnyHostedProcessor = {
     events: readonly StreamProcessorEventBatch["events"][number][];
     streamMaxOffset: number;
   }): Promise<void>;
+  ingestThrough(args: StreamProcessorEventBatch): Promise<void>;
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
   getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
   /** The current reduced state, synchronously — feeds live-state assembly without an async hop. */
@@ -540,8 +541,9 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       const sink = (batch: StreamProcessorEventBatch) => {
         const attempt = entry.ingestChain.then(() => {
           if (deliveryFailure !== null) throw deliveryFailure.error;
-          return entry.processor.ingest({
+          return entry.processor.ingestThrough({
             events: batch.events,
+            deliveryThroughOffset: batch.deliveryThroughOffset,
             streamMaxOffset: batch.streamMaxOffset,
           });
         });
@@ -557,40 +559,6 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
         // gets this host redialed — the stream-side retry needs the stream
         // DO awake to notice the corpse.
         keepalive.track(attempt);
-        // Wake-lane batches are consumes-FILTERED but stamped with the RAW
-        // stream head, so a delivered batch can leave the checkpoint behind
-        // streamMaxOffset with nothing ever delivering the difference (a
-        // non-consumed tail event — a presence fact — produces no further
-        // push). The reconcilers' at-head gate rightly defers on such folds,
-        // so every behind batch gets a trailing type-unfiltered catch-up: it
-        // checkpoints through the non-consumed DURABLE tail and its final
-        // page reports its own tail as the head, so its reconciliation runs.
-        // One honest hole: an EPHEMERAL tail (a mid-turn chunk run) is
-        // invisible to this pull too — the checkpoint parks below the raw
-        // head and the deferred reconcile waits for the next durable fact.
-        // Every producer pattern ends with one (chunks → output-added;
-        // revival appends `revived`), so the deferral is bounded by design:
-        // reconciliation is guaranteed relative to the DURABLE head, not the
-        // allocator head. Already-at-head batches pay one snapshot read.
-        keepalive.track(
-          attempt.then(
-            async () => {
-              const { offset } = await entry.processor.snapshot();
-              if (offset < batch.streamMaxOffset) {
-                // Rethrown into the tracked promise: a failed trailing pull
-                // leaves the checkpoint behind a head nothing will re-push,
-                // so it must read as a FAILURE to the keepalive — blocking
-                // the quiet-clean disarm and routing the next alarm fire to
-                // revival, whose unfiltered catch-up is this pull's retry.
-                await catchUpInternal(name, { rethrow: true });
-              }
-            },
-            () => {
-              // A failed ingest is the spine's problem (nack → backoff →
-              // redelivery); the trailing pull only follows success.
-            },
-          ),
-        );
         return attempt;
       };
 
