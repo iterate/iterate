@@ -363,6 +363,10 @@ export class StreamSubscribers {
         lastOffset: number | undefined;
       }
     | undefined;
+  /** One immutable SQLite range shared by lanes aligned within this wake. */
+  #storageReadCache:
+    | { afterOffset: number; limit: number; entries: SizedStreamEvent[] }
+    | undefined;
   #configuredSubscribers: ConfiguredSubscribers | undefined;
   #configuredSubscriberEntries: [string, ConfiguredSubscribers[string]][] = [];
 
@@ -377,6 +381,7 @@ export class StreamSubscribers {
    */
   wake(freshTail?: SizedStreamEvent[]): void {
     this.#wakeGeneration += 1;
+    this.#storageReadCache = undefined;
     if (freshTail !== undefined && freshTail.length > 0) {
       this.#freshTail = freshTail;
       this.#freshTailProjection = undefined;
@@ -816,9 +821,17 @@ export class StreamSubscribers {
     }
     const hintedLimit = this.#storageReadLimitHint;
     const storageLimit = Math.min(limit, hintedLimit ?? limit);
+    const cachedStorageRead = this.#storageReadCache;
+    const sourceFromStorageCache =
+      !useFreshTail &&
+      cachedStorageRead !== undefined &&
+      cachedStorageRead.afterOffset === afterOffset &&
+      cachedStorageRead.limit === storageLimit;
     const source = useFreshTail
       ? this.#freshTail
-      : this.#hooks.readEvents({ afterOffset, limit: storageLimit });
+      : sourceFromStorageCache
+        ? cachedStorageRead.entries
+        : this.#hooks.readEvents({ afterOffset, limit: storageLimit });
     const start = useFreshTail ? freshStart : 0;
     const events: StreamEvent[] = [];
     let durable: StreamEvent[] | undefined;
@@ -828,6 +841,7 @@ export class StreamSubscribers {
     let bytes = 0;
     let durableBytes = 0;
     let exceededByteLimit = false;
+    let crossingEntryByteLength = 0;
     const count = Math.min(source.length - start, limit);
     for (let index = 0; index < count; index += 1) {
       const entry = source[start + index]!;
@@ -835,6 +849,7 @@ export class StreamSubscribers {
       const nextBytes = bytes + entryByteLength;
       if (nextBytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) {
         exceededByteLimit = true;
+        crossingEntryByteLength = entryByteLength;
         break;
       }
       events.push(entry.event);
@@ -864,6 +879,17 @@ export class StreamSubscribers {
         this.#storageReadLimitHint = expanded === limit ? undefined : expanded;
       } else if (storageLimit === limit) {
         this.#storageReadLimitHint = undefined;
+      }
+    }
+    if (!useFreshTail && !sourceFromStorageCache) {
+      // Do not pin an initial over-read. Retain at most one complete frame or
+      // the adaptive fit+1 probe (whose crossing row is itself frame-bounded).
+      const boundedCrossing =
+        exceededByteLimit &&
+        source.length === events.length + 1 &&
+        crossingEntryByteLength <= DELIVERY_BATCH_BYTE_LIMIT;
+      if ((!exceededByteLimit && bytes <= DELIVERY_BATCH_BYTE_LIMIT) || boundedCrossing) {
+        this.#storageReadCache = { afterOffset, limit: storageLimit, entries: source };
       }
     }
     const durableEvents = durable ?? events;

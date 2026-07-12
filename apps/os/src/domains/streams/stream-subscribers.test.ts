@@ -1441,7 +1441,37 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(10);
   });
 
-  it("w1b. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
+  it("w1b. aligned backlog lanes share one bounded storage read per wake", async () => {
+    const h = makeHarness();
+    const subscriptionCount = 100;
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      h.configure(pushPayload({ subscriptionKey: `k-${index}` }), 0);
+    }
+    h.append(...Array.from({ length: 10 }, (_, index) => evt(index + 1, "event")));
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.storageReadLimits).toEqual([1000]);
+    expect(h.pushes).toHaveLength(subscriptionCount);
+    expect(h.pushes.every((batch) => batch.events.length === 10)).toBe(true);
+    expect(h.pushes.every((batch) => batch.events.at(-1)?.offset === 10)).toBe(true);
+
+    h.append(evt(11, "event"));
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.storageReadLimits).toEqual([1000, 1000]);
+    expect(h.pushes).toHaveLength(subscriptionCount * 2);
+    expect(h.pushes.slice(subscriptionCount).every((batch) => batch.events[0]?.offset === 11)).toBe(
+      true,
+    );
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      expect(h.row(`k-${index}`)?.ackedOffset).toBe(11);
+    }
+  });
+
+  it("w1c. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
     const h = makeHarness();
     const subscriptionCount = 100;
     for (let index = 0; index < subscriptionCount; index += 1) {
@@ -1482,7 +1512,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1c. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
+  it("w1d. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
     const h = makeHarness();
     const all = makeSink();
     const selected = makeSink();
@@ -1514,7 +1544,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1d. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
+  it("w1e. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
     const fresh = [
