@@ -65,8 +65,9 @@ export function useStreamProcessorStore<State>(input: {
   } = input;
   // `tables` is passed as a literal at every callsite; key the memo on its
   // content. (Even a spurious re-run is safe — acquire dedupes by key — this
-  // just keeps the memo honest.)
-  const tablesKey = tables.join(",");
+  // just keeps the memo honest.) JSON, not join(","): a table name containing
+  // a comma must not silently split into two.
+  const tablesKey = JSON.stringify(tables);
   const store = useMemo(
     () =>
       acquireStreamRuntime({
@@ -76,7 +77,7 @@ export function useStreamProcessorStore<State>(input: {
         streamPath,
         slug,
         schemaVersion,
-        tables: tablesKey === "" ? [] : tablesKey.split(","),
+        tables: JSON.parse(tablesKey) as string[],
         ...(resetOnSchemaVersionChange == null ? {} : { resetOnSchemaVersionChange }),
         createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
           const storage = browserProcessorStateStorage<State>({

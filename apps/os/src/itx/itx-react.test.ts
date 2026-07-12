@@ -246,7 +246,10 @@ describe("useItxSubscription liveness", () => {
     const socketsBefore = FakeWebSocket.instances.length;
     const globalSocket = connectItxBrowser();
 
-    await harness.advance(INTERVAL + PING_TIMEOUT);
+    // TWO ping timeouts: the watchdog holds the same two-strike standard as
+    // the stream runtimes' probes (one slow answer is a busy DO, not a dead
+    // socket — and this lane's recovery drops EVERY socket in the tab).
+    await harness.advance(INTERVAL + PING_TIMEOUT * 2);
     // reconnectAllItx ran: the cached socket promise was dropped, the hook
     // re-suspended, and a FRESH dial started.
     expect(connectItxBrowser()).not.toBe(globalSocket);

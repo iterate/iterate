@@ -168,6 +168,12 @@ function installSocketKillSwitch(page: Page) {
       }
       return mutedUrls;
     };
+    // The registry sheds sockets on their close event, so this counts sockets
+    // that are genuinely still alive — the leak census. Historically each
+    // eviction left one never-closed corpse behind (eviction closed the fresh
+    // successor instead), so the census grew by one per suspend cycle.
+    (window as { __countLiveApiSockets?: () => number }).__countLiveApiSockets = () =>
+      apiSockets().length;
   });
 }
 
@@ -442,4 +448,17 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     }
     await sentRow.waitFor({ timeout: 30_000 });
   });
+
+  // Leak census: the eviction cycle must CLOSE the corpse, not strand it.
+  // The page dials at most two contexts (global + project); anything beyond
+  // that after recovery is a leaked never-closed socket per cycle.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          (window as unknown as { __countLiveApiSockets: () => number }).__countLiveApiSockets(),
+        ),
+      { timeout: 10_000 },
+    )
+    .toBeLessThanOrEqual(2);
 });
