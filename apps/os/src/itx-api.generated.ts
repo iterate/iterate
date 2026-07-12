@@ -1073,24 +1073,23 @@ export interface Stream {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null>;
-  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
+  /**
+   * Live debug view of the stream Durable Object: core processor state, open
+   * connections with real delivery metrics (lag, bytes, commit→settled
+   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the
+   * stream's own throughput windows. All runtime metrics are in-memory and
+   * reset on eviction (`metrics.measuredSince` says how long the window has
+   * been collecting); latency stats fields are absent until a real sample
+   * exists — no value is ever synthesized. Calling this also requests a
+   * throttled mutual-ping round over the live connections (observer-driven
+   * sampling), so a polling debug UI sees RTTs populate.
+   */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
-      connections: Record<string, unknown>;
-      subscriptions: Record<
-        string,
-        {
-          mode: "wake" | "push" | "webhook";
-          ackedOffset: number;
-          lag: number;
-          attempt: number;
-          nextAttemptAt: number | null;
-          lastError: string | null;
-          parkedAtOffset: number | null;
-          connected: boolean;
-        }
-      >;
+      connections: Record<string, ConnectionRuntimeState>;
+      subscriptions: Record<string, SubscriptionRuntimeState>;
+      metrics: StreamThroughputMetrics;
     };
   }>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -1115,6 +1114,13 @@ export interface Stream {
     subscriber?: unknown;
     /** Optional live debug hook, retained for the subscription's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
+    /**
+     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`
+     * in rpc-types.ts), retained for the subscription's lifetime. The stream
+     * pings it — throttled, and only while someone is watching runtimeState —
+     * to measure real transport RTT to this subscriber.
+     */
+    ping?: StreamSubscriberPing;
   }): Promise<StreamSubscriptionHandle>;
   /**
    * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
@@ -1719,6 +1725,8 @@ export type StreamSubscriberWakeResponse = {
   subscriber?: unknown;
   /** Live runtime-state capability, retained for the connection lifetime. */
   getRuntimeState?: GetProcessorRuntimeState;
+  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */
+  ping?: StreamSubscriberPing;
 };
 
 /**
@@ -2407,6 +2415,73 @@ export type ProcessorRuntimeState<State = unknown> = {
   runtime?: Record<string, unknown>;
 };
 
+/** Serializable debug view of one live connection, for `runtimeState()`. */
+export type ConnectionRuntimeState = {
+  subscriptionType: StreamSubscriptionType;
+  startedAt: string;
+  cursor: number;
+  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
+  lag: number;
+  batchesSent: number;
+  eventsSent: number;
+  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
+  bytesSent: number;
+  lastDeliveredAt?: string;
+  /**
+   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
+   * event in a batch → the pulled batch result settling (the subscriber's
+   * ingest resolved). Durable (wake) lane only — ephemeral results are
+   * disposed unpulled, so ephemeral consumption is self-reported by the host
+   * through `getRuntimeState` instead. Absent until a sample exists.
+   */
+  settleLatencyMs?: LatencyStats;
+  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
+  pingRttMs?: LatencyStats;
+  /**
+   * The connect-time identity descriptor. The runtime table is the ONLY home
+   * for ephemeral identity — ephemeral connections don't fold into the
+   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
+   * read who's connected from here.
+   */
+  subscriber?: StreamSubscriberDescriptor;
+  /**
+   * True while the last batch handed to this connection's sink is unsettled —
+   * exactly the signal idle teardown consults to classify a sink as wedged.
+   */
+  hasPendingDelivery: boolean;
+};
+
+/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
+export type SubscriptionRuntimeState = {
+  mode: SubscriptionDelivery["mode"];
+  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
+  ackedOffset: number;
+  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
+  lag: number;
+  attempt: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+  parkedAtOffset: number | null;
+  /** Whether a live delivery connection currently exists (wake mode). */
+  connected: boolean;
+  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
+  bytesSent?: number;
+  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
+  settleLatencyMs?: LatencyStats;
+  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
+  deliveryDurationMs?: LatencyStats;
+};
+
+/** What `runtimeState()` reports for the stream's own throughput. */
+export type StreamThroughputMetrics = {
+  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
+  measuredSince: string;
+  /** Appends committed (all producers). */
+  ingressLastMinute: MinuteWindow;
+  /** Deliveries dispatched (all lanes, all subscribers). */
+  egressLastMinute: MinuteWindow;
+};
+
 /**
  * Callback invoked by the stream pump for each delivered batch.
  *
@@ -2422,6 +2497,15 @@ export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
  * immediately, while RPC-backed processors may need an async round trip.
  */
 export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
+
+/**
+ * Optional ping capability a subscriber hands the stream (ephemeral
+ * `subscribe()` argument or wake-handshake field). Absent on older
+ * subscribers — the stream then simply has no RTT samples for them.
+ */
+export type StreamSubscriberPing = (
+  input: StreamPingInput,
+) => StreamPingReply | Promise<StreamPingReply>;
 
 /**
  * Live subscription handle returned by `Stream.subscribe`.
@@ -2714,6 +2798,54 @@ export type WorkspaceFileInfo = {
   updatedAt: number;
 };
 
+/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
+export type StreamSubscriptionType = "configured" | "ephemeral";
+
+/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
+export type LatencyStats = {
+  /** Most recent sample (ms). */
+  last: number;
+  p50: number;
+  p95: number;
+  /** Samples currently in the ring (caps at the ring size). */
+  samples: number;
+  /** Epoch ms of the most recent sample. */
+  lastAt: number;
+};
+
+/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
+export type StreamSubscriberDescriptor = {
+  description?: string | undefined;
+  processor?:
+    | {
+        announcement: {
+          slug: string;
+          version: string;
+          description: string;
+          consumes: string[];
+          emits: string[];
+          ownedEvents: { type: string; description?: string | undefined }[];
+        };
+      }
+    | undefined;
+};
+
+/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
+export type SubscriptionDelivery =
+  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
+  | { mode: "push"; expression: ItxExpression }
+  | { mode: "webhook"; url: string };
+
+/** One rolling-minute throughput window. */
+export type MinuteWindow = {
+  /** Events in the last 60 seconds. */
+  count: number;
+  /** Payload bytes in the last 60 seconds. */
+  bytes: number;
+  /** `count / 60` — the "events/s over the last minute" number. */
+  perSecond: number;
+};
+
 /**
  * Batch delivered to stream processors and live subscribers.
  *
@@ -2727,6 +2859,23 @@ export type StreamEventBatch = {
   streamMaxOffset: number;
   state: unknown;
 };
+
+/**
+ * The mutual ping's request half (NTP-style, for real latency measurement
+ * between a stream and its subscribers): the requester stamps `t0` on its own
+ * clock and observes `t3` when the reply lands.
+ */
+export type StreamPingInput = { t0: number };
+
+/**
+ * The mutual ping's reply half: the responder echoes `t0` and reports when it
+ * received the request (`t1`) and sent the reply (`t2`) on ITS clock.
+ * `rtt = (t3 - t0) - (t2 - t1)` excludes responder processing time, and
+ * `((t1 - t0) + (t2 - t3)) / 2` estimates the responder−requester clock
+ * offset (see stream-runtime-metrics.pingRoundTrip). Purely observational:
+ * ping failures drop the sample and never affect delivery or liveness.
+ */
+export type StreamPingReply = { t0: number; t1: number; t2: number };
 
 /** The policy events an agent is born with, as append inputs. Typed
  * structurally (not against the full event catalog) so the SDK projection

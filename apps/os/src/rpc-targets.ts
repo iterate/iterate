@@ -237,12 +237,18 @@ import type {
   ProcessorSnapshot,
   StreamEventReadInput,
   StreamProcessorRpc,
+  StreamSubscriberPing,
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
   StreamSubscriptionHandle,
   WakeableStreamProcessorRpc,
 } from "./domains/streams/rpc-types.ts";
 import { StreamReceiverUnavailableError } from "./domains/streams/rpc-types.ts";
+import type {
+  ConnectionRuntimeState,
+  SubscriptionRuntimeState,
+} from "./domains/streams/stream-subscribers.ts";
+import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-metrics.ts";
 import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
 import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
@@ -475,24 +481,23 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return this.durableObjectStub.getProcessorRuntimeState(args);
   }
 
-  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
+  /**
+   * Live debug view of the stream Durable Object: core processor state, open
+   * connections with real delivery metrics (lag, bytes, commit→settled
+   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the
+   * stream's own throughput windows. All runtime metrics are in-memory and
+   * reset on eviction (`metrics.measuredSince` says how long the window has
+   * been collecting); latency stats fields are absent until a real sample
+   * exists — no value is ever synthesized. Calling this also requests a
+   * throttled mutual-ping round over the live connections (observer-driven
+   * sampling), so a polling debug UI sees RTTs populate.
+   */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
-      connections: Record<string, unknown>;
-      subscriptions: Record<
-        string,
-        {
-          mode: "wake" | "push" | "webhook";
-          ackedOffset: number;
-          lag: number;
-          attempt: number;
-          nextAttemptAt: number | null;
-          lastError: string | null;
-          parkedAtOffset: number | null;
-          connected: boolean;
-        }
-      >;
+      connections: Record<string, ConnectionRuntimeState>;
+      subscriptions: Record<string, SubscriptionRuntimeState>;
+      metrics: StreamThroughputMetrics;
     };
   }> {
     return this.durableObjectStub.runtimeState();
@@ -523,6 +528,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     subscriber?: unknown;
     /** Optional live debug hook, retained for the subscription's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
+    /**
+     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`
+     * in rpc-types.ts), retained for the subscription's lifetime. The stream
+     * pings it — throttled, and only while someone is watching runtimeState —
+     * to measure real transport RTT to this subscriber.
+     */
+    ping?: StreamSubscriberPing;
   }): Promise<StreamSubscriptionHandle> {
     // The zero-return-frame wire guarantee, relay leg. The Stream DO retains
     // and invokes the delivery callback over Workers RPC, and Workers RPC

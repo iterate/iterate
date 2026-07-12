@@ -22,6 +22,16 @@
 // `-resumed` events). The spine triggers on watermark lag — never on event
 // types — so facts stay data, not control flow.
 //
+// Runtime metrics: every connection carries real counters (events/bytes
+// delivered, lag from cursor), the durable lanes record commit→settled
+// latency on the stream's own clock (wake: the pulled result settling; push/
+// webhook: the awaited ack), and subscribers that hand over a ping capability
+// get NTP-style RTT sampled — observer-driven via runtimeState(), throttled,
+// and purely observational (a failed ping drops the sample, nothing else).
+// Ephemeral consumption is deliberately NOT measured here: those results stay
+// unpulled (zero return frames), and the consuming host self-reports through
+// its getRuntimeState capability instead (see subscriber-metrics.ts).
+//
 // This module is transport-free, clock-free, and randomness-free: everything
 // it touches arrives through `StreamSubscribersHooks` (storage, log reads, the
 // dial, time, backoff jitter, the alarm), so the whole state machine runs in
@@ -37,6 +47,7 @@ import type {
   ProcessorRuntimeState,
   StreamEventBatch,
   StreamPushEventBatch,
+  StreamSubscriberPing,
   StreamSubscriberWakeRequest,
   StreamWebhookDelivery,
 } from "./rpc-types.ts";
@@ -55,8 +66,11 @@ import type { SizedStreamEvent, SubscriptionCursorStore } from "./stream-storage
 import {
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
+  retainSubscriberPing,
   type RetainedProcessEventBatch,
+  type RetainedSubscriberPing,
 } from "./subscriber-sinks.ts";
+import { LatencyRing, pingRoundTrip, type LatencyStats } from "./stream-runtime-metrics.ts";
 import {
   computeBackoffMs,
   deliveryId,
@@ -74,9 +88,23 @@ export type ConnectionRuntimeState = {
   subscriptionType: StreamSubscriptionType;
   startedAt: string;
   cursor: number;
+  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
+  lag: number;
   batchesSent: number;
   eventsSent: number;
+  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
+  bytesSent: number;
   lastDeliveredAt?: string;
+  /**
+   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
+   * event in a batch → the pulled batch result settling (the subscriber's
+   * ingest resolved). Durable (wake) lane only — ephemeral results are
+   * disposed unpulled, so ephemeral consumption is self-reported by the host
+   * through `getRuntimeState` instead. Absent until a sample exists.
+   */
+  settleLatencyMs?: LatencyStats;
+  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
+  pingRttMs?: LatencyStats;
   /**
    * The connect-time identity descriptor. The runtime table is the ONLY home
    * for ephemeral identity — ephemeral connections don't fold into the
@@ -104,6 +132,12 @@ export type SubscriptionRuntimeState = {
   parkedAtOffset: number | null;
   /** Whether a live delivery connection currently exists (wake mode). */
   connected: boolean;
+  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
+  bytesSent?: number;
+  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
+  settleLatencyMs?: LatencyStats;
+  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
+  deliveryDurationMs?: LatencyStats;
 };
 
 /**
@@ -120,7 +154,14 @@ type Connection = {
   readonly cursor: number;
   batchesSent: number;
   eventsSent: number;
+  bytesSent: number;
   lastDeliveredAt?: string;
+  /** Wake-lane commit→settle samples (see {@link ConnectionRuntimeState.settleLatencyMs}). */
+  readonly settleLatency: LatencyRing;
+  /** Mutual-ping RTT samples for this connection. */
+  readonly pingRtt: LatencyRing;
+  /** Retained ping capability; absent for subscribers that supplied none. */
+  ping?: RetainedSubscriberPing;
   getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
   /** Re-arm the delivery pump after events are committed. Idempotent while draining. */
   wake(): void;
@@ -146,6 +187,8 @@ type OpenConnectionArgs = {
   presence?: StreamSubscriberDescriptor;
   /** Live processor runtime-state capability, retained for the connection lifetime. */
   getRuntimeState?: GetProcessorRuntimeState;
+  /** Subscriber's ping capability, retained for the connection lifetime. */
+  ping?: StreamSubscriberPing;
 };
 
 /**
@@ -165,6 +208,7 @@ export type SubscriberDial = {
     sink: RetainedProcessEventBatch;
     subscriber?: unknown;
     getRuntimeState?: GetProcessorRuntimeState;
+    ping?: StreamSubscriberPing;
   }>;
   /** Evaluate the expression to a sink and invoke it with the batch. Resolve = ack. */
   push(expression: ItxExpression, batch: StreamPushEventBatch): Promise<void>;
@@ -192,6 +236,11 @@ type StreamSubscribersHooks = {
    * append can fail, and that must never mask the close itself.
    */
   appendFact(event: StreamEventInput): void;
+  /**
+   * Delivery-throughput accounting: called once per dispatched delivery with
+   * the event count and serialized payload bytes it carried (all lanes).
+   */
+  recordEgress(count: number, bytes: number): void;
   /** Injected clock (epoch ms). */
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
@@ -236,6 +285,18 @@ export class StreamSubscribers {
   readonly #batchLimits = new Map<string, number>();
   /** Consecutive poison skips per key (no intervening success) — see MAX_CONSECUTIVE_SKIPS. */
   readonly #consecutiveSkips = new Map<string, number>();
+  /**
+   * Per-subscription delivery metrics for the stream-owned-cursor lanes
+   * (push/webhook): the awaited call IS the ack, so the stream is the only
+   * observer of these subscribers' consumption. In-memory like every other
+   * runtime metric; cleaned up with the subscription.
+   */
+  readonly #subscriptionMetrics = new Map<
+    string,
+    { settleLatency: LatencyRing; deliveryDuration: LatencyRing; bytesSent: number }
+  >();
+  /** Last mutual-ping round start — throttles observer-driven sampling. Null until the first round. */
+  #lastPingRoundAtMs: number | null = null;
 
   constructor(args: { idleTeardownMs: number; hooks: StreamSubscribersHooks }) {
     this.#hooks = args.hooks;
@@ -295,6 +356,7 @@ export class StreamSubscribers {
     events?: boolean;
     presence?: StreamSubscriberDescriptor;
     getRuntimeState?: GetProcessorRuntimeState;
+    ping?: StreamSubscriberPing;
   }): Connection {
     return this.#open({
       subscriptionKey: args.subscriptionKey,
@@ -309,6 +371,7 @@ export class StreamSubscribers {
       events: args.events,
       presence: args.presence,
       getRuntimeState: args.getRuntimeState,
+      ping: args.ping,
     });
   }
 
@@ -434,6 +497,7 @@ export class StreamSubscribers {
               : compileEventSelector({ eventTypes: [...consumes] }),
           presence,
           getRuntimeState: response.getRuntimeState,
+          ping: response.ping,
         });
         // Observational watermark: the subscriber confirmed this checkpoint.
         // While the connection streams, the watermark deliberately goes stale;
@@ -496,14 +560,19 @@ export class StreamSubscribers {
                   this.#batchLimits.get(subscriptionKey) ?? DELIVERY_BATCH_LIMIT,
                   DELIVERY_BATCH_LIMIT,
                 );
-          const events = this.#readBatch(row.ackedOffset, limit);
-          const lastOffset = events.at(-1)?.offset;
+          const sized = this.#readBatch(row.ackedOffset, limit);
+          const lastOffset = sized.at(-1)?.event.offset;
           if (lastOffset === undefined) return; // caught up
+          const byteLengthByOffset = new Map(
+            sized.map((entry) => [entry.event.offset, entry.byteLength]),
+          );
 
           // Ephemeral events never reach durable receivers — platform law,
           // enforced as the same skip-not-defer shape selectors use: the raw
           // read advances the cursor over their offsets, delivery drops them.
-          const durable = events.filter((event) => event.ephemeral !== true);
+          const durable = sized
+            .filter((entry) => entry.event.ephemeral !== true)
+            .map((entry) => entry.event);
           const { matched, conditionErrors } = this.#applySelector(
             subscriptionKey,
             config,
@@ -527,6 +596,14 @@ export class StreamSubscribers {
             payload: entry.latestConfiguredEvent.payload,
           };
 
+          const deliveredBytes = matched.reduce(
+            (sum, event) => sum + (byteLengthByOffset.get(event.offset) ?? 0),
+            0,
+          );
+          // Dispatch-time accounting: retries re-send real bytes, so failed
+          // attempts count too (the wire carried them either way).
+          const dispatchAtMs = this.#hooks.now();
+          this.#hooks.recordEgress(matched.length, deliveredBytes);
           try {
             if (config.delivery.mode === "webhook") {
               if (state.projectId === null) return; // unreachable: rejected at append (egress attribution)
@@ -569,6 +646,18 @@ export class StreamSubscribers {
             }
             return;
           }
+          // The awaited resolve above IS this lane's consumption ack — record
+          // both the call duration (transport+receiver latency) and the
+          // commit→acked age of the newest delivered event, all on the
+          // stream's own clock.
+          const settledAtMs = this.#hooks.now();
+          const subscriptionMetrics = this.#subscriptionMetricsFor(subscriptionKey);
+          subscriptionMetrics.deliveryDuration.record(settledAtMs - dispatchAtMs, settledAtMs);
+          const newestCreatedAtMs = Date.parse(matched.at(-1)!.createdAt);
+          if (Number.isFinite(newestCreatedAtMs)) {
+            subscriptionMetrics.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
+          }
+          subscriptionMetrics.bytesSent += deliveredBytes;
           // Fenced on the epoch read above: a seek (cursor-set, replacement
           // deliver, remove+recreate) that landed while this delivery was in
           // flight bumped the epoch, and this ack no-ops instead of
@@ -596,22 +685,22 @@ export class StreamSubscribers {
    * committed objects are byte-for-byte what a read-back would parse (append
    * strict-parses the body and stamps `path` before commit).
    */
-  #readBatch(afterOffset: number, limit: number): StreamEvent[] {
+  #readBatch(afterOffset: number, limit: number): SizedStreamEvent[] {
     const sized =
       this.#freshTail[0]?.event.offset === afterOffset + 1
         ? this.#freshTail.length > limit
           ? this.#freshTail.slice(0, limit)
           : this.#freshTail
         : this.#hooks.readEvents({ afterOffset, limit });
-    if (sized.length <= 1) return sized.map((entry) => entry.event);
+    if (sized.length <= 1) return sized;
     let bytes = 0;
     for (let index = 0; index < sized.length; index += 1) {
       bytes += sized[index]!.byteLength;
       if (bytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) {
-        return sized.slice(0, index).map((entry) => entry.event);
+        return sized.slice(0, index);
       }
     }
-    return sized.map((entry) => entry.event);
+    return sized;
   }
 
   /**
@@ -827,6 +916,20 @@ export class StreamSubscribers {
     this.#connections.get(subscriptionKey)?.close("subscription-removed");
     this.#batchLimits.delete(subscriptionKey);
     this.#consecutiveSkips.delete(subscriptionKey);
+    this.#subscriptionMetrics.delete(subscriptionKey);
+  }
+
+  #subscriptionMetricsFor(subscriptionKey: string) {
+    let metrics = this.#subscriptionMetrics.get(subscriptionKey);
+    if (metrics === undefined) {
+      metrics = {
+        settleLatency: new LatencyRing(),
+        deliveryDuration: new LatencyRing(),
+        bytesSent: 0,
+      };
+      this.#subscriptionMetrics.set(subscriptionKey, metrics);
+    }
+    return metrics;
   }
 
   /** A `subscription-cursor-set` fact committed: the audited seek. */
@@ -878,12 +981,13 @@ export class StreamSubscribers {
       try {
         while (open) {
           let events: StreamEvent[] = [];
+          let deliveredBytes = 0;
           if (deliverEvents) {
             // Same byte-capped read as the push drain: a batch of near-2MB
             // events in one live frame would blow the RPC frame limit and turn
             // into a delivery failure the subscriber can never get past.
             const readEvents = this.#readBatch(cursor, DELIVERY_BATCH_LIMIT);
-            const lastOffset = readEvents.at(-1)?.offset;
+            const lastOffset = readEvents.at(-1)?.event.offset;
             if (lastOffset === undefined) {
               // Caught up; the next append wakes us again. The first drain
               // still owes the initial state batch.
@@ -897,12 +1001,14 @@ export class StreamSubscribers {
               // replay.
               const visible =
                 subscriptionType === "configured"
-                  ? readEvents.filter((event) => event.ephemeral !== true)
+                  ? readEvents.filter((entry) => entry.event.ephemeral !== true)
                   : readEvents;
-              events =
+              const delivered =
                 args.selector === undefined
                   ? visible
-                  : visible.filter((event) => selectorMatchesSafely(args.selector!, event));
+                  : visible.filter((entry) => selectorMatchesSafely(args.selector!, entry.event));
+              events = delivered.map((entry) => entry.event);
+              deliveredBytes = delivered.reduce((sum, entry) => sum + entry.byteLength, 0);
               if (events.length === 0 && !initialBatchPending) continue;
             }
           } else {
@@ -913,22 +1019,41 @@ export class StreamSubscribers {
           initialBatchPending = false;
           connection.batchesSent += 1;
           connection.eventsSent += events.length;
+          connection.bytesSent += deliveredBytes;
           connection.lastDeliveredAt = new Date(this.#hooks.now()).toISOString();
+          this.#hooks.recordEgress(events.length, deliveredBytes);
           const currentState = this.#hooks.coreState();
           if (currentState.projectId === undefined || currentState.path === undefined) {
             throw new Error(
               "Cannot deliver stream batch before stream coordinates are initialized.",
             );
           }
-          sink({
-            projectId: currentState.projectId,
-            path: currentState.path,
-            events,
-            streamMaxOffset: currentState.maxOffset,
-            // Read in the same synchronous block as streamMaxOffset, so the
-            // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
-            state: currentState,
-          } satisfies StreamEventBatch);
+          // Wake-lane batches have their results pulled anyway (corpse
+          // detection), so the settle doubles as a free commit→consumed
+          // sample on the stream's own clock. Ephemeral results stay
+          // unpulled: no onSettled ever fires there (see subscriber-sinks.ts).
+          const newestCreatedAtMs =
+            events.length === 0 ? undefined : Date.parse(events.at(-1)!.createdAt);
+          sink(
+            {
+              projectId: currentState.projectId,
+              path: currentState.path,
+              events,
+              streamMaxOffset: currentState.maxOffset,
+              // Read in the same synchronous block as streamMaxOffset, so the
+              // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
+              state: currentState,
+            } satisfies StreamEventBatch,
+            newestCreatedAtMs === undefined || !Number.isFinite(newestCreatedAtMs)
+              ? undefined
+              : {
+                  onSettled: (outcome) => {
+                    if (outcome !== "ok") return;
+                    const settledAtMs = this.#hooks.now();
+                    connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
+                  },
+                },
+          );
           await Promise.resolve();
         }
       } finally {
@@ -941,11 +1066,15 @@ export class StreamSubscribers {
       startedAt: new Date(this.#hooks.now()).toISOString(),
       ...(args.presence === undefined ? {} : { subscriber: args.presence }),
       getProcessorRuntimeState: retainGetProcessorRuntimeState(args.getRuntimeState),
+      ping: retainSubscriberPing(args.ping),
       get cursor() {
         return cursor;
       },
       batchesSent: 0,
       eventsSent: 0,
+      bytesSent: 0,
+      settleLatency: new LatencyRing(),
+      pingRtt: new LatencyRing(),
       wake: () => void pump(),
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
@@ -955,6 +1084,9 @@ export class StreamSubscribers {
         if (this.#connections.get(subscriptionKey) === connection) {
           this.#connections.delete(subscriptionKey);
         }
+        // The ping stub proxies through the same chain the sink retains
+        // (wake lane), so it releases before the sink tears that chain down.
+        connection.ping?.[Symbol.dispose]();
         sink[Symbol.dispose]();
         connection.getProcessorRuntimeState?.[Symbol.dispose]();
         this.#hooks.appendFact({
@@ -1023,21 +1155,77 @@ export class StreamSubscribers {
     return (await connection?.getProcessorRuntimeState?.()) ?? null;
   }
 
+  /**
+   * One throttled mutual-ping round over every live connection that supplied
+   * a ping capability. Observer-driven: `runtimeState()` triggers it, so RTT
+   * sampling runs only while something is reading runtime state — the debug
+   * panel's poll, or a live browser tab's ~10s liveness probe. A stream with
+   * no browser attached and no debug observer is never pinged. Purely
+   * observational: a failed/garbage/slow ping drops the sample and NOTHING
+   * else (liveness stays owned by result-pulling and onRpcBroken); it never
+   * wakes pumps and never re-arms the idle timer.
+   */
+  samplePingsSoon(): void {
+    const now = this.#hooks.now();
+    if (
+      this.#lastPingRoundAtMs !== null &&
+      now - this.#lastPingRoundAtMs < PING_ROUND_MIN_INTERVAL_MS
+    ) {
+      return;
+    }
+    this.#lastPingRoundAtMs = now;
+    for (const connection of this.#connections.values()) {
+      const ping = connection.ping;
+      if (ping === undefined) continue;
+      const t0 = this.#hooks.now();
+      const work = (async () => {
+        try {
+          const reply = await withDeliveryTimeout(Promise.resolve(ping({ t0 })), "ping", {
+            timeoutMs: PING_TIMEOUT_MS,
+          });
+          const t3 = this.#hooks.now();
+          if (
+            typeof reply?.t1 !== "number" ||
+            typeof reply.t2 !== "number" ||
+            !Number.isFinite(reply.t1) ||
+            !Number.isFinite(reply.t2)
+          ) {
+            return; // a subscriber that answers garbage just has no RTT data
+          }
+          const { rttMs } = pingRoundTrip({ t0, t1: reply.t1, t2: reply.t2 }, t3);
+          if (connection.isLive()) connection.pingRtt.record(rttMs, t3);
+        } catch {
+          // Drop the sample; the delivery machinery owns liveness verdicts.
+        }
+      })();
+      this.#hooks.keepAlive(work);
+    }
+  }
+
   connectionRuntimeState(): Record<string, ConnectionRuntimeState> {
+    const maxOffset = this.#hooks.coreState().maxOffset;
     return Object.fromEntries(
-      [...this.#connections].map(([subscriptionKey, connection]) => [
-        subscriptionKey,
-        {
-          subscriptionType: connection.subscriptionType,
-          startedAt: connection.startedAt,
-          cursor: connection.cursor,
-          batchesSent: connection.batchesSent,
-          eventsSent: connection.eventsSent,
-          lastDeliveredAt: connection.lastDeliveredAt,
-          hasPendingDelivery: connection.hasPendingDelivery(),
-          ...(connection.subscriber === undefined ? {} : { subscriber: connection.subscriber }),
-        },
-      ]),
+      [...this.#connections].map(([subscriptionKey, connection]) => {
+        const settleLatencyMs = connection.settleLatency.stats();
+        const pingRttMs = connection.pingRtt.stats();
+        return [
+          subscriptionKey,
+          {
+            subscriptionType: connection.subscriptionType,
+            startedAt: connection.startedAt,
+            cursor: connection.cursor,
+            lag: Math.max(0, maxOffset - connection.cursor),
+            batchesSent: connection.batchesSent,
+            eventsSent: connection.eventsSent,
+            bytesSent: connection.bytesSent,
+            lastDeliveredAt: connection.lastDeliveredAt,
+            hasPendingDelivery: connection.hasPendingDelivery(),
+            ...(settleLatencyMs === null ? {} : { settleLatencyMs }),
+            ...(pingRttMs === null ? {} : { pingRttMs }),
+            ...(connection.subscriber === undefined ? {} : { subscriber: connection.subscriber }),
+          },
+        ];
+      }),
     );
   }
 
@@ -1048,6 +1236,9 @@ export class StreamSubscribers {
       Object.entries(state.configuredSubscribersByKey).map(([subscriptionKey, entry]) => {
         const row = rows.get(subscriptionKey);
         const ackedOffset = row?.ackedOffset ?? 0;
+        const metrics = this.#subscriptionMetrics.get(subscriptionKey);
+        const settleLatencyMs = metrics?.settleLatency.stats() ?? null;
+        const deliveryDurationMs = metrics?.deliveryDuration.stats() ?? null;
         return [
           subscriptionKey,
           {
@@ -1059,6 +1250,9 @@ export class StreamSubscribers {
             lastError: row?.lastError ?? null,
             parkedAtOffset: entry.parkedAtOffset ?? null,
             connected: this.#connections.has(subscriptionKey),
+            ...(metrics === undefined ? {} : { bytesSent: metrics.bytesSent }),
+            ...(settleLatencyMs === null ? {} : { settleLatencyMs }),
+            ...(deliveryDurationMs === null ? {} : { deliveryDurationMs }),
           },
         ];
       }),
@@ -1137,6 +1331,15 @@ export class StreamSubscribers {
  */
 const DELIVERY_TIMEOUT_MS = 60_000;
 
+/**
+ * Minimum interval between mutual-ping rounds. Sampling is observer-driven
+ * (each `runtimeState()` call requests a round), so this throttle turns the
+ * panel's ~2s poll into a ≤1-ping-per-5s-per-connection ceiling.
+ */
+const PING_ROUND_MIN_INTERVAL_MS = 5_000;
+/** Bound on one ping attempt — a reply slower than this isn't a useful RTT sample. */
+const PING_TIMEOUT_MS = 10_000;
+
 async function withDeliveryTimeout<T>(
   promise: Promise<T>,
   label: string,
@@ -1144,8 +1347,11 @@ async function withDeliveryTimeout<T>(
     /** Runs iff the underlying promise RESOLVES after the timeout already won
      * the race — the caller's chance to dispose late-arriving resources. */
     onLateResolve?: (value: T) => void;
+    /** Override for callers with their own bound (pings); deliveries use the default. */
+    timeoutMs?: number;
   } = {},
 ): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? DELIVERY_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   if (opts.onLateResolve !== undefined) {
@@ -1166,8 +1372,8 @@ async function withDeliveryTimeout<T>(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
-          reject(new Error(`${label} timed out after ${DELIVERY_TIMEOUT_MS}ms`));
-        }, DELIVERY_TIMEOUT_MS);
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
       }),
     ]);
   } finally {

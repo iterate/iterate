@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
+import { emptyStreamRuntimeState } from "../streams/test-helpers.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
 class MemoryStream implements Stream {
@@ -98,7 +99,7 @@ class MemoryStream implements Stream {
   }
 
   async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {}, subscriptions: {} } };
+    return emptyStreamRuntimeState();
   }
 
   async subscribe(): Promise<never> {

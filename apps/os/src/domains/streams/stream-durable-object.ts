@@ -23,6 +23,7 @@ import {
   type ConnectionRuntimeState,
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
+import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
@@ -78,6 +79,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    * the freshly folded config — see #readCoreProcessorState.
    */
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
+  /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
+  readonly #metrics = new StreamRuntimeMetrics(Date.now());
   readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
@@ -113,6 +116,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           console.error("stream delivery fact append failed", { type: event.type, error });
         }
       },
+      recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
       armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
@@ -289,6 +293,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     const byteLengths = this.#log.insert(newEvents);
     this.#coreProcessorState = workingState;
     this.#checkpointCoreProcessorState(newEvents.length);
+    this.#metrics.ingress.bump(
+      Date.now(),
+      newEvents.length,
+      byteLengths.reduce((sum, bytes) => sum + bytes, 0),
+    );
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
@@ -1093,6 +1102,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       events: args.events,
       presence,
       getRuntimeState: args.getRuntimeState,
+      ping: args.ping,
     });
 
     return new StreamSubscriptionRpcTarget({
@@ -1187,13 +1197,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     runtime: {
       connections: Record<string, ConnectionRuntimeState>;
       subscriptions: Record<string, SubscriptionRuntimeState>;
+      metrics: StreamThroughputMetrics;
     };
   } {
+    // Observer-driven RTT sampling: being asked for runtime state IS the
+    // signal someone is watching. The round runs in the background (this
+    // method is synchronous); the caller's next poll reads the samples.
+    this.#subscribers.samplePingsSoon();
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#subscribers.connectionRuntimeState(),
         subscriptions: this.#subscribers.subscriptionRuntimeState(),
+        metrics: this.#metrics.report(Date.now()),
       },
     };
   }

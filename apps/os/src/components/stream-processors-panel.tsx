@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronLeftIcon, DatabaseZapIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
@@ -10,13 +11,20 @@ import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { ProcessorRuntimeState } from "../domains/streams/rpc-types.ts";
 import type { Stream } from "../itx-api.generated.ts";
+import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";
 import {
-  hashString,
+  AgentPrettyState,
+  CorePrettyState,
+  RuntimeStateStat,
+  SectionHeading,
+} from "~/components/stream-processor-pretty-state.tsx";
+import { readNumber, readRuntimeRecord } from "~/lib/runtime-record.ts";
+import {
   presenceColorClasses,
   presenceInitials,
   presenceLabel,
   sparklinePoints,
-  type RttMetrics,
+  type BrowserStreamMetricsView,
 } from "~/lib/stream-presence.ts";
 
 export function PresenceAvatar({
@@ -59,7 +67,9 @@ export function PresenceAvatar({
 /**
  * One abstraction for presence, metrics, and processor detail — everything is
  * a facet of "the stream's consumers". Overview lists every consumer with
- * (simulated) RTT/lag; clicking one drills into its announced contract.
+ * REAL RTT/lag from the stream's runtime table (polled while open — the poll
+ * is also what drives the stream's observer-gated ping sampling); clicking
+ * one drills into its announced contract and self-reported metrics.
  */
 export type StreamRuntimeDebugState = Awaited<ReturnType<Stream["runtimeState"]>>;
 
@@ -74,14 +84,14 @@ type ProcessorPanelEntry = {
   deliveryMode?: "wake" | "push" | "webhook";
   configuredAtOffset?: number;
   runtimeSubscription?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
-  runtimeConnection?: Record<string, unknown>;
+  runtimeConnection?: StreamRuntimeDebugState["runtime"]["connections"][string];
 };
 
-type StreamRuntimeLoad =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "loaded"; state: StreamRuntimeDebugState }
-  | { status: "error"; message: string };
+/**
+ * Overview poll cadence while the sheet is open. Also the observer signal for
+ * the stream's throttled ping sampling (see runtimeState in rpc-targets.ts).
+ */
+const STREAM_RUNTIME_POLL_MS = 2_000;
 
 const CORE_PROCESSOR_KEY = "__stream-core__";
 const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
@@ -128,13 +138,16 @@ export function StreamProcessorsPanel({
   onClearClientDatabase,
   getProcessorRuntimeState,
   getStreamRuntimeState,
+  streamPath,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   presence: readonly AgentUiPresenceEntry[];
-  metrics: RttMetrics;
+  metrics: BrowserStreamMetricsView;
   eventCount: number;
   busy: boolean;
+  /** Keys the runtime poll's query cache per stream. */
+  streamPath: string;
   /** Subscription key of the focused processor (URL-backed); null = overview. */
   focusedKey: string | null;
   onFocus: (subscriptionKey: string) => void;
@@ -144,35 +157,25 @@ export function StreamProcessorsPanel({
   getProcessorRuntimeState: (subscriptionKey: string) => Promise<ProcessorRuntimeStateResult>;
   getStreamRuntimeState: () => Promise<StreamRuntimeDebugState>;
 }) {
-  const [streamRuntimeLoad, setStreamRuntimeLoad] = useState<StreamRuntimeLoad>({
-    status: "idle",
+  // Poll while open: every fetch refreshes the live metrics AND asks the
+  // stream for a ping round (its RTT sampling is observer-gated on exactly
+  // this call). keepPreviousData swaps polls in place instead of flashing a
+  // loading state.
+  const streamRuntimeQuery = useQuery({
+    queryKey: ["stream-processors-panel-runtime", streamPath],
+    queryFn: getStreamRuntimeState,
+    enabled: open,
+    refetchInterval: STREAM_RUNTIME_POLL_MS,
+    placeholderData: keepPreviousData,
   });
-  const [streamRefreshKey, setStreamRefreshKey] = useState(0);
-  useEffect(() => {
-    if (!open) {
-      setStreamRuntimeLoad({ status: "idle" });
-      return;
-    }
-    let disposed = false;
-    setStreamRuntimeLoad({ status: "loading" });
-    void getStreamRuntimeState()
-      .then((state) => {
-        if (!disposed) setStreamRuntimeLoad({ status: "loaded", state });
-      })
-      .catch((error: unknown) => {
-        if (!disposed) {
-          setStreamRuntimeLoad({
-            status: "error",
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [getStreamRuntimeState, open, streamRefreshKey]);
 
-  const streamRuntime = streamRuntimeLoad.status === "loaded" ? streamRuntimeLoad.state : undefined;
+  const streamRuntime = streamRuntimeQuery.data;
+  const streamRuntimeError =
+    streamRuntimeQuery.error == null
+      ? undefined
+      : streamRuntimeQuery.error instanceof Error
+        ? streamRuntimeQuery.error.message
+        : String(streamRuntimeQuery.error);
   const entries = useMemo(
     () => buildProcessorPanelEntries(presence, streamRuntime),
     [presence, streamRuntime],
@@ -203,28 +206,30 @@ export function StreamProcessorsPanel({
     }
 
     if (focused?.kind === "core") {
-      if (streamRuntimeLoad.status === "loading" || streamRuntimeLoad.status === "idle") {
-        setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedSubscriptionKey });
-        return;
-      }
-      if (streamRuntimeLoad.status === "error") {
+      // Error first: with keepPreviousData a failed poll leaves stale data in
+      // place alongside the error, and a metrics drill-in silently rendering
+      // stale state during an outage would be exactly the fake UI this
+      // feature exists to kill.
+      if (streamRuntimeError !== undefined) {
         setRuntimeStateLoad({
           status: "error",
           subscriptionKey: focusedSubscriptionKey,
-          message: streamRuntimeLoad.message,
+          message: streamRuntimeError,
         });
-        return;
+      } else if (streamRuntime !== undefined) {
+        const coreState = streamRuntime.coreProcessorState;
+        setRuntimeStateLoad({
+          status: "loaded",
+          subscriptionKey: focusedSubscriptionKey,
+          runtimeState: {
+            snapshot: { offset: readNumber(coreState, "maxOffset") ?? 0, state: coreState },
+            runtime: streamRuntime.runtime,
+          },
+          streamMaxOffset: readNumber(coreState, "maxOffset") ?? 0,
+        });
+      } else {
+        setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedSubscriptionKey });
       }
-      const coreState = streamRuntimeLoad.state.coreProcessorState;
-      setRuntimeStateLoad({
-        status: "loaded",
-        subscriptionKey: focusedSubscriptionKey,
-        runtimeState: {
-          snapshot: { offset: readNumber(coreState, "maxOffset") ?? 0, state: coreState },
-          runtime: streamRuntimeLoad.state.runtime,
-        },
-        streamMaxOffset: readNumber(coreState, "maxOffset") ?? 0,
-      });
       return;
     }
 
@@ -270,7 +275,8 @@ export function StreamProcessorsPanel({
     focusedSubscriptionKey,
     getProcessorRuntimeState,
     refreshKey,
-    streamRuntimeLoad,
+    streamRuntime,
+    streamRuntimeError,
   ]);
 
   return (
@@ -293,8 +299,10 @@ export function StreamProcessorsPanel({
             onFocus={onFocus}
             onClose={onClose}
             onClearClientDatabase={onClearClientDatabase}
-            onRefreshStreamRuntime={() => setStreamRefreshKey((key) => key + 1)}
-            streamRuntimeLoad={streamRuntimeLoad}
+            onRefreshStreamRuntime={() => void streamRuntimeQuery.refetch()}
+            streamRuntimeFetching={streamRuntimeQuery.isFetching}
+            streamRuntimeError={streamRuntimeError}
+            throughput={streamRuntime?.runtime.metrics}
           />
         ) : (
           <ProcessorDetail
@@ -303,7 +311,7 @@ export function StreamProcessorsPanel({
             runtimeStateLoad={focusedRuntimeStateLoad}
             onRefreshRuntimeState={() => {
               setRefreshKey((key) => key + 1);
-              if (focused.kind === "core") setStreamRefreshKey((key) => key + 1);
+              if (focused.kind === "core") void streamRuntimeQuery.refetch();
             }}
             onBack={onBack}
             onClose={onClose}
@@ -335,10 +343,12 @@ function ProcessorsOverview({
   onClose,
   onClearClientDatabase,
   onRefreshStreamRuntime,
-  streamRuntimeLoad,
+  streamRuntimeFetching,
+  streamRuntimeError,
+  throughput,
 }: {
   entries: readonly ProcessorPanelEntry[];
-  metrics: RttMetrics;
+  metrics: BrowserStreamMetricsView;
   eventCount: number;
   busy: boolean;
   focusedKey: string | null;
@@ -346,12 +356,16 @@ function ProcessorsOverview({
   onClose: () => void;
   onClearClientDatabase: () => Promise<void>;
   onRefreshStreamRuntime: () => void;
-  streamRuntimeLoad: StreamRuntimeLoad;
+  streamRuntimeFetching: boolean;
+  streamRuntimeError: string | undefined;
+  throughput: StreamRuntimeDebugState["runtime"]["metrics"] | undefined;
 }) {
   const [clearState, setClearState] = useState<"idle" | "clearing" | "error">("idle");
   const points = sparklinePoints(metrics.spark, 368, 44);
   const area = `2,42 ${points} 366,42`;
   const sections = processorEntrySections(entries);
+  const rtt = metrics.transportRttMs;
+  const subscriber = metrics.subscriber;
 
   return (
     <>
@@ -368,43 +382,87 @@ function ProcessorsOverview({
         <div className="rounded-2xl bg-muted/40 px-4 py-3.5">
           <div className="flex items-baseline justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Append round-trip
+              Connection RTT
             </span>
-            <span className="font-mono text-[10px] text-muted-foreground/70">simulated</span>
+            <span className="font-mono text-[10px] text-muted-foreground/70">this browser</span>
           </div>
           <div className="mt-2 flex items-end gap-3">
             <span className="font-mono text-2xl font-semibold leading-none">
-              {metrics.rttNow}
+              {rtt === null ? "—" : rtt.last}
               <span className="text-xs text-muted-foreground">ms</span>
             </span>
-            <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
-              <polygon points={area} className="fill-emerald-500/10" />
-              <polyline
-                points={points}
-                fill="none"
-                className="stroke-emerald-600"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-            </svg>
+            {metrics.spark.length === 0 ? (
+              <span className="flex-1 pb-1 text-xs text-muted-foreground/70">measuring…</span>
+            ) : (
+              <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
+                <polygon points={area} className="fill-emerald-500/10" />
+                <polyline
+                  points={points}
+                  fill="none"
+                  className="stroke-emerald-600"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
           </div>
-          <div className="mt-3 flex gap-5">
-            <MetricStat label="p50" value={`${metrics.p50}ms`} />
-            <MetricStat label="p95" value={`${metrics.p95}ms`} />
-            <MetricStat label="events/s" value={(0.4 + (metrics.rttNow % 7) / 10).toFixed(1)} />
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+            <MetricStat label="p50" value={rtt === null ? "—" : `${rtt.p50}ms`} />
+            <MetricStat label="p95" value={rtt === null ? "—" : `${rtt.p95}ms`} />
+            <MetricStat
+              label="append"
+              title="Append call → commit acknowledged (this browser's own appends)"
+              value={
+                subscriber?.appendRoundTripMs == null
+                  ? "—"
+                  : `${subscriber.appendRoundTripMs.last}ms`
+              }
+            />
+            <MetricStat
+              label="own loop"
+              title="Append call → this browser's own subscription ingested the committed event"
+              value={
+                subscriber?.consumeOwnAppendMs == null
+                  ? "—"
+                  : `${subscriber.consumeOwnAppendMs.last}ms`
+              }
+            />
+            <MetricStat
+              label="events/s"
+              title="Appends committed on this stream over the last minute"
+              value={
+                throughput === undefined ? "—" : throughput.ingressLastMinute.perSecond.toFixed(1)
+              }
+            />
+            <MetricStat
+              label="in"
+              title="Bytes appended over the last minute"
+              value={
+                throughput === undefined
+                  ? "—"
+                  : formatBytesPerSecond(throughput.ingressLastMinute.bytes)
+              }
+            />
+            <MetricStat
+              label="out"
+              title="Bytes delivered to all subscribers over the last minute"
+              value={
+                throughput === undefined
+                  ? "—"
+                  : formatBytesPerSecond(throughput.egressLastMinute.bytes)
+              }
+            />
             <MetricStat label="head" value={`#${eventCount}`} />
           </div>
           <div className="mt-3 flex justify-end">
             <Button
               variant="ghost"
               size="sm"
-              disabled={streamRuntimeLoad.status === "loading"}
+              disabled={streamRuntimeFetching}
               onClick={onRefreshStreamRuntime}
               className="mr-2 text-muted-foreground"
             >
-              <RefreshCwIcon
-                className={cn("size-3.5", streamRuntimeLoad.status === "loading" && "animate-spin")}
-              />
+              <RefreshCwIcon className={cn("size-3.5", streamRuntimeFetching && "animate-spin")} />
               Refresh
             </Button>
             <Button
@@ -426,11 +484,11 @@ function ProcessorsOverview({
               Could not clear local client data.
             </div>
           ) : null}
-          {streamRuntimeLoad.status === "error" ? (
+          {streamRuntimeError === undefined ? null : (
             <div className="mt-2 text-right text-xs text-red-600 dark:text-red-400">
-              {streamRuntimeLoad.message}
+              {streamRuntimeError}
             </div>
-          ) : null}
+          )}
         </div>
         {sections.map((section) => (
           <ProcessorEntrySection
@@ -440,7 +498,6 @@ function ProcessorsOverview({
             entries={section.entries}
             busy={busy}
             focusedKey={focusedKey}
-            metrics={metrics}
             onFocus={onFocus}
           />
         ))}
@@ -455,7 +512,6 @@ function ProcessorEntrySection({
   entries,
   busy,
   focusedKey,
-  metrics,
   onFocus,
 }: {
   title: string;
@@ -463,7 +519,6 @@ function ProcessorEntrySection({
   entries: readonly ProcessorPanelEntry[];
   busy: boolean;
   focusedKey: string | null;
-  metrics: RttMetrics;
   onFocus: (subscriptionKey: string) => void;
 }) {
   return (
@@ -483,7 +538,6 @@ function ProcessorEntrySection({
               entry={entry}
               busy={busy}
               focused={entry.subscriptionKey === focusedKey}
-              metrics={metrics}
               onFocus={onFocus}
             />
           ))
@@ -497,17 +551,35 @@ function ProcessorEntryButton({
   entry,
   busy,
   focused,
-  metrics,
   onFocus,
 }: {
   entry: ProcessorPanelEntry;
   busy: boolean;
   focused: boolean;
-  metrics: RttMetrics;
   onFocus: (subscriptionKey: string) => void;
 }) {
+  // Real numbers only: the ping RTT when the subscriber answers pings, else
+  // the last commit→settled sample (wake). Push/webhook subscribers never
+  // hold a live connection, so their delivery-call duration shows regardless
+  // of `connected` — it's the last acked delivery's real round trip. "—"
+  // until data exists — never a synthesized value.
+  const rttMs =
+    (entry.connected
+      ? (entry.runtimeConnection?.pingRttMs?.last ??
+        entry.runtimeConnection?.settleLatencyMs?.last ??
+        null)
+      : null) ??
+    entry.runtimeSubscription?.deliveryDurationMs?.last ??
+    null;
+  // Live connection cursor first: the wake lane's spine row is an
+  // OBSERVATIONAL watermark that deliberately goes stale while a connection
+  // streams (see stream-subscribers.ts #poke), so a healthy connected
+  // processor would otherwise show a scary fake backlog. The subscription
+  // row's lag is the real number for the lanes without a live connection.
   const lag =
-    entry.kind === "core" ? "0" : (entry.runtimeSubscription?.lag ?? fakeLag(entry, busy));
+    entry.kind === "core"
+      ? "0"
+      : (entry.runtimeConnection?.lag ?? entry.runtimeSubscription?.lag ?? null);
   return (
     <button
       type="button"
@@ -538,15 +610,15 @@ function ProcessorEntryButton({
         </span>
       </span>
       <span className="text-right font-mono text-xs text-muted-foreground">
-        {entry.connected ? `${fakeRtt(entry.subscriptionKey, metrics.rttNow)}ms` : "—"}
+        {rttMs == null ? "—" : `${rttMs}ms`}
       </span>
       <span
         className={cn(
           "text-right font-mono text-xs",
-          String(lag) === "0" ? "text-muted-foreground" : "text-amber-600",
+          lag == null || String(lag) === "0" ? "text-muted-foreground" : "text-amber-600",
         )}
       >
-        {entry.kind === "core" || entry.connected || entry.runtimeSubscription != null ? lag : "—"}
+        {lag == null ? "—" : String(lag)}
       </span>
     </button>
   );
@@ -572,14 +644,12 @@ function buildProcessorPanelEntries(
   for (const entry of presence) {
     const coreConnection = coreConnections[entry.subscriptionKey];
     const subscriptionType = readSubscriptionType(coreConnection) ?? "ephemeral";
-    const runtimeConnection = readRuntimeRecord(
-      streamRuntime?.runtime.connections[entry.subscriptionKey],
-    );
+    const runtimeConnection = streamRuntime?.runtime.connections[entry.subscriptionKey];
     entries.set(entry.subscriptionKey, {
       ...entry,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
       subscriptionType,
-      runtimeConnection,
+      ...(runtimeConnection === undefined ? {} : { runtimeConnection }),
       ...(configured[entry.subscriptionKey]?.deliveryMode === undefined
         ? {}
         : { deliveryMode: configured[entry.subscriptionKey].deliveryMode }),
@@ -605,7 +675,9 @@ function buildProcessorPanelEntries(
         : {}),
       ...(announcement == null ? {} : { processor: announcement }),
       subscriptionType,
-      runtimeConnection: readRuntimeRecord(streamRuntime?.runtime.connections[subscriptionKey]),
+      ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
+        ? {}
+        : { runtimeConnection: streamRuntime.runtime.connections[subscriptionKey] }),
       ...(configured[subscriptionKey]?.deliveryMode === undefined
         ? {}
         : { deliveryMode: configured[subscriptionKey].deliveryMode }),
@@ -620,11 +692,11 @@ function buildProcessorPanelEntries(
   // exist ONLY in the runtime connection table (core state v14), and this
   // client's presence roster may not know consumers that connected before its
   // mirror subscribed. The runtime table is the authority on "connected now".
-  for (const [subscriptionKey, value] of Object.entries(streamRuntime?.runtime.connections ?? {})) {
+  for (const [subscriptionKey, runtimeConnection] of Object.entries(
+    streamRuntime?.runtime.connections ?? {},
+  )) {
     if (entries.has(subscriptionKey)) continue;
-    const runtimeConnection = readRuntimeRecord(value);
-    if (runtimeConnection == null) continue;
-    const subscriptionType = readSubscriptionType(runtimeConnection) ?? "ephemeral";
+    const subscriptionType = runtimeConnection.subscriptionType;
     const subscriber = readRuntimeRecord(runtimeConnection.subscriber);
     const announcement = readAnnouncement(subscriber?.processor);
     entries.set(subscriptionKey, {
@@ -671,7 +743,9 @@ function buildProcessorPanelEntries(
       deliveryMode: config.deliveryMode,
       configuredAtOffset: config.configuredAtOffset,
       runtimeSubscription,
-      runtimeConnection: readRuntimeRecord(streamRuntime?.runtime.connections[subscriptionKey]),
+      ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
+        ? {}
+        : { runtimeConnection: streamRuntime.runtime.connections[subscriptionKey] }),
     });
   }
 
@@ -810,36 +884,14 @@ function readAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
   return { slug, version, description, consumes, emits, ownedEvents };
 }
 
-function readRuntimeRecord(value: unknown): Record<string, unknown> | undefined {
-  return value != null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readNumber(value: unknown, key: string): number | null {
-  const record = readRuntimeRecord(value);
-  const field = record?.[key];
-  return typeof field === "number" || typeof field === "bigint" ? Number(field) : null;
-}
-
 function isLlmish(entry: Pick<AgentUiPresenceEntry, "processor">): boolean {
   const slug = entry.processor?.slug ?? "";
   return ["agent", "capability-host"].includes(slug);
 }
 
-/** Deterministic fake RTT for preview data; stable per subscription but still visibly live. */
-function fakeRtt(subscriptionKey: string, rttNow: number): number {
-  return 14 + (hashString(subscriptionKey) % 38) + (rttNow % 9);
-}
-
-function fakeLag(entry: AgentUiPresenceEntry, busy: boolean): string {
-  if (busy && isLlmish(entry)) return String(1 + (hashString(entry.subscriptionKey) % 3));
-  return "0";
-}
-
-function MetricStat({ label, value }: { label: string; value: string }) {
+function MetricStat({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div>
+    <div {...(title === undefined ? {} : { title })}>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
       <div className="mt-0.5 font-mono text-sm">{value}</div>
     </div>
@@ -1039,15 +1091,72 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
     return null;
   }
   const runtime = entry.runtimeSubscription;
+  const connection = entry.runtimeConnection;
   return (
     <div>
       <SectionHeading>Delivery</SectionHeading>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <RuntimeStateStat label="type" value={entry.subscriptionType ?? "unknown"} />
         <RuntimeStateStat label="mode" value={entry.deliveryMode ?? runtime?.mode ?? "live"} />
-        <RuntimeStateStat label="acked" value={runtime == null ? "—" : `#${runtime.ackedOffset}`} />
-        <RuntimeStateStat label="lag" value={runtime == null ? "—" : String(runtime.lag)} />
+        <RuntimeStateStat
+          label="acked"
+          value={
+            connection != null
+              ? `#${connection.cursor}`
+              : runtime != null
+                ? `#${runtime.ackedOffset}`
+                : "—"
+          }
+        />
+        <RuntimeStateStat
+          label="lag"
+          // Connection cursor first: the wake spine row's watermark goes
+          // stale by design while a connection streams (see the row list).
+          value={
+            connection != null
+              ? String(connection.lag)
+              : runtime != null
+                ? String(runtime.lag)
+                : "—"
+          }
+        />
       </div>
+      {connection == null && runtime?.settleLatencyMs == null ? null : (
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <RuntimeStateStat
+            label="ping rtt"
+            value={
+              connection?.pingRttMs == null
+                ? "—"
+                : `${connection.pingRttMs.last}ms · p95 ${connection.pingRttMs.p95}ms`
+            }
+          />
+          <RuntimeStateStat
+            label="settle"
+            value={(() => {
+              const stats = connection?.settleLatencyMs ?? runtime?.settleLatencyMs;
+              return stats == null ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
+            })()}
+          />
+          <RuntimeStateStat
+            label="delivered"
+            // Events delivered, live-connection lanes only: push/webhook
+            // subscriptions track bytes (the adjacent stat), not an event
+            // count — a dash beats relabeling bytes as events.
+            value={connection != null ? `${connection.eventsSent} ev` : "—"}
+          />
+          <RuntimeStateStat
+            label="bytes"
+            value={
+              connection != null
+                ? formatFileSize(connection.bytesSent)
+                : runtime?.bytesSent != null
+                  ? formatFileSize(runtime.bytesSent)
+                  : "—"
+            }
+          />
+        </div>
+      )}
       {entry.configuredAtOffset == null && runtime?.lastError == null ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {entry.configuredAtOffset == null ? null : (
@@ -1066,281 +1175,6 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
   );
 }
 
-function CorePrettyState({
-  state,
-  runtime,
-}: {
-  state: unknown;
-  runtime: Record<string, unknown> | undefined;
-}) {
-  const core = asCoreState(state);
-  if (core == null) {
-    return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
-  }
-
-  const childPaths = Array.isArray(core.childPaths) ? core.childPaths : [];
-  const configured = readRuntimeRecord(core.configuredSubscribersByKey) ?? {};
-  const connections = readRuntimeRecord(core.connectionsByKey) ?? {};
-  const runtimeSubscriptions = readRuntimeRecord(runtime?.subscriptions) ?? {};
-  const paused = core.paused === true;
-  const circuitBreaker = readRuntimeRecord(core.circuitBreaker);
-  const trippedAtOffset = readNumber(circuitBreaker, "trippedAtOffset");
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <RuntimeStateStat label="head" value={`#${Number(core.maxOffset ?? 0)}`} />
-        <RuntimeStateStat label="events" value={String(core.eventCount ?? 0)} />
-        <RuntimeStateStat label="children" value={String(childPaths.length)} />
-        <RuntimeStateStat label="paused" value={paused ? "yes" : "no"} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <RuntimeStateStat label="configured" value={String(Object.keys(configured).length)} />
-        <RuntimeStateStat label="connected" value={String(Object.keys(connections).length)} />
-        <RuntimeStateStat
-          label="runtime subs"
-          value={String(Object.keys(runtimeSubscriptions).length)}
-        />
-      </div>
-
-      {core.path == null && core.projectId == null ? null : (
-        <div className="rounded-xl bg-muted/40 px-3 py-2">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Stream</div>
-          <div className="mt-1 break-all font-mono text-xs">
-            {String(core.projectId ?? "global")} {String(core.path ?? "")}
-          </div>
-          {typeof core.createdAt !== "string" ? null : (
-            <div className="mt-1 text-xs text-muted-foreground">{core.createdAt}</div>
-          )}
-        </div>
-      )}
-
-      {paused || trippedAtOffset != null ? (
-        <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-          {paused ? (
-            <div>Paused{typeof core.pauseReason === "string" ? `: ${core.pauseReason}` : ""}</div>
-          ) : null}
-          {trippedAtOffset == null ? null : (
-            <div>Circuit breaker tripped at #{trippedAtOffset}</div>
-          )}
-        </div>
-      ) : null}
-
-      {Object.keys(configured).length === 0 ? null : (
-        <div>
-          <SectionHeading>Configured subscriptions</SectionHeading>
-          <div className="flex flex-col gap-1.5">
-            {Object.entries(configured).map(([key, value]) => {
-              const latest = readRuntimeRecord(readRuntimeRecord(value)?.latestConfiguredEvent);
-              const payload = readRuntimeRecord(latest?.payload);
-              const delivery = readRuntimeRecord(payload?.delivery);
-              const mode = typeof delivery?.mode === "string" ? delivery.mode : "unknown";
-              const runtimeSub = readRuntimeRecord(runtimeSubscriptions[key]);
-              const lag = readNumber(runtimeSub, "lag");
-              return (
-                <div key={key} className="rounded-xl bg-muted/40 px-3 py-2">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <div className="min-w-0 truncate font-mono text-xs">{key}</div>
-                    <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                      {mode}
-                      {lag == null ? "" : ` · lag ${lag}`}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {childPaths.length === 0 ? null : (
-        <div>
-          <SectionHeading>Child streams</SectionHeading>
-          <div className="flex flex-col gap-1.5">
-            {childPaths.slice(0, 8).map((path) => (
-              <div
-                key={String(path)}
-                className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs"
-              >
-                {String(path)}
-              </div>
-            ))}
-          </div>
-          {childPaths.length <= 8 ? null : (
-            <div className="mt-1 text-xs text-muted-foreground">+{childPaths.length - 8} more</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Pretty renderer for the agent processor reduced state (status machine). */
-function AgentPrettyState({ state }: { state: unknown }) {
-  const agent = asAgentState(state);
-  if (agent == null) {
-    return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
-  }
-
-  const currentRequest =
-    agent.currentRequest != null && typeof agent.currentRequest === "object"
-      ? (agent.currentRequest as Record<string, unknown>)
-      : null;
-  const phase =
-    currentRequest == null
-      ? "idle"
-      : currentRequest.phase === "scheduled"
-        ? "scheduled"
-        : "requested";
-  const history = Array.isArray(agent.history) ? agent.history : [];
-  const lastMessage = history.length > 0 ? history[history.length - 1] : null;
-  const lastPreview =
-    lastMessage != null && typeof lastMessage === "object" && lastMessage !== null
-      ? previewChatMessage(lastMessage as Record<string, unknown>)
-      : null;
-  const scripts = Array.isArray(agent.inProgressScriptExecutions)
-    ? agent.inProgressScriptExecutions
-    : [];
-  const systemPrompt = typeof agent.systemPrompt === "string" ? agent.systemPrompt : "";
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <RuntimeStateStat label="phase" value={phase} />
-        <RuntimeStateStat label="provider" value={String(agent.llmProvider ?? "—")} />
-        <RuntimeStateStat
-          label="model"
-          value={String(
-            agent.llmConfig != null &&
-              typeof agent.llmConfig === "object" &&
-              "model" in agent.llmConfig
-              ? (agent.llmConfig as { model?: unknown }).model
-              : "—",
-          )}
-        />
-        <RuntimeStateStat label="failures" value={String(agent.consecutiveLlmFailures ?? 0)} />
-      </div>
-
-      {currentRequest == null ? null : (
-        <div className="rounded-xl bg-muted/40 px-3 py-2">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            Current request
-          </div>
-          <div className="mt-1 font-mono text-xs break-all">{JSON.stringify(currentRequest)}</div>
-        </div>
-      )}
-
-      {scripts.length === 0 ? null : (
-        <div>
-          <SectionHeading>In-progress scripts</SectionHeading>
-          <div className="flex flex-col gap-1.5">
-            {scripts.map((script, index) => {
-              const row =
-                script != null && typeof script === "object"
-                  ? (script as Record<string, unknown>)
-                  : {};
-              return (
-                <div
-                  key={String(row.executionId ?? index)}
-                  className="rounded-xl bg-muted/40 px-3 py-2"
-                >
-                  <div className="font-mono text-[10px] text-muted-foreground">
-                    {String(row.executionId ?? "script")}
-                  </div>
-                  <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-foreground/80">
-                    {String(row.code ?? "").slice(0, 400)}
-                  </pre>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      <div className="rounded-xl bg-muted/40 px-3 py-2">
-        <div className="flex items-baseline justify-between gap-2">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            History
-          </div>
-          <div className="font-mono text-xs text-muted-foreground">{history.length} messages</div>
-        </div>
-        {lastPreview == null ? (
-          <div className="mt-1 text-xs text-muted-foreground">No messages yet.</div>
-        ) : (
-          <div className="mt-1 text-xs text-foreground/80">
-            <span className="font-medium text-muted-foreground">{lastPreview.role}: </span>
-            {lastPreview.text}
-          </div>
-        )}
-        <div className="mt-1 text-[10px] text-muted-foreground/70">
-          Full history is in Raw view (and in the Pretty feed).
-        </div>
-      </div>
-
-      {systemPrompt === "" ? null : (
-        <details className="rounded-xl bg-muted/40 px-3 py-2">
-          <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            System prompt
-          </summary>
-          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground/80">
-            {systemPrompt}
-          </pre>
-        </details>
-      )}
-
-      <div className="grid grid-cols-2 gap-2">
-        <RuntimeStateStat label="autonomous turns" value={String(agent.autonomousTurnCount ?? 0)} />
-        <RuntimeStateStat label="request gen" value={String(agent.requestGeneration ?? 0)} />
-      </div>
-    </div>
-  );
-}
-
-function asAgentState(state: unknown): Record<string, unknown> | null {
-  if (state == null || typeof state !== "object") return null;
-  const record = state as Record<string, unknown>;
-  // Heuristic: agent reduced state always has history + llmProvider-ish keys.
-  if (!("history" in record) && !("currentRequest" in record) && !("systemPrompt" in record)) {
-    return null;
-  }
-  return record;
-}
-
-function asCoreState(state: unknown): Record<string, unknown> | null {
-  if (state == null || typeof state !== "object") return null;
-  const record = state as Record<string, unknown>;
-  if (
-    !("maxOffset" in record) &&
-    !("configuredSubscribersByKey" in record) &&
-    !("connectionsByKey" in record)
-  ) {
-    return null;
-  }
-  return record;
-}
-
-function previewChatMessage(message: Record<string, unknown>): { role: string; text: string } {
-  const role = String(message.role ?? message.kind ?? "message");
-  const content = message.content ?? message.text ?? message;
-  let text = "";
-  if (typeof content === "string") text = content;
-  else if (Array.isArray(content)) {
-    text = content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part != null && typeof part === "object" && "text" in part) {
-          return String((part as { text?: unknown }).text ?? "");
-        }
-        return "";
-      })
-      .join("");
-  } else text = JSON.stringify(content);
-  text = text.replace(/\s+/g, " ").trim();
-  if (text.length > 160) text = `${text.slice(0, 157)}…`;
-  return { role, text: text || "(empty)" };
-}
-
 function RuntimeStateMessage({
   children,
   tone = "muted",
@@ -1356,15 +1190,6 @@ function RuntimeStateMessage({
       )}
     >
       {children}
-    </div>
-  );
-}
-
-function RuntimeStateStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl bg-muted/40 px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
-      <div className="mt-0.5 font-mono text-sm">{value}</div>
     </div>
   );
 }
@@ -1400,14 +1225,6 @@ function ContractEventChips({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
-      {children}
     </div>
   );
 }

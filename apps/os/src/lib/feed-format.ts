@@ -27,6 +27,12 @@ export function formatFileSize(size: number): string {
   return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
 }
 
+/** Human bytes-per-second from a rolling one-minute byte total. */
+export function formatBytesPerSecond(bytesPerMinute: number): string {
+  if (bytesPerMinute <= 0) return "0 B/s";
+  return `${formatFileSize(Math.round(bytesPerMinute / 60))}/s`;
+}
+
 /** Code-mode agents stream itx code as their response; chat agents stream
  * prose. Decides whether LLM response text renders as a code block. */
 const CODE_START_PATTERN = /^\s*(async|await|function|const|let|import)\b/;

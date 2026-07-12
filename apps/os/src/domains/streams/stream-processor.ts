@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
+import { SubscriberMetrics } from "./subscriber-metrics.ts";
 import {
   assertObjectProcessorState,
   cachedEventSchema,
@@ -243,6 +244,17 @@ export abstract class StreamProcessor<
   /** Owning project, or null on a global (deployment-root) stream. */
   protected readonly projectId: string | null;
   protected readonly deps: Deps;
+
+  /**
+   * Self-measured consumption metrics (see subscriber-metrics.ts): every
+   * home-stream append and every ingested batch feeds it, closing the
+   * consume-your-own-appends loop on the processor's own clock. HOSTS merge
+   * `subscriberMetrics.report()` into the `getRuntimeState` answer they give
+   * the stream (`runtime.metrics`) — merged host-side so a subclass
+   * overriding `getRuntimeState` with its own `runtime` bag cannot
+   * accidentally drop it. In-memory; resets with the isolate.
+   */
+  readonly subscriberMetrics = new SubscriberMetrics(Date.now());
 
   #checkpointOffset = 0;
   // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: #loadState reads and assigns this via ??=.
@@ -492,6 +504,7 @@ export abstract class StreamProcessor<
   }
 
   async #ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void> {
+    const ingestStartedAtMs = Date.now();
     await this.#loadState();
 
     const previousState = this.#getState();
@@ -561,6 +574,16 @@ export abstract class StreamProcessor<
     // asserts. This is how a processor whose checkpoint was DISCARDED at load
     // (schema mismatch) becomes loaded again: the refold lands here.
     this.#hasLoaded = true;
+    // The checkpoint is durable and the state advanced — the batch is
+    // genuinely CONSUMED, which is the moment self-measured metrics report.
+    const newestEventCreatedAtMs = Date.parse(events.at(-1)!.createdAt);
+    this.subscriberMetrics.noteBatchIngested({
+      ingestedThroughOffset: checkpointOffset,
+      ...(Number.isFinite(newestEventCreatedAtMs) ? { newestEventCreatedAtMs } : {}),
+      eventCount: events.length,
+      ingestStartedAtMs,
+      atMs: Date.now(),
+    });
     if (!Object.is(previousState, state)) {
       this.#notifyStateChange({ offset: checkpointOffset, state });
     }
@@ -653,7 +676,19 @@ export abstract class StreamProcessor<
       const built = this.#buildEmittedEvent(event) as StreamEventInput;
       return { ...built, source: { ...built.source, processor } };
     });
-    return args.target.append(...events);
+    // Home-stream appends feed the consume-own-append loop: the committed
+    // offsets come back through this processor's own subscription, and
+    // noteBatchIngested closes the sample. Sibling-stream appends (appendTo)
+    // never loop back here, so they are not timed.
+    if (args.target !== this.stream) return args.target.append(...events);
+    const t0 = Date.now();
+    return Promise.resolve(this.stream.append(...events)).then((committed) => {
+      const maxCommittedOffset = committed.reduce((max, event) => Math.max(max, event.offset), 0);
+      if (maxCommittedOffset > 0) {
+        this.subscriberMetrics.noteAppendCommitted({ maxCommittedOffset, t0, atMs: Date.now() });
+      }
+      return committed;
+    });
   }
 
   // Settle `waitUntilEvent` waiters whose predicate matches a just-delivered

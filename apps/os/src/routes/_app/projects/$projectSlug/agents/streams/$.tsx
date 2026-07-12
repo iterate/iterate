@@ -75,14 +75,16 @@ function ProjectAgentDetailContent() {
   // are addressed by their stream path (e.g. "/agents/onboarding").
   async function submitAgentMessage(message: string) {
     const itx = await connectItxBrowser({ projectId: project.id });
-    await itx.agents.get(streamPath).message(message);
+    // Returned so the composer can feed the committed offset into the
+    // store's consume-own-append metric (real append→observed latency).
+    return await itx.agents.get(streamPath).message(message);
   }
 
   async function submitAgentFiles({ files, message }: { files: File[]; message: string }) {
     const itx = await connectItxBrowser({ projectId: project.id });
     // One addFiles call → ONE input event carrying every attachment, so the
     // feed shows a single message and the agent gets one turn trigger.
-    await itx.agents.get(streamPath).addFiles({
+    const { event } = await itx.agents.get(streamPath).addFiles({
       files: await Promise.all(
         files.map(async (file) => ({
           contentType: file.type || "application/octet-stream",
@@ -92,6 +94,7 @@ function ProjectAgentDetailContent() {
       ),
       ...(message ? { message } : {}),
     });
+    return event;
   }
 
   async function interruptAgentMessage(llmRequestOffset: number) {
