@@ -1071,6 +1071,15 @@ const launcherProcedures = {
           .describe(
             "Machine mode for the menu-bar app: NDJSON activity on stdout. Never opens a browser — emits a needs-login line instead.",
           ),
+        exposePort: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(65535)
+          .optional()
+          .describe(
+            "Also lend the local server on this port at http://<name>.iterate/ (HTTP + WebSockets). Skips the interactive prompt — required for a non-interactive run.",
+          ),
       }),
     )
     .meta({
@@ -1103,9 +1112,16 @@ const launcherProcedures = {
       }
       const auth = envAuth ?? osAuthFromHeaders(authHeaders!);
 
+      // A doppler-driven run (`doppler run --config preview_N -- iterate …`)
+      // supplies both the admin secret AND APP_CONFIG_BASE_URL; honor the latter
+      // so the CLI connects to the SAME environment it authenticated against
+      // (otherwise it auths against preview but talks to prod). Falls back to the
+      // named config's osBaseUrl for an ordinary login-driven run.
+      const osBaseUrl = process.env.APP_CONFIG_BASE_URL?.trim() || resolved.config.osBaseUrl;
+
       const projectId = await resolveChatProject({
         auth,
-        baseUrl: resolved.config.osBaseUrl,
+        baseUrl: osBaseUrl,
         configName: resolved.name,
         configPath: CONFIG_PATH,
         configuredDefaultProject: resolved.config.defaultProject,
@@ -1114,10 +1130,11 @@ const launcherProcedures = {
 
       const shared = {
         auth: auth.credentials,
-        baseUrl: resolved.config.osBaseUrl,
+        baseUrl: osBaseUrl,
         projectId,
         headers: headersRecord(auth.requestHeaders),
         name: input.name,
+        exposePort: input.exposePort,
       };
       // JSON mode announces activity for the menu-bar app; the terminal form
       // prompts for a name and prints a paste-for-your-agent hint. Both block.
