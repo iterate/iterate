@@ -56,6 +56,27 @@ describe("compileEventSelector", () => {
     expect(selector.matches(evt("a-prefix-mismatch"))).toBe(false);
   });
 
+  it("canonicalizes semantically equal selectors for aligned projection reuse", () => {
+    const first = compileEventSelector({
+      eventTypes: ["projection-b", "projection-a", "projection-a"],
+      condition: "payload.projection = true",
+    });
+    const reordered = compileEventSelector({
+      eventTypes: ["projection-a", "projection-b"],
+      condition: "payload.projection = true",
+    });
+    const different = compileEventSelector({
+      eventTypes: ["projection-a", "projection-b"],
+      condition: "payload.projection = false",
+    });
+
+    expect(reordered).toBe(first);
+    expect(different).not.toBe(first);
+    expect(compileEventSelector({ eventTypes: ["projection-a", "*"] })).toBe(
+      compileEventSelector(undefined),
+    );
+  });
+
   it('"*" anywhere in eventTypes means all types', () => {
     const wildcard = compileEventSelector({ eventTypes: ["*"] });
     const mixed = compileEventSelector({ eventTypes: ["a", "*"] });
@@ -96,6 +117,13 @@ describe("compileEventSelector", () => {
     expect(() => compileEventSelector({ condition: "(((" })).toThrow();
     expect(() => compileEventSelector({ condition: "payload.x =" })).toThrow();
   });
+
+  test.for(["$random()", "$shuffle([true, false])[0]", "$now()", "$millis()", '$eval("true")'])(
+    "rejects nondeterministic selector condition %s",
+    (condition) => {
+      expect(() => compileEventSelector({ condition })).toThrow(/nondeterministic/);
+    },
+  );
 });
 
 describe("compileJsonataExpression", () => {

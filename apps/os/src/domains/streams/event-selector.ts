@@ -50,11 +50,15 @@ export type CompiledEventSelector = {
 // Compiled-expression cache: selector conditions (and cross-post transforms,
 // which share this compiler) re-evaluate on every matching append, and a
 // stream's expression set is small and stable, so compile-once is the
-// sensible steady state. Bounded so pathological churn of expressions cannot
-// grow the map without limit (clearing wholesale is fine — recompiling is
-// cheap, correctness never depends on the cache).
+// sensible steady state. Compiled selectors are canonical too: aligned lanes
+// with the same declarative filter can share one wake-scoped projection.
+// Both caches are bounded; clearing wholesale is fine because correctness
+// never depends on their contents.
 const compiledExpressions = new Map<string, jsonata.Expression>();
 const MAX_COMPILED_EXPRESSIONS = 200;
+const compiledSelectors = new Map<string, CompiledEventSelector>();
+const MAX_COMPILED_SELECTORS = 200;
+const NONDETERMINISTIC_SELECTOR_FUNCTIONS = new Set(["eval", "millis", "now", "random", "shuffle"]);
 
 /**
  * Parse a JSONata expression, throwing on invalid input. Used for selector
@@ -79,14 +83,20 @@ export function compileJsonataExpression(expression: string): jsonata.Expression
  * state, not discovered as a per-event error forever after.
  */
 export function compileEventSelector(selector: EventSelector | undefined): CompiledEventSelector {
-  const eventTypes =
+  const selectedEventTypes =
     selector?.eventTypes === undefined || selector.eventTypes.includes("*")
       ? undefined
-      : new Set(selector.eventTypes);
+      : [...new Set(selector.eventTypes)].sort();
+  const cacheKey = JSON.stringify([selectedEventTypes ?? null, selector?.condition ?? null]);
+  const cached = compiledSelectors.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const eventTypes = selectedEventTypes === undefined ? undefined : new Set(selectedEventTypes);
   const condition =
     selector?.condition === undefined ? undefined : compileJsonataExpression(selector.condition);
+  if (condition !== undefined) assertDeterministicSelector(condition.ast());
 
-  return {
+  const compiled: CompiledEventSelector = {
     matchesAll: eventTypes === undefined && condition === undefined,
     matches(event) {
       if (eventTypes !== undefined && !eventTypes.has(event.type)) return false;
@@ -94,4 +104,30 @@ export function compileEventSelector(selector: EventSelector | undefined): Compi
       return true;
     },
   };
+  if (compiledSelectors.size >= MAX_COMPILED_SELECTORS) compiledSelectors.clear();
+  compiledSelectors.set(cacheKey, compiled);
+  return compiled;
+}
+
+function assertDeterministicSelector(ast: jsonata.ExprNode): void {
+  const pending: unknown[] = [ast];
+  const visited = new Set<object>();
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === null || typeof value !== "object" || visited.has(value)) continue;
+    visited.add(value);
+    if (Array.isArray(value)) {
+      pending.push(...value);
+      continue;
+    }
+    const node = value as Record<string, unknown>;
+    if (
+      node.type === "variable" &&
+      typeof node.value === "string" &&
+      NONDETERMINISTIC_SELECTOR_FUNCTIONS.has(node.value)
+    ) {
+      throw new Error(`Selector condition cannot use nondeterministic $${node.value}().`);
+    }
+    pending.push(...Object.values(node));
+  }
 }

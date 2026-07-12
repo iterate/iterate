@@ -267,6 +267,17 @@ type PushDrainStart = {
   row: SubscriptionCursorRow;
 };
 
+type SelectorConditionFailure = { event: StreamEvent; error: string };
+type SelectorProjection = {
+  matched: StreamEvent[];
+  matchedByteLength: number;
+  conditionFailures: SelectorConditionFailure[];
+};
+type SelectorProjectionsByVisibility = {
+  all?: SelectorProjection;
+  durable?: SelectorProjection;
+};
+
 type ReadBatchProjection = {
   afterOffset: number;
   limit: number;
@@ -278,6 +289,16 @@ type ReadBatchProjection = {
   byteLength: number;
   durableByteLength: number;
   lastOffset: number | undefined;
+  selectorProjections?: Map<CompiledEventSelector, SelectorProjectionsByVisibility>;
+};
+
+type ReadBatchResult = {
+  events: StreamEvent[];
+  lastOffset: number | undefined;
+  eventByteLengths: readonly number[] | undefined;
+  byteLength: number;
+  projection: ReadBatchProjection | undefined;
+  durableOnly: boolean;
 };
 
 export class StreamSubscribers {
@@ -680,6 +701,8 @@ export class StreamSubscribers {
               selector,
               durable,
               read.eventByteLengths,
+              read.projection,
+              read.durableOnly,
             );
             matched = selected.matched;
             matchedByteLength = selected.matchedByteLength;
@@ -801,12 +824,7 @@ export class StreamSubscribers {
     limit: number,
     durableOnly = false,
     includeEventByteLengths = false,
-  ): {
-    events: StreamEvent[];
-    lastOffset: number | undefined;
-    eventByteLengths: readonly number[] | undefined;
-    byteLength: number;
-  } {
+  ): ReadBatchResult {
     const firstFreshOffset = this.#freshTail[0]?.event.offset;
     const freshStart = firstFreshOffset === undefined ? -1 : afterOffset + 1 - firstFreshOffset;
     const useFreshTail =
@@ -829,6 +847,8 @@ export class StreamSubscribers {
         lastOffset: cached.lastOffset,
         eventByteLengths: durableOnly ? cached.durableEventByteLengths : cached.eventByteLengths,
         byteLength: durableOnly ? cached.durableByteLength : cached.byteLength,
+        projection: cached,
+        durableOnly,
       };
     }
     const hintedLimit = this.#storageReadLimitHint;
@@ -944,6 +964,8 @@ export class StreamSubscribers {
         lastOffset,
         eventByteLengths: durableOnly ? durableByteLengths : eventByteLengths,
         byteLength: durableOnly ? durableBytes : bytes,
+        projection,
+        durableOnly,
       };
     }
     return {
@@ -951,6 +973,8 @@ export class StreamSubscribers {
       lastOffset,
       eventByteLengths: durableOnly ? durableByteLengths : eventByteLengths,
       byteLength: durableOnly ? durableBytes : bytes,
+      projection: undefined,
+      durableOnly,
     };
   }
 
@@ -960,10 +984,12 @@ export class StreamSubscribers {
    * authoritative; the durable record just makes the skip observable.
    */
   #applySelector(
-    subscriptionKey: string,
+    subscriptionKey: string | undefined,
     selector: CompiledEventSelector,
     events: StreamEvent[],
     eventByteLengths: readonly number[] | undefined,
+    projection: ReadBatchProjection | undefined,
+    durableOnly: boolean,
   ): {
     matched: StreamEvent[];
     matchedByteLength: number | undefined;
@@ -975,8 +1001,17 @@ export class StreamSubscribers {
     if (eventByteLengths === undefined || eventByteLengths.length !== events.length) {
       missingFilteredByteLength();
     }
+    const visibility = durableOnly ? "durable" : "all";
+    const cached = projection?.selectorProjections?.get(selector)?.[visibility];
+    if (cached !== undefined) {
+      return {
+        matched: cached.matched.slice(),
+        matchedByteLength: cached.matchedByteLength,
+        conditionErrors: selectorConditionFacts(subscriptionKey, cached.conditionFailures),
+      };
+    }
     const matched: StreamEvent[] = [];
-    const conditionErrors: StreamEventInput[] = [];
+    const conditionFailures: SelectorConditionFailure[] = [];
     let matchedByteLength = 0;
     for (let index = 0; index < events.length; index += 1) {
       const event = events[index]!;
@@ -993,16 +1028,25 @@ export class StreamSubscribers {
         // that even the pause door cannot stop (error-occurred is allowlisted
         // through it). The event is still skipped, silently.
         if (event.type === "events.iterate.com/stream/error-occurred") continue;
-        conditionErrors.push({
-          type: "events.iterate.com/stream/error-occurred",
-          idempotencyKey: `selector-condition-failed:${subscriptionKey}:${event.offset}`,
-          payload: {
-            message: `subscription "${subscriptionKey}" selector condition failed on offset ${event.offset}: ${String(error)}`,
-          },
-        });
+        conditionFailures.push({ event, error: String(error) });
       }
     }
-    return { matched, matchedByteLength, conditionErrors };
+    if (projection !== undefined) {
+      const selectorProjections = (projection.selectorProjections ??= new Map());
+      const byVisibility = selectorProjections.get(selector) ?? {};
+      byVisibility[visibility] = { matched, matchedByteLength, conditionFailures };
+      selectorProjections.set(selector, byVisibility);
+      return {
+        matched: matched.slice(),
+        matchedByteLength,
+        conditionErrors: selectorConditionFacts(subscriptionKey, conditionFailures),
+      };
+    }
+    return {
+      matched,
+      matchedByteLength,
+      conditionErrors: selectorConditionFacts(subscriptionKey, conditionFailures),
+    };
   }
 
   #selectorFor(
@@ -1305,9 +1349,16 @@ export class StreamSubscribers {
                 events = visible;
                 deliveredBytes = read.byteLength;
               } else {
-                const selected = selectEventsSafely(args.selector, visible, read.eventByteLengths);
-                events = selected.events;
-                deliveredBytes = selected.byteLength;
+                const selected = this.#applySelector(
+                  undefined,
+                  args.selector,
+                  visible,
+                  read.eventByteLengths,
+                  read.projection,
+                  read.durableOnly,
+                );
+                events = selected.matched;
+                deliveredBytes = selected.matchedByteLength ?? missingFilteredByteLength();
               }
               if (events.length === 0 && !initialBatchPending) continue;
             }
@@ -1711,32 +1762,18 @@ async function withDeliveryTimeout<T>(
   }
 }
 
-/** A selector error during LIVE delivery skips the event; live lanes never append error facts per event. */
-function selectorMatchesSafely(selector: CompiledEventSelector, event: StreamEvent): boolean {
-  try {
-    return selector.matches(event);
-  } catch {
-    return false;
-  }
-}
-
-function selectEventsSafely(
-  selector: CompiledEventSelector,
-  events: readonly StreamEvent[],
-  eventByteLengths: readonly number[] | undefined,
-): { events: StreamEvent[]; byteLength: number } {
-  if (eventByteLengths === undefined || eventByteLengths.length !== events.length) {
-    missingFilteredByteLength();
-  }
-  const selected: StreamEvent[] = [];
-  let byteLength = 0;
-  for (let index = 0; index < events.length; index += 1) {
-    const event = events[index]!;
-    if (!selectorMatchesSafely(selector, event)) continue;
-    selected.push(event);
-    byteLength += eventByteLengths[index]!;
-  }
-  return { events: selected, byteLength };
+function selectorConditionFacts(
+  subscriptionKey: string | undefined,
+  failures: readonly SelectorConditionFailure[],
+): StreamEventInput[] {
+  if (subscriptionKey === undefined || failures.length === 0) return [];
+  return failures.map(({ event, error }) => ({
+    type: "events.iterate.com/stream/error-occurred",
+    idempotencyKey: `selector-condition-failed:${subscriptionKey}:${event.offset}`,
+    payload: {
+      message: `subscription "${subscriptionKey}" selector condition failed on offset ${event.offset}: ${error}`,
+    },
+  }));
 }
 
 function missingFilteredByteLength(): never {

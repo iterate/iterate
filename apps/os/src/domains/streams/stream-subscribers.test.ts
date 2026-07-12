@@ -12,7 +12,7 @@ import type {
   SubscriptionConfiguredPayload,
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
-import { compileEventSelector } from "./event-selector.ts";
+import { compileEventSelector, type CompiledEventSelector } from "./event-selector.ts";
 import type {
   StreamEventBatch,
   StreamPushEventBatch,
@@ -1609,7 +1609,17 @@ describe("StreamSubscribers", () => {
 
   it("w1g. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
     const h = makeHarness();
-    h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
+    const selector = { eventTypes: ["selected"] };
+    const ephemeral = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "ephemeral-selected",
+      sink: ephemeral.sink,
+      replayAfterOffset: 0,
+      selector: compileEventSelector(selector),
+    });
+    await h.settle();
+    h.egress.length = 0;
+    h.configure(pushPayload({ selector }), 0);
     const fresh = [
       evt(1, "other"),
       evt(2, "selected"),
@@ -1628,9 +1638,74 @@ describe("StreamSubscribers", () => {
 
     expect(h.pushes).toHaveLength(1);
     expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([2, 4]);
-    expect(h.egress).toEqual([{ count: 2, bytes: 46 }]);
+    expect(ephemeral.batches.at(-1)!.events.map((event) => event.offset)).toEqual([2, 3, 4]);
+    expect(h.egress).toEqual([
+      { count: 3, bytes: 69 },
+      { count: 2, bytes: 46 },
+    ]);
     expect(h.row("k")?.ackedOffset).toBe(4);
     expect(h.storageReads()).toBe(0);
+  });
+
+  it("w1h. aligned lanes evaluate one shared selector projection with isolated arrays", async () => {
+    const h = makeHarness();
+    const connectionCount = 100;
+    const sinks = Array.from({ length: connectionCount }, () => makeSink());
+    const compiled = compileEventSelector({ eventTypes: ["projection-selected"] });
+    let matchCalls = 0;
+    const countingSelector: CompiledEventSelector = {
+      matchesAll: false,
+      matches: (event) => {
+        matchCalls += 1;
+        return compiled.matches(event);
+      },
+    };
+    for (let index = 0; index < connectionCount; index += 1) {
+      h.subscribers.openEphemeral({
+        subscriptionKey: `projection-${index}`,
+        sink: sinks[index]!.sink,
+        replayAfterOffset: 0,
+        selector: countingSelector,
+      });
+    }
+    await h.settle();
+
+    const fresh = Array.from({ length: 500 }, (_, index) =>
+      evt(index + 1, index % 2 === 0 ? "projection-selected" : "other"),
+    );
+    h.append(...fresh);
+    h.subscribers.wake(fresh.map((event) => ({ event, byteLength: 128 })));
+    await h.settle();
+
+    expect(matchCalls).toBe(fresh.length);
+    expect(sinks.every(({ batches }) => batches.at(-1)?.events.length === 250)).toBe(true);
+    expect(new Set(sinks.map(({ batches }) => batches.at(-1)!.events)).size).toBe(connectionCount);
+
+    const next = evt(501, "projection-selected");
+    h.append(next);
+    h.subscribers.wake([{ event: next, byteLength: 128 }]);
+    await h.settle();
+
+    expect(matchCalls).toBe(fresh.length + 1);
+    expect(sinks.every(({ batches }) => batches.at(-1)?.events[0]?.offset === 501)).toBe(true);
+  });
+
+  it("w1i. cached selector failures still emit one keyed fact per durable lane", async () => {
+    const h = makeHarness();
+    const selector = { condition: "$number(payload.message) = 42" };
+    h.configure(pushPayload({ subscriptionKey: "failure-a", selector }), 0);
+    h.configure(pushPayload({ subscriptionKey: "failure-b", selector }), 0);
+    h.append(evt(1, "event", { message: { not: "numeric" } }));
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.factsOfType(ERROR_OCCURRED).map((fact) => fact.idempotencyKey)).toEqual([
+      "selector-condition-failed:failure-a:1",
+      "selector-condition-failed:failure-b:1",
+    ]);
+    expect(h.row("failure-a")?.ackedOffset).toBe(1);
+    expect(h.row("failure-b")?.ackedOffset).toBe(1);
   });
 
   it("w2. a connection already at the in-memory head skips the initial storage probe", async () => {
