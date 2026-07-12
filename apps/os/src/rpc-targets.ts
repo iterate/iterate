@@ -4146,6 +4146,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
   readonly #props: ProjectRpcTargetProps;
+  #deliveryWorker: DynamicWorkerCapability<ProjectWorker> | undefined;
 
   constructor(props: ProjectRpcTargetProps) {
     super();
@@ -4500,7 +4501,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
     try {
-      return await this.worker.processEventBatch(batch);
+      this.#deliveryWorker ??= this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
+        flattenNestedPaths: true,
+      });
+      return await this.#deliveryWorker.processEventBatch(batch);
     } catch (error) {
       // The bootstrap window: the worker cannot be MATERIALIZED yet (config
       // repo unseeded, or its first build still in flight). That is this
