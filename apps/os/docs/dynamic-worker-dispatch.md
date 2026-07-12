@@ -149,13 +149,17 @@ end to end by `e2e/vitest/live-capability-fetcher.e2e.test.ts`:
   back. It refuses upgrade requests with a teaching error instead of letting
   them die deep in the mesh.
 - `connectSocket({ port, path, onMessage })` is the by-hand frame bridge: the
-  provider opens the real socket locally and hands back a
-  `{ send, receive, close }` handle; a Durable Object app terminates the
-  browser's socket with `WebSocketPair` and pumps frames through the handle.
-  Two findings the e2e pins: callback stubs (`onMessage`) do chain CLI→host→DO
-  and stay live for the socket's lifetime once the provider `dup()`s them, and
-  a Durable Object can keep the handle across events (its I/O context spans
-  the socket's life) — a stateless worker could not.
+  provider opens the real socket locally and hands back a `{ send, close }`
+  handle, delivering incoming frames to the `onMessage` callback; a Durable
+  Object app terminates the browser's socket with `WebSocketPair` and pumps
+  frames through the handle. Three findings the e2e pins: callback stubs
+  (`onMessage`) do chain CLI→host→DO and stay live for the socket's lifetime
+  once the provider `dup()`s them; a Durable Object can keep the handle across
+  events (its I/O context spans the socket's life) where a stateless worker
+  could not; and cross-RPC teardown must be the string-keyed `close()` (a
+  returned value's `[Symbol.dispose]` is dropped by capnweb's by-value return
+  serialization), awaited before the DO disposes the itx stub the handle rides
+  on — disposing first aborts the close in flight and the local socket lingers.
 
 ## Rules of thumb
 

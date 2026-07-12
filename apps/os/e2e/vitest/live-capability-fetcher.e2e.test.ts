@@ -377,6 +377,15 @@ test("WebSockets work through the bridge: frames pump between a browser socket a
     } finally {
       socket.close();
     }
+    // Teardown note: closing the browser socket does NOT reliably drain the
+    // Mac's socket in local dev — the DO's close listener (and its
+    // handle.close()) doesn't fire once the upgrade request has returned (the
+    // isolate is done with that request), so the provider socket lingers until
+    // closeServer force-terminates it. That terminate is not just hang
+    // avoidance: it drives the provider's OWN socket-close teardown (dispose
+    // the retained callbacks), which is the cleanup the provider can guarantee
+    // without depending on the DO. The provider's other guaranteed lane is
+    // closeAllBridges when the CLI's connection to OS drops.
   } finally {
     await closeServer(server);
     await closeServer(wsServer);
