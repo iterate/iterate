@@ -729,7 +729,7 @@ return {
     e2eProven: false,
     title: "Connect to an API that needs a key: collect the secret from the user",
     description:
-      "The full flow for connecting to an external API (an OpenAPI server, a REST endpoint, anything) that needs a bearer token or API key only the user has. NEVER ask for credentials in chat — chat is not a secret store, and you must never see the value. itx.secrets.collectFromUser mints a deep link to a minimal form; the user enters the value there, it is stored write-only and pinned to the egress hosts you chose, and YOU get a message the moment they submit. Needs a human to click the link — interactive-only.",
+      "The full flow for connecting to an external API (an OpenAPI server, a REST endpoint, anything) that needs a bearer token or API key only the user has. NEVER ask for credentials in chat — chat is not a secret store, and you must never see the value. itx.secrets.collectFromUser mints a deep link to a minimal form; the user enters the value there, it is stored write-only and pinned to the egress hosts you chose, and YOU get a message the moment they submit. Also the rotation path: it works on existing secrets (the page warns before replacing). If the user pastes a key into chat instead, use it — unblocking them comes first — but advise rolling it and collecting the replacement here. Needs a human to click the link — interactive-only.",
     context: "agent",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -770,6 +770,12 @@ return;
 //   apiOrigin + "/v1/me",
 //   { headers: { authorization: 'Bearer getSecret({ path: "' + secretPath + '" })' } },
 // ));
+//
+// If the user PASTES the key into chat instead of using the link: that is fine —
+// store it and proceed (itx.secrets.get(secretPath).update({ material, egress: { urls: [apiOrigin] } })),
+// unblocking them comes first. But the pasted value sat in the transcript, so advise
+// them to roll the key with the provider and collect the replacement via
+// collectFromUser — the same call updates the existing secret in place.
 `.trim(),
   },
   {
