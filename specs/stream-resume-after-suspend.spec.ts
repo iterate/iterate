@@ -344,7 +344,9 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   page,
   baseURL,
 }) => {
-  test.setTimeout(240_000);
+  // The greeting-settle wait (up to 120s) stacks on the probe window and the
+  // two send assertions, so this lane gets the heavy ceiling.
+  test.setTimeout(300_000);
   await using fixture = await helpers.createFixture("suspend-halfopen");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   await installSocketKillSwitch(page);
@@ -358,6 +360,11 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   const keys = runtimeDebugKeys(fixture.project.id);
   await waitForSubscribed(page, keys);
 
+  // The onboarding greeting turn may still be streaming, and a live turn swaps
+  // the send button for "Stop generation" — wait for the settled composer so
+  // the mid-outage send below has a button to click.
+  await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+
   // Blackhole the transport WITHOUT a close event — what a suspend-killed TCP
   // connection looks like when the OS never surfaces the death. Every capnweb
   // call now hangs; the socket map still holds the corpse, so recovery needs
@@ -368,6 +375,20 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   );
   console.log(`muted sockets: ${JSON.stringify(mutedUrls)}`);
   expect(mutedUrls.length, "expected at least one live /api WebSocket to mute").toBeGreaterThan(0);
+
+  // Send DURING the outage, before anything has noticed the death. The call
+  // rides the corpse session; it can only settle when eviction CLOSES that
+  // socket (capnweb rejects pending calls on transport close, the composer
+  // surfaces the error and keeps the draft). The historical bug: eviction
+  // closed the freshly-dialed SUCCESSOR instead (wake()'s synchronous
+  // getSnapshot re-dial overwrote the transport slot before it was read), so
+  // the corpse survived and the composer spun forever with no error — even
+  // while the feed looked fully recovered.
+  const sentDuringOutage = `during-outage-${Date.now()}`;
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.getByPlaceholder("Message this agent").fill(sentDuringOutage);
+    await page.getByRole("button", { name: "Send message" }).click();
+  });
 
   // Two probe intervals + two probe timeouts before the transport is evicted.
   await page.waitForTimeout(PROBE_NOTICE_MS + 10_000);
@@ -393,19 +414,32 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     `marker at offset ${marker!.offset} should be delivered after the transport is evicted and re-dialed — see the __streamRuntimeDebug dump above`,
   ).toBe(true);
 
-  // The user's half of the story: after recovery, a send from the BROWSER
-  // composer must settle and paint. Historically eviction only unmapped the
-  // dead session (never closed it), so a send could hang forever on the ghost
-  // even while the feed looked recovered. The feed's live "Thinking…" state
-  // renders two spinner-matching elements, so spinner-waiter sits this out
-  // (same per-call override as agent-chat.spec.ts).
+  // The user's half of the story: the stranded mid-outage send must SETTLE —
+  // either it landed, or it rejected (composer re-enables, draft retained) and
+  // a resend on the recovered transport lands. Never a forever-spinner. The
+  // feed's live "Thinking…" state renders two spinner-matching elements, so
+  // spinner-waiter sits this out (same per-call override as agent-chat.spec.ts).
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    const sent = `resumed-${Date.now()}`;
-    await page.getByPlaceholder("Message this agent").fill(sent);
-    await page.getByRole("button", { name: "Send message" }).click();
-    await page
+    const sendButton = page.getByRole("button", { name: "Send message" });
+    const sentRow = page
       .locator('[data-testid="agent-feed-message"][data-kind="user"]')
-      .getByText(sent)
-      .waitFor({ timeout: 30_000 });
+      .getByText(sentDuringOutage);
+    await expect(async () => {
+      // Settled = the message painted (it landed) OR the button re-enabled
+      // (it rejected and the draft is back). A still-spinning composer with
+      // no row is the stranded-on-a-ghost-session wedge.
+      const landed = await sentRow.isVisible();
+      const enabled = await sendButton.isEnabled();
+      expect(
+        landed || enabled,
+        "the mid-outage send never settled — stranded on a ghost session",
+      ).toBe(true);
+    }).toPass({ timeout: 60_000, intervals: [1_000] });
+    if (!(await sentRow.isVisible())) {
+      // The stranded call rejected; the composer kept the draft — resend on
+      // the recovered transport.
+      await sendButton.click();
+    }
+    await sentRow.waitFor({ timeout: 30_000 });
   });
 });
