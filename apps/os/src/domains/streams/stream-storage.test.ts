@@ -564,6 +564,28 @@ describe("StreamEventLog.getRange", () => {
     expect(log.getByOffset(1)).toBeUndefined();
   });
 
+  it("omits incomplete chunked rows without disturbing inline range order", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    const committedEvents = [
+      event(1, "events.iterate.com/test/inline"),
+      {
+        ...event(2, "events.iterate.com/test/incomplete"),
+        payload: { text: "x".repeat(600 * 1024) },
+      },
+      event(3, "events.iterate.com/test/inline"),
+    ];
+    log.insert(committedEvents);
+    db.exec("delete from event_chunks where offset = 2");
+
+    expect(offsets(read(log, { afterOffset: 0, limit: 3 }))).toEqual([1, 3]);
+    expect(
+      log
+        .getRangeSized({ afterOffset: 0, beforeOffset: 4, limit: 3 })
+        .map(({ event: readEvent }) => readEvent.offset),
+    ).toEqual([1, 3]);
+  });
+
   it("excludes ephemeral rows from range reads unless asked; point reads always return them", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
     const chunk: StreamEvent = {

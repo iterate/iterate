@@ -517,20 +517,37 @@ export class StreamEventLog {
         args.limit,
       )
       .toArray();
-    const chunkedOffsets = rows.filter((row) => row.eventJson === null).map((row) => row.offset);
-    const chunkedEvents = this.#readChunkedEvents(chunkedOffsets);
-    const events: Array<SizedStreamEvent | StreamEvent> = [];
-    for (const row of rows) {
-      const stored =
-        row.eventJson === null
-          ? chunkedEvents.get(row.offset)
-          : { chunks: row.eventJson, byteLength: row.inlineByteLength ?? 0 };
-      if (stored !== undefined) {
-        const event = this.#parseEvent(stored.chunks, stored.byteLength);
-        events.push(includeByteLength ? { event, byteLength: stored.byteLength } : event);
+    const events: Array<SizedStreamEvent | StreamEvent | undefined> = new Array(rows.length);
+    let chunkedOffsets: number[] | undefined;
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]!;
+      if (row.eventJson === null) {
+        (chunkedOffsets ??= []).push(row.offset);
+        continue;
       }
+      const event = this.#parseEvent(row.eventJson, 0);
+      events[index] = includeByteLength ? { event, byteLength: row.inlineByteLength ?? 0 } : event;
     }
-    return events;
+    if (chunkedOffsets === undefined) {
+      return events as Array<SizedStreamEvent | StreamEvent>;
+    }
+
+    const chunkedEvents = this.#readChunkedEvents(chunkedOffsets);
+    let hasMissingChunks = false;
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]!;
+      if (row.eventJson !== null) continue;
+      const stored = chunkedEvents.get(row.offset);
+      if (stored === undefined) {
+        hasMissingChunks = true;
+        continue;
+      }
+      const event = this.#parseEvent(stored.chunks, stored.byteLength);
+      events[index] = includeByteLength ? { event, byteLength: stored.byteLength } : event;
+    }
+    return hasMissingChunks
+      ? events.filter((event) => event !== undefined)
+      : (events as Array<SizedStreamEvent | StreamEvent>);
   }
 
   #readChunkedEvents(
