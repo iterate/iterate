@@ -250,24 +250,33 @@ export class SecretDurableObject extends DurableObject<Env> {
   ): Promise<void> {
     assertOriginPinned(refresh.tokenEndpoint, state);
     const refreshToken = readStringField(material, "refreshToken");
+    // Material creds may be a confidential client (clientId + clientSecret) or a
+    // PUBLIC client (clientId only — e.g. a dynamically-registered MCP client);
+    // platform creds are always confidential.
     const creds =
       refresh.clientCreds === "material"
         ? {
             clientId: readStringField(material, "clientId"),
-            clientSecret: readStringField(material, "clientSecret"),
+            clientSecret: optionalStringField(material, "clientSecret"),
           }
         : resolvePlatformClientCreds(
             parseConfig(this.env),
             refresh.clientCreds,
             refresh.tokenEndpoint,
           );
+    const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken });
+    // A confidential client authenticates with HTTP Basic; a public client (no
+    // secret) instead identifies itself with client_id in the body (RFC 6749 §6).
+    if (creds.clientSecret === undefined) body.set("client_id", creds.clientId);
     const response = await fetch(refresh.tokenEndpoint, {
       method: "POST",
       headers: {
-        authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}`,
+        ...(creds.clientSecret === undefined
+          ? {}
+          : { authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}` }),
         "content-type": "application/x-www-form-urlencoded",
       },
-      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }),
+      body,
     });
     if (!response.ok) throw new Error(`oauth refresh failed with HTTP ${response.status}`);
     const data = (await response.json()) as { access_token?: string; refresh_token?: string };
@@ -431,6 +440,13 @@ function readStringField(material: Record<string, unknown>, field: string): stri
     throw new SecretSubstitutionError("secret_reference_field_not_found");
   }
   return value;
+}
+
+/** Like {@link readStringField} but returns undefined instead of throwing when
+ * the field is absent — for optional material (a public client has no secret). */
+function optionalStringField(material: Record<string, unknown>, field: string): string | undefined {
+  const value = material[field];
+  return typeof value === "string" ? value : undefined;
 }
 
 /**
