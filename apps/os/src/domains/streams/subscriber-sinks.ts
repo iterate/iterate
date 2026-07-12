@@ -123,20 +123,25 @@ export function retainProcessEventBatch(
         // forever. Dispose only after settle; disposing before the result is
         // pulled opts out of observing the rejection signal this path needs.
         pendingDeliveries += 1;
-        void Promise.resolve(result)
-          .then(
-            () => {
+        void Promise.resolve(result).then(
+          () => {
+            try {
               if (newestCreatedAtMs !== undefined) onSettled?.("ok", newestCreatedAtMs);
-            },
-            (error: unknown) => {
+            } finally {
+              pendingDeliveries -= 1;
+              disposeIgnoredRpcResult(result);
+            }
+          },
+          (error: unknown) => {
+            try {
               onDeliveryError(error);
               if (newestCreatedAtMs !== undefined) onSettled?.("error", newestCreatedAtMs);
-            },
-          )
-          .finally(() => {
-            pendingDeliveries -= 1;
-            disposeIgnoredRpcResult(result);
-          });
+            } finally {
+              pendingDeliveries -= 1;
+              disposeIgnoredRpcResult(result);
+            }
+          },
+        );
         return;
       }
       disposeIgnoredRpcResult(result);
