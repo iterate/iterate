@@ -439,13 +439,21 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "McpClientCollection",
     kind: "interface",
     sourceText:
-      "/**\n * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`\n * returns a client whose dotted calls invoke the server's tools; `exa` is the\n * pre-connected Exa web-search server every project gets.\n */\nexport interface McpClientCollection {\n  __describe(): Promise<Description>;\n  /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */\n  connect(input: McpClientConnectInput): Promise<McpClientRpc>;\n  /**\n   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every\n   * project: web search and page reading as flat tool calls.\n   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;\n   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.\n   */\n  exa: McpClientRpc;\n}",
+      '/**\n * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`\n * returns a client whose dotted calls invoke the server\'s tools; `exa` is the\n * pre-connected Exa web-search server every project gets.\n */\nexport interface McpClientCollection {\n  __describe(): Promise<Description>;\n  /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */\n  connect(input: McpClientConnectInput): Promise<McpClientRpc>;\n  /**\n   * Begin the OAuth sign-in for an OAuth-protected MCP server (one whose\n   * unauthenticated request answers 401 with a `WWW-Authenticate` challenge —\n   * e.g. Cloudflare\'s mcp.cloudflare.com). Discovers the server\'s OAuth\n   * endpoints, registers a client, and returns a `{ authorizationUrl, path }`:\n   * send `authorizationUrl` to the user ("click here to connect"). When they\n   * sign in, the token is stored write-only at `path` and — if you are an agent\n   * — you are messaged so you can continue. Then connect like any bearer MCP:\n   * `itx.mcp.connect({ url, headers: { authorization: \'Bearer getSecret({ path:\n   * "<path>", field: "accessToken" })\' } })`. For a server that just wants a\n   * bearer token you already hold, use `itx.secrets.collectFromUser` instead.\n   */\n  beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult>;\n  /**\n   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every\n   * project: web search and page reading as flat tool calls.\n   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;\n   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.\n   */\n  exa: McpClientRpc;\n}',
     summary: "Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`.",
     memberSummaries: {
       connect: "Connect to an MCP server by URL; dotted calls on the client are tool invocations.",
+      beginOAuth:
+        "Begin the OAuth sign-in for an OAuth-protected MCP server (one whose unauthenticated request answers 401 with a `WWW-Authenticate` challenge — e.g.",
       exa: "The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every project: web search and page reading as flat tool calls.",
     },
-    referencedTypeNames: ["Description", "McpClientConnectInput", "McpClientRpc"],
+    referencedTypeNames: [
+      "Description",
+      "McpClientConnectInput",
+      "McpClientRpc",
+      "McpBeginOAuthInput",
+      "McpBeginOAuthResult",
+    ],
   },
   {
     name: "OpenApiCollection",
@@ -1277,6 +1285,26 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       "/**\n * A connected MCP client. Its tools are dotted method calls\n * (`itx.mcp.<server>.<tool>({...})`) resolved through the dynamic path-call\n * fallback, so this contract deliberately does not re-declare a fixed surface.\n */\nexport type McpClientRpc = object;",
     summary: "A connected MCP client.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "McpBeginOAuthInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to,\n * the secret path to store the resulting token at, and an optional OAuth scope. */\nexport type McpBeginOAuthInput = {\n  /** The MCP server's URL (the same URL you would pass to `connect`). */\n  url: string;\n  /** Where the resulting token is stored write-only, e.g. `/secrets/mcp/cloudflare`. */\n  path: string;\n  /** OAuth scope to request; the server's default is used when omitted. */\n  scope?: string;\n};",
+    summary:
+      "Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to, the secret path to store the resulting token at, and an optional OAuth scope.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "McpBeginOAuthResult",
+    kind: "typeAlias",
+    sourceText:
+      '/** Result of `itx.mcp.beginOAuth`: a link to send the user through, and the\n * secret path the token lands at once they finish. */\nexport type McpBeginOAuthResult = {\n  /** Send this to the user. Signing in there stores the token and (for an agent)\n   * messages you back so you can continue. */\n  authorizationUrl: string;\n  /** The `/secrets/…` path the token is stored at. Connect afterwards with\n   * `headers: { authorization: \'Bearer getSecret({ path: "<path>", field: "accessToken" })\' }`. */\n  path: string;\n};',
+    summary:
+      "Result of `itx.mcp.beginOAuth`: a link to send the user through, and the secret path the token lands at once they finish.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
