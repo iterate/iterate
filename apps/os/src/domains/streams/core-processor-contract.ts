@@ -14,12 +14,12 @@ import { ItxExpression } from "../../itx/expression.ts";
 import { EventSelector } from "./event-selector.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
 
-// Version of the persisted core reduced state ("state" in KV). Bump this when
-// the core reducer starts deriving NEW state from already-reduced events
+// Version of the persisted core reduced state ("coreState" in KV). Bump this
+// when the core reducer starts deriving NEW state from already-reduced events
 // (already-committed events are never re-reduced on the incremental catch-up
-// path). On wake, a stored version that differs from this constant discards
-// the persisted state and rebuilds it by replaying the full event log from the
-// DO's own SQLite -- the same path used when KV state is missing entirely.
+// path). A missing checkpoint rebuilds from the SQL journal. A present
+// checkpoint with a different version fails activation: schema changes require
+// erasing deployed stream storage rather than carrying a compatibility path.
 //
 // History:
 // - 1 (implicit; no "stateVersion" key in KV): pre-descendantPaths state.
@@ -729,3 +729,31 @@ export const CoreProcessorContract = defineProcessorContract({
 export type CoreProcessorContract = typeof CoreProcessorContract;
 
 export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;
+
+/** Exact disposable checkpoint envelope persisted under one synchronous KV key. */
+export type CoreProcessorCheckpoint = {
+  version: typeof CORE_STATE_VERSION;
+  state: CoreProcessorState;
+};
+
+const CoreProcessorCheckpointState = CoreProcessorContract.stateSchema.strict();
+
+/** Parses present storage strictly; only an absent checkpoint may rebuild from the journal. */
+export function parseCoreProcessorCheckpoint(input: unknown): CoreProcessorCheckpoint {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new TypeError("Invalid core processor checkpoint envelope");
+  }
+  const envelope = input as Record<string, unknown>;
+  if (Object.keys(envelope).length !== 2 || !("version" in envelope) || !("state" in envelope)) {
+    throw new TypeError("Invalid core processor checkpoint envelope");
+  }
+  if (envelope.version !== CORE_STATE_VERSION) {
+    throw new TypeError(
+      `Unsupported core processor checkpoint version: ${String(envelope.version)}`,
+    );
+  }
+  return {
+    version: CORE_STATE_VERSION,
+    state: CoreProcessorCheckpointState.parse(envelope.state),
+  };
+}

@@ -131,6 +131,32 @@ test("stream getEvents defaults to a bounded page and supports event type filter
   await expect(stream.getEvents({ limit: 501 })).rejects.toThrow("getEvents limit");
 });
 
+test("cold activation catches core state up from the journal tail", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/os-port/checkpoint-tail/${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `os-stream-checkpoint-${RUN_SUFFIX}-${marker}` });
+  using stream = project.streams.get(streamPath);
+
+  const appended = await stream.append(
+    ...Array.from({ length: 65 }, (_, index) => ({
+      type: STREAM_EVENT_TYPE,
+      payload: { index, marker },
+    })),
+  );
+  const tailOffset = appended.at(-1)!.offset;
+  await stream.kill().catch(() => undefined);
+
+  const state = coreState((await stream.runtimeState()).coreProcessorState);
+  expect(state.maxOffset).toBeGreaterThanOrEqual(tailOffset);
+  expect(state.path).toBe(streamPath);
+});
+
 test("variadic ordinary appends preserve the exact circuit-breaker trip event", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/os-port/variadic-breaker/${marker}`;

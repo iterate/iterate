@@ -34,6 +34,8 @@ import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-run
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
+  parseCoreProcessorCheckpoint,
+  type CoreProcessorCheckpoint,
   CoreProcessorContract,
   StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema,
   type CoreProcessorState,
@@ -65,7 +67,7 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  *    is synchronous with the commit, and `validateAppend` can REJECT an event
  *    before it becomes a durable fact.
  * 3. Its checkpoint — reduced state in DO KV, rebuilt from the SQL event log
- *    (`stream-storage.ts`) when missing or version-skewed.
+ *    (`stream-storage.ts`) when missing. Version skew fails activation.
  * 4. Delivery — every lane (ephemeral connections, wake pokes, push drains)
  *    lives in `stream-subscribers.ts`, dialing transports through
  *    `subscriber-sinks.ts`; this class only decides policy (who may
@@ -1051,40 +1053,36 @@ export class StreamDurableObject extends DurableObject<Env> {
   // ===========================================================================
 
   #readCoreProcessorState(): CoreProcessorState {
-    let stored: unknown;
-    let storedVersion: unknown = 1;
-    // Sync KV list is one storage snapshot/query for both checkpoint keys;
-    // separate point gets pay two storage crossings on every incarnation.
-    for (const [key, value] of this.ctx.storage.kv.list<unknown>({ prefix: "state" })) {
-      if (key === "state") stored = value;
-      else if (key === "stateVersion") storedVersion = value;
-    }
-    // A version observed in durable storage is already written. Only a
-    // legacy/mismatched checkpoint needs the rebuild write below to replace it.
-    this.#stateVersionWritten = storedVersion === CORE_STATE_VERSION;
-    // State persisted by a reducer of a different version is incomplete (it
-    // was reduced before newer derived fields existed), so it is discarded and
-    // rebuilt from the event log rather than trusted.
-    const storedStateIsCurrent = stored !== undefined && storedVersion === CORE_STATE_VERSION;
+    const stored = this.ctx.storage.kv.get<unknown>("coreState");
+    const checkpoint = stored === undefined ? undefined : parseCoreProcessorCheckpoint(stored);
     const bounds = this.#log.takeBootstrapOffsetBounds();
-    const storedState = storedStateIsCurrent
-      ? CoreProcessorContract.stateSchema.parse(stored)
-      : bounds.highestOffset === 0
-        ? undefined
-        : CoreProcessorContract.stateSchema.parse({});
+    if (checkpoint !== undefined) {
+      if (checkpoint.state.maxOffset > bounds.highestAssignedOffset) {
+        throw new Error(
+          `Core processor checkpoint offset ${checkpoint.state.maxOffset} exceeds journal head ${bounds.highestAssignedOffset}`,
+        );
+      }
+      if (
+        checkpoint.state.projectId !== this.name.projectId ||
+        checkpoint.state.path !== this.name.path
+      ) {
+        throw new Error("Core processor checkpoint belongs to a different stream");
+      }
+    }
+    const storedState =
+      checkpoint !== undefined
+        ? checkpoint.state
+        : bounds.highestOffset === 0
+          ? undefined
+          : CoreProcessorContract.stateSchema.parse({});
     if (storedState === undefined) return CoreProcessorContract.stateSchema.parse({});
 
     const state = this.#catchUpCoreProcessorState(storedState, bounds);
 
-    if (!storedStateIsCurrent) {
-      // A version-mismatch rebuild replayed the config from the log, but the
-      // spine's SQLite cursor rows are storage and survived as-is — possibly
-      // describing a world the new fold no longer derives (a subscription
-      // whose config event no longer parses loses its config but kept its
-      // row; a row's backoff may blame code the new version replaced). Drop
-      // rows with no surviving config; keep progress (ackedOffset is
-      // monotonic truth about the same immutable log) but clear failure state
-      // so every survivor gets an immediate fresh try under the new fold.
+    if (checkpoint === undefined) {
+      // A missing checkpoint rebuild replayed config from the log while the
+      // spine's SQLite cursor rows survived. Drop rows with no surviving
+      // config; retain monotonic progress but clear stale failure state.
       reconcileSubscriptionCursorRows(
         this.#subscriptionCursorStore,
         new Set(Object.keys(state.configuredSubscribersByKey)),
@@ -1092,21 +1090,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     const checkpointLag = state.maxOffset - storedState.maxOffset;
-    const checkpointDue = storedStateIsCurrent
-      ? this.#coreCheckpointSchedule.restoreLag({
-          eventCount: checkpointLag,
-          // The constructor is synchronous. This exact activation baseline and
-          // the following woken append remain correct when workerd freezes time.
-          nowMs: Date.now(),
-        })
-      : true;
+    const checkpointDue =
+      checkpoint !== undefined
+        ? this.#coreCheckpointSchedule.restoreLag({
+            eventCount: checkpointLag,
+            // The constructor is synchronous. This exact activation baseline and
+            // the following woken append remain correct when workerd freezes time.
+            nowMs: Date.now(),
+          })
+        : true;
     if (checkpointDue) {
       this.#writeCoreProcessorState(state);
     }
     return state;
   }
 
-  #stateVersionWritten = false;
   /**
    * The debounced per-append checkpoint. Serializing the full core state into
    * KV on EVERY append is O(state) write amplification per event — on a busy
@@ -1134,15 +1132,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #writeCoreProcessorState(state: CoreProcessorState, writtenAtMs = Date.now()): void {
-    this.ctx.storage.kv.put("state", state);
+    this.ctx.storage.kv.put("coreState", {
+      version: CORE_STATE_VERSION,
+      state,
+    } satisfies CoreProcessorCheckpoint);
     this.#coreCheckpointSchedule.didWrite(writtenAtMs);
-    // The version is a constant per deploy. A warm activation observed it in
-    // durable storage and sets this flag during read; a rebuild writes it once
-    // after folding the new state shape.
-    if (!this.#stateVersionWritten) {
-      this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
-      this.#stateVersionWritten = true;
-    }
   }
 
   /** Fold any event-log rows past the checkpoint into the state (no side effects). */
@@ -1152,8 +1146,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   ): CoreProcessorState {
     const { highestOffset, highestAssignedOffset } = bounds;
     let next = state;
-    // PAGED, never one monolithic read: this is also the version-bump rebuild
-    // path (replay from offset 0), and a capture stream's full log
+    // PAGED, never one monolithic read: a missing-checkpoint rebuild replays
+    // from offset 0, and a capture stream's full log
     // materialized into one array can exceed the DO's 128MB heap — an OOM in
     // the CONSTRUCTOR, i.e. a stream bricked on every wake. The fold is
     // incremental; only the read needed paging.
