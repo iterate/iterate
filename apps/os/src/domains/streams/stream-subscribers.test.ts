@@ -221,6 +221,7 @@ function makeHarness() {
   };
 
   let storageReads = 0;
+  let eventByteLengthReads = 0;
   const subscribers = new StreamSubscribers({
     idleTeardownMs: 60_000,
     hooks: {
@@ -232,7 +233,10 @@ function makeHarness() {
           .slice(0, limit)
           .map((event) => ({
             event,
-            byteLength: eventByteLengths.get(event.offset) ?? JSON.stringify(event).length,
+            get byteLength() {
+              eventByteLengthReads += 1;
+              return eventByteLengths.get(event.offset) ?? JSON.stringify(event).length;
+            },
           }));
       },
       coreState: (): CoreProcessorState => {
@@ -293,6 +297,7 @@ function makeHarness() {
     settle,
     append: (...events: StreamEvent[]) => log.push(...events),
     storageReads: () => storageReads,
+    eventByteLengthReads: () => eventByteLengthReads,
     storageReadLimits,
     setEventByteLength: (offset: number, byteLength: number) => {
       eventByteLengths.set(offset, byteLength);
@@ -1441,7 +1446,7 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(10);
   });
 
-  it("w1b. aligned backlog lanes share one bounded storage read per wake", async () => {
+  it("w1b. aligned backlog lanes share one bounded storage projection per wake", async () => {
     const h = makeHarness();
     const subscriptionCount = 100;
     for (let index = 0; index < subscriptionCount; index += 1) {
@@ -1456,6 +1461,8 @@ describe("StreamSubscribers", () => {
     expect(h.pushes).toHaveLength(subscriptionCount);
     expect(h.pushes.every((batch) => batch.events.length === 10)).toBe(true);
     expect(h.pushes.every((batch) => batch.events.at(-1)?.offset === 10)).toBe(true);
+    expect(new Set(h.pushes.map((batch) => batch.events)).size).toBe(subscriptionCount);
+    expect(h.eventByteLengthReads()).toBe(10);
 
     h.append(evt(11, "event"));
     h.subscribers.wake();
@@ -1466,12 +1473,68 @@ describe("StreamSubscribers", () => {
     expect(h.pushes.slice(subscriptionCount).every((batch) => batch.events[0]?.offset === 11)).toBe(
       true,
     );
+    expect(h.eventByteLengthReads()).toBe(11);
     for (let index = 0; index < subscriptionCount; index += 1) {
       expect(h.row(`k-${index}`)?.ackedOffset).toBe(11);
     }
   });
 
-  it("w1c. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
+  it("w1c. aligned byte-capped backlog lanes reuse the first over-read projection", async () => {
+    const h = makeHarness();
+    const subscriptionCount = 100;
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      h.configure(
+        pushPayload({
+          subscriptionKey: `k-${index}`,
+          ...(index % 2 === 1 ? { selector: { eventTypes: ["event"] } } : {}),
+        }),
+        0,
+      );
+    }
+    const backlog = Array.from({ length: 1_000 }, (_, index) => evt(index + 1, "event"));
+    h.append(...backlog);
+    for (const event of backlog) h.setEventByteLength(event.offset, 16 * 1024);
+    const deliveryGate = Promise.withResolvers<void>();
+    h.dialImpl.push = () => deliveryGate.promise;
+
+    h.subscribers.wake();
+
+    expect(h.storageReadLimits).toEqual([1000]);
+    expect(h.pushes).toHaveLength(subscriptionCount);
+    expect(h.pushes.every((batch) => batch.events.length === 64)).toBe(true);
+    // One unsized projection + one selector-sized projection; neither the
+    // 1,000-row over-read nor either projection repeats per lane.
+    expect(h.eventByteLengthReads()).toBe(65 * 2);
+    expect(new Set(h.pushes.map((batch) => batch.events)).size).toBe(subscriptionCount);
+
+    deliveryGate.resolve();
+    await h.settle();
+    expect(h.row("k-0")?.ackedOffset).toBe(1_000);
+    expect(h.row("k-99")?.ackedOffset).toBe(1_000);
+  });
+
+  it("w1d. an oversized singleton is delivered but never retained in the storage cache", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ subscriptionKey: "k-1" }), 0);
+    h.configure(pushPayload({ subscriptionKey: "k-2" }), 0);
+    h.append(evt(1, "oversized"));
+    h.setEventByteLength(1, DELIVERY_BATCH_BYTE_LIMIT + 1);
+    const deliveryGate = Promise.withResolvers<void>();
+    h.dialImpl.push = () => deliveryGate.promise;
+
+    h.subscribers.wake();
+
+    expect(h.storageReadLimits).toEqual([1000, 1000]);
+    expect(h.eventByteLengthReads()).toBe(2);
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1], [1]]);
+
+    deliveryGate.resolve();
+    await h.settle();
+    expect(h.row("k-1")?.ackedOffset).toBe(1);
+    expect(h.row("k-2")?.ackedOffset).toBe(1);
+  });
+
+  it("w1e. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
     const h = makeHarness();
     const subscriptionCount = 100;
     for (let index = 0; index < subscriptionCount; index += 1) {
@@ -1512,7 +1575,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1d. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
+  it("w1f. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
     const h = makeHarness();
     const all = makeSink();
     const selected = makeSink();
@@ -1544,7 +1607,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1e. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
+  it("w1g. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
     const fresh = [

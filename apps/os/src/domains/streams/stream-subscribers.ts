@@ -267,6 +267,19 @@ type PushDrainStart = {
   row: SubscriptionCursorRow;
 };
 
+type ReadBatchProjection = {
+  afterOffset: number;
+  limit: number;
+  includesEventByteLengths: boolean;
+  events: StreamEvent[];
+  durableEvents: StreamEvent[];
+  eventByteLengths: readonly number[] | undefined;
+  durableEventByteLengths: readonly number[] | undefined;
+  byteLength: number;
+  durableByteLength: number;
+  lastOffset: number | undefined;
+};
+
 export class StreamSubscribers {
   readonly #hooks: StreamSubscribersHooks;
   /**
@@ -349,24 +362,15 @@ export class StreamSubscribers {
    * delivery can resume at a later position in the same tail without SQL.
    */
   #freshTail: SizedStreamEvent[] = [];
-  #freshTailProjection:
-    | {
-        afterOffset: number;
-        limit: number;
-        includesEventByteLengths: boolean;
-        events: StreamEvent[];
-        durableEvents: StreamEvent[];
-        eventByteLengths: readonly number[] | undefined;
-        durableEventByteLengths: readonly number[] | undefined;
-        byteLength: number;
-        durableByteLength: number;
-        lastOffset: number | undefined;
-      }
-    | undefined;
+  #freshTailProjection: ReadBatchProjection | undefined;
+  #freshTailSizedProjection: ReadBatchProjection | undefined;
   /** One immutable SQLite range shared by lanes aligned within this wake. */
   #storageReadCache:
     | { afterOffset: number; limit: number; entries: SizedStreamEvent[] }
     | undefined;
+  /** Complete frame-bounded projections, split by optional byte metadata. */
+  #storageReadProjection: ReadBatchProjection | undefined;
+  #storageReadSizedProjection: ReadBatchProjection | undefined;
   #configuredSubscribers: ConfiguredSubscribers | undefined;
   #configuredSubscriberEntries: [string, ConfiguredSubscribers[string]][] = [];
 
@@ -382,9 +386,12 @@ export class StreamSubscribers {
   wake(freshTail?: SizedStreamEvent[]): void {
     this.#wakeGeneration += 1;
     this.#storageReadCache = undefined;
+    this.#storageReadProjection = undefined;
+    this.#storageReadSizedProjection = undefined;
     if (freshTail !== undefined && freshTail.length > 0) {
       this.#freshTail = freshTail;
       this.#freshTailProjection = undefined;
+      this.#freshTailSizedProjection = undefined;
     }
     for (const connection of this.#connections.values()) connection.wake();
     if (this.#tearingDown) return;
@@ -804,13 +811,18 @@ export class StreamSubscribers {
     const freshStart = firstFreshOffset === undefined ? -1 : afterOffset + 1 - firstFreshOffset;
     const useFreshTail =
       freshStart >= 0 && this.#freshTail[freshStart]?.event.offset === afterOffset + 1;
-    const cached = this.#freshTailProjection;
+    const cached = useFreshTail
+      ? includeEventByteLengths
+        ? this.#freshTailSizedProjection
+        : (this.#freshTailProjection ?? this.#freshTailSizedProjection)
+      : includeEventByteLengths
+        ? this.#storageReadSizedProjection
+        : (this.#storageReadProjection ?? this.#storageReadSizedProjection);
     if (
-      useFreshTail &&
       cached !== undefined &&
       cached.afterOffset === afterOffset &&
       cached.limit === limit &&
-      cached.includesEventByteLengths === includeEventByteLengths
+      (!includeEventByteLengths || cached.includesEventByteLengths)
     ) {
       return {
         events: (durableOnly ? cached.durableEvents : cached.events).slice(),
@@ -882,22 +894,32 @@ export class StreamSubscribers {
       }
     }
     if (!useFreshTail && !sourceFromStorageCache) {
-      // Do not pin an initial over-read. Retain at most one complete frame or
-      // the adaptive fit+1 probe (whose crossing row is itself frame-bounded).
+      // Never pin an initial over-read. Retain at most one complete frame or
+      // its fit+1 prefix (whose crossing row is itself frame-bounded).
       const boundedCrossing =
         exceededByteLimit &&
-        source.length === events.length + 1 &&
+        bytes <= DELIVERY_BATCH_BYTE_LIMIT &&
         crossingEntryByteLength <= DELIVERY_BATCH_BYTE_LIMIT;
-      if ((!exceededByteLimit && bytes <= DELIVERY_BATCH_BYTE_LIMIT) || boundedCrossing) {
+      if (boundedCrossing) {
+        const boundedLength = events.length + 1;
+        this.#storageReadCache = {
+          afterOffset,
+          limit: boundedLength,
+          entries: source.length === boundedLength ? source : source.slice(0, boundedLength),
+        };
+      } else if (!exceededByteLimit && bytes <= DELIVERY_BATCH_BYTE_LIMIT) {
         this.#storageReadCache = { afterOffset, limit: storageLimit, entries: source };
       }
     }
     const durableEvents = durable ?? events;
     const durableByteLengths = durableEventByteLengths ?? eventByteLengths;
-    if (useFreshTail) {
+    const projectionIsComplete =
+      useFreshTail || exceededByteLimit || source.length < storageLimit || storageLimit === limit;
+    const cacheProjection = projectionIsComplete && bytes <= DELIVERY_BATCH_BYTE_LIMIT;
+    if (useFreshTail || cacheProjection) {
       // Keep canonical arrays private. Each lane still gets an isolated array,
       // while aligned raw and durable readers share both scans through slice().
-      this.#freshTailProjection = {
+      const projection = {
         afterOffset,
         limit,
         includesEventByteLengths: includeEventByteLengths,
@@ -909,6 +931,14 @@ export class StreamSubscribers {
         durableByteLength: durableBytes,
         lastOffset,
       };
+      if (useFreshTail) {
+        if (includeEventByteLengths) this.#freshTailSizedProjection = projection;
+        else this.#freshTailProjection = projection;
+      } else if (includeEventByteLengths) {
+        this.#storageReadSizedProjection = projection;
+      } else {
+        this.#storageReadProjection = projection;
+      }
       return {
         events: (durableOnly ? durableEvents : events).slice(),
         lastOffset,
