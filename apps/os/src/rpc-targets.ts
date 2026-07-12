@@ -1695,7 +1695,9 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
    * agent scope, the page also messages that agent ("The user submitted the
    * secret at …"), which starts its next turn — send the URL to the user,
    * end the turn, and act on the notification. Nothing is created until the
-   * user submits; the link itself is stateless.
+   * user submits; the link itself is stateless. Works for EXISTING secrets
+   * too — the page warns before replacing — so it is also the way to rotate
+   * a credential (e.g. one the user pasted into chat and should roll).
    */
   async collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink> {
     const path = normalizeSecretPath(input.path);
