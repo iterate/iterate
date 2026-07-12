@@ -46,20 +46,17 @@ import type {
 import type { SubscriberDial } from "./stream-subscribers.ts";
 
 /**
- * Per-call delivery options, consumed LOCALLY by the retained wrapper — never
- * serialized, never on the wire. `onSettled` fires when the durable lane's
- * pulled result settles (the subscriber's ingest resolved/rejected); on the
- * ephemeral lane, where results are disposed unpulled by design, it never
- * fires.
+ * Per-connection settlement observer. The event timestamp is passed
+ * separately on each delivery, so the pump reuses this callback without
+ * sharing mutable context across results that may settle out of order.
  */
-export type DeliveryOptions = {
-  onSettled?: (outcome: "ok" | "error") => void;
-};
+export type DeliverySettled = (outcome: "ok" | "error", newestCreatedAtMs: number) => void;
 
 /** The pump-facing delivery callback: fire-and-forget, disposable, broken-transport aware. */
 export type RetainedProcessEventBatch = ((
   batch: Parameters<ProcessEventBatch>[0],
-  opts?: DeliveryOptions,
+  newestCreatedAtMs?: number,
+  onSettled?: DeliverySettled,
 ) => void) &
   Disposable & {
     onRpcBroken?(callback: (error: unknown) => void): void;
@@ -105,14 +102,18 @@ export function retainProcessEventBatch(
   const onDeliveryError = opts.onDeliveryError;
   let pendingDeliveries = 0;
   const callback: RetainedProcessEventBatch = Object.assign(
-    (batch: Parameters<ProcessEventBatch>[0], opts?: DeliveryOptions) => {
+    (
+      batch: Parameters<ProcessEventBatch>[0],
+      newestCreatedAtMs?: number,
+      onSettled?: DeliverySettled,
+    ) => {
       let result: unknown;
       try {
         result = retained(batch);
       } catch (error) {
         // A disposed/broken stub can throw synchronously at call time.
         onDeliveryError?.(error);
-        opts?.onSettled?.("error");
+        if (newestCreatedAtMs !== undefined) onSettled?.("error", newestCreatedAtMs);
         return;
       }
       if (onDeliveryError !== undefined && isThenable(result)) {
@@ -124,10 +125,12 @@ export function retainProcessEventBatch(
         pendingDeliveries += 1;
         void Promise.resolve(result)
           .then(
-            () => opts?.onSettled?.("ok"),
+            () => {
+              if (newestCreatedAtMs !== undefined) onSettled?.("ok", newestCreatedAtMs);
+            },
             (error: unknown) => {
               onDeliveryError(error);
-              opts?.onSettled?.("error");
+              if (newestCreatedAtMs !== undefined) onSettled?.("error", newestCreatedAtMs);
             },
           )
           .finally(() => {
@@ -140,7 +143,9 @@ export function retainProcessEventBatch(
       // Ephemeral lane (results disposed unpulled): "settled" is meaningless
       // here — the subscriber's consumption is self-reported instead — but a
       // LOCAL sink's synchronous return is a genuine settle.
-      if (onDeliveryError !== undefined) opts?.onSettled?.("ok");
+      if (onDeliveryError !== undefined && newestCreatedAtMs !== undefined) {
+        onSettled?.("ok", newestCreatedAtMs);
+      }
     },
     {
       pendingDeliveries: () => pendingDeliveries,

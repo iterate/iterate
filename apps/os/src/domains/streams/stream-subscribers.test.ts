@@ -2010,6 +2010,49 @@ describe("StreamSubscribers runtime metrics", () => {
     });
   });
 
+  it("wake-lane overlapping results retain their own timestamps when settling out of order", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "first"));
+    h.advanceTo(100);
+    h.configure(wakePayload(), 0);
+
+    const pending: { offset: number; resolve: () => void }[] = [];
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink: retainProcessEventBatch(
+        (batch) => {
+          const result = Promise.withResolvers<void>();
+          pending.push({ offset: batch.events.at(-1)!.offset, resolve: result.resolve });
+          return result.promise;
+        },
+        { onDeliveryError: () => {} },
+      ),
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+    const second = evt(2, "second");
+    h.append(second);
+    h.subscribers.wake([{ event: second, byteLength: 64 }]);
+    await h.settle();
+    expect(pending.map(({ offset }) => offset)).toEqual([1, 2]);
+
+    h.advanceTo(200);
+    pending[1]!.resolve(); // second event: 200 - 2 = 198ms
+    await h.settle();
+    h.advanceTo(300);
+    pending[0]!.resolve(); // first event: 300 - 1 = 299ms
+    await h.settle();
+
+    expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toEqual({
+      last: 299,
+      p50: 198,
+      p95: 299,
+      samples: 2,
+      lastAt: 300,
+    });
+  });
+
   it("mutual ping: NTP math cancels responder clock skew; rounds are throttled", async () => {
     const h = makeHarness();
     const SKEW = 100_000; // responder clock runs far ahead

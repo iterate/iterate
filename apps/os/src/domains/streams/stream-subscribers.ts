@@ -1334,6 +1334,14 @@ export class StreamSubscribers {
     let initialBatchPending = true;
     let draining = false;
     let open = true;
+    const onDeliverySettled =
+      subscriptionType === "configured"
+        ? (outcome: "ok" | "error", newestCreatedAtMs: number) => {
+            if (outcome !== "ok") return;
+            const settledAtMs = this.#hooks.now();
+            connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
+          }
+        : undefined;
 
     const pump = async () => {
       draining = true;
@@ -1424,13 +1432,8 @@ export class StreamSubscribers {
             } satisfies StreamEventBatch,
             newestCreatedAtMs === undefined || !Number.isFinite(newestCreatedAtMs)
               ? undefined
-              : {
-                  onSettled: (outcome) => {
-                    if (outcome !== "ok") return;
-                    const settledAtMs = this.#hooks.now();
-                    connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
-                  },
-                },
+              : newestCreatedAtMs,
+            onDeliverySettled,
           );
           await Promise.resolve();
           // Every append calls wake(). If no wake landed while this pump
