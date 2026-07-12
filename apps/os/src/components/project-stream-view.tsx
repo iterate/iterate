@@ -37,9 +37,9 @@ import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.t
 import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import {
-  StreamProcessorsPanel,
+  StreamStatePanel,
   type StreamRuntimeDebugState,
-} from "~/components/stream-processors-panel.tsx";
+} from "~/components/stream-state-panel.tsx";
 import {
   StreamViewComposer,
   type StreamInterrupt,
@@ -364,8 +364,8 @@ export function ProjectStreamView({
     </div>
   );
 
-  const processorsSheet = (
-    <StreamProcessorsPanel
+  const streamStateSheet = (
+    <StreamStatePanel
       open={panels.processorsPanelOpen}
       onOpenChange={(open) => {
         if (!open) panels.closeProcessorsPanel();
@@ -398,7 +398,7 @@ export function ProjectStreamView({
           streamPath={streamPath}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
-        {processorsSheet}
+        {streamStateSheet}
         <StreamEventsSheet streamPath={streamPath}>
           {filterRow}
           {feedColumn}
@@ -429,7 +429,7 @@ export function ProjectStreamView({
         )}
         {feedColumn}
       </div>
-      {processorsSheet}
+      {streamStateSheet}
     </section>
   );
 }

@@ -1198,6 +1198,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       connections: Record<string, ConnectionRuntimeState>;
       subscriptions: Record<string, SubscriptionRuntimeState>;
       metrics: StreamThroughputMetrics;
+      /** SQLite database size in bytes (event log + spine rows + chunks). */
+      storageSizeBytes: number;
     };
   } {
     // Observer-driven RTT sampling: being asked for runtime state IS the
@@ -1210,6 +1212,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         connections: this.#subscribers.connectionRuntimeState(),
         subscriptions: this.#subscribers.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
+        storageSizeBytes: this.ctx.storage.sql.databaseSize,
       },
     };
   }

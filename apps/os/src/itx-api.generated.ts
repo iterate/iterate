@@ -1090,6 +1090,8 @@ export interface Stream {
       connections: Record<string, ConnectionRuntimeState>;
       subscriptions: Record<string, SubscriptionRuntimeState>;
       metrics: StreamThroughputMetrics;
+      /** SQLite database size in bytes (event log + spine rows + chunks). */
+      storageSizeBytes: number;
     };
   }>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */

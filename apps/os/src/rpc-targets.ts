@@ -498,6 +498,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       connections: Record<string, ConnectionRuntimeState>;
       subscriptions: Record<string, SubscriptionRuntimeState>;
       metrics: StreamThroughputMetrics;
+      /** SQLite database size in bytes (event log + spine rows + chunks). */
+      storageSizeBytes: number;
     };
   }> {
     return this.durableObjectStub.runtimeState();
