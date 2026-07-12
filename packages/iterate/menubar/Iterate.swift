@@ -40,12 +40,13 @@ struct MenuBarConfig: Codable {
     return config
   }
 
-  /// The argv for `iterate approve --json` (or `login`) under this config.
-  func argv(for subcommand: [String]) -> [String] {
+  /// The argv for a subcommand under this config. `login` takes no `--project`
+  /// (it rejects the flag), so callers opt out of it there.
+  func argv(for subcommand: [String], includeProject: Bool = true) -> [String] {
     var out = args
     if let config { out += ["--config", config] }
     out += subcommand
-    if let project { out += ["--project", project] }
+    if includeProject, let project { out += ["--project", project] }
     return out
   }
 }
@@ -123,7 +124,12 @@ final class ApprovalController: ObservableObject {
       }
     }
     process.terminationHandler = { [weak self] _ in
-      DispatchQueue.main.async { self?.watcherExited() }
+      DispatchQueue.main.async {
+        // Guard on the session: a late callback from a process we already
+        // replaced must not tear down the new one.
+        guard let self, self.generation == session else { return }
+        self.watcherExited()
+      }
     }
     do {
       try process.run()
@@ -189,7 +195,7 @@ final class ApprovalController: ObservableObject {
     reconnectAttempts = 0  // an explicit retry clears the give-up counter
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = [config.command] + config.argv(for: ["login"])
+    process.arguments = [config.command] + config.argv(for: ["login"], includeProject: false)
     if let cwd = config.cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
     process.terminationHandler = { [weak self] _ in
       Task { @MainActor in
@@ -350,6 +356,7 @@ struct ComputerCall: Identifiable, Equatable {
   let method: String
   let summary: String
   var running: Bool
+  var ok = true  // set from call-done; a failed local call must not read as success
 }
 
 /// Drives `iterate use-my-computer --json`: lends this Mac to the project's
@@ -363,6 +370,7 @@ final class ComputerController: ObservableObject {
 
   @Published var enabled = false  // the human asked to share
   @Published var sharing = false  // the capability is mounted and live
+  @Published var reconnecting = false  // mount dropped; the CLI is re-establishing it
   @Published var computerName: String?  // the itx.<name> agents call
   @Published var recentCalls: [ComputerCall] = []  // capped display list
   @Published private var activeCalls = 0  // in-flight count, independent of the cap
@@ -419,8 +427,18 @@ final class ComputerController: ObservableObject {
     let session = generation
     stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
       let chunk = handle.availableData
-      if chunk.isEmpty {  // EOF: clear the handler so it stops busy-looping
+      if chunk.isEmpty {  // EOF — the child closed stdout, i.e. it has exited.
         handle.readabilityHandler = nil
+        DispatchQueue.main.async {
+          // Tear down HERE, on EOF, NOT in terminationHandler. EOF is delivered on
+          // this same handle after every data chunk, so a final `conflict` status
+          // line is ingested (and sets the takeover message) before we exit.
+          // Terminating off the process's death instead is a separate event that
+          // can win the race, bump `generation`, and drop that last line —
+          // leaving the generic "Stopped sharing" instead of the takeover error.
+          guard let self, self.generation == session else { return }
+          self.watcherExited()
+        }
         return
       }
       DispatchQueue.main.async {
@@ -429,7 +447,13 @@ final class ComputerController: ObservableObject {
       }
     }
     process.terminationHandler = { [weak self] _ in
-      DispatchQueue.main.async { self?.watcherExited() }
+      // Teardown is driven by stdout EOF (above), which is ordered after the
+      // child's final line; just release the finished process here. A late
+      // callback from a process we already replaced is voided by the guard.
+      DispatchQueue.main.async {
+        guard let self, self.generation == session else { return }
+        self.process = nil
+      }
     }
     do {
       try process.run()
@@ -449,6 +473,7 @@ final class ComputerController: ObservableObject {
     process = nil
     detachIO()
     sharing = false
+    reconnecting = false
     recentCalls = []
     activeCalls = 0
   }
@@ -459,6 +484,7 @@ final class ComputerController: ObservableObject {
     generation += 1
     detachIO()
     sharing = false
+    reconnecting = false
     recentCalls = []
     activeCalls = 0
     if enabled {
@@ -490,7 +516,14 @@ final class ComputerController: ObservableObject {
   private func handle(_ event: [String: Any]) {
     switch event["type"] as? String {
     case "status":
-      if event["loggedIn"] as? Bool == true {
+      if event["conflict"] as? Bool == true {
+        // Another session took the name — the CLI is stopping; reflect that.
+        stop()
+        lastError = "Another session took over sharing this computer."
+      } else if event["loggedIn"] as? Bool == true {
+        // `reconnecting:true` = the mount dropped and the CLI is re-establishing
+        // it; the plain status (no flag) means we're live again.
+        reconnecting = event["reconnecting"] as? Bool == true
         sharing = true
         computerName = event["name"] as? String
       } else {
@@ -519,6 +552,7 @@ final class ComputerController: ObservableObject {
       // array reliably republishes. Same idiom as ApprovalController.setSubmitting.
       var call = recentCalls[index]
       call.running = false
+      call.ok = event["ok"] as? Bool ?? true  // a failed local call is shown as failed, not done
       recentCalls[index] = call
     default:
       break
@@ -586,8 +620,10 @@ struct DropdownView: View {
             HStack(spacing: 6) {
               if call.running {
                 ProgressView().controlSize(.small)
-              } else {
+              } else if call.ok {
                 Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
+              } else {
+                Image(systemName: "xmark.circle").foregroundStyle(.orange)
               }
               Text("\(call.method) · \(call.summary)")
                 .font(.caption)
@@ -604,6 +640,7 @@ struct DropdownView: View {
     if !controller.loggedIn { return "Sign in to lend this Mac to agents." }
     if computer.sharing {
       let name = computer.computerName.map { "itx.\($0)" } ?? "your computer"
+      if computer.reconnecting { return "Reconnecting \(name)…" }
       return computer.inUse ? "In use now — \(name)" : "\(name) is live for this project."
     }
     if computer.enabled { return "Starting…" }
