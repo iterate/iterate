@@ -23,7 +23,6 @@
 
 import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import type { StreamEvent } from "./schemas.ts";
-import { parseStreamStoredJsonEvent } from "./stream-event-validation.ts";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 4;
@@ -561,10 +560,10 @@ export class StreamEventLog {
     return events;
   }
 
+  /** Decode exact rows produced by append; JSON syntax corruption still fails loudly. */
   #parseEvent(storedJson: string | EventChunks, byteLength: number): StreamEvent {
     const json = typeof storedJson === "string" ? storedJson : decodeChunks(storedJson, byteLength);
-    const parsed = JSON.parse(json) as unknown;
-    return parseStreamStoredJsonEvent(parsed);
+    return JSON.parse(json) as StreamEvent;
   }
 }
 

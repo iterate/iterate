@@ -168,6 +168,42 @@ describe("StreamEventLog.getRange", () => {
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
   });
 
+  it("round-trips the exact committed source and payload representation", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    const committed: StreamEvent = {
+      ...event(1, "events.iterate.com/test/sourced"),
+      payload: { nested: { value: true } },
+      metadata: { traceId: "trace" },
+      source: {
+        processor: {
+          slug: "processor",
+          version: "1",
+          stream: { projectId: null, path: "/processor" },
+          whileProcessing: { offset: 7, type: "events.iterate.com/test/origin" },
+        },
+      },
+    };
+
+    log.insert([committed]);
+    const replayed = log.getRangeSized({ afterOffset: 0, beforeOffset: 2, limit: 1 })[0]!.event;
+
+    expect(replayed).toEqual(committed);
+    expect(replayed).not.toBe(committed);
+    expect(replayed.payload).not.toBe(committed.payload);
+  });
+
+  it("fails loudly when stored JSON syntax is corrupt", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    log.insert([event(1, "events.iterate.com/test/corrupt")]);
+    db.prepare("update events set event_json = ? where offset = 1").run(
+      new TextEncoder().encode('{"type":'),
+    );
+
+    expect(() => log.getByOffset(1)).toThrow(SyntaxError);
+    expect(() => read(log, { afterOffset: 0, limit: 1 })).toThrow(SyntaxError);
+  });
+
   it("writes a bounded single event inline with one statement", () => {
     const inserts: Array<{ statement: string; bindings: readonly SqlStorageValue[] }> = [];
     const db = new DatabaseSync(":memory:");

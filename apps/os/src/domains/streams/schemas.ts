@@ -5,11 +5,8 @@ export const StreamEventInput = z.object({
   type: z.string(),
   payload: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
-  // Deliberately NOT strict: committed rows are re-parsed through this schema
-  // on every read (stream-storage.ts), so a strict envelope would poison
-  // every stream holding an event with a retired source shape (e.g. the
-  // pre-chain `crossPost` object). Unknown keys strip on read; the row is
-  // untouched.
+  // Source input is normalized once at append. Stored rows are exact commit
+  // output and replay trusts that boundary instead of schema-parsing every row.
   source: z
     .object({
       // Stamped by the StreamProcessor append lanes: which processor appended
@@ -18,8 +15,8 @@ export const StreamEventInput = z.object({
       // offsets resolve), recorded absolutely so the stamp stays meaningful on
       // rows appended cross-stream and on cross-posted copies. The stamp is a
       // claim, not authentication: same trust model as idempotency keys.
-      // Deliberately not strict (see the envelope comment above): a retired
-      // stamp field must strip on read, not poison the row.
+      // Non-strict source inputs are normalized here, before their committed
+      // representation is serialized into the exact stream schema.
       processor: z
         .object({
           slug: z.string(),
