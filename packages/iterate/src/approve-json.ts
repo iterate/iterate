@@ -49,6 +49,9 @@ import {
 
 const RESOLUTION_TYPES = [EVENT.settled, EVENT.rejected];
 
+/** Back-off before re-arming a settlement watch after a transient read error. */
+const SETTLEMENT_RETRY_MS = 2_000;
+
 function emit(line: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(line)}\n`);
 }
@@ -105,34 +108,43 @@ export async function runApprovalJson(input: {
     // A dedicated handle so a settlement wait never queues behind the tail or an
     // append on their handles.
     const watchStream = project.streams.get("/") as unknown as RpcStub<Stream>;
-    void awaitSettlement(watchStream, offset).then((settlement) => {
-      watching.delete(offset);
-      if (settlement.kind === "unsettled") {
-        // The grant didn't take (unenrolled/revoked key) and the hold is still
-        // open — clear the spinner AND the decided-claim so Approve/Reject can be
-        // used again, like the terminal.
-        decided.delete(offset);
-        emit({ type: "unsettled", offset });
+    void (async () => {
+      // A grant has been seen, so from here the door is the SOLE authority for
+      // this row. A transient read failure (`error`) must NOT end the watch: that
+      // would hand the row back to the live tail, which treats a raw reject as
+      // terminal — a stray veto could then be reported while the door is still
+      // committing a release. So on `error` we keep the watch (and the `decided`
+      // claim) and re-arm; only a genuine settlement, or the door ignoring an
+      // unverifiable grant (`unsettled`), ends the watch. A row nothing ever
+      // settles re-arms until the request expires, when the door appends its
+      // terminal event.
+      while (true) {
+        const settlement = await awaitSettlement(watchStream, offset);
+        if (settlement.kind === "error") {
+          await new Promise((resolve) => setTimeout(resolve, SETTLEMENT_RETRY_MS));
+          continue;
+        }
+        watching.delete(offset);
+        if (settlement.kind === "unsettled") {
+          // The grant didn't take (unenrolled/revoked key) and the hold is still
+          // open — clear the decided-claim so Approve/Reject can be used again,
+          // like the terminal.
+          decided.delete(offset);
+          emit({ type: "unsettled", offset });
+          return;
+        }
+        resolved.add(offset);
+        pending.delete(offset);
+        if (settlement.kind === "released") {
+          emit({ type: "settled", offset, outcome: "released", status: settlement.status });
+        } else if (settlement.kind === "delivery-failed") {
+          emit({ type: "settled", offset, outcome: "delivery-failed", error: settlement.error });
+        } else {
+          emit({ type: "settled", offset, outcome: "rejected", reason: settlement.reason });
+        }
         return;
       }
-      if (settlement.kind === "error") {
-        // Couldn't read the outcome (transport/protocol failure) — do NOT mark
-        // this resolved. Surface the error, release the claim, and leave the row
-        // pending so the live tail settles it authoritatively when the event lands.
-        decided.delete(offset);
-        emit({ type: "error", offset, message: settlement.message });
-        return;
-      }
-      resolved.add(offset);
-      pending.delete(offset);
-      if (settlement.kind === "released") {
-        emit({ type: "settled", offset, outcome: "released", status: settlement.status });
-      } else if (settlement.kind === "delivery-failed") {
-        emit({ type: "settled", offset, outcome: "delivery-failed", error: settlement.error });
-      } else {
-        emit({ type: "settled", offset, outcome: "rejected", reason: settlement.reason });
-      }
-    });
+    })();
   }
 
   // Reconcile the backlog: replay history once, emit still-open requests (a
