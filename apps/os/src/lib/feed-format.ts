@@ -27,10 +27,10 @@ export function formatFileSize(size: number): string {
   return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
 }
 
-/** Human bytes-per-second from a rolling one-minute byte total. */
-export function formatBytesPerSecond(bytesPerMinute: number): string {
-  if (bytesPerMinute <= 0) return "0 B/s";
-  return `${formatFileSize(Math.round(bytesPerMinute / 60))}/s`;
+/** Human bytes-per-second rate. */
+export function formatBytesPerSecond(bytesPerSecond: number): string {
+  if (bytesPerSecond <= 0) return "0 B/s";
+  return `${formatFileSize(Math.round(bytesPerSecond))}/s`;
 }
 
 /** Code-mode agents stream itx code as their response; chat agents stream

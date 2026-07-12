@@ -1530,10 +1530,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamThroughputMetrics",
     kind: "typeAlias",
     sourceText:
-      "/** What `runtimeState()` reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** Appends committed (all producers). */\n  ingressLastMinute: MinuteWindow;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egressLastMinute: MinuteWindow;\n};",
+      "/** What `runtimeState()` reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
     summary: "What `runtimeState()` reports for the stream's own throughput.",
     memberSummaries: {},
-    referencedTypeNames: ["MinuteWindow"],
+    referencedTypeNames: ["ThroughputReport"],
   },
   {
     name: "ProcessEventBatch",
@@ -1821,13 +1821,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["ItxExpression"],
   },
   {
-    name: "MinuteWindow",
+    name: "ThroughputReport",
     kind: "typeAlias",
     sourceText:
-      '/** One rolling-minute throughput window. */\nexport type MinuteWindow = {\n  /** Events in the last 60 seconds. */\n  count: number;\n  /** Payload bytes in the last 60 seconds. */\n  bytes: number;\n  /** `count / 60` — the "events/s over the last minute" number. */\n  perSecond: number;\n};',
-    summary: "One rolling-minute throughput window.",
+      "/**\n * One direction's throughput report: a responsive trailing-5s rate (the\n * number UIs show), the full-minute totals, and the raw 1s series for graphs.\n */\nexport type ThroughputReport = {\n  /** Events per second over the trailing 5 seconds. */\n  perSecond5s: number;\n  /** Payload bytes per second over the trailing 5 seconds. */\n  bytesPerSecond5s: number;\n  lastMinute: MinuteWindow;\n  series: ThroughputSeries;\n};",
+    summary:
+      "One direction's throughput report: a responsive trailing-5s rate (the number UIs show), the full-minute totals, and the raw 1s series for graphs.",
     memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["MinuteWindow", "ThroughputSeries"],
   },
   {
     name: "StreamEventBatch",
@@ -1941,6 +1942,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       "/** One commit returned by `WorkspaceGit.log` (the config repo's main history). */\nexport type WorkspaceGitLogEntry = {\n  author: { email: string; name: string };\n  message: string;\n  oid: string;\n  /** Epoch milliseconds. */\n  timestamp: number;\n};",
     summary: "One commit returned by `WorkspaceGit.log` (the config repo's main history).",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "MinuteWindow",
+    kind: "typeAlias",
+    sourceText:
+      '/** One rolling-minute throughput window. */\nexport type MinuteWindow = {\n  /** Events in the last 60 seconds. */\n  count: number;\n  /** Payload bytes in the last 60 seconds. */\n  bytes: number;\n  /** `count / 60` — the "events/s over the last minute" number. */\n  perSecond: number;\n};',
+    summary: "One rolling-minute throughput window.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ThroughputSeries",
+    kind: "typeAlias",
+    sourceText:
+      "/** Per-second buckets over the trailing minute, oldest→newest, length 60. */\nexport type ThroughputSeries = {\n  counts: number[];\n  bytes: number[];\n};",
+    summary: "Per-second buckets over the trailing minute, oldest→newest, length 60.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

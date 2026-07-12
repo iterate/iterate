@@ -25,6 +25,15 @@ import {
  * on purpose: a change to the runtime shape becomes a one-line edit here
  * instead of the same mechanical edit in every test double.
  */
+function emptyThroughputReport() {
+  return {
+    perSecond5s: 0,
+    bytesPerSecond5s: 0,
+    lastMinute: { count: 0, bytes: 0, perSecond: 0 },
+    series: { counts: new Array(60).fill(0), bytes: new Array(60).fill(0) },
+  };
+}
+
 export function emptyStreamRuntimeState() {
   return {
     coreProcessorState: null,
@@ -33,8 +42,8 @@ export function emptyStreamRuntimeState() {
       subscriptions: {},
       metrics: {
         measuredSince: new Date(0).toISOString(),
-        ingressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
-        egressLastMinute: { count: 0, bytes: 0, perSecond: 0 },
+        ingress: emptyThroughputReport(),
+        egress: emptyThroughputReport(),
       },
     },
   };
