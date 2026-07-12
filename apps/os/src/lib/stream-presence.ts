@@ -21,7 +21,7 @@ export type BrowserStreamMetricsView = BrowserStreamMetrics & {
 };
 
 const SPARK_LENGTH = 24;
-const METRICS_POLL_MS = 2_000;
+const METRICS_POLL_MS = 1_000;
 
 /** Poll the store's measured metrics and accumulate the RTT sparkline. */
 export function useBrowserStreamMetrics(store: {
@@ -36,6 +36,7 @@ export function useBrowserStreamMetrics(store: {
   useEffect(() => {
     let spark: number[] = [];
     let lastSampleAt = 0;
+    let lastSerialized = "";
     const tick = () => {
       const current = store.metrics();
       const rtt = current.transportRttMs;
@@ -43,7 +44,13 @@ export function useBrowserStreamMetrics(store: {
         lastSampleAt = rtt.lastAt;
         spark = [...spark.slice(-(SPARK_LENGTH - 1)), rtt.last];
       }
-      setView({ ...current, spark });
+      // Change-gated: ticks without a new sample (a quiet stream between
+      // probes) must not rerender the whole stream view every second.
+      const next = { ...current, spark };
+      const serialized = JSON.stringify(next);
+      if (serialized === lastSerialized) return;
+      lastSerialized = serialized;
+      setView(next);
     };
     tick();
     const timer = setInterval(tick, METRICS_POLL_MS);
@@ -53,11 +60,16 @@ export function useBrowserStreamMetrics(store: {
   return view;
 }
 
-export function sparklinePoints(values: readonly number[], width: number, height: number): string {
-  // Scale to the window's own max (floored so ordinary sub-100ms jitter
-  // doesn't render as drama), instead of a hardcoded ceiling that flattens
-  // fast connections and clips slow ones.
-  const max = Math.max(100, ...values);
+export function sparklinePoints(
+  values: readonly number[],
+  width: number,
+  height: number,
+  opts: {
+    /** Shared scale for multi-series graphs; defaults to this series' own max, floored at 100 (RTT jitter shouldn't render as drama). */
+    max?: number;
+  } = {},
+): string {
+  const max = opts.max ?? Math.max(100, ...values);
   const count = values.length;
   if (count === 0) return "";
   return values

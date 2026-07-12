@@ -2477,9 +2477,9 @@ export type StreamThroughputMetrics = {
   /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
   measuredSince: string;
   /** Appends committed (all producers). */
-  ingressLastMinute: MinuteWindow;
+  ingress: ThroughputReport;
   /** Deliveries dispatched (all lanes, all subscribers). */
-  egressLastMinute: MinuteWindow;
+  egress: ThroughputReport;
 };
 
 /**
@@ -2836,14 +2836,17 @@ export type SubscriptionDelivery =
   | { mode: "push"; expression: ItxExpression }
   | { mode: "webhook"; url: string };
 
-/** One rolling-minute throughput window. */
-export type MinuteWindow = {
-  /** Events in the last 60 seconds. */
-  count: number;
-  /** Payload bytes in the last 60 seconds. */
-  bytes: number;
-  /** `count / 60` — the "events/s over the last minute" number. */
-  perSecond: number;
+/**
+ * One direction's throughput report: a responsive trailing-5s rate (the
+ * number UIs show), the full-minute totals, and the raw 1s series for graphs.
+ */
+export type ThroughputReport = {
+  /** Events per second over the trailing 5 seconds. */
+  perSecond5s: number;
+  /** Payload bytes per second over the trailing 5 seconds. */
+  bytesPerSecond5s: number;
+  lastMinute: MinuteWindow;
+  series: ThroughputSeries;
 };
 
 /**
@@ -3002,6 +3005,22 @@ export type WorkspaceGitLogEntry = {
   oid: string;
   /** Epoch milliseconds. */
   timestamp: number;
+};
+
+/** One rolling-minute throughput window. */
+export type MinuteWindow = {
+  /** Events in the last 60 seconds. */
+  count: number;
+  /** Payload bytes in the last 60 seconds. */
+  bytes: number;
+  /** `count / 60` — the "events/s over the last minute" number. */
+  perSecond: number;
+};
+
+/** Per-second buckets over the trailing minute, oldest→newest, length 60. */
+export type ThroughputSeries = {
+  counts: number[];
+  bytes: number[];
 };
 
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),

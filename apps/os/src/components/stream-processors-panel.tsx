@@ -91,7 +91,7 @@ type ProcessorPanelEntry = {
  * Overview poll cadence while the sheet is open. Also the observer signal for
  * the stream's throttled ping sampling (see runtimeState in rpc-targets.ts).
  */
-const STREAM_RUNTIME_POLL_MS = 2_000;
+const STREAM_RUNTIME_POLL_MS = 1_000;
 
 const CORE_PROCESSOR_KEY = "__stream-core__";
 const CORE_PROCESSOR_ANNOUNCEMENT: AgentUiProcessorAnnouncement = {
@@ -384,7 +384,9 @@ function ProcessorsOverview({
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Connection RTT
             </span>
-            <span className="font-mono text-[10px] text-muted-foreground/70">this browser</span>
+            <span className="font-mono text-[10px] text-muted-foreground/70">
+              this browser · sampled each poll
+            </span>
           </div>
           <div className="mt-2 flex items-end gap-3">
             <span className="font-mono text-2xl font-semibold leading-none">
@@ -407,11 +409,19 @@ function ProcessorsOverview({
             )}
           </div>
           <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
-            <MetricStat label="p50" value={rtt === null ? "—" : `${rtt.p50}ms`} />
-            <MetricStat label="p95" value={rtt === null ? "—" : `${rtt.p95}ms`} />
             <MetricStat
-              label="append"
-              title="Append call → commit acknowledged (this browser's own appends)"
+              label="p50 · 32 samples"
+              title="Median of the last 32 RTT samples"
+              value={rtt === null ? "—" : `${rtt.p50}ms`}
+            />
+            <MetricStat
+              label="p95 · 32 samples"
+              title="95th percentile (nearest-rank) of the last 32 RTT samples"
+              value={rtt === null ? "—" : `${rtt.p95}ms`}
+            />
+            <MetricStat
+              label="append · last"
+              title="Most recent append call → commit acknowledged (this browser's own appends)"
               value={
                 subscriber?.appendRoundTripMs == null
                   ? "—"
@@ -419,40 +429,79 @@ function ProcessorsOverview({
               }
             />
             <MetricStat
-              label="own loop"
-              title="Append call → this browser's own subscription ingested the committed event"
+              label="own loop · last"
+              title="Most recent append call → this browser's own subscription ingested the committed event"
               value={
                 subscriber?.consumeOwnAppendMs == null
                   ? "—"
                   : `${subscriber.consumeOwnAppendMs.last}ms`
               }
             />
+          </div>
+
+          <div className="mt-4 flex items-baseline justify-between border-t border-border/60 pt-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Throughput
+            </span>
+            <span className="font-mono text-[10px] text-muted-foreground/70">
+              this stream · 1s buckets · last 60s
+            </span>
+          </div>
+          {throughput === undefined ? (
+            <div className="mt-2 h-11 text-xs text-muted-foreground/70">measuring…</div>
+          ) : (
+            <div className="mt-2 flex items-end gap-3">
+              <span
+                className="font-mono text-2xl font-semibold leading-none"
+                title="Appends committed per second, trailing 5s"
+              >
+                {formatRate(throughput.ingress.perSecond5s)}
+                <span className="text-xs text-muted-foreground">ev/s</span>
+              </span>
+              <ThroughputGraph
+                ingress={throughput.ingress.series.counts}
+                egress={throughput.egress.series.counts}
+              />
+            </div>
+          )}
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
             <MetricStat
-              label="events/s"
-              title="Appends committed on this stream over the last minute"
-              value={
-                throughput === undefined ? "—" : throughput.ingressLastMinute.perSecond.toFixed(1)
-              }
-            />
-            <MetricStat
-              label="in"
-              title="Bytes appended over the last minute"
+              label="in · 5s"
+              title="Bytes appended per second, trailing 5s"
               value={
                 throughput === undefined
                   ? "—"
-                  : formatBytesPerSecond(throughput.ingressLastMinute.bytes)
+                  : formatBytesPerSecond(throughput.ingress.bytesPerSecond5s)
               }
             />
             <MetricStat
-              label="out"
-              title="Bytes delivered to all subscribers over the last minute"
+              label="out · 5s"
+              title="Bytes delivered to all subscribers per second, trailing 5s"
               value={
                 throughput === undefined
                   ? "—"
-                  : formatBytesPerSecond(throughput.egressLastMinute.bytes)
+                  : formatBytesPerSecond(throughput.egress.bytesPerSecond5s)
               }
             />
-            <MetricStat label="head" value={`#${eventCount}`} />
+            <MetricStat
+              label="events · 60s"
+              title="Appends committed in the last minute (delivered in the last minute in parens)"
+              value={
+                throughput === undefined
+                  ? "—"
+                  : `${throughput.ingress.lastMinute.count} (${throughput.egress.lastMinute.count} out)`
+              }
+            />
+            <MetricStat label="head" title="Stream head offset" value={`#${eventCount}`} />
+            <MetricStat
+              label="measuring"
+              title={
+                throughput === undefined
+                  ? "Metrics are in-memory and reset when the stream Durable Object restarts"
+                  : `Since ${throughput.measuredSince} (in-memory; resets on stream restart)`
+              }
+              value={throughput === undefined ? "—" : sinceLabel(throughput.measuredSince)}
+            />
           </div>
           <div className="mt-3 flex justify-end">
             <Button
@@ -887,6 +936,55 @@ function readAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
 function isLlmish(entry: Pick<AgentUiPresenceEntry, "processor">): boolean {
   const slug = entry.processor?.slug ?? "";
   return ["agent", "capability-host"].includes(slug);
+}
+
+/**
+ * Both throughput directions on one shared scale: ingress (appends) as the
+ * filled area, egress (deliveries) as the dashed line — comparable at a
+ * glance, and honest about which direction spiked.
+ */
+function ThroughputGraph({ ingress, egress }: { ingress: number[]; egress: number[] }) {
+  const peak = Math.max(...ingress, ...egress);
+  // The scale floors at 5/s so single events don't render as mountains; the
+  // tooltip reports the TRUE peak, not the floored axis.
+  const max = Math.max(5, peak);
+  const ingressPoints = sparklinePoints(ingress, 368, 44, { max });
+  const egressPoints = sparklinePoints(egress, 368, 44, { max });
+  return (
+    <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
+      <title>{`Appends (area) and deliveries (dashed) per second over the last 60s; peak ${peak}/s`}</title>
+      <polygon points={`2,42 ${ingressPoints} 366,42`} className="fill-sky-500/15" />
+      <polyline
+        points={ingressPoints}
+        fill="none"
+        className="stroke-sky-600"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <polyline
+        points={egressPoints}
+        fill="none"
+        strokeDasharray="3 2"
+        className="stroke-emerald-600/80"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Rates jitter less as "12" / "3.4" / "0.2" than as raw floats. */
+function formatRate(perSecond: number): string {
+  if (perSecond >= 10) return String(Math.round(perSecond));
+  return perSecond.toFixed(1);
+}
+
+/** Compact "how long has this window been collecting" caption. */
+function sinceLabel(measuredSinceIso: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - Date.parse(measuredSinceIso)) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${(seconds / 3600).toFixed(1)}h`;
 }
 
 function MetricStat({ label, value, title }: { label: string; value: string; title?: string }) {

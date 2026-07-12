@@ -81,16 +81,44 @@ describe("MinuteBuckets", () => {
   });
 });
 
+describe("MinuteBuckets windows and series", () => {
+  it("short windows report responsive rates; old buckets fall out", () => {
+    const buckets = new MinuteBuckets();
+    const t0 = 100_000_000;
+    buckets.bump(t0, 30, 3_000); // 10s ago — outside a 5s window
+    buckets.bump(t0 + 8_000, 10, 1_000); // 2s ago — inside
+    expect(buckets.window(t0 + 10_000, 5)).toEqual({ count: 10, bytes: 1_000 });
+    expect(buckets.window(t0 + 10_000, 60)).toEqual({ count: 40, bytes: 4_000 });
+  });
+
+  it("series is exactly 60 per-second entries, oldest→newest, silent seconds zero", () => {
+    const buckets = new MinuteBuckets();
+    const t0 = 100_000_000;
+    buckets.bump(t0, 7, 700); // now − 59s: the oldest visible bucket
+    buckets.bump(t0 + 59_000, 2, 200); // the current second
+    const series = buckets.series(t0 + 59_000);
+    expect(series.counts).toHaveLength(60);
+    expect(series.counts[0]).toBe(7);
+    expect(series.counts[59]).toBe(2);
+    expect(series.counts.reduce((sum, n) => sum + n, 0)).toBe(9);
+    expect(series.bytes[0]).toBe(700);
+    expect(series.bytes[59]).toBe(200);
+  });
+});
+
 describe("StreamRuntimeMetrics", () => {
-  it("reports measuredSince and both windows", () => {
+  it("reports measuredSince plus responsive rates, minute totals, and the series", () => {
     const metrics = new StreamRuntimeMetrics(1_700_000_000_000);
     metrics.ingress.bump(1_700_000_010_000, 4, 4000);
     metrics.egress.bump(1_700_000_010_000, 8, 8000);
-    expect(metrics.report(1_700_000_010_500)).toEqual({
-      measuredSince: "2023-11-14T22:13:20.000Z",
-      ingressLastMinute: { count: 4, bytes: 4000, perSecond: 4 / 60 },
-      egressLastMinute: { count: 8, bytes: 8000, perSecond: 8 / 60 },
-    });
+    const report = metrics.report(1_700_000_010_500);
+    expect(report.measuredSince).toBe("2023-11-14T22:13:20.000Z");
+    expect(report.ingress.perSecond5s).toBe(4 / 5);
+    expect(report.ingress.bytesPerSecond5s).toBe(4000 / 5);
+    expect(report.ingress.lastMinute).toEqual({ count: 4, bytes: 4000, perSecond: 4 / 60 });
+    expect(report.ingress.series.counts.reduce((sum, n) => sum + n, 0)).toBe(4);
+    expect(report.egress.perSecond5s).toBe(8 / 5);
+    expect(report.egress.lastMinute.bytes).toBe(8000);
   });
 });
 
