@@ -65,6 +65,31 @@ export class McpOAuthError extends Error {
   }
 }
 
+// The encrypted state carried through the redirect. Everything here is either
+// public discovery data or a freshly minted per-flow secret (client secret,
+// PKCE verifier) — which is exactly why the whole blob is encrypted, not just
+// signed, before it rides in a URL the provider echoes back.
+const MCPOAuthState = z.object({
+  v: z.literal("mcp-oauth-1"),
+  projectId: z.string(),
+  path: z.string(),
+  notify: z.string().optional(),
+  mcpUrl: z.string(),
+  resource: z.string().optional(),
+  redirectUri: z.string(),
+  authServerUrl: z.string(),
+  tokenEndpoint: z.string(),
+  /** Full RFC 8414 metadata, so the exchange picks the same client-auth method
+   * discovery advertised without re-fetching. */
+  authMetadata: z.unknown(),
+  clientId: z.string(),
+  clientSecret: z.string().optional(),
+  codeVerifier: z.string(),
+  egressOrigins: z.array(z.string()),
+  expiresAt: z.number(),
+});
+type MCPOAuthState = z.infer<typeof MCPOAuthState>;
+
 type BeginMcpOAuthInput = {
   /** The MCP server's streamable-HTTP URL (what itx.mcp.connect would take). */
   mcpUrl: string;
@@ -91,55 +116,6 @@ type BeginMcpOAuthResult = {
   /** The authorization server the user will sign in at (for the agent's message). */
   authorizationServer: string;
 };
-
-type CompleteMcpOAuthInput = {
-  /** The encrypted `state` echoed back by the provider. */
-  state: string;
-  /** The authorization code from the callback query. */
-  code: string;
-  /** The `iss` callback param (RFC 9207), validated against discovery. */
-  iss?: string;
-  encryptionKey: string;
-  fetchFn: FetchLike;
-};
-
-type CompleteMcpOAuthResult = {
-  path: string;
-  notify?: string;
-  mcpUrl: string;
-  egressOrigins: string[];
-  /** The Secret DO update the caller applies: material + egress + (maybe) refresh. */
-  secret: {
-    material: Record<string, string>;
-    egress: { urls: string[] };
-    refresh?: SecretRefresh;
-  };
-};
-
-// The encrypted state carried through the redirect. Everything here is either
-// public discovery data or a freshly minted per-flow secret (client secret,
-// PKCE verifier) — which is exactly why the whole blob is encrypted, not just
-// signed, before it rides in a URL the provider echoes back.
-const MCPOAuthState = z.object({
-  v: z.literal("mcp-oauth-1"),
-  projectId: z.string(),
-  path: z.string(),
-  notify: z.string().optional(),
-  mcpUrl: z.string(),
-  resource: z.string().optional(),
-  redirectUri: z.string(),
-  authServerUrl: z.string(),
-  tokenEndpoint: z.string(),
-  /** Full RFC 8414 metadata, so the exchange picks the same client-auth method
-   * discovery advertised without re-fetching. */
-  authMetadata: z.unknown(),
-  clientId: z.string(),
-  clientSecret: z.string().optional(),
-  codeVerifier: z.string(),
-  egressOrigins: z.array(z.string()),
-  expiresAt: z.number(),
-});
-type MCPOAuthState = z.infer<typeof MCPOAuthState>;
 
 export async function beginMcpOAuth(input: BeginMcpOAuthInput): Promise<BeginMcpOAuthResult> {
   const { fetchFn } = input;
@@ -248,6 +224,30 @@ export async function beginMcpOAuth(input: BeginMcpOAuthInput): Promise<BeginMcp
     authorizationServer: authServerUrl,
   };
 }
+
+type CompleteMcpOAuthInput = {
+  /** The encrypted `state` echoed back by the provider. */
+  state: string;
+  /** The authorization code from the callback query. */
+  code: string;
+  /** The `iss` callback param (RFC 9207), validated against discovery. */
+  iss?: string;
+  encryptionKey: string;
+  fetchFn: FetchLike;
+};
+
+type CompleteMcpOAuthResult = {
+  path: string;
+  notify?: string;
+  mcpUrl: string;
+  egressOrigins: string[];
+  /** The Secret DO update the caller applies: material + egress + (maybe) refresh. */
+  secret: {
+    material: Record<string, string>;
+    egress: { urls: string[] };
+    refresh?: SecretRefresh;
+  };
+};
 
 export async function completeMcpOAuth(
   input: CompleteMcpOAuthInput,
