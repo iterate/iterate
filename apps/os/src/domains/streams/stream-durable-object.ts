@@ -11,6 +11,7 @@ import {
   reduceOrdinaryEventAtTimestamp,
   type OrdinaryEventRun,
 } from "./stream-ordinary-event-run.ts";
+import { CoreCheckpointSchedule } from "./stream-core-checkpoint.ts";
 import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
@@ -130,6 +131,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     },
   });
   #coreProcessorState: CoreProcessorState;
+  readonly #coreCheckpointSchedule = new CoreCheckpointSchedule({ nowMs: 0 });
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -1089,21 +1091,22 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
 
-    if (!storedStateIsCurrent || state.maxOffset !== storedState.maxOffset) {
+    const checkpointLag = state.maxOffset - storedState.maxOffset;
+    const checkpointDue = storedStateIsCurrent
+      ? this.#coreCheckpointSchedule.restoreLag({
+          eventCount: checkpointLag,
+          // The constructor is synchronous. This exact activation baseline and
+          // the following woken append remain correct when workerd freezes time.
+          nowMs: Date.now(),
+        })
+      : true;
+    if (checkpointDue) {
       this.#writeCoreProcessorState(state);
     }
     return state;
   }
 
   #stateVersionWritten = false;
-  /** True while `#coreProcessorState` is ahead of the KV checkpoint. */
-  #checkpointDirty = false;
-  #eventsSinceCheckpoint = 0;
-  #checkpointWrittenAtMs = 0;
-  /** Debounce bounds: checkpoint at least every N events / T ms of appends. */
-  static readonly #CHECKPOINT_EVERY_EVENTS = 64;
-  static readonly #CHECKPOINT_MAX_LAG_MS = 1_000;
-
   /**
    * The debounced per-append checkpoint. Serializing the full core state into
    * KV on EVERY append is O(state) write amplification per event — on a busy
@@ -1111,32 +1114,28 @@ export class StreamDurableObject extends DurableObject<Env> {
    * event. Event rows are the commit boundary and the durable truth; the KV
    * checkpoint is a rebuild accelerator, and boot ALWAYS folds log rows past
    * it (`#catchUpCoreProcessorState`, paged) — so a checkpoint that lags by a
-   * bounded window (64 events / 1s) costs a small constructor fold, never
-   * correctness. Alarm and idle teardown flush so a stream going quiet
-   * checkpoints before it hibernates.
+   * bounded window costs a small constructor fold, never correctness. A warm
+   * activation restores offset lag into the same 64-event budget instead of
+   * rewriting the full state for its one `woken` fact. The 1s clock bound
+   * applies within an incarnation; abrupt restarts retain the offset bound,
+   * while alarm and idle teardown flush before normal hibernation.
    */
   #checkpointCoreProcessorState(newEventCount: number, now: number): void {
-    this.#eventsSinceCheckpoint += newEventCount;
-    if (
-      this.#eventsSinceCheckpoint < StreamDurableObject.#CHECKPOINT_EVERY_EVENTS &&
-      now - this.#checkpointWrittenAtMs < StreamDurableObject.#CHECKPOINT_MAX_LAG_MS
-    ) {
-      this.#checkpointDirty = true;
-      return;
+    if (this.#coreCheckpointSchedule.record({ eventCount: newEventCount, nowMs: now })) {
+      this.#writeCoreProcessorState(this.#coreProcessorState, now);
     }
-    this.#writeCoreProcessorState(this.#coreProcessorState, now);
   }
 
   /** Write the checkpoint now if the in-memory state is ahead of it. */
   #flushCoreProcessorState(): void {
-    if (this.#checkpointDirty) this.#writeCoreProcessorState(this.#coreProcessorState);
+    if (this.#coreCheckpointSchedule.needsFlush) {
+      this.#writeCoreProcessorState(this.#coreProcessorState);
+    }
   }
 
   #writeCoreProcessorState(state: CoreProcessorState, writtenAtMs = Date.now()): void {
     this.ctx.storage.kv.put("state", state);
-    this.#checkpointDirty = false;
-    this.#eventsSinceCheckpoint = 0;
-    this.#checkpointWrittenAtMs = writtenAtMs;
+    this.#coreCheckpointSchedule.didWrite(writtenAtMs);
     // The version is a constant per deploy. A warm activation observed it in
     // durable storage and sets this flag during read; a rebuild writes it once
     // after folding the new state shape.
