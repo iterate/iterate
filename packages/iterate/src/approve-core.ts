@@ -266,13 +266,13 @@ export async function awaitSettlement(
     (candidate.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===
     offset;
 
-  // ONE deadline for the whole call, so a re-scan after a rejection shares the
-  // remaining budget rather than starting a fresh full window (which could
-  // double the intended wait). Wait for the first matching event within it,
-  // re-arming a one-shot waitForEvent on chunk timeouts (and transient stream
-  // restarts). Returns null once the deadline passes.
-  const deadline = Date.now() + windowMs;
-  const waitWithin = async (eventTypes: readonly string[]): Promise<StreamEvent | null> => {
+  // Wait for the first matching event before `deadline`, re-arming a one-shot
+  // waitForEvent on chunk timeouts (and transient stream restarts). Returns null
+  // once the deadline passes.
+  const waitUntil = async (
+    eventTypes: readonly string[],
+    deadline: number,
+  ): Promise<StreamEvent | null> => {
     while (Date.now() < deadline) {
       try {
         return await stream.waitForEvent({
@@ -295,15 +295,20 @@ export async function awaitSettlement(
   };
 
   try {
-    const event = await waitWithin([EVENT.settled, EVENT.rejected]);
+    const event = await waitUntil([EVENT.settled, EVENT.rejected], Date.now() + windowMs);
     if (event === null) return { kind: "unsettled" };
     if (event.type === EVENT.settled) return settledOutcome(event);
 
-    // A rejection: authoritative only if no grant won. Re-scan for a `settled`
-    // (already committed, or landing before the window closes — the winning
-    // grant's upstream fetch can be slow); its presence means egress released
-    // and this reject is a stray veto.
-    const settled = await waitWithin([EVENT.settled]);
+    // A rejection is authoritative only if no grant won. The door acts on the
+    // FIRST resolution and appends `settled` only after the winning grant's
+    // upstream fetch finishes — up to a full egress window after it acted — so a
+    // reject that arrives late in the first window can still be shadowed by a
+    // slow `settled`. Re-scan with a FRESH window (not the leftover budget):
+    // sharing one deadline could leave a late reject no time to find the settled,
+    // reporting a stray veto as terminal while egress is actually releasing. The
+    // extra wait only ever runs after an observed reject, and exits the instant a
+    // `settled` lands.
+    const settled = await waitUntil([EVENT.settled], Date.now() + windowMs);
     return settled === null
       ? { kind: "rejected", reason: (event.payload as { reason?: string }).reason ?? "human" }
       : settledOutcome(settled);
