@@ -1707,36 +1707,45 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
    * agent scope, the page also messages that agent ("The user submitted the
    * secret at …"), which starts its next turn — send the URL to the user,
    * end the turn, and act on the notification. Nothing is created until the
-   * user submits; the link itself is stateless.
+   * user submits; the link itself is stateless. Works for EXISTING secrets
+   * too — the page warns before replacing — so it is also the way to rotate
+   * a credential (e.g. one the user pasted into chat and should roll).
    */
   async collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink> {
     const path = normalizeSecretPath(input.path);
     if (!path.isWellFormed()) {
       throw new Error("collectFromUser paths must be well-formed strings (no lone surrogates).");
     }
-    const egressUrls = [...new Set(input.egress.urls)];
-    if (egressUrls.length === 0) {
+    if (input.egress.urls.length === 0) {
       throw new Error(
         "collectFromUser needs at least one egress URL: the user is shown where the value can ever be sent, and a secret pinned to nothing can never be used.",
       );
     }
-    // Validate the pin at mint, so a bad list fails on the caller that can
-    // fix it — not as a raw "Invalid URL" in the user's face at submit time.
-    // Userinfo is rejected: it would ride a plaintext, shareable chat URL
-    // while origin-pinning ignores it anyway.
-    for (const url of egressUrls) {
-      const parsed = URL.canParse(url) ? new URL(url) : null;
-      if (parsed === null || !/^https?:$/.test(parsed.protocol)) {
-        throw new Error(
-          `collectFromUser egress URLs must be absolute http(s) URLs; got ${JSON.stringify(url)}.`,
-        );
-      }
-      if (parsed.username !== "" || parsed.password !== "") {
-        throw new Error(
-          `collectFromUser egress URLs must not carry credentials; got ${JSON.stringify(url)}.`,
-        );
-      }
-    }
+    // Pin to ORIGINS, not URLs. Enforcement (assertOriginPinned) only ever
+    // compares origins, so a pin of "https://api.acme.com/safe" would in fact
+    // authorize the whole origin — the page must not display a promise
+    // narrower than what is enforced. Normalizing here also dedupes. Userinfo
+    // is rejected: it would ride a plaintext, shareable chat URL while
+    // origin-pinning ignores it anyway. Bad input fails on the caller that can
+    // fix it, not as a raw "Invalid URL" in the user's face at submit time.
+    const egressOrigins = [
+      ...new Set(
+        input.egress.urls.map((url) => {
+          const parsed = URL.canParse(url) ? new URL(url) : null;
+          if (parsed === null || !/^https?:$/.test(parsed.protocol)) {
+            throw new Error(
+              `collectFromUser egress URLs must be absolute http(s) URLs; got ${JSON.stringify(url)}.`,
+            );
+          }
+          if (parsed.username !== "" || parsed.password !== "") {
+            throw new Error(
+              `collectFromUser egress URLs must not carry credentials; got ${JSON.stringify(url)}.`,
+            );
+          }
+          return parsed.origin;
+        }),
+      ),
+    ];
     const project = await readProjectById(env.PROJECT_DIRECTORY, this.props.projectId);
     if (!project?.slug) {
       throw new Error(`Project ${this.props.projectId} has no slug; cannot build a page URL.`);
@@ -1753,7 +1762,7 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
       projectSlug: project.slug,
       search: {
         path,
-        egress: egressUrls,
+        egress: egressOrigins,
         ...(input.description === undefined ? {} : { description: input.description }),
         ...(scopePath.startsWith("/agents/") ? { notify: scopePath } : {}),
       },

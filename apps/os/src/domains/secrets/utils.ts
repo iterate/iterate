@@ -38,6 +38,21 @@ export function normalizeSecretPath(path: string): string {
   if (!normalized.startsWith("/secrets/")) {
     throw new Error(`secret path must start with "/secrets/", got "${normalized}"`);
   }
+  // A secret path becomes a Durable Object name (`durable-object-names.ts`),
+  // and that name is reparsed with WHATWG `URL` — which collapses `.`/`..`
+  // segments and splits on `?`/`#`. So `/secrets/../agents/x` addresses one DO
+  // but reparses to a DIFFERENT path than the one shown in audit/UI. Reject
+  // anything non-canonical in this shared helper (every secret op flows
+  // through it) so the addressed path and the displayed path cannot diverge.
+  // eslint-disable-next-line no-control-regex -- control chars are exactly what we reject
+  if (/[\u0000-\u0020\u007f?#%\\]/.test(normalized)) {
+    throw new Error(`secret path has an illegal character: "${normalized}"`);
+  }
+  for (const segment of normalized.slice(1).split("/")) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new Error(`secret path has an empty or dot segment: "${normalized}"`);
+    }
+  }
   return normalized;
 }
 

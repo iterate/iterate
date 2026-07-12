@@ -1119,8 +1119,12 @@ const launcherProcedures = {
       const reauth = async () => {
         const env = osAuthFromEnvironment();
         if (env) return { auth: env.credentials, headers: headersRecord(env.requestHeaders) };
-        const current = resolveConfig(process.cwd(), { throw: true });
-        const refreshed = osAuthFromHeaders(await getOsAuthHeaders(current.config, current.name));
+        // Re-read the EXACT launch-time config by name (picks up a token the
+        // previous refresh persisted) — never re-resolve from cwd, which could
+        // select a different config and send its credential to this server.
+        const config = readConfig(resolved.name);
+        if (config instanceof Error) throw config;
+        const refreshed = osAuthFromHeaders(await getOsAuthHeaders(config, resolved.name));
         return { auth: refreshed.credentials, headers: headersRecord(refreshed.requestHeaders) };
       };
       const shared = {

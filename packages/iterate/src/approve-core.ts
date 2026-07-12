@@ -63,7 +63,8 @@ export type Settlement =
   | { kind: "released"; status: number }
   | { kind: "delivery-failed"; error: string }
   | { kind: "rejected"; reason: string }
-  | { kind: "unsettled" };
+  | { kind: "unsettled" } // the deadline elapsed with no outcome — safe to re-offer
+  | { kind: "error"; message: string }; // a transport/protocol failure — NOT re-offerable
 
 /** Connect a session, read who we are, and hand back the project's root stream. */
 export async function connectApproval(input: {
@@ -265,21 +266,20 @@ export async function awaitSettlement(
     (candidate.payload as { approvalRequestEventOffset?: number }).approvalRequestEventOffset ===
     offset;
 
-  // Wait for the first matching event within the budget, re-arming a one-shot
-  // waitForEvent on chunk timeouts (and transient stream restarts) from the same
-  // offset. Returns null once the budget elapses.
-  const waitWithin = async (
+  // Wait for the first matching event before `deadline`, re-arming a one-shot
+  // waitForEvent on chunk timeouts (and transient stream restarts). Returns null
+  // once the deadline passes.
+  const waitUntil = async (
     eventTypes: readonly string[],
-    budgetMs: number,
+    deadline: number,
   ): Promise<StreamEvent | null> => {
-    const until = Date.now() + budgetMs;
-    while (Date.now() < until) {
+    while (Date.now() < deadline) {
       try {
         return await stream.waitForEvent({
           afterOffset: offset,
           eventTypes: [...eventTypes],
           predicate: forThisRequest,
-          timeoutMs: Math.min(until - Date.now(), SETTLEMENT_CHUNK_MS),
+          timeoutMs: Math.min(deadline - Date.now(), SETTLEMENT_CHUNK_MS),
         });
       } catch (error) {
         if (
@@ -295,19 +295,27 @@ export async function awaitSettlement(
   };
 
   try {
-    const event = await waitWithin([EVENT.settled, EVENT.rejected], windowMs);
+    const event = await waitUntil([EVENT.settled, EVENT.rejected], Date.now() + windowMs);
     if (event === null) return { kind: "unsettled" };
     if (event.type === EVENT.settled) return settledOutcome(event);
 
-    // A rejection: authoritative only if no grant won. Re-scan for a `settled`
-    // (already committed, or landing before the window closes — the winning
-    // grant's upstream fetch can be slow); its presence means egress released
-    // and this reject is a stray veto.
-    const settled = await waitWithin([EVENT.settled], windowMs);
+    // A rejection is authoritative only if no grant won. The door acts on the
+    // FIRST resolution and appends `settled` only after the winning grant's
+    // upstream fetch finishes — up to a full egress window after it acted — so a
+    // reject that arrives late in the first window can still be shadowed by a
+    // slow `settled`. Re-scan with a FRESH window (not the leftover budget):
+    // sharing one deadline could leave a late reject no time to find the settled,
+    // reporting a stray veto as terminal while egress is actually releasing. The
+    // extra wait only ever runs after an observed reject, and exits the instant a
+    // `settled` lands.
+    const settled = await waitUntil([EVENT.settled], Date.now() + windowMs);
     return settled === null
       ? { kind: "rejected", reason: (event.payload as { reason?: string }).reason ?? "human" }
       : settledOutcome(settled);
-  } catch {
-    return { kind: "unsettled" };
+  } catch (error) {
+    // A transport/protocol failure — NOT the deadline. Reporting this as
+    // `unsettled` would re-enable the action and risk a contradictory decision
+    // against a request the door may already be settling; surface it as an error.
+    return { kind: "error", message: error instanceof Error ? error.message : String(error) };
   }
 }

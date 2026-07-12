@@ -166,7 +166,7 @@ export async function runApprovalCli(input: {
       }
 
       // Granting is a claim, not a fact — the door verifies and settles.
-      const settlement = await awaitSettlement(stream, offset);
+      const settlement = await settleWithRetry(stream, offset);
       reportSettlement(offset, settlement);
       if (settlement.kind !== "unsettled") return "next"; // released / rejected → done
 
@@ -195,7 +195,7 @@ export async function runApprovalCli(input: {
     prompts.log.info(
       `#${offset} ${payload.method} ${safeHost(payload.url)} already has a grant — awaiting the egress door...`,
     );
-    const settlement = await awaitSettlement(stream, offset);
+    const settlement = await settleWithRetry(stream, offset);
     reportSettlement(offset, settlement);
     return settlement.kind === "unsettled" ? offerHeldRequest(offset, payload) : "next";
   };
@@ -285,7 +285,28 @@ async function revokeKey(input: {
   );
 }
 
-function reportSettlement(offset: number, settlement: Settlement) {
+/** Back-off before re-arming a settlement watch after a transient read error. */
+const SETTLEMENT_RETRY_MS = 2_000;
+
+/**
+ * awaitSettlement, but a transient read `error` re-arms rather than resolving.
+ * A grant has been appended, so it still stands at the door — a blip reading the
+ * outcome must not abandon the watch (and skip the ignored-grant retry path) as
+ * if it had settled. Loops until a real outcome: released, delivery-failed,
+ * rejected, or unsettled (the door ignored an unverifiable grant).
+ */
+async function settleWithRetry(
+  stream: RpcStub<Stream>,
+  offset: number,
+): Promise<Exclude<Settlement, { kind: "error" }>> {
+  while (true) {
+    const settlement = await awaitSettlement(stream, offset);
+    if (settlement.kind !== "error") return settlement;
+    await new Promise((resolve) => setTimeout(resolve, SETTLEMENT_RETRY_MS));
+  }
+}
+
+function reportSettlement(offset: number, settlement: Exclude<Settlement, { kind: "error" }>) {
   switch (settlement.kind) {
     case "released":
       return prompts.log.success(`Released #${offset} — upstream ${settlement.status}.`);
