@@ -17,6 +17,8 @@ import {
   McpOAuthError,
 } from "~/domains/itx/mcp-oauth.ts";
 import { projectEgressFetcher } from "~/domains/projects/utils.ts";
+import { readProjectById } from "~/project-directory.ts";
+import { streamPathToSplat } from "~/lib/stream-links.ts";
 
 export async function handleIntegrationApiRequest(input: {
   auth: Principal | null | undefined;
@@ -173,7 +175,21 @@ async function handleMcpOAuthCallback(input: {
         console.error("mcp-oauth: failed to notify", result.notify, cause);
       }
     }
-    return redirectResponse("/");
+    // Land the user back in the thread that started the flow — NOT "/", which for
+    // a user still mid-onboarding resolves to the onboarding thread and loses
+    // their place. `notify` is the initiating agent's stream path (agent scopes
+    // only); fall back to "/" when there is no agent scope or the slug won't
+    // resolve.
+    let redirectTo = "/";
+    if (result.notify?.startsWith("/agents/")) {
+      const record = await readProjectById(itxEnv.PROJECT_DIRECTORY, state.projectId).catch(
+        () => null,
+      );
+      if (record?.slug) {
+        redirectTo = `/projects/${encodeURIComponent(record.slug)}/agents/streams/${streamPathToSplat(result.notify)}`;
+      }
+    }
+    return redirectResponse(redirectTo);
   } catch (cause) {
     if (!(cause instanceof McpOAuthError)) console.error("mcp-oauth: callback failed", cause);
     return redirectWithError(null, "mcp_oauth_failed");
