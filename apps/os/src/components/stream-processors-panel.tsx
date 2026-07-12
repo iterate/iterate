@@ -944,12 +944,15 @@ function isLlmish(entry: Pick<AgentUiPresenceEntry, "processor">): boolean {
  * glance, and honest about which direction spiked.
  */
 function ThroughputGraph({ ingress, egress }: { ingress: number[]; egress: number[] }) {
-  const max = Math.max(5, ...ingress, ...egress);
+  const peak = Math.max(...ingress, ...egress);
+  // The scale floors at 5/s so single events don't render as mountains; the
+  // tooltip reports the TRUE peak, not the floored axis.
+  const max = Math.max(5, peak);
   const ingressPoints = sparklinePoints(ingress, 368, 44, { max });
   const egressPoints = sparklinePoints(egress, 368, 44, { max });
   return (
     <svg viewBox="0 0 368 44" className="h-11 min-w-0 flex-1" preserveAspectRatio="none">
-      <title>{`Appends (area) and deliveries (dashed) per second over the last 60s; peak ${max}/s`}</title>
+      <title>{`Appends (area) and deliveries (dashed) per second over the last 60s; peak ${peak}/s`}</title>
       <polygon points={`2,42 ${ingressPoints} 366,42`} className="fill-sky-500/15" />
       <polyline
         points={ingressPoints}
