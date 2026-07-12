@@ -180,6 +180,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** The DO alarm: the spine's durable retry timer. */
   alarm(): void {
+    this.#alarmGeneration += 1;
     this.#alarmArmedForMs = null;
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
@@ -196,14 +197,24 @@ export class StreamDurableObject extends DurableObject<Env> {
    * alarm fires; a stale-low value merely re-arms an already-set time.
    */
   #alarmArmedForMs: number | null = null;
+  /** Fences async cache adoption against the platform consuming an alarm. */
+  #alarmGeneration = 0;
 
   /** Move the DO alarm earlier, never later (many rows share one alarm). */
   async #armAlarmNoLaterThan(atMs: number): Promise<void> {
     if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
     this.#alarmArmedForMs = atMs;
+    const generation = this.#alarmGeneration;
     try {
       const current = await this.ctx.storage.getAlarm();
-      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
+      if (current === null || atMs < current) {
+        await this.ctx.storage.setAlarm(atMs);
+      } else if (generation === this.#alarmGeneration) {
+        // Adopt an earlier alarm inherited from a previous incarnation. If we
+        // kept `atMs`, every newly discovered row between `current` and `atMs`
+        // would repeat this storage read despite being already covered.
+        this.#alarmArmedForMs = Math.min(this.#alarmArmedForMs, current);
+      }
     } catch (error) {
       console.error("stream alarm arming failed", error);
     }
