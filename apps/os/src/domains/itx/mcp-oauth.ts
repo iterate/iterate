@@ -65,7 +65,7 @@ export class McpOAuthError extends Error {
   }
 }
 
-export type BeginMcpOAuthInput = {
+type BeginMcpOAuthInput = {
   /** The MCP server's streamable-HTTP URL (what itx.mcp.connect would take). */
   mcpUrl: string;
   /** Normalized `/secrets/…` path the resulting token lands at. */
@@ -83,7 +83,7 @@ export type BeginMcpOAuthInput = {
   fetchFn: FetchLike;
 };
 
-export type BeginMcpOAuthResult = {
+type BeginMcpOAuthResult = {
   /** The provider authorization URL to send the user to. */
   authorizationUrl: string;
   /** The secret path the token will land at (echoed for convenience). */
@@ -92,7 +92,7 @@ export type BeginMcpOAuthResult = {
   authorizationServer: string;
 };
 
-export type CompleteMcpOAuthInput = {
+type CompleteMcpOAuthInput = {
   /** The encrypted `state` echoed back by the provider. */
   state: string;
   /** The authorization code from the callback query. */
@@ -103,7 +103,7 @@ export type CompleteMcpOAuthInput = {
   fetchFn: FetchLike;
 };
 
-export type CompleteMcpOAuthResult = {
+type CompleteMcpOAuthResult = {
   path: string;
   notify?: string;
   mcpUrl: string;
