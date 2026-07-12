@@ -132,7 +132,18 @@ export type StreamRuntimeState = {
  */
 export type StreamRpcResult<T> = Promise<T> & Disposable;
 
-export type BrowserStreamClient = Disposable & Stream;
+export type BrowserStreamClient = Disposable &
+  Stream & {
+    /**
+     * Evict the exact transport THIS client rides, bound at creation (see
+     * evictItxSocketIfCurrent) — so a late suspicion verdict against this
+     * connection can never evict a successor socket, and a genuinely-dead
+     * young socket can be evicted without waiting out an age guard. Absent
+     * on clients whose factory can't bind identity; the runtime then falls
+     * back to the config-level resetTransport (age-guarded).
+     */
+    evictTransport?: () => void;
+  };
 
 export type BrowserStreamClientFactory = (args: {
   projectId: string;
@@ -144,10 +155,15 @@ export type BrowserStreamClientFactory = (args: {
   ) => void;
 }) => Promise<BrowserStreamClient>;
 
-export function asBrowserStreamClient(stream: Stream, dispose: () => void): BrowserStreamClient {
+export function asBrowserStreamClient(
+  stream: Stream,
+  dispose: () => void,
+  evictTransport?: () => void,
+): BrowserStreamClient {
   return new Proxy(stream, {
     get(target, property, receiver) {
       if (property === Symbol.dispose) return dispose;
+      if (property === "evictTransport") return evictTransport;
       const value = Reflect.get(target, property, receiver);
       if (typeof value !== "function") return value;
       return (...args: unknown[]) => Reflect.apply(value, target, args);
@@ -173,6 +189,12 @@ export type StreamBrowserStore = Disposable & {
   getSnapshot(): StreamBrowserSnapshot;
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
+  /**
+   * True once the runtime tore down (last subscriber gone, idle grace
+   * elapsed). A caller holding a memoized reference to a disposed runtime
+   * must RE-ACQUIRE, not subscribe — see useStreamProcessorStore's self-heal.
+   */
+  isDisposed(): boolean;
 };
 
 /**
@@ -512,14 +534,19 @@ function createStreamRuntime(
     step: string,
     error: unknown,
     delayMs: number,
-    opts?: { evictTransport?: boolean },
+    opts?: { evictTransport?: boolean; suspect?: BrowserStreamClient },
   ) {
     if (opts?.evictTransport || error instanceof StepTimeoutError) {
       console.warn(
         `[stream ${args.streamPath} ${slug}] evicting suspect transport (${step})`,
         error,
       );
-      transport.resetTransport?.();
+      // Prefer the suspect connection's own identity-bound evictor (it can
+      // only evict the exact socket the suspicion accumulated against); fall
+      // back to the config-level, age-guarded evictor when the factory
+      // couldn't bind identity or the failing step had no connection yet.
+      const evict = opts?.suspect?.evictTransport ?? transport.resetTransport;
+      evict?.();
     }
     scheduleReconnect(`${step}: ${errorMessage(error)}`, delayMs);
   }
@@ -684,7 +711,6 @@ function createStreamRuntime(
     connectionEpoch += 1;
     const epoch = connectionEpoch;
     connectPendingEpoch = epoch;
-
     const dial = transport.createStreamClient({
       projectId: args.projectId,
       streamPath: args.streamPath,
@@ -856,17 +882,17 @@ function createStreamRuntime(
             deliveryArrivals += 1;
             lastBatchEvents = page.length;
             totalDeliveredEvents += page.length;
-            // Deadlined like the checkpoint read above, and for the same
-            // reason: this await goes to the shared db worker, and a wedged
-            // worker here would park a probe-less forever-"leader" (the probe
-            // only starts post-subscribe; connect succeeded so no backoff
-            // timer is armed; onResume leaves elections alone by design). A
-            // 500-event page applies in ≲1s measured, so the shared step
-            // deadline is a generous bound.
-            await withDeadline(
-              "catch-up ingest",
-              processor.ingest({ events: page, streamMaxOffset: serverHead }),
-            );
+            // Deliberately NOT deadlined, unlike the read-only steps above: a
+            // deadline can only ABANDON this promise, not cancel the ingest —
+            // the old processor would keep committing projection rows and its
+            // checkpoint in the db worker while the timeout's fresh election
+            // spun up a second processor over the same tables (browser
+            // projection/checkpoint writes are non-atomic; two interleaved
+            // writers can regress reduced state). A wedged db worker parking
+            // this await is the known "worker death is undetected" latent —
+            // the safe fix is generation-fenced worker shutdown inside
+            // StreamBrowserDatabase, not a deadline here.
+            await processor.ingest({ events: page, streamMaxOffset: serverHead });
             if (!ownsRuntime()) return undefined;
             catchUpOffset = page.at(-1)!.offset;
             lastDeliveredOffset = catchUpOffset;
@@ -934,7 +960,7 @@ function createStreamRuntime(
         // "succeeds" instantly off the cached corpse and THIS chain is the
         // first place the death manifests — without eviction it would loop
         // dial → 15s park → reconnect forever, the wedge's residual form.
-        reconnectAfterError("subscribe failed", error, 1_000);
+        reconnectAfterError("subscribe failed", error, 1_000, { suspect: election.connection });
       });
   }
 
@@ -1077,7 +1103,7 @@ function createStreamRuntime(
             `[stream ${args.streamPath} ${slug}] follower connection failed its resume check; reconnecting`,
             error,
           );
-          reconnectAfterError("follower resume check failed", error, 0);
+          reconnectAfterError("follower resume check failed", error, 0, { suspect: connection });
         }
       })();
     }
@@ -1200,7 +1226,7 @@ function createStreamRuntime(
             `[stream ${args.streamPath} ${slug}] connection failed its liveness probe; reconnecting`,
             error,
           );
-          reconnectAfterError("liveness probe failed", error, 250);
+          reconnectAfterError("liveness probe failed", error, 250, { suspect: connection });
         }
       })();
     }, LIVENESS_PROBE_INTERVAL_MS);
@@ -1271,7 +1297,7 @@ function createStreamRuntime(
         `[stream ${args.streamPath} ${slug}] delivery nudge failed; reconnecting`,
         error,
       );
-      reconnectAfterError("delivery nudge failed", error, 0);
+      reconnectAfterError("delivery nudge failed", error, 0, { suspect: connection });
     } finally {
       nudgeInFlight = false;
     }
@@ -1362,7 +1388,7 @@ function createStreamRuntime(
         stream === connection &&
         (error instanceof StepTimeoutError || isSessionBrokenError(error))
       ) {
-        reconnectAfterError("stream call failed", error, 0);
+        reconnectAfterError("stream call failed", error, 0, { suspect: connection });
       }
       throw error;
     }
@@ -1449,6 +1475,7 @@ function createStreamRuntime(
       reconnectNow();
     },
     nudge,
+    isDisposed: () => disposed,
     getSnapshot: () => snapshot,
     getServerSnapshot: () => snapshot,
     subscribe(listener) {

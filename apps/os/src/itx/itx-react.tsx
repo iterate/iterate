@@ -139,6 +139,14 @@ type SocketEntry = {
   promise: Promise<ItxHandle>;
   ws: WebSocket | undefined;
   dialedAt: number;
+  /**
+   * One cheap authenticated round trip proving the transport is alive — set
+   * once the dial opens. The resume sweep uses it: a half-open socket answers
+   * nothing, and a socket with no mounted watchdog/probe consumer (a
+   * queries-only page; the global socket on a project page) would otherwise
+   * never be found dead — every later call through it just hung.
+   */
+  ping?: () => Promise<void>;
 };
 const socketEntries = new Map<string | undefined, SocketEntry>();
 /** Consecutive closed-before-open dials per context — the re-dial backoff input. */
@@ -166,7 +174,9 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
     );
   }
   const existing = socketEntries.get(context);
-  if (existing) return existing.promise;
+  if (existing) {
+    return existing.promise;
+  }
 
   const { promise, resolve, reject } = Promise.withResolvers<ItxHandle>();
   // Keep an internal handler so a dial that rejects with no live awaiter (the
@@ -204,6 +214,13 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
       // disposed individually.
       const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(ws);
       const root = unauthenticated.authenticate({ type: "from-server-cookie" });
+      entry.ping = async () => {
+        // Any round trip proves the transport; authenticate rides the session
+        // cookie and is the one call every context supports. Dispose the
+        // probe stub so resume sweeps don't grow the cap table.
+        const probe = await unauthenticated.authenticate({ type: "from-server-cookie" });
+        (probe as Partial<Disposable>)[Symbol.dispose]?.();
+      };
       resolve((context ? root.projects.get(context) : root) as unknown as ItxHandle);
     });
     // `close` fires for a failed dial AND for a later death — either way the socket
@@ -219,8 +236,11 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
     // its snapshot to the fresh promise before this rejection is observed.
     ws.addEventListener("close", () => {
       clearTimeout(timeout);
-      if (!opened) dialFailures.set(context, (dialFailures.get(context) ?? 0) + 1);
       if (socketEntries.get(context) === entry) {
+        // Failure bookkeeping only for the entry that still owns the slot: a
+        // stale or intentionally-evicted socket's close must not count
+        // against its successor's backoff history.
+        if (!opened) dialFailures.set(context, (dialFailures.get(context) ?? 0) + 1);
         socketEntries.delete(context);
         wake();
       }
@@ -236,7 +256,9 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
       ? 0
       : Math.min(REDIAL_BACKOFF_MAX_MS, REDIAL_BACKOFF_MIN_MS * 2 ** Math.min(failures - 2, 6));
   if (delay === 0) beginDial();
-  else setTimeout(beginDial, delay);
+  else {
+    setTimeout(beginDial, delay);
+  }
   return promise;
 }
 
@@ -257,6 +279,25 @@ export function evictItxSocket(address?: ItxAddress): void {
 }
 
 /**
+ * Evict a context's socket ONLY if it is still the one the suspicion was
+ * accumulated against — the connecting promise IS the socket's identity, and
+ * callers that dialed through {@link connectItxBrowser} hold it. This is the
+ * exact form of {@link evictItxSocket}'s age heuristic: a late verdict against
+ * an already-replaced corpse cannot evict the successor no matter how old the
+ * successor is, and a genuinely-dead YOUNG socket can still be evicted by its
+ * own consumer (the age guard would refuse for 15s).
+ */
+export function evictItxSocketIfCurrent(
+  address: ItxAddress | undefined,
+  suspect: Promise<unknown>,
+): void {
+  const context = address?.projectId;
+  const entry = socketEntries.get(context);
+  if (entry === undefined || entry.promise !== suspect) return;
+  reconnectItx(address);
+}
+
+/**
  * Drop a context's socket (default: global) and dispose it, so the next read
  * re-dials with the browser session's CURRENT claims. Call after a session
  * change such as creating a project or unlocking admin — the live socket carries
@@ -271,6 +312,9 @@ export function reconnectItx(address?: ItxAddress): void {
   // useSyncExternalStore's change handler synchronously re-reads getSnapshot →
   // socketFor, which installs a NEW entry — closing OURS below cannot touch it
   // (#1894 was eviction closing the fresh successor out of a shared slot).
+  // An INTENTIONAL eviction also resets the dial backoff: the successor should
+  // dial immediately, not inherit pacing from failures it didn't have.
+  dialFailures.delete(context);
   socketEntries.delete(context);
   wake();
   // CLOSE the transport, don't just unmap it: capnweb tears the session down
@@ -282,6 +326,69 @@ export function reconnectItx(address?: ItxAddress): void {
   void entry.promise
     .then((itx) => (itx as Partial<Disposable>)[Symbol.dispose]?.())
     .catch(() => {});
+}
+
+/**
+ * Baseline resume liveness for EVERY live socket, owned by the socket map
+ * itself: on visibilitychange/online — exactly when transports die — prove
+ * each opened socket with one cheap authenticated round trip and evict (by
+ * identity) the ones that answer nothing twice. Consumer-mounted watchdogs
+ * (useItxSubscription, the stream runtimes' probes) recover their OWN lanes
+ * faster; this sweep is for the sockets nobody probes — a queries-only page,
+ * the global socket on a project page — which otherwise stayed half-open
+ * forever, hanging every later call through them.
+ */
+const RESUME_SWEEP_SINGLE_FLIGHT_MS = 5_000;
+const RESUME_PING_TIMEOUT_MS = 5_000;
+let lastResumeSweepAt = 0;
+
+function sweepSocketsOnResume(): void {
+  const now = Date.now();
+  if (now - lastResumeSweepAt < RESUME_SWEEP_SINGLE_FLIGHT_MS) return;
+  lastResumeSweepAt = now;
+  for (const [context, entry] of [...socketEntries]) {
+    const ping = entry.ping;
+    if (ping === undefined) continue; // mid-dial: the dial's own timeout owns it
+    void (async () => {
+      const pingOnce = () =>
+        new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("resume sweep ping timed out")),
+            RESUME_PING_TIMEOUT_MS,
+          );
+          ping().then(
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            (error: unknown) => {
+              clearTimeout(timer);
+              reject(error instanceof Error ? error : new Error(String(error)));
+            },
+          );
+        });
+      try {
+        // Two-strike, like every other liveness lane: one slow answer is a
+        // busy server, not a dead socket.
+        try {
+          await pingOnce();
+        } catch {
+          if (socketEntries.get(context) !== entry) return;
+          await pingOnce();
+        }
+      } catch {
+        // Identity-bound: only evict if this exact socket still owns the slot.
+        evictItxSocketIfCurrent(context === undefined ? {} : { projectId: context }, entry.promise);
+      }
+    })();
+  }
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") sweepSocketsOnResume();
+  });
+  window.addEventListener("online", sweepSocketsOnResume);
 }
 
 /**

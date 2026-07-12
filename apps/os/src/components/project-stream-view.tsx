@@ -49,7 +49,7 @@ import {
   presetsForStream,
 } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { connectItxBrowser, evictItxSocket } from "~/itx/itx-react.tsx";
+import { connectItxBrowser, evictItxSocket, evictItxSocketIfCurrent } from "~/itx/itx-react.tsx";
 import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
@@ -134,16 +134,32 @@ export function ProjectStreamView({
         (await connectItxBrowser(projectId == null ? {} : { projectId })).streams.get(path)),
     [projectId, streamSource],
   );
-  const streamClientFactory = useMemo(
-    () => async (input: { streamPath: string }) => {
-      const stub = await resolvedStreamSource(input.streamPath);
-      // The stub's REAL dispose, so every reconnect releases its stream export
-      // on the (possibly long-lived, healthy) session instead of stranding one
-      // per reconnect in the cap table on both sides.
-      return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
-    },
-    [resolvedStreamSource],
-  );
+  const streamClientFactory = useMemo(() => {
+    if (streamSource !== undefined) {
+      // Custom source: we can't see its transport, so no identity-bound
+      // evictor — the runtime falls back to resetStreamSourceTransport.
+      return async (input: { streamPath: string }) => {
+        const stub = await streamSource(input.streamPath);
+        // The stub's REAL dispose, so every reconnect releases its stream
+        // export on the (possibly long-lived, healthy) session instead of
+        // stranding one per reconnect in the cap table on both sides.
+        return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
+      };
+    }
+    const address = projectId == null ? {} : { projectId };
+    return async (input: { streamPath: string }) => {
+      // The connecting promise IS the socket's identity: binding the evictor
+      // to it means a suspicion verdict against THIS connection can only ever
+      // evict THIS socket — never a successor another runtime already dialed.
+      const connection = connectItxBrowser(address);
+      const stub = (await connection).streams.get(input.streamPath);
+      return asBrowserStreamClient(
+        stub,
+        () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
+        () => evictItxSocketIfCurrent(address, connection),
+      );
+    };
+  }, [streamSource, projectId]);
   // The half-open lane: a suspended page's socket can die without a close
   // frame, so the socket map keeps handing out the corpse and per-call dialing
   // alone can't recover. When the runtimes' probes/dials time out they call
