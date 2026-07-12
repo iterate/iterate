@@ -353,9 +353,9 @@ function pushPayload(
   };
 }
 
-function wakePayload(): SubscriptionConfiguredPayload {
+function wakePayload(subscriptionKey = "k"): SubscriptionConfiguredPayload {
   return {
-    subscriptionKey: "k",
+    subscriptionKey,
     delivery: {
       mode: "wake",
       expression: ["agents", ["get", "/t"], "processor", "wakeStreamSubscriber"],
@@ -890,11 +890,16 @@ describe("StreamSubscribers", () => {
 
     let ensureBefore = connected.store.ensureCalls;
     let getBefore = connected.store.getCalls;
+    const coreStateBefore = connected.coreStateCalls();
     connected.append(evt(2, "a"));
     connected.subscribers.wake([{ event: evt(2, "a"), byteLength: 64 }]);
     await connected.settle();
     expect(connected.store.ensureCalls).toBe(ensureBefore);
     expect(connected.store.getCalls).toBe(getBefore);
+    // The delivery pump owns the sole state snapshot. With every configured
+    // key covered by a live wake connection, durable reconciliation does not
+    // read or scan the same desired-state registry again.
+    expect(connected.coreStateCalls() - coreStateBefore).toBe(1);
 
     const dialing = makeHarness();
     dialing.configure(wakePayload(), 0);
@@ -914,6 +919,31 @@ describe("StreamSubscribers", () => {
 
     resolvePoke({ checkpointOffset: 1, sink: makeSink().sink });
     await dialing.settle();
+  });
+
+  it("invalidates full wake coverage when a mixed-mode config is added", async () => {
+    const h = makeHarness();
+    const wake = wakePayload("wake");
+    h.configure(wake, 0);
+    h.append(evt(1, "first"));
+    const wakeSink = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: wakeSink.sink });
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.subscribers.hasConnection("wake")).toBe(true);
+
+    const push = pushPayload({ subscriptionKey: "push" });
+    h.configure(push, 2);
+    h.subscribers.onSubscriptionConfigured(push, 2, { deferReconcile: true });
+    const second = evt(2, "second");
+    h.append(second);
+    h.subscribers.wake([{ event: second, byteLength: 64 }]);
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.pushes[0]!.subscriptionKey).toBe("push");
+    expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1, 2]);
+    expect(wakeSink.batches.at(-1)!.events.map((event) => event.offset)).toEqual([2]);
   });
 
   it("does no cursor work for a push lane with a drain in flight", async () => {
@@ -1755,6 +1785,47 @@ describe("StreamSubscribers", () => {
     expect(delivered).toEqual([[1], [2]]);
   });
 
+  it("w4. shared wake state refreshes before a later lane after a reentrant wake", async () => {
+    const h = makeHarness();
+    const firstDelivered: number[][] = [];
+    const secondDelivered: { offsets: number[]; streamMaxOffset: number }[] = [];
+    let appendedDuringDelivery = false;
+
+    h.subscribers.openEphemeral({
+      subscriptionKey: "first",
+      replayAfterOffset: 0,
+      sink: (batch) => {
+        firstDelivered.push(batch.events.map((event) => event.offset));
+        if (appendedDuringDelivery || batch.events.at(-1)?.offset !== 1) return;
+        appendedDuringDelivery = true;
+        const next = evt(2, "second");
+        h.append(next);
+        h.subscribers.wake([{ event: next, byteLength: 64 }]);
+      },
+    });
+    h.subscribers.openEphemeral({
+      subscriptionKey: "second",
+      replayAfterOffset: 0,
+      sink: (batch) => {
+        secondDelivered.push({
+          offsets: batch.events.map((event) => event.offset),
+          streamMaxOffset: batch.streamMaxOffset,
+        });
+      },
+    });
+    await h.settle();
+    firstDelivered.length = 0;
+    secondDelivered.length = 0;
+
+    const first = evt(1, "first");
+    h.append(first);
+    h.subscribers.wake([{ event: first, byteLength: 64 }]);
+    await h.settle();
+
+    expect(firstDelivered).toEqual([[1], [2]]);
+    expect(secondDelivered).toEqual([{ offsets: [1, 2], streamMaxOffset: 2 }]);
+  });
+
   it("x. a receiver-unavailable rejection backs off whole under onPoison skip — no bisect, no skips (the bootstrap window)", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ onPoison: "skip" }), 0);
@@ -1925,8 +1996,8 @@ describe("StreamSubscribers runtime metrics", () => {
     await h.settle();
 
     expect(h.nowCalls() - nowCallsBeforeWake).toBe(2);
-    // One snapshot per lane plus the durable reconciler's one stream snapshot.
-    expect(h.coreStateCalls() - coreStateCallsBeforeWake).toBe(3);
+    // Both lanes and durable reconciliation share one immutable wake snapshot.
+    expect(h.coreStateCalls() - coreStateCallsBeforeWake).toBe(1);
     expect(h.egressAtMs).toEqual([1_234, 1_234]);
     expect(h.subscribers.connectionRuntimeState()).toMatchObject({
       first: { lastDeliveredAt: "1970-01-01T00:00:01.234Z" },

@@ -168,7 +168,7 @@ type Connection = {
   ping?: RetainedSubscriberPing;
   getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
   /** Re-arm the delivery pump after events are committed. Idempotent while draining. */
-  wake(): void;
+  wake(readState: () => CoreProcessorState): void;
   /** `true` until close() runs — backs the subscription handle's `ping()`. */
   isLive(): boolean;
   /** `true` while a durable sink delivery is dispatched but unsettled. */
@@ -334,6 +334,18 @@ export class StreamSubscribers {
    */
   #tearingDown = false;
   #wakeGeneration = 0;
+  #wakeStateGeneration = -1;
+  #wakeState: CoreProcessorState | undefined;
+  readonly #readWakeState = () => {
+    // All pumps entered by one synchronous wake observe the same immutable
+    // reduced-state object. A sink can synchronously trigger another wake in
+    // tests/local transports; generation refresh preserves that newer head.
+    if (this.#wakeStateGeneration !== this.#wakeGeneration) {
+      this.#wakeState = this.#hooks.coreState();
+      this.#wakeStateGeneration = this.#wakeGeneration;
+    }
+    return this.#wakeState!;
+  };
   readonly #pushDrains = new Set<string>();
   /** Bisect state for onPoison:"skip" — current batch ceiling per key. */
   readonly #batchLimits = new Map<string, number>();
@@ -437,10 +449,25 @@ export class StreamSubscribers {
       this.#freshTailProjection = undefined;
       this.#freshTailSizedProjection = undefined;
     }
-    for (const connection of this.#connections.values()) connection.wake();
+    for (const connection of this.#connections.values()) connection.wake(this.#readWakeState);
     if (this.#tearingDown) return;
     try {
-      this.#reconcileDurable();
+      // Config side effects close stale wake connections before this final
+      // post-commit wake and invalidate the identity-keyed entry snapshot.
+      // Therefore a current snapshot with equal counts proves every configured
+      // key already owns a live wake connection; there can be no push/webhook
+      // key left to reconcile. Avoid even reading core state in that common
+      // case while preserving the full mixed-mode path.
+      if (
+        this.#configuredSubscribers === undefined ||
+        this.#configuredConnectionCount !== this.#configuredSubscriberEntries.length
+      ) {
+        const state = this.#readWakeState();
+        const configuredEntries = this.#entriesFor(state.configuredSubscribersByKey);
+        if (this.#configuredConnectionCount !== configuredEntries.length) {
+          this.#reconcileDurable(state, configuredEntries);
+        }
+      }
       // Pure selector/ephemeral skips run synchronously until their first
       // delivery await (usually all the way to the head). Give the cursor
       // store one chance to checkpoint every lane's accumulated progress as
@@ -498,9 +525,10 @@ export class StreamSubscribers {
    * state rebuild the config events re-create them here), skip parked ones,
    * skip ones backing off (the alarm owns those), then poke or drain.
    */
-  #reconcileDurable(): void {
-    const state = this.#hooks.coreState();
-    const configuredEntries = this.#entriesFor(state.configuredSubscribersByKey);
+  #reconcileDurable(
+    state: CoreProcessorState,
+    configuredEntries: [string, ConfiguredSubscribers[string]][],
+  ): void {
     let now: number | undefined;
 
     for (const [subscriptionKey, entry] of configuredEntries) {
@@ -1243,6 +1271,7 @@ export class StreamSubscribers {
     options?: ControlSideEffectOptions,
   ): void {
     const key = payload.subscriptionKey;
+    this.#configuredSubscribers = undefined;
     this.#compiledSelectors.delete(key);
     // A replaced config's live connection belongs to the old config; drop it
     // and let reconcile re-establish against the new one.
@@ -1267,6 +1296,7 @@ export class StreamSubscribers {
 
   /** A `subscription-removed` event committed. Deleting the row is revocation. */
   onSubscriptionRemoved(subscriptionKey: string): void {
+    this.#configuredSubscribers = undefined;
     this.#hooks.store.delete(subscriptionKey);
     this.#connections.get(subscriptionKey)?.close("subscription-removed");
     this.#batchLimits.delete(subscriptionKey);
@@ -1343,12 +1373,13 @@ export class StreamSubscribers {
           }
         : undefined;
 
-    const pump = async () => {
+    const pump = async (initialState?: CoreProcessorState) => {
       draining = true;
       try {
         while (open) {
           const wakeGeneration = this.#wakeGeneration;
-          const currentState = this.#hooks.coreState();
+          const currentState = initialState ?? this.#hooks.coreState();
+          initialState = undefined;
           let events: StreamEvent[] = [];
           let deliveredBytes = 0;
           if (deliverEvents) {
@@ -1465,8 +1496,8 @@ export class StreamSubscribers {
       // function just to hit its draining guard allocates one resolved Promise
       // per connection on every append burst; the active loop already rereads
       // the stream head after each delivery yield.
-      wake: () => {
-        if (!draining) void pump();
+      wake: (readState) => {
+        if (!draining) void pump(readState());
       },
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
@@ -1511,7 +1542,7 @@ export class StreamSubscribers {
       },
     });
     sink.onRpcBroken?.(() => connection.close("rpc-broken"));
-    connection.wake();
+    void pump();
     return connection;
   }
 
