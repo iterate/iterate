@@ -96,9 +96,9 @@ describe("StreamEventLog.getRange", () => {
     const db = new DatabaseSync(":memory:");
     const sql = wrapSqlStorage(db);
     new StreamEventLog(sql, "/tests/stream");
-    db.exec("update stream_storage_schema set version = 2 where singleton = 1");
+    db.exec("update stream_storage_schema set version = 3 where singleton = 1");
     expect(() => new StreamEventLog(wrapSqlStorage(db), "/tests/stream")).toThrow(
-      "Unsupported stream storage schema version: 2",
+      "Unsupported stream storage schema version: 3",
     );
   });
 
@@ -184,9 +184,9 @@ describe("StreamEventLog.getRange", () => {
 
     const inserted = log.insert([committed]);
 
-    expect(inserts.map(({ bindings }) => bindings.length)).toEqual([6]);
+    expect(inserts.map(({ bindings }) => bindings.length)).toEqual([5]);
     expect(inserts.every(({ statement }) => !statement.includes("), ("))).toBe(true);
-    expect(inserts[0]?.bindings[5]).toBeInstanceOf(ArrayBuffer);
+    expect(inserts[0]?.bindings[4]).toBeInstanceOf(ArrayBuffer);
     expect(db.prepare("select typeof(event_json) as type from events").get()).toEqual({
       type: "blob",
     });
@@ -226,18 +226,18 @@ describe("StreamEventLog.getRange", () => {
     expect(transactions).toBe(0);
 
     log.insert(
-      Array.from({ length: 17 }, (_, index) => event(index + 4, "large-batch")),
+      Array.from({ length: 21 }, (_, index) => event(index + 4, "large-batch")),
       transactionRunner,
     );
     expect(transactions).toBe(1);
 
     log.insert(
-      [{ ...event(21, "large"), payload: { text: "x".repeat(600 * 1024) } }],
+      [{ ...event(25, "large"), payload: { text: "x".repeat(600 * 1024) } }],
       transactionRunner,
     );
     expect(transactions).toBe(2);
-    expect(offsets(read(log, { afterOffset: 0, limit: 21 }))).toEqual(
-      Array.from({ length: 21 }, (_, index) => index + 1),
+    expect(offsets(read(log, { afterOffset: 0, limit: 25 }))).toEqual(
+      Array.from({ length: 25 }, (_, index) => index + 1),
     );
   });
 
@@ -331,7 +331,7 @@ describe("StreamEventLog.getRange", () => {
     const chunkInserts = inserts.filter((insert) =>
       insert.sql.startsWith("insert into event_chunks "),
     );
-    expect(eventInserts).toHaveLength(7);
+    expect(eventInserts).toHaveLength(5);
     expect(chunkInserts).toHaveLength(0);
     expect(inserts.every((insert) => insert.bindings <= 100)).toBe(true);
     expect(offsets(read(log, { afterOffset: 0, limit: 100 }))).toEqual(
@@ -581,7 +581,7 @@ describe("StreamEventLog.getRange", () => {
         .prepare("select name from pragma_table_info('events') order by cid")
         .all()
         .map((column) => column.name),
-    ).toEqual(["offset", "type", "created_at", "idempotency_key", "ephemeral", "event_json"]);
+    ).toEqual(["offset", "type", "idempotency_key", "ephemeral", "event_json"]);
     expect(
       db
         .prepare("select name from pragma_table_info('stream_storage_schema') order by cid")
@@ -596,7 +596,7 @@ describe("StreamEventLog.getRange", () => {
     );
     expect(
       db.prepare("select version, evicted_offset_floor as floor from stream_storage_schema").get(),
-    ).toEqual({ version: 3, floor: 0 });
+    ).toEqual({ version: 4, floor: 0 });
     expect(
       db
         .prepare(
@@ -789,7 +789,7 @@ describe("SqliteSubscriptionCursorStore schema", () => {
       "updated_at",
     ]);
     expect(db.prepare("select version from stream_storage_schema").get()).toEqual({
-      version: 3,
+      version: 4,
     });
   });
 
@@ -820,10 +820,10 @@ describe("SqliteSubscriptionCursorStore schema", () => {
     const db = new DatabaseSync(":memory:");
     const sql = wrapSqlStorage(db);
     new SqliteSubscriptionCursorStore(sql);
-    db.exec("update stream_storage_schema set version = 2 where singleton = 1");
+    db.exec("update stream_storage_schema set version = 3 where singleton = 1");
 
     expect(() => new SqliteSubscriptionCursorStore(wrapSqlStorage(db))).toThrow(
-      "Unsupported stream storage schema version: 2",
+      "Unsupported stream storage schema version: 3",
     );
   });
 });

@@ -21,7 +21,7 @@ export const StreamAppendInput = StreamEventInput.extend({
   offset: z.number().int().nonnegative().optional(),
 }).strict();
 
-export type ParsedStreamAppendInput = z.output<typeof StreamAppendInput>;
+type ParsedStreamAppendInput = z.output<typeof StreamAppendInput>;
 
 /**
  * Common source-free append envelope without Zod's per-field parser dispatch.

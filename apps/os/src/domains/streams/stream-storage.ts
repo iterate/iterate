@@ -26,7 +26,7 @@ import type { StreamEvent } from "./schemas.ts";
 import { parseStreamStoredJsonEvent } from "./stream-event-validation.ts";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
-const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 3;
+const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 4;
 // Durable Object SQL currently permits at most 100 bound parameters per query.
 // Keep generated multi-row inserts at that ceiling and bound pending BLOB
 // memory independently: small events fill the row budget, large events flush
@@ -37,7 +37,7 @@ const MAX_PENDING_INSERT_BYTES = EVENT_CHUNK_SIZE * 2;
 // avoids serializing medium/large events twice without ever pinning a second
 // arbitrarily large event next to the batch being written.
 const MAX_CARRIED_INSERT_BYTES = MAX_PENDING_INSERT_BYTES;
-const EVENT_INSERT_ROW_WIDTH = 6;
+const EVENT_INSERT_ROW_WIDTH = 5;
 const CHUNK_INSERT_ROW_WIDTH = 3;
 const MAX_EVENT_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / EVENT_INSERT_ROW_WIDTH);
 const MAX_CHUNK_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / CHUNK_INSERT_ROW_WIDTH);
@@ -45,7 +45,7 @@ const SKIPPED_ACK_ROW_WIDTH = 3;
 const MAX_SKIPPED_ACK_ROWS = Math.floor((MAX_SQL_BINDINGS - 1) / SKIPPED_ACK_ROW_WIDTH);
 const MAX_UNPERSISTED_SKIP_OFFSETS = 64;
 const EVENT_INSERT_STATEMENTS = createInsertStatements(
-  "insert into events (offset, type, created_at, idempotency_key, ephemeral, event_json) values",
+  "insert into events (offset, type, idempotency_key, ephemeral, event_json) values",
   EVENT_INSERT_ROW_WIDTH,
   MAX_EVENT_ROWS_PER_INSERT,
 );
@@ -102,13 +102,14 @@ function initializeStreamStorage(sqlStorage: SqlStorage): void {
   sqlStorage.exec(`
     -- Stream-owned append log metadata. Bounded JSON is inline; oversized JSON is chunked.
     -- offset is the replay cursor; the partial index below owns keyed dedup/lookups.
+    -- createdAt stays solely in event_json: no query filters or orders on it, so a
+    -- duplicate column would consume one binding and one SQLite field per append.
     -- ephemeral marks second-class rows: range reads exclude them unless asked, and
     -- the stream may evict them in the future. Eviction keeps offsets consumed
     -- in stream_storage_schema but forgets their idempotency keys.
     create table events (
       offset integer primary key,
       type text not null,
-      created_at text not null,
       idempotency_key text,
       ephemeral integer not null default 0,
       event_json blob
@@ -264,7 +265,6 @@ export class StreamEventLog {
           EVENT_INSERT_STATEMENTS[1]!,
           event.offset,
           event.type,
-          event.createdAt,
           event.idempotencyKey ?? null,
           event.ephemeral === true ? 1 : 0,
           exactArrayBuffer(bytes),
@@ -300,7 +300,6 @@ export class StreamEventLog {
           eventBindings.push(
             event.offset,
             event.type,
-            event.createdAt,
             event.idempotencyKey ?? null,
             event.ephemeral === true ? 1 : 0,
             exactArrayBuffer(bytes),
@@ -346,7 +345,6 @@ export class StreamEventLog {
           eventBindings.push(
             event.offset,
             event.type,
-            event.createdAt,
             event.idempotencyKey ?? null,
             event.ephemeral === true ? 1 : 0,
             bytes.byteLength <= EVENT_CHUNK_SIZE ? exactArrayBuffer(bytes) : null,
