@@ -386,6 +386,11 @@ export async function runUseMyComputerJson(input: ConnectInput): Promise<void> {
     onDegraded: () => status({ reconnecting: true }),
     onConflict: () => status({ conflict: true }),
   });
+  // keepMountAlive only returns after a conflict (another session took the name).
+  // `process.stdin.resume()` above holds the event loop open, so return alone
+  // would leave the CLI running with no active share — exit explicitly. (The menu
+  // bar also kills the child on `conflict`; this covers running --json directly.)
+  process.exit(0);
 }
 
 /** One NDJSON line to stdout — the machine protocol's only output channel. */
