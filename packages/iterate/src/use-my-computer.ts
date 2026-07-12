@@ -80,157 +80,242 @@ const myComputer = {
    */
   async getFetcher({ port, host = "127.0.0.1" }: { port: number; host?: string }) {
     const origin = `http://${host}:${port}`;
-    return {
-      fetch: async (request: Request): Promise<Response> => {
-        if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
-          throw new Error(
-            `getFetcher().fetch cannot carry a WebSocket upgrade: the 101 response's socket ` +
-              `cannot cross RPC hops between the platform and this machine. ` +
-              `Terminate the socket in a Durable Object app and bridge frames with ` +
-              `connectSocket({ port, path }) instead.`,
-          );
-        }
-        const incoming = new URL(request.url);
-        // Re-aim at the local server: same path + query, local origin. The
-        // original host arrives as x-forwarded-host (undici refuses a bare
-        // `host` override and drops it silently).
-        const headers = new Headers(request.headers);
-        headers.set("x-forwarded-host", incoming.host);
-        headers.delete("host");
-        const body =
-          request.method === "GET" || request.method === "HEAD"
-            ? undefined
-            : await request.arrayBuffer();
-        const response = await fetch(`${origin}${incoming.pathname}${incoming.search}`, {
-          method: request.method,
-          headers,
-          body,
-          // Pass redirects through untouched so the browser sees them.
-          redirect: "manual",
-        });
-        // undici decompresses bodies but keeps the encoding headers; re-serving
-        // those verbatim corrupts the hop back. Buffer the (now-plain) body and
-        // drop the stale framing headers.
-        const outHeaders = new Headers(response.headers);
-        outHeaders.delete("content-encoding");
-        outHeaders.delete("content-length");
-        outHeaders.delete("transfer-encoding");
-        const nullBody =
-          response.status === 204 || response.status === 205 || response.status === 304;
-        return new Response(nullBody ? null : await response.arrayBuffer(), {
-          status: response.status,
-          statusText: response.statusText,
-          headers: outHeaders,
-        });
-      },
-    };
+    return { fetch: (request: Request) => proxyLocalHttp(origin, request) };
   },
 
   /**
    * The WebSocket lane getFetcher cannot offer: open a real socket to a server
    * on this machine and bridge FRAMES over capability dispatch. Returns a
-   * handle — `send(data)` pushes a frame to the local server, `receive()`
-   * long-polls frames coming back (plus a `closed` marker), `close()` hangs
-   * up. If an `onMessage` callback is passed, incoming frames are also pushed
-   * to it live (functions chain through every RPC hop; we dup() them here
-   * because RPC params are released when this call returns).
+   * bridge — `send(data)` pushes a frame to the local server, `close()` hangs
+   * up. Incoming frames (and the eventual close) are delivered to the
+   * `onMessage` / `onClose` callbacks; those are stubs that capnweb would
+   * release when this call returns, so we `dup()` them for the socket's life
+   * and dispose them in the one shutdown path.
    *
    * A Durable Object app terminates the browser's WebSocket with
-   * WebSocketPair and pumps frames both ways through this handle — that is
-   * how "WebSockets to a server on my Mac" works today, since the socket
-   * itself can never cross the RPC mesh.
+   * WebSocketPair and pumps frames both ways through this bridge — that is how
+   * "WebSockets to a server on my Mac" works today, since the socket itself
+   * can never cross the RPC mesh. The local socket is torn down (once) by any
+   * of: the local server closing it, the caller calling `close()` (the
+   * cross-RPC teardown a DO must drive on browser disconnect — a returned
+   * value's `[Symbol.dispose]` is dropped by capnweb's by-value serialization,
+   * so it can't be relied on across the wire), or the CLI's own connection to
+   * OS dropping (`closeAllBridges`). `[Symbol.dispose]` still mirrors `close()`
+   * for a same-process consumer that disposes the handle directly.
    */
-  async connectSocket({
-    port,
-    path = "/",
-    host = "127.0.0.1",
-    onMessage,
-    onClose,
-  }: {
+  async connectSocket(input: {
     port: number;
     path?: string;
     host?: string;
     onMessage?: (data: string) => unknown;
     onClose?: (info: { code: number; reason: string }) => unknown;
   }) {
-    const socket = new WebSocket(`ws://${host}:${port}${path}`);
-    // Callback stubs arrive as RPC params, which are released on return —
-    // dup() keeps them alive for the socket's lifetime (dynamic-worker-dispatch.md).
-    const keptMessage = dupCallback(onMessage);
-    const keptClose = dupCallback(onClose);
-
-    const buffered: string[] = [];
-    let closed: { code: number; reason: string } | undefined;
-    let wake: (() => void) | undefined;
-    const notify = () => {
-      wake?.();
-      wake = undefined;
-    };
-
-    socket.on("message", (data) => {
-      const text = String(data);
-      if (keptMessage) {
-        // Push lane: fire-and-forget; a broken callback must not kill the pump.
-        void Promise.resolve()
-          .then(() => keptMessage(text))
-          .catch(() => {});
-      }
-      buffered.push(text);
-      notify();
-    });
-    socket.on("close", (code, reason) => {
-      closed = { code, reason: String(reason) };
-      if (keptClose) {
-        void Promise.resolve()
-          .then(() => keptClose(closed!))
-          .catch(() => {});
-      }
-      notify();
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      socket.once("open", () => resolve());
-      socket.once("error", (error) => reject(error));
-    });
-
-    return {
-      /** Push one text frame to the local server. */
-      send: async (data: string) => {
-        if (closed) throw new Error(`socket already closed (${closed.code})`);
-        socket.send(data);
-        return { ok: true as const };
-      },
-      /**
-       * Long-poll the frames received since the last call. Resolves as soon as
-       * at least one frame (or the close) arrives, or with an empty list after
-       * `timeoutMs`. `closed` reports the local server hanging up.
-       */
-      receive: async ({ timeoutMs = 20_000 }: { timeoutMs?: number } = {}) => {
-        if (buffered.length === 0 && !closed) {
-          await new Promise<void>((resolve) => {
-            wake = resolve;
-            setTimeout(resolve, timeoutMs);
-          });
-        }
-        return { frames: buffered.splice(0), closed };
-      },
-      /** Close the local socket. */
-      close: async (input?: { code?: number; reason?: string }) => {
-        socket.close(input?.code ?? 1000, input?.reason ?? "");
-        return { ok: true as const };
-      },
-    };
+    return await openSocketBridge(input);
   },
 };
 
 /**
  * Keep a callback stub usable past this RPC's return: capnweb releases params
  * when the call resolves, so a provider that stores one must dup() it. Plain
- * local functions (unit tests) have no dup and pass through unchanged.
+ * local functions (unit tests) have no dup and pass through unchanged. The
+ * returned wrapper carries a matching `dispose` so the one owner can release
+ * the dup when the socket dies.
  */
-function dupCallback<T extends (...args: never[]) => unknown>(callback: T | undefined) {
+function dupCallback<T extends (...args: never[]) => unknown>(
+  callback: T | undefined,
+): { call: T; dispose: () => void } | undefined {
   if (!callback) return undefined;
-  return (callback as unknown as { dup?: () => T }).dup?.() ?? callback;
+  const stub = callback as unknown as { dup?: () => T; [Symbol.dispose]?: () => void };
+  const kept = stub.dup?.() ?? callback;
+  const disposer = (kept as unknown as { [Symbol.dispose]?: () => void })[Symbol.dispose];
+  return { call: kept, dispose: () => disposer?.call(kept) };
+}
+
+/**
+ * The frame bridge behind `connectSocket`: it exclusively owns one local
+ * WebSocket, the dup()ed callbacks, and a single idempotent `shutdown()` that
+ * every terminal path (local close/error, `close()`, `[Symbol.dispose]`, CLI
+ * teardown) funnels through — so the socket and the dup()ed stubs are released
+ * exactly once, no matter which side hangs up first. Registered in
+ * `activeBridges` so CLI shutdown can close every open bridge.
+ */
+async function openSocketBridge({
+  port,
+  path = "/",
+  host = "127.0.0.1",
+  onMessage,
+  onClose,
+}: {
+  port: number;
+  path?: string;
+  host?: string;
+  onMessage?: (data: string) => unknown;
+  onClose?: (info: { code: number; reason: string }) => unknown;
+}) {
+  const socket = new WebSocket(`ws://${host}:${port}${path}`);
+  const keptMessage = dupCallback(onMessage);
+  const keptClose = dupCallback(onClose);
+
+  let done = false;
+  const shutdown = () => {
+    if (done) return;
+    done = true;
+    activeBridges.delete(shutdown);
+    try {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close(1000, "");
+      }
+    } catch {}
+    // Release the dup()ed callbacks: without this the CLI leaks one stub per
+    // connection for the process's lifetime.
+    keptMessage?.dispose();
+    keptClose?.dispose();
+  };
+  activeBridges.add(shutdown);
+
+  socket.on("message", (data) => {
+    // Fire-and-forget: a broken callback must not kill the pump.
+    void Promise.resolve()
+      .then(() => keptMessage?.call(String(data)))
+      .catch(() => {});
+  });
+  socket.on("close", (code, reason) => {
+    void Promise.resolve()
+      .then(() => keptClose?.call({ code, reason: String(reason) }))
+      .catch(() => {});
+    shutdown();
+  });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", () => resolve());
+      socket.once("error", (error) => reject(error));
+    });
+  } catch (error) {
+    shutdown();
+    throw error;
+  }
+
+  return {
+    /** Push one text frame to the local server; resolves once the write is accepted. */
+    send: async (data: string) => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        throw new Error(`socket not open (readyState ${socket.readyState})`);
+      }
+      await new Promise<void>((resolve, reject) => {
+        socket.send(data, (error) => (error ? reject(error) : resolve()));
+      });
+      return { ok: true as const };
+    },
+    /** Close the local socket (idempotent). */
+    close: async (closeInput?: { code?: number; reason?: string }) => {
+      try {
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close(closeInput?.code ?? 1000, closeInput?.reason ?? "");
+        }
+      } catch {}
+      shutdown();
+      return { ok: true as const };
+    },
+    /** Caller releasing the handle (or the RPC session dropping) tears the socket down. */
+    [Symbol.dispose]: () => shutdown(),
+  };
+}
+
+/** Every open frame bridge's shutdown, so CLI teardown can close them all. */
+const activeBridges = new Set<() => void>();
+
+/** Close every open frame bridge — run when the CLI's own socket to OS drops. */
+function closeAllBridges(): void {
+  for (const shutdown of [...activeBridges]) shutdown();
+}
+
+/** Hop-by-hop headers are connection-scoped and must not be forwarded across a proxy hop (RFC 9110 §7.6.1). */
+const HOP_BY_HOP_HEADERS = [
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+];
+
+/**
+ * Proxy one HTTP request to a server on this machine and return its response,
+ * faithfully enough to serve a real dev server on a project host:
+ * - WebSocket upgrades are refused with a teaching error (the socket can't
+ *   cross RPC — that's what connectSocket is for).
+ * - Hop-by-hop headers are stripped in both directions; the original host
+ *   travels as `x-forwarded-host` (undici drops a bare `host` override).
+ * - A `Location` pointing back at the local origin is rewritten onto the
+ *   public origin, so a dev server's `302 → /login` doesn't send the browser
+ *   to its own loopback.
+ * - A refused/failed upstream becomes a `502`, not an exception escaping
+ *   through capability dispatch as an opaque worker failure.
+ * Bodies are buffered (fine for a spike; undici already decompressed them, so
+ * the stale framing headers are dropped).
+ */
+async function proxyLocalHttp(origin: string, request: Request): Promise<Response> {
+  if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+    throw new Error(
+      `getFetcher().fetch cannot carry a WebSocket upgrade: the 101 response's socket ` +
+        `cannot cross RPC hops between the platform and this machine. ` +
+        `Terminate the socket in a Durable Object app and bridge frames with ` +
+        `connectSocket({ port, path }) instead.`,
+    );
+  }
+  const incoming = new URL(request.url);
+  const headers = stripHopByHop(new Headers(request.headers));
+  headers.set("x-forwarded-host", incoming.host);
+  headers.delete("host");
+  const body =
+    request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
+
+  let response: Response;
+  try {
+    response = await fetch(`${origin}${incoming.pathname}${incoming.search}`, {
+      method: request.method,
+      headers,
+      body,
+      redirect: "manual", // pass redirects through so the browser sees them
+    });
+  } catch (error) {
+    return new Response(`local server at ${origin} is unreachable: ${String(error)}`, {
+      status: 502,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  const outHeaders = stripHopByHop(new Headers(response.headers));
+  // undici decompressed the body but left the encoding/length framing — drop it.
+  outHeaders.delete("content-encoding");
+  outHeaders.delete("content-length");
+  // Keep a dev-server redirect on the public host instead of the Mac's loopback.
+  const location = outHeaders.get("location");
+  if (location?.startsWith(origin)) {
+    outHeaders.set("location", `${incoming.origin}${location.slice(origin.length)}`);
+  }
+  const nullBody =
+    request.method === "HEAD" ||
+    response.status === 204 ||
+    response.status === 205 ||
+    response.status === 304;
+  return new Response(nullBody ? null : await response.arrayBuffer(), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: outHeaders,
+  });
+}
+
+/** Delete hop-by-hop headers, including any named by the `Connection` header. */
+function stripHopByHop(headers: Headers): Headers {
+  for (const named of headers.get("connection")?.split(",") ?? []) {
+    headers.delete(named.trim());
+  }
+  for (const name of HOP_BY_HOP_HEADERS) headers.delete(name);
+  return headers;
 }
 
 /**
@@ -255,7 +340,7 @@ const INSTRUCTIONS = `A real person's Mac, shared live from their terminal for a
 - notify({ message, title? }) shows a desktop notification.
 - runSwift({ code }) runs Swift on their Mac and returns { stdout, stderr, exitCode }. It has full access to their files, GUI and network, so ask before doing anything destructive.
 - getFetcher({ port }) lends a server running on their machine: the returned { fetch } proxies each Request to http://127.0.0.1:<port> on their Mac and returns the Response. A worker's fetch handler can forward straight through — e.g. \`return (await itx.myComputer.getFetcher({ port: 3000 })).fetch(req)\` serves their local dev server on a project host. HTTP only; WebSocket upgrades throw a teaching error.
-- connectSocket({ port, path?, onMessage?, onClose? }) opens a real WebSocket to a local server and bridges FRAMES over this capability: the returned handle has send(data), receive({ timeoutMs? }) → { frames, closed? } (long-poll), and close(). Terminate the browser's socket in a Durable Object app and pump frames through this handle — the socket itself can never cross RPC.`;
+- connectSocket({ port, path?, onMessage?, onClose? }) opens a real WebSocket to a local server and bridges FRAMES over this capability: onMessage receives each incoming frame, and the returned bridge has send(data) and close(). Terminate the browser's socket in a Durable Object app and pump frames through this bridge — the socket itself can never cross RPC.`;
 
 // A capability `types` string must be a valid TS declaration named `Capability`
 // (the egress/capability host typechecks it before mounting) — not a bare object
@@ -273,7 +358,6 @@ const TYPES = `export type Capability = {
     onClose?: (info: { code: number; reason: string }) => unknown;
   }): Promise<{
     send(data: string): Promise<{ ok: true }>;
-    receive(input?: { timeoutMs?: number }): Promise<{ frames: string[]; closed?: { code: number; reason: string } }>;
     close(input?: { code?: number; reason?: string }): Promise<{ ok: true }>;
   }>;
 };`;
@@ -361,9 +445,18 @@ async function connectAndProvide(
   return itx;
 }
 
-/** Keep the mount routable — a live capability only serves while its socket is warm — and never return. */
+/**
+ * Keep the mount routable — a live capability only serves while its socket is
+ * warm — and never return. If the heartbeat starts failing the CLI's own
+ * socket to OS has likely dropped and every mounted capability is unreachable;
+ * close any open frame bridges so their local sockets don't linger.
+ */
 function holdWarm(itx: RpcStub<Project>): Promise<never> {
-  const heartbeat = () => itx.__describe().catch(() => {});
+  const heartbeat = () =>
+    itx.__describe().then(
+      () => {},
+      () => closeAllBridges(),
+    );
   heartbeat();
   setInterval(heartbeat, 5_000);
   return new Promise<never>(() => {});
@@ -423,6 +516,12 @@ export function emitComputerNeedsLogin(): void {
  */
 function withActivity(capability: typeof myComputer): typeof myComputer {
   let nextId = 0;
+  // Each capability method takes exactly one argument and announces itself as
+  // it runs. The returned transport handles (getFetcher's { fetch }, the frame
+  // bridge) pass through untouched: per-request activity would mean reflecting
+  // over their methods, which changes what capnweb serializes back — the
+  // top-level getFetcher/connectSocket line is enough to show the computer's
+  // in use.
   const announce = (method: string, fn: (arg: never) => Promise<unknown>) => {
     return async (arg: never) => {
       const id = (nextId += 1);
@@ -437,7 +536,7 @@ function withActivity(capability: typeof myComputer): typeof myComputer {
       try {
         const result = await fn(arg);
         emitJson({ type: "call-done", id, method, ok: true, ms: Date.now() - startedAt });
-        return wrapHandle(method, result);
+        return result;
       } catch (error) {
         emitJson({
           type: "call-done",
@@ -450,23 +549,6 @@ function withActivity(capability: typeof myComputer): typeof myComputer {
         throw error;
       }
     };
-  };
-  // getFetcher/connectSocket return HANDLES whose methods carry the real
-  // traffic — wrap those one level deep too (as `getFetcher.fetch` etc.), or
-  // the app's activity log goes blind to the busiest lane. `receive` is a
-  // long-poll and would announce a line every ~20s doing nothing: skip it.
-  const wrapHandle = (method: string, result: unknown): unknown => {
-    if (result === null || typeof result !== "object") return result;
-    const entries = Object.entries(result as Record<string, unknown>);
-    if (!entries.some(([, value]) => typeof value === "function")) return result;
-    return Object.fromEntries(
-      entries.map(([key, value]) => [
-        key,
-        typeof value === "function" && key !== "receive"
-          ? announce(`${method}.${key}`, value as (arg: never) => Promise<unknown>)
-          : value,
-      ]),
-    );
   };
   const wrapped = {} as Record<string, (arg: never) => Promise<unknown>>;
   for (const [method, fn] of Object.entries(capability)) {
@@ -491,16 +573,9 @@ function summarizeCall(method: string, arg: unknown): string {
     return `ran ${lines} line${lines === 1 ? "" : "s"} of Swift`;
   }
   if (method === "getFetcher") return `lent an HTTP fetcher to localhost:${input.port}`;
-  if (method === "getFetcher.fetch") {
-    const request = arg as { method?: string; url?: string } | undefined;
-    const path = request?.url ? new URL(request.url).pathname : "?";
-    return truncate(`${request?.method ?? "GET"} ${path}`);
-  }
   if (method === "connectSocket") {
     return `opened a WebSocket to localhost:${input.port}${input.path ?? "/"}`;
   }
-  if (method === "connectSocket.send") return truncate(`ws → ${String(arg ?? "")}`);
-  if (method === "connectSocket.close") return "closed the WebSocket";
   return method;
 }
 

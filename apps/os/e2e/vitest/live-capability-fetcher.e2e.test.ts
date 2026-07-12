@@ -66,6 +66,21 @@ function startLocalWsServer(): Promise<{ port: number; server: WebSocketServer }
 }
 
 /**
+ * Await a node http / ws server's full shutdown. A WebSocketServer won't close
+ * while a client socket is open — here that's the bridge's still-live provider
+ * socket (the browser-close → DO → handle.close() teardown races this, and a
+ * hibernated DO may never run it at all) — so terminate any clients first.
+ * That abrupt close also drives the provider's own socket-close teardown.
+ */
+function closeServer(server: {
+  close(cb?: (error?: Error) => void): void;
+  clients?: Set<{ terminate(): void }>;
+}): Promise<void> {
+  for (const client of server.clients ?? []) client.terminate();
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+/**
  * The demo worker committed to the test project: the homepage forwards to the
  * human's HTTP server through getFetcher; the wsbridge app terminates browser
  * WebSockets and bridges frames through connectSocket. Mirrors the seeded
@@ -122,8 +137,9 @@ export class WsBridgeApp extends IterateDurableObject {
     const server = pair[1];
     server.accept();
 
-    // Deliberately NOT disposed at the end of this request: the bridge lives
-    // as long as the browser's socket does.
+    // Held (not disposed at request end): the bridge lives as long as the
+    // browser's socket does. connectSocket's onMessage delivers local-server
+    // frames; the browser's frames go out through handle.send.
     const itx = await this.env.ITX.get();
     let handle: any;
     try {
@@ -142,12 +158,34 @@ export class WsBridgeApp extends IterateDurableObject {
         },
       });
     } catch (error) {
+      // Nothing to bridge to: close the pair we accepted and release itx.
+      try {
+        server.close(1011, "bridge failed");
+      } catch {}
       try {
         (itx as any)[Symbol.dispose]?.();
       } catch {}
       return new Response("bridge failed: " + String(error), { status: 502 });
     }
 
+    // One idempotent teardown for both close and error: close the bridge, then
+    // release the itx stub. Ordering matters — handle.close() is an RPC that
+    // rides on this itx session, so we must AWAIT it (the provider closes the
+    // Mac's socket) before disposing the session; disposing first aborts the
+    // close in flight and the Mac's socket lingers. (Symbol.dispose on the
+    // returned handle is dropped by capnweb's by-value return serialization, so
+    // close() — a real string-keyed method — is the only cross-RPC teardown.)
+    let torn = false;
+    const teardown = async () => {
+      if (torn) return;
+      torn = true;
+      try {
+        await handle.close({});
+      } catch {}
+      try {
+        (itx as any)[Symbol.dispose]?.();
+      } catch {}
+    };
     server.addEventListener("message", (event) => {
       void handle.send(String(event.data)).catch(() => {
         try {
@@ -155,12 +193,6 @@ export class WsBridgeApp extends IterateDurableObject {
         } catch {}
       });
     });
-    const teardown = () => {
-      void handle.close({}).catch(() => {});
-      try {
-        (itx as any)[Symbol.dispose]?.();
-      } catch {}
-    };
     server.addEventListener("close", teardown);
     server.addEventListener("error", teardown);
 
@@ -244,8 +276,8 @@ test("the homepage is a server on the human's machine: getFetcher proxies HTTP e
     })();
     expect(outcome).toContain("cannot carry a WebSocket upgrade");
   } finally {
-    server.close();
-    wsServer.close();
+    await closeServer(server);
+    await closeServer(wsServer);
   }
 });
 
@@ -284,20 +316,26 @@ test("WebSockets work through the bridge: frames pump between a browser socket a
         ws.once("open", () => resolve(ws));
         ws.once("unexpected-response", (_req, res) => {
           res.resume();
-          reject(new Error(`upgrade rejected: ${res.statusCode}`));
+          const error = new Error(`upgrade rejected: ${res.statusCode}`) as Error & {
+            status?: number;
+          };
+          error.status = res.statusCode;
+          reject(error);
         });
         ws.once("error", reject);
       });
 
-    // Cold build: retry until the upgrade lands (building 503s read as
-    // rejected upgrades; a 502 means the bridge dialed but couldn't connect).
+    // Retry ONLY the cold-build 503 (the router's building page); a real
+    // failure such as a 502 from the bridge surfaces immediately instead of
+    // spinning for two minutes.
     const openSocketReady = async () => {
       const deadline = Date.now() + 120_000;
       for (;;) {
         try {
           return await openSocket(connect());
         } catch (error) {
-          if (Date.now() > deadline) throw error;
+          const status = (error as { status?: number }).status;
+          if (status !== 503 || Date.now() > deadline) throw error;
           await new Promise((resolve) => setTimeout(resolve, 2_000));
         }
       }
@@ -340,7 +378,7 @@ test("WebSockets work through the bridge: frames pump between a browser socket a
       socket.close();
     }
   } finally {
-    server.close();
-    wsServer.close();
+    await closeServer(server);
+    await closeServer(wsServer);
   }
 });
