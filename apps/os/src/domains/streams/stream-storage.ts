@@ -2,7 +2,9 @@
 //
 // Storage is normalized into two tables: `events` is the offset-ordered
 // metadata/index plus common event JSON inline, and `event_chunks` holds
-// oversized event JSON as bounded UTF-8 byte rows. Durable Object
+// oversized event JSON as bounded UTF-8 byte rows. The enclosing stream path
+// is the Durable Object's identity, so stored JSON omits that repeated field
+// and reads restore it. Durable Object
 // SQLite caps each string/blob/row cell at ~2 MB; BLOB columns do not raise
 // that ceiling, and SQL-side substr(?) chunking would still require binding
 // the oversized value first, so JSON above the conservative 512 KiB inline
@@ -25,7 +27,7 @@ import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import type { StreamEvent } from "./schemas.ts";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
-const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 5;
+const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 6;
 // Durable Object SQL currently permits at most 100 bound parameters per query.
 // Keep generated multi-row inserts at that ceiling and bound pending BLOB
 // memory independently: small events fill the row budget, large events flush
@@ -72,9 +74,9 @@ function isSubscriptionProgressDue(progress: PendingSubscriptionProgress): boole
 }
 
 /**
- * A committed event paired with its serialized byte length (the exact bytes
- * stored inline or in `event_chunks`). Delivery batching sizes batches against the byte
- * cap with these instead of re-stringifying every event on every read.
+ * A committed event paired with its exact full-envelope serialized byte
+ * length. Delivery batching sizes batches against the byte cap with these
+ * instead of re-stringifying every event on every read.
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
 export type StreamOffsetBounds = { highestOffset: number; highestAssignedOffset: number };
@@ -129,6 +131,7 @@ function initializeStreamStorage(sqlStorage: SqlStorage): StreamOffsetBounds | u
     -- offset is the replay cursor; the partial index below owns keyed dedup/lookups.
     -- createdAt stays solely in event_json: no query filters or orders on it, so a
     -- duplicate column would consume one binding and one SQLite field per append.
+    -- path is omitted because every row belongs to this Durable Object's one path.
     -- ephemeral marks second-class rows: range reads exclude them unless asked, and
     -- the stream may evict them in the future. Eviction keeps offsets consumed
     -- in stream_storage_schema but forgets their idempotency keys.
@@ -186,11 +189,15 @@ function initializeStreamStorage(sqlStorage: SqlStorage): StreamOffsetBounds | u
 
 export class StreamEventLog {
   #bootstrapOffsetBounds: StreamOffsetBounds | undefined;
+  readonly #path: string;
+  readonly #pathPropertyByteLength: number;
 
   constructor(
     readonly sql: SqlStorage,
-    _path: string,
+    path: string,
   ) {
+    this.#path = path;
+    this.#pathPropertyByteLength = textEncoder.encode(`,"path":${JSON.stringify(path)}`).byteLength;
     this.#bootstrapOffsetBounds = initializeStreamStorage(this.sql);
   }
 
@@ -283,9 +290,10 @@ export class StreamEventLog {
   }
 
   /**
-   * Returns each event's serialized byte length (the exact bytes written to
-   * SQLite), so the commit path can hand delivery fan-out a sized
-   * fresh tail without anyone re-stringifying what was just serialized here.
+   * Returns each event's exact full-envelope serialized byte length, so the
+   * commit path can hand delivery fan-out a sized fresh tail without anyone
+   * re-stringifying what was just serialized here. SQLite omits the invariant
+   * stream path; #serializedEventByteLength restores that property's byte cost.
    */
   insert(
     events: readonly StreamEvent[],
@@ -295,7 +303,7 @@ export class StreamEventLog {
     let serializedPrefix: Uint8Array[] | undefined;
     if (events.length === 1) {
       const event = events[0]!;
-      const bytes = textEncoder.encode(JSON.stringify(event));
+      const bytes = this.#serializeEvent(event);
       if (bytes.byteLength <= EVENT_CHUNK_SIZE) {
         // This is the entire commit in one atomic SQLite statement. An
         // explicit transaction would add begin/commit work without widening
@@ -308,7 +316,7 @@ export class StreamEventLog {
           event.ephemeral === true ? 1 : 0,
           exactArrayBuffer(bytes),
         );
-        return [{ event, byteLength: bytes.byteLength }];
+        return [{ event, byteLength: this.#serializedEventByteLength(bytes.byteLength) }];
       }
       // Preserve the large-event path's single-serialization guarantee.
       carriedSerialization = { eventIndex: 0, bytes };
@@ -316,7 +324,7 @@ export class StreamEventLog {
       const candidate = [] as Uint8Array[];
       let candidateByteLength = 0;
       for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
-        const bytes = textEncoder.encode(JSON.stringify(events[eventIndex]!));
+        const bytes = this.#serializeEvent(events[eventIndex]!);
         if (
           bytes.byteLength > EVENT_CHUNK_SIZE ||
           candidateByteLength + bytes.byteLength > MAX_PENDING_INSERT_BYTES
@@ -343,7 +351,10 @@ export class StreamEventLog {
             event.ephemeral === true ? 1 : 0,
             exactArrayBuffer(bytes),
           );
-          sizedEvents.push({ event, byteLength: bytes.byteLength });
+          sizedEvents.push({
+            event,
+            byteLength: this.#serializedEventByteLength(bytes.byteLength),
+          });
         }
         this.sql.exec(EVENT_INSERT_STATEMENTS[events.length]!, ...eventBindings);
         return sizedEvents;
@@ -367,9 +378,7 @@ export class StreamEventLog {
           const carried =
             carriedSerialization?.eventIndex === batchEnd ? carriedSerialization : null;
           const bytes =
-            serializedPrefix?.[batchEnd] ??
-            carried?.bytes ??
-            textEncoder.encode(JSON.stringify(event));
+            serializedPrefix?.[batchEnd] ?? carried?.bytes ?? this.#serializeEvent(event);
           if (carried !== null) carriedSerialization = undefined;
           if (
             serializedEvents.length > 0 &&
@@ -389,7 +398,10 @@ export class StreamEventLog {
             bytes.byteLength <= EVENT_CHUNK_SIZE ? exactArrayBuffer(bytes) : null,
           );
           if (bytes.byteLength > EVENT_CHUNK_SIZE) hasChunkedEvents = true;
-          sizedEvents.push({ event, byteLength: bytes.byteLength });
+          sizedEvents.push({
+            event,
+            byteLength: this.#serializedEventByteLength(bytes.byteLength),
+          });
           serializedByteLength += bytes.byteLength;
           batchEnd += 1;
         }
@@ -526,8 +538,9 @@ export class StreamEventLog {
   }
 
   /**
-   * `getRange` plus each event's stored byte length, so delivery batching can
-   * enforce its byte cap without re-stringifying every event it just parsed.
+   * `getRange` plus each event's full-envelope byte length, so delivery
+   * batching can enforce its byte cap without re-stringifying every event it
+   * just parsed.
    */
   getRangeSized(args: StreamRangeArgs): SizedStreamEvent[] {
     return this.#readRange(args, true);
@@ -575,7 +588,14 @@ export class StreamEventLog {
         continue;
       }
       const event = this.#parseEvent(eventJsonOrOffset, 0);
-      events.push(includeByteLength ? { event, byteLength: inlineByteLength ?? 0 } : event);
+      events.push(
+        includeByteLength
+          ? {
+              event,
+              byteLength: this.#serializedEventByteLength(inlineByteLength ?? 0),
+            }
+          : event,
+      );
     }
     if (chunkedRows === undefined) {
       return events as Array<SizedStreamEvent | StreamEvent>;
@@ -595,7 +615,9 @@ export class StreamEventLog {
         continue;
       }
       const event = this.#parseEvent(stored.chunks, stored.byteLength);
-      events[resultIndex] = includeByteLength ? { event, byteLength: stored.byteLength } : event;
+      events[resultIndex] = includeByteLength
+        ? { event, byteLength: this.#serializedEventByteLength(stored.byteLength) }
+        : event;
     }
     return hasMissingChunks
       ? events.filter((event) => event !== undefined)
@@ -632,7 +654,19 @@ export class StreamEventLog {
   /** Decode exact rows produced by append; JSON syntax corruption still fails loudly. */
   #parseEvent(storedJson: string | EventChunks, byteLength: number): StreamEvent {
     const json = typeof storedJson === "string" ? storedJson : decodeChunks(storedJson, byteLength);
-    return JSON.parse(json) as StreamEvent;
+    return { ...(JSON.parse(json) as Omit<StreamEvent, "path">), path: this.#path };
+  }
+
+  #serializeEvent(event: StreamEvent): Uint8Array {
+    if (event.path !== this.#path) {
+      throw new Error(`Cannot store event for path ${event.path} in stream ${this.#path}`);
+    }
+    const { path: _path, ...storedEvent } = event;
+    return textEncoder.encode(JSON.stringify(storedEvent));
+  }
+
+  #serializedEventByteLength(storedByteLength: number): number {
+    return storedByteLength + this.#pathPropertyByteLength;
   }
 }
 

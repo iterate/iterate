@@ -287,6 +287,19 @@ describe("StreamEventLog.getRange", () => {
     expect(db.prepare("select typeof(event_json) as type from events").get()).toEqual({
       type: "blob",
     });
+    const stored = JSON.parse(
+      new TextDecoder().decode(
+        db.prepare("select event_json from events").get()!.event_json as Uint8Array,
+      ),
+    ) as Record<string, unknown>;
+    expect(stored).not.toHaveProperty("path");
+    const storedByteLength = db.prepare("select length(event_json) as value from events").get()!
+      .value as number;
+    const textEncoder = new TextEncoder();
+    expect(storedByteLength).toBe(
+      textEncoder.encode(JSON.stringify(committed)).byteLength -
+        textEncoder.encode(`,"path":${JSON.stringify(committed.path)}`).byteLength,
+    );
     expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 0 });
     expect(inserted).toEqual([
       {
@@ -295,6 +308,13 @@ describe("StreamEventLog.getRange", () => {
       },
     ]);
     expect(log.getByOffset(1)).toEqual(committed);
+  });
+
+  it("rejects an event belonging to another stream", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    expect(() => log.insert([{ ...event(1, "wrong-path"), path: "/other" }])).toThrow(
+      "Cannot store event for path /other in stream /tests/stream",
+    );
   });
 
   it("opens transactions only for multi-statement commits", () => {
@@ -764,7 +784,7 @@ describe("StreamEventLog.getRange", () => {
     );
     expect(
       db.prepare("select version, evicted_offset_floor as floor from stream_storage_schema").get(),
-    ).toEqual({ version: 5, floor: 0 });
+    ).toEqual({ version: 6, floor: 0 });
     expect(
       db
         .prepare(
@@ -956,7 +976,7 @@ describe("SqliteSubscriptionCursorStore schema", () => {
       "epoch",
     ]);
     expect(db.prepare("select version from stream_storage_schema").get()).toEqual({
-      version: 5,
+      version: 6,
     });
   });
 
