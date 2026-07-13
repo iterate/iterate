@@ -2030,12 +2030,21 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   /** Map one AI Search result item to a provenance-carrying chunk. */
   #toChunk(item: AutoRagSearchResponse["data"][number]): SearchResultChunk {
     const attributes = item.attributes ?? {};
+    // Live-verified on the legacy binding: custom metadata comes back NESTED
+    // under `attributes.file` ({ file: { kind, context, … } }), while the new
+    // AI Search API returns it flat — read both so a binding migration can't
+    // silently blank provenance. The workers-types attribute value type
+    // doesn't admit the nested object, hence the cast.
+    const custom = ((attributes as Record<string, unknown>).file ?? attributes) as Record<
+      string,
+      unknown
+    >;
     return {
       filename: item.filename,
       score: item.score,
       content: item.content.map((chunk) => chunk.text).join("\n"),
-      kind: typeof attributes.kind === "string" ? attributes.kind : undefined,
-      context: typeof attributes.context === "string" ? attributes.context : undefined,
+      kind: typeof custom.kind === "string" ? custom.kind : undefined,
+      context: typeof custom.context === "string" ? custom.context : undefined,
     };
   }
 
@@ -2056,9 +2065,13 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     if (input.exclude?.includes("docs")) return [];
     const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
     const hits = await docs.search({ q: input.query });
-    return hits.slice(0, input.limit ?? 10).map((hit, index) => ({
+    // Docs scores are keyword-overlap counts, not comparable to the corpus's
+    // vector scores — placing them at 1.0 drowned every real content hit
+    // (live-verified: corpus hits score ~0.4–0.7). A descending band from 0.5
+    // keeps strong corpus hits on top while docs still surface mid-list.
+    return hits.slice(0, Math.min(input.limit ?? 5, 5)).map((hit, index) => ({
       filename: hit.fetchCall,
-      score: 1 - index * 0.01,
+      score: 0.5 - index * 0.02,
       content: hit.summary,
       kind: "docs",
       context: `${hit.kind}: ${hit.name} — fetch with ${hit.fetchCall}`,
