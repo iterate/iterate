@@ -162,3 +162,18 @@ export function githubTokenEnvForConnections(
     .sort();
   return first === undefined ? null : githubAccessTokenPlaceholder(first);
 }
+
+/**
+ * Shell run on every container start when `GH_TOKEN` is set: configure stock
+ * `git` so HTTPS to github.com sends Basic auth with username `x-access-token`
+ * and password `$GH_TOKEN` (the egress placeholder).
+ *
+ * GitHub's git smart-HTTP endpoint rejects `Authorization: Bearer …` (API-style)
+ * with 401; it wants Basic. The placeholder is base64-encoded into the header
+ * value inside the container — project egress peels Basic Authorization headers
+ * before substituting (see `substituteSecretHeaders`), so the secret cell still
+ * holds: the container never sees token bytes. `$GH_TOKEN` expands in the
+ * container so `setEnvVars({ GH_TOKEN })` overrides still apply.
+ */
+export const SANDBOX_GITHUB_GIT_AUTH_SHELL =
+  'if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Basic $(printf %s "x-access-token:${GH_TOKEN}" | base64 | tr -d "\\n")"; fi';

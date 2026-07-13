@@ -134,13 +134,15 @@ value** — it would sit in the container's environment, its snapshots, and the
 connection, the sandbox plants `GH_TOKEN` automatically — a `getSecret`
 placeholder for the connection secret's `accessToken` (minted/substituted only
 at egress). `gh` reads it from the environment natively, and provisioning also
-sets a `git http."https://github.com/".extraheader` with a raw
-`AUTHORIZATION: Bearer $GH_TOKEN` header (a credential helper would send Basic
-auth — base64 — hiding the placeholder from egress substitution), so plain
-`git` and `gitCheckout` against github.com work too. Discovery runs per
-container start (a new connection is picked up on the next start); with
-several connections the lexicographically first connection name wins;
-`setEnvVars({ GH_TOKEN })` overrides the pick.
+sets a `git http."https://github.com/".extraheader` with
+`AUTHORIZATION: Basic base64(x-access-token:$GH_TOKEN)` — GitHub's git
+smart-HTTP endpoint rejects Bearer tokens (API-style) and wants Basic with
+username `x-access-token`. The placeholder rides inside the base64 payload;
+project egress peels Basic Authorization headers before substituting, so plain
+`git` and `gitCheckout` against github.com work without token bytes entering
+the container. Discovery runs per container start (a new connection is picked
+up on the next start); with several connections the lexicographically first
+connection name wins; `setEnvVars({ GH_TOKEN })` overrides the pick.
 
 **Nothing else is planted, and nothing is baked into the image.** There is no
 bundled coding agent and no automatic repo checkout — a sandbox starts as the

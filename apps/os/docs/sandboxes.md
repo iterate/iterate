@@ -168,11 +168,12 @@ material as a value** — it would land on the durable stream.
 When the project has a GitHub connection, the sandbox plants **`GH_TOKEN`**
 automatically (a placeholder for the connection secret's `accessToken`,
 re-discovered per container start; lexicographically-first connection wins;
-`setEnvVars({ GH_TOKEN })` overrides) — so `gh` and git-over-https
-against github.com work out of the box, and `gitCheckout` is the way to get
-code into a sandbox. Nothing else is planted: there is no baked coding agent
-and no automatic repo checkout — a sandbox starts as the stock image plus
-whatever its snapshots carry.
+`setEnvVars({ GH_TOKEN })` overrides) and configures git with Basic
+`http.extraheader` for github.com — so `gh`, curl-with-Bearer, and
+git-over-https against github.com work out of the box, and `gitCheckout` is
+the way to get code into a sandbox. Nothing else is planted: there is no
+baked coding agent and no automatic repo checkout — a sandbox starts as the
+stock image plus whatever its snapshots carry.
 
 ## Egress: all sandbox traffic goes through project policy
 

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { assertSandboxPath, githubTokenEnvForConnections, sandboxPathFor } from "./utils.ts";
+import {
+  assertSandboxPath,
+  githubTokenEnvForConnections,
+  sandboxPathFor,
+  SANDBOX_GITHUB_GIT_AUTH_SHELL,
+} from "./utils.ts";
 
 describe("sandboxPathFor", () => {
   test("a name mints /sandboxes/<name> — flat, no intermediate folders", () => {
@@ -66,5 +71,18 @@ describe("githubTokenEnvForConnections", () => {
       { connection: "install-10", integration: "github" },
     ]);
     expect(placeholder).toContain("/secrets/integrations/github/install-10");
+  });
+});
+
+describe("SANDBOX_GITHUB_GIT_AUTH_SHELL", () => {
+  test("configures git extraheader as Basic x-access-token + base64 of GH_TOKEN placeholder", () => {
+    // GitHub git smart-HTTP rejects Bearer; Basic with username x-access-token
+    // is the documented install-token shape. The shell base64-encodes so the
+    // placeholder still expands from $GH_TOKEN inside the container.
+    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).toContain('http."https://github.com/".extraheader');
+    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).toContain("AUTHORIZATION: Basic");
+    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).toContain("x-access-token:${GH_TOKEN}");
+    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).toContain("base64");
+    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).not.toContain("Bearer");
   });
 });

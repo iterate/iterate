@@ -193,11 +193,12 @@ ALL container egress — including HTTPS, MITM'd with the Cloudflare container
 CA (`interceptHttps`) — routes through the project egress door. So sandboxes
 need no token bytes: the sandbox DO plants a placeholder `GH_TOKEN` per
 container start when the project has a GitHub connection, and the warm-up
-script sets a `git http.extraheader` with a raw Bearer placeholder (git's
-credential helpers send Basic auth — base64 — which would hide the placeholder
-from header substitution). Substitution + refresh-on-401 happen en route under
-the pin, exactly as for any other caller. There is no reveal lane, and none is
-needed.
+script sets a `git http.extraheader` with Basic auth
+(`x-access-token` + base64 of the placeholder — GitHub git rejects Bearer).
+Egress peels Basic Authorization headers so the placeholder is still
+discoverable and substitutable. Substitution + refresh-on-401 happen en route
+under the pin, exactly as for any other caller. There is no reveal lane, and
+none is needed.
 
 ## 6. The proof (apps/dummy-petshop)
 

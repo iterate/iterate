@@ -14,6 +14,7 @@ import {
   assertSandboxPath,
   assertValidSleepAfter,
   githubTokenEnvForConnections,
+  SANDBOX_GITHUB_GIT_AUTH_SHELL,
 } from "../utils.ts";
 
 /**
@@ -859,25 +860,22 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   /**
    * Make plain `git` (and therefore `gitCheckout`) authenticate against
    * github.com with the GH_TOKEN placeholder. `gh` reads GH_TOKEN from the
-   * environment natively, but stock git does not — it needs the
-   * `http.extraheader` config. A raw `AUTHORIZATION: Bearer <placeholder>`
-   * header (NOT a credential helper, which would send Basic auth — base64 —
-   * hiding the placeholder from egress substitution) is what lets the egress
-   * door swap in the real installation token. `$GH_TOKEN` expands INSIDE the
-   * container from the just-applied env map, so the placeholder string never
-   * needs shell-quoting here; when the project has no GitHub connection the
-   * guard makes this a no-op. Config lands on the ephemeral disk, hence
-   * re-run per container start. Best-effort: a hiccup must not fail
-   * provisioning — `gh` still works via the env var, and the next start
-   * retries.
+   * environment natively, but stock git does not — it needs
+   * `http.extraheader`. GitHub's git smart-HTTP endpoint only accepts Basic
+   * auth (`x-access-token:<token>`), not Bearer (API-style Bearer returns
+   * 401). The shell base64-encodes `x-access-token:$GH_TOKEN` into
+   * `AUTHORIZATION: Basic …`; project egress peels Basic headers so the
+   * placeholder is still substituted at the door (see
+   * {@link SANDBOX_GITHUB_GIT_AUTH_SHELL}). `$GH_TOKEN` expands INSIDE the
+   * container from the just-applied env map; when the project has no GitHub
+   * connection the guard makes this a no-op. Config lands on the ephemeral
+   * disk, hence re-run per container start. Best-effort: a hiccup must not
+   * fail provisioning — `gh`/curl still work via the env var, and the next
+   * start retries.
    */
   async #configureGitAuth(): Promise<void> {
     try {
-      await this.#redialOnInterruptedSessionSetup(() =>
-        super.exec(
-          'if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Bearer $GH_TOKEN"; fi',
-        ),
-      );
+      await this.#redialOnInterruptedSessionSetup(() => super.exec(SANDBOX_GITHUB_GIT_AUTH_SHELL));
     } catch (error) {
       console.warn("sandbox git auth configuration failed; git-over-https may 401", error);
     }
