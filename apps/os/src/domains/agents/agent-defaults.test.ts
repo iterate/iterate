@@ -93,6 +93,15 @@ describe("agentDefaultsForPath", () => {
     expect(provider?.payload).toMatchObject({ model: "openai/gpt-5.5" });
   });
 
+  it("uses GPT-5.6 Sol by default", () => {
+    const defaults = defaultsFor("/agents/demo");
+    expect(defaults.model).toBe("openai/gpt-5.6-sol");
+    const provider = defaults.events.find(
+      (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
+    );
+    expect(provider?.payload).toMatchObject({ ifUnset: true, model: "openai/gpt-5.6-sol" });
+  });
+
   it("keys every event on (projectId, agentPath) so re-appends dedupe", () => {
     for (const event of defaultsFor("/agents/demo").events) {
       expect(event.idempotencyKey).toContain(PROJECT_ID);

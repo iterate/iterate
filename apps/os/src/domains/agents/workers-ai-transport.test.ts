@@ -4,6 +4,7 @@ import {
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
+import { DEFAULT_AGENT_MODEL } from "./agent-processor-contract.ts";
 import { agentDefaultsForPath } from "./agent-defaults.ts";
 import { buildAgentLlmRequestBody } from "./agent-processor-implementation.ts";
 
@@ -61,7 +62,7 @@ describe("runWorkersAiAttempt", () => {
         return { response: "ok" };
       },
     };
-    for (const model of ["openai/gpt-5.5", "@cf/test/non-openai-model"]) {
+    for (const model of [DEFAULT_AGENT_MODEL, "@cf/test/non-openai-model"]) {
       await runWorkersAiAttempt({
         ai,
         deadlineMs: 1_000,
@@ -103,7 +104,7 @@ describe("runWorkersAiAttempt", () => {
       ai: { run: async () => body },
       deadlineMs: 1_000,
       messages: [{ role: "user", content: "hi" }],
-      model: "openai/gpt-5.5",
+      model: DEFAULT_AGENT_MODEL,
       onChunk: async () => {},
     });
 
@@ -169,7 +170,7 @@ describe("the BYOK gateway lane", () => {
       ai: fake.ai,
       deadlineMs: 1_000,
       messages: [{ role: "user", content: "hi" }],
-      model: "openai/gpt-5.5",
+      model: DEFAULT_AGENT_MODEL,
       onChunk: async () => {},
       transport: {
         kind: "byok",
@@ -188,7 +189,7 @@ describe("the BYOK gateway lane", () => {
     expect(request.headers["cf-aig-cache-ttl"]).toBe("600");
     expect(request.headers["cf-aig-cache-key"]).toMatch(/^[0-9a-f]{64}$/);
     expect(request.query).toMatchObject({
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       prompt_cache_key: "prj_1:/agents/onboarding",
       reasoning_effort: "medium",
       stream: true,
@@ -205,7 +206,7 @@ describe("the BYOK gateway lane", () => {
       ai: fake.ai,
       deadlineMs: 1_000,
       messages: [{ role: "user", content: "hi" }],
-      model: "openai/gpt-5.5",
+      model: DEFAULT_AGENT_MODEL,
       onChunk: async () => {},
       transport: { kind: "byok", gatewayId: "default", openaiApiKey: "sk-test" },
     });
@@ -357,7 +358,7 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
         })),
         {
           type: "events.iterate.com/agent/llm-request-requested",
-          payload: { model: "openai/gpt-5.5", requestId: "llm-request:gen-0" },
+          payload: { model: DEFAULT_AGENT_MODEL, requestId: "llm-request:gen-0" },
           offset: defaults.events.length + 1,
           createdAt: input.requestedAt,
           path: "/agents/onboarding",

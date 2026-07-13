@@ -1237,8 +1237,8 @@ function renderFileHintLine(file: AgentFileAttachment): string {
  * prompt with the transcript re-rendered behind it. Compaction fires at the
  * biggest prompt this agent will ever send (~half the context window), and
  * the tail position means that whole prompt is a prefix the provider already
- * has cached from the previous turn (90% input discount on gpt-5.5) instead
- * of a from-scratch prompt sharing no bytes with it.
+ * has cached from the previous turn (the provider's cached-input discount)
+ * instead of a from-scratch prompt sharing no bytes with it.
  */
 const AGENT_COMPACTION_PROMPT = [
   "You are compacting this AI agent conversation because it is close to overflowing the model's context window. Do not respond to the messages above. Instead, write a summary that will REPLACE everything above as the agent's only memory of it.",
@@ -1281,10 +1281,12 @@ export function buildAgentCompactionRequestBody(state: {
 /**
  * Context windows per model family, longest-prefix matched so dated variants
  * inherit their family's window. The OpenAI figures are our OPERATING window,
- * not the documented one: gpt-5.5's real window is 1.05M tokens, but 272k is
- * where OpenAI's pricing doubles, so compaction should treat that as full.
+ * not the documented one: GPT-5.6 Sol and GPT-5.5 have 1.05M-token windows,
+ * but 272k is where OpenAI's pricing doubles, so compaction should treat that
+ * as full.
  */
 const MODEL_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
+  "openai/gpt-5.6": 272_000,
   "openai/gpt-5.5": 272_000,
   "openai/gpt-5": 272_000,
 };

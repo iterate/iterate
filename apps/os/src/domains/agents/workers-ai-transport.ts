@@ -227,7 +227,7 @@ export function maskCloudflareAiGatewayResponseCacheEntropy(serialized: string):
 
 /**
  * Extra chat-completions params for OpenAI reasoning models served through
- * Workers AI (`openai/gpt-5.5`, o-series, codex): pin reasoning effort to
+ * Workers AI (`openai/gpt-5.6-sol`, o-series, codex): pin reasoning effort to
  * medium (the pre-#1808 openai-ws posture) and ask streamed responses to
  * carry usage in their final chunk. Gated by model family — non-OpenAI
  * models reject unknown params with a whole-request failure, the same reason
