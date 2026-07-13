@@ -1,12 +1,7 @@
 import type { PublicSessionResponse } from "@iterate-com/auth/client";
 import { z } from "zod";
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
-import {
-  adminPrincipal,
-  createUserPrincipal,
-  type Principal,
-  type UserPrincipal,
-} from "~/auth/principal.ts";
+import { adminPrincipal, createUserPrincipal, type Principal } from "~/auth/principal.ts";
 import type { AppConfig } from "~/config.ts";
 import type { ProjectDirectoryRecord } from "~/project-directory.ts";
 
@@ -365,16 +360,7 @@ function principalForGrant(grant: OperatorGrant): Principal {
   });
 }
 
-export function userPrincipalForOperator(
-  session: AuthenticatedOperatorSession,
-): UserPrincipal | undefined {
-  return session.principal.type === "user" ? session.principal : undefined;
-}
-
-export async function signOperatorGrant(input: {
-  grant: OperatorGrant;
-  secret: string;
-}): Promise<string> {
+async function signOperatorGrant(input: { grant: OperatorGrant; secret: string }): Promise<string> {
   const payload = base64UrlEncode(new TextEncoder().encode(JSON.stringify(input.grant)));
   const signature = await sign(input.secret, payload);
   return `${payload}.${base64UrlEncode(signature)}`;
