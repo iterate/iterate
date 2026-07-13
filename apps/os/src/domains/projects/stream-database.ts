@@ -68,13 +68,13 @@ export class StreamDatabase {
   /**
    * Record activity on a stream from a delivered batch. FULLY idempotent:
    * `maxOffset` is the stream's highest offset (monotonic, 1-based) and drives
-   * `eventCount` through max, recency only ever advances, and a batch that
-   * advances neither is a pure no-op — no write, same projection identity. So a
-   * redelivered or retried batch can neither move recency backwards, clobber
-   * `lastType` with an older event's type, nor inflate the count. (Offsets are
-   * sequential, so the max offset IS the event count.) Returns whether the row
-   * advanced. `copyOnWrite: false` is valid only while the projection has no
-   * observer that could retain its previous value.
+   * `eventCount` through max. Recency only advances, while a later serial batch
+   * at the same timestamp may update `lastType` because Cloudflare can freeze
+   * the clock across one atomic append. A redelivered batch with the same type
+   * is a pure no-op. Thus retries cannot move recency backwards or inflate the
+   * count. (Offsets are sequential, so the max offset IS the event count.)
+   * Returns whether the row advanced. `copyOnWrite: false` is valid only while
+   * the projection has no observer that could retain its previous value.
    */
   touch(
     { path, at, type, maxOffset }: TouchInput,
@@ -82,13 +82,22 @@ export class StreamDatabase {
   ): boolean {
     const prev = this.#projection[path];
     const advancesRecency = prev === undefined || at > prev.lastActivityAt;
+    const updatesTiedType =
+      prev !== undefined && at === prev.lastActivityAt && type !== prev.lastType;
     const eventCount = Math.max(prev?.eventCount ?? 0, maxOffset);
-    if (prev !== undefined && !advancesRecency && eventCount === prev.eventCount) return false;
+    if (
+      prev !== undefined &&
+      !advancesRecency &&
+      !updatesTiedType &&
+      eventCount === prev.eventCount
+    ) {
+      return false;
+    }
     const row: StreamIndexRow = {
       path,
       createdAt: prev?.createdAt ?? at,
       lastActivityAt: advancesRecency ? at : prev.lastActivityAt,
-      lastType: advancesRecency ? type : prev.lastType,
+      lastType: advancesRecency || updatesTiedType ? type : prev.lastType,
       eventCount,
     };
     this.#store(row);

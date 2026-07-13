@@ -40,6 +40,18 @@ describe("StreamDatabase", () => {
     });
   });
 
+  it("uses the later serial batch's type when Cloudflare's clock is frozen", () => {
+    const db = new StreamDatabase(sqlStorage());
+    const frozenAt = "2026-01-02T00:00:00.000Z";
+    db.touch({ path: "/a", at: frozenAt, type: "x", maxOffset: 8 });
+    db.touch({ path: "/a", at: frozenAt, type: "y", maxOffset: 8 });
+    expect(db.all()["/a"]).toMatchObject({
+      eventCount: 8,
+      lastActivityAt: frozenAt,
+      lastType: "y",
+    });
+  });
+
   it("swaps only the touched row's reference (copy-on-write)", () => {
     const db = new StreamDatabase(sqlStorage());
     db.touch({ path: "/a", at: "2026-01-01T00:00:00.000Z", type: "x", maxOffset: 1 });
@@ -58,7 +70,7 @@ describe("StreamDatabase", () => {
       true,
     );
     const before = db.all();
-    // Exact redelivery: same maxOffset, no newer activity → no write, same map.
+    // Exact redelivery: same maxOffset, timestamp, and type → no write, same map.
     expect(db.touch({ path: "/a", at: "2026-01-02T00:00:00.000Z", type: "x", maxOffset: 5 })).toBe(
       false,
     );
