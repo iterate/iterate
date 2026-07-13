@@ -28,7 +28,12 @@ import { RepoEditorPane } from "./repo-editor-pane.tsx";
 import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import { RepoTasksView } from "./repo-tasks-view.tsx";
-import { isRepoTaskPath, prepareRepoTaskAssignment, type RepoTask } from "./repo-tasks.ts";
+import {
+  isRepoTaskPath,
+  prepareRepoTaskAssignment,
+  repoTaskAssignmentFileChanges,
+  type RepoTask,
+} from "./repo-tasks.ts";
 import {
   commitPlan,
   effectiveEntry,
@@ -219,8 +224,12 @@ export function RepoIde({
     },
   });
 
-  const assignTaskAgent = async (task: RepoTask) => {
+  const assignTaskAgent = async (task: RepoTask, pendingRenameFromPath?: string) => {
     const assignment = prepareRepoTaskAssignment(task, repoPath);
+    const renamedFromPath =
+      pendingRenameFromPath !== undefined && headPathSet.has(pendingRenameFromPath)
+        ? pendingRenameFromPath
+        : undefined;
     const sourceStore = store;
     const previousTaskPaths = headPaths.filter(isRepoTaskPath);
     const previousTaskContents =
@@ -236,7 +245,7 @@ export function RepoIde({
     try {
       const result = await itx.repos.get(repoPath).commitFiles({
         message: `Assign task: ${task.title}`,
-        changes: [{ path: task.path, content: assignment.content }],
+        changes: repoTaskAssignmentFileChanges(task, assignment.content, renamedFromPath),
       });
       committed = true;
 
@@ -262,13 +271,20 @@ export function RepoIde({
         throw new Error("The assignment is committed, but the new repository head is not ready.");
       }
       const nextTaskPaths = refreshedFiles.paths.filter(isRepoTaskPath);
-      // The assignment commit changes exactly one task. Seed the new HEAD's
-      // task query before removing the overlay, so React never observes a gap
-      // and the sheet immediately sees both `agent` and `in-progress`.
+      // The assignment commit changes one logical task (and may rename its
+      // file). Seed the new HEAD's task query before removing the overlay, so
+      // React never observes a gap and the sheet immediately sees both
+      // `agent` and `in-progress`.
+      const nextTaskContents = { ...previousTaskContents, [task.path]: assignment.content };
+      if (renamedFromPath !== undefined) delete nextTaskContents[renamedFromPath];
       queryClient.setQueryData<Record<string, string>>(
         ["itx", "repo-task-files", projectId, repoPath, result.commitOid, nextTaskPaths.join("\n")],
-        { ...previousTaskContents, [task.path]: assignment.content },
+        nextTaskContents,
       );
+      if (renamedFromPath !== undefined) {
+        sourceStore.setWorking(renamedFromPath, undefined);
+        sourceStore.setStaged(renamedFromPath, undefined);
+      }
       sourceStore.setWorking(task.path, undefined);
       sourceStore.setStaged(task.path, undefined);
       sourceStore.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));

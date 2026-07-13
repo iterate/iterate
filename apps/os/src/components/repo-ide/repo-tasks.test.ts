@@ -4,6 +4,7 @@ import {
   isRepoTaskPath,
   parseRepoTask,
   prepareRepoTaskAssignment,
+  repoTaskAssignmentFileChanges,
   queryRepoTaskBoard,
   repoTaskAgentPath,
   repoTaskHeadingTitle,
@@ -175,6 +176,15 @@ test("prepares a deterministic durable agent assignment", () => {
   expect(assignment.instructions).toContain("First, verify");
   expect(assignment.instructions).toContain("## Comments");
   expect(assignment.instructions).toContain("in-review");
+  expect(
+    repoTaskAssignmentFileChanges(task, assignment.content, "apps/os/tasks/old-name.md"),
+  ).toEqual([
+    { path: "apps/os/tasks/old-name.md", delete: true },
+    { path: task.path, content: assignment.content },
+  ]);
+  expect(repoTaskAssignmentFileChanges(task, assignment.content)).toEqual([
+    { path: task.path, content: assignment.content },
+  ]);
 });
 
 test("creates tasks in a folder's conventional task directory", () => {

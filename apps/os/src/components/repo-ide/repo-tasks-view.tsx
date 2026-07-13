@@ -114,10 +114,11 @@ export function RepoTasksView({
   onPatchSearch: (patch: SearchPatch) => void;
   onSetWorking: (path: string, entry: FileEntry | undefined) => void;
   onDelete: (path: string) => void;
-  onAssignAgent: (task: RepoTask) => Promise<string | undefined>;
+  onAssignAgent: (task: RepoTask, renamedFromPath?: string) => Promise<string | undefined>;
 }) {
   const [draft, setDraft] = useState<RepoTask | undefined>();
   const [editorPath, setEditorPath] = useState(selectedPath);
+  const renameOrigins = useRef(new Map<string, string>());
   const lastCreationContext = useRef<{
     state: string;
     folderPath: string;
@@ -209,15 +210,22 @@ export function RepoTasksView({
     }
   };
   const deleteTask = (task: RepoTask) => {
+    renameOrigins.current.delete(task.path);
     onDelete(task.path);
     selectTask(undefined);
   };
   const moveTaskToPath = (task: RepoTask, targetPath: string, content = task.content) => {
     if (targetPath === task.path) return true;
     if (effectivePaths.has(targetPath)) return false;
+    const originalPath =
+      renameOrigins.current.get(task.path) ??
+      (Object.prototype.hasOwnProperty.call(headContents, task.path) ? task.path : undefined);
     const wasSelected = editorPath === task.path;
     onDelete(task.path);
     onSetWorking(targetPath, { type: "write", content });
+    renameOrigins.current.delete(task.path);
+    if (originalPath !== undefined && originalPath !== targetPath)
+      renameOrigins.current.set(targetPath, originalPath);
     if (wasSelected) selectTask(targetPath);
     return true;
   };
@@ -327,7 +335,11 @@ export function RepoTasksView({
         }
         onDelete={deleteTask}
         onSubmit={closeEditor}
-        onAssignAgent={onAssignAgent}
+        onAssignAgent={async (task) => {
+          const agentPath = await onAssignAgent(task, renameOrigins.current.get(task.path));
+          if (agentPath !== undefined) renameOrigins.current.delete(task.path);
+          return agentPath;
+        }}
       />
     </div>
   );

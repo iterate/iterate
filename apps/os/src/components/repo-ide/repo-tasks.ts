@@ -1,5 +1,6 @@
 import type { Document } from "yaml";
 import { isRepoTaskMarkdownPath } from "../../domains/repos/repo-task-events.ts";
+import type { RepoFileChange } from "../../domains/repos/types.ts";
 import { markdownFrontmatterRecord, parseMarkdownFrontmatter } from "./markdown-frontmatter.ts";
 
 const DEFAULT_TASK_STATE = "todo";
@@ -202,6 +203,20 @@ export function prepareRepoTaskAssignment(
       "When the work is ready for human review, summarize the result in Comments and set the task frontmatter state to `in-review`.",
     ].join("\n\n"),
   };
+}
+
+/** The one atomic repo commit that makes a renamed task durable and assigned. */
+export function repoTaskAssignmentFileChanges(
+  task: RepoTask,
+  content: string,
+  renamedFromPath?: string,
+): RepoFileChange[] {
+  return [
+    ...(renamedFromPath === undefined || renamedFromPath === task.path
+      ? []
+      : [{ path: renamedFromPath, delete: true } as const]),
+    { path: task.path, content },
+  ];
 }
 
 export function createRepoTask(
