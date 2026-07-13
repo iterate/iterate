@@ -1,11 +1,18 @@
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { StreamEvent } from "../streams/schemas.ts";
-import { appendConnectionDirectoryEvents, foldConnectionClaim } from "./integration-streams.ts";
+import {
+  appendConnectionDirectoryEvents,
+  foldConnectionClaim,
+  latestStreamEvent,
+} from "./integration-streams.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   CONNECTION_UNCLAIMED_EVENT_TYPE,
   integrationDirectoryStreamPath,
 } from "./utils.ts";
+
+const { getByName } = vi.hoisted(() => ({ getByName: vi.fn() }));
+vi.mock("../../env.ts", () => ({ itxEnv: { STREAM: { getByName } } }));
 
 let offset = 0;
 function event(type: string, payload: Record<string, unknown>): StreamEvent {
@@ -17,6 +24,62 @@ const claim = (slug: string, externalId: string, projectId: string, connection: 
   event(CONNECTION_CLAIMED_EVENT_TYPE, { connection, externalId, projectId, slug });
 const unclaim = (slug: string, externalId: string, projectId: string, connection: string) =>
   event(CONNECTION_UNCLAIMED_EVENT_TYPE, { connection, externalId, projectId, slug });
+
+beforeEach(() => {
+  offset = 0;
+  getByName.mockReset();
+});
+
+describe("latestStreamEvent", () => {
+  test("returns an accepted newest row in one descending read", async () => {
+    const newest = event("selected", { accepted: true });
+    const getEvents = vi.fn().mockResolvedValue([newest]);
+    getByName.mockReturnValue({ getEvents });
+
+    await expect(
+      latestStreamEvent(null, "/latest", ["selected"], (candidate) =>
+        Boolean((candidate.payload as { accepted?: boolean }).accepted),
+      ),
+    ).resolves.toBe(newest);
+    expect(getEvents).toHaveBeenCalledExactlyOnceWith({
+      eventTypes: ["selected"],
+      limit: 1,
+      order: "desc",
+    });
+  });
+
+  test("pages backward only after rejecting the newest row", async () => {
+    const accepted = event("selected", { accepted: true });
+    const rejectedPage = Array.from({ length: 500 }, () =>
+      event("selected", { accepted: false }),
+    ).reverse();
+    const newest = event("selected", { accepted: false });
+    const getEvents = vi
+      .fn()
+      .mockResolvedValueOnce([newest])
+      .mockResolvedValueOnce(rejectedPage)
+      .mockResolvedValueOnce([accepted]);
+    getByName.mockReturnValue({ getEvents });
+
+    await expect(
+      latestStreamEvent(null, "/latest", ["selected"], (candidate) =>
+        Boolean((candidate.payload as { accepted?: boolean }).accepted),
+      ),
+    ).resolves.toBe(accepted);
+    expect(getEvents).toHaveBeenNthCalledWith(2, {
+      beforeOffset: newest.offset,
+      eventTypes: ["selected"],
+      limit: 500,
+      order: "desc",
+    });
+    expect(getEvents).toHaveBeenNthCalledWith(3, {
+      beforeOffset: rejectedPage.at(-1)!.offset,
+      eventTypes: ["selected"],
+      limit: 500,
+      order: "desc",
+    });
+  });
+});
 
 describe("foldConnectionClaim", () => {
   test("latest claim wins; a matching unclaim clears it", () => {

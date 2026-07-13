@@ -34,15 +34,32 @@ async function readAllStreamEvents(projectId: string | null, path: string): Prom
   }
 }
 
-/** The newest matching event in one stream, using one descending SQL range. */
+/**
+ * The newest accepted event of the requested types. The ordinary path reads
+ * one row; only a rejected newest row falls back to bounded backward pages.
+ */
 export async function latestStreamEvent(
   projectId: string | null,
   path: string,
   eventTypes: readonly string[],
+  accepts?: (event: StreamEvent) => boolean,
 ): Promise<StreamEvent | undefined> {
   const stream = integrationStreamStub(projectId, path);
-  const events = await stream.getEvents({ eventTypes, limit: 1, order: "desc" });
-  return events[0];
+  const newest = (await stream.getEvents({ eventTypes, limit: 1, order: "desc" }))[0];
+  if (newest === undefined || accepts === undefined || accepts(newest)) return newest;
+
+  let beforeOffset = newest.offset;
+  for (;;) {
+    const page = await stream.getEvents({
+      beforeOffset,
+      eventTypes,
+      limit: 500,
+      order: "desc",
+    });
+    const accepted = page.find(accepts);
+    if (accepted !== undefined || page.length < 500) return accepted;
+    beforeOffset = page.at(-1)!.offset;
+  }
 }
 
 /** One project+connection that owns a provider-side external id. */

@@ -274,7 +274,10 @@ import type {
   WorkspacePublishResult,
 } from "./domains/workspaces/types.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
-import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
+import {
+  integrationStreamStub,
+  latestStreamEvent,
+} from "./domains/integrations/integration-streams.ts";
 import {
   buildProjectEmailMessage,
   decodeBase64Attachment,
@@ -2868,24 +2871,17 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
    */
   async #threadIdFromOwnRoute(): Promise<string | null> {
     if (!this.props.scopePath.startsWith("/agents/")) return null;
-    const stream = integrationStreamStub(this.props.projectId, this.props.scopePath);
-    let afterOffset = 0;
-    let threadId: string | null = null;
-    for (;;) {
-      const page = await stream.getEvents({
-        afterOffset,
-        eventTypes: ["events.iterate.com/email/thread-route-configured"],
-        limit: 500,
-      });
-      for (const event of page) {
+    const event = await latestStreamEvent(
+      this.props.projectId,
+      this.props.scopePath,
+      ["events.iterate.com/email/thread-route-configured"],
+      (event) => {
         const payload = event.payload as { streamPath?: string; threadId?: string };
-        if (payload.streamPath === this.props.scopePath && typeof payload.threadId === "string") {
-          threadId = payload.threadId;
-        }
-      }
-      if (page.length < 500) return threadId;
-      afterOffset = page[page.length - 1]!.offset;
-    }
+        return payload.streamPath === this.props.scopePath && typeof payload.threadId === "string";
+      },
+    );
+    const payload = event?.payload as { threadId?: string } | undefined;
+    return payload?.threadId ?? null;
   }
 
   /**
@@ -3018,27 +3014,19 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
    */
   async #lastReceivedOnThread() {
     const schema = EmailProcessorContract.events[EMAIL_RECEIVED_EVENT_TYPE].payloadSchema;
-    const stream = integrationStreamStub(this.props.projectId, this.props.scopePath);
-    let afterOffset = 0;
-    let last: ReturnType<(typeof schema)["parse"]> | null = null;
-    for (;;) {
-      const page = await stream.getEvents({
-        afterOffset,
-        eventTypes: [EMAIL_RECEIVED_EVENT_TYPE],
-        limit: 500,
-      });
-      for (const event of page) {
+    const event = await latestStreamEvent(
+      this.props.projectId,
+      this.props.scopePath,
+      [EMAIL_RECEIVED_EVENT_TYPE],
+      (event) => {
         const parsed = schema.safeParse(event.payload);
         // Skip our own looped-back mail AND automated mail (bounces,
         // Auto-Submitted): a mailer-daemon arriving after the human's message
         // must never become the reply target.
-        if (parsed.success && !isOwnProjectMail(parsed.data) && !parsed.data.automated) {
-          last = parsed.data;
-        }
-      }
-      if (page.length < 500) return last;
-      afterOffset = page[page.length - 1]!.offset;
-    }
+        return parsed.success && !isOwnProjectMail(parsed.data) && !parsed.data.automated;
+      },
+    );
+    return event === undefined ? null : schema.parse(event.payload);
   }
 }
 
