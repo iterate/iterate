@@ -34,6 +34,25 @@ describe("inbound MCP client guidance", () => {
     expect(EXEC_TYPESCRIPT_DESCRIPTION).not.toMatch(/JavaScript|```js(?:\s|$)|\bITX\b/);
   });
 
+  it("puts the fence contract and source pointers before aggressively truncated previews", () => {
+    const clientPreview = EXEC_TYPESCRIPT_DESCRIPTION.slice(0, 600);
+
+    expect(clientPreview).toContain("```ts");
+    expect(clientPreview).toContain("https://github.com/iterate/iterate");
+    expect(clientPreview).toContain("apps/os/src/README.md");
+    expect(clientPreview).toContain("apps/os/docs/");
+  });
+
+  it("front-loads a runnable discovery example before normal client truncation", () => {
+    const clientPreview = EXEC_TYPESCRIPT_DESCRIPTION.slice(0, 1_500);
+
+    expect(clientPreview).toContain("async (itx) => {");
+    expect(clientPreview).toContain("itx.docs.search");
+    expect(clientPreview).toContain("fetchCall");
+    expect(clientPreview).toContain("itx.docs.get");
+    expect(clientPreview).toContain("itx.docs.typecheck");
+  });
+
   it("keeps platform-agent turn-taking mechanics out of MCP guidance", () => {
     const corpus = [
       inboundMcpServerInstructions({ withAgent: true }),

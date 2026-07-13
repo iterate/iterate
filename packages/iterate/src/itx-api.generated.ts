@@ -739,9 +739,9 @@ export interface ProjectIntegrations {
   /** Called by the app worker's OAuth callback route; authority is the
    * HMAC-signed OAuth state minted by startOAuthFlow. */
   completeConnect(input: {
-    /** OAuth authorization code (slack/google). */
+    /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
     code?: string;
-    /** GitHub App installation id — github's callback carries this, not a code. */
+    /** Untrusted GitHub setup-URL installation id, verified through user OAuth. */
     installationId?: string;
     provider: OAuthProviderSlug;
     state: string;
@@ -2063,7 +2063,8 @@ export type ConnectTelegramResult =
 export type OAuthProviderSlug = "github" | "google" | "slack";
 
 /** Outcome of `completeConnect` (the OAuth/installation redirect callback):
- * `ok` plus the `callbackUrl` to send the browser back to; on failure, a
+ * `ok` plus the browser's next URL (a provider authorization URL for an
+ * intermediate step, otherwise the product callback); on failure, a
  * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }

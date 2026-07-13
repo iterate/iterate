@@ -72,14 +72,14 @@ describe("substitutePlatformApiKeyReferences", () => {
     );
   });
 
-  test("openAiApiKey resolves toward the OpenAI origin", () => {
+  test("does not expose the internal agent OpenAI key through project egress", () => {
     const request = new Request("https://api.openai.com/v1/responses", {
       headers: { authorization: 'Bearer getSecret({ platform: "openAiApiKey" })' },
     });
 
-    const substituted = substitutePlatformApiKeyReferences({ config, request });
-
-    expect(substituted.headers.get("authorization")).toBe("Bearer openai-platform-key");
+    expect(() => substitutePlatformApiKeyReferences({ config, request })).toThrow(
+      SecretSubstitutionError,
+    );
   });
 });
 
@@ -201,7 +201,9 @@ describe("resolvePlatformGithubAppKey", () => {
         secretEgressUrls: ["https://api.github.com"],
       }),
     ).toThrow(SecretSubstitutionError);
+  });
 
+  test("the caller-supplied App id and egress must match the configured App", () => {
     expect(() =>
       resolvePlatformGithubAppKey({
         apiBase: "https://api.github.com",

@@ -90,11 +90,14 @@ event.
 
 `platform-secrets.ts` — a known, closed registry over typed AppConfig:
 
-- **API keys** (`integrations.exa.apiKey`, `integrations.parallel.apiKey`,
-  `openAiApiKey`): substitutable into project egress as
+- **API keys** (`integrations.exa.apiKey`, `integrations.parallel.apiKey`):
+  substitutable into project egress as
   `getSecret({ platform: "<configPath>" })` header references, resolved at
   the project egress door, each pinned to its provider origins. Adding one is
   adding a config key + a row.
+- **The internal OpenAI key is not in this registry.** The Agent Durable
+  Object may use it only through its hardcoded Cloudflare AI Gateway model
+  transport; project egress cannot reference or receive it.
 - **OAuth client credentials** (`integrations.google`,
   `integrations.petshop`): resolved by the `oauth-refresh-token` strategy.
   The registry's origin pin means even a hostile `secret.update` configuring
@@ -193,11 +196,12 @@ ALL container egress — including HTTPS, MITM'd with the Cloudflare container
 CA (`interceptHttps`) — routes through the project egress door. So sandboxes
 need no token bytes: the sandbox DO plants a placeholder `GH_TOKEN` per
 container start when the project has a GitHub connection, and the warm-up
-script sets a `git http.extraheader` with a raw Bearer placeholder (git's
-credential helpers send Basic auth — base64 — which would hide the placeholder
-from header substitution). Substitution + refresh-on-401 happen en route under
-the pin, exactly as for any other caller. There is no reveal lane, and none is
-needed.
+script sets a `git http.extraheader` with Basic auth
+(`x-access-token` + base64 of the placeholder — GitHub git rejects Bearer).
+Egress peels Basic Authorization headers so the placeholder is still
+discoverable and substitutable. Substitution + refresh-on-401 happen en route
+under the pin, exactly as for any other caller. There is no reveal lane, and
+none is needed.
 
 ## 6. The proof (apps/dummy-petshop)
 

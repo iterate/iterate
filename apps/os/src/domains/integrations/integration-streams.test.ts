@@ -82,7 +82,7 @@ describe("latestStreamEvent", () => {
 });
 
 describe("foldConnectionClaim", () => {
-  test("latest claim wins; a matching unclaim clears it", () => {
+  test("a matching unclaim clears a live claim", () => {
     expect(
       foldConnectionClaim(
         [claim("slack", "T1", "prj_1", "acme"), unclaim("slack", "T1", "prj_1", "acme")],
@@ -121,6 +121,18 @@ describe("foldConnectionClaim", () => {
         { externalId: "T1", slug: "slack" },
       ),
     ).toEqual({ connection: "acme", projectId: "prj_1" });
+  });
+
+  test("another project's claim cannot replace a live owner", () => {
+    expect(
+      foldConnectionClaim(
+        [
+          claim("github", "123", "prj_1", "install-123"),
+          claim("github", "123", "prj_2", "stolen-install-123"),
+        ],
+        { externalId: "123", slug: "github" },
+      ),
+    ).toEqual({ connection: "install-123", projectId: "prj_1" });
   });
 
   test("different keys sharing a bucket still fold independently", () => {

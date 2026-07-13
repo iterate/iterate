@@ -66,9 +66,10 @@ export async function latestStreamEvent(
 type ConnectionClaim = { connection: string; projectId: string };
 
 /**
- * Folds one claim from its integration-directory bucket. Latest claim wins;
- * an unclaim clears it only when BOTH project and connection match the live
- * claim, so a stale connection's disconnect cannot tear down a newer owner.
+ * Folds one claim from its integration-directory bucket. The first live
+ * project owner wins, but that project may update the connection name. An
+ * unclaim clears the owner only when BOTH project and connection match, so a
+ * stale connection's disconnect cannot tear down a newer connection.
  */
 export function foldConnectionClaim(
   events: readonly StreamEvent[],
@@ -91,7 +92,9 @@ export function foldConnectionClaim(
     }
     if (event.type === CONNECTION_CLAIMED_EVENT_TYPE) {
       if (typeof payload.connection !== "string") continue;
-      claim = { connection: payload.connection, projectId: payload.projectId };
+      if (claim === null || claim.projectId === payload.projectId) {
+        claim = { connection: payload.connection, projectId: payload.projectId };
+      }
     } else if (
       event.type === CONNECTION_UNCLAIMED_EVENT_TYPE &&
       claim?.projectId === payload.projectId &&
@@ -111,18 +114,6 @@ export async function lookupConnectionClaim(
 ): Promise<ConnectionClaim | null> {
   const events = await readAllStreamEvents(null, integrationDirectoryStreamPath(slug, externalId));
   return foldConnectionClaim(events, { externalId, slug });
-}
-
-/** Whether a provider external id has a live directory claim for a project.
- * Platform credential mints use this to prevent a project-authored refresh
- * configuration from acting as another project's provider installation. */
-export async function isConnectionClaimedByProject(input: {
-  externalId: string;
-  projectId: string;
-  slug: string;
-}): Promise<boolean> {
-  const claim = await lookupConnectionClaim(input.slug, input.externalId);
-  return claim?.projectId === input.projectId;
 }
 
 /** The outcome of routing one inbound webhook: delivered to a connection, or
