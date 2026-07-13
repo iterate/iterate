@@ -1831,7 +1831,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
 
-  /** Set the secret material and/or its egress allowlist. */
+  /** Set secret material and/or narrow its egress allowlist. Adding an origin
+   * requires replacement material in the same update. */
   update(input: SecretUpdateInput): Promise<StreamEvent> {
     return this.durableObjectStub.update(input);
   }

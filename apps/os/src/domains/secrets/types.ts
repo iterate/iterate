@@ -7,6 +7,8 @@
  */
 
 export type SecretUpdateInput = {
+  /** Retained material may only keep or remove effective origins. Adding an
+   * origin requires supplying replacement material in the same update. */
   egress?: { urls: string[] };
   /** Any serializable value (write-only, one JSON blob). A plain string keeps
    * the whole-material placeholder working; structured material is addressed

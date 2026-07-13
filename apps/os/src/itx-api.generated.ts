@@ -1266,7 +1266,8 @@ export interface Secret {
   fetch(request: Request): Promise<Response>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** Set the secret material and/or its egress allowlist. */
+  /** Set secret material and/or narrow its egress allowlist. Adding an origin
+   * requires replacement material in the same update. */
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
   processor: WakeableStreamProcessorRpc<SecretDescription>;
@@ -2696,6 +2697,8 @@ export type SecretDescription = {
  * crosses the RPC boundary.
  */
 export type SecretUpdateInput = {
+  /** Retained material may only keep or remove effective origins. Adding an
+   * origin requires supplying replacement material in the same update. */
   egress?: { urls: string[] };
   /** Any serializable value (write-only, one JSON blob). A plain string keeps
    * the whole-material placeholder working; structured material is addressed

@@ -164,7 +164,8 @@ function SecretDetail({
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      Leave blank to keep the current material; filling it rotates the material.
+                      Leave blank to keep the current material. Adding an egress origin requires a
+                      replacement value; filling this rotates the material.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>
@@ -190,7 +191,8 @@ function SecretDetail({
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      One URL pattern per line. The secret can only be sent to matching egress URLs.
+                      One URL pattern per line. Existing material can only keep or remove origins;
+                      adding one requires entering a replacement value above.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>

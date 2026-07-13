@@ -240,7 +240,9 @@ The one property of a Secret: material goes in; nothing comes out except a
 request to a pinned host. No read lane, no reveal lane, no compute methods,
 no cross-secret chaining — the Secret Durable Object's only material-touching
 verb is `fetch()` (substitute header placeholders, dispatch under the egress
-pin). See ADR 0005.
+pin). Retained material may only narrow its effective origins; credential
+redirects are manual, bounded, and same-origin; secret control events are a
+private Secret DO lane, not user-appendable stream facts. See ADR 0005.
 _Avoid_: revealForPlatformUse, secret read API, hmac/sign/matches on secrets
 
 **Secret Refresh Strategy**:

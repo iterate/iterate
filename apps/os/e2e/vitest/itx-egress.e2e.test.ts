@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { withTunnel } from "../test-support/tunnel.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
 import {
@@ -10,6 +11,125 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // These are hand written tests - they MUST pass
 describe("itx", () => {
+  test("secret control events cannot be forged through the public stream API", async () => {
+    await using original = await startEgressEcho();
+    await using attacker = await startEgressEcho();
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({ slug: `secret-stream-forgery-${crypto.randomUUID()}` });
+    const secretPath = `/secrets/stream-forgery/${crypto.randomUUID()}`;
+    using secret = project.secrets.get(secretPath);
+    await secret.update({
+      egress: { urls: [original.url] },
+      material: "user-submitted-material",
+    });
+
+    let appendError: unknown;
+    try {
+      await project.streams.get(secretPath).append({
+        type: "events.iterate.com/secret/updated",
+        payload: { egress: { urls: [attacker.url] } },
+      });
+    } catch (error) {
+      appendError = error;
+    }
+
+    expect(String(appendError)).toMatch(/Secret Durable Object/);
+    expect((await secret.__describe()).egress.urls).toEqual([original.url]);
+  });
+
+  test("retained secret material cannot be re-pinned to a new origin", async () => {
+    await using original = await startEgressEcho();
+    await using attacker = await startEgressEcho();
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({ slug: `secret-repin-${crypto.randomUUID()}` });
+    using secret = project.secrets.get(`/secrets/repin/${crypto.randomUUID()}`);
+
+    await secret.update({
+      egress: { urls: [original.url] },
+      material: "user-submitted-material",
+    });
+
+    const sameOriginPath = new URL("/narrower-path", original.url).toString();
+    await secret.update({ egress: { urls: [sameOriginPath] } });
+
+    let updateError: unknown;
+    try {
+      await secret.update({ egress: { urls: [attacker.url] } });
+    } catch (error) {
+      updateError = error;
+    }
+    expect(String(updateError)).toMatch(/resubmitting material/);
+    expect((await secret.__describe()).egress.urls).toEqual([sameOriginPath]);
+
+    await secret.update({
+      egress: { urls: [attacker.url] },
+      material: "replacement-material",
+    });
+    expect((await secret.__describe()).egress.urls).toEqual([attacker.url]);
+
+    await secret.update({
+      egress: { urls: [original.url, attacker.url] },
+      material: "concurrent-update-material",
+    });
+    const concurrentNarrowings = await Promise.allSettled([
+      secret.update({ egress: { urls: [original.url] } }),
+      secret.update({ egress: { urls: [attacker.url] } }),
+    ]);
+    expect(concurrentNarrowings.map(({ status }) => status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    expect([[original.url], [attacker.url]]).toContainEqual(
+      (await secret.__describe()).egress.urls,
+    );
+  });
+
+  test("secret egress rejects a cross-origin redirect without forwarding material", async () => {
+    const received: string[] = [];
+    await using attacker = await withTunnel({
+      path: "/capture",
+      fetch(request) {
+        received.push(request.headers.get(EGRESS_PROOF_HEADER) ?? "");
+        return Response.json({ captured: true });
+      },
+    });
+    await using allowed = await withTunnel({
+      path: "/redirect",
+      fetch() {
+        return Response.redirect(attacker.url, 302);
+      },
+    });
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({ slug: `secret-redirect-${crypto.randomUUID()}` });
+    const secretPath = `/secrets/redirect/${crypto.randomUUID()}`;
+    using secret = project.secrets.get(secretPath);
+
+    await secret.update({
+      egress: { urls: [allowed.url] },
+      material: "redirect-exfiltration-proof",
+    });
+    using probe = egressProbeWorker(project);
+    const responseBody = await probe.probeFetch({
+      headerValue: `Bearer getSecret({ path: "${secretPath}" })`,
+      url: allowed.url,
+    });
+
+    expect(responseBody).toEqual({ error: "secret_not_allowed_for_origin" });
+    expect(received).toEqual([]);
+  });
+
   test("Project egress substitutes path-addressed secrets for explicit and project worker fetches", async () => {
     const echo = await startEgressEcho();
     using session = withItxSession();

@@ -28,6 +28,8 @@ Folded state: encrypted material (one JSON blob, write-only), an egress URL
 allowlist, an optional refresh strategy, an audit record.
 
 - `update({ material?, egress?, refresh? })` — the only write verb.
+- Retaining material permits only narrowing its effective egress origins;
+  adding an origin requires replacement material in that same update.
 - `__describe()` — the node's self-report, metadata only (hasMaterial,
   egress, refresh kind, audit); material never leaves, in snapshots or pushes.
 - `fetch(request)` — the only lane material travels. Every request must carry
@@ -38,6 +40,11 @@ allowlist, an optional refresh strategy, an audit record.
   (added for Telegram, whose Bot API authenticates in the path
   `/bot<token>/…`) — never the query string, never the body; a placeholder
   elsewhere in the URL is rejected loudly rather than passed through.
+- Credential-bearing fetches follow at most five same-origin redirects, with
+  every hop requested manually and revalidated before rebuilding the request.
+  Cross-origin redirects are rejected rather than forwarding headers or bodies.
+- `events.iterate.com/secret/*` are private control facts appended only by the
+  Secret Durable Object; public secret streams still accept ordinary user events.
 
 ### Refresh strategies
 

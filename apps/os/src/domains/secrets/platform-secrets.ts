@@ -1,6 +1,10 @@
 import { type AppConfig } from "../../config.ts";
 import { type PlatformCredsRef } from "./types.ts";
-import { SecretSubstitutionError, substitutePlatformHeaders } from "./utils.ts";
+import {
+  SecretSubstitutionError,
+  substitutePlatformHeaders,
+  type PlatformReference,
+} from "./utils.ts";
 
 /**
  * Known platform credentials: deployment-owned secrets resolved from typed
@@ -91,17 +95,30 @@ export function substitutePlatformApiKeyReferences(input: {
   config: AppConfig;
   request: Request;
 }): Request {
-  const origin = new URL(input.request.url).origin;
-  return substitutePlatformHeaders(input.request, ({ platform }) => {
+  return substitutePlatformHeaders(input.request, (reference) => {
+    assertPlatformApiKeyReferencesAllowed([reference], input.request.url);
+    const { platform } = reference;
+    const entry = PLATFORM_API_KEYS[platform];
+    if (entry === undefined) throw new SecretSubstitutionError("secret_not_found");
+    const value = entry.value(input.config);
+    if (value === undefined) throw new SecretSubstitutionError("secret_not_found");
+    return value;
+  });
+}
+
+/** Re-authorize every referenced platform API key against one redirect hop. */
+export function assertPlatformApiKeyReferencesAllowed(
+  references: PlatformReference[],
+  url: string,
+): void {
+  const origin = new URL(url).origin;
+  for (const { platform } of references) {
     const entry = PLATFORM_API_KEYS[platform];
     if (entry === undefined) throw new SecretSubstitutionError("secret_not_found");
     if (!entry.origins.includes(origin)) {
       throw new SecretSubstitutionError("secret_not_allowed_for_origin");
     }
-    const value = entry.value(input.config);
-    if (value === undefined) throw new SecretSubstitutionError("secret_not_found");
-    return value;
-  });
+  }
 }
 
 /** Resolve a built-in integration's OAuth client credential for a refresh

@@ -13,6 +13,7 @@ import { parseConfig } from "../../config.ts";
 import { mintGithubInstallationToken } from "../integrations/github-app.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
+import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
@@ -68,6 +69,12 @@ export class SecretDurableObject extends DurableObject<Env> {
   // trip provider rate limits and race last-write-wins on the stored token.
   #refreshing: Promise<void> | undefined;
 
+  // update() authorizes a retained-material egress change against folded
+  // state, then crosses an async RPC seam to commit it. Serialize that pair so
+  // concurrent narrowings cannot both authorize against one stale allowlist
+  // and let the later append reintroduce an origin removed by the first.
+  #updates: Promise<void> = Promise.resolve();
+
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
@@ -97,21 +104,33 @@ export class SecretDurableObject extends DurableObject<Env> {
     return new LiveStateRpcTarget<SecretDescription>(this.#processorHost);
   }
 
-  async update(input: SecretUpdateInput) {
+  update(input: SecretUpdateInput) {
+    const result = this.#updates.then(() => this.#update(input));
+    this.#updates = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async #update(input: SecretUpdateInput) {
     if (input.material === undefined && input.egress === undefined && input.refresh === undefined) {
       throw new Error("secret.update requires material, egress, or refresh");
     }
 
-    if (input.egress !== undefined && input.material === undefined) {
-      if ((await this.#snapshot()).encryptedMaterial === null) {
+    const egress = input.egress === undefined ? undefined : normalizeEgress(input.egress);
+    if (egress !== undefined && input.material === undefined) {
+      const state = await this.#snapshot();
+      if (state.encryptedMaterial === null) {
         throw new Error("secret.update with egress requires existing material");
       }
+      assertEgressDoesNotWiden(state.egress, egress);
     }
 
-    const [event] = await this.#processorHost.stream.append({
+    const [event] = await this.#appendSecretEvent({
       type: "events.iterate.com/secret/updated",
       payload: {
-        ...(input.egress === undefined ? {} : { egress: normalizeEgress(input.egress) }),
+        ...(egress === undefined ? {} : { egress }),
         ...(input.material === undefined
           ? {}
           : {
@@ -185,7 +204,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       }
 
       await this.#appendUsed(request.url);
-      const response = await fetch(substituted);
+      const response = await fetchWithCredentialRedirects(substituted, {
+        assertUrlAllowed: (url) => assertOriginPinned(url, state),
+      });
       if (response.status !== 401 || retry === null) return response;
 
       try {
@@ -195,9 +216,12 @@ export class SecretDurableObject extends DurableObject<Env> {
         // the caller's answer, not an opaque exception.
         return response;
       }
-      const retried = await this.#substitute(retry.source, await this.#snapshot());
+      const retriedState = await this.#snapshot();
+      const retried = await this.#substitute(retry.source, retriedState);
       await this.#appendUsed(request.url);
-      return await fetch(retried);
+      return await fetchWithCredentialRedirects(retried, {
+        assertUrlAllowed: (url) => assertOriginPinned(url, retriedState),
+      });
     } catch (error) {
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       throw error;
@@ -268,16 +292,19 @@ export class SecretDurableObject extends DurableObject<Env> {
     // A confidential client authenticates with HTTP Basic; a public client (no
     // secret) instead identifies itself with client_id in the body (RFC 6749 §6).
     if (creds.clientSecret === undefined) body.set("client_id", creds.clientId);
-    const response = await fetch(refresh.tokenEndpoint, {
-      method: "POST",
-      headers: {
-        ...(creds.clientSecret === undefined
-          ? {}
-          : { authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}` }),
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body,
-    });
+    const response = await fetchWithCredentialRedirects(
+      new Request(refresh.tokenEndpoint, {
+        method: "POST",
+        headers: {
+          ...(creds.clientSecret === undefined
+            ? {}
+            : { authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}` }),
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body,
+      }),
+      { assertUrlAllowed: (url) => assertOriginPinned(url, state) },
+    );
     if (!response.ok) throw new Error(`oauth refresh failed with HTTP ${response.status}`);
     const data = (await response.json()) as { access_token?: string; refresh_token?: string };
     if (typeof data.access_token !== "string") {
@@ -336,20 +363,23 @@ export class SecretDurableObject extends DurableObject<Env> {
     assertOriginPinned(refresh.graphqlUrl, state);
     const username = readStringField(material, "username");
     const password = readStringField(material, "password");
-    const response = await fetch(refresh.graphqlUrl, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        // Waitrose's edge answers UA-less requests with HTTP 520 (proven live
-        // 2026-07-07); the Android app's UA is the known-good request shape.
-        "user-agent": "Waitrose/3.9.1 (Android)",
-      },
-      body: JSON.stringify({
-        query: WAITROSE_NEW_SESSION_MUTATION,
-        variables: { input: { clientId: "ANDROID_APP", password, username } },
+    const response = await fetchWithCredentialRedirects(
+      new Request(refresh.graphqlUrl, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          // Waitrose's edge answers UA-less requests with HTTP 520 (proven live
+          // 2026-07-07); the Android app's UA is the known-good request shape.
+          "user-agent": "Waitrose/3.9.1 (Android)",
+        },
+        body: JSON.stringify({
+          query: WAITROSE_NEW_SESSION_MUTATION,
+          variables: { input: { clientId: "ANDROID_APP", password, username } },
+        }),
       }),
-    });
+      { assertUrlAllowed: (url) => assertOriginPinned(url, state) },
+    );
     if (response.status === 401) {
       // The live API answers wrong credentials with a 401 GraphQL error (the
       // failures[] shape below is the app-client contract, not what the edge
@@ -390,10 +420,22 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   #appendUsed(url: string): Promise<unknown> {
-    return this.#processorHost.stream.append({
+    return this.#appendSecretEvent({
       type: "events.iterate.com/secret/used",
       payload: { url, usedAt: new Date().toISOString(), usedBy: this.#name.projectId },
     });
+  }
+
+  #appendSecretEvent(event: {
+    type: `events.iterate.com/secret/${string}`;
+    payload: Record<string, unknown>;
+  }) {
+    return this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.#name.projectId,
+        path: this.#name.path,
+      }),
+    ).appendSecretEvents(this.env.SECRET_ENCRYPTION_KEY, event);
   }
 }
 
@@ -404,8 +446,22 @@ const WAITROSE_NEW_SESSION_MUTATION =
   "mutation NewSession($input: SessionInput) { generateSession(session: $input) { __typename ...SessionPayload failures { type message } } }  fragment SessionPayload on SetSessionPayload { accessToken refreshToken customerId customerOrderId customerOrderState defaultBranchId expiresIn }";
 
 function normalizeEgress(egress: { urls: string[] }): { urls: string[] } {
-  for (const url of egress.urls) new URL(url);
+  for (const url of egress.urls) {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error(`secret egress URL must use http or https: ${url}`);
+    }
+  }
   return { urls: [...egress.urls] };
+}
+
+/** Retained material may lose origins, never gain one. Adding an effective
+ * destination is a new trust event and therefore requires new material. */
+function assertEgressDoesNotWiden(current: { urls: string[] }, next: { urls: string[] }): void {
+  const currentOrigins = new Set(current.urls.map((url) => new URL(url).origin));
+  if (next.urls.some((url) => !currentOrigins.has(new URL(url).origin))) {
+    throw new Error("changing secret egress to a new origin requires resubmitting material");
+  }
 }
 
 /** A substitution miss a refresh strategy can fill: no material yet, or the

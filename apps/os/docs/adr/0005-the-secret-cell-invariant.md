@@ -12,6 +12,19 @@ whose Bot API authenticates in the path `/bot<token>/…`) — never the query
 string, never the body; a placeholder anywhere else in the URL is rejected
 loudly rather than passed through. One request references one secret.
 
+The egress pin is part of the write trust event. While material is retained,
+an update may only keep or remove effective origins; adding an origin requires
+replacement material in the same update. Credential-bearing fetches own
+redirect handling: every hop is manual, bounded, and revalidated. Same-origin
+redirects may retain credentials; cross-origin redirects are rejected, even
+when both origins appear in an allowlist, so headers and bodies never acquire
+a new destination implicitly.
+
+Secret streams remain readable and accept ordinary user events, but
+`events.iterate.com/secret/*` control facts are reserved to an authenticated
+Secret-Durable-Object-to-Stream-Durable-Object lane. Otherwise a caller could
+forge the processor's `updated` fact and bypass the update verb's trust checks.
+
 Credential refresh does not weaken the invariant, because it runs INSIDE the
 cell: a **named strategy** (`oauth-refresh-token`, `github-app-installation`,
 `waitrose-session`)

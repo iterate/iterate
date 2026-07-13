@@ -31,7 +31,7 @@ type SecretReference = { field?: string; path: string };
 const PLATFORM_REFERENCE = /getSecret\(\s*\{\s*platform\s*:\s*"([^"]+)"\s*\}\s*\)/g;
 
 /** One parsed platform placeholder: the AppConfig path it references. */
-type PlatformReference = { platform: string };
+export type PlatformReference = { platform: string };
 
 export function normalizeSecretPath(path: string): string {
   const normalized = normalizePath(path);
