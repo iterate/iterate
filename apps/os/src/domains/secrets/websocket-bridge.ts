@@ -11,10 +11,74 @@
  * substitution, audit, and close handling explicit. Frame payloads are never
  * rewritten — only the upgrade envelope (headers / URL path) is substituted,
  * same as ordinary secret egress.
+ *
+ * Container intercept: in-container clients (Node undici WebSocket, `ws`)
+ * validate the HTTP 101 handshake headers (Upgrade / Connection /
+ * Sec-WebSocket-Accept). workerd often injects those when serving a
+ * `Response.webSocket` directly to a browser client, but the container
+ * intercept path presents the Response as raw HTTP to the MITM client — so we
+ * must set the handshake headers ourselves against the *caller's*
+ * Sec-WebSocket-Key (not the upstream's Accept, which is for a different key).
  */
+
+/** RFC 6455 magic GUID for Sec-WebSocket-Accept. */
+const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 export function isWebSocketUpgrade(request: Request): boolean {
   return request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+}
+
+/**
+ * Compute `Sec-WebSocket-Accept` for a client `Sec-WebSocket-Key` (RFC 6455).
+ * Pure helper — unit-tested; used by pair-bridge for container intercept.
+ */
+export async function computeSecWebSocketAccept(secWebSocketKey: string): Promise<string> {
+  const data = new TextEncoder().encode(secWebSocketKey + WEBSOCKET_GUID);
+  const digest = await crypto.subtle.digest("SHA-1", data);
+  const bytes = new Uint8Array(digest);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/**
+ * Ensure a WebSocket Response carries the HTTP handshake headers Node/undici
+ * clients require when the Response is presented as raw HTTP (container
+ * intercept MITM). Preserves `response.webSocket`.
+ */
+export async function withWebSocketHandshakeHeaders(
+  request: Request,
+  response: Response,
+): Promise<Response> {
+  const socket = response.webSocket;
+  if (socket == null) return response;
+
+  const headers = new Headers(response.headers);
+  headers.set("Upgrade", "websocket");
+  // Connection can be a list; clients require an exact case-insensitive "Upgrade".
+  headers.set("Connection", "Upgrade");
+
+  const key = request.headers.get("Sec-WebSocket-Key");
+  if (key !== null && key.length > 0) {
+    headers.set("Sec-WebSocket-Accept", await computeSecWebSocketAccept(key));
+  }
+
+  // Upstream Accept was for the Project DO ↔ origin key, not the container client.
+  // (We just overwrote it when key was present.)
+
+  // Echo a single requested subprotocol if the source did not already choose.
+  const requested = request.headers.get("Sec-WebSocket-Protocol");
+  if (requested !== null && !headers.has("Sec-WebSocket-Protocol")) {
+    const first = requested.split(",")[0]?.trim();
+    if (first) headers.set("Sec-WebSocket-Protocol", first);
+  }
+
+  return new Response(null, {
+    status: 101,
+    statusText: "Switching Protocols",
+    headers,
+    webSocket: socket,
+  });
 }
 
 /**
@@ -22,11 +86,14 @@ export function isWebSocketUpgrade(request: Request): boolean {
  * present), replace the response with a pair-bridged 101. Otherwise return
  * `response` unchanged (failed handshake, ordinary HTTP, etc.).
  */
-export function maybeBridgeWebSocketResponse(request: Request, response: Response): Response {
+export async function maybeBridgeWebSocketResponse(
+  request: Request,
+  response: Response,
+): Promise<Response> {
   if (!isWebSocketUpgrade(request)) return response;
   const upstream = response.webSocket;
   if (upstream == null) return response;
-  return bridgeUpstreamWebSocket(upstream, response);
+  return bridgeUpstreamWebSocket(upstream, response, { clientRequest: request });
 }
 
 type BridgeUpstreamWebSocketOptions = {
@@ -40,17 +107,23 @@ type BridgeUpstreamWebSocketOptions = {
    * Flushed to the client leg in order before live pump starts.
    */
   pendingUpstreamMessages?: Array<string | ArrayBuffer>;
+  /**
+   * The caller's upgrade request — used to mint Sec-WebSocket-Accept for the
+   * container intercept / undici handshake. Prefer passing this whenever the
+   * Response will leave workerd toward a raw-HTTP client.
+   */
+  clientRequest?: Request;
 };
 
 /**
  * Present `upstream` to the caller through a fresh WebSocketPair.
  * Caller must only invoke this when `upstream` is a live accepted-or-accepting socket.
  */
-export function bridgeUpstreamWebSocket(
+export async function bridgeUpstreamWebSocket(
   upstream: WebSocket,
   source?: Response,
   options?: BridgeUpstreamWebSocketOptions,
-): Response {
+): Promise<Response> {
   const pair = new WebSocketPair();
   const client = pair[0];
   const server = pair[1];
@@ -89,6 +162,26 @@ export function bridgeUpstreamWebSocket(
   headers.delete("location");
   headers.delete("content-location");
   headers.delete("refresh");
+  // Upstream Accept is for a different Sec-WebSocket-Key — never forward it.
+  headers.delete("sec-websocket-accept");
+
+  headers.set("Upgrade", "websocket");
+  headers.set("Connection", "Upgrade");
+
+  const clientKey = options?.clientRequest?.headers.get("Sec-WebSocket-Key");
+  if (clientKey !== null && clientKey !== undefined && clientKey.length > 0) {
+    headers.set("Sec-WebSocket-Accept", await computeSecWebSocketAccept(clientKey));
+  }
+
+  const requestedProtocol = options?.clientRequest?.headers.get("Sec-WebSocket-Protocol");
+  if (
+    requestedProtocol !== null &&
+    requestedProtocol !== undefined &&
+    !headers.has("Sec-WebSocket-Protocol")
+  ) {
+    const first = requestedProtocol.split(",")[0]?.trim();
+    if (first) headers.set("Sec-WebSocket-Protocol", first);
+  }
 
   return new Response(null, {
     status: 101,

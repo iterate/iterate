@@ -5,6 +5,7 @@ import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { listIntegrationConnections } from "../../integrations/connect-flows.ts";
 import { describeNode } from "../../itx/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
+import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-bridge.ts";
 import {
   SandboxProcessorContract,
   type SandboxLifecycleEventInput,
@@ -181,7 +182,17 @@ async function resolveEgressProjectId(
 function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<Env> {
   return async (request, env, ctx) => {
     const projectId = await resolveEgressProjectId(env, ctx.containerId, instanceType);
-    return projectStub(env.PROJECT, projectId).fetch(request);
+    const response = await projectStub(env.PROJECT, projectId).fetch(request);
+    // Container intercept presents this Response as raw HTTP to in-container
+    // clients (Node undici WebSocket / `ws`). workerd injects handshake
+    // headers for browser upgrades; intercept does not — stamp them here.
+    if (
+      request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
+      response.webSocket != null
+    ) {
+      return withWebSocketHandshakeHeaders(request, response);
+    }
+    return response;
   };
 }
 

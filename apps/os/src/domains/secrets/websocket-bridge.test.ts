@@ -1,9 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   bridgeUpstreamWebSocket,
+  computeSecWebSocketAccept,
   isWebSocketUpgrade,
   maybeBridgeWebSocketResponse,
   normalizeWebSocketClose,
+  withWebSocketHandshakeHeaders,
 } from "./websocket-bridge.ts";
 
 function mockSocket() {
@@ -38,16 +40,16 @@ describe("isWebSocketUpgrade", () => {
 });
 
 describe("maybeBridgeWebSocketResponse", () => {
-  test("passes non-upgrade responses through unchanged", () => {
+  test("passes non-upgrade responses through unchanged", async () => {
     const request = new Request("https://example.com");
     const response = new Response("ok", { status: 200 });
-    expect(maybeBridgeWebSocketResponse(request, response)).toBe(response);
+    expect(await maybeBridgeWebSocketResponse(request, response)).toBe(response);
   });
 
-  test("passes upgrade responses without webSocket through unchanged", () => {
+  test("passes upgrade responses without webSocket through unchanged", async () => {
     const request = new Request("https://example.com", { headers: { Upgrade: "websocket" } });
     const response = new Response("nope", { status: 400 });
-    expect(maybeBridgeWebSocketResponse(request, response)).toBe(response);
+    expect(await maybeBridgeWebSocketResponse(request, response)).toBe(response);
   });
 });
 
@@ -66,29 +68,86 @@ describe("normalizeWebSocketClose", () => {
   });
 });
 
+describe("computeSecWebSocketAccept", () => {
+  test("matches RFC 6455 example key", async () => {
+    // RFC 6455 §1.3 / §4.2.2 example.
+    await expect(computeSecWebSocketAccept("dGhlIHNhbXBsZSBub25jZQ==")).resolves.toBe(
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+    );
+  });
+});
+
+describe("withWebSocketHandshakeHeaders", () => {
+  test("stamps Upgrade/Connection/Accept for the caller's Sec-WebSocket-Key", async () => {
+    if (typeof WebSocketPair === "undefined") return;
+
+    const pair = new WebSocketPair();
+    const request = new Request("https://example.com/ws", {
+      headers: {
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+      },
+    });
+    // Upstream Accept is for a different key — must be replaced.
+    const source = new Response(null, {
+      status: 101,
+      headers: {
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+        "Sec-WebSocket-Accept": "wrong-accept-for-upstream-key",
+      },
+      webSocket: pair[0],
+    });
+
+    const stamped = await withWebSocketHandshakeHeaders(request, source);
+    expect(stamped.status).toBe(101);
+    expect(stamped.headers.get("Upgrade")?.toLowerCase()).toBe("websocket");
+    expect(stamped.headers.get("Connection")?.toLowerCase()).toBe("upgrade");
+    expect(stamped.headers.get("Sec-WebSocket-Accept")).toBe("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    expect(stamped.webSocket).toBeTruthy();
+  });
+
+  test("leaves non-websocket responses alone", async () => {
+    const request = new Request("https://example.com");
+    const response = new Response("ok");
+    expect(await withWebSocketHandshakeHeaders(request, response)).toBe(response);
+  });
+});
+
 describe("bridgeUpstreamWebSocket", () => {
-  test("accepts both ends with half-open and returns 101 with client socket", () => {
+  test("accepts both ends with half-open and returns 101 with client socket", async () => {
     // In Node vitest, WebSocketPair is not defined — skip unless workerd/global provides it.
     if (typeof WebSocketPair === "undefined") {
       return;
     }
 
     const upstream = mockSocket() as unknown as WebSocket;
-    const response = bridgeUpstreamWebSocket(upstream);
+    const response = await bridgeUpstreamWebSocket(upstream, undefined, {
+      clientRequest: new Request("https://example.com", {
+        headers: {
+          Upgrade: "websocket",
+          "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        },
+      }),
+    });
     expect(response.status).toBe(101);
     expect(response.webSocket).toBeTruthy();
+    expect(response.headers.get("Upgrade")?.toLowerCase()).toBe("websocket");
+    expect(response.headers.get("Connection")?.toLowerCase()).toBe("upgrade");
+    expect(response.headers.get("Sec-WebSocket-Accept")).toBe("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     expect(
       (upstream as unknown as { accept: ReturnType<typeof vi.fn> }).accept,
     ).toHaveBeenCalledWith({ allowHalfOpen: true });
   });
 
-  test("skips upstream accept when already accepted (relay path)", () => {
+  test("skips upstream accept when already accepted (relay path)", async () => {
     if (typeof WebSocketPair === "undefined") {
       return;
     }
 
     const upstream = mockSocket() as unknown as WebSocket;
-    const response = bridgeUpstreamWebSocket(upstream, undefined, {
+    const response = await bridgeUpstreamWebSocket(upstream, undefined, {
       upstreamAlreadyAccepted: true,
     });
     expect(response.status).toBe(101);

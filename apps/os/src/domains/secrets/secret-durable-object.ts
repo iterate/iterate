@@ -275,7 +275,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       // bridge again for the ContainerProxy handoff; double-bridge is correct
       // if slightly wasteful.
       if (response.status !== 401 || retry === null) {
-        return maybeBridgeWebSocketResponse(request, response);
+        return await maybeBridgeWebSocketResponse(request, response);
       }
 
       try {
@@ -283,7 +283,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       } catch {
         // The provider (or config) refused the refresh: the original 401 is
         // the caller's answer, not an opaque exception.
-        return maybeBridgeWebSocketResponse(request, response);
+        return await maybeBridgeWebSocketResponse(request, response);
       }
       const retriedState = await this.#snapshot();
       const retried = await this.#substitute(retry.source, retriedState);
@@ -292,7 +292,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       const retriedResponse = await fetchWithCredentialRedirects(retried, {
         assertUrlAllowed: (url) => assertOriginPinned(url, retriedState),
       });
-      return maybeBridgeWebSocketResponse(request, retriedResponse);
+      return await maybeBridgeWebSocketResponse(request, retriedResponse);
     } catch (error) {
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       throw error;
@@ -387,7 +387,7 @@ export class SecretDurableObject extends DurableObject<Env> {
 
       // Bridge after IDENTIFY so the client never sees/sends the token frame.
       // upstreamAlreadyAccepted: Workers allow accept() only once.
-      return bridgeUpstreamWebSocket(upstream, upgradeResponse, {
+      return await bridgeUpstreamWebSocket(upstream, upgradeResponse, {
         upstreamAlreadyAccepted: true,
         pendingUpstreamMessages,
       });

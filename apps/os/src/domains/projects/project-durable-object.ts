@@ -581,7 +581,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         const response = await fetchWithCredentialRedirects(substituted, {
           assertUrlAllowed: (url) => assertPlatformApiKeyReferencesAllowed(platformReferences, url),
         });
-        return maybeBridgeWebSocketResponse(request, response);
+        return await maybeBridgeWebSocketResponse(request, response);
       } catch (error) {
         if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
         throw error;
@@ -591,7 +591,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (secretPaths.length === 0) {
       // Bare fetch (no secrets): still pair-bridge WebSocket upgrades so the
       // sandbox client leg is owned here, not a fragile pass-through socket.
-      return maybeBridgeWebSocketResponse(request, await fetch(request));
+      return await maybeBridgeWebSocketResponse(request, await fetch(request));
     }
     // One request, one secret: the referenced Secret DO substitutes its own
     // placeholders under its own host pin (cross-secret chaining is gone).
@@ -603,7 +603,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         path: secretPaths[0]!,
       }),
     ).fetch(request);
-    return maybeBridgeWebSocketResponse(request, secretResponse);
+    return await maybeBridgeWebSocketResponse(request, secretResponse);
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
