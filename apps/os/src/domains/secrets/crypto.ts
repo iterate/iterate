@@ -1,14 +1,14 @@
 const ALGORITHM = "AES-GCM-SHA256" as const;
 const SECRET_CELL_ALGORITHM = "AES-GCM-SHA256+SECRET-CELL-V1" as const;
 
-export type SecretCellMaterialBinding = {
+type SecretCellMaterialBinding = {
   egressOrigins: readonly string[];
   offset: number;
   path: string;
   projectId: string;
 };
 
-export type SecretCellEncryptedMaterial = {
+type SecretCellEncryptedMaterial = {
   algorithm: typeof SECRET_CELL_ALGORITHM;
   ciphertext: string;
   iv: string;
