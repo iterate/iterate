@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 
-import { builderConfig, config } from "./generate-wrangler-config.ts";
+import { builderConfig, config, OPTIONAL_SECRETS } from "./generate-wrangler-config.ts";
+
+it("does not ship the retired APP_CONFIG_LOGS secret", () => {
+  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_LOGS");
+});
 
 // Wrangler tags every `--env` deploy with `cf:service=<top-level name>` and
 // `cf:environment=<env>`. The top-level names below are therefore the fleet's

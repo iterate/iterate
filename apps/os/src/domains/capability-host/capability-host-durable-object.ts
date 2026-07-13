@@ -108,8 +108,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   /** The keepalive's revival alarm — see stream-processor-host.ts. */
-  alarm(): Promise<void> {
-    return this.#processorHost.handleAlarm();
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    return this.#processorHost.handleAlarm(alarmInfo);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */

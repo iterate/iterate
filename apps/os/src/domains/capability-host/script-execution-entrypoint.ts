@@ -30,6 +30,7 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
     const result = await dynamicWorkers.invokeCapability({
       path: ["run"],
       ref: scriptWorkerRef({ code, scopePath }),
+      traceRole: "run_script",
     });
     return result === undefined ? undefined : (JSON.parse(JSON.stringify(result)) as JsonValue);
   }
