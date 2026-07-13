@@ -49,6 +49,16 @@ function methodName(target: unknown, path: RpcCallInfo["path"]): string {
   return "call";
 }
 
+function correlatedItxError(error: unknown, callId: string): Error {
+  let message = "ITX target threw a non-Error value";
+  try {
+    if (error instanceof Error && typeof error.message === "string") message = error.message;
+  } catch {
+    // A hostile proxy must not prevent correlation at the RPC boundary.
+  }
+  return Object.assign(new Error(message), { itxCallId: callId });
+}
+
 export function itxRpcMethod(info: Pick<RpcCallInfo, "path" | "target">): string {
   return `${targetName(info.target)}.${methodName(info.target, info.path)}`;
 }
@@ -97,7 +107,13 @@ export function createItxRpcSessionOptions(options: {
               return result;
             } catch (error) {
               span.setAttribute("itx.outcome", "error");
-              throw error;
+              // Cap'n Web v0.8.0 copies enumerable Error properties across
+              // the wire: https://github.com/cloudflare/capnweb/blob/v0.8.0/src/serialize.ts
+              // A fresh error makes the opaque ID authoritative even when a
+              // target throws a frozen, pre-tagged, hostile, or non-Error
+              // value. Only a safely read message survives; no arguments,
+              // results, causes, arbitrary properties, or server stack do.
+              throw correlatedItxError(error, callId);
             }
           },
         ),

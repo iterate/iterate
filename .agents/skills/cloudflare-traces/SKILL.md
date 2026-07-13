@@ -1,98 +1,70 @@
 ---
 name: cloudflare-traces
-description: Query and analyze Cloudflare Workers traces through the general Cloudflare API MCP server. Use when diagnosing Workers traces, distributed tracing spans, observability events, subrequest chains, or when an agent needs Cloudflare trace data programmatically.
+description: Query and audit Cloudflare Workers traces and logs through the general Cloudflare API MCP server. Use when diagnosing distributed traces, custom spans, Durable Object or Workers RPC chains, console logs, or correlation IDs.
 ---
 
 # Cloudflare Traces
 
-Use Cloudflare's general API MCP server only:
+Use Cloudflare's general API MCP server (`https://mcp.cloudflare.com/mcp`), not
+a product-specific observability endpoint.
 
-- MCP URL: `https://mcp.cloudflare.com/mcp`
-- MCP server name: `cloudflare-api` or `cloudflare`
-- Do not configure a separate product-specific observability endpoint.
+## Current API mapping
 
-Docs: https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/
+- `otel` normally returns trace summaries and spans, including custom spans.
+- `cloudflare-workers` normally returns invocation and structured `console` logs.
+- `[]` searches all current datasets; use it to correlate a shared ID.
 
-## MCP Tools
+These are observed Workers Observability API dataset names, not a permanent
+public schema. An `otel`-only query cannot prove a log is missing. Query the
+keys/values endpoints when a dataset, field, or value is uncertain.
 
-Use the general Cloudflare MCP tools:
+## Workflow
 
-- `mcp__cloudflare_api__.search`
-- `mcp__cloudflare_api__.execute`
+1. Use the MCP OpenAPI search tool to verify the Workers Observability
+   `telemetry/query`, `keys`, and `values` endpoints.
+2. Select the account explicitly when more than one is available.
+3. Start with the narrowest known UTC timeframe and service name.
+4. Search all datasets for a known call/log/session/request ID.
+5. Follow a returned `traceId` in `otel`; follow `log.id` or `log.parentId` in
+   `cloudflare-workers`.
+6. Widen the timeframe before adding complicated filters.
+7. Return compact fields and aggregates rather than thousands of raw events.
 
-`execute` requires `account_id` when the token can see multiple accounts. Pass it
-as the tool argument, not in the MCP URL.
+See [EXAMPLES.md](EXAMPLES.md) for reusable query blocks.
 
-## Codemode Blocks
+## Trace audit
 
-Use these as the `code` strings passed to `mcp__cloudflare_api__.execute`.
+For every semantic span report:
 
-1. Verify trace keys:
+- `name`, `traceId`, `spanId`, `parentSpanId`;
+- start, end, and duration;
+- outcome/error attributes;
+- script service/version; and
+- whether the parent exists and how their time ranges overlap.
 
-```ts
-async () => {
-  return cloudflare.request({
-    method: "POST",
-    path: `/accounts/${accountId}/workers/observability/telemetry/keys`,
-    body: {
-      datasets: ["otel"],
-      from: Date.parse("2026-05-06T15:37:00.000Z"),
-      to: Date.parse("2026-05-06T15:40:00.000Z"),
-      keyNeedle: { value: "trace", matchCase: false },
-      limit: 50,
-    },
-  });
-};
-```
+[OpenTelemetry permits a child to outlive its parent](https://opentelemetry.io/docs/specs/otel/trace/api/).
+Judge timing against the application span's declared scope and code ordering:
+flag a mismatch only when that contract says the parent must contain the child.
+Treat automatic native spans separately. [Cloudflare documents beta tracing
+limitations](https://developers.cloudflare.com/workers/observability/traces/known-limitations/),
+including 0ms non-I/O spans and incomplete attributes. Iterate also observed
+native offsets that violated known code ordering on 2026-07-13; treat that as a
+dated product observation and corroborate it with application attributes and a
+controlled reproduction.
 
-2. Fetch a trace summary with `view: "traces"`:
+Observed on 2026-07-13: a failed custom ITX span's presentation message ended
+in `OK` while `source.itx.outcome` was `error`. Treat message suffixes and level
+as presentation metadata. Use explicit application outcome attributes; for ITX,
+a correlated error-level log is useful corroboration.
 
-```ts
-async () => {
-  return cloudflare.request({
-    method: "POST",
-    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
-    body: {
-      queryId: "trace-summary",
-      timeframe: {
-        from: Date.parse("2026-05-06T15:37:00.000Z"),
-        to: Date.parse("2026-05-06T15:40:00.000Z"),
-      },
-      view: "traces",
-      limit: 20,
-      parameters: {
-        datasets: ["otel"],
-        filters: [
-          {
-            key: "traceId",
-            operation: "eq",
-            type: "string",
-            value: "250178b64271952ffb1ed1711133cf78",
-          },
-        ],
-      },
-    },
-  });
-};
-```
+## Dashboard link
 
-3. Fetch spans with `view: "events"` and the same exact `traceId` filter.
+Once the account and trace are known:
 
-4. Summarize span events by `source.name` and `$metadata.transactionName`.
-
-## Working Query
-
-See [EXAMPLES.md](EXAMPLES.md) for the exact codemode block that returned
-trace `250178b64271952ffb1ed1711133cf78` from `os-preview-2` with 686 spans.
-
-If this returns no rows:
-
-- try filter key `$metadata.traceId` as well as `traceId`
-- widen the timeframe by a few minutes
-- confirm `account_id` matches the worker's account
-- query `view: "events"` with `needle: { value: traceId }` as a fallback
+`https://dash.cloudflare.com/<account-id>/observability/traces/<trace-id>`
 
 ## Report
 
-Include trace id, service/script name, timeframe, request URL, span counts,
-error spans, longest repeated chain, and whether the failure surfaced to the caller.
+Include the account/service, UTC timeframe, trace deep link, script version,
+span/log counts, semantic chain, correlation IDs, failures, span-contract
+violations, and the exact query that established each conclusion.
