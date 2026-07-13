@@ -21,7 +21,10 @@ import type {
 } from "./rpc-types.ts";
 import { StreamReceiverUnavailableError } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
+import type {
+  SubscriptionCursorRow,
+  SubscriptionCursorStore,
+} from "./subscription-cursor-store.ts";
 import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
 import {
   DELIVERY_BATCH_LIMIT,

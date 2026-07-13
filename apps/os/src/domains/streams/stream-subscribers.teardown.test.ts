@@ -16,7 +16,10 @@ import {
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamSubscribers } from "./stream-subscribers.ts";
 import type { RetainedProcessEventBatch } from "./subscriber-sinks.ts";
-import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
+import type {
+  SubscriptionCursorRow,
+  SubscriptionCursorStore,
+} from "./subscription-cursor-store.ts";
 
 type PokeImpl = (request: { subscriptionKey: string }) => Promise<{
   checkpointOffset: number;

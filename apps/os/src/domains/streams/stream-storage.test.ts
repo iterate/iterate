@@ -4,8 +4,8 @@ import type { StreamEvent } from "./schemas.ts";
 import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,
-  StreamEventLog,
-} from "./stream-storage.ts";
+} from "./subscription-cursor-store.ts";
+import { StreamEventLog } from "./stream-storage.ts";
 
 function wrapSqlStorage(
   db: DatabaseSync,

@@ -26,10 +26,9 @@ import { compileEventSelector } from "./event-selector.ts";
 import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,
-  StreamEventLog,
   type SubscriptionCursorSet,
-  type StreamOffsetBounds,
-} from "./stream-storage.ts";
+} from "./subscription-cursor-store.ts";
+import { StreamEventLog, type StreamOffsetBounds } from "./stream-storage.ts";
 import {
   StreamSubscribers,
   type ConnectionRuntimeState,

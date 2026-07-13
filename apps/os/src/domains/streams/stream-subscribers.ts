@@ -17,10 +17,10 @@
 // Durable subscriptions (wake + push) are desired state — the folded
 // `subscription-configured` events in core state — and their delivery
 // bookkeeping is the SPINE: one SQLite cursor row per subscription
-// (stream-storage.ts) plus the Durable Object alarm for retries. Cursor rows
-// are storage; park/resume transitions are facts (`subscription-parked` /
-// `-resumed` events). The spine triggers on watermark lag — never on event
-// types — so facts stay data, not control flow.
+// (subscription-cursor-store.ts) plus the Durable Object alarm for retries.
+// Cursor rows are storage; park/resume transitions are facts
+// (`subscription-parked` / `-resumed` events). The spine triggers on
+// watermark lag — never on event types — so facts stay data, not control flow.
 //
 // Runtime metrics: every connection carries real counters (events/bytes
 // delivered, lag from cursor), the durable lanes record commit→settled
@@ -67,12 +67,11 @@ import {
   type DeliveryFrameProjection,
 } from "./stream-delivery-frame-reader.ts";
 import type {
-  SelectedStreamFrame,
-  SizedStreamEvent,
   SubscriptionCursorRow,
   SubscriptionCursorSet,
   SubscriptionCursorStore,
-} from "./stream-storage.ts";
+} from "./subscription-cursor-store.ts";
+import type { SelectedStreamFrame, SizedStreamEvent } from "./stream-storage.ts";
 import {
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,

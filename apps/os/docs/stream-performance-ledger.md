@@ -322,3 +322,35 @@ records are in `/tmp/read-positional-{candidate,baseline}-{1..4}.log`.
 The reader boundary is therefore considered complete at a combined `+53`
 production lines. Further structural reduction should come from cursor-store
 locality and repeated transition plumbing, not from weakening frame ownership.
+
+## 2026-07-13: Subscription Cursor Store Boundary
+
+The cursor contract, sqlfu query client, in-memory row cache, transition
+methods, batched progress/set statements, and reconciliation now live in
+`subscription-cursor-store.ts`. The append log remains in
+`stream-storage.ts`, which still owns the one shared schema bootstrap because
+the event and cursor tables intentionally commit under the same Durable Object
+output gate. The runtime dependency is one-way: cursor store to shared storage
+bootstrap to event schemas.
+
+The cursor implementation and generated SQL statement builders are byte-identical
+to parent `329800a53`. The move reduces `stream-storage.ts` from 1,674 to 940
+lines; the new cursor module is 739 lines, so the combined boundary is only
+`+5` production lines. It improves locality without hiding transitions behind
+a generic repository abstraction or adding another persistence model.
+
+All 358 Stream-domain tests pass, along with OS typecheck and focused lint and
+format checks. An independent review found no semantic drift, import cycle,
+schema-initialization regression, sqlfu regression, or hot-path change. The one
+remaining ownership cost is deliberate: cursor schema changes touch both the
+central bootstrap DDL and sqlfu's typed schema description, just as they did
+when both lived in one file.
+
+Three alternating host-timed full benchmark rounds compared the extraction on
+port 5201 with exact parent `e6aef40b8` on port 5202. The equal-workload p50
+geometric mean was 2.5% slower, within the previously measured 5.0% p50 /
+16.2% p95 disadvantage of port 5201 under a same-revision calibration. The two
+cursor-sensitive durable cross-post paths were 9.0% and 9.3% faster at
+median-of-round p50 despite that port placement. This move therefore records no
+new speedup and no reproduced regression. Raw records are in
+`/tmp/cursor-extraction-{candidate,baseline}-{1..3}.log`.
