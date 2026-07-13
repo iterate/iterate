@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import {
   commitPlan,
   effectiveEntry,
+  textContentForEntry,
   workingTreeGitStatus,
   workingTreeStore,
   type FileEntry,
@@ -143,6 +144,19 @@ test("git status derives from the effective entry, staged or live", () => {
     { path: "doomed.ts", status: "deleted" },
   ]);
   expect(effectiveEntry(store.changes.get("doomed.ts")!)).toEqual({ type: "delete" });
+});
+
+test("text content decodes UTF-8 files written through the base64 upload lane", () => {
+  const markdown = "# Caf\u00e9 \u2615\n";
+  const bytes = new TextEncoder().encode(markdown);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+
+  expect(textContentForEntry({ type: "write-base64", contentBase64: btoa(binary) })).toBe(markdown);
+  expect(
+    textContentForEntry({ type: "write-base64", contentBase64: "not base64" }),
+  ).toBeUndefined();
+  expect(textContentForEntry({ type: "delete" })).toBeUndefined();
 });
 
 test("changes persist to storage under the repo+oid key and rehydrate on load", () => {
