@@ -7,10 +7,13 @@ applies policy and secret rules; accepted upgrades are **pair-bridged**
 
 ## Does real WebSocket work?
 
-**Yes.** Local containers (2026-07-13) completed full duplex echo under the
-Cloudflare Intercept CA against `wss://ws.postman-echo.com/raw` (open → send →
-echo frame). Cert subject stayed the MITM CA; a raw upgrade saw
-`HTTP/1.1 101 Switching Protocols`.
+**Yes.** Preview Firecracker sandboxes and local containers (2026-07-13) complete
+full duplex under the Cloudflare Intercept CA against
+`wss://ws.postman-echo.com/raw` (Node global `WebSocket` open → send → echo).
+Peer cert issuer is the MITM CA; the HTTP 101 carries a single
+`Upgrade: websocket` / `Connection: Upgrade` pair plus a client-key
+`Sec-WebSocket-Accept` (container intercept injects hop-by-hop Upgrade headers;
+outbound stamps Accept only so undici does not see duplicates).
 
 gRPC/HTTP2 under intercept is a separate limitation
 ([containers#195](https://github.com/cloudflare/containers/issues/195));
@@ -82,6 +85,7 @@ clock stays inside budget:
 
 ```bash
 RUN_SANDBOX_WS_E2E=1 pnpm --dir apps/os exec vitest run \
+  --config e2e/vitest.config.ts \
   e2e/vitest/sandbox-websocket-egress.e2e.test.ts
 ```
 
