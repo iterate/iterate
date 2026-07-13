@@ -18,6 +18,7 @@ import {
   resolveWorkerSource,
   type ResolvedWorkerSource,
   type WorkerBindings,
+  type WorkerSourceResolution,
 } from "./worker-loader.ts";
 
 // Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
@@ -49,6 +50,7 @@ export class DynamicWorkerRunner {
   readonly #projectId: string;
   readonly #scopePath: string;
   readonly #waitUntil: (promise: Promise<unknown>) => void;
+  #sourceResolution: WorkerSourceResolution | undefined;
 
   constructor(props: {
     /** The hosting context's `ctx.exports` — loopback entrypoints are minted
@@ -217,12 +219,15 @@ export class DynamicWorkerRunner {
     ref: DynamicWorkerRef,
     buildBudgetMs?: number,
   ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
-    const resolved = await resolveWorkerSource({
+    const resolution = await resolveWorkerSource({
       buildBudgetMs,
+      previous: this.#sourceResolution,
       projectId: this.#projectId,
       source: ref.source,
       waitUntil: this.#waitUntil,
     });
+    this.#sourceResolution = resolution;
+    const { resolved } = resolution;
     return { resolved, worker: this.#loadResolved(ref, resolved) };
   }
 

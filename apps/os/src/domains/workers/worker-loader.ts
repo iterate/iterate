@@ -38,6 +38,15 @@ export type ResolvedWorkerSource = {
   modules: Record<string, string>;
 };
 
+/** Completed plain-data resolution retained by one runner. The source object
+ * identity proves the immutable recipe is unchanged; mutable branch refs still
+ * resolve their durable head on every use and compare `version` afterward. */
+export type WorkerSourceResolution = {
+  resolved: ResolvedWorkerSource;
+  source: DynamicWorkerSource;
+  version: string;
+};
+
 export type WorkerBindings = Record<string, unknown>;
 
 // Artifacts are immutable (content-addressed by build key), so a small
@@ -47,6 +56,7 @@ const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
 
 export async function resolveWorkerSource({
   buildBudgetMs,
+  previous,
   projectId,
   source,
   waitUntil,
@@ -54,13 +64,21 @@ export async function resolveWorkerSource({
   /** Give up on a cold resolve after this long (the build itself keeps
    * running in the builder worker). Omitted = wait for the build. */
   buildBudgetMs?: number;
+  /** A completed resolution from this runner. This never carries I/O objects
+   * across requests; WorkerStub/entrypoint handles are minted per call. */
+  previous?: WorkerSourceResolution;
   projectId: string;
   source: DynamicWorkerSource;
   /** The hosting request context's `ctx.waitUntil`. A budget-expired resolve
    * is handed to it so the cold path survives the caller's request ending. */
   waitUntil: (promise: Promise<unknown>) => void;
-}): Promise<ResolvedWorkerSource> {
+}): Promise<WorkerSourceResolution> {
   const options = source.options ?? {};
+
+  // Inline and pinned-commit recipes contain no late-bound identity. A runner
+  // owns its parsed ref, so exact source-object identity makes the completed
+  // resolution immutable for that target's lifetime.
+  if (previous?.source === source && isImmutableFileSource(source)) return previous;
 
   // Loader-ready degenerate case: inline JavaScript with bundling explicitly
   // off is exactly what the Worker Loader consumes, so materialization is the
@@ -68,13 +86,21 @@ export async function resolveWorkerSource({
   // on every agent turn) at direct-load latency instead of paying a build
   // round trip per script.
   const loaderReady = await loaderReadyInlineSource(source, options);
-  if (loaderReady !== null) return loaderReady;
+  if (loaderReady !== null) {
+    return { resolved: loaderReady, source, version: loaderReady.cacheKey };
+  }
 
   // The budget covers the WHOLE cold path — head resolution (a Repo DO call)
   // included — so a browser-facing caller's bound is a real bound, not just a
   // bound on the bundler.
   return await withBuildBudget(
-    resolveThroughBuilder({ budgeted: buildBudgetMs !== undefined, options, projectId, source }),
+    resolveThroughBuilder({
+      budgeted: buildBudgetMs !== undefined,
+      options,
+      previous,
+      projectId,
+      source,
+    }),
     buildBudgetMs,
     waitUntil,
   );
@@ -84,10 +110,10 @@ export async function resolveWorkerSource({
  * builder finishes into the artifact cache regardless, so the caller's retry
  * is a hit. */
 async function withBuildBudget(
-  resolution: Promise<ResolvedWorkerSource>,
+  resolution: Promise<WorkerSourceResolution>,
   budgetMs: number | undefined,
   waitUntil: (promise: Promise<unknown>) => void,
-): Promise<ResolvedWorkerSource> {
+): Promise<WorkerSourceResolution> {
   if (budgetMs === undefined) return await resolution;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -134,11 +160,16 @@ async function resolveThroughBuilder(input: {
   /** Whether the caller runs under a build budget (see isBuildInFlight). */
   budgeted: boolean;
   options: WorkerBuildOptions;
+  previous?: WorkerSourceResolution;
   projectId: string;
   source: DynamicWorkerSource;
-}): Promise<ResolvedWorkerSource> {
+}): Promise<WorkerSourceResolution> {
   const options = withIterateSdkVirtualModule(input.options);
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
+  const version = resolvedSourceVersion(resolved);
+  if (input.previous?.source === input.source && input.previous.version === version) {
+    return input.previous;
+  }
   const buildKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
@@ -147,11 +178,15 @@ async function resolveThroughBuilder(input: {
   });
 
   const memoized = resolvedArtifactMemo.get(buildKey);
-  if (memoized !== undefined) return memoized;
+  if (memoized !== undefined) {
+    return { resolved: memoized, source: input.source, version };
+  }
 
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
   const cached = await store.get(buildKey);
-  if (cached !== null) return memoizeArtifact(cached);
+  if (cached !== null) {
+    return { resolved: memoizeArtifact(cached), source: input.source, version };
+  }
 
   // A budgeted caller (the building-page lane) answers "still building" from
   // the in-flight marker instead of piling a duplicate full build onto a
@@ -172,7 +207,19 @@ async function resolveThroughBuilder(input: {
     files: await resolvedSourceFiles(input.projectId, resolved),
     options,
   });
-  return memoizeArtifact(artifact);
+  return { resolved: memoizeArtifact(artifact), source: input.source, version };
+}
+
+function isImmutableFileSource(source: DynamicWorkerSource): boolean {
+  return (
+    source.files.type === "inline" ||
+    (source.files.ref !== undefined && "commitOid" in source.files.ref)
+  );
+}
+
+function resolvedSourceVersion(source: ResolvedWorkerFileSource): string {
+  if (source.type === "inline") return "inline";
+  return source.contentHash ?? `commit:${source.commitOid}`;
 }
 
 /** The full file map for a resolved source. Only runs on artifact-cache

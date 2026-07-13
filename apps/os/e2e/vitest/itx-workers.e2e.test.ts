@@ -240,9 +240,10 @@ describe("itx", () => {
     });
 
     using project = itx.projects.create({ slug: "deleted-worker-source" });
+    const worker = project.worker;
     // The seeded root worker serves a static homepage; this warm-up only needs
     // proof the seeded worker.ts is live before we delete it.
-    const warmResponse = await project.worker.fetch(new Request("https://example.com/warm"));
+    const warmResponse = await worker.fetch(new Request("https://example.com/warm"));
     expect(await warmResponse.text()).toContain("Hello from your Iterate project worker");
 
     await project.repo.commitFiles({
@@ -251,8 +252,9 @@ describe("itx", () => {
     });
 
     // The commit moved the branch head, so the next use resolves a new build
-    // key, and that build has no entry point to bundle.
-    await expect(project.worker.fetch(new Request("https://example.com/warm"))).rejects.toThrow();
+    // key on this SAME retained target, and that build has no entry point to
+    // bundle.
+    await expect(worker.fetch(new Request("https://example.com/warm"))).rejects.toThrow();
   });
 
   test("Worker expression capabilities dispatch nested RpcTarget paths", async () => {
