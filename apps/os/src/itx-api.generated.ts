@@ -152,6 +152,8 @@ export interface Project {
   /** The project's sandboxes — explicitly created, sized Linux containers
    * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
+  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */
+  search: Search;
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   scheduler: Scheduler;
   /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */
@@ -841,6 +843,109 @@ export interface SandboxCollection {
   /** Every sandbox stream path in the project (`/sandboxes/...`), including
    * destroyed sandboxes' streams — the stream is the history. */
   list(): Promise<StreamListItem[]>;
+}
+
+/**
+ * Project search over everything the project accumulates — stream events,
+ * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
+ * instance over the deployment's search-index bucket
+ * (domains/search/search-index.ts). One instance per deployment; every query
+ * is scoped to this project via a folder-prefix metadata filter, so no query
+ * can see another project's data. Experimental — the surface may change.
+ */
+export interface Search {
+  __describe(): Promise<Description>;
+  /**
+   * Retrieve scored chunks matching a query, scoped to this project's own
+   * search instance. Merges the corpus (streams/files/repos/custom kinds)
+   * with federated itx.docs, each result tagged with its `kind` and `context`
+   * so callers can contextualize a hit. On a project whose instance doesn't
+   * exist yet, the instance is created and docs results return with a
+   * `warning` — retry once its first index completes.
+   */
+  query(input: {
+    q: string;
+    /** Max chunks to return (1–50). */
+    limit?: number;
+    /** Rewrite the query for retrieval first (extra LLM call). */
+    rewriteQuery?: boolean;
+    /** Drop chunks scoring below this threshold (0–1). */
+    scoreThreshold?: number;
+    /** Restrict to ONE corpus kind (skips docs federation). */
+    source?: SearchSourceKind;
+    /** Exclude kinds from results, e.g. `["streams"]` to skip the event log. */
+    exclude?: readonly SearchKind[];
+  }): Promise<SearchQueryResult>;
+  /** Retrieve matching chunks AND generate an answer from them (RAG). */
+  answer(input: {
+    q: string;
+    limit?: number;
+    rewriteQuery?: boolean;
+    scoreThreshold?: number;
+    source?: SearchSourceKind;
+    exclude?: readonly SearchKind[];
+    /** Optional system prompt for the answer generation. */
+    systemPrompt?: string;
+  }): Promise<SearchAnswerResult>;
+  /**
+   * Add (or replace) one document in the search corpus — the general
+   * mechanism to make derived content (summaries, notes, digests) findable
+   * via `query`. `ref` is REQUIRED: the itx expression leading back to the
+   * domain object the text derives from (e.g. `["streams", ["get", path],
+   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
+   * a search result is never a dead end. `id` is stable within
+   * `(project, kind)`, so re-indexing the same id overwrites. `context` is
+   * the one-line descriptor shown on every hit and to the answer model.
+   */
+  index(input: {
+    kind: string;
+    id: string;
+    text: string;
+    /** The itx expression that leads back to the source domain object. */
+    ref: ItxExpression;
+    title?: string;
+    context?: string;
+  }): Promise<{ key: string }>;
+  /**
+   * Pin one stream event into the search corpus by its coordinates — the
+   * domain-object way to make a specific moment findable. The event's content
+   * is read from the stream (never trusted from the caller) and indexed as a
+   * focused document together with the optional `note`; the search hit's
+   * `ref` leads back to `{ path, offset }`. Idempotent per (stream, offset).
+   */
+  indexEvent(input: {
+    /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+    stream: string;
+    /** The event's offset on that stream. */
+    offset: number;
+    /** Optional annotation, indexed alongside the event ("decision made here"). */
+    note?: string;
+  }): Promise<{ key: string }>;
+  /**
+   * Re-index one stream from the beginning — the repair verb for streams that
+   * predate search indexing, or the rare tail gap a failed per-batch write can
+   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   */
+  indexStream(input: { path: string }): Promise<{ segments: number }>;
+  /**
+   * Snapshot one repo's default-branch HEAD into the search corpus now — the
+   * backfill verb for repos that predate search indexing (writes index
+   * incrementally from here on). Runs on the repo Durable Object's own write
+   * chain so its stale-key sweep can't race post-commit indexing.
+   */
+  indexRepo(input: { path: string }): Promise<{
+    deleted: number;
+    indexed: number;
+    skipped: number;
+    failed: number;
+  }>;
+  /**
+   * Re-mirror every existing itx.files object into the search corpus — the
+   * backfill verb for files that predate search indexing (puts mirror
+   * incrementally from here on). Counts reflect the actual mirror outcome:
+   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
+   */
+  backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;
 }
 
 /**
@@ -2200,6 +2305,35 @@ export type CloudflareSandbox = object & {
   kill(): Promise<void>;
 };
 
+/**
+ * The kinds a project's search corpus is folded from. The first segment of
+ * every R2 key IS the kind (`{projectId}/{kind}/…`), so it doubles as the
+ * folder-scoping token AND the `kind` metadata attribute. `docs` is federated
+ * from the in-worker itx.docs index rather than stored in R2 (see
+ * Search.query), but shares the vocabulary so callers filter
+ * uniformly.
+ */
+export type SearchSourceKind = "streams" | "files" | "repos";
+
+/** Every filterable kind: the stored corpus kinds plus the federated `docs`. */
+export type SearchKind = SearchSourceKind | "docs";
+
+/** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */
+export type SearchQueryResult = {
+  searchQuery: string;
+  results: SearchResultChunk[];
+  /**
+   * Present when the AI Search corpus was unreachable (e.g. the instance is
+   * not created yet) and only federated docs results are returned.
+   */
+  warning?: string;
+};
+
+/** What `itx.search.answer` returns: a generated answer plus the chunks it cited. */
+export type SearchAnswerResult = SearchQueryResult & {
+  response: string;
+};
+
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
 export type SchedulerProcessorState = {
   pendingTriggers: Record<
@@ -2682,6 +2816,30 @@ export type ProjectFileMetadata = {
   contentType: string;
   path: string;
   size: number;
+};
+
+/** One retrieved chunk: the matched index document plus its scored text and provenance. */
+export type SearchResultChunk = {
+  /** The index object key, e.g. `prj_x/streams/agents/…/events-00000001.md`. */
+  filename: string;
+  /** Relevance score in [0, 1]. */
+  score: number;
+  /** The matched text content (the specific matching chunk). */
+  content: string;
+  /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
+  kind?: string;
+  /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
+  context?: string;
+  /**
+   * The itx expression that leads back to the DOMAIN OBJECT this hit mirrors
+   * — evaluate it against the project itx to fetch the real thing instead of
+   * trusting chunk text. E.g. `["streams", ["get", "/agents/x"],
+   * ["getEvents", { afterOffset: 100, beforeOffset: 201 }]]` for a stream
+   * segment, `["files", ["get", "/reports/q3.pdf"]]` for a file, `["repos",
+   * ["get", "/repos/config"], ["readFile", { path: "worker.ts" }]]` for a
+   * repo file, `["docs", ["get", { name }]]` for a docs entry.
+   */
+  ref?: ItxExpression;
 };
 
 /**

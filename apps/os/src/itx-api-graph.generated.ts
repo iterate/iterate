@@ -38,7 +38,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Project",
     kind: "interface",
     sourceText:
-      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** THIS agent's control surface — present only on an agent-scoped itx (path under `/agents/`). */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in integrations as dispatch branches\n   * on the dotted-call surface (`itx.integrations.slack[\"main-slack\"].chat\n   * .postMessage(...)`), provided integrations through the capability table,\n   * management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
+      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** THIS agent's control surface — present only on an agent-scoped itx (path under `/agents/`). */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in integrations as dispatch branches\n   * on the dotted-call surface (`itx.integrations.slack[\"main-slack\"].chat\n   * .postMessage(...)`), provided integrations through the capability table,\n   * management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */\n  search: Search;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
     summary:
       'An itx: the project capability surface, scoped to one path (the project root "/", an agent path, ...).',
     memberSummaries: {
@@ -76,6 +76,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       repos: "Repo catalog by path.",
       sandboxes:
         "The project's sandboxes — explicitly created, sized Linux containers (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}.",
+      search:
+        "Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search).",
       scheduler:
         'The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`.',
       schedulers:
@@ -117,6 +119,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "OpenApiRpc",
       "ProjectRepoCollection",
       "SandboxCollection",
+      "Search",
       "Scheduler",
       "SchedulerCollection",
       "SecretCollection",
@@ -494,6 +497,37 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "SandboxInstanceType",
       "CloudflareSandbox",
       "StreamListItem",
+    ],
+  },
+  {
+    name: "Search",
+    kind: "interface",
+    sourceText:
+      '/**\n * Project search over everything the project accumulates — stream events,\n * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search\n * instance over the deployment\'s search-index bucket\n * (domains/search/search-index.ts). One instance per deployment; every query\n * is scoped to this project via a folder-prefix metadata filter, so no query\n * can see another project\'s data. Experimental — the surface may change.\n */\nexport interface Search {\n  __describe(): Promise<Description>;\n  /**\n   * Retrieve scored chunks matching a query, scoped to this project\'s own\n   * search instance. Merges the corpus (streams/files/repos/custom kinds)\n   * with federated itx.docs, each result tagged with its `kind` and `context`\n   * so callers can contextualize a hit. On a project whose instance doesn\'t\n   * exist yet, the instance is created and docs results return with a\n   * `warning` — retry once its first index completes.\n   */\n  query(input: {\n    q: string;\n    /** Max chunks to return (1–50). */\n    limit?: number;\n    /** Rewrite the query for retrieval first (extra LLM call). */\n    rewriteQuery?: boolean;\n    /** Drop chunks scoring below this threshold (0–1). */\n    scoreThreshold?: number;\n    /** Restrict to ONE corpus kind (skips docs federation). */\n    source?: SearchSourceKind;\n    /** Exclude kinds from results, e.g. `["streams"]` to skip the event log. */\n    exclude?: readonly SearchKind[];\n  }): Promise<SearchQueryResult>;\n  /** Retrieve matching chunks AND generate an answer from them (RAG). */\n  answer(input: {\n    q: string;\n    limit?: number;\n    rewriteQuery?: boolean;\n    scoreThreshold?: number;\n    source?: SearchSourceKind;\n    exclude?: readonly SearchKind[];\n    /** Optional system prompt for the answer generation. */\n    systemPrompt?: string;\n  }): Promise<SearchAnswerResult>;\n  /**\n   * Add (or replace) one document in the search corpus — the general\n   * mechanism to make derived content (summaries, notes, digests) findable\n   * via `query`. `ref` is REQUIRED: the itx expression leading back to the\n   * domain object the text derives from (e.g. `["streams", ["get", path],\n   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so\n   * a search result is never a dead end. `id` is stable within\n   * `(project, kind)`, so re-indexing the same id overwrites. `context` is\n   * the one-line descriptor shown on every hit and to the answer model.\n   */\n  index(input: {\n    kind: string;\n    id: string;\n    text: string;\n    /** The itx expression that leads back to the source domain object. */\n    ref: ItxExpression;\n    title?: string;\n    context?: string;\n  }): Promise<{ key: string }>;\n  /**\n   * Pin one stream event into the search corpus by its coordinates — the\n   * domain-object way to make a specific moment findable. The event\'s content\n   * is read from the stream (never trusted from the caller) and indexed as a\n   * focused document together with the optional `note`; the search hit\'s\n   * `ref` leads back to `{ path, offset }`. Idempotent per (stream, offset).\n   */\n  indexEvent(input: {\n    /** The stream path, e.g. "/agents/slack/T1/thr-9". */\n    stream: string;\n    /** The event\'s offset on that stream. */\n    offset: number;\n    /** Optional annotation, indexed alongside the event ("decision made here"). */\n    note?: string;\n  }): Promise<{ key: string }>;\n  /**\n   * Re-index one stream from the beginning — the repair verb for streams that\n   * predate search indexing, or the rare tail gap a failed per-batch write can\n   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").\n   */\n  indexStream(input: { path: string }): Promise<{ segments: number }>;\n  /**\n   * Snapshot one repo\'s default-branch HEAD into the search corpus now — the\n   * backfill verb for repos that predate search indexing (writes index\n   * incrementally from here on). Runs on the repo Durable Object\'s own write\n   * chain so its stale-key sweep can\'t race post-commit indexing.\n   */\n  indexRepo(input: { path: string }): Promise<{\n    deleted: number;\n    indexed: number;\n    skipped: number;\n    failed: number;\n  }>;\n  /**\n   * Re-mirror every existing itx.files object into the search corpus — the\n   * backfill verb for files that predate search indexing (puts mirror\n   * incrementally from here on). Counts reflect the actual mirror outcome:\n   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.\n   */\n  backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;\n}',
+    summary:
+      "Project search over everything the project accumulates — stream events, itx.files, repo files, custom documents — indexed in a Cloudflare AI Search instance over the deployment's search-index bucket (domains/search/search-index.ts).",
+    memberSummaries: {
+      query:
+        "Retrieve scored chunks matching a query, scoped to this project's own search instance.",
+      answer: "Retrieve matching chunks AND generate an answer from them (RAG).",
+      index:
+        "Add (or replace) one document in the search corpus — the general mechanism to make derived content (summaries, notes, digests) findable via `query`.",
+      indexEvent:
+        "Pin one stream event into the search corpus by its coordinates — the domain-object way to make a specific moment findable.",
+      indexStream:
+        "Re-index one stream from the beginning — the repair verb for streams that predate search indexing, or the rare tail gap a failed per-batch write can leave (`path` is the stream path, e.g.",
+      indexRepo:
+        "Snapshot one repo's default-branch HEAD into the search corpus now — the backfill verb for repos that predate search indexing (writes index incrementally from here on).",
+      backfillFiles:
+        "Re-mirror every existing itx.files object into the search corpus — the backfill verb for files that predate search indexing (puts mirror incrementally from here on).",
+    },
+    referencedTypeNames: [
+      "Description",
+      "SearchSourceKind",
+      "SearchKind",
+      "SearchQueryResult",
+      "SearchAnswerResult",
+      "ItxExpression",
     ],
   },
   {
@@ -1358,6 +1392,42 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "SearchSourceKind",
+    kind: "typeAlias",
+    sourceText:
+      '/**\n * The kinds a project\'s search corpus is folded from. The first segment of\n * every R2 key IS the kind (`{projectId}/{kind}/…`), so it doubles as the\n * folder-scoping token AND the `kind` metadata attribute. `docs` is federated\n * from the in-worker itx.docs index rather than stored in R2 (see\n * Search.query), but shares the vocabulary so callers filter\n * uniformly.\n */\nexport type SearchSourceKind = "streams" | "files" | "repos";',
+    summary: "The kinds a project's search corpus is folded from.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "SearchKind",
+    kind: "typeAlias",
+    sourceText:
+      '/** Every filterable kind: the stored corpus kinds plus the federated `docs`. */\nexport type SearchKind = SearchSourceKind | "docs";',
+    summary: "Every filterable kind: the stored corpus kinds plus the federated `docs`.",
+    memberSummaries: {},
+    referencedTypeNames: ["SearchSourceKind"],
+  },
+  {
+    name: "SearchQueryResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */\nexport type SearchQueryResult = {\n  searchQuery: string;\n  results: SearchResultChunk[];\n  /**\n   * Present when the AI Search corpus was unreachable (e.g. the instance is\n   * not created yet) and only federated docs results are returned.\n   */\n  warning?: string;\n};",
+    summary: "What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks.",
+    memberSummaries: {},
+    referencedTypeNames: ["SearchResultChunk"],
+  },
+  {
+    name: "SearchAnswerResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** What `itx.search.answer` returns: a generated answer plus the chunks it cited. */\nexport type SearchAnswerResult = SearchQueryResult & {\n  response: string;\n};",
+    summary: "What `itx.search.answer` returns: a generated answer plus the chunks it cited.",
+    memberSummaries: {},
+    referencedTypeNames: ["SearchQueryResult"],
+  },
+  {
     name: "SchedulerProcessorState",
     kind: "typeAlias",
     sourceText:
@@ -1724,6 +1794,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "A stored project file: what it looks like from the outside — its itx path plus wire facts.",
     memberSummaries: {},
     referencedTypeNames: [],
+  },
+  {
+    name: "SearchResultChunk",
+    kind: "typeAlias",
+    sourceText:
+      '/** One retrieved chunk: the matched index document plus its scored text and provenance. */\nexport type SearchResultChunk = {\n  /** The index object key, e.g. `prj_x/streams/agents/…/events-00000001.md`. */\n  filename: string;\n  /** Relevance score in [0, 1]. */\n  score: number;\n  /** The matched text content (the specific matching chunk). */\n  content: string;\n  /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */\n  kind?: string;\n  /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */\n  context?: string;\n  /**\n   * The itx expression that leads back to the DOMAIN OBJECT this hit mirrors\n   * — evaluate it against the project itx to fetch the real thing instead of\n   * trusting chunk text. E.g. `["streams", ["get", "/agents/x"],\n   * ["getEvents", { afterOffset: 100, beforeOffset: 201 }]]` for a stream\n   * segment, `["files", ["get", "/reports/q3.pdf"]]` for a file, `["repos",\n   * ["get", "/repos/config"], ["readFile", { path: "worker.ts" }]]` for a\n   * repo file, `["docs", ["get", { name }]]` for a docs entry.\n   */\n  ref?: ItxExpression;\n};',
+    summary: "One retrieved chunk: the matched index document plus its scored text and provenance.",
+    memberSummaries: {},
+    referencedTypeNames: ["ItxExpression"],
   },
   {
     name: "SchedulerRecurrence",
