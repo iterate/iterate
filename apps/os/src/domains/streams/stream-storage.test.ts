@@ -1206,7 +1206,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(1);
   });
 
-  it("bounds successful push replay to seven batches and flushes the drain tail", () => {
+  it("bounds successful push replay to seven batches across drain tails", () => {
     const db = new DatabaseSync(":memory:");
     let progressWrites = 0;
     const store = new SqliteSubscriptionCursorStore(
@@ -1216,7 +1216,11 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     );
     const epoch = store.ensure("k", 0).epoch;
 
-    for (let batch = 1; batch < 8; batch += 1) store.stageAck("k", batch * 1_000, epoch);
+    for (let batch = 1; batch < 8; batch += 1) {
+      store.stageAck("k", batch * 1_000, epoch);
+      // wake() offers this due-only flush after every separate drain.
+      store.flushPending();
+    }
     expect(progressWrites).toBe(0);
     expect(store.get("k")!.ackedOffset).toBe(7_000);
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(0);
@@ -1226,7 +1230,9 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(8_000);
 
     store.stageAck("k", 9_000, epoch);
-    store.flushPending("delivered");
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(8_000);
+
+    store.flushPending("all");
     expect(progressWrites).toBe(2);
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(9_000);
   });
@@ -1243,20 +1249,6 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     store.skip("k", 164, epoch);
     store.flushPending();
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(164);
-  });
-
-  it("flushes delivered progress without forcing unrelated sub-threshold skips", () => {
-    const db = new DatabaseSync(":memory:");
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
-    const skipEpoch = store.ensure("skip", 0).epoch;
-    const pushEpoch = store.ensure("push", 0).epoch;
-    store.skip("skip", 1, skipEpoch);
-    store.stageAck("push", 1, pushEpoch);
-
-    store.flushPending("delivered");
-    const reloaded = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
-    expect(reloaded.get("skip")!.ackedOffset).toBe(0);
-    expect(reloaded.get("push")!.ackedOffset).toBe(1);
   });
 
   it("resolves staged push progress before failure and lets a seek supersede it", () => {

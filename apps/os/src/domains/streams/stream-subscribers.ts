@@ -867,7 +867,6 @@ export class StreamSubscribers {
         }
       } finally {
         this.#pushDrains.delete(subscriptionKey);
-        this.#hooks.store.flushPending("delivered");
       }
     })();
     this.#hooks.keepAlive(

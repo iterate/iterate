@@ -104,6 +104,11 @@ describe("itx", () => {
       payload: { content },
     });
 
+    const providerSelected = agent.stream.waitForEvent({
+      afterOffset: historicalOutput.offset,
+      eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
+      timeoutMs: 30_000,
+    });
     const replayedReply = await agent.stream.waitForEvent({
       afterOffset: historicalOutput.offset,
       eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
@@ -115,6 +120,7 @@ describe("itx", () => {
       type: AGENT_WEB_MESSAGE_SENT_TYPE,
       payload: { message: marker },
     });
+    await providerSelected;
 
     const events = await agent.stream.getEvents({ afterOffset: 0 });
     const outputOffset = events.find(

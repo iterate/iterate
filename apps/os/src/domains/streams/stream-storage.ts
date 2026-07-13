@@ -671,7 +671,9 @@ export type SubscriptionCursorStore = {
   /**
    * Successful internal RPC push delivery. Advance immediately, but permit a
    * bounded durable lag so consecutive remote calls do not each wait behind a
-   * SQLite output-gate commit. Webhooks use {@link ack} instead.
+   * SQLite output-gate commit. Progress survives drain completion and flushes
+   * on the eighth successful batch or an explicit lifecycle/failure boundary.
+   * Webhooks use {@link ack} instead.
    */
   stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): void;
   /**
@@ -680,8 +682,8 @@ export type SubscriptionCursorStore = {
    * persistence may lag by a bounded window because replaying a skip is safe.
    */
   skip(subscriptionKey: string, ackedOffset: number, epoch: number): void;
-  /** Persist pending cursor progress that is due, all progress, or delivered progress. */
-  flushPending(mode?: "due" | "all" | "delivered"): void;
+  /** Persist pending cursor progress that is due, or all progress. */
+  flushPending(mode?: "due" | "all"): void;
   /**
    * Advance the wake lane's observational watermark (monotonic) after a poke
    * whose checkpoint did NOT progress. Clears the retry schedule (the poke
@@ -916,6 +918,8 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    // Deliberately count across drain lifetimes: trickle traffic otherwise
+    // turns every one-batch drain tail back into an output-gated cursor write.
     this.flushPending(clearsFailure ? "all" : "due");
   }
 
@@ -939,7 +943,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     if (clearsFailure) this.flushPending("all");
   }
 
-  flushPending(mode: "due" | "all" | "delivered" = "due"): void {
+  flushPending(mode: "due" | "all" = "due"): void {
     if (this.#pendingProgress.size === 0) return;
     const all = [...this.#pendingProgress.entries()];
     const checkpointDue = all.some(
@@ -948,9 +952,8 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         pending.skippedOffsets >= MAX_UNPERSISTED_SKIP_OFFSETS,
     );
     if (mode === "due" && !checkpointDue) return;
-    const pending = mode === "delivered" ? all.filter(([, row]) => row.deliveredBatches > 0) : all;
-    for (let start = 0; start < pending.length; start += MAX_CURSOR_PROGRESS_ROWS) {
-      const batch = pending.slice(start, start + MAX_CURSOR_PROGRESS_ROWS);
+    for (let start = 0; start < all.length; start += MAX_CURSOR_PROGRESS_ROWS) {
+      const batch = all.slice(start, start + MAX_CURSOR_PROGRESS_ROWS);
       const bindings: SqlStorageValue[] = [];
       for (const [subscriptionKey, row] of batch) {
         bindings.push(subscriptionKey, row.ackedOffset, row.epoch);
