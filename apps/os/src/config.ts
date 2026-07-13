@@ -145,6 +145,10 @@ export const AppConfig = z.object({
           oauthClientId: publicValue(z.string().trim().min(1)),
           oauthClientSecret: redacted(z.string().trim().min(1)),
           webhookSigningSecret: redacted(z.string().trim().min(1)),
+          /** Same-app recovery credential for a connected workspace whose
+           * stored token has been revoked. Outbound Slack code verifies its
+           * team id against the connection journal before using it. */
+          botToken: redacted(z.string().trim().min(1)).optional(),
           scopes: publicValue(z.array(SlackScope).default(DEFAULT_SLACK_BOT_SCOPES)),
         })
         .optional(),
