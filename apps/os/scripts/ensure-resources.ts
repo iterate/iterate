@@ -60,8 +60,12 @@ export async function ensureAiSearchInstance(
   },
 ): Promise<void> {
   try {
-    const instances = await cf<{ id: string; name: string }[]>(`/ai-search/instances?per_page=100`);
-    if (instances.some((instance) => instance.name === input.instanceName)) {
+    // Live-observed: an instance created with a name comes back with that
+    // name in `id` and `name: null`, so `id` is the identity to compare.
+    const instances = await cf<{ id: string; name: string | null }[]>(
+      `/ai-search/instances?per_page=100`,
+    );
+    if (instances.some((instance) => (instance.name ?? instance.id) === input.instanceName)) {
       console.log(`AI Search instance ${input.instanceName} exists`);
       return;
     }
