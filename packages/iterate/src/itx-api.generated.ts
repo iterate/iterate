@@ -1268,6 +1268,9 @@ export interface Secret {
    * Discord-shaped WebSocket relay: IDENTIFY with material held only in the
    * Secret DO, then a pair-bridged socket for app frames. See
    * `SecretWebSocketRelayInput` / petshop `/gateway`.
+   *
+   * Routed through DO **fetch** (not a JSRPC method) so `Response.webSocket`
+   * can leave the Secret DO — method returns reject sockets with DataCloneError.
    */
   relayWebSocket(input: SecretWebSocketRelayInput): Promise<Response>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
@@ -2712,14 +2715,6 @@ export type SecretDescription = {
   refresh: SecretRefresh["kind"] | null;
 };
 
-/**
- * Discord-shaped WebSocket relay helpers: trusted IDENTIFY after optional
- * hello, then opaque frame pump. The token never appears on the public
- * secret surface — only inside this module's trusted send path.
- *
- * Petshop proof: apps/dummy-petshop `/gateway` (see gateway.ts).
- * Design: integrations-and-secrets-design.md "WebSocket egress + relay".
- */
 export type SecretWebSocketRelayInput = {
   /** Absolute ws/wss (or http/https, upgraded) URL on the secret's egress pin. */
   url: string;
