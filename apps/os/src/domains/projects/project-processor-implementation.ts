@@ -131,6 +131,18 @@ export class ProjectProcessor extends StreamProcessor<
           // child-stream-created lanes. Projects whose onboarding chat is
           // never opened (CLI creates, test fixtures) never pay an LLM turn.
           await Promise.all([
+            // The project's AI Search instance is born WITH the project so
+            // itx.search works from the first query instead of warming lazily
+            // (Jonas, 2026-07-13). Best-effort: instance creation must never
+            // fail project creation — the query/index paths lazily self-heal.
+            timedStep("create-timing", timing, "search-instance-ensure", () =>
+              this.deps.itx.search.ensureIndex().catch((error: unknown) => {
+                console.warn(
+                  `project create: search instance ensure failed (lazy self-heal remains): ${String(error).slice(0, 200)}`,
+                );
+                return { created: false };
+              }),
+            ),
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({

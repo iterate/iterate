@@ -2017,6 +2017,8 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       children: {
         answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
+        ensureIndex:
+          "Ensure this project's search instance exists (idempotent; created at project birth).",
         index:
           "Add/replace one standalone document ({ kind, id, text, ref, title?, context? }) — " +
           "ref (itx expression) is required.",
@@ -2143,6 +2145,17 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     } catch (provisionError) {
       return `AI Search instance provisioning failed: ${String(provisionError).slice(0, 200)}`;
     }
+  }
+
+  /**
+   * Ensure this project's search instance exists (idempotent). The project
+   * CREATE SAGA calls this so search is warm from birth; the lazy
+   * query/index paths remain as self-heal for projects that predate it.
+   * Safe to call any time — an existing instance is a no-op.
+   */
+  async ensureIndex(): Promise<{ created: boolean }> {
+    const { created } = await ensureProjectSearchInstance(this.props.projectId);
+    return { created };
   }
 
   /**
