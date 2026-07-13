@@ -95,6 +95,12 @@ import {
 // each raw page is already capped at 1,000 events and 1 MiB.
 const MAX_CONFIGURED_EMPTY_READ_PAGES = 8;
 
+// A byte-capped raw page can contain only a small selected payload. Fold one
+// more page into the same push to remove a serial receiver round trip while
+// keeping raw parsing bounded to two 4 MiB pages per delivery attempt.
+const MAX_SELECTED_PUSH_READ_PAGES = 2;
+const MAX_PUSH_STORAGE_READ_CACHE_ENTRIES = MAX_SELECTED_PUSH_READ_PAGES;
+
 /** Serializable debug view of one live connection, for `runtimeState()`. */
 export type ConnectionRuntimeState = {
   subscriptionType: StreamSubscriptionType;
@@ -431,13 +437,13 @@ export class StreamSubscribers {
   #freshTailByteLength = 0;
   #freshTailProjection: ReadBatchProjection | undefined;
   #freshTailSizedProjection: ReadBatchProjection | undefined;
-  /** One immutable SQLite range shared by lanes aligned within this wake. */
-  #storageReadCache:
-    | { afterOffset: number; limit: number; entries: SizedStreamEvent[] }
-    | undefined;
-  /** Complete frame-bounded projections, split by optional byte metadata. */
-  #storageReadProjection: ReadBatchProjection | undefined;
-  #storageReadSizedProjection: ReadBatchProjection | undefined;
+  /** Immutable SQLite ranges partitioned by frame budget so mixed modes cannot evict each other. */
+  readonly #storageReadCachesByByteLimit = new Map<
+    number,
+    { afterOffset: number; limit: number; entries: SizedStreamEvent[] }[]
+  >();
+  /** Complete frame-bounded projections; sized entries also serve unsized readers. */
+  readonly #storageReadProjectionsByByteLimit = new Map<number, ReadBatchProjection[]>();
   #configuredSubscribers: ConfiguredSubscribers | undefined;
   #configuredSubscriberEntries: [string, ConfiguredSubscribers[string]][] = [];
 
@@ -452,9 +458,8 @@ export class StreamSubscribers {
    */
   wake(freshTail?: SizedStreamEvent[], freshTailByteLength?: number): void {
     this.#wakeGeneration += 1;
-    this.#storageReadCache = undefined;
-    this.#storageReadProjection = undefined;
-    this.#storageReadSizedProjection = undefined;
+    this.#storageReadCachesByByteLimit.clear();
+    this.#storageReadProjectionsByByteLimit.clear();
     if (freshTail !== undefined && freshTail.length > 0) {
       const retainedLastOffset = this.#freshTail.at(-1)?.event.offset;
       const incomingFirstOffset = freshTail[0]!.event.offset;
@@ -768,14 +773,18 @@ export class StreamSubscribers {
               ? PUSH_DELIVERY_BATCH_BYTE_LIMIT
               : DELIVERY_BATCH_BYTE_LIMIT,
           );
-          const { events: durable, lastOffset } = read;
+          let durable = read.events;
+          let lastOffset = read.lastOffset;
           if (lastOffset === undefined) return; // caught up
+          let scannedEventCount = read.scannedEventCount;
+          let durableByteLength = read.byteLength;
 
           // Ephemeral events never reach durable receivers — platform law,
           // enforced as the same skip-not-defer shape selectors use: the raw
           // read advances the cursor over their offsets, delivery drops them.
           let matched = durable;
           let matchedByteLength: number | undefined;
+          const conditionErrors: StreamEventInput[] = [];
           if (selector !== undefined) {
             const selected = this.#applySelector(
               subscriptionKey,
@@ -787,8 +796,65 @@ export class StreamSubscribers {
             );
             matched = selected.matched;
             matchedByteLength = selected.matchedByteLength;
-            for (const fact of selected.conditionErrors) this.#hooks.appendFact(fact);
+            conditionErrors.push(...selected.conditionErrors);
           }
+
+          if (
+            config.delivery.mode === "push" &&
+            selector !== undefined &&
+            !selector.matchesAll &&
+            matched.length > 0 &&
+            matchedByteLength !== undefined &&
+            matchedByteLength < PUSH_DELIVERY_BATCH_BYTE_LIMIT &&
+            !this.#batchLimits.has(subscriptionKey) &&
+            scannedEventCount < limit &&
+            lastOffset < state.maxOffset
+          ) {
+            for (let page = 1; page < MAX_SELECTED_PUSH_READ_PAGES; page += 1) {
+              const nextRead = this.#readBatch(
+                lastOffset,
+                limit - scannedEventCount,
+                true,
+                true,
+                PUSH_DELIVERY_BATCH_BYTE_LIMIT,
+              );
+              const nextLastOffset = nextRead.lastOffset;
+              if (nextLastOffset === undefined) break;
+              const selected = this.#applySelector(
+                subscriptionKey,
+                selector,
+                nextRead.events,
+                nextRead.eventByteLengths,
+                nextRead.projection,
+                nextRead.durableOnly,
+              );
+              const nextMatchedByteLength = selected.matchedByteLength ?? 0;
+              if (
+                selected.matched.length > 0 &&
+                matchedByteLength + nextMatchedByteLength > PUSH_DELIVERY_BATCH_BYTE_LIMIT
+              ) {
+                break;
+              }
+              durable = durable.concat(nextRead.events);
+              matched = matched.concat(selected.matched);
+              matchedByteLength += nextMatchedByteLength;
+              scannedEventCount += nextRead.scannedEventCount;
+              durableByteLength += nextRead.byteLength;
+              lastOffset = nextLastOffset;
+              conditionErrors.push(...selected.conditionErrors);
+              if (
+                scannedEventCount >= limit ||
+                lastOffset >= state.maxOffset ||
+                matchedByteLength >= PUSH_DELIVERY_BATCH_BYTE_LIMIT
+              ) {
+                break;
+              }
+            }
+          }
+
+          // Fact appends can synchronously commit and re-enter wake(). Defer
+          // them until every page is selected so they cannot enter this frame.
+          for (const fact of conditionErrors) this.#hooks.appendFact(fact);
 
           if (matched.length === 0) {
             // Skip-not-defer: nothing here for this subscriber, but the cursor
@@ -811,7 +877,7 @@ export class StreamSubscribers {
 
           const deliveredBytes =
             matched.length === durable.length
-              ? read.byteLength
+              ? durableByteLength
               : (matchedByteLength ?? missingFilteredByteLength());
           // Dispatch-time accounting: retries re-send real bytes, so failed
           // attempts count too (the wire carried them either way).
@@ -859,7 +925,7 @@ export class StreamSubscribers {
                 subscriptionKey,
                 config,
                 matched,
-                scannedEventCount: read.scannedEventCount,
+                scannedEventCount,
                 error,
               }) === "continue"
             ) {
@@ -926,9 +992,15 @@ export class StreamSubscribers {
       ? includeEventByteLengths
         ? this.#freshTailSizedProjection
         : (this.#freshTailProjection ?? this.#freshTailSizedProjection)
-      : includeEventByteLengths
-        ? this.#storageReadSizedProjection
-        : (this.#storageReadProjection ?? this.#storageReadSizedProjection);
+      : this.#storageReadProjectionsByByteLimit
+          .get(byteLimit)
+          ?.find(
+            (projection) =>
+              projection.afterOffset === afterOffset &&
+              projection.limit === limit &&
+              projection.byteLimit === byteLimit &&
+              (!includeEventByteLengths || projection.includesEventByteLengths),
+          );
     if (
       cached !== undefined &&
       cached.afterOffset === afterOffset &&
@@ -948,12 +1020,11 @@ export class StreamSubscribers {
     }
     const hintedLimit = this.#storageReadLimitHints.get(byteLimit);
     const storageLimit = Math.min(limit, hintedLimit ?? limit);
-    const cachedStorageRead = this.#storageReadCache;
-    const sourceFromStorageCache =
-      !useFreshTail &&
-      cachedStorageRead !== undefined &&
-      cachedStorageRead.afterOffset === afterOffset &&
-      cachedStorageRead.limit === storageLimit;
+    const storageReadCaches = this.#storageReadCachesByByteLimit.get(byteLimit);
+    const cachedStorageRead = storageReadCaches?.find(
+      (entry) => entry.afterOffset === afterOffset && entry.limit === storageLimit,
+    );
+    const sourceFromStorageCache = !useFreshTail && cachedStorageRead !== undefined;
     const source = useFreshTail
       ? this.#freshTail
       : sourceFromStorageCache
@@ -1014,15 +1085,24 @@ export class StreamSubscribers {
       // its fit+1 prefix (whose crossing row is itself frame-bounded).
       const boundedCrossing =
         exceededByteLimit && bytes <= byteLimit && crossingEntryByteLength <= byteLimit;
+      const caches = storageReadCaches ?? [];
       if (boundedCrossing) {
         const boundedLength = events.length + 1;
-        this.#storageReadCache = {
+        caches.unshift({
           afterOffset,
           limit: boundedLength,
           entries: source.length === boundedLength ? source : source.slice(0, boundedLength),
-        };
+        });
       } else if (!exceededByteLimit && bytes <= byteLimit) {
-        this.#storageReadCache = { afterOffset, limit: storageLimit, entries: source };
+        caches.unshift({ afterOffset, limit: storageLimit, entries: source });
+      }
+      if (caches.length > 0) {
+        this.#storageReadCachesByByteLimit.set(byteLimit, caches);
+      }
+      const maxEntries =
+        byteLimit === PUSH_DELIVERY_BATCH_BYTE_LIMIT ? MAX_PUSH_STORAGE_READ_CACHE_ENTRIES : 1;
+      if (caches.length > maxEntries) {
+        caches.pop();
       }
     }
     const durableEvents = durable ?? events;
@@ -1049,10 +1129,15 @@ export class StreamSubscribers {
       if (useFreshTail) {
         if (includeEventByteLengths) this.#freshTailSizedProjection = projection;
         else this.#freshTailProjection = projection;
-      } else if (includeEventByteLengths) {
-        this.#storageReadSizedProjection = projection;
       } else {
-        this.#storageReadProjection = projection;
+        const projections = this.#storageReadProjectionsByByteLimit.get(byteLimit) ?? [];
+        projections.unshift(projection);
+        this.#storageReadProjectionsByByteLimit.set(byteLimit, projections);
+        const maxEntries =
+          byteLimit === PUSH_DELIVERY_BATCH_BYTE_LIMIT ? MAX_PUSH_STORAGE_READ_CACHE_ENTRIES : 1;
+        if (projections.length > maxEntries) {
+          projections.pop();
+        }
       }
       return {
         events: (durableOnly ? durableEvents : events).slice(),

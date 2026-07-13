@@ -200,6 +200,7 @@ function makeHarness() {
   const webhooks: { url: string; delivery: StreamWebhookDelivery }[] = [];
   const storageReadLimits: number[] = [];
   const eventByteLengths = new Map<number, number>();
+  let onAppendFact = (_event: StreamEventInput): void => {};
 
   // Scripted behaviors, swappable per test. The dial wrapper below records
   // every invocation regardless of the scripted outcome.
@@ -277,6 +278,7 @@ function makeHarness() {
           const entry = configured[payload.subscriptionKey];
           if (entry !== undefined) entry.parkedAtOffset = payload.atOffset;
         }
+        onAppendFact(event);
       },
       recordEgress: (count, bytes, atMs) => {
         egress.push({ count, bytes });
@@ -323,6 +325,9 @@ function makeHarness() {
     storageReadLimits,
     setEventByteLength: (offset: number, byteLength: number) => {
       eventByteLengths.set(offset, byteLength);
+    },
+    onAppendFact: (callback: (event: StreamEventInput) => void) => {
+      onAppendFact = callback;
     },
     now: () => now,
     nowCalls: () => nowCalls,
@@ -783,6 +788,214 @@ describe("StreamSubscribers", () => {
       [4],
     ]);
     expect(h.storageReadLimits).toEqual([PUSH_DELIVERY_BATCH_LIMIT, 4]);
+  });
+
+  it("g3. sparse push selectors fill one delivery across byte-capped raw pages", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
+    h.append(
+      evt(1, "ignored"),
+      evt(2, "selected"),
+      evt(3, "ignored"),
+      evt(4, "selected"),
+      evt(5, "ignored"),
+      evt(6, "selected"),
+    );
+    for (const offset of [1, 3, 5]) {
+      h.setEventByteLength(offset, 3 * 1024 * 1024);
+    }
+    for (const offset of [2, 4, 6]) h.setEventByteLength(offset, 64);
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [2, 4],
+      [6],
+    ]);
+    expect(h.pushes.map((batch) => batch.deliveryId)).toEqual(["k:2-4", "k:6-6"]);
+    expect(h.egress).toEqual([
+      { count: 2, bytes: 128 },
+      { count: 1, bytes: 64 },
+    ]);
+    expect(h.row("k")?.ackedOffset).toBe(6);
+  });
+
+  it("g4. sparse push frame filling preserves the selected byte ceiling", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
+    h.append(evt(1, "selected"), evt(2, "ignored"), evt(3, "selected"));
+    h.setEventByteLength(1, 3 * 1024 * 1024);
+    h.setEventByteLength(2, 1024 * 1024);
+    h.setEventByteLength(3, 3 * 1024 * 1024);
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1], [3]]);
+    expect(h.egress.every(({ bytes }) => bytes <= PUSH_DELIVERY_BATCH_BYTE_LIMIT)).toBe(true);
+    expect(h.row("k")?.ackedOffset).toBe(3);
+  });
+
+  it("g5. poison bisection includes every raw row scanned while filling a sparse frame", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip", selector: { eventTypes: ["selected"] } }), 0);
+    h.append(evt(1, "ignored"), evt(2, "selected"), evt(3, "ignored"), evt(4, "selected"));
+    for (const offset of [1, 3]) h.setEventByteLength(offset, 3 * 1024 * 1024);
+    for (const offset of [2, 4]) h.setEventByteLength(offset, 64);
+    h.dialImpl.push = async () => {
+      throw new Error("reject selected events");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [2, 4],
+      [2],
+    ]);
+    expect(h.storageReadLimits).toEqual([PUSH_DELIVERY_BATCH_LIMIT, 3, 2]);
+  });
+
+  it("g6. aligned sparse frame filling shares both raw pages", async () => {
+    const h = makeHarness();
+    const subscriptionCount = 100;
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      h.configure(
+        pushPayload({
+          subscriptionKey: `k-${index}`,
+          selector: { eventTypes: ["selected"] },
+        }),
+        0,
+      );
+    }
+    h.append(evt(1, "ignored"), evt(2, "selected"), evt(3, "ignored"), evt(4, "selected"));
+    for (const offset of [1, 3]) h.setEventByteLength(offset, 3 * 1024 * 1024);
+    for (const offset of [2, 4]) h.setEventByteLength(offset, 64);
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(subscriptionCount);
+    expect(
+      h.pushes.every((batch) => batch.events.map((event) => event.offset).join() === "2,4"),
+    ).toBe(true);
+    expect(h.storageReads()).toBe(2);
+  });
+
+  it("g7. mixed push and webhook fan-out keeps each delivery budget's reads shared", async () => {
+    const h = makeHarness();
+    const subscriptionCount = 50;
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      h.configure(
+        pushPayload({
+          subscriptionKey: `push-${index}`,
+          selector: { eventTypes: ["selected"] },
+        }),
+        0,
+      );
+      h.configure(webhookPayload({ subscriptionKey: `webhook-${index}` }), 0);
+    }
+    h.append(
+      evt(1, "ignored"),
+      evt(2, "ignored"),
+      evt(3, "ignored"),
+      evt(4, "selected"),
+      evt(5, "ignored"),
+      evt(6, "ignored"),
+      evt(7, "ignored"),
+      evt(8, "selected"),
+    );
+    for (const offset of [1, 2, 3, 5, 6, 7]) {
+      h.setEventByteLength(offset, 900 * 1024);
+    }
+    for (const offset of [4, 8]) h.setEventByteLength(offset, 64);
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(subscriptionCount);
+    expect(h.webhooks).toHaveLength(subscriptionCount * 8);
+    expect(h.storageReads()).toBe(10);
+  });
+
+  it("g8. a matchless continuation page extends the successful delivery checkpoint", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
+    h.append(evt(1, "ignored"), evt(2, "selected"), evt(3, "ignored"));
+    h.setEventByteLength(1, 3 * 1024 * 1024);
+    h.setEventByteLength(2, 64);
+    h.setEventByteLength(3, 3 * 1024 * 1024);
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[2]]);
+    expect(h.pushes[0]!.deliveryId).toBe("k:2-3");
+    expect(h.row("k")?.ackedOffset).toBe(3);
+  });
+
+  it("g9. a failed aggregate leaves the cursor and retry frame unchanged", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
+    h.append(evt(1, "ignored"), evt(2, "selected"), evt(3, "ignored"), evt(4, "selected"));
+    for (const offset of [1, 3]) h.setEventByteLength(offset, 3 * 1024 * 1024);
+    for (const offset of [2, 4]) h.setEventByteLength(offset, 64);
+    h.dialImpl.push = async () => {
+      throw new Error("receiver unavailable");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.row("k")?.ackedOffset).toBe(0);
+
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [2, 4],
+      [2, 4],
+    ]);
+    expect(h.pushes.map((batch) => batch.deliveryId)).toEqual(["k:2-4", "k:2-4"]);
+    expect(h.row("k")?.ackedOffset).toBe(0);
+  });
+
+  it("g10. condition facts from both pages append only after frame assembly", async () => {
+    const h = makeHarness();
+    h.configure(
+      pushPayload({
+        selector: {
+          eventTypes: ["selected"],
+          condition: "$number(payload.message) = 42",
+        },
+      }),
+      0,
+    );
+    h.append(
+      evt(1, "selected", { message: "bad" }),
+      evt(2, "selected", { message: 42 }),
+      evt(3, "selected", { message: "also-bad" }),
+      evt(4, "selected", { message: 42 }),
+    );
+    for (const offset of [1, 3]) h.setEventByteLength(offset, 3 * 1024 * 1024);
+    for (const offset of [2, 4]) h.setEventByteLength(offset, 64);
+    h.onAppendFact((fact) => {
+      const committed = evt(h.log.length + 1, fact.type, fact.payload);
+      h.append(committed);
+      h.subscribers.wake([{ event: committed, byteLength: 64 }], 64);
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[2, 4]]);
+    expect(h.pushes[0]!.deliveryId).toBe("k:2-4");
+    expect(h.factsOfType(ERROR_OCCURRED).map((fact) => fact.idempotencyKey)).toEqual([
+      "selector-condition-failed:k:1",
+      "selector-condition-failed:k:3",
+    ]);
+    expect(h.row("k")?.ackedOffset).toBe(6);
   });
 
   it("h. skip mode parks when everything fails instead of mass-skipping the backlog", async () => {
