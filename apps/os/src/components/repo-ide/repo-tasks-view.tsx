@@ -619,27 +619,22 @@ function TaskEditorSheet({
   const taskPath = task?.path;
   useEffect(() => {
     if (taskPath === undefined) return;
-    const frame = requestAnimationFrame(() => {
+    const focusEditor = () => {
       const editor = editorRef.current;
       if (editor === null) return;
       editor.focus();
       editor.setSelectionRange(editor.value.length, editor.value.length);
-    });
-    return () => cancelAnimationFrame(frame);
+    };
+    const frame = requestAnimationFrame(focusEditor);
+    const timeout = window.setTimeout(focusEditor, 250);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
   }, [taskPath]);
 
   return (
-    <Sheet
-      open={task !== undefined}
-      onOpenChange={onOpenChange}
-      onOpenChangeComplete={(open) => {
-        if (!open) return;
-        const editor = editorRef.current;
-        if (editor === null) return;
-        editor.focus();
-        editor.setSelectionRange(editor.value.length, editor.value.length);
-      }}
-    >
+    <Sheet open={task !== undefined} onOpenChange={onOpenChange}>
       {task === undefined ? null : (
         <SheetContent
           initialFocus={editorRef}
