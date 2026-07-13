@@ -854,7 +854,11 @@ export interface SandboxCollection {
  */
 export interface Search {
   __describe(): Promise<Description>;
-  /** Retrieve scored chunks matching a query, scoped to this project. */
+  /**
+   * Retrieve scored chunks matching a query, scoped to this project. In local
+   * dev (no cloud AI Search instance) this falls back to a keyword scan over
+   * the local R2 corpus — see {@link isLocalDevSearch}.
+   */
   query(input: {
     query: string;
     /** Max chunks to return (1–50). */
@@ -866,7 +870,12 @@ export interface Search {
     /** Restrict to one corpus kind; omit to search everything. */
     source?: SearchSourceKind;
   }): Promise<SearchQueryResult>;
-  /** Retrieve matching chunks AND generate an answer from them (RAG). */
+  /**
+   * Retrieve matching chunks AND generate an answer from them (RAG). In local
+   * dev there is no cloud generation lane, so this returns the local
+   * keyword-search chunks with a short, clearly-labelled extractive response
+   * instead of an LLM answer.
+   */
   answer(input: {
     query: string;
     limit?: number;

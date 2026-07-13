@@ -199,6 +199,8 @@ import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
   indexEntireStream,
   indexStreamEventBatch,
+  isLocalDevSearch,
+  localKeywordSearch,
   mirrorFileToSearchIndex,
   projectSearchFilter,
   searchInstanceName,
@@ -1974,7 +1976,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         "schedule — expect minutes of lag behind writes). query({ query }) returns scored " +
         "chunks; answer({ query }) additionally generates an answer from them. Scope with " +
         'source: "streams" | "files" | "repos". indexStream({ path }), indexRepo({ path }), ' +
-        "and backfillFiles() force-reindex content written before this deployment started mirroring.",
+        "and backfillFiles() force-reindex content written before this deployment started mirroring. " +
+        "In local dev (no cloud AI Search instance) query/answer fall back to a keyword scan of the " +
+        "local R2 corpus — functional, but no semantic ranking or LLM generation.",
       children: {
         answer: "RAG answer: retrieve matching chunks and generate a response from them.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
@@ -2021,7 +2025,11 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     }
   }
 
-  /** Retrieve scored chunks matching a query, scoped to this project. */
+  /**
+   * Retrieve scored chunks matching a query, scoped to this project. In local
+   * dev (no cloud AI Search instance) this falls back to a keyword scan over
+   * the local R2 corpus — see {@link isLocalDevSearch}.
+   */
   query(input: {
     query: string;
     /** Max chunks to return (1–50). */
@@ -2033,6 +2041,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     /** Restrict to one corpus kind; omit to search everything. */
     source?: SearchSourceKind;
   }): Promise<SearchQueryResult> {
+    if (isLocalDevSearch()) {
+      return this.#localQuery(input);
+    }
     return this.#withInstanceHint(async () => {
       const response = await this.#instance().search(this.#searchRequest(input));
       return {
@@ -2046,7 +2057,12 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     });
   }
 
-  /** Retrieve matching chunks AND generate an answer from them (RAG). */
+  /**
+   * Retrieve matching chunks AND generate an answer from them (RAG). In local
+   * dev there is no cloud generation lane, so this returns the local
+   * keyword-search chunks with a short, clearly-labelled extractive response
+   * instead of an LLM answer.
+   */
   answer(input: {
     query: string;
     limit?: number;
@@ -2056,6 +2072,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult> {
+    if (isLocalDevSearch()) {
+      return this.#localAnswer(input);
+    }
     return this.#withInstanceHint(async () => {
       const response = await this.#instance().aiSearch({
         ...this.#searchRequest(input),
@@ -2071,6 +2090,39 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         })),
       };
     });
+  }
+
+  /** Local-dev retrieval: keyword scan over the miniflare R2 corpus. */
+  async #localQuery(input: {
+    query: string;
+    limit?: number;
+    source?: SearchSourceKind;
+  }): Promise<SearchQueryResult> {
+    const results = await localKeywordSearch({
+      projectId: this.props.projectId,
+      query: input.query,
+      source: input.source,
+      limit: input.limit,
+    });
+    return { searchQuery: input.query, results };
+  }
+
+  /** Local-dev `answer`: retrieval only, with an extractive stand-in response. */
+  async #localAnswer(input: {
+    query: string;
+    limit?: number;
+    source?: SearchSourceKind;
+  }): Promise<SearchAnswerResult> {
+    const { results } = await this.#localQuery(input);
+    const response =
+      results.length === 0
+        ? "[local dev keyword search: no matching content in the search corpus yet]"
+        : `[local dev keyword search — no LLM generation locally] Top matches for "${input.query}":\n\n` +
+          results
+            .slice(0, 3)
+            .map((chunk) => `• ${chunk.filename}\n${chunk.content}`)
+            .join("\n\n");
+    return { response, searchQuery: input.query, results };
   }
 
   /**
