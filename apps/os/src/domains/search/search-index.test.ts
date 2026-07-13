@@ -3,6 +3,7 @@ import type { StreamEvent } from "../streams/schemas.ts";
 import {
   fileRef,
   fileSearchKey,
+  narrowStreamRefToChunk,
   repoFileRef,
   searchMetadata,
   streamEventsRef,
@@ -212,5 +213,44 @@ describe("ref expressions (search hits lead back to domain objects)", () => {
     const huge = searchMetadata("files", "File /x", fileRef("/" + "x".repeat(600)));
     expect(huge.ref).toBeUndefined();
     expect(huge.kind).toBe("files");
+  });
+});
+
+describe("narrowStreamRefToChunk (hits name exact events, not the storage segment)", () => {
+  const storedRef = streamEventsRef({ path: "/agents/slack/T1", firstOffset: 1, lastOffset: 100 });
+
+  it("narrows to the events the chunk actually contains", () => {
+    // The chunk that comes back for "what is the secret" holds the one message.
+    const chunk = renderStreamSegmentDocument({
+      events: [
+        {
+          type: "events.iterate.com/test/user-message-received",
+          createdAt: "2026-07-13T00:00:00.000Z",
+          path: "/agents/slack/T1",
+          payload: { text: "the secret is bananas" },
+          offset: 42,
+        },
+      ],
+      segment: 0,
+      streamPath: "/agents/slack/T1",
+    })!;
+    expect(narrowStreamRefToChunk(storedRef, chunk)).toEqual([
+      "streams",
+      ["get", "/agents/slack/T1"],
+      ["getEvents", { afterOffset: 41, beforeOffset: 43 }],
+    ]);
+  });
+
+  it("spans exactly the chunk's events when it holds several", () => {
+    const text = "## a/b (offset 41)\ntext\n## a/b (offset 44)\nmore";
+    const narrowed = narrowStreamRefToChunk(storedRef, text);
+    expect(narrowed[2]).toEqual(["getEvents", { afterOffset: 40, beforeOffset: 45 }]);
+  });
+
+  it("falls back to the stored ref for header-less chunks and non-stream refs", () => {
+    expect(narrowStreamRefToChunk(storedRef, "mid-payload json with no headers")).toEqual(
+      storedRef,
+    );
+    expect(narrowStreamRefToChunk(fileRef("/x.pdf"), "## a (offset 9)")).toEqual(fileRef("/x.pdf"));
   });
 });

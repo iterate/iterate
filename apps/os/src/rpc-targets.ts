@@ -206,7 +206,11 @@ import {
   mirrorFileToSearchIndex,
   triggerProjectSearchSync,
 } from "./domains/search/search-index.ts";
-import { projectSearchInstanceId, searchFilters } from "./domains/search/search-corpus.ts";
+import {
+  narrowStreamRefToChunk,
+  projectSearchInstanceId,
+  searchFilters,
+} from "./domains/search/search-corpus.ts";
 import { ItxExpression } from "./itx/expression.ts";
 import type {
   SearchAnswerResult,
@@ -2054,6 +2058,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   /** Map one AI Search chunk to a provenance-carrying result. */
   #toChunk(chunk: AiSearchSearchResponse["chunks"][number]): SearchResultChunk {
     const metadata = chunk.item.metadata ?? {};
+    const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
     return {
       filename: chunk.item.key,
       score: chunk.score,
@@ -2061,9 +2066,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
       context: typeof metadata.context === "string" ? metadata.context : undefined,
       // Every corpus writer stores `ref` — the serialized itx expression back
-      // to the domain object. Parse defensively: a hit without one (foreign
-      // object, oversized ref) is still a valid result, just not a shortcut.
-      ref: typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined,
+      // to the domain object. Parse defensively (a hit without one is still a
+      // valid result), then narrow stream refs to the exact events the chunk
+      // contains — the stored ref covers the whole storage segment.
+      ref: storedRef === undefined ? undefined : narrowStreamRefToChunk(storedRef, chunk.text),
     };
   }
 

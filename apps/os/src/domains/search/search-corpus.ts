@@ -213,6 +213,35 @@ export function streamEventsRef(input: {
   ];
 }
 
+/**
+ * Narrow a stream hit's ref to the EXACT events present in the retrieved
+ * chunk. Segment documents batch 100 offsets for storage economics, but the
+ * renderer stamps every event with a `## <type> (offset N)` header, so the
+ * chunk that comes back names its own events — a hit on "the secret is
+ * bananas" refs THAT message (and its chunk-mates), never "somewhere within
+ * 100 events". Falls back to the stored document-level ref when a chunk
+ * carries no headers (a rare mid-payload split).
+ */
+export function narrowStreamRefToChunk(storedRef: ItxExpression, chunkText: string): ItxExpression {
+  // Shape check: ["streams", ["get", path], ...] — anything else passes through.
+  const getStep = storedRef[1];
+  if (
+    storedRef[0] !== "streams" ||
+    !Array.isArray(getStep) ||
+    getStep[0] !== "get" ||
+    typeof getStep[1] !== "string"
+  ) {
+    return storedRef;
+  }
+  const offsets = [...chunkText.matchAll(/^## \S+ \(offset (\d+)\)$/gm)].map((m) => Number(m[1]));
+  if (offsets.length === 0) return storedRef;
+  return streamEventsRef({
+    path: getStep[1],
+    firstOffset: Math.min(...offsets),
+    lastOffset: Math.max(...offsets),
+  });
+}
+
 /** The ref expression for an itx.files path — evaluates to the file handle. */
 export function fileRef(path: string): ItxExpression {
   return ["files", ["get", path]];
