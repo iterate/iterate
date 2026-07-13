@@ -28,9 +28,28 @@ type CreatedOperatorSession = {
 };
 
 /**
- * Create a short-lived browser session for one project, or an explicit
- * platform-wide operator session. The admin secret stays in this Node process;
- * the browser receives only the signed, expiring grant returned by OS.
+ * Create a short-lived operator browser session. Run this command from
+ * `apps/os`; the active Doppler config supplies the OS deployment URL and its
+ * matching admin secret. The secret stays in this Node process, while the
+ * browser receives only an origin-bound, signed, expiring grant.
+ *
+ * The normal mode is `--project <slug-or-prj-id>`. Use it to open a project an
+ * E2E test or agent created in preview, or to inspect one customer project in
+ * production without impersonating that customer. The resulting synthetic
+ * principal has project-admin access to that project only and cannot widen to
+ * sibling projects through customer organization membership.
+ *
+ * Examples:
+ * `doppler run --config preview_8 -- pnpm cli session create --project <id> --open`
+ * `doppler run --config prd -- pnpm cli session create --project <slug> --open`
+ *
+ * Omit `--open` to print the one-shot redemption URL for Playwright,
+ * agent-browser, or a browser on another machine. Use `pnpm --silent cli ...`
+ * when automation needs stdout to contain only that URL.
+ *
+ * `--admin` is a separate, explicit mode for the platform administration UI.
+ * It is deployment-wide and should not be used merely to inspect a project:
+ * `doppler run --config prd -- pnpm cli session create --admin --open`.
  */
 export async function create(options: CreateOptions = {}) {
   const isAdmin = options.admin === true;
