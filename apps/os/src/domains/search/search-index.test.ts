@@ -82,28 +82,25 @@ describe("index keys", () => {
 });
 
 describe("searchFilters", () => {
-  it("builds the documented lexicographic folder prefix range (Mongo-style)", () => {
-    const filters = searchFilters({ projectId: "prj_1" });
-    // The upper bound bumps the trailing "/" to "0" (Cloudflare's documented
-    // starts-with trick), so the range is exactly the prefix match.
-    expect(filters.folder).toEqual({ $gte: "prj_1/", $lt: "prj_10" });
-    // Every folder under the project sorts inside [gte, lt); other project
-    // ids — including ones the prefix is a prefix OF — sort outside it.
-    expect("prj_1/streams/a/" >= "prj_1/").toBe(true);
-    expect("prj_1/streams/a/" < "prj_10").toBe(true);
-    expect("prj_2/" < "prj_10").toBe(false);
-    expect("prj_10abc/" >= "prj_10").toBe(true);
+  it("uses only term operators on kind — range filters are keyword-lane-blind (live-proven)", () => {
+    // No scoping: no filters at all — tenancy is structural (per-project
+    // instance), never a query-time concern.
+    expect(searchFilters({ projectId: "prj_1" })).toEqual({});
   });
 
-  it("narrows to one source kind via the folder prefix", () => {
-    const filters = searchFilters({ projectId: "prj_1", source: "repos" });
-    expect(filters.folder?.$gte).toBe("prj_1/repos/");
+  it("pins one source kind with $eq (binds both hybrid lanes)", () => {
+    expect(searchFilters({ projectId: "prj_1", source: "repos" })).toEqual({
+      kind: { $eq: "repos" },
+    });
   });
 
-  it("excludes kinds with one $nin condition", () => {
-    const filters = searchFilters({ projectId: "prj_1", excludeKinds: ["streams", "files"] });
-    expect(filters.kind).toEqual({ $nin: ["streams", "files"] });
-    expect(searchFilters({ projectId: "prj_1" }).kind).toBeUndefined();
+  it("excludes kinds with one $nin condition; source wins over exclude", () => {
+    expect(searchFilters({ projectId: "prj_1", excludeKinds: ["streams", "files"] })).toEqual({
+      kind: { $nin: ["streams", "files"] },
+    });
+    expect(
+      searchFilters({ projectId: "prj_1", source: "decisions", excludeKinds: ["streams"] }),
+    ).toEqual({ kind: { $eq: "decisions" } });
   });
 });
 

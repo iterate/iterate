@@ -349,27 +349,30 @@ export function renderStreamSegmentDocument(input: {
 
 /**
  * The metadata filter for a query (the new AI Search binding's Mongo-style
- * grammar; keys are implicit AND). Each project has its OWN instance whose R2
- * source is glob-scoped to `{projectId}/**`, so tenancy is structural — the
- * `folder` prefix range here (upper bound = trailing `/` bumped to `0`,
- * Cloudflare's documented "starts-with" trick) is defense in depth plus the
- * `source` kind scoping, and `kind: {$nin}` is the query-time escape hatch
- * for noisy corpora.
+ * grammar; keys are implicit AND). Tenancy is STRUCTURAL — each project has
+ * its own instance whose R2 source is glob-scoped to `{projectId}/**` — so
+ * query filters only ever scope KINDS within one project's corpus.
+ *
+ * Everything filters on the `kind` metadata field with term operators
+ * ($eq/$nin), never lexicographic ranges: live-proven on engine v3
+ * (2026-07-13) that hybrid search applies range filters ($gte/$lt on
+ * `folder`) only to the VECTOR lane — the keyword lane ignores them, so
+ * filtered-out documents leak back through rrf fusion at ~0.5× score. Term
+ * filters on `kind` bind both lanes. `source` (one kind) wins over
+ * `excludeKinds` — a query pinned to one kind excludes the rest by
+ * construction.
  */
 export function searchFilters(input: {
   projectId: string;
   /** A platform corpus kind or a normalized custom kind (see normalizeSearchSource). */
   source?: string;
   excludeKinds?: readonly string[];
-}): Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> {
-  const prefix = projectSearchPrefix(input.projectId, input.source);
-  const filters: Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> = {
-    folder: { $gte: prefix, $lt: `${prefix.slice(0, -1)}0` },
-  };
+}): Record<string, { $eq?: string; $nin?: string[] }> {
+  if (input.source !== undefined) return { kind: { $eq: input.source } };
   if (input.excludeKinds !== undefined && input.excludeKinds.length > 0) {
-    filters.kind = { $nin: [...input.excludeKinds] };
+    return { kind: { $nin: [...input.excludeKinds] } };
   }
-  return filters;
+  return {};
 }
 
 /**
