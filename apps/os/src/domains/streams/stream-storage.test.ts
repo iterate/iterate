@@ -298,9 +298,10 @@ describe("StreamEventLog.getRange", () => {
 
     const inserted = log.insert([committed]);
 
-    expect(inserts.map(({ bindings }) => bindings.length)).toEqual([5]);
+    expect(inserts.map(({ bindings }) => bindings.length)).toEqual([3]);
     expect(inserts.every(({ statement }) => !statement.includes("), ("))).toBe(true);
-    expect(inserts[0]?.bindings[4]).toBeInstanceOf(ArrayBuffer);
+    expect(inserts[0]?.statement).toContain("(offset, type, event_json)");
+    expect(inserts[0]?.bindings[2]).toBeInstanceOf(ArrayBuffer);
     expect(db.prepare("select typeof(event_json) as type from events").get()).toEqual({
       type: "blob",
     });
@@ -325,6 +326,32 @@ describe("StreamEventLog.getRange", () => {
       },
     ]);
     expect(log.getByOffset(1)).toEqual(committed);
+  });
+
+  it("binds explicit metadata columns when a batch contains keyed or ephemeral events", () => {
+    const inserts: Array<{ statement: string; bindings: readonly SqlStorageValue[] }> = [];
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(
+      wrapSqlStorage(db, (statement, bindings) => {
+        if (statement.startsWith("insert into events ")) inserts.push({ statement, bindings });
+      }),
+      "/tests/stream",
+    );
+
+    log.insert([
+      { ...event(1, "keyed"), idempotencyKey: "key-1" },
+      { ...event(2, "ephemeral"), ephemeral: true },
+    ]);
+
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]?.statement).toContain(
+      "(offset, type, idempotency_key, ephemeral, event_json)",
+    );
+    expect(inserts[0]?.bindings).toHaveLength(10);
+    expect(inserts[0]?.bindings.slice(2, 4)).toEqual(["key-1", 0]);
+    expect(inserts[0]?.bindings.slice(7, 9)).toEqual([null, 1]);
+    expect(log.getByIdempotencyKey("key-1")?.offset).toBe(1);
+    expect(log.getByOffset(2)?.ephemeral).toBe(true);
   });
 
   it("rejects an event belonging to another stream", () => {
@@ -360,18 +387,18 @@ describe("StreamEventLog.getRange", () => {
     expect(transactions).toBe(0);
 
     log.insert(
-      Array.from({ length: 21 }, (_, index) => event(index + 4, "large-batch")),
+      Array.from({ length: 34 }, (_, index) => event(index + 4, "large-batch")),
       transactionRunner,
     );
     expect(transactions).toBe(1);
 
     log.insert(
-      [{ ...event(25, "large"), payload: { text: "x".repeat(600 * 1024) } }],
+      [{ ...event(38, "large"), payload: { text: "x".repeat(600 * 1024) } }],
       transactionRunner,
     );
     expect(transactions).toBe(2);
-    expect(offsets(read(log, { afterOffset: 0, limit: 25 }))).toEqual(
-      Array.from({ length: 25 }, (_, index) => index + 1),
+    expect(offsets(read(log, { afterOffset: 0, limit: 38 }))).toEqual(
+      Array.from({ length: 38 }, (_, index) => index + 1),
     );
   });
 
@@ -488,7 +515,7 @@ describe("StreamEventLog.getRange", () => {
     const chunkInserts = inserts.filter((insert) =>
       insert.sql.startsWith("insert into event_chunks "),
     );
-    expect(eventInserts).toHaveLength(5);
+    expect(eventInserts.map((insert) => insert.bindings)).toEqual([99, 99, 99, 3]);
     expect(chunkInserts).toHaveLength(0);
     expect(inserts.every((insert) => insert.bindings <= 100)).toBe(true);
     expect(offsets(read(log, { afterOffset: 0, limit: 100 }))).toEqual(

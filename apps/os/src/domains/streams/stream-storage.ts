@@ -39,8 +39,12 @@ const MAX_PENDING_INSERT_BYTES = EVENT_CHUNK_SIZE * 2;
 // arbitrarily large event next to the batch being written.
 const MAX_CARRIED_INSERT_BYTES = MAX_PENDING_INSERT_BYTES;
 const EVENT_INSERT_ROW_WIDTH = 5;
+const KEYLESS_DURABLE_EVENT_INSERT_ROW_WIDTH = 3;
 const CHUNK_INSERT_ROW_WIDTH = 3;
 const MAX_EVENT_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / EVENT_INSERT_ROW_WIDTH);
+const MAX_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT = Math.floor(
+  MAX_SQL_BINDINGS / KEYLESS_DURABLE_EVENT_INSERT_ROW_WIDTH,
+);
 const MAX_CHUNK_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / CHUNK_INSERT_ROW_WIDTH);
 const CURSOR_PROGRESS_ROW_WIDTH = 3;
 const MAX_CURSOR_PROGRESS_ROWS = Math.floor(MAX_SQL_BINDINGS / CURSOR_PROGRESS_ROW_WIDTH);
@@ -52,6 +56,13 @@ const EVENT_INSERT_STATEMENTS = createInsertStatements(
   "insert into events (offset, type, idempotency_key, ephemeral, event_json) values",
   EVENT_INSERT_ROW_WIDTH,
   MAX_EVENT_ROWS_PER_INSERT,
+);
+// Durable rows without an idempotency key inherit the schema's null/zero
+// defaults, fitting 33 rows under the same 100-binding ceiling instead of 20.
+const KEYLESS_DURABLE_EVENT_INSERT_STATEMENTS = createInsertStatements(
+  "insert into events (offset, type, event_json) values",
+  KEYLESS_DURABLE_EVENT_INSERT_ROW_WIDTH,
+  MAX_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT,
 );
 const CHUNK_INSERT_STATEMENTS = createInsertStatements(
   "insert into event_chunks (offset, chunk_index, chunk_bytes) values",
@@ -303,6 +314,17 @@ export class StreamEventLog {
     events: readonly StreamEvent[],
     transactionRunner?: TransactionRunner,
   ): SizedStreamEvent[] {
+    const firstEvent = events[0];
+    const useKeylessDurableInsert =
+      events.length === 1
+        ? firstEvent!.idempotencyKey === undefined && firstEvent!.ephemeral !== true
+        : events.every((event) => event.idempotencyKey === undefined && event.ephemeral !== true);
+    const eventInsertStatements = useKeylessDurableInsert
+      ? KEYLESS_DURABLE_EVENT_INSERT_STATEMENTS
+      : EVENT_INSERT_STATEMENTS;
+    const maxEventRowsPerInsert = useKeylessDurableInsert
+      ? MAX_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT
+      : MAX_EVENT_ROWS_PER_INSERT;
     let carriedSerialization: { eventIndex: number; bytes: Uint8Array } | undefined;
     let serializedPrefix: Uint8Array[] | undefined;
     if (events.length === 1) {
@@ -312,19 +334,24 @@ export class StreamEventLog {
         // This is the entire commit in one atomic SQLite statement. An
         // explicit transaction would add begin/commit work without widening
         // the failure boundary; multi-statement paths below still use it.
-        this.sql.exec(
-          EVENT_INSERT_STATEMENTS[1]!,
-          event.offset,
-          event.type,
-          event.idempotencyKey ?? null,
-          event.ephemeral === true ? 1 : 0,
-          exactArrayBuffer(bytes),
-        );
+        const eventJson = exactArrayBuffer(bytes);
+        if (useKeylessDurableInsert) {
+          this.sql.exec(eventInsertStatements[1]!, event.offset, event.type, eventJson);
+        } else {
+          this.sql.exec(
+            eventInsertStatements[1]!,
+            event.offset,
+            event.type,
+            event.idempotencyKey ?? null,
+            event.ephemeral === true ? 1 : 0,
+            eventJson,
+          );
+        }
         return [{ event, byteLength: this.#serializedEventByteLength(bytes.byteLength) }];
       }
       // Preserve the large-event path's single-serialization guarantee.
       carriedSerialization = { eventIndex: 0, bytes };
-    } else if (events.length <= MAX_EVENT_ROWS_PER_INSERT) {
+    } else if (events.length <= maxEventRowsPerInsert) {
       const candidate = [] as Uint8Array[];
       let candidateByteLength = 0;
       for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
@@ -348,19 +375,23 @@ export class StreamEventLog {
         for (let index = 0; index < events.length; index += 1) {
           const event = events[index]!;
           const bytes = candidate[index]!;
-          eventBindings.push(
-            event.offset,
-            event.type,
-            event.idempotencyKey ?? null,
-            event.ephemeral === true ? 1 : 0,
-            exactArrayBuffer(bytes),
-          );
+          if (useKeylessDurableInsert) {
+            eventBindings.push(event.offset, event.type, exactArrayBuffer(bytes));
+          } else {
+            eventBindings.push(
+              event.offset,
+              event.type,
+              event.idempotencyKey ?? null,
+              event.ephemeral === true ? 1 : 0,
+              exactArrayBuffer(bytes),
+            );
+          }
           sizedEvents.push({
             event,
             byteLength: this.#serializedEventByteLength(bytes.byteLength),
           });
         }
-        this.sql.exec(EVENT_INSERT_STATEMENTS[events.length]!, ...eventBindings);
+        this.sql.exec(eventInsertStatements[events.length]!, ...eventBindings);
         return sizedEvents;
       }
       if (candidate.length > 0) serializedPrefix = candidate;
@@ -377,7 +408,7 @@ export class StreamEventLog {
         let batchEnd = batchStart;
         let hasChunkedEvents = false;
 
-        while (batchEnd < events.length && serializedEvents.length < MAX_EVENT_ROWS_PER_INSERT) {
+        while (batchEnd < events.length && serializedEvents.length < maxEventRowsPerInsert) {
           const event = events[batchEnd]!;
           const carried =
             carriedSerialization?.eventIndex === batchEnd ? carriedSerialization : null;
@@ -394,13 +425,18 @@ export class StreamEventLog {
             break;
           }
           serializedEvents.push(bytes);
-          eventBindings.push(
-            event.offset,
-            event.type,
-            event.idempotencyKey ?? null,
-            event.ephemeral === true ? 1 : 0,
-            bytes.byteLength <= EVENT_CHUNK_SIZE ? exactArrayBuffer(bytes) : null,
-          );
+          const eventJson = bytes.byteLength <= EVENT_CHUNK_SIZE ? exactArrayBuffer(bytes) : null;
+          if (useKeylessDurableInsert) {
+            eventBindings.push(event.offset, event.type, eventJson);
+          } else {
+            eventBindings.push(
+              event.offset,
+              event.type,
+              event.idempotencyKey ?? null,
+              event.ephemeral === true ? 1 : 0,
+              eventJson,
+            );
+          }
           if (bytes.byteLength > EVENT_CHUNK_SIZE) hasChunkedEvents = true;
           sizedEvents.push({
             event,
@@ -410,7 +446,7 @@ export class StreamEventLog {
           batchEnd += 1;
         }
 
-        this.sql.exec(EVENT_INSERT_STATEMENTS[serializedEvents.length]!, ...eventBindings);
+        this.sql.exec(eventInsertStatements[serializedEvents.length]!, ...eventBindings);
 
         if (!hasChunkedEvents) {
           batchStart = batchEnd;
