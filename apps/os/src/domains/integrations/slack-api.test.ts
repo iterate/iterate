@@ -30,7 +30,7 @@ vi.mock("../projects/egress.ts", () => ({
   }),
 }));
 vi.mock("./integration-streams.ts", () => ({
-  latestStreamEventOfTypes: async () => ({
+  latestStreamEvent: async () => ({
     payload: { teamId: mocks.expectedTeamId },
     type: "events.iterate.com/slack/connected",
   }),

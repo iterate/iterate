@@ -21,7 +21,7 @@ import {
   sanitizeFileFilename,
 } from "../files/project-files.ts";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
-import { latestStreamEventOfTypes } from "./integration-streams.ts";
+import { latestStreamEvent } from "./integration-streams.ts";
 import {
   integrationConnectionStreamPath,
   readRecord,
@@ -348,7 +348,7 @@ async function connectedSlackTeamId(input: {
   connection: string;
   projectId: string;
 }): Promise<string | null> {
-  const event = await latestStreamEventOfTypes(
+  const event = await latestStreamEvent(
     input.projectId,
     integrationConnectionStreamPath("slack", input.connection),
     [SLACK_CONNECTED_EVENT_TYPE, SLACK_DISCONNECTED_EVENT_TYPE],
