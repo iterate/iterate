@@ -14,11 +14,8 @@
 
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import {
-  createStreamProcessorHost,
-  type AnyHostedProcessor,
-  type StreamProcessorHost,
-} from "./stream-processor-host.ts";
+import type { AnyHostedProcessor } from "./processor-host-capabilities.ts";
+import { createStreamProcessorHost, type StreamProcessorHost } from "./stream-processor-host.ts";
 
 /**
  * The empty `runtimeState()` answer every test MemoryStream serves. ONE home

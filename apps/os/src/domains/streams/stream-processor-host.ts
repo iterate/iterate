@@ -59,17 +59,17 @@ import { tracing } from "cloudflare:workers";
 import type { Stream } from "../../itx-api.generated.ts";
 import { LiveState } from "../../lib/live-state/engine.ts";
 import type {
-  GetProcessorRuntimeState,
   StreamEventBatch,
-  StreamPingInput,
-  StreamSubscriberPing,
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "./rpc-types.ts";
-import type { SubscriberMetrics } from "./subscriber-metrics.ts";
-import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
-import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
+import type { StreamProcessorSnapshot } from "./stream-processor.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
+import {
+  announceContract,
+  hostRuntimeCapabilities,
+  type AnyHostedProcessor,
+} from "./processor-host-capabilities.ts";
 
 /**
  * The journaled evidence a revival pass appends before pulling processors
@@ -94,46 +94,6 @@ type HostedProcessorDeps = {
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
-};
-
-// Structural: the host drives the processor's public surface only. (A
-// `StreamProcessor<any, ...>` bound would compare #-private fields nominally
-// and reject concrete subclasses over their state types.) Exported because the
-// browser mirror runtime (client-libraries/browser/stream-browser-store.ts)
-// hosts processors through the same surface.
-export type AnyHostedProcessor = {
-  contract: {
-    slug: string;
-    version: string;
-    description: string;
-    consumes: readonly string[];
-    emits: readonly string[];
-    events: Record<string, { description?: string; payloadSchema?: unknown }>;
-  };
-  ingest(args: {
-    events: readonly StreamEventBatch["events"][number][];
-    streamMaxOffset: number;
-  }): Promise<void>;
-  snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
-  getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
-  /** The current reduced state, synchronously — feeds live-state assembly without an async hop. */
-  currentState: unknown;
-  /** Whether `currentState` is the fold and not the schema default (see StreamProcessor.isLoaded). */
-  readonly isLoaded: boolean;
-  /**
-   * Self-measured consumption metrics — every hosted processor has one
-   * (StreamProcessor provides it; Pick keeps this structural). Hosts merge
-   * its report into the `getRuntimeState` answer and feed observed pings
-   * into it — see {@link hostRuntimeCapabilities}.
-   */
-  readonly subscriberMetrics: Pick<
-    SubscriberMetrics,
-    "report" | "notePingObserved" | "noteAppendCommitted" | "clearPendingAppends"
-  >;
-  /** Host confirmation that the journal is folded through head (the zero-batch catch-up case). */
-  markLoaded(): void;
-  /** Observe reduced-state changes in-process (a local function, not a retained RPC stub). */
-  observeStateChanges(observer: (snapshot: StreamProcessorSnapshot<unknown>) => void): () => void;
 };
 
 type HostedEntry = {
@@ -607,71 +567,5 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
         ...hostRuntimeCapabilities(entry.processor, { now }),
       };
     },
-  };
-}
-
-/**
- * The two live capabilities every processor host hands the stream alongside
- * its sink, built in ONE place so the server host and the browser runtime
- * cannot drift:
- *
- * - `getRuntimeState` merges the processor's self-measured metrics into the
- *   answer HERE — outside the processor — so a subclass that overrides
- *   `getRuntimeState` with its own `runtime` bag cannot accidentally drop
- *   them.
- * - `ping` answers the mutual ping (see rpc-types.ts) and — only when the
- *   host measures its transport RTT (`oneWayEstimateMs`, the browser's
- *   half-RTT) — feeds the observed timestamps into the processor's
- *   clock-offset estimate. A host that omits it shares the stream's clock
- *   domain, where the correct offset IS zero: recording the raw `t1 − t0`
- *   there would book transport delay as clock skew and bias delivery ages.
- *   A host with no RTT sample yet skips too — an uncorrected offset guess
- *   is worse than the documented raw-age estimate.
- */
-export function hostRuntimeCapabilities(
-  processor: AnyHostedProcessor,
-  opts: { now: () => number; oneWayEstimateMs?: () => number | undefined },
-): { getRuntimeState: GetProcessorRuntimeState; ping: StreamSubscriberPing } {
-  return {
-    getRuntimeState: async () => {
-      const state = await processor.getRuntimeState();
-      const metrics = processor.subscriberMetrics.report();
-      return { ...state, runtime: { ...state.runtime, metrics } };
-    },
-    ping: (input: StreamPingInput) => {
-      const t1 = opts.now();
-      const oneWayEstimateMs = opts.oneWayEstimateMs?.();
-      if (oneWayEstimateMs !== undefined) {
-        processor.subscriberMetrics.notePingObserved({ t0: input.t0, t1, oneWayEstimateMs });
-      }
-      return { t0: input.t0, t1, t2: opts.now() };
-    },
-  };
-}
-
-/**
- * Serializable contract announcement carried on a poke response (and from
- * there onto the subscription's connected presence fact). Shared by this
- * Durable Object host and the browser mirror runtime so both kinds of hosted
- * processor land identically on the stream's presence roster.
- */
-export function announceContract(contract: {
-  slug: string;
-  version: string;
-  description: string;
-  consumes: readonly string[];
-  emits: readonly string[];
-  events: Record<string, { description?: string; payloadSchema?: unknown }>;
-}): ProcessorContractAnnouncement {
-  return {
-    slug: contract.slug,
-    version: contract.version,
-    description: contract.description,
-    consumes: [...contract.consumes],
-    emits: [...contract.emits],
-    ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
-      type,
-      ...(definition.description === undefined ? {} : { description: definition.description }),
-    })),
   };
 }

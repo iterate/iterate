@@ -259,7 +259,7 @@ describe("operator sessions", () => {
       await verifyOperatorGrant({
         audience: ORIGIN,
         secret: ADMIN_SECRET,
-        token: `${issued.token.slice(0, -1)}x`,
+        token: issued.token.replace(/\.([^.])/, (_, first) => `.${first === "A" ? "B" : "A"}`),
       }),
     ).toBeNull();
   });
