@@ -136,11 +136,7 @@ export class GithubAgentProcessor extends StreamProcessor<GithubAgentProcessorCo
         const candidate =
           state.reviewCandidate?.offset === event.offset ? state.reviewCandidate : null;
         const automaticReview =
-          reviewNow ||
-          (candidate !== null && shouldAutomaticallyReview(state, candidate)) ||
-          (reviewWasEnabledByWebhook(body) &&
-            state.reviewCandidate !== null &&
-            shouldAutomaticallyReview(state, state.reviewCandidate));
+          reviewNow || (candidate !== null && shouldAutomaticallyReview(state, candidate));
 
         if (!mentioned && !automaticReview) return;
         const behaviour = automaticReview
@@ -242,12 +238,14 @@ function reduceGithubWebhook(input: {
   const recentActivity = [...input.state.recentActivity, activity].slice(-RECENT_ACTIVITY_LIMIT);
   const action = readString(body.action);
   const headSha = readString(readRecord(pullRequest?.head)?.sha);
+  const reviewWasEnabled = reviewWasEnabledByWebhook(body);
+  const candidateHeadSha = headSha ?? (reviewWasEnabled ? nextPullRequest?.headSha : undefined);
   const reviewCandidate =
-    action !== undefined && REVIEW_CANDIDATE_ACTIONS.has(action) && headSha !== undefined
+    ((action !== undefined && REVIEW_CANDIDATE_ACTIONS.has(action)) || reviewWasEnabled) &&
+    candidateHeadSha !== undefined
       ? {
-          action: action as "opened" | "ready_for_review" | "synchronize",
-          draft: typeof pullRequest?.draft === "boolean" ? pullRequest.draft : false,
-          headSha,
+          draft: nextPullRequest?.draft ?? false,
+          headSha: candidateHeadSha,
           offset: input.event.offset,
         }
       : input.state.reviewCandidate;
@@ -348,14 +346,16 @@ function githubAgentTurnInput(input: {
   }
 
   if (input.automaticReview) {
-    const headSha = state.reviewCandidate?.headSha ?? state.pullRequest?.headSha ?? "<unknown>";
+    const headSha = state.reviewCandidate?.headSha ?? state.pullRequest?.headSha;
+    const reviewHead = headSha === undefined ? "reviewHead" : JSON.stringify(headSha);
     tasks.push(
       [
-        `Review head ${headSha} against the project rules below.`,
-        "Before doing expensive work, fetch the current PR and compare its head SHA. If it is no longer this head, end without posting; the newer push has its own trigger.",
+        headSha === undefined
+          ? "Fetch the current PR first and use its current head SHA as `reviewHead`. This one-off request is not tied to an earlier head snapshot; do not abort merely because the bounded context had no head SHA."
+          : `Review head ${headSha} against the project rules below. Before doing expensive work, fetch the current PR and compare its head SHA. If it is no longer this head, end without posting; the newer push has its own trigger.`,
         `Read the complete diff with ${octokit}.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", { owner, repo, pull_number }) and fetch full files when patches are truncated.`,
-        `Post exactly one COMMENT review with ${octokit}.rest.pulls.createReview({ owner, repo, pull_number, commit_id: ${JSON.stringify(headSha)}, event: "COMMENT", body, comments }). Omit comments unless you have exact changed lines; otherwise put findings in the review body.`,
-        `Include the hidden marker <!-- iterate-review:${headSha} -->. First inspect ${octokit}.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", { owner, repo, pull_number }) and do not post if that marker already exists; tool retries must not duplicate a review.`,
+        `Post exactly one COMMENT review with ${octokit}.rest.pulls.createReview({ owner, repo, pull_number, commit_id: ${reviewHead}, event: "COMMENT", body, comments }). Omit comments unless you have exact changed lines; otherwise put findings in the review body.`,
+        `Include the hidden marker ${headSha === undefined ? "`<!-- iterate-review:${reviewHead} -->`" : `<!-- iterate-review:${headSha} -->`}. First inspect ${octokit}.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", { owner, repo, pull_number }) and do not post if that marker already exists; tool retries must not duplicate a review.`,
         "Rules:",
         state.configuration.automaticReview.instructions,
       ].join("\n"),

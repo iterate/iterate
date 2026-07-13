@@ -58,7 +58,6 @@ const PullRequestActivity = z.object({
 });
 
 const ReviewCandidate = z.object({
-  action: z.enum(["opened", "ready_for_review", "synchronize"]),
   draft: z.boolean(),
   headSha: z.string(),
   offset: z.number().int().positive(),

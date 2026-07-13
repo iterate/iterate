@@ -873,6 +873,55 @@ describe("GithubAgentProcessor (projection and trigger policy)", () => {
     expect((now.payload as { content: string }).content).toContain("Review head controlled");
   });
 
+  it("reviews an already-open PR when its first routed webhook enables the label", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = newGithubAgentProcessor(stream);
+    const cursors = new Map<object, number>();
+    const labeled = pullRequestBody({
+      action: "labeled",
+      headSha: "existing-head",
+      labels: ["iterate:review"],
+    });
+
+    await stream.append(ROUTE_EVENT, CONFIGURED(false), {
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhookPayload({ ...labeled, label: { name: "iterate:review" } }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const reviews = agentInputs(stream).filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
+    );
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]!.idempotencyKey).toContain("automatic-review:existing-head");
+    expect((reviews[0]!.payload as { content: string }).content).toContain(
+      "Review head existing-head",
+    );
+  });
+
+  it("fetches the live head for review-now when no PR snapshot exists yet", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = newGithubAgentProcessor(stream);
+    const cursors = new Map<object, number>();
+
+    await stream.append(ROUTE_EVENT, CONFIGURED(false), {
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhookPayload(
+        pullRequestBody({ comment: { body: "@iterate review now" } }),
+        "issue_comment",
+      ),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const turn = (agentInputs(stream).at(-1)!.payload as { content: string }).content;
+    expect(turn).toContain("use its current head SHA as `reviewHead`");
+    expect(turn).toContain("commit_id: reviewHead");
+    expect(turn).toContain("<!-- iterate-review:${reviewHead} -->");
+    expect(turn).not.toContain("<unknown>");
+  });
+
   it("projects CI silently and includes it in the next requested turn", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
