@@ -485,6 +485,8 @@ describe("GithubAgentProcessor (projection and trigger policy)", () => {
     );
     expect(latest).toContain(".octokit.rest.pulls.createReview");
     expect(latest).toContain("<!-- iterate-review:global:789:7:head:head-two -->");
+    expect(latest).toContain("no trusted GitHub App identity");
+    expect(latest).toContain("Do not create, recover, or update any check");
   });
 
   it("opens a visible head-bound check before waking the review agent", async () => {

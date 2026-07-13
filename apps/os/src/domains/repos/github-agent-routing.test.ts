@@ -121,7 +121,6 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     expect(routed.map((event) => event.type)).toEqual([
       "events.iterate.com/github-agent/route-configured",
       "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/stream/subscription-removed",
       "events.iterate.com/github/webhook-received",
     ]);
     expect(routed[0]!.payload).toEqual({
@@ -134,10 +133,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
       subscriptionKey: expect.stringMatching(/#github-agent$/),
       delivery: { processorSlug: "github-agent" },
     });
-    expect(routed[2]!.payload).toMatchObject({
-      subscriptionKey: expect.stringMatching(/#github-pr-agent$/),
-    });
-    expect(routed[3]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
+    expect(routed[2]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
   });
 
   it("routes each PR to its own stream and dedupes the route fact per PR", async () => {
@@ -166,14 +162,12 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     expect(network.eventsAt(WIDGETS_PR_7).map((event) => event.type)).toEqual([
       "events.iterate.com/github-agent/route-configured",
       "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/stream/subscription-removed",
       "events.iterate.com/github/webhook-received",
       "events.iterate.com/github/webhook-received",
     ]);
     expect(network.eventsAt(WIDGETS_PR_8).map((event) => event.type)).toEqual([
       "events.iterate.com/github-agent/route-configured",
       "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/stream/subscription-removed",
       "events.iterate.com/github/webhook-received",
     ]);
   });
@@ -259,7 +253,6 @@ describe("RepoProcessor PR webhook forward (router)", () => {
       ).toEqual([
         "events.iterate.com/github-agent/route-configured",
         "events.iterate.com/stream/subscription-configured",
-        "events.iterate.com/stream/subscription-removed",
         "events.iterate.com/github/webhook-received",
       ]);
     }

@@ -1,10 +1,7 @@
 import type { ProcessorEvent } from "../streams/processor-contracts.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
-import {
-  githubAgentSubscriptionConfiguredEvent,
-  obsoleteGithubAgentSubscriptionRemovedEvent,
-} from "./github-agent-mechanics.ts";
+import { githubAgentSubscriptionConfiguredEvent } from "./github-agent-mechanics.ts";
 import { githubAgentPath, pullRequestNumbersFromWebhookBody } from "./github-agent-utils.ts";
 
 /** The one event this processor acts on, narrowed from the contract by its type string. */
@@ -140,10 +137,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
                 },
               },
               githubAgentSubscriptionConfiguredEvent({
-                agentPath: streamPath,
-                projectId,
-              }),
-              obsoleteGithubAgentSubscriptionRemovedEvent({
                 agentPath: streamPath,
                 projectId,
               }),

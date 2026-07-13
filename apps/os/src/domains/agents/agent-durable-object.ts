@@ -38,7 +38,7 @@ const GITHUB_REVIEW_WATCHDOG_RETRY_MS = 60_000;
 const GITHUB_REVIEW_WATCHDOG_MAX_ATTEMPTS = 3;
 
 type PendingGithubReviewCheck = {
-  appSlug?: string;
+  appSlug: string;
   attempts: number;
   connection: string;
   expiresAt: number;
@@ -304,6 +304,26 @@ export class AgentDurableObject extends DurableObject<Env> {
           superseded,
         }) => {
           const appSlug = parseConfig(this.env).integrations.github?.appSlug;
+          if (appSlug === undefined) {
+            console.error(
+              "[github-agent] GitHub review check skipped: integrations.github.appSlug is not configured",
+              { path: this.#name.path, reviewKey },
+            );
+            return {
+              externalId,
+              ...(superseded === undefined ? {} : { superseded }),
+            };
+          }
+          // A review-now comment can precede a PR snapshot. Preserve the
+          // trusted App identity so the agent can fetch the live head and do
+          // the same exact lookup-before-create flow itself.
+          if (headSha === undefined) {
+            return {
+              appSlug,
+              externalId,
+              ...(superseded === undefined ? {} : { superseded }),
+            };
+          }
           let shell: GithubReviewCheckShell;
           try {
             const octokit = connectionOctokit({
@@ -321,8 +341,8 @@ export class AgentDurableObject extends DurableObject<Env> {
             });
             shell = {
               ...check,
+              appSlug,
               externalId,
-              ...(appSlug === undefined ? {} : { appSlug }),
               ...(superseded === undefined ? {} : { superseded }),
             };
           } catch (error) {
@@ -336,8 +356,8 @@ export class AgentDurableObject extends DurableObject<Env> {
               reviewKey,
             });
             shell = {
+              appSlug,
               externalId,
-              ...(appSlug === undefined ? {} : { appSlug }),
               ...(superseded === undefined ? {} : { superseded }),
             };
           }

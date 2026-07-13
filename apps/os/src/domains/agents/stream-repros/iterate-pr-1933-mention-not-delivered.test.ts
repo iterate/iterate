@@ -76,14 +76,6 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
         payload.delivery?.processorSlug === "github-agent"
       );
     });
-    const obsoleteRemoval = agent.events.find((event) => {
-      const subscriptionKey = (event.payload as { subscriptionKey?: unknown }).subscriptionKey;
-      return (
-        event.type === "events.iterate.com/stream/subscription-removed" &&
-        typeof subscriptionKey === "string" &&
-        subscriptionKey.endsWith("#github-pr-agent")
-      );
-    });
     const forwardedMention = agent.events.find((event) => {
       const payload = event.payload as { body?: { comment?: { id?: unknown } } };
       return (
@@ -96,7 +88,6 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
       "repo/pr-route:install-115079265:iterate/iterate:1933",
     );
     expect(currentSubscription?.payload?.subscriptionKey).toMatch(/#github-agent$/);
-    expect(obsoleteRemoval).toBeDefined();
     expect(currentRoute!.offset).toBeLessThan(currentSubscription!.offset);
     expect(currentSubscription!.offset).toBeLessThan(forwardedMention!.offset);
 

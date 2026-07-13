@@ -24,7 +24,7 @@ export function githubReviewCheckExternalId(input: ReviewCheckIdentity): string 
 }
 
 export async function ensureGithubReviewCheck(input: {
-  appSlug?: string;
+  appSlug: string;
   checks: ChecksApi;
   externalId: string;
   headSha: string;
@@ -60,7 +60,7 @@ export async function ensureGithubReviewCheck(input: {
 /** Terminal safety net for a model/tool loop that never completed its shell.
  * Normal useful output remains agent-owned; this only closes stale UI. */
 export async function expireGithubReviewCheck(input: {
-  appSlug?: string;
+  appSlug: string;
   checks: ChecksApi;
   externalId: string;
   headSha: string;
@@ -126,10 +126,7 @@ async function findReviewCheck(
       repo: input.repo,
     });
     const match = response.data.check_runs.find(
-      (candidate) =>
-        candidate.external_id === externalId &&
-        input.appSlug !== undefined &&
-        candidate.app?.slug === input.appSlug,
+      (candidate) => candidate.external_id === externalId && candidate.app?.slug === input.appSlug,
     );
     if (match !== undefined) return match;
     if (response.data.check_runs.length < 100) return undefined;
