@@ -54,6 +54,13 @@ export type StreamProcessorBaseDeps<Contract> = {
   /** Owning project, or null on a global (deployment-root) stream. */
   projectId: string | null;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
+  /**
+   * Reuse a loaded state by identity instead of parsing it through the schema.
+   * Only internal hosts whose storage key includes `contract.version` may set
+   * this: changing the state shape must change the version and miss the old
+   * checkpoint. Custom and browser stores retain runtime validation.
+   */
+  trustStoredState?: boolean;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
 // These arg shapes are intentionally not exported: subclass overrides annotate
@@ -267,6 +274,7 @@ export abstract class StreamProcessor<
   #state: ProcessorState<Contract> | undefined;
   #memorySnapshot: StreamProcessorSnapshot<ProcessorState<Contract>> | undefined;
   readonly #keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined;
+  readonly #trustStoredState: boolean;
   readonly #readState: () => MaybePromise<
     StreamProcessorSnapshot<ProcessorState<Contract>> | undefined
   >;
@@ -281,12 +289,22 @@ export abstract class StreamProcessor<
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps>) {
     super();
     // Base deps are destructured out; everything else is the subclass's Deps.
-    const { stream, path, projectId, keepAliveWhile, readState, writeState, ...deps } = args;
+    const {
+      stream,
+      path,
+      projectId,
+      keepAliveWhile,
+      readState,
+      writeState,
+      trustStoredState,
+      ...deps
+    } = args;
     this.stream = stream;
     this.path = path;
     this.projectId = projectId;
     this.deps = deps as Deps;
     this.#keepAliveWhile = keepAliveWhile;
+    this.#trustStoredState = trustStoredState ?? false;
     this.#readState = readState ?? (() => this.#memorySnapshot);
     this.#writeState =
       writeState ??
@@ -828,35 +846,41 @@ export abstract class StreamProcessor<
       await this.prepare();
       const snapshot = await this.#readState();
       if (snapshot === undefined) {
-        // Fresh processor, no checkpoint: nothing has been observed yet, so
-        // the schema default IS the fold of the (empty) delivered prefix.
         this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
-        this.#hasLoaded = true;
+        // Generic stores use absence for a fresh, empty processor. The
+        // production versioned store also uses it to invalidate an old
+        // contract version, so only its host can confirm whether the journal
+        // needs a refold (catch-up marks a zero-event journal loaded too).
+        this.#hasLoaded = !this.#trustStoredState;
         return;
       }
-      // The checkpoint is a disposable CACHE of the fold (see
-      // docs/domain-objects-and-stream-processors.md); the journal is the
-      // authority. A snapshot that fails the current schema — the normal
-      // aftermath of deploying a state-shape change — is a cache miss, not an
-      // error: discard it and refold from offset 0. Wedging here would turn
-      // every schema evolution into a permanently unresponsive processor
-      // (snapshot() and ingest() rethrowing forever), with the recovery
-      // machinery itself crash-looping on the parse.
-      const parsed = this.contract.stateSchema.safeParse(snapshot.state);
-      if (!parsed.success) {
-        console.error(
-          `stream processor "${this.contract.slug}" checkpoint no longer fits its state schema; discarding the cache and refolding from the journal`,
-          parsed.error,
-        );
-        this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
-        // Deliberately NOT loaded: the state is the schema default with a
-        // refold pending — exactly what the isLoaded gate keeps away from
-        // live-state subscribers. The refold flips it: ingest (a replayed
-        // delivery or the host's catch-up), or the host's zero-batch
-        // {@link markLoaded} confirmation.
-        return;
+      if (this.#trustStoredState) {
+        // The production DO host keys checkpoints by contract version and is
+        // their only writer. Same-version state already crossed this schema
+        // when the fold was produced, so parsing it again only deep-copies it.
+        this.#state = snapshot.state;
+      } else {
+        // The checkpoint is a disposable CACHE of the fold (see
+        // docs/domain-objects-and-stream-processors.md); the journal is the
+        // authority. A snapshot that fails the current schema — the normal
+        // aftermath of deploying a state-shape change — is a cache miss, not
+        // an error: discard it and refold from offset 0.
+        const parsed = this.contract.stateSchema.safeParse(snapshot.state);
+        if (!parsed.success) {
+          console.error(
+            `stream processor "${this.contract.slug}" checkpoint no longer fits its state schema; discarding the cache and refolding from the journal`,
+            parsed.error,
+          );
+          this.#state ??= this.contract.stateSchema.parse({}) as ProcessorState<Contract>;
+          // Deliberately NOT loaded: the state is the schema default with a
+          // refold pending — exactly what the isLoaded gate keeps away from
+          // live-state subscribers. The refold flips it: ingest (a replayed
+          // delivery or the host's catch-up), or the host's zero-batch
+          // {@link markLoaded} confirmation.
+          return;
+        }
+        this.#state = parsed.data as ProcessorState<Contract>;
       }
-      this.#state = parsed.data as ProcessorState<Contract>;
       this.#checkpointOffset = snapshot.offset;
       this.#hasLoaded = true;
     })().catch((error: unknown) => {

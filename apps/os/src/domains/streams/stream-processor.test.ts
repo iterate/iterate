@@ -554,6 +554,20 @@ describe("StreamProcessor provenance stamping", () => {
 });
 
 describe("StreamProcessor checkpoint loading", () => {
+  it("reuses trusted same-version state without a schema copy", async () => {
+    const state = { count: 3 };
+    const processor = new CounterProcessor({
+      stream: neverStream,
+      path: "/tests/counter",
+      projectId: null,
+      readState: () => ({ offset: 7, state }),
+      trustStoredState: true,
+    });
+
+    expect((await processor.snapshot()).state).toBe(state);
+    expect(processor.checkpointOffset).toBe(7);
+  });
+
   it("treats a snapshot that fails the current state schema as a cache miss and refolds", async () => {
     // The deploy-a-schema-change scenario: the stored checkpoint carries the
     // OLD state shape. Wedging on it would make snapshot()/ingest() reject

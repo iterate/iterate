@@ -127,12 +127,16 @@ how far your fold sits from the stream head) before starting anything.
 
 ## Refold safety: the whole journal will be replayed at you
 
-The checkpoint is a disposable CACHE of the fold. Whenever a stored snapshot
-stops parsing against the current state schema — the **normal aftermath of
-deploying a state-shape change** — the processor discards it and refolds from
-offset 0 (`StreamProcessor.#loadState`). That means `processEvent` runs again
-for every historical event, with **event-time state**: at each event, `state`
-is the fold up to that offset, not current truth.
+The checkpoint is a disposable CACHE of the fold. **Bump the processor
+contract version whenever its state schema changes.** The production Durable
+Object host keys internal snapshots by that version; a new version misses the
+old checkpoint and refolds from offset 0. Matching-version state is trusted
+because only that host writes it, avoiding a recursive schema parse and copy on
+every cold activation. Browser and custom checkpoint stores still parse loaded
+state and treat a schema mismatch as the same cache miss
+(`StreamProcessor.#loadState`). That means `processEvent` runs again for every
+historical event, with **event-time state**: at each event, `state` is the fold
+up to that offset, not current truth.
 
 Event-time state is therefore NOT a guard. `if (state.created) return` does
 not protect a refold: the `created` fact folds _later_ in the replay, so the

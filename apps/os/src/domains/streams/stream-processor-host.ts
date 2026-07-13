@@ -92,6 +92,7 @@ type HostedProcessorDeps = {
   projectId: string | null;
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
+  trustStoredState: true;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
 };
 
@@ -166,9 +167,9 @@ export type StreamProcessorHost<Live extends object = Record<string, unknown>> =
   loadAndRefreshLive(): Promise<void>;
   /**
    * Register a processor under its contract slug. The builder receives the
-   * host-provided base deps (checkpoint storage in DO KV keyed by the slug and
-   * the host's stable stream capability) and must construct the processor with
-   * them. Call during DO field initialization.
+   * host-provided base deps (checkpoint storage in DO KV keyed by slug and
+   * contract version, plus the host's stable stream capability) and must
+   * construct the processor with them. Call during DO field initialization.
    */
   add<P extends AnyHostedProcessor>(build: (deps: HostedProcessorDeps) => P): P;
   /**
@@ -239,7 +240,6 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
 ): StreamProcessorHost<Live> {
   const entries = new Map<string, HostedEntry>();
 
-  const snapshotKey = (name: string) => `stream-processor:${name}:snapshot`;
   const KEEPALIVE_RECORD_KEY = "stream-processor-host:keepalive";
 
   // ---------------------------------------------------------------------------
@@ -460,24 +460,23 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
     refreshLive: assembleLive,
     loadAndRefreshLive: loadThenAssemble,
     add(build) {
-      // The registry name is the processor's contract slug, which only exists
-      // after the builder runs; the checkpoint-storage deps close over it
-      // lazily (they are first called on the first snapshot/ingest, long after
-      // registration completes).
-      let registeredSlug: string | undefined;
-      const slug = () => {
-        if (registeredSlug === undefined) {
+      // Contract identity only exists after the builder runs; checkpoint deps
+      // close over the complete key lazily and first use it after registration.
+      let registeredSnapshotKey: string | undefined;
+      const checkpointKey = () => {
+        if (registeredSnapshotKey === undefined) {
           throw new Error("Stream processor checkpoint storage used before registration");
         }
-        return registeredSlug;
+        return registeredSnapshotKey;
       };
       const processor = build({
         stream: options.stream,
         path: options.path,
         projectId: options.projectId,
         readState: () =>
-          ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(slug())) ?? undefined,
-        writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(slug()), snapshot),
+          ctx.storage.kv.get<StreamProcessorSnapshot<any>>(checkpointKey()) ?? undefined,
+        writeState: (snapshot) => void ctx.storage.kv.put(checkpointKey(), snapshot),
+        trustStoredState: true,
         // Every registered side-effect closure (blockProcessorWhile and
         // runInBackground alike) rides through the keepalive: while any of it
         // is in flight, a durable alarm sits a few seconds ahead, and an
@@ -489,7 +488,8 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
           `Stream processor "${processor.contract.slug}" is already registered on this host`,
         );
       }
-      registeredSlug = processor.contract.slug;
+      const registeredSlug = processor.contract.slug;
+      registeredSnapshotKey = `stream-processor:${registeredSlug}:${processor.contract.version}:snapshot`;
       entries.set(registeredSlug, { processor, ingestChain: Promise.resolve() });
       // Any processor's reduced-state change reassembles the node's live state.
       processor.observeStateChanges(() => assembleLive());

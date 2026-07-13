@@ -38,6 +38,9 @@ function recorderContract(slug: string) {
 const RecorderA = recorderContract("recorder-a");
 const RecorderB = recorderContract("recorder-b");
 
+const snapshotKey = (contract: { slug: string; version: string }) =>
+  `stream-processor:${contract.slug}:${contract.version}:snapshot`;
+
 type RecorderContract = ReturnType<typeof recorderContract>;
 
 class Recorder extends StreamProcessor<RecorderContract> {
@@ -387,56 +390,50 @@ describe("live-state assembly", () => {
     await vi.waitFor(() => expect(h.host.live.getState()).toEqual({ pings: 1 }));
   });
 
-  it("a checkpoint DISCARDED at load (schema mismatch) refolds from the journal before publishing", async () => {
+  it("a prior-version checkpoint refolds from the journal before publishing", async () => {
     const h = createProcessorHostHarness({
       build: (host) => ({ a: host.add((deps) => new CountingRecorder(RecorderA, deps)) }),
     });
     await h.stream.append({ type: PING, payload: {} });
     await h.deliverAll();
     expect(h.host.live.getState()).toEqual({ pings: 1 });
+    expect(h.store.kv.get(snapshotKey(RecorderA))).toEqual({
+      offset: 1,
+      state: { pings: 1 },
+    });
 
     h.crash();
-    // The aftermath of a state-shape deploy: the stored checkpoint no longer
-    // fits the schema. Load discards it — and must NOT treat the resulting
-    // schema default as the fold (isLoaded stays false until the refold).
-    h.store.kv.set(`stream-processor:${RecorderA.slug}:snapshot`, {
+    // State-shape deploys bump the contract version. The old checkpoint key
+    // becomes a cache miss, and live state must wait for the journal refold.
+    h.store.kv.delete(snapshotKey(RecorderA));
+    h.store.kv.set(snapshotKey({ ...RecorderA, version: "previous" }), {
       offset: 1,
       state: { pings: "corrupt" },
     });
 
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      // The read lane (liveState.get/subscribe): load, catch the discarded
-      // processor up from the journal, then assemble — never the default.
-      await h.host.loadAndRefreshLive();
-      expect(h.host.live.getState()).toEqual({ pings: 1 });
-      expect(h.processors.a.isLoaded).toBe(true);
-    } finally {
-      consoleError.mockRestore();
-    }
+    // The read lane (liveState.get/subscribe): load the cache miss, catch the
+    // processor up from the journal, then assemble — never the default.
+    await h.host.loadAndRefreshLive();
+    expect(h.host.live.getState()).toEqual({ pings: 1 });
+    expect(h.processors.a.isLoaded).toBe(true);
   });
 
-  it("a discarded checkpoint over an EMPTY journal still becomes loaded (zero-batch catch-up)", async () => {
+  it("a prior-version checkpoint over an EMPTY journal becomes loaded", async () => {
     const h = createProcessorHostHarness({
       build: (host) => ({ a: host.add((deps) => new CountingRecorder(RecorderA, deps)) }),
     });
-    // Nothing ever appended; only a corrupt checkpoint exists. The catch-up
+    // Nothing ever appended; only an old checkpoint exists. The catch-up
     // delivers zero batches, so only the host's markLoaded confirmation can
     // flip the gate — without it, liveState would serve the {} seed forever.
-    h.store.kv.set(`stream-processor:${RecorderA.slug}:snapshot`, {
+    h.store.kv.set(snapshotKey({ ...RecorderA, version: "previous" }), {
       offset: 0,
       state: { pings: "corrupt" },
     });
 
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      await h.host.loadAndRefreshLive();
-      // The schema default IS the fold of an empty journal — published, not wedged.
-      expect(h.host.live.getState()).toEqual({ pings: 0 });
-      expect(h.processors.a.isLoaded).toBe(true);
-    } finally {
-      consoleError.mockRestore();
-    }
+    await h.host.loadAndRefreshLive();
+    // The schema default IS the fold of an empty journal — published, not wedged.
+    expect(h.host.live.getState()).toEqual({ pings: 0 });
+    expect(h.processors.a.isLoaded).toBe(true);
   });
 });
 

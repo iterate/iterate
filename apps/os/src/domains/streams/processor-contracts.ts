@@ -460,6 +460,11 @@ export function defineProcessorContract<
   const ProcessorDeps extends readonly unknown[] = readonly [],
 >(contract: {
   slug: string;
+  /**
+   * Checkpoint state-shape version. Bump this whenever `stateSchema` changes:
+   * the production host keys internal snapshots by it and trusts matching
+   * state without reparsing.
+   */
   version: string;
   description: string;
   stateSchema: DefaultableObjectStateSchema<StateSchema>;
