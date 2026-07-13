@@ -136,10 +136,9 @@ export interface Project {
   docs: Docs;
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
   files: Files;
-  /** The integrations collection: built-in integrations as dispatch branches
-   * on the dotted-call surface (`itx.integrations.slack["main-slack"].chat
-   * .postMessage(...)`), provided integrations through the capability table,
-   * management verbs, `list()`. */
+  /** The integrations collection: built-in connection families selected with
+   * `.get()` (first connected) or `.get("slug")` (exact), provided
+   * integrations through the capability table, management verbs, `list()`. */
   integrations: ProjectIntegrations;
   /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */
   mcp: McpClientCollection;
@@ -653,12 +652,12 @@ export interface Files {
 /**
  * The `itx.integrations` collection.
  *
- * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.
- * Built-in slugs (`slack`, `google`, `github`, `telegram`, `waitrose`)
+ * Connection-yielding calls are `{slug}.get(connection?).{...method}`.
+ * Public built-in families (`slack`, `gmail`, `github`, `telegram`, `waitrose`)
  * dispatch to deployment code —
- * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
- * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
- * the Gmail REST proxy, and `itx.integrations.github["jonas"].octokit` is a
+ * `itx.integrations.slack.get().chat.postMessage({...})` reaches any Slack Web
+ * API method (a real WebClient), `itx.integrations.gmail.get().request({...})`
+ * the Gmail REST proxy, and `itx.integrations.github.get().octokit` is a
  * real Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
  * `.request("GET /repos/{owner}/{repo}")` escape hatch, `.graphql(...)`;
  * there is NO generic `.api.request({ method, path })` shape, and the
@@ -666,32 +665,40 @@ export interface Files {
  * `...ForAuthenticatedUser` endpoints answer 403 — and every other slug
  * resolves through the itx capability table under the `integrations` prefix.
  * The exception is `itx.integrations.parallel`: a first-party API-key RPC
- * target, not a connection and not returned by `list()`. There is no implicit
- * connection: a built-in call without a connection name is an error.
+ * target, not a connection and not returned by `list()`. With no argument,
+ * `get()` selects the first currently connected account in `list()` order.
  *
- * Built-in integrations are plain imperative dispatch branches, not classes,
- * because their only callers are untyped dotted scripts; a project extends
- * the collection with ordinary `provideCapability({ path: ["integrations", ...] })`
- * — data, not deployment. `completeConnect` is called by the app worker's
+ * The SDK connection targets are thin dispatchers over the normal vendor
+ * clients. A project extends the collection with ordinary
+ * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
+ * `completeConnect` is called by the app worker's
  * OAuth callback routes (/api/integrations/<provider>/callback); its
  * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
  * verified itx-side.
  */
 export interface ProjectIntegrations {
+  /** Slack WebClient connections. `get()` selects the first connected workspace. */
+  slack: IntegrationFamily<SlackConnection>;
+  /** Connected Google accounts, exposed as Gmail. `get()` selects the first. */
+  gmail: IntegrationFamily<GmailConnection>;
+  /** GitHub App installations with the normal all-in-one Octokit package. */
+  github: IntegrationFamily<GithubConnection>;
+  /** Telegram Bot API connections. `get()` selects the first connected bot. */
+  telegram: IntegrationFamily<TelegramConnection>;
+  /** Waitrose account connections. */
+  waitrose: IntegrationFamily<WaitroseConnection>;
   /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
   parallel: OpenApiRpc;
   /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
    * Transformations. Like `parallel`, these ride the deployment's own
    * Cloudflare account — not a per-project connection. */
   cf: CloudflareIntegrations;
-  /** The dotted-call surface: built-in slugs dispatch here; unknown slugs
-   * resolve through the project capability table (the provided lane). Slack
-   * methods are unary — one body object:
-   * `itx.integrations.slack["<connection>"].chat.postMessage({ ... })`. */
+  /** Dynamic provided-integration dispatch. The only selector is
+   * `<slug>.get(connection?)`; built-in families are concrete typed getters. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  /** Every connection the project holds: `/integrations/<slug>/<connection>`
-   * journals plus provided mounts from the capability table (deduped by path;
-   * a mount over its own webhook journal is one entry). */
+  /** Every connection the project holds: integration journals,
+   * credential-defined Waitrose accounts, plus provided mounts from the
+   * capability table (deduped by path). */
   list(): Promise<IntegrationConnectionListEntry[]>;
   __describe(): Promise<
     { instructions: string; types: string; children: Record<string, string> } & {
@@ -704,12 +711,13 @@ export interface ProjectIntegrations {
         disconnect: string;
         getConnection: string;
         github: string;
-        google: string;
+        gmail: string;
         list: string;
         parallel: string;
         slack: string;
         startOAuthFlow: string;
         telegram: string;
+        waitrose: string;
       };
       parent: string;
     }
@@ -2135,18 +2143,90 @@ export type EmailAttachmentInput =
       contentType?: string;
     };
 
+/** A connection family on `itx.integrations`. `get()` selects the first
+ * connected account; pass a slug only when the exact account matters. The
+ * return value is an RPC capability (not a Promise), so calls pipeline in one
+ * expression: `itx.integrations.github.get().octokit.rest.repos.get(...)`. */
+export type IntegrationFamily<Connection> = {
+  get(connection?: string): Connection;
+};
+
+/** A Slack WebClient connection. Web API namespaces and methods are dynamic;
+ * `processor` is the connection's durable webhook router. */
+export type SlackConnection = Record<string, any> & {
+  processor: WakeableStreamProcessorRpc;
+};
+
+/** The Gmail REST API connection exposed by a connected Google account. */
+export type GmailConnection = {
+  request(input: GmailRequestInput): Promise<{
+    data: unknown;
+    headers: Record<string, string>;
+    status: number;
+    statusText: string;
+  }>;
+};
+
+/** The normal all-in-one Octokit package with Iterate supplying GitHub App
+ * installation auth and transport. Both REST and GraphQL are available. */
+export type GithubConnection = { octokit: import("octokit").Octokit };
+
+/** The commonly used Telegram Bot API surface. The runtime accepts every
+ * flat Bot API method with one params object; these members keep the generated
+ * script types useful without maintaining a second copy of Telegram's API. */
+export type TelegramConnection = {
+  getMe(params?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  processor: WakeableStreamProcessorRpc;
+  sendChatAction(params: Record<string, unknown>): Promise<Record<string, unknown>>;
+  sendMessage(
+    params: { chat_id: number | string; text: string } & Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  sendPhoto(params: Record<string, unknown>): Promise<Record<string, unknown>>;
+};
+
+/** Iterate's small, connection-scoped Waitrose client. */
+export type WaitroseConnection = {
+  addToTrolley(lineNumber: string, quantity?: number): Promise<Record<string, unknown>>;
+  removeFromTrolley(lineNumber: string): Promise<Record<string, unknown>>;
+  searchProducts(
+    searchTerm: string,
+    options?: { size?: number; sortBy?: string; start?: number },
+  ): Promise<{
+    products: Array<{ displayPrice?: string; lineNumber: string; name: string; size?: string }>;
+    totalMatches: number;
+  }>;
+  shoppingContext(): Promise<{
+    customerId: string;
+    customerOrderId: string;
+    customerOrderState: string;
+    defaultBranchId: string;
+  }>;
+  trolley(orderId?: string): Promise<Record<string, unknown>>;
+  updateTrolleyItems(
+    items: Array<{
+      canSubstitute?: boolean;
+      lineNumber: string;
+      noteToShopper?: string;
+      quantity: { amount: number; uom: string };
+    }>,
+    orderId?: string,
+  ): Promise<Record<string, unknown>>;
+};
+
 /**
  * One entry of `integrations.list()`. Discriminated on `source`: built-in
- * entries always name a concrete connection (they come from
- * `/integrations/<slug>/<connection>` journals); provided entries may be
+ * entries always name a concrete connection (normally from
+ * `/integrations/<slug>/<connection>` journals; credential-defined Waitrose
+ * connections come from their session-secret paths); provided entries may be
  * integration-level mounts (`connection: null` — one recipe serving every
  * connection name beneath it, path `/integrations/<slug>`).
  */
 export type IntegrationConnectionListEntry =
   | {
       connection: string;
-      integration: BuiltinIntegrationSlug;
-      /** The fully qualified connection path, e.g. `/integrations/slack/main-slack`. */
+      integration: PublicBuiltinIntegrationSlug;
+      /** The internal connection path, e.g. `/integrations/slack/main-slack`;
+       * Gmail entries retain their `/integrations/google/...` journal path. */
       path: string;
       source: "builtin";
     }
@@ -2821,6 +2901,22 @@ export type ProjectFileMetadata = {
   path: string;
   size: number;
 };
+
+/** Input to `itx.integrations.gmail.get("<connection>").request(...)` — a
+ * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the
+ * response is `{ data, headers, status, statusText }`. */
+export type GmailRequestInput = {
+  body?: unknown;
+  headers?: Record<string, string>;
+  method?: string;
+  path: string;
+  query?: Record<string, boolean | number | string | null | undefined>;
+};
+
+/** Public connection-family names. Google OAuth is presented as the Gmail
+ * capability it actually supplies, while management APIs retain the provider
+ * slug `google`. */
+export type PublicBuiltinIntegrationSlug = "github" | "gmail" | "slack" | "telegram" | "waitrose";
 
 /** One retrieved chunk: the matched index document plus its scored text and provenance. */
 export type SearchResultChunk = {

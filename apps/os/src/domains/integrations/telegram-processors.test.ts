@@ -977,7 +977,7 @@ describe("telegramAgentSystemPrompt", () => {
     );
     expect(prompt).toContain("your judgement");
     // Arbitrary Bot API methods remain available as immediate calls.
-    expect(prompt).toContain(`itx.integrations.telegram["${CONNECTION}"]`);
+    expect(prompt).toContain(`itx.integrations.telegram.get("${CONNECTION}")`);
     // v1 media limitation is stated so the agent doesn't hallucinate vision.
     expect(prompt).toContain("[photo]");
   });

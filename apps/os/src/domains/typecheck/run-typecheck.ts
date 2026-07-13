@@ -32,6 +32,15 @@ export interface CompileFn {
  * fast instead of stalling a check. */
 const TYPM_LIMITS = { maxPackages: 40, maxTotalBytes: 20 * 1024 * 1024 };
 
+/** Vendor types exposed by the platform surface itself. Pin their compatible
+ * range to the runtime package instead of resolving a potentially newer npm
+ * `latest` on every fresh typechecker isolate. User-provided type imports keep
+ * the ordinary latest behavior below. */
+const PLATFORM_PACKAGE_TYPE_RANGES: Record<string, string> = {
+  "@types/node": "^22.0.0",
+  octokit: "^5.0.5",
+};
+
 /** `.d.ts` maps per npm package, cached for the isolate's lifetime — package
  * type surfaces are immutable enough for an advisory checker. */
 const packageTypesCache = new Map<
@@ -56,7 +65,15 @@ export async function runTypecheck(input: {
 }): Promise<TypecheckResult> {
   const files = { ...input.files };
   const notes: string[] = [];
-  for (const packageName of npmPackagesMentioned(input.files)) {
+  const mentionedPackages = npmPackagesMentioned(input.files);
+  // The all-in-one Octokit type includes its OAuth-app surface, whose
+  // published declarations reference node:stream through @types/aws-lambda
+  // without declaring @types/node. Acquire that missing ambient dependency
+  // explicitly so the exact upstream Octokit type works in the ES-only
+  // sidecar compiler too.
+  const packages = new Set(mentionedPackages);
+  if (packages.has("octokit")) packages.add("@types/node");
+  for (const packageName of packages) {
     const cached = packageTypesCache.get(packageName);
     const acquisition =
       cached ??
@@ -64,7 +81,11 @@ export async function runTypecheck(input: {
         // "latest" is the npm dist-tag; a bare "*" range resolves to the
         // highest semver INCLUDING prereleases (typescript@* acquired the
         // 7.0 native preview), which is never what a reader means.
-        packageJson: JSON.stringify({ dependencies: { [packageName]: "latest" } }),
+        packageJson: JSON.stringify({
+          dependencies: {
+            [packageName]: PLATFORM_PACKAGE_TYPE_RANGES[packageName] ?? "latest",
+          },
+        }),
         fetch: input.fetchImpl,
         log: () => {},
         limits: TYPM_LIMITS,
