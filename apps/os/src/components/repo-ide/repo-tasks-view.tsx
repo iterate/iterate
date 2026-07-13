@@ -89,7 +89,6 @@ export function RepoTasksView({
   selectedPath,
   onPatchSearch,
   onSetWorking,
-  onSetStaged,
   onDelete,
 }: {
   projectId: string;
@@ -100,7 +99,6 @@ export function RepoTasksView({
   selectedPath: string | undefined;
   onPatchSearch: (patch: SearchPatch) => void;
   onSetWorking: (path: string, entry: FileEntry | undefined) => void;
-  onSetStaged: (path: string, entry: FileEntry | undefined) => void;
   onDelete: (path: string) => void;
 }) {
   const headTaskPaths = useMemo(() => headPaths.filter(isRepoTaskPath), [headPaths]);
@@ -161,7 +159,6 @@ export function RepoTasksView({
     selectTask(created.path);
   };
   const deleteTask = (task: RepoTask) => {
-    onSetStaged(task.path, undefined);
     onDelete(task.path);
     selectTask(undefined);
   };
@@ -169,9 +166,7 @@ export function RepoTasksView({
     if (targetPath === task.path) return true;
     if (effectivePaths.has(targetPath)) return false;
     const wasSelected = selectedPath === task.path;
-    onSetStaged(task.path, undefined);
     onDelete(task.path);
-    onSetStaged(targetPath, undefined);
     onSetWorking(targetPath, { type: "write", content });
     if (wasSelected) selectTask(targetPath);
     return true;

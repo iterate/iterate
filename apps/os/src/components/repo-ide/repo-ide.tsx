@@ -339,7 +339,6 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
             selectedPath={selectedPath}
             onPatchSearch={patchSearch}
             onSetWorking={(path, entry) => store.setWorking(path, entry)}
-            onSetStaged={(path, entry) => store.setStaged(path, entry)}
             onDelete={removePath}
           />
         </Suspense>
