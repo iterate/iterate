@@ -1,9 +1,7 @@
-// The browser mirror reconciles against two fields of the server's core
-// reduced state, which crosses `Stream.runtimeState()` as `unknown`. These
-// tests pin the parser: it must accept the real CoreProcessorState shape
-// (with all its extra server-internal fields), tolerate a not-yet-created
-// stream (no `createdAt`), and fail loudly on shapes it cannot reconcile
-// against.
+// The browser mirror reconciles against the two-field `Stream.head()` result.
+// Stream navigation also uses this parser as the base of its wider core-state
+// schema, so it must accept extra server-internal fields, tolerate a
+// not-yet-created stream, and fail loudly on shapes it cannot reconcile.
 
 import { describe, expect, it } from "vitest";
 import { CoreProcessorContract } from "../../core-processor-contract.ts";

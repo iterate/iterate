@@ -53,6 +53,12 @@ test("creates a project and uses project streams through v4 ITX", async () => {
     payload: { marker },
     type: STREAM_EVENT_TYPE,
   });
+  const head = await stream.head();
+  expect(Object.keys(head).sort()).toEqual(["createdAt", "maxOffset"]);
+  expect(head).toEqual({
+    createdAt: expect.any(String),
+    maxOffset: appended!.offset,
+  });
 
   const read = await stream.getEvents({ afterOffset: 0 });
   expect(read).toEqual(

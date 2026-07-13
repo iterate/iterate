@@ -242,6 +242,7 @@ import type {
   ProcessorRuntimeState,
   ProcessorSnapshot,
   StreamEventReadInput,
+  StreamHead,
   StreamProcessorRpc,
   StreamSubscriberPing,
   StreamSubscriberWakeRequest,
@@ -381,7 +382,7 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), head(), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
@@ -389,6 +390,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
           "Copy matching events onto another stream (optionally JSONata-transformed). Rides durable delivery, so ephemeral events are never cross-posted; a selector matching only ephemeral types delivers nothing.",
         getEvent: "One event by offset or idempotencyKey.",
         getEvents: "Read one bounded page of events.",
+        head: "Read the stream identity and highest committed offset.",
         kill: "Abort the current Durable Object incarnation; the next request boots it again.",
         readEvents: "Create a pager for bounded event pages.",
         removeCrossPost: "Remove a cross-post configured by crossPostTo.",
@@ -454,6 +456,11 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     return this.durableObjectStub.getEvents(args);
+  }
+
+  /** The stream identity and highest committed offset, without runtime diagnostics. */
+  head(): Promise<StreamHead> {
+    return this.durableObjectStub.head();
   }
 
   /**

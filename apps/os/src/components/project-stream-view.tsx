@@ -9,7 +9,6 @@ import type {
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { Stream } from "../itx-api.generated.ts";
-import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useStreamProcessorStore } from "~/domains/streams/client-libraries/browser/hooks/use-stream-processor-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
@@ -541,16 +540,13 @@ function useProcessorsPanelDebugState(args: {
   const getProcessorRuntimeState = useCallback(
     async (subscriptionKey: string) => {
       const stream = await resolvedStreamSource(streamPath);
-      const [runtimeState, streamRuntimeState] = await Promise.all([
+      const [runtimeState, streamHead] = await Promise.all([
         stream.getProcessorRuntimeState({ subscriptionKey }),
-        stream.runtimeState(),
+        stream.head(),
       ]);
       return {
         runtimeState,
-        // The itx Stream.runtimeState() types coreProcessorState as
-        // unknown; parse out the slice this panel needs.
-        streamMaxOffset: parseBrowserCoreProcessorState(streamRuntimeState.coreProcessorState)
-          .maxOffset,
+        streamMaxOffset: streamHead.maxOffset,
       };
     },
     [resolvedStreamSource, streamPath],

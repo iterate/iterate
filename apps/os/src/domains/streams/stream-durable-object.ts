@@ -14,6 +14,7 @@ import {
 import { CoreCheckpointSchedule } from "./stream-core-checkpoint.ts";
 import type {
   ProcessorRuntimeState,
+  StreamHead,
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "./rpc-types.ts";
@@ -1342,6 +1343,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
     return this.#subscribers.getProcessorRuntimeState(args.subscriptionKey);
+  }
+
+  head(): StreamHead {
+    const { createdAt, maxOffset } = this.#coreProcessorState;
+    return createdAt === undefined ? { maxOffset } : { createdAt, maxOffset };
   }
 
   runtimeState(): {

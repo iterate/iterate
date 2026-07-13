@@ -113,6 +113,10 @@ class MemoryStream implements Stream {
     return null;
   }
 
+  async head() {
+    return { createdAt: this.events[0]?.createdAt, maxOffset: this.events.at(-1)?.offset ?? 0 };
+  }
+
   async runtimeState() {
     return emptyStreamRuntimeState();
   }

@@ -51,8 +51,7 @@ export async function* streamEventsNewestFirst(
   path: string,
 ): AsyncGenerator<StreamEvent> {
   const stream = integrationStreamStub(projectId, path);
-  const { coreProcessorState } = await stream.runtimeState();
-  let beforeOffset = coreProcessorState.maxOffset + 1;
+  let beforeOffset = (await stream.head()).maxOffset + 1;
   while (beforeOffset > 1) {
     // getEvents bounds are exclusive on both ends, so consecutive windows
     // (afterOffset, beforeOffset) tile the offset space with no gap/overlap.

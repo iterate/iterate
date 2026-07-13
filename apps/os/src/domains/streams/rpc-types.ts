@@ -28,6 +28,14 @@ export type StreamEventReadInput = {
   includeEphemeral?: boolean;
 };
 
+/** The minimal stream identity + committed tail used for reconciliation and liveness. */
+export type StreamHead = {
+  /** Stable for the lifetime of the stream's storage; changes after erase/recreation. */
+  createdAt?: string;
+  /** Highest committed event offset, or 0 for a stream with no committed events. */
+  maxOffset: number;
+};
+
 /** One consistent read of a processor (what `snapshot()` returns): the folded
  * state pinned to the offset of the last event folded into it. */
 export type ProcessorSnapshot<State> = {

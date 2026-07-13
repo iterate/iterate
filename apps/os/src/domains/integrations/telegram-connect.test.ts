@@ -66,6 +66,9 @@ const network = vi.hoisted(() => {
               return event;
             });
           },
+          async head() {
+            return { maxOffset: stored.length };
+          },
           async runtimeState() {
             return { coreProcessorState: { maxOffset: stored.length } };
           },

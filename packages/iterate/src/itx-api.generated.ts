@@ -1064,6 +1064,8 @@ export interface Stream {
    * shows you the beginning, not the head.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
+  /** The stream identity and highest committed offset, without runtime diagnostics. */
+  head(): Promise<StreamHead>;
   /**
    * A stateful pager over a read window: repeated `next()` calls walk forward
    * through pages, `[]` means "caught up for now". Dispose it when finished
@@ -2445,6 +2447,14 @@ export type StreamEventReadInput = {
    * may evict them later — never derive durable state from one.
    */
   includeEphemeral?: boolean;
+};
+
+/** The minimal stream identity + committed tail used for reconciliation and liveness. */
+export type StreamHead = {
+  /** Stable for the lifetime of the stream's storage; changes after erase/recreation. */
+  createdAt?: string;
+  /** Highest committed event offset, or 0 for a stream with no committed events. */
+  maxOffset: number;
 };
 
 /** Serializable snapshot plus optional live runtime debug state for a processor. */

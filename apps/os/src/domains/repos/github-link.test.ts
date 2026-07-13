@@ -84,6 +84,9 @@ const network = vi.hoisted(() => {
             const before = args.beforeOffset ?? Number.MAX_SAFE_INTEGER;
             return stored.filter((event) => event.offset > after && event.offset < before);
           },
+          async head() {
+            return { maxOffset: stored.length };
+          },
           async runtimeState() {
             return { coreProcessorState: { maxOffset: stored.length } };
           },

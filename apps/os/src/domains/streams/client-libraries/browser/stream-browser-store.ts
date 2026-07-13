@@ -397,7 +397,7 @@ function createStreamRuntime(
   let pendingIngestEvents = 0;
   // The server incarnation this connection reconciled against, how far deliveries have
   // progressed, and a counter bumped every time a delivery ARRIVES (before the possibly-slow
-  // ingest). The liveness probe compares these against fresh runtimeState() so an
+  // ingest). The liveness probe compares these against fresh head() reads so an
   // orphaned-but-healthy-looking subscription (the stream was recreated underneath us, or the
   // server moved ahead while deliveries silently stopped) reconnects instead of wedging.
   // Arrival — not ingest completion — is the aliveness signal: a large replay batch can take
@@ -672,8 +672,7 @@ function createStreamRuntime(
     });
     const checkpoint = await processor.snapshot();
     const localMaxOffset = checkpoint.offset;
-    const { coreProcessorState: rawCoreProcessorState } = await rpc.runtimeState();
-    const coreProcessorState = parseBrowserCoreProcessorState(rawCoreProcessorState);
+    const coreProcessorState = parseBrowserCoreProcessorState(await rpc.head());
     const reconciled = { serverMaxOffset: coreProcessorState.maxOffset };
     const serverIncarnation = coreProcessorState.createdAt;
     reconciledIncarnation = serverIncarnation;
@@ -931,9 +930,9 @@ function createStreamRuntime(
               // applied. A stream that kept appending meanwhile could be far
               // ahead of it — re-read the live head before trusting the exit,
               // or the subscription would dump the accumulated gap after all.
-              const { coreProcessorState: rawHeadState } = await withDeadline(
+              const rawHeadState = await withDeadline(
                 "catch-up head re-read",
-                election.connection.runtimeState(),
+                election.connection.head(),
               );
               if (!ownsRuntime()) return undefined;
               serverHead = parseBrowserCoreProcessorState(rawHeadState).maxOffset;
@@ -1192,7 +1191,7 @@ function createStreamRuntime(
       // probe racing a cold DO would tear down that healthy attempt.
       void (async () => {
         try {
-          await readCoreStateTwoStrike(connection, "follower resume check");
+          await readHeadTwoStrike(connection, "follower resume check");
         } catch (error) {
           if (disposed || stream !== connection) return;
           console.warn(
@@ -1206,17 +1205,17 @@ function createStreamRuntime(
   }
 
   // Read the connection's core state under the probe deadline, retrying ONE
-  // timeout — the shared two-strike standard: a single slow runtimeState()
+  // timeout — the shared two-strike standard: a single slow head()
   // answer is a cold or busy DO, not a dead socket, and a timeout verdict
   // ultimately evicts the transport the whole page shares. Returns undefined
   // when ownership was lost mid-check; a second timeout (or any rejection)
   // throws into the caller's reconnect lane.
-  async function readCoreStateTwoStrike(connection: BrowserStreamClient, step: string) {
+  async function readHeadTwoStrike(connection: BrowserStreamClient, step: string) {
     const read = () =>
       raceWithTimeout(
-        // Every runtime-state read doubles as a transport-RTT sample (timed
+        // Every head read doubles as a transport-RTT sample (timed
         // guards against recording abandoned late resolutions itself).
-        timed(Promise.resolve(connection.runtimeState())),
+        timed(Promise.resolve(connection.head())),
         LIVENESS_PROBE_TIMEOUT_MS,
         `${step} timed out`,
       );
@@ -1228,7 +1227,7 @@ function createStreamRuntime(
       if (disposed || stream !== connection) return undefined;
       result = await read();
     }
-    return parseBrowserCoreProcessorState(result.coreProcessorState);
+    return parseBrowserCoreProcessorState(result);
   }
   const onVisibilityChange = () => {
     if (document.visibilityState === "visible") onResume();
@@ -1270,7 +1269,7 @@ function createStreamRuntime(
   function startLivenessProbe(connection: NonNullable<typeof stream>) {
     stopLivenessProbe();
     probePreviousArrivals = deliveryArrivals;
-    // A single SLOW runtimeState() answer (cold DO, busy worker) is not a dead
+    // A single SLOW head() answer (cold DO, busy worker) is not a dead
     // socket — only consecutive timeouts are, and two of them mean the
     // transport itself is swallowing calls (half-open socket): evict it so the
     // reconnect dials fresh. A REJECTION is definitive on the first hit — the
@@ -1283,11 +1282,11 @@ function createStreamRuntime(
         try {
           let rawCoreProcessorState: unknown;
           try {
-            ({ coreProcessorState: rawCoreProcessorState } = await raceWithTimeout(
-              timed(Promise.resolve(connection.runtimeState())),
+            rawCoreProcessorState = await raceWithTimeout(
+              timed(Promise.resolve(connection.head())),
               LIVENESS_PROBE_TIMEOUT_MS,
               "liveness probe timed out",
-            ));
+            );
           } catch (error) {
             // Strike bookkeeping only; the second strike rethrows the
             // StepTimeoutError and reconnectAfterError below evicts on it.
@@ -1367,7 +1366,7 @@ function createStreamRuntime(
     nudgeInFlight = true;
     try {
       const arrivalsBefore = deliveryArrivals;
-      const coreProcessorState = await readCoreStateTwoStrike(connection, "delivery nudge");
+      const coreProcessorState = await readHeadTwoStrike(connection, "delivery nudge");
       if (coreProcessorState === undefined) return; // ownership lost mid-check
       if (disposed || stream !== connection) return;
       if (

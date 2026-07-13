@@ -1,10 +1,9 @@
-// The slice of the server stream's core reduced state the browser mirror needs.
+// The stream-head shape the browser mirror needs.
 //
-// `Stream.runtimeState()` deliberately types `coreProcessorState` as `unknown`
-// (the full `CoreProcessorState` is server internals), so the browser runtime
-// parses out just the two fields it reconciles against. Extra fields pass
-// through unvalidated; a missing/mis-typed field fails loudly instead of
-// silently reconciling against garbage.
+// `Stream.head()` returns exactly these two fields. The runtime still parses
+// the wire value so a malformed peer response fails loudly instead of silently
+// reconciling against garbage. Extra fields pass through unvalidated because
+// stream-navigation also applies this schema to the wider core debug state.
 //
 // INCARNATION IDENTITY: `createdAt` is the commit timestamp of the stream's
 // `events.iterate.com/stream/created` event (always offset 1). It is stable for

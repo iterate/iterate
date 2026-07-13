@@ -37,6 +37,9 @@ vi.mock("../../env.ts", () => ({
         const events = streamNetwork.streams.get(name) ?? [];
         streamNetwork.streams.set(name, events);
         return {
+          async head() {
+            return { maxOffset: events.length };
+          },
           async runtimeState() {
             return { coreProcessorState: { maxOffset: events.length } };
           },

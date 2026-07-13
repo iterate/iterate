@@ -116,7 +116,7 @@ function AdminGate() {
     // render the admin pages or the unlock form.
     void itx.streams
       .get("/")
-      .runtimeState()
+      .head()
       .then(
         () => {
           if (!cancelled) setAuthority({ status: "ready" });
