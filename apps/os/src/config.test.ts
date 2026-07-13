@@ -54,6 +54,7 @@ describe("AppConfig", () => {
       env: {
         APP_CONFIG: JSON.stringify(baseConfig),
         APP_CONFIG_INTEGRATIONS__SLACK: JSON.stringify({
+          botToken: "slack-bot-token",
           oauthClientId: "slack-client-id",
           oauthClientSecret: "slack-client-secret",
           webhookSigningSecret: "slack-signing-secret",
@@ -72,6 +73,7 @@ describe("AppConfig", () => {
     expect(parsed.integrations.slack?.webhookSigningSecret.exposeSecret()).toEqual(
       "slack-signing-secret",
     );
+    expect(parsed.integrations.slack?.botToken?.exposeSecret()).toEqual("slack-bot-token");
     expect(parsed.integrations.google?.oauthClientId).toEqual("google-client-id");
     expect(parsed.integrations.google?.oauthClientSecret.exposeSecret()).toEqual(
       "google-client-secret",
