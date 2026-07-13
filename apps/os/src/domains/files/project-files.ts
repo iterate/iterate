@@ -28,6 +28,7 @@
 
 import { itxEnv } from "../../env.ts";
 import type { AppConfig } from "../../config.ts";
+import { mirrorFileToSearchIndex, removeFileFromSearchIndex } from "../search/search-index.ts";
 import { readProjectById } from "../../project-directory.ts";
 import { normalizeProjectHostnameBase } from "../../lib/project-host-routing.ts";
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
@@ -80,6 +81,13 @@ export async function putProjectFile(input: {
   await itxEnv.FILES_BUCKET.put(fileObjectKey(input), bytes, {
     httpMetadata: { contentType },
   });
+  // SPIKE: mirror into the itx.search corpus (best-effort; never fails the put).
+  await mirrorFileToSearchIndex({
+    bytes,
+    contentType,
+    path: normalizePath(input.path),
+    projectId: input.projectId,
+  });
   return { contentType, path: normalizePath(input.path), size: bytes.byteLength };
 }
 
@@ -99,6 +107,36 @@ export async function readProjectFile(input: {
 
 export async function deleteProjectFile(input: { path: string; projectId: string }): Promise<void> {
   await itxEnv.FILES_BUCKET.delete(fileObjectKey(input));
+  await removeFileFromSearchIndex({
+    path: normalizePath(input.path),
+    projectId: input.projectId,
+  });
+}
+
+/**
+ * Every stored file of one project, as `{ path, bytes, contentType }` — the
+ * enumeration the search-corpus backfill consumes. Lives here so the
+ * `{projectId}.iterate{path}` key convention stays owned by this domain (via
+ * the codec) instead of being re-derived by callers.
+ */
+export async function* listProjectFiles(
+  projectId: string,
+): AsyncGenerator<{ bytes: Uint8Array; contentType: string; path: string }> {
+  const prefix = DurableObjectNameCodec.stringify({ path: "/", projectId });
+  let cursor: string | undefined;
+  do {
+    const page = await itxEnv.FILES_BUCKET.list({ cursor, limit: 500, prefix });
+    for (const entry of page.objects) {
+      const object = await itxEnv.FILES_BUCKET.get(entry.key);
+      if (object === null) continue;
+      yield {
+        bytes: new Uint8Array(await object.arrayBuffer()),
+        contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+        path: DurableObjectNameCodec.parse(entry.key).path,
+      };
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor !== undefined);
 }
 
 /**
