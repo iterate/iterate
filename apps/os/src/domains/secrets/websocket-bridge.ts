@@ -42,9 +42,15 @@ export async function computeSecWebSocketAccept(secWebSocketKey: string): Promis
 }
 
 /**
- * Ensure a WebSocket Response carries the HTTP handshake headers Node/undici
- * clients require when the Response is presented as raw HTTP (container
- * intercept MITM). Preserves `response.webSocket`.
+ * Ensure a WebSocket Response carries a correct `Sec-WebSocket-Accept` for the
+ * *caller's* key when presented as raw HTTP (container intercept MITM).
+ *
+ * Important: do NOT also set `Upgrade`/`Connection` here. Container intercept
+ * injects those hop-by-hop headers when converting `Response.webSocket` into
+ * an HTTP 101 for the in-container client. If we set them too, the client sees
+ * duplicates (`Upgrade: websocket, websocket`) and undici rejects the
+ * handshake with "Server did not set Upgrade header to websocket" (exact
+ * equality check against the joined value).
  */
 export async function withWebSocketHandshakeHeaders(
   request: Request,
@@ -54,17 +60,16 @@ export async function withWebSocketHandshakeHeaders(
   if (socket == null) return response;
 
   const headers = new Headers(response.headers);
-  headers.set("Upgrade", "websocket");
-  // Connection can be a list; clients require an exact case-insensitive "Upgrade".
-  headers.set("Connection", "Upgrade");
+  // Strip any hop-by-hop / wrong-key handshake fields; intercept re-adds
+  // Upgrade/Connection once, and we stamp Accept for the container client key.
+  headers.delete("upgrade");
+  headers.delete("connection");
+  headers.delete("sec-websocket-accept");
 
   const key = request.headers.get("Sec-WebSocket-Key");
   if (key !== null && key.length > 0) {
     headers.set("Sec-WebSocket-Accept", await computeSecWebSocketAccept(key));
   }
-
-  // Upstream Accept was for the Project DO ↔ origin key, not the container client.
-  // (We just overwrote it when key was present.)
 
   // Echo a single requested subprotocol if the source did not already choose.
   const requested = request.headers.get("Sec-WebSocket-Protocol");
@@ -163,10 +168,11 @@ export async function bridgeUpstreamWebSocket(
   headers.delete("content-location");
   headers.delete("refresh");
   // Upstream Accept is for a different Sec-WebSocket-Key — never forward it.
+  // Strip Upgrade/Connection: container intercept re-injects them once;
+  // keeping both sources produces undici-breaking duplicates.
   headers.delete("sec-websocket-accept");
-
-  headers.set("Upgrade", "websocket");
-  headers.set("Connection", "Upgrade");
+  headers.delete("upgrade");
+  headers.delete("connection");
 
   const clientKey = options?.clientRequest?.headers.get("Sec-WebSocket-Key");
   if (clientKey !== null && clientKey !== undefined && clientKey.length > 0) {

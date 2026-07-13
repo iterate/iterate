@@ -182,32 +182,15 @@ async function resolveEgressProjectId(
 function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<Env> {
   return async (request, env, ctx) => {
     const projectId = await resolveEgressProjectId(env, ctx.containerId, instanceType);
-    const isWs = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
     const response = await projectStub(env.PROJECT, projectId).fetch(request);
-    // Container intercept presents this Response as raw HTTP to in-container
-    // clients (Node undici WebSocket / `ws`). workerd injects handshake
-    // headers for browser upgrades; intercept does not — stamp them here.
-    if (isWs && response.webSocket != null) {
+    // Container intercept converts Response.webSocket → HTTP 101 for the
+    // in-container client. Stamp Sec-WebSocket-Accept for the caller's key
+    // (and strip hop-by-hop Upgrade/Connection so intercept injects them once).
+    if (
+      request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
+      response.webSocket != null
+    ) {
       return withWebSocketHandshakeHeaders(request, response);
-    }
-    // Temporary diagnostic: if the upgrade request did not yield a live socket,
-    // surface why on a response header (visible via ws unexpected-response).
-    if (isWs) {
-      const headers = new Headers(response.headers);
-      headers.set(
-        "x-iterate-ws-outbound",
-        JSON.stringify({
-          status: response.status,
-          hasWebSocket: response.webSocket != null,
-          upgradeIn: request.headers.get("Upgrade"),
-          url: request.url.slice(0, 120),
-        }),
-      );
-      return new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers,
-      });
     }
     return response;
   };

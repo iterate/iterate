@@ -78,7 +78,7 @@ describe("computeSecWebSocketAccept", () => {
 });
 
 describe("withWebSocketHandshakeHeaders", () => {
-  test("stamps Upgrade/Connection/Accept for the caller's Sec-WebSocket-Key", async () => {
+  test("stamps Accept for the caller key and strips hop-by-hop duplicates", async () => {
     if (typeof WebSocketPair === "undefined") return;
 
     const pair = new WebSocketPair();
@@ -89,7 +89,8 @@ describe("withWebSocketHandshakeHeaders", () => {
         "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
       },
     });
-    // Upstream Accept is for a different key — must be replaced.
+    // Upstream Accept is for a different key — must be replaced; Upgrade/
+    // Connection are stripped so intercept can inject them once.
     const source = new Response(null, {
       status: 101,
       headers: {
@@ -102,8 +103,8 @@ describe("withWebSocketHandshakeHeaders", () => {
 
     const stamped = await withWebSocketHandshakeHeaders(request, source);
     expect(stamped.status).toBe(101);
-    expect(stamped.headers.get("Upgrade")?.toLowerCase()).toBe("websocket");
-    expect(stamped.headers.get("Connection")?.toLowerCase()).toBe("upgrade");
+    expect(stamped.headers.get("Upgrade")).toBeNull();
+    expect(stamped.headers.get("Connection")).toBeNull();
     expect(stamped.headers.get("Sec-WebSocket-Accept")).toBe("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     expect(stamped.webSocket).toBeTruthy();
   });
@@ -133,8 +134,9 @@ describe("bridgeUpstreamWebSocket", () => {
     });
     expect(response.status).toBe(101);
     expect(response.webSocket).toBeTruthy();
-    expect(response.headers.get("Upgrade")?.toLowerCase()).toBe("websocket");
-    expect(response.headers.get("Connection")?.toLowerCase()).toBe("upgrade");
+    // Hop-by-hop Upgrade/Connection left for intercept to inject once.
+    expect(response.headers.get("Upgrade")).toBeNull();
+    expect(response.headers.get("Connection")).toBeNull();
     expect(response.headers.get("Sec-WebSocket-Accept")).toBe("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     expect(
       (upstream as unknown as { accept: ReturnType<typeof vi.fn> }).accept,
