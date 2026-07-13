@@ -110,7 +110,7 @@ describe("arming", () => {
     const keepalive = h.build();
     keepalive.track(deferred().promise);
     h.clock.now = T0 + 1_000;
-    await keepalive.onAlarm();
+    await expect(keepalive.onAlarm()).resolves.toBe("not_due");
     expect(h.state.reviveCalls).toEqual([]);
     expect(h.state.armCalls).toEqual([T0 + KEEPALIVE_ALARM_LEAD_MS]);
   });
@@ -118,7 +118,7 @@ describe("arming", () => {
   test("a fire while disarmed is a no-op", async () => {
     const h = makeHarness();
     const keepalive = h.build();
-    await keepalive.onAlarm();
+    await expect(keepalive.onAlarm()).resolves.toBe("not_due");
     expect(h.state.reviveCalls).toEqual([]);
     expect(h.state.armCalls).toEqual([]);
   });
@@ -133,14 +133,14 @@ describe("the happy lifecycle", () => {
 
     // Fire mid-work: still busy, alarm pushed ahead of the work again.
     h.clock.now = T0 + KEEPALIVE_ALARM_LEAD_MS;
-    await keepalive.onAlarm();
+    await expect(keepalive.onAlarm()).resolves.toBe("busy_rearmed");
     expect(keepalive.armedAtMs).toBe(h.clock.now + KEEPALIVE_ALARM_LEAD_MS);
     expect(h.state.reviveCalls).toEqual([]);
 
     // Work settles cleanly; the confirmation fire finds quiet and disarms.
     await settle({ resolve: work.resolve });
     h.clock.now = keepalive.armedAtMs!;
-    await keepalive.onAlarm();
+    await expect(keepalive.onAlarm()).resolves.toBe("clean_disarmed");
     expect(keepalive.armedAtMs).toBeNull();
     expect(h.state.reviveCalls).toEqual([]);
     expect(h.state.record).toMatchObject({ revivals: 0, armedAtMs: null });
@@ -155,7 +155,7 @@ describe("revival", () => {
 
     const revived = h.build(); // fresh instance over the same record
     h.clock.now = T0 + KEEPALIVE_ALARM_LEAD_MS;
-    await revived.onAlarm();
+    await expect(revived.onAlarm()).resolves.toBe("revived");
 
     expect(h.state.reviveCalls).toHaveLength(1);
     expect(h.state.reviveCalls[0]).toMatchObject({ revivals: 1, version: "v1" });
@@ -218,7 +218,7 @@ describe("the crash-loop breaker", () => {
       const fresh = h.build();
       h.clock.now = fresh.armedAtMs!;
       const before = h.clock.now;
-      await fresh.onAlarm();
+      await expect(fresh.onAlarm()).resolves.toBe("revival_failed");
       expect(fresh.armedAtMs).toBe(before + backoff);
     }
     expect(h.state.record?.revivals).toBe(6);
@@ -324,5 +324,28 @@ describe("the crash-loop breaker", () => {
       expect(keepalive.armedAtMs).toBe(h.clock.now + expectedBackoff);
     }
     expect(h.state.record?.revivals).toBe(3);
+  });
+
+  test("a hung revival pass backs off instead of starting a second pass", async () => {
+    const gate = deferred();
+    const h = makeHarness({ revive: () => gate.promise });
+    h.build().track(deferred().promise);
+
+    const fresh = h.build();
+    h.clock.now = fresh.armedAtMs!;
+    const revival = fresh.onAlarm();
+    await Promise.resolve();
+
+    for (let i = 0; i < MAX_CONSECUTIVE_BUSY_REFIRES - 1; i += 1) {
+      h.clock.now = fresh.armedAtMs!;
+      await expect(fresh.onAlarm()).resolves.toBe("busy_rearmed");
+    }
+    h.clock.now = fresh.armedAtMs!;
+    await expect(fresh.onAlarm()).resolves.toBe("revival_hung_backoff");
+    expect(fresh.armedAtMs).toBe(h.clock.now + REVIVAL_BACKOFF_PLATEAU_MS);
+    expect(h.state.reviveCalls).toHaveLength(1);
+
+    gate.resolve();
+    await expect(revival).resolves.toBe("revived");
   });
 });

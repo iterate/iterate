@@ -849,41 +849,59 @@ export interface SandboxCollection {
  * Project search over everything the project accumulates — stream events,
  * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
  * instance over the deployment's search-index bucket
- * (domains/search/search-index.ts). One instance per deployment; every query
- * is scoped to this project via a folder-prefix metadata filter, so no query
- * can see another project's data. Experimental — the surface may change.
+ * (domains/search/search-index.ts). One instance PER PROJECT, created on
+ * first use, indexing only the project's `{projectId}/**` slice of the
+ * bucket — tenancy is structural, not a query filter. Experimental — the
+ * surface may change.
  */
 export interface Search {
   __describe(): Promise<Description>;
   /**
+   * Ensure this project's search instance exists (idempotent). The project
+   * CREATE SAGA calls this so search is warm from birth; the lazy
+   * query/index paths remain as self-heal for projects that predate it.
+   * Safe to call any time — an existing instance is a no-op.
+   */
+  ensureIndex(): Promise<{ created: boolean }>;
+  /**
    * Retrieve scored chunks matching a query, scoped to this project's own
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
-   * so callers can contextualize a hit. On a project whose instance doesn't
-   * exist yet, the instance is created and docs results return with a
-   * `warning` — retry once its first index completes.
+   * so callers can contextualize a hit. Docs hits carry synthetic 0.5-band
+   * scores (keyword overlap, not comparable to corpus relevance) and are
+   * exempt from `limit`/`scoreThreshold` (separately capped at 5). On a
+   * project whose instance doesn't exist yet, the instance is created and
+   * docs results return with a `warning` — retry once its first index
+   * completes (typically a minute or two). A warning-free empty result means
+   * the index is live and simply has no match.
    */
   query(input: {
     q: string;
-    /** Max chunks to return (1–50). */
+    /** Max chunks to return (1–50, default 20 — tuned for recall). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1). */
+    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
     scoreThreshold?: number;
-    /** Restrict to ONE corpus kind (skips docs federation). */
-    source?: SearchSourceKind;
-    /** Exclude kinds from results, e.g. `["streams"]` to skip the event log. */
-    exclude?: readonly SearchKind[];
+    /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
+    source?: string;
+    /** Exclude kinds from results (platform or custom), e.g. `["streams"]` to skip the event log. */
+    exclude?: readonly string[];
   }): Promise<SearchQueryResult>;
-  /** Retrieve matching chunks AND generate an answer from them (RAG). */
+  /**
+   * Retrieve matching chunks AND generate an answer from them (RAG).
+   * Unlike `query`, a project whose instance doesn't exist yet THROWS here
+   * (message: "first index is in progress — retry shortly") — there is no
+   * warning-carrying degraded result. `searchQuery` echoes the input
+   * verbatim (never the rewritten query).
+   */
   answer(input: {
     q: string;
     limit?: number;
     rewriteQuery?: boolean;
     scoreThreshold?: number;
-    source?: SearchSourceKind;
-    exclude?: readonly SearchKind[];
+    source?: string;
+    exclude?: readonly string[];
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult>;
@@ -893,7 +911,9 @@ export interface Search {
    * via `query`. `ref` is REQUIRED: the itx expression leading back to the
    * domain object the text derives from (e.g. `["streams", ["get", path],
    * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
-   * a search result is never a dead end. `id` is stable within
+   * a search result is never a dead end. `kind` is `[a-z0-9._-]+` and must
+   * not be a reserved platform kind (streams/files/repos/docs); the
+   * serialized ref caps at 500 chars. `id` is stable within
    * `(project, kind)`, so re-indexing the same id overwrites. `context` is
    * the one-line descriptor shown on every hit and to the answer model.
    */
@@ -911,7 +931,9 @@ export interface Search {
    * domain-object way to make a specific moment findable. The event's content
    * is read from the stream (never trusted from the caller) and indexed as a
    * focused document together with the optional `note`; the search hit's
-   * `ref` leads back to `{ path, offset }`. Idempotent per (stream, offset).
+   * `ref` is the itx expression fetching exactly that event. Note the param
+   * is `stream` (unlike indexStream's `path`). Idempotent per
+   * (stream, offset).
    */
   indexEvent(input: {
     /** The stream path, e.g. "/agents/slack/T1/thr-9". */
@@ -931,7 +953,9 @@ export interface Search {
    * Snapshot one repo's default-branch HEAD into the search corpus now — the
    * backfill verb for repos that predate search indexing (writes index
    * incrementally from here on). Runs on the repo Durable Object's own write
-   * chain so its stale-key sweep can't race post-commit indexing.
+   * chain so its stale-key sweep can't race post-commit indexing. Returned
+   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key
+   * files, and a nonzero `failed` means re-run.
    */
   indexRepo(input: { path: string }): Promise<{
     deleted: number;
@@ -946,6 +970,20 @@ export interface Search {
    * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
    */
   backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;
+  /**
+   * Reindex the WHOLE project — every known stream, every repo's default
+   * branch, every itx.files object — in one crude, idempotent sweep. This is
+   * the backfill/repair verb for projects that predate search indexing (new
+   * writes index automatically); every unit overwrites its own corpus keys,
+   * so re-running (including after a timeout on a huge project) only fills
+   * gaps. Streams run a few at a time; expect minutes on large projects. Per
+   * unit failures are counted, never thrown — nonzero `failed` means re-run.
+   */
+  reindex(): Promise<{
+    streams: { indexed: number; segments: number; failed: number };
+    repos: { indexed: number; failed: number };
+    files: { mirrored: number; skipped: number; failed: number };
+  }>;
 }
 
 /**
@@ -2304,19 +2342,6 @@ export type CloudflareSandbox = object & {
   /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
 };
-
-/**
- * The kinds a project's search corpus is folded from. The first segment of
- * every R2 key IS the kind (`{projectId}/{kind}/…`), so it doubles as the
- * folder-scoping token AND the `kind` metadata attribute. `docs` is federated
- * from the in-worker itx.docs index rather than stored in R2 (see
- * Search.query), but shares the vocabulary so callers filter
- * uniformly.
- */
-export type SearchSourceKind = "streams" | "files" | "repos";
-
-/** Every filterable kind: the stored corpus kinds plus the federated `docs`. */
-export type SearchKind = SearchSourceKind | "docs";
 
 /** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */
 export type SearchQueryResult = {

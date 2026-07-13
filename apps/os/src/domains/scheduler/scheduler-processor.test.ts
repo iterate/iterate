@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
+import {
+  activeSpans,
+  recordedSpans,
+  resetRecordedSpans,
+} from "../../test/cloudflare-workers-shim.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { StreamProcessorSnapshot } from "../streams/stream-processor.ts";
 import { emptyStreamRuntimeState } from "../streams/test-helpers.ts";
@@ -293,6 +298,43 @@ describe("SchedulerProcessor reduce", () => {
 });
 
 describe("triggering", () => {
+  it("traces the action invocation without blocking delivery", async () => {
+    resetRecordedSpans();
+    let finishAction!: () => void;
+    const actionFinished = new Promise<void>((resolve) => {
+      finishAction = resolve;
+    });
+    const harness = makeHarness({
+      invokeCapability: async () => {
+        expect([...activeSpans].map((span) => span.name)).toContain("scheduler action invocation");
+        await actionFinished;
+      },
+    });
+    const { clock, deliver, processor, stream } = harness;
+    await stream.append(setEvent("report"));
+    await deliver();
+
+    clock.now = T0 + 61_000;
+    await processor.triggerDue();
+    await deliver();
+
+    const invocation = recordedSpans.find((span) => span.name === "scheduler action invocation");
+    expect(invocation).toMatchObject({
+      attributes: { "iterate.scheduler.execution_id": expect.any(String) },
+    });
+    expect(activeSpans.has(invocation!)).toBe(true);
+    await expect(processor.getRuntimeState()).resolves.toMatchObject({
+      runtime: { inflightExecutions: [expect.any(String)] },
+    });
+
+    finishAction();
+    await waitForCompletion(harness);
+    expect(activeSpans.has(invocation!)).toBe(false);
+    expect(invocation).toMatchObject({
+      attributes: { "iterate.scheduler.action_outcome": "succeeded" },
+    });
+  });
+
   it("requests due schedules with incarnation-scoped idempotency keys and advances the clock", async () => {
     const harness = makeHarness();
     const { clock, deliver, processor, stream } = harness;
@@ -376,6 +418,7 @@ describe("triggering", () => {
     expect(invokeCapability).toHaveBeenCalledTimes(1);
     const call = vi.mocked(invokeCapability).mock.calls[0]![0];
     expect(call.path).toEqual(["run"]);
+    expect(call.traceRole).toBe("scheduler_action");
     expect(
       (call.ref as { source: { files: { files: Record<string, string> } } }).source.files.files[
         "main.js"
@@ -444,6 +487,7 @@ describe("triggering", () => {
   });
 
   it("records a throwing script as outcome=failed and keeps the recurrence alive", async () => {
+    resetRecordedSpans();
     const harness = makeHarness({
       invokeCapability: async () => {
         throw new Error("script exploded");
@@ -461,6 +505,9 @@ describe("triggering", () => {
       error: "script exploded",
       outcome: "failed",
     });
+    expect(recordedSpans.find((span) => span.name === "scheduler action invocation")).toMatchObject(
+      { attributes: { "iterate.scheduler.action_outcome": "failed" } },
+    );
     // Failure does not retry and does not kill the schedule: next occurrence stands.
     expect(processor.state.schedules["report"]!.nextTriggerAt).toBe(clock.now + 60_000);
   });
@@ -480,6 +527,11 @@ describe("triggering", () => {
     await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledTimes(1));
     expect(stream.events.filter((e) => e.type === COMPLETED_TYPE)).toHaveLength(0);
     await vi.waitFor(() => expect(Object.keys(processor.state.pendingTriggers)).toHaveLength(1));
+    await vi.waitFor(async () => {
+      await expect(processor.getRuntimeState()).resolves.toMatchObject({
+        runtime: { inflightExecutions: [] },
+      });
+    });
 
     // Next wake: the sweep re-launches (at-least-once) and the append heals.
     stream.failAppendsOfType = undefined;
@@ -685,6 +737,7 @@ describe("recovery and alarm derivation", () => {
   });
 
   it("an in-flight execution is never double-launched by concurrent sweeps or redelivery", async () => {
+    resetRecordedSpans();
     let invocations = 0;
     const harness = makeHarness({
       invokeCapability: () => {
@@ -706,6 +759,11 @@ describe("recovery and alarm derivation", () => {
     await processor.triggerDue();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(invocations).toBe(1);
+    const invocationSpans = recordedSpans.filter(
+      (span) => span.name === "scheduler action invocation",
+    );
+    expect(invocationSpans).toHaveLength(1);
+    expect(activeSpans.has(invocationSpans[0]!)).toBe(true);
   });
 
   it("barren wakes back off exponentially instead of hot-looping at the minimum delay", async () => {

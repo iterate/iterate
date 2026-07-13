@@ -326,8 +326,11 @@ async function resolveOAuthAccessToken(input: {
       audiences: [...input.audiences],
     });
     if (!result.active) {
-      input.context.log.info("os.mcp.opaque_token_inactive");
-      input.context.log.set({ mcpAuth: { opaqueIntrospection: result.reason ?? "inactive" } });
+      input.context.log.info("os.mcp.opaque_token_inactive", {
+        mcpAuth: {
+          opaqueIntrospection: diagnosticIdentifier(result.reason) ?? "inactive",
+        },
+      });
       return null;
     }
 
@@ -346,14 +349,18 @@ async function resolveOAuthAccessToken(input: {
       [ITERATE_ROLE_CLAIM]: result.role,
     };
   } catch (error) {
-    input.context.log.info("os.mcp.opaque_introspection_error");
-    input.context.log.set({
+    input.context.log.info("os.mcp.opaque_introspection_error", {
       mcpAuth: {
-        opaqueIntrospectionError: error instanceof Error ? error.message : String(error),
+        opaqueIntrospectionErrorType: error instanceof Error ? "Error" : "NonErrorThrowable",
       },
     });
     return null;
   }
+}
+
+function diagnosticIdentifier(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/u.test(value) ? value : undefined;
 }
 
 function createMcpIterateAuth(

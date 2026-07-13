@@ -20,7 +20,7 @@ import {
   announceContract,
   hostRuntimeCapabilities,
   type AnyHostedProcessor,
-} from "../../stream-processor-host.ts";
+} from "../../processor-host-capabilities.ts";
 import { LatencyRing, type LatencyStats } from "../../stream-runtime-metrics.ts";
 import type { SubscriberMetricsReport } from "../../subscriber-metrics.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";

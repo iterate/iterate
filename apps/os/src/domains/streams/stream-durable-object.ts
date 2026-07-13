@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, tracing } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
@@ -191,14 +191,22 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** The DO alarm: the spine's durable retry timer. */
-  alarm(): void {
-    this.#alarmArmedForMs = null;
-    // The constructor's `woken` append already ran `#subscribers.wake()` via
-    // post-commit fan-out; this call re-arms the alarm for the next due retry
-    // (wake() itself only attempts rows whose backoff has elapsed).
-    this.#subscribers.onAlarm();
-    this.#subscriptionCursorStore.flushPending("all");
-    this.#flushCoreProcessorState();
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    return tracing.enterSpan("alarm stream subscription retry", async (span) => {
+      span.setAttribute("iterate.alarm.kind", "stream_subscription_retry");
+      if (alarmInfo !== undefined) {
+        span.setAttribute("iterate.alarm.is_retry", alarmInfo.isRetry);
+        span.setAttribute("iterate.alarm.retry_count", alarmInfo.retryCount);
+      }
+      this.#alarmArmedForMs = null;
+      // The constructor's `woken` append already ran `#subscribers.wake()` via
+      // post-commit fan-out; this call re-arms the alarm for the next due retry
+      // (wake() itself only attempts rows whose backoff has elapsed).
+      this.#subscribers.onAlarm();
+      this.#subscriptionCursorStore.flushPending("all");
+      this.#flushCoreProcessorState();
+      span.setAttribute("iterate.alarm.action", "redrive_scheduled");
+    });
   }
 
   /**

@@ -76,11 +76,11 @@ export class SchedulerDurableObject extends DurableObject<Env> {
       }),
   );
 
-  async alarm(): Promise<void> {
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     // The shared alarm may be firing for the keepalive's slice, the
     // scheduler's, or both — run both handlers; each is idempotent and
     // re-derives its own next fire time.
-    await this.#processorHost.handleAlarm();
+    await this.#processorHost.handleAlarm(alarmInfo);
     try {
       await this.#processorHost.catchUp(PROCESSOR_SLUG);
       await this.#schedulerProcessor.triggerDue();

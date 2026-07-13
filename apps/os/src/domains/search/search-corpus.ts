@@ -47,18 +47,14 @@ const SEARCH_EVENT_TYPE_DISALLOW_LIST: ReadonlySet<string> = new Set([
   "events.iterate.com/stream/child-stream-created",
 ]);
 
-/**
- * The kinds a project's search corpus is folded from. The first segment of
- * every R2 key IS the kind (`{projectId}/{kind}/…`), so it doubles as the
- * folder-scoping token AND the `kind` metadata attribute. `docs` is federated
- * from the in-worker itx.docs index rather than stored in R2 (see
- * SearchRpcTarget.query), but shares the vocabulary so callers filter
- * uniformly.
- */
-export type SearchSourceKind = "streams" | "files" | "repos";
-
-/** Every filterable kind: the stored corpus kinds plus the federated `docs`. */
-export type SearchKind = SearchSourceKind | "docs";
+// The kinds a project's search corpus is folded from: `streams`, `files`,
+// `repos`, plus arbitrary custom kinds written by itx.search.index(). The
+// first segment of every R2 key IS the kind (`{projectId}/{kind}/…`), so it
+// doubles as the folder-scoping token AND the `kind` metadata attribute.
+// `docs` is federated from the in-worker itx.docs index rather than stored in
+// R2 (see SearchRpcTarget.query), but shares the vocabulary so callers filter
+// uniformly. Kinds are plain strings on the API surface (custom kinds made a
+// closed union wrong); normalizeSearchSource is the validation gate.
 
 /**
  * Kinds `itx.search.index()` must not write: the three platform namespaces
@@ -156,10 +152,40 @@ export type SearchAnswerResult = SearchQueryResult & {
 };
 
 /** Root key prefix for one project (the multi-tenancy boundary), or one kind within it. */
-export function projectSearchPrefix(projectId: string, source?: SearchSourceKind): string {
+export function projectSearchPrefix(projectId: string, source?: string): string {
   // The trailing slash matters both times: without it, `prj/files` would also
   // match a custom kind like `prj/filesystem/…` in the folder range.
   return source === undefined ? `${projectId}/` : `${projectId}/${source}/`;
+}
+
+/**
+ * Validate a caller-supplied `source` for query scoping: case-insensitive — a
+ * platform corpus kind passes through normalized, a custom kind is normalized
+ * by the same rules `index()` applied when writing it. `docs` gets its own
+ * error — it is federated, never stored, so it cannot be a folder scope.
+ */
+export function normalizeSearchSource(source: string): string {
+  const normalized = source.trim().toLowerCase();
+  if (normalized === "docs") {
+    throw new Error(
+      'source "docs" cannot be pinned: docs are federated at query time, not stored in the ' +
+        "corpus. Query without `source` (docs merge in automatically) or use itx.docs.search.",
+    );
+  }
+  if ((["streams", "files", "repos"] as const).some((kind) => kind === normalized)) {
+    return normalized;
+  }
+  return normalizeCustomSearchKind(normalized);
+}
+
+/**
+ * Normalize `exclude` entries the same way kinds are stored (trim/lowercase),
+ * so `["Docs", " Decisions"]` excludes what `docs` and `decisions` would.
+ * No reserved-kind validation: excluding a platform kind is legitimate, and a
+ * nonexistent kind in a `$nin` list just matches nothing.
+ */
+export function normalizeSearchExcludeKinds(kinds: readonly string[]): string[] {
+  return kinds.map((kind) => kind.trim().toLowerCase());
 }
 
 /** Object key for one stream's segment document (segment n covers the n-th SEARCH_SEGMENT_SIZE offsets). */
@@ -323,26 +349,30 @@ export function renderStreamSegmentDocument(input: {
 
 /**
  * The metadata filter for a query (the new AI Search binding's Mongo-style
- * grammar; keys are implicit AND). Each project has its OWN instance whose R2
- * source is glob-scoped to `{projectId}/**`, so tenancy is structural — the
- * `folder` prefix range here (upper bound = trailing `/` bumped to `0`,
- * Cloudflare's documented "starts-with" trick) is defense in depth plus the
- * `source` kind scoping, and `kind: {$nin}` is the query-time escape hatch
- * for noisy corpora.
+ * grammar; keys are implicit AND). Tenancy is STRUCTURAL — each project has
+ * its own instance whose R2 source is glob-scoped to `{projectId}/**` — so
+ * query filters only ever scope KINDS within one project's corpus.
+ *
+ * Everything filters on the `kind` metadata field with term operators
+ * ($eq/$nin), never lexicographic ranges: live-proven on engine v3
+ * (2026-07-13) that hybrid search applies range filters ($gte/$lt on
+ * `folder`) only to the VECTOR lane — the keyword lane ignores them, so
+ * filtered-out documents leak back through rrf fusion at ~0.5× score. Term
+ * filters on `kind` bind both lanes. `source` (one kind) wins over
+ * `excludeKinds` — a query pinned to one kind excludes the rest by
+ * construction.
  */
 export function searchFilters(input: {
   projectId: string;
-  source?: SearchSourceKind;
-  excludeKinds?: readonly SearchKind[];
-}): Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> {
-  const prefix = projectSearchPrefix(input.projectId, input.source);
-  const filters: Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> = {
-    folder: { $gte: prefix, $lt: `${prefix.slice(0, -1)}0` },
-  };
+  /** A platform corpus kind or a normalized custom kind (see normalizeSearchSource). */
+  source?: string;
+  excludeKinds?: readonly string[];
+}): Record<string, { $eq?: string; $nin?: string[] }> {
+  if (input.source !== undefined) return { kind: { $eq: input.source } };
   if (input.excludeKinds !== undefined && input.excludeKinds.length > 0) {
-    filters.kind = { $nin: [...input.excludeKinds] };
+    return { kind: { $nin: [...input.excludeKinds] } };
   }
-  return filters;
+  return {};
 }
 
 /**
@@ -378,6 +408,8 @@ export function projectSearchInstanceConfig(input: { bucketName: string; project
   indexing_options: { keyword_tokenizer: "porter" | "trigram" };
   custom_metadata: { field_name: string; data_type: "text" }[];
   sync_interval: 3600;
+  score_threshold: number;
+  max_num_results: number;
 } {
   return {
     id: projectSearchInstanceId(input.projectId),
@@ -388,6 +420,12 @@ export function projectSearchInstanceConfig(input: { bucketName: string; project
     indexing_options: { keyword_tokenizer: "trigram" },
     custom_metadata: [...SEARCH_METADATA_SCHEMA],
     sync_interval: 3600,
+    // Generous inclusion at birth (query-time options still override): recall
+    // over precision — downstream consumers can filter with a fast LLM, but a
+    // hit below the threshold never surfaces at all. Platform defaults are
+    // 0.4 / 10.
+    score_threshold: 0.2,
+    max_num_results: 20,
   };
 }
 

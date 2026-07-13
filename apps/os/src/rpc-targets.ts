@@ -205,19 +205,20 @@ import {
   indexStreamEventBatch,
   mirrorFileToSearchIndex,
   triggerProjectSearchSync,
+  triggerProjectSearchSyncDebounced,
 } from "./domains/search/search-index.ts";
 import {
   narrowStreamRefToChunk,
+  normalizeSearchExcludeKinds,
+  normalizeSearchSource,
   projectSearchInstanceId,
   searchFilters,
 } from "./domains/search/search-corpus.ts";
 import { ItxExpression } from "./itx/expression.ts";
 import type {
   SearchAnswerResult,
-  SearchKind,
   SearchQueryResult,
   SearchResultChunk,
-  SearchSourceKind,
 } from "./domains/search/search-corpus.ts";
 import type { AgentFileAttachment } from "./domains/agents/agent-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
@@ -296,7 +297,10 @@ import type {
   WorkspaceGitLogEntry,
   WorkspacePublishResult,
 } from "./domains/workspaces/types.ts";
-import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
+import {
+  DynamicWorkerRunner,
+  type DynamicWorkerTraceRole,
+} from "./domains/workers/worker-runner.ts";
 import {
   integrationStreamStub,
   latestStreamEvent,
@@ -2002,9 +2006,10 @@ function parseStoredRef(serialized: string): ItxExpression | undefined {
  * Project search over everything the project accumulates — stream events,
  * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
  * instance over the deployment's search-index bucket
- * (domains/search/search-index.ts). One instance per deployment; every query
- * is scoped to this project via a folder-prefix metadata filter, so no query
- * can see another project's data. Experimental — the surface may change.
+ * (domains/search/search-index.ts). One instance PER PROJECT, created on
+ * first use, indexing only the project's `{projectId}/**` slice of the
+ * bucket — tenancy is structural, not a query filter. Experimental — the
+ * surface may change.
  */
 class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   constructor(
@@ -2019,23 +2024,35 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       instructions:
         "One search over everything this project accumulates — stream events, itx.files, repo " +
         "files, and itx.docs — via this project's own AI Search instance. query({ q }) returns " +
-        "scored chunks; every hit carries a `ref` that leads BACK TO THE DOMAIN OBJECT — " +
-        '{ type: "stream", path, firstOffset, lastOffset } (fetch via itx.streams.get(path)' +
-        '.getEvents), { type: "file", path } (itx.files.get), { type: "repoFile", repoPath, ' +
-        "filePath } (itx.repos.get(repoPath).readFile), or an itx.docs entry — plus `kind` and a " +
-        "human-readable `context`. answer({ q }) generates a cited answer. Narrow with source " +
-        '("streams" | "files" | "repos") or exclude kinds. indexEvent({ stream, offset, note? }) ' +
-        "pins one event by coordinates; index({ kind, id, text }) adds a standalone document; " +
-        "indexStream/indexRepo/backfillFiles backfill pre-existing content. Everything indexes " +
-        "automatically except ephemeral events; expect up to ~a minute of indexing lag.",
+        "scored chunks; hits carry a `ref` — an itx EXPRESSION ARRAY leading back to the domain " +
+        'object: ["streams", ["get", path], ["getEvents", { afterOffset, beforeOffset }]] for ' +
+        'stream events, ["files", ["get", path]], ["repos", ["get", repoPath], ["readFile", ' +
+        '{ path }]], or ["docs", ["get", { name }]]. Evaluate a ref by walking it: let v = itx; ' +
+        "for (const step of ref) v = typeof step === 'string' ? v[step] : await v[step[0]]" +
+        "(...step.slice(1)); — plus `kind` and a human-readable `context` on every hit. " +
+        "answer({ q }) generates a cited answer. Narrow with source " +
+        '("streams" | "files" | "repos") or exclude kinds; options: limit (1–50), ' +
+        "scoreThreshold, rewriteQuery. indexEvent({ stream, offset, note? }) pins one event by " +
+        "coordinates; index({ kind, id, text, ref, title?, context? }) adds a standalone " +
+        "document (ref REQUIRED — the itx expression back to the source); " +
+        "indexStream/indexRepo/backfillFiles backfill one unit, reindex() sweeps the whole " +
+        "project (all streams + repos + files). Everything indexes automatically except " +
+        "ephemeral and stream-housekeeping events. Explicit index verbs are searchable in ~a " +
+        "minute; automatic mirroring can lag up to the hourly sync.",
       children: {
         answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
-        index: "Add/replace one standalone document ({ kind, id, text, title?, context? }).",
+        ensureIndex:
+          "Ensure this project's search instance exists (idempotent; created at project birth).",
+        index:
+          "Add/replace one standalone document ({ kind, id, text, ref, title?, context? }) — " +
+          "ref (itx expression) is required.",
         indexEvent:
           "Pin one stream event by coordinates ({ stream, offset, note? }) — ref leads back to it.",
         indexRepo: "Snapshot one repo's default-branch HEAD into the search corpus now.",
         indexStream: "Re-index one stream from the beginning (backfill/repair).",
+        reindex:
+          "Reindex the whole project — every stream, repo, and file — crude, idempotent, re-runnable.",
         query:
           "Retrieve scored, kind-tagged chunks matching a query (with source/exclude filters).",
       },
@@ -2051,20 +2068,31 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     limit?: number;
     rewriteQuery?: boolean;
     scoreThreshold?: number;
-    source?: SearchSourceKind;
-    exclude?: readonly SearchKind[];
+    source?: string;
+    exclude?: readonly string[];
   }): AiSearchOptions {
     return {
       retrieval: {
         filters: searchFilters({
           projectId: this.props.projectId,
-          source: input.source,
+          // Platform kinds pass through; custom kinds are re-normalized by
+          // the same rules index() wrote them under; "docs" throws (it is
+          // federated, never stored).
+          source: input.source === undefined ? undefined : normalizeSearchSource(input.source),
           // "docs" is federated, never in the R2 corpus, so it can't be an R2
           // filter; drop it here and let #federatedDocs honour the exclusion.
-          excludeKinds: input.exclude?.filter((kind) => kind !== "docs"),
+          excludeKinds:
+            input.exclude === undefined
+              ? undefined
+              : normalizeSearchExcludeKinds(input.exclude).filter((kind) => kind !== "docs"),
         }),
-        max_num_results: input.limit,
-        match_threshold: input.scoreThreshold,
+        // Tuned for GENEROUS INCLUSION (Jonas, 2026-07-13): recall over
+        // precision — a downstream fast-LLM pass can always filter the result
+        // set in conversation context, but a hit that never surfaces is gone.
+        // Defaults beat the instance's (10 results, 0.4 threshold); explicit
+        // caller values still win.
+        max_num_results: input.limit ?? 20,
+        match_threshold: input.scoreThreshold ?? 0.2,
         // OR-mode keyword matching: dogfooding showed the default AND-mode
         // misses exact-token queries whose terms don't co-occur in one chunk;
         // hybrid rrf fusion keeps precision.
@@ -2105,12 +2133,17 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    */
   async #federatedDocs(input: {
     query: string;
-    source?: SearchSourceKind;
-    exclude?: readonly SearchKind[];
+    source?: string;
+    exclude?: readonly string[];
     limit?: number;
   }): Promise<SearchResultChunk[]> {
     if (input.source !== undefined) return []; // a corpus source was pinned
-    if (input.exclude?.includes("docs")) return [];
+    if (
+      input.exclude !== undefined &&
+      normalizeSearchExcludeKinds(input.exclude).includes("docs")
+    ) {
+      return [];
+    }
     const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
     const hits = await docs.search({ q: input.query });
     return hits.slice(0, Math.min(input.limit ?? 5, 5)).map((hit, index) => ({
@@ -2140,25 +2173,40 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   }
 
   /**
+   * Ensure this project's search instance exists (idempotent). The project
+   * CREATE SAGA calls this so search is warm from birth; the lazy
+   * query/index paths remain as self-heal for projects that predate it.
+   * Safe to call any time — an existing instance is a no-op.
+   */
+  async ensureIndex(): Promise<{ created: boolean }> {
+    const { created } = await ensureProjectSearchInstance(this.props.projectId);
+    return { created };
+  }
+
+  /**
    * Retrieve scored chunks matching a query, scoped to this project's own
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
-   * so callers can contextualize a hit. On a project whose instance doesn't
-   * exist yet, the instance is created and docs results return with a
-   * `warning` — retry once its first index completes.
+   * so callers can contextualize a hit. Docs hits carry synthetic 0.5-band
+   * scores (keyword overlap, not comparable to corpus relevance) and are
+   * exempt from `limit`/`scoreThreshold` (separately capped at 5). On a
+   * project whose instance doesn't exist yet, the instance is created and
+   * docs results return with a `warning` — retry once its first index
+   * completes (typically a minute or two). A warning-free empty result means
+   * the index is live and simply has no match.
    */
   async query(input: {
     q: string;
-    /** Max chunks to return (1–50). */
+    /** Max chunks to return (1–50, default 20 — tuned for recall). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1). */
+    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
     scoreThreshold?: number;
-    /** Restrict to ONE corpus kind (skips docs federation). */
-    source?: SearchSourceKind;
-    /** Exclude kinds from results, e.g. `["streams"]` to skip the event log. */
-    exclude?: readonly SearchKind[];
+    /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
+    source?: string;
+    /** Exclude kinds from results (platform or custom), e.g. `["streams"]` to skip the event log. */
+    exclude?: readonly string[];
   }): Promise<SearchQueryResult> {
     const [corpus, docs] = await Promise.allSettled([
       this.#instance.search({ query: input.q, ai_search_options: this.#searchOptions(input) }),
@@ -2184,14 +2232,20 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     return { searchQuery: corpus.value.search_query, results };
   }
 
-  /** Retrieve matching chunks AND generate an answer from them (RAG). */
+  /**
+   * Retrieve matching chunks AND generate an answer from them (RAG).
+   * Unlike `query`, a project whose instance doesn't exist yet THROWS here
+   * (message: "first index is in progress — retry shortly") — there is no
+   * warning-carrying degraded result. `searchQuery` echoes the input
+   * verbatim (never the rewritten query).
+   */
   async answer(input: {
     q: string;
     limit?: number;
     rewriteQuery?: boolean;
     scoreThreshold?: number;
-    source?: SearchSourceKind;
-    exclude?: readonly SearchKind[];
+    source?: string;
+    exclude?: readonly string[];
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult> {
@@ -2222,7 +2276,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * via `query`. `ref` is REQUIRED: the itx expression leading back to the
    * domain object the text derives from (e.g. `["streams", ["get", path],
    * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
-   * a search result is never a dead end. `id` is stable within
+   * a search result is never a dead end. `kind` is `[a-z0-9._-]+` and must
+   * not be a reserved platform kind (streams/files/repos/docs); the
+   * serialized ref caps at 500 chars. `id` is stable within
    * `(project, kind)`, so re-indexing the same id overwrites. `context` is
    * the one-line descriptor shown on every hit and to the answer model.
    */
@@ -2248,7 +2304,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * domain-object way to make a specific moment findable. The event's content
    * is read from the stream (never trusted from the caller) and indexed as a
    * focused document together with the optional `note`; the search hit's
-   * `ref` leads back to `{ path, offset }`. Idempotent per (stream, offset).
+   * `ref` is the itx expression fetching exactly that event. Note the param
+   * is `stream` (unlike indexStream's `path`). Idempotent per
+   * (stream, offset).
    */
   async indexEvent(input: {
     /** The stream path, e.g. "/agents/slack/T1/thr-9". */
@@ -2309,7 +2367,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * Snapshot one repo's default-branch HEAD into the search corpus now — the
    * backfill verb for repos that predate search indexing (writes index
    * incrementally from here on). Runs on the repo Durable Object's own write
-   * chain so its stale-key sweep can't race post-commit indexing.
+   * chain so its stale-key sweep can't race post-commit indexing. Returned
+   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key
+   * files, and a nonzero `failed` means re-run.
    */
   async indexRepo(input: { path: string }): Promise<{
     deleted: number;
@@ -2346,6 +2406,67 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     await ensureProjectSearchInstance(this.props.projectId);
     await triggerProjectSearchSync(this.props.projectId);
     return counts;
+  }
+
+  /**
+   * Reindex the WHOLE project — every known stream, every repo's default
+   * branch, every itx.files object — in one crude, idempotent sweep. This is
+   * the backfill/repair verb for projects that predate search indexing (new
+   * writes index automatically); every unit overwrites its own corpus keys,
+   * so re-running (including after a timeout on a huge project) only fills
+   * gaps. Streams run a few at a time; expect minutes on large projects. Per
+   * unit failures are counted, never thrown — nonzero `failed` means re-run.
+   */
+  async reindex(): Promise<{
+    streams: { indexed: number; segments: number; failed: number };
+    repos: { indexed: number; failed: number };
+    files: { mirrored: number; skipped: number; failed: number };
+  }> {
+    const state = await projectProcessorState(this.props.projectId);
+    const streams = { indexed: 0, segments: 0, failed: 0 };
+    const queue = [...state.streams];
+    await Promise.all(
+      Array.from({ length: 5 }, async () => {
+        for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
+          const path = normalizePath(item.path);
+          try {
+            const streamStub = env.STREAM.getByName(
+              DurableObjectNameCodec.stringify(
+                { projectId: this.props.projectId, path },
+                { allowNullProjectId: true },
+              ),
+            );
+            const { segments } = await indexEntireStream({
+              projectId: this.props.projectId,
+              path,
+              readEvents: (args) => streamStub.getEvents(args),
+            });
+            streams.indexed += 1;
+            streams.segments += segments;
+          } catch (error) {
+            console.warn(`search reindex: stream ${path} failed: ${String(error)}`);
+            streams.failed += 1;
+          }
+        }
+      }),
+    );
+    const repos = { indexed: 0, failed: 0 };
+    for (const repo of state.repos) {
+      try {
+        await env.REPO.getByName(
+          DurableObjectNameCodec.stringify({
+            projectId: this.props.projectId,
+            path: normalizePath(repo.path),
+          }),
+        ).reindexSearch();
+        repos.indexed += 1;
+      } catch (error) {
+        console.warn(`search reindex: repo ${repo.path} failed: ${String(error)}`);
+        repos.failed += 1;
+      }
+    }
+    const files = await this.backfillFiles(); // also ensures the instance + triggers the sync
+    return { streams, repos, files };
   }
 }
 
@@ -3859,6 +3980,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   readonly #flattenNestedPaths: boolean;
   readonly #props: { ctx: CfExecutionContext; projectId: string };
   readonly #ref: DynamicWorkerRef;
+  readonly #traceRole: DynamicWorkerTraceRole | undefined;
   #lazyRunner: DynamicWorkerRunner | undefined;
 
   constructor(props: {
@@ -3867,12 +3989,14 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
+    traceRole?: DynamicWorkerTraceRole;
   }) {
     super();
     this.#buildBudgetMs = props.buildBudgetMs;
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
+    this.#traceRole = props.traceRole;
   }
 
   // Lazy: __describe answers from the ref alone and must not mint loopback
@@ -3955,6 +4079,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       flattenNestedPath,
       path,
       ref: this.#ref,
+      traceRole: this.#traceRole,
     });
   }
 
@@ -4979,13 +5104,18 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     // waitUntil, not bare fire-and-forget: the segment re-read + R2 puts are a
     // multi-hop pipeline that outlives this RPC's resolve, and an unanchored
     // promise can be cancelled when the invocation's I/O context ends.
+    const projectId = batch.projectId;
     this.#props.ctx.waitUntil(
       indexStreamEventBatch({
         batch,
         readEvents: (args) => streamStub.getEvents(args),
-      }).catch((error: unknown) => {
-        console.warn("search index stream batch failed", { path: batch.path, error });
-      }),
+      })
+        // Freshness: nudge the project's instance (if one exists) so passive
+        // content is searchable in minutes, not on the hourly schedule.
+        .then(() => triggerProjectSearchSyncDebounced(projectId))
+        .catch((error: unknown) => {
+          console.warn("search index stream batch failed", { path: batch.path, error });
+        }),
     );
   }
 
@@ -4996,9 +5126,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.
    */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
-    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
+    return new DynamicWorkerRpcTarget({
+      ctx: this.#props.ctx,
       flattenNestedPaths: true,
-    });
+      projectId: this.#props.projectId,
+      ref: defaultProjectWorkerRef(),
+      traceRole: "project_config",
+    }) as unknown as DynamicWorkerCapability<ProjectWorker>;
   }
 }
 

@@ -563,7 +563,7 @@ describe("StreamEventLog.getRange", () => {
     const committedEvents = Array.from({ length: 34 }, (_, index) => ({
       ...event(index + 1, "same-type"),
       ...(index === 17 ? { idempotencyKey: "late-key" } : {}),
-      ...(index === 33 ? { ephemeral: true } : {}),
+      ...(index === 33 ? { ephemeral: true as const } : {}),
     }));
 
     log.insert(committedEvents, transactionRunner(db));

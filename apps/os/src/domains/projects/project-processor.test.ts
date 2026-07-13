@@ -166,6 +166,9 @@ function makeHarness() {
     // The repo-created lane probes the default project worker before
     // committing project/created; the fake worker is always ready.
     worker: { fetch: async () => ({}) },
+    // The create saga ensures the project's search instance at birth
+    // (best-effort); the fake resolves so the saga's Promise.all settles.
+    search: { ensureIndex: async () => ({ created: true }) },
   } as unknown as ProjectRpcTarget;
   const processor = new ProjectProcessor({
     stream: network.get("/"),

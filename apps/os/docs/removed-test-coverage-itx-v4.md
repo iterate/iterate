@@ -8,9 +8,9 @@ after the migration landed; both are recoverable from git history at PR #1585.
 
 ## How to recover anything listed here
 
-- Every deleted file is intact on `main` until this PR merges, and in history
-  forever after: `git show 'main:<path>'` (or `git log --all --diff-filter=D
--- '<path>'` to find the deleting commit, then `git show '<sha>^:<path>'`).
+- Every deleted file remains available in git history. Use
+  `git log --all --diff-filter=D -- '<path>'` to find the deleting commit, then
+  `git show '<sha>^:<path>'` to recover it.
 - The migration quarantined suites into `test-quarantine/` folders before
   deleting them at the very end in commit `551f172b7` ("The very end: delete
   the quarantine folders"). `git show '551f172b7^' --stat` lists everything

@@ -1,3 +1,4 @@
+import { tracing } from "cloudflare:workers";
 import { itxEnv as env } from "../../env.ts";
 import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
@@ -20,6 +21,8 @@ import {
   type WorkerBindings,
   type WorkerSourceResolution,
 } from "./worker-loader.ts";
+
+export type DynamicWorkerTraceRole = "project_config" | "run_script" | "scheduler_action";
 
 // Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
 // of the DO's own type: the DO imports this module (cycle), and a typed
@@ -139,20 +142,26 @@ export class DynamicWorkerRunner {
     buildBudgetMs,
     ref,
     request,
+    traceRole,
   }: {
     /** Give up on a cold build after this long (see resolveWorkerSource). */
     buildBudgetMs?: number;
     ref: DynamicWorkerRef;
     request: Request;
+    traceRole?: DynamicWorkerTraceRole;
   }): Promise<Response> {
-    if (ref.type === "stateful") {
-      const stub = env.WORKER.getByName(
-        statefulWorkerDurableObjectName(this.#projectId, ref),
-      ) as unknown as Fetcher;
-      return await stub.fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
-    }
-    const entrypoint = await this.#getStatelessEntrypoint<Fetcher>(ref, buildBudgetMs);
-    return await entrypoint.fetch(request);
+    return this.#trace(ref, "fetch", traceRole, async (span) => {
+      const response =
+        ref.type === "stateful"
+          ? await (
+              env.WORKER.getByName(
+                statefulWorkerDurableObjectName(this.#projectId, ref),
+              ) as unknown as Fetcher
+            ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }))
+          : await (await this.#getStatelessEntrypoint<Fetcher>(ref, buildBudgetMs)).fetch(request);
+      span.setAttribute("http.response.status_code", response.status);
+      return response;
+    });
   }
 
   async invokeCapability({
@@ -161,6 +170,7 @@ export class DynamicWorkerRunner {
     flattenNestedPath = false,
     path,
     ref,
+    traceRole,
   }: {
     args?: unknown[];
     /** Give up on a cold build after this long (see resolveWorkerSource). */
@@ -168,6 +178,7 @@ export class DynamicWorkerRunner {
     flattenNestedPath?: boolean;
     path: string[];
     ref: DynamicWorkerRef;
+    traceRole?: DynamicWorkerTraceRole;
   }): Promise<unknown> {
     // Capability dispatch is method calls; no name is protocol-special here,
     // `fetch` included (see docs/dynamic-worker-dispatch.md). A WebSocket
@@ -186,28 +197,30 @@ export class DynamicWorkerRunner {
       );
     }
 
-    if (ref.type === "stateful") {
-      // Method replay must happen inside StatefulWorkerDurableObject. Returning
-      // a dynamic facet stub through one DO and then invoking it from another RPC
-      // target has produced opaque internal RPC failures; keeping the replay at
-      // the owning DO boundary also keeps storage affinity explicit. Stateful
-      // refs are also deliberately lazy: mounting a worker capability only
-      // commits the recipe to the stream, while this first real invocation is the
-      // point where source loading, version-marker writes, and facet restarts are
-      // allowed to mutate durable runtime state.
-      return await this.#statefulWorker(ref).invokeCapability({
-        args,
-        buildBudgetMs,
-        flattenNestedPath,
-        path,
-        ref,
-      });
-    }
+    return this.#trace(ref, "call", traceRole, async () => {
+      if (ref.type === "stateful") {
+        // Method replay must happen inside StatefulWorkerDurableObject. Returning
+        // a dynamic facet stub through one DO and then invoking it from another RPC
+        // target has produced opaque internal RPC failures; keeping the replay at
+        // the owning DO boundary also keeps storage affinity explicit. Stateful
+        // refs are also deliberately lazy: mounting a worker capability only
+        // commits the recipe to the stream, while this first real invocation is the
+        // point where source loading, version-marker writes, and facet restarts are
+        // allowed to mutate durable runtime state.
+        return await this.#statefulWorker(ref).invokeCapability({
+          args,
+          buildBudgetMs,
+          flattenNestedPath,
+          path,
+          ref,
+        });
+      }
 
-    const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
-    return flattenNestedPath
-      ? await invokePreferringFlattenedPath({ args, path, target })
-      : await replayPath({ args, path, target });
+      const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
+      return flattenNestedPath
+        ? await invokePreferringFlattenedPath({ args, path, target })
+        : await replayPath({ args, path, target });
+    });
   }
 
   /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */
@@ -246,6 +259,24 @@ export class DynamicWorkerRunner {
     return env.WORKER.getByName(
       statefulWorkerDurableObjectName(this.#projectId, ref),
     ) as unknown as StatefulWorkerRpc;
+  }
+
+  #trace<T>(
+    ref: DynamicWorkerRef,
+    operation: "call" | "fetch",
+    traceRole: DynamicWorkerTraceRole | undefined,
+    callback: (span: {
+      setAttribute(name: string, value: boolean | number | string): void;
+    }) => Promise<T>,
+  ): Promise<T> {
+    const kind = traceRole ?? (ref.type === "stateful" ? "stateful" : ref.source.files.type);
+    return tracing.enterSpan(`dynamic_worker.${kind}.${operation}`, async (span) => {
+      span.setAttribute("iterate.worker.kind", kind);
+      span.setAttribute("iterate.worker.operation", operation);
+      span.setAttribute("iterate.worker.source", ref.source.files.type);
+      span.setAttribute("iterate.worker.type", ref.type);
+      return await callback(span);
+    });
   }
 }
 
