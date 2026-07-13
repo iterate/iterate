@@ -47,18 +47,14 @@ const SEARCH_EVENT_TYPE_DISALLOW_LIST: ReadonlySet<string> = new Set([
   "events.iterate.com/stream/child-stream-created",
 ]);
 
-/**
- * The kinds a project's search corpus is folded from. The first segment of
- * every R2 key IS the kind (`{projectId}/{kind}/…`), so it doubles as the
- * folder-scoping token AND the `kind` metadata attribute. `docs` is federated
- * from the in-worker itx.docs index rather than stored in R2 (see
- * SearchRpcTarget.query), but shares the vocabulary so callers filter
- * uniformly.
- */
-export type SearchSourceKind = "streams" | "files" | "repos";
-
-/** Every filterable kind: the stored corpus kinds plus the federated `docs`. */
-export type SearchKind = SearchSourceKind | "docs";
+// The kinds a project's search corpus is folded from: `streams`, `files`,
+// `repos`, plus arbitrary custom kinds written by itx.search.index(). The
+// first segment of every R2 key IS the kind (`{projectId}/{kind}/…`), so it
+// doubles as the folder-scoping token AND the `kind` metadata attribute.
+// `docs` is federated from the in-worker itx.docs index rather than stored in
+// R2 (see SearchRpcTarget.query), but shares the vocabulary so callers filter
+// uniformly. Kinds are plain strings on the API surface (custom kinds made a
+// closed union wrong); normalizeSearchSource is the validation gate.
 
 /**
  * Kinds `itx.search.index()` must not write: the three platform namespaces
@@ -156,10 +152,27 @@ export type SearchAnswerResult = SearchQueryResult & {
 };
 
 /** Root key prefix for one project (the multi-tenancy boundary), or one kind within it. */
-export function projectSearchPrefix(projectId: string, source?: SearchSourceKind): string {
+export function projectSearchPrefix(projectId: string, source?: string): string {
   // The trailing slash matters both times: without it, `prj/files` would also
   // match a custom kind like `prj/filesystem/…` in the folder range.
   return source === undefined ? `${projectId}/` : `${projectId}/${source}/`;
+}
+
+/**
+ * Validate a caller-supplied `source` for query scoping: a platform corpus
+ * kind passes as-is, a custom kind is normalized by the same rules `index()`
+ * applied when writing it. `docs` gets its own error — it is federated, never
+ * stored, so it cannot be a folder scope.
+ */
+export function normalizeSearchSource(source: string): string {
+  if (source === "docs") {
+    throw new Error(
+      'source "docs" cannot be pinned: docs are federated at query time, not stored in the ' +
+        "corpus. Query without `source` (docs merge in automatically) or use itx.docs.search.",
+    );
+  }
+  if ((["streams", "files", "repos"] as const).some((kind) => kind === source)) return source;
+  return normalizeCustomSearchKind(source);
 }
 
 /** Object key for one stream's segment document (segment n covers the n-th SEARCH_SEGMENT_SIZE offsets). */
@@ -332,8 +345,9 @@ export function renderStreamSegmentDocument(input: {
  */
 export function searchFilters(input: {
   projectId: string;
-  source?: SearchSourceKind;
-  excludeKinds?: readonly SearchKind[];
+  /** A platform corpus kind or a normalized custom kind (see normalizeSearchSource). */
+  source?: string;
+  excludeKinds?: readonly string[];
 }): Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> {
   const prefix = projectSearchPrefix(input.projectId, input.source);
   const filters: Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> = {

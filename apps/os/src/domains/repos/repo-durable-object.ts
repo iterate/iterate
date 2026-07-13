@@ -20,7 +20,10 @@ import {
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
-import { indexRepoSnapshotToSearchIndex } from "../search/search-index.ts";
+import {
+  indexRepoSnapshotToSearchIndex,
+  triggerProjectSearchSyncDebounced,
+} from "../search/search-index.ts";
 import { ROOT_WORKSPACE_PATH } from "../workspaces/utils.ts";
 import type {
   CommitRepoFilesInput,
@@ -92,8 +95,8 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   /** The keepalive's revival alarm — see stream-processor-host.ts. */
-  alarm(): Promise<void> {
-    return this.#host.handleAlarm();
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    return this.#host.handleAlarm(alarmInfo);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -994,11 +997,16 @@ export class RepoDurableObject extends DurableObject<Env> {
    * reindexes can never race each other's stale-key sweeps.
    */
   #scheduleSearchIndex(branch: string): void {
-    if (branch !== REPO_DEFAULT_BRANCH || this.#name.projectId === null) return;
+    const projectId = this.#name.projectId;
+    if (branch !== REPO_DEFAULT_BRANCH || projectId === null) return;
     this.ctx.waitUntil(
-      this.reindexSearch().catch((error: unknown) => {
-        console.warn("search index repo snapshot failed", error);
-      }),
+      this.reindexSearch()
+        // Freshness: nudge the project's instance (if one exists) so the new
+        // snapshot is searchable in minutes, not on the hourly schedule.
+        .then(() => triggerProjectSearchSyncDebounced(projectId))
+        .catch((error: unknown) => {
+          console.warn("search index repo snapshot failed", error);
+        }),
     );
   }
 

@@ -8,6 +8,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers-shim.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
 import { StreamProcessor, type StreamProcessorConstructorArgs } from "./stream-processor.ts";
 import { PROCESSOR_HOST_REVIVED_EVENT_TYPE } from "./stream-processor-host.ts";
@@ -168,6 +169,7 @@ describe("lost-alarm self-healing", () => {
     const h = createProcessorHostHarness({
       build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
     });
+    resetRecordedSpans();
     void h.host.setAlarmSlice("scheduler", h.clock.now + 30_000);
     await vitestSettle();
     expect(h.store.alarm.at).toBe(h.clock.now + 30_000);
@@ -178,6 +180,13 @@ describe("lost-alarm self-healing", () => {
     // is gone rather than re-armed in the past.
     expect(h.host.getAlarmSlice("scheduler")).toBeNull();
     expect(h.store.alarm.at).toBeNull();
+    expect(recordedSpans).toContainEqual({
+      name: "alarm processor keepalive",
+      attributes: {
+        "iterate.alarm.action": "not_due",
+        "iterate.alarm.kind": "processor_keepalive",
+      },
+    });
   });
 });
 

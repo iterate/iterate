@@ -1,3 +1,4 @@
+import { tracing } from "cloudflare:workers";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
@@ -299,9 +300,14 @@ export class SchedulerProcessor extends StreamProcessor<
     if (this.#inflightExecutions.has(executionId)) return;
     this.#inflightExecutions.add(executionId);
     this.runInBackground(() =>
-      this.#execute(executionId, barrierOffset).finally(() =>
-        this.#inflightExecutions.delete(executionId),
-      ),
+      tracing.enterSpan("scheduler action attempt", async (span) => {
+        span.setAttribute("iterate.scheduler.execution_id", executionId);
+        try {
+          await this.#execute(executionId, barrierOffset);
+        } finally {
+          this.#inflightExecutions.delete(executionId);
+        }
+      }),
     );
   }
 
@@ -359,6 +365,7 @@ export class SchedulerProcessor extends StreamProcessor<
           ],
           path: ["run"],
           ref: scheduleActionWorkerRef(entry.action.script),
+          traceRole: "scheduler_action",
         });
         outcome = {
           definedAtOffset: entry.definedAtOffset,
