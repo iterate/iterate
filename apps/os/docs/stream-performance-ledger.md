@@ -683,3 +683,48 @@ and explicit wipe/rollback sign-off. It does not justify bypassing those gates.
 
 Raw records are in `/tmp/cumulative-20260714-{main,candidate}-{1..5}.log` for
 the life of this workstation.
+
+## 2026-07-14: Rejected Single-Type SQL Predicate
+
+### Hypothesis
+
+`scanPushEventTypesFrame()` binds exact event types as one JSON array and uses
+`type in (select value from json_each(?))`. Most compiled selectors contain one
+type, so a temporary specialization used `type = ?` for that case while
+retaining the JSON predicate for empty and multi-type sets.
+
+A 12-round `node:sqlite` control over 8,000 rows ran each predicate 1,000 times.
+The median was 996.18 ms for `json_each()` and 832.03 ms for equality, making
+the isolated statement loop 16.48% faster. Equality won every control round.
+
+### End-To-End Result
+
+- Candidate: uncommitted specialization on `dd9a49d7f`.
+- Baseline: exact parent `dd9a49d7f`.
+- Five full rounds per revision, alternated in groups of two, two, and one with
+  only one Workers stack active.
+- Each measured sample seeded 8,000 durable 128-byte events, selected 80 of
+  them, then timed an awaited deliver-all cross-post until all 80 destination
+  callbacks arrived. Ten measured samples and two warmups ran per round.
+- Collection ended at `2026-07-13T23:52:05Z`. Host timers enclosed network I/O
+  and callback observation; no result depended on a Worker isolate clock
+  advancing without I/O.
+
+Each value below is the median of the five per-round statistics. Positive
+change means less wall time.
+
+| Metric |    Parent | Candidate | Change |
+| ------ | --------: | --------: | -----: |
+| p50    | 29.712 ms | 30.410 ms |  -2.3% |
+| p95    | 39.786 ms | 40.532 ms |  -1.9% |
+| mean   | 30.670 ms | 32.134 ms |  -4.8% |
+
+All delivery and replay assertions passed, but the statement-level gain did
+not survive frame construction, Workers RPC, and destination delivery. The
+production branch, test changes, and temporary benchmark controls were
+deleted. This avoids permanent SQL and binding branches for a neutral-to-worse
+public result. Future selector work should target materialization or frame
+boundaries where the cost is large enough to remain visible end to end.
+
+Raw records are in `/tmp/one-type-{parent,candidate}-{1..5}.log` for the life
+of this workstation.
