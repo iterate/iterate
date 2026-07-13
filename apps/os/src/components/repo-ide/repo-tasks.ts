@@ -5,7 +5,13 @@ import { markdownFrontmatterRecord, parseMarkdownFrontmatter } from "./markdown-
 const DEFAULT_TASK_STATE = "todo";
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
 
-const STANDARD_TASK_STATES = [DEFAULT_TASK_STATE, "in-progress", "in-review", "done"] as const;
+const STANDARD_TASK_STATES = [
+  "backlog",
+  DEFAULT_TASK_STATE,
+  "in-progress",
+  "in-review",
+  "done",
+] as const;
 
 export type RepoTask = {
   path: string;
@@ -71,8 +77,7 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
 
   const frontmatter = parseMarkdownFrontmatter(content);
   const metadata = markdownFrontmatterRecord(frontmatter.document);
-  const rawState = stringValue(metadata.state) ?? DEFAULT_TASK_STATE;
-  const state = rawState === "backlog" ? DEFAULT_TASK_STATE : rawState;
+  const state = stringValue(metadata.state) ?? DEFAULT_TASK_STATE;
   const labels = uniqueStrings(stringArray(metadata.labels));
   const agent = stringValue(metadata.agent);
   const folderPath = `/${taskDirectoryPath.split("/").slice(0, -1).join("/")}`;
@@ -103,7 +108,6 @@ export function updateRepoTaskState(content: string, state: string): string {
   const normalized = state.trim() || DEFAULT_TASK_STATE;
   return updateFrontmatter(content, (document) => {
     document.set("state", normalized);
-    document.delete("status");
   });
 }
 
@@ -116,8 +120,24 @@ export function updateRepoTaskLabels(content: string, labels: readonly string[])
     } else {
       document.set("labels", normalized);
     }
-    document.delete("tags");
   });
+}
+
+/** Validate an edited task path and project the task at that path. */
+export function repoTaskWithPath(
+  task: RepoTask,
+  path: string,
+  reservedPaths: ReadonlySet<string>,
+): RepoTask | null {
+  const targetPath = path.trim().replace(/^\/+/, "");
+  const segments = targetPath.split("/");
+  if (
+    !isRepoTaskPath(targetPath) ||
+    (targetPath !== task.path && reservedPaths.has(targetPath)) ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..")
+  )
+    return null;
+  return parseRepoTask(targetPath, task.content);
 }
 
 /** Assign (or clear) an agent without disturbing any other task metadata. */

@@ -63,6 +63,7 @@ import {
   repoTaskCreationPaths,
   repoTaskPathForTitle,
   repoTaskPathInDirectory,
+  repoTaskWithPath,
   taskDirectoryForFolder,
   taskStateColumns,
   taskStateLabel,
@@ -175,10 +176,13 @@ export function RepoTasksView({
     setEditorPath(path);
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
   };
-  const persistDraft = () => {
+  const persistDraft = (path = draft?.path) => {
     if (draft === undefined) return;
-    onSetWorking(draft.path, { type: "write", content: draft.content });
+    const persisted = path === undefined ? null : repoTaskWithPath(draft, path, effectivePaths);
+    if (persisted === null) return false;
+    onSetWorking(persisted.path, { type: "write", content: persisted.content });
     setDraft(undefined);
+    return true;
   };
   const openTask = (task: RepoTask) => {
     // Starting another action should never silently replace a new task. Put
@@ -245,26 +249,12 @@ export function RepoTasksView({
     moveTaskToPath(task, targetPath, content);
   };
   const renameTask = (task: RepoTask, path: string) => {
-    const targetPath = path.trim().replace(/^\/+/, "");
-    const segments = targetPath.split("/");
-    if (
-      !isRepoTaskPath(targetPath) ||
-      segments.some((segment) => segment === "" || segment === "." || segment === "..")
-    )
-      return false;
-    return moveTaskToPath(task, targetPath);
+    const renamed = repoTaskWithPath(task, path, effectivePaths);
+    return renamed !== null && moveTaskToPath(task, renamed.path);
   };
   const renameDraft = (path: string) => {
     if (draft === undefined) return false;
-    const targetPath = path.trim().replace(/^\/+/, "");
-    const segments = targetPath.split("/");
-    if (
-      !isRepoTaskPath(targetPath) ||
-      effectivePaths.has(targetPath) ||
-      segments.some((segment) => segment === "" || segment === "." || segment === "..")
-    )
-      return false;
-    const renamed = parseRepoTask(targetPath, draft.content);
+    const renamed = repoTaskWithPath(draft, path, effectivePaths);
     if (renamed === null) return false;
     setDraft(renamed);
     return true;
@@ -283,11 +273,14 @@ export function RepoTasksView({
     } else if (nextPath === task.path) writeTask(task, content);
     else moveTaskToPath(task, nextPath, content);
   };
-  const closeEditor = () => {
+  const closeEditor = (path?: string) => {
     // Dismissing a new-task sheet should behave like switching cards: keep
     // what was typed as an ordinary uncommitted working-tree file.
-    persistDraft();
+    if (draft !== undefined && persistDraft(path) === false) return false;
+    if (draft === undefined && selectedTask !== undefined && path !== undefined)
+      if (!renameTask(selectedTask, path)) return false;
     selectTask(undefined);
+    return true;
   };
   useEffect(() => setEditorPath(selectedPath), [selectedPath]);
 
@@ -320,8 +313,8 @@ export function RepoTasksView({
         projectSlug={projectSlug}
         isNew={draft !== undefined}
         columns={columns}
-        onOpenChange={(open) => {
-          if (!open) closeEditor();
+        onOpenChange={(open, path) => {
+          if (!open) closeEditor(path);
         }}
         onChangeContent={updateEditorContent}
         onChangeState={(state) => {
@@ -352,9 +345,11 @@ export function RepoTasksView({
           if (selectedTask !== undefined) deleteTask(selectedTask);
         }}
         onSubmit={closeEditor}
-        onAssignAgent={async () => {
-          if (selectedTask !== undefined) return onAssignAgent(selectedTask);
-          return undefined;
+        onAssignAgent={async (path) => {
+          if (selectedTask === undefined) return undefined;
+          const renamed = repoTaskWithPath(selectedTask, path, effectivePaths);
+          if (renamed === null || !moveTaskToPath(selectedTask, renamed.path)) return undefined;
+          return onAssignAgent(renamed);
         }}
       />
     </div>
@@ -720,14 +715,14 @@ function TaskEditorSheet({
   projectSlug: string;
   isNew: boolean;
   columns: readonly string[];
-  onOpenChange: (open: boolean) => void;
+  onOpenChange: (open: boolean, path: string) => void;
   onChangeContent: (content: string, syncPath: boolean) => void;
   onChangeState: (state: string) => void;
   onRenamePath: (path: string) => boolean;
   onOpenInEditor: () => void;
   onDelete: () => void;
-  onSubmit: () => void;
-  onAssignAgent: () => Promise<string | undefined>;
+  onSubmit: (path: string) => boolean;
+  onAssignAgent: (path: string) => Promise<string | undefined>;
 }) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -762,11 +757,11 @@ function TaskEditorSheet({
 
   const submit = () => {
     if (task === undefined) return;
-    onSubmit();
+    onSubmit(pathValue);
   };
 
   return (
-    <Sheet open={task !== undefined} onOpenChange={onOpenChange}>
+    <Sheet open={task !== undefined} onOpenChange={(open) => onOpenChange(open, pathValue)}>
       {task === undefined ? null : (
         <SheetContent
           initialFocus={false}
@@ -834,7 +829,7 @@ function TaskEditorSheet({
                       disabled={assigning}
                       onClick={async () => {
                         setAssigning(true);
-                        const agent = await onAssignAgent();
+                        const agent = await onAssignAgent(pathValue);
                         if (agent !== undefined) setAssignedAgent(agent);
                         setAssigning(false);
                       }}
