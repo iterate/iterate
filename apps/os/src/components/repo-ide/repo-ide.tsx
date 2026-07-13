@@ -32,6 +32,7 @@ import {
   isRepoTaskPath,
   prepareRepoTaskAssignment,
   repoTaskAssignmentFileChanges,
+  repoTaskAssignmentHeadPaths,
   type RepoTask,
 } from "./repo-tasks.ts";
 import {
@@ -267,10 +268,21 @@ export function RepoIde({
         projectId,
         repoPath,
       ]);
+      // A successful commit is the authority even if the invalidated query
+      // briefly returns its previous cached HEAD. Project this known atomic
+      // mutation locally so we can migrate every unrelated working edit and
+      // start the agent without waiting for eventual cache convergence.
+      const nextFiles =
+        refreshedFiles?.commitOid === result.commitOid
+          ? refreshedFiles
+          : {
+              commitOid: result.commitOid,
+              paths: repoTaskAssignmentHeadPaths(headPaths, task, renamedFromPath),
+            };
       if (refreshedFiles?.commitOid !== result.commitOid) {
-        throw new Error("The assignment is committed, but the new repository head is not ready.");
+        queryClient.setQueryData(["itx", "repo-files", projectId, repoPath], nextFiles);
       }
-      const nextTaskPaths = refreshedFiles.paths.filter(isRepoTaskPath);
+      const nextTaskPaths = nextFiles.paths.filter(isRepoTaskPath);
       // The assignment commit changes one logical task (and may rename its
       // file). Seed the new HEAD's task query before removing the overlay, so
       // React never observes a gap and the sheet immediately sees both
