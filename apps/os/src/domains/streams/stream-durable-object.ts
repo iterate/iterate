@@ -1,8 +1,7 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, tracing } from "cloudflare:workers";
 import { z } from "zod";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
-import { enterCloudflareSpan } from "../../lib/cloudflare-tracing.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
@@ -171,7 +170,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** The DO alarm: the spine's durable retry timer. */
   alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return enterCloudflareSpan("alarm stream subscription retry", async (span) => {
+    return tracing.enterSpan("alarm stream subscription retry", async (span) => {
       span.setAttribute("iterate.alarm.kind", "stream_subscription_retry");
       span.setAttribute("iterate.stream.path", this.name.path);
       if (this.name.projectId !== null) {

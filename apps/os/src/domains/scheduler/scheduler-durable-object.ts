@@ -1,7 +1,6 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, tracing } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { enterCloudflareSpan } from "../../lib/cloudflare-tracing.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
 import type {
   StreamSubscriberWakeRequest,
@@ -81,8 +80,10 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     // The shared alarm may be firing for the keepalive's slice, the
     // scheduler's, or both — run both handlers; each is idempotent and
     // re-derives its own next fire time.
-    await this.#processorHost.handleAlarm(alarmInfo);
-    await enterCloudflareSpan("alarm scheduler trigger due", async (span) => {
+    await tracing.enterSpan("alarm processor keepalive", (span) =>
+      this.#processorHost.handleAlarm(alarmInfo, span),
+    );
+    await tracing.enterSpan("alarm scheduler trigger due", async (span) => {
       span.setAttribute("iterate.alarm.kind", "scheduler_trigger_due");
       span.setAttribute("iterate.project.id", this.#name.projectId);
       span.setAttribute("iterate.stream.path", this.#name.path);

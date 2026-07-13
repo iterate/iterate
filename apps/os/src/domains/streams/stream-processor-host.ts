@@ -56,7 +56,6 @@
 // incarnation left behind.
 
 import type { Stream } from "../../itx-api.generated.ts";
-import { enterCloudflareSpan } from "../../lib/cloudflare-tracing.ts";
 import { LiveState } from "../../lib/live-state/engine.ts";
 import type {
   GetProcessorRuntimeState,
@@ -142,6 +141,10 @@ type HostedEntry = {
   ingestChain: Promise<void>;
 };
 
+type ApplicationSpan = {
+  setAttribute(name: string, value: boolean | number | string): void;
+};
+
 export type StreamProcessorHost<Live extends object = Record<string, unknown>> = {
   readonly stream: Stream;
   /** The node's live-state engine; a `.liveState` RpcTarget exposes getState()/subscribe() over it. */
@@ -192,7 +195,7 @@ export type StreamProcessorHost<Live extends object = Record<string, unknown>> =
    * sharing the alarm with its own scheduling (see {@link setAlarmSlice})
    * calls this unconditionally and then runs its own due work.
    */
-  handleAlarm(alarmInfo?: AlarmInvocationInfo): Promise<void>;
+  handleAlarm(alarmInfo?: AlarmInvocationInfo, span?: ApplicationSpan): Promise<void>;
   /**
    * Share the single DO alarm: each named slice states its own desired fire
    * time (or null for none) and the host arms the earliest across all slices
@@ -498,7 +501,7 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
 
     catchUp: (name) => catchUpInternal(name, { rethrow: false }),
 
-    async handleAlarm(alarmInfo) {
+    async handleAlarm(alarmInfo, span) {
       // Entering alarm() means the platform consumed the durable alarm:
       // whatever we believed was armed no longer is, and every reconcile from
       // here must re-issue rather than skip as "unchanged".
@@ -513,7 +516,7 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       for (const [name, atMs] of alarmSlices) {
         if (atMs <= firedAt) alarmSlices.delete(name);
       }
-      await enterCloudflareSpan("alarm processor keepalive", async (span) => {
+      if (span !== undefined) {
         span.setAttribute("iterate.alarm.kind", "processor_keepalive");
         span.setAttribute("iterate.stream.path", options.path);
         if (options.projectId !== null) {
@@ -523,22 +526,24 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
           span.setAttribute("iterate.alarm.is_retry", alarmInfo.isRetry);
           span.setAttribute("iterate.alarm.retry_count", alarmInfo.retryCount);
         }
+      }
+      try {
         try {
-          try {
-            const action = await keepalive.onAlarm();
-            span.setAttribute("iterate.alarm.action", action);
-          } finally {
-            // Awaited AND rethrown: the platform only retries an alarm whose
-            // handler THREW. Resolving with the re-arm still queued (or silently
-            // failed) would consume the alarm for good — an eviction in that
-            // window loses the only thing that revives this DO.
-            await reconcileAlarm();
-          }
-        } catch (error) {
-          span.setAttribute("error.type", error instanceof Error ? error.name : typeof error);
-          throw error;
+          const action = await keepalive.onAlarm();
+          span?.setAttribute("iterate.alarm.action", action);
+        } finally {
+          // Awaited AND rethrown: the platform only retries an alarm whose
+          // handler THREW. Resolving with the re-arm still queued (or silently
+          // failed) would consume the alarm for good — an eviction in that
+          // window loses the only thing that revives this DO.
+          await reconcileAlarm();
         }
-      });
+      } catch (error) {
+        if (span !== undefined) {
+          span.setAttribute("error.type", error instanceof Error ? error.name : typeof error);
+        }
+        throw error;
+      }
     },
 
     setAlarmSlice,

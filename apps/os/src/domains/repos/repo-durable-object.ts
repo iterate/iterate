@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, tracing } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
@@ -92,7 +92,9 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   /** The keepalive's revival alarm — see stream-processor-host.ts. */
   alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#host.handleAlarm(alarmInfo);
+    return tracing.enterSpan("alarm processor keepalive", (span) =>
+      this.#host.handleAlarm(alarmInfo, span),
+    );
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
