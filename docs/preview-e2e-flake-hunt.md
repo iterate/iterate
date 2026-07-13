@@ -29,6 +29,18 @@ launched with `depot ci run --workflow .depot/workflows/preview-e2e-marathon.yml
 Local runs are for fast iteration while fixing a flake; the 50-consecutive-green
 bar is measured on Depot.
 
+## Round 4 (2026-07-13)
+
+Goal: 25 consecutive green runs on Depot, re-validating the lane after a week
+of heavy merging (subagents/unified messaging, itx.search, stream metrics,
+MCP OAuth, sandbox AI-gateway egress, …). Method unchanged: Depot marathon
+(`preview-e2e-marathon.yml`) against this PR's leased slot, fail fast, root
+cause + fix every failure, merge main into this branch between marathons so
+the lane is always tested at (or ahead of) main's head.
+
+Run log lives in the PR comments; flakes found get sections here like every
+prior round.
+
 ## Run log
 
 Depot marathons (the counted lane), 2026-07-05:
