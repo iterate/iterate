@@ -181,7 +181,9 @@ export function githubTokenEnvForConnections(
 export const SANDBOX_GIT_CONFIG_SHELL = [
   `git config --global user.name ${shellSingleQuote(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name)}`,
   `git config --global user.email ${shellSingleQuote(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email)}`,
-  `if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Basic $(printf %s "x-access-token:\${GH_TOKEN}" | base64 | tr -d "\\n")"; fi`,
+  // base64 -w0: single-line output (GNU coreutils on the stock sandbox image).
+  // Do not pipe through tr -d "\\n" — that deletes backslash and n, not newlines.
+  `if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Basic $(printf %s "x-access-token:\${GH_TOKEN}" | base64 -w0)"; fi`,
 ].join(" && ");
 
 /** Quote a literal for POSIX single-quoted shell (safe for `[bot]` emails). */

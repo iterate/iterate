@@ -91,14 +91,15 @@ describe("SANDBOX_GIT_CONFIG_SHELL", () => {
     expect(SANDBOX_GIT_CONFIG_SHELL).toContain("iterate[bot]");
   });
 
-  test("configures git extraheader as Basic x-access-token + base64 of GH_TOKEN placeholder", () => {
+  test("configures git extraheader as Basic x-access-token + unwrapped base64 of GH_TOKEN", () => {
     // GitHub git smart-HTTP rejects Bearer; Basic with username x-access-token
-    // is the documented install-token shape. The shell base64-encodes so the
-    // placeholder still expands from $GH_TOKEN inside the container.
+    // is the documented install-token shape. base64 -w0 keeps the placeholder
+    // on one line so egress can peel/substitute it.
     expect(SANDBOX_GIT_CONFIG_SHELL).toContain('http."https://github.com/".extraheader');
     expect(SANDBOX_GIT_CONFIG_SHELL).toContain("AUTHORIZATION: Basic");
     expect(SANDBOX_GIT_CONFIG_SHELL).toContain("x-access-token:${GH_TOKEN}");
-    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("base64");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("base64 -w0");
+    expect(SANDBOX_GIT_CONFIG_SHELL).not.toMatch(/tr -d/);
     expect(SANDBOX_GIT_CONFIG_SHELL).not.toContain("Bearer");
   });
 });
