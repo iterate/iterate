@@ -1,4 +1,4 @@
-import { DurableObject, tracing } from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -109,9 +109,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   /** The keepalive's revival alarm — see stream-processor-host.ts. */
   alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return tracing.enterSpan("alarm processor keepalive", (span) =>
-      this.#processorHost.handleAlarm(alarmInfo, span),
-    );
+    return this.#processorHost.handleAlarm(alarmInfo);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */

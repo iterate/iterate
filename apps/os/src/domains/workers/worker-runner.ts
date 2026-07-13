@@ -144,7 +144,7 @@ export class DynamicWorkerRunner {
     ref: DynamicWorkerRef;
     request: Request;
   }): Promise<Response> {
-    return this.#trace(ref, "fetch", `worker fetch ${workerTraceReceiver(ref)}`, async (span) => {
+    return this.#trace(ref, "fetch", "dynamic_worker.fetch", async (span) => {
       span.setAttribute("http.request.method", request.method);
       const response =
         ref.type === "stateful"
@@ -191,35 +191,30 @@ export class DynamicWorkerRunner {
     }
 
     const operation = traceNamePart(path.length === 0 ? "root" : path.join("."));
-    return this.#trace(
-      ref,
-      operation,
-      `worker call ${workerTraceReceiver(ref)}.${operation}`,
-      async () => {
-        if (ref.type === "stateful") {
-          // Method replay must happen inside StatefulWorkerDurableObject. Returning
-          // a dynamic facet stub through one DO and then invoking it from another RPC
-          // target has produced opaque internal RPC failures; keeping the replay at
-          // the owning DO boundary also keeps storage affinity explicit. Stateful
-          // refs are also deliberately lazy: mounting a worker capability only
-          // commits the recipe to the stream, while this first real invocation is the
-          // point where source loading, version-marker writes, and facet restarts are
-          // allowed to mutate durable runtime state.
-          return await this.#statefulWorker(ref).invokeCapability({
-            args,
-            buildBudgetMs,
-            flattenNestedPath,
-            path,
-            ref,
-          });
-        }
+    return this.#trace(ref, operation, "dynamic_worker.call", async () => {
+      if (ref.type === "stateful") {
+        // Method replay must happen inside StatefulWorkerDurableObject. Returning
+        // a dynamic facet stub through one DO and then invoking it from another RPC
+        // target has produced opaque internal RPC failures; keeping the replay at
+        // the owning DO boundary also keeps storage affinity explicit. Stateful
+        // refs are also deliberately lazy: mounting a worker capability only
+        // commits the recipe to the stream, while this first real invocation is the
+        // point where source loading, version-marker writes, and facet restarts are
+        // allowed to mutate durable runtime state.
+        return await this.#statefulWorker(ref).invokeCapability({
+          args,
+          buildBudgetMs,
+          flattenNestedPath,
+          path,
+          ref,
+        });
+      }
 
-        const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
-        return flattenNestedPath
-          ? await invokePreferringFlattenedPath({ args, path, target })
-          : await replayPath({ args, path, target });
-      },
-    );
+      const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
+      return flattenNestedPath
+        ? await invokePreferringFlattenedPath({ args, path, target })
+        : await replayPath({ args, path, target });
+    });
   }
 
   /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */
@@ -266,36 +261,17 @@ export class DynamicWorkerRunner {
     }) => Promise<T>,
   ): Promise<T> {
     return tracing.enterSpan(name, async (span) => {
-      span.setAttribute("iterate.project.id", this.#projectId);
-      span.setAttribute("iterate.scope.path", traceNamePart(this.#scopePath));
       span.setAttribute("iterate.worker.operation", operation);
       span.setAttribute("iterate.worker.source", ref.source.files.type);
       span.setAttribute("iterate.worker.type", ref.type);
       if (ref.type === "stateful") {
         span.setAttribute("iterate.worker.class", traceNamePart(ref.className));
-        span.setAttribute("iterate.worker.durable_key", traceNamePart(ref.durableWorkerKey));
       } else {
         span.setAttribute("iterate.worker.entrypoint", traceNamePart(ref.entrypoint ?? "default"));
       }
-      try {
-        return await callback(span);
-      } catch (error) {
-        span.setAttribute(
-          "error.type",
-          traceNamePart(error instanceof Error ? error.name : typeof error),
-        );
-        throw error;
-      }
+      return await callback(span);
     });
   }
-}
-
-function workerTraceReceiver(ref: DynamicWorkerRef): string {
-  return traceNamePart(
-    ref.type === "stateful"
-      ? `${ref.className}:${ref.durableWorkerKey}`
-      : (ref.entrypoint ?? "default"),
-  );
 }
 
 function traceNamePart(value: string): string {

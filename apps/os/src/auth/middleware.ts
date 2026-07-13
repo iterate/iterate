@@ -202,28 +202,28 @@ function logAuthSessionVerificationFailure(input: {
   error: AuthenticateErrorEvent;
   request: Request;
 }) {
-  const url = new URL(input.request.url);
   const details = {
-    reason: input.error.reason,
-    error: toLogError(input.error.error),
-    issuer: input.context.config.iterateAuth?.issuer,
-    clientId: input.context.config.iterateAuth?.clientId,
+    reason: diagnosticIdentifier(input.error.reason) ?? "unknown",
+    errorType: input.error.error instanceof Error ? "Error" : "NonErrorThrowable",
+    issuerHost: input.context.config.iterateAuth?.issuer
+      ? new URL(input.context.config.iterateAuth.issuer).host
+      : undefined,
+    clientId: diagnosticIdentifier(input.context.config.iterateAuth?.clientId),
     jwksKeyIds: input.context.config.iterateAuth?.jwks?.keys
-      ?.map((key) => (typeof key.kid === "string" ? key.kid : null))
-      .filter((kid) => kid !== null),
+      ?.map((key) => diagnosticIdentifier(key.kid))
+      .filter((kid) => kid !== undefined)
+      .slice(0, 20),
     sessionCookie: summarizeSessionCookie(input.request.headers),
-    path: `${url.pathname}${url.search}`,
   };
 
-  input.context.log.warn("os.auth.session_verification_failed");
-  input.context.log.set({ auth: { sessionVerificationFailure: details } });
+  input.context.log.warn("os.auth.session_verification_failed", {
+    auth: { sessionVerificationFailure: details },
+  });
 }
 
-function toLogError(error: unknown) {
-  if (error instanceof Error) {
-    return { name: error.name, message: error.message };
-  }
-  return { message: String(error) };
+function diagnosticIdentifier(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/u.test(value) ? value : undefined;
 }
 
 function summarizeSessionCookie(headers: Headers) {
@@ -238,8 +238,8 @@ function summarizeSessionCookie(headers: Headers) {
     return {
       present: true,
       parseable: true,
-      accessTokenKid: jwtHeaderKid(tokenSet.accessToken),
-      idTokenKid: jwtHeaderKid(tokenSet.idToken),
+      accessTokenKid: diagnosticIdentifier(jwtHeaderKid(tokenSet.accessToken)),
+      idTokenKid: diagnosticIdentifier(jwtHeaderKid(tokenSet.idToken)),
     };
   } catch {
     return { present: true, parseable: false };

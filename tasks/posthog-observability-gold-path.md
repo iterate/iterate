@@ -28,7 +28,7 @@ The parts of #1206 worth reviving are:
 - a generic `AsyncLocalStorage` scope for any logical operation, not just HTTP;
 - one accumulated structured event emitted when the operation exits;
 - structured messages, errors, cause chains, and custom error fields;
-- explicit exit sinks for Cloudflare logs and PostHog;
+- separate ownership for Cloudflare logs and PostHog delivery;
 - independent causal operations for `waitUntil`, outbox work, and other child
   work; and
 - outside-in tests proving successful, expected, thrown, custom, and background
@@ -37,8 +37,8 @@ The parts of #1206 worth reviving are:
 Do not wholesale cherry-pick #1206. Improve these details while porting it:
 
 - link children with `parentId`/`causationId`; never clone the full parent log;
-- pass sinks explicitly and inherit them into child operations rather than
-  mutating process-global exit-handler arrays;
+- emit directly to Cloudflare today; add PostHog only when its delivery and
+  privacy contract is implemented rather than building a speculative sink API;
 - do not restore JSONata keep filters or sampling: emit every operation for now;
 - bound message/error counts and serialized sizes instead of allowing an event
   to grow forever;
@@ -57,6 +57,8 @@ Do not wholesale cherry-pick #1206. Improve these details while porting it:
 - The existing `patches/capnweb@0.8.0.patch` carries the small server-side
   `onCall(info, invoke)` hook. It survives promise pipelining while the client
   API and wire protocol remain unchanged, so the proof has no separate fork PR.
+  The hook is intentionally private to the Workers ESM runtime OS executes;
+  the package does not advertise a cross-runtime API it does not implement.
 - Closed draft `iterate/iterate#1930` used the current evlog wrapper. It is
   superseded by the #1206 correction and is not the logging foundation.
 - The outer OS `worker.fetch` operation covers dashboard, API, webhook,
@@ -67,7 +69,9 @@ Do not wholesale cherry-pick #1206. Improve these details while porting it:
 
 An ITX WebSocket is a long-running transport, not one logical application
 operation. Its HTTP request log ends when the handshake response is returned.
-Never retain one ever-growing log or span for the life of the socket.
+Cloudflare's automatic request trace nevertheless remains the root for the
+life of the socket: custom spans cannot start independent roots or choose a
+manual parent. Never retain one ever-growing application log for the socket.
 
 Each logical call gets its own bounded operation and custom span:
 
@@ -78,22 +82,24 @@ HTTP WebSocket handshake operation
 ITX call operation + `itx <semantic method>` span
   sessionId
   callId
-  trusted projectId, when known
   semantic target/method name
   outcome and duration
   parent operation id, when causally available
 ```
 
-The span display name and log display name should be the same bounded semantic
-name, for example `itx project.files.read`; never put arguments or results in a
-span name. Multiple calls over one socket produce N small call events, not one
+The span display name is a bounded semantic name such as
+`itx Projects.get`. The structured log uses the stable message `itx_rpc` and
+stores the semantic name in `itx.method`, which keeps Cloudflare grouping
+low-cardinality without losing searchability. Never put arguments or results
+in either. Multiple calls over one socket produce N small call events, not one
 large session event.
 
 The Cap'n Web package patch is deliberately minimal. The server-side
 `onCall(info, invoke)` hook and promise-pipeline propagation touch only the
-Workers runtime and public types needed by OS. It sends no client metadata and
-changes no wire tuple; OS mints the session ID and uses the wide-log operation
-ID as the call ID.
+Workers ESM runtime. It sends no client metadata and changes no wire tuple; OS
+mints the session ID and uses the wide-log operation ID as the call ID. The
+current hook covers ordinary and promise-pipelined calls; Cap'n Web `map()` is
+a separate protocol operation and is not claimed as part of this hook.
 Browser/PostHog identity may eventually justify a separate, narrow correlation
 protocol if a socket can outlive the current PostHog session. That decision
 must not be conflated with Cloudflare trace IDs.
@@ -110,25 +116,35 @@ The target is one structured object per completed operation:
 ```ts
 {
   schema: "iterate.wide-log.v1",
-  message,
+  message, // stable kind: http_request or itx_rpc
   log: { id, kind, parentId?, start, end, durationMs },
-  service,
-  deployment: { environment, workerName, version },
   outcome,
-  http?: { requestId, method, path, status, cfRay, traceparent },
   ingress?: { lane, transport, projectId?, appSlug? },
   itx?: { sessionId, callId, method, rpcSystem, transport },
+  auth?,
+  mcpAuth?,
   messages?,
-  errors?,
+  error?: { name, cause? },
   dropped?
 }
 ```
 
-The Cloudflare sink receives the object as one console argument, using error
-severity only for an exception or server-error outcome. Sink failures produce
-one terse diagnostic and never change the product result. All operations are
-retained for now; hard bounds, classification, and safe fields are the volume
-and privacy guardrails.
+The logger writes the object directly as one console argument, using error
+severity only for an exception or server-error outcome. Finalization and
+console failures are swallowed so diagnostics cannot change the product
+result. The schema is an application allowlist rather than an arbitrary record;
+raw error messages, URL queries, headers, bodies, arguments, and results have no
+field. Native Cloudflare request metadata remains the source of truth for HTTP
+method, URL, and status; the application event records only its derived outcome
+instead of duplicating a possibly sensitive path. Error names are normalized to
+`Error` or `NonErrorThrowable`, because an arbitrary throwable can control its
+own `name`. Each event is capped at 4 KiB.
+
+Cloudflare's separate limit is 256 KiB of total console data per request. A
+single indefinitely long WebSocket can therefore never promise unlimited
+native log history, even with 100% configured sampling. The compact per-call
+shape maximizes the useful window; a hard requirement for unbounded sessions
+would need reconnect/rotation or an out-of-band exporter.
 
 ## PostHog investigation experience
 
@@ -146,8 +162,9 @@ For an unexpected browser or Worker failure an operator should be able to:
 - Use the supported edge/workerd export of `posthog-node`.
 - The outer HTTP or logical-ITX operation owns unexpected terminal error
   capture exactly once. Inner code may enrich and rethrow but should not send.
-- Pass the original `Error` to `captureExceptionImmediate`; the wide log keeps a
-  safe serialized copy while its runtime scope retains original error identity.
+- Pass the original `Error` to `captureExceptionImmediate`; the wide log keeps
+  only its safe structural copy. PostHog capture must happen at the terminal
+  catch while the original object is still available.
 - Attach safe properties: error/log ID, deployment/release, operation name,
   connection/call IDs, trusted project group, and current distinct/session ID
   when available.
@@ -217,15 +234,13 @@ encode operational logs as arbitrary product analytics events.
 
 ## Follow-on operation adapters
 
-After HTTP and ITX calls, use the same primitive for:
+The Cloudflare proof also covers dynamic-worker calls/fetches and semantic
+alarm actions. Possible later operation adapters are:
 
 - `waitUntil` children;
 - queue batches and individual retryable work;
 - inbound email delivery;
-- Durable Object alarms (new roots with scheduled-alarm correlation, not fake
-  HTTP ancestry);
 - stream-processor wake/catch-up operations;
-- dynamic-worker calls and fetches; and
 - outbox/reconciler work.
 
 ## Acceptance criteria
@@ -239,7 +254,7 @@ After HTTP and ITX calls, use the same primitive for:
 - [ ] A server error observed in the browser retains replay without creating a
       second exception issue.
 - [ ] Expected 4xx/cancel/close/reconnect outcomes create no PostHog issue.
-- [ ] Sink timeout/failure cannot alter the product outcome.
+- [ ] Logging failure cannot alter the product outcome.
 - [ ] Secrets, bodies, scripts, prompts, arguments/results, auth headers, and
       query parameters are absent from logs, exceptions, and replay.
 
@@ -248,6 +263,16 @@ After HTTP and ITX calls, use the same primitive for:
 - Misha's PR #1206: https://github.com/iterate/iterate/pull/1206
 - Consolidated OS proof: https://github.com/iterate/iterate/pull/1933
 - Minimal Cap'n Web package patch: `patches/capnweb@0.8.0.patch`
+- Cloudflare custom spans:
+  https://developers.cloudflare.com/workers/observability/traces/custom-spans/
+- Cloudflare automatic span attributes:
+  https://developers.cloudflare.com/workers/observability/traces/spans-and-attributes/
+- Cloudflare trace limitations:
+  https://developers.cloudflare.com/workers/observability/traces/known-limitations/
+- Cloudflare Workers log-size limit:
+  https://developers.cloudflare.com/workers/platform/limits/#log-size
+- Cloudflare Workers RPC and promise pipelining:
+  https://developers.cloudflare.com/workers/runtime-apis/rpc/
 - PostHog exception capture: https://posthog.com/docs/error-tracking/capture
 - PostHog React tracking: https://posthog.com/docs/error-tracking/installation/react
 - PostHog Node/Worker tracking: https://posthog.com/docs/error-tracking/installation/node

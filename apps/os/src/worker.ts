@@ -16,7 +16,7 @@
  */
 import handler from "@tanstack/react-start/server-entry";
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
-import { workerVersion, type Env } from "./env.ts";
+import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
@@ -40,7 +40,6 @@ import {
   isWorkerEventsQueue,
 } from "./domains/events/event-queue-entrypoint.ts";
 import { runHttpWideLog } from "./observability/operation.ts";
-import { cloudflareWideLogSink } from "./observability/sinks.ts";
 import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
 
@@ -85,20 +84,7 @@ export default {
     // set by our own routing below. Strip whatever the outside world sent so
     // downstream code can rely on them.
     const request = stripInternalHeaders(inbound);
-    return await runHttpWideLog(
-      {
-        request,
-        service: "@iterate-com/os",
-        deployment: {
-          environment: deploymentEnvironment(env.WORKER_SELF),
-          workerName: env.WORKER_SELF,
-          version: workerVersion(env),
-        },
-        sinks: [cloudflareWideLogSink],
-        waitUntil: (promise) => ctx.waitUntil(promise),
-      },
-      () => fetchWithoutWideLog(request, env, ctx),
-    );
+    return await runHttpWideLog(() => fetchWithoutWideLog(request, env, ctx));
   },
 
   async queue(batch: MessageBatch, env: Env) {
@@ -275,9 +261,7 @@ async function apiFetch(
     return createItxRpcSessionOptions({
       transport,
       sessionId,
-      parentLogId: wideLogger.get().log.id,
-      sinks: [cloudflareWideLogSink],
-      waitUntil: (promise) => ctx.waitUntil(promise),
+      parentLogId: wideLogger.id(),
     });
   };
   if (request.method === "POST") {
@@ -294,7 +278,9 @@ function ingressLogFields(request: Request, route: Awaited<ReturnType<typeof dec
       ...((route.lane === "api" && path === "/api") || route.lane === "project"
         ? {
             transport:
-              request.headers.get("upgrade")?.toLowerCase() === "websocket" ? "websocket" : "http",
+              request.headers.get("upgrade")?.toLowerCase() === "websocket"
+                ? ("websocket" as const)
+                : ("http" as const),
           }
         : {}),
       ...(route.lane === "project"
@@ -305,14 +291,6 @@ function ingressLogFields(request: Request, route: Awaited<ReturnType<typeof dec
         : {}),
     },
   };
-}
-
-function deploymentEnvironment(workerName: string) {
-  if (workerName === "os-prd") return "prd";
-  const preview = /^os-preview-(\d+)$/.exec(workerName);
-  if (preview) return `preview_${preview[1]}`;
-  if (workerName === "os") return "dev";
-  return workerName;
 }
 
 function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {

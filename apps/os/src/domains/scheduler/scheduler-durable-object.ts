@@ -80,9 +80,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     // The shared alarm may be firing for the keepalive's slice, the
     // scheduler's, or both — run both handlers; each is idempotent and
     // re-derives its own next fire time.
-    await tracing.enterSpan("alarm processor keepalive", (span) =>
-      this.#processorHost.handleAlarm(alarmInfo, span),
-    );
+    await this.#processorHost.handleAlarm(alarmInfo);
     await tracing.enterSpan("alarm scheduler trigger due", async (span) => {
       span.setAttribute("iterate.alarm.kind", "scheduler_trigger_due");
       span.setAttribute("iterate.project.id", this.#name.projectId);
@@ -97,10 +95,6 @@ export class SchedulerDurableObject extends DurableObject<Env> {
         span.setAttribute("iterate.scheduler.requested", requested);
         await this.#processorHost.catchUp(PROCESSOR_SLUG);
       } catch (error) {
-        span.setAttribute(
-          "error.type",
-          (error instanceof Error ? error.name : typeof error).slice(0, 128),
-        );
         // Cloudflare retries a throwing alarm handler only a bounded number of
         // times; a prolonged Stream DO outage must not end with due schedules
         // and no armed alarm. Arm a coarse fallback — AWAITED, so the alarm is

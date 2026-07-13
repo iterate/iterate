@@ -6,6 +6,10 @@
 // real Workers implementation.
 
 export class RpcTarget {}
+export class RpcStub {}
+export class RpcPromise {}
+export class RpcProperty {}
+export class ServiceStub {}
 
 export const tracing = {
   enterSpan: <T>(
