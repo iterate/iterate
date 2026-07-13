@@ -246,6 +246,201 @@ describe("StreamEventLog.getRange", () => {
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
   });
 
+  it("scans exact raw progress while materializing only selected event types", () => {
+    const db = new DatabaseSync(":memory:");
+    let selectedQuery: { statement: string; bindings: readonly SqlStorageValue[] } | undefined;
+    const log = new StreamEventLog(
+      wrapSqlStorage(db, (statement, bindings) => {
+        if (statement.includes("with raw as materialized")) {
+          selectedQuery = { statement, bindings };
+        }
+      }),
+      "/tests/stream",
+    );
+    const committedEvents = [
+      event(1, "ignored"),
+      { ...event(2, "selected"), payload: { text: "first" } },
+      event(3, "ignored"),
+      { ...event(4, "selected"), payload: { text: "second" } },
+      event(5, "ignored"),
+    ];
+    const inserted = log.insert(committedEvents);
+    const firstSelectedByteLength = inserted[1]!.byteLength;
+
+    const selected = log.scanPushEventTypesFrame({
+      afterOffset: 0,
+      throughOffset: 5,
+      eventTypes: ["selected"],
+      rawLimit: 5,
+      selectedByteLimit: firstSelectedByteLength,
+    });
+
+    expect(selected).toEqual({
+      events: [inserted[1]],
+      scannedRawRows: 3,
+      rawThroughOffset: 3,
+      byteLength: firstSelectedByteLength,
+      stoppedByByteLimit: true,
+    });
+    expect(selectedQuery).toBeDefined();
+    const plan = db
+      .prepare(`explain query plan ${selectedQuery!.statement}`)
+      .all(
+        ...selectedQuery!.bindings.map((binding) =>
+          binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding,
+        ),
+      )
+      .map((row) => String(row.detail));
+    expect(plan).toContain("SEARCH events USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)");
+    expect(
+      plan.filter((detail) => detail === "SEARCH events USING INTEGER PRIMARY KEY (rowid=?)"),
+    ).not.toHaveLength(0);
+  });
+
+  it("advances over selector misses and matching ephemeral rows without parsing them", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    log.insert([
+      event(1, "ignored"),
+      { ...event(2, "selected"), ephemeral: true },
+      event(3, "ignored"),
+    ]);
+
+    expect(
+      log.scanPushEventTypesFrame({
+        afterOffset: 0,
+        throughOffset: 3,
+        eventTypes: ["selected"],
+        rawLimit: 3,
+        selectedByteLimit: 1,
+      }),
+    ).toEqual({
+      events: [],
+      scannedRawRows: 3,
+      rawThroughOffset: 3,
+      byteLength: 0,
+      stoppedByByteLimit: false,
+    });
+  });
+
+  it("hydrates a selected chunked singleton even when it exceeds the byte cap", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    const committed = { ...event(1, "selected"), payload: { text: "x".repeat(600 * 1024) } };
+    const inserted = log.insert([committed])[0]!;
+
+    expect(
+      log.scanPushEventTypesFrame({
+        afterOffset: 0,
+        throughOffset: 1,
+        eventTypes: ["selected"],
+        rawLimit: 1,
+        selectedByteLimit: 1,
+      }),
+    ).toEqual({
+      events: [inserted],
+      scannedRawRows: 1,
+      rawThroughOffset: 1,
+      byteLength: inserted.byteLength,
+      stoppedByByteLimit: false,
+    });
+  });
+
+  it("advances to the captured head across leading, internal, and trailing eviction gaps", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    log.insert([
+      { ...event(1, "selected"), ephemeral: true },
+      event(2, "selected"),
+      { ...event(3, "selected"), ephemeral: true },
+      event(4, "selected"),
+      { ...event(5, "selected"), ephemeral: true },
+    ]);
+    log.evictEphemeralThrough(5, transactionRunner(db));
+
+    expect(
+      log.scanPushEventTypesFrame({
+        afterOffset: 0,
+        throughOffset: 5,
+        eventTypes: ["selected"],
+        rawLimit: 8,
+        selectedByteLimit: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toMatchObject({
+      events: [{ event: event(2, "selected") }, { event: event(4, "selected") }],
+      scannedRawRows: 2,
+      rawThroughOffset: 5,
+      stoppedByByteLimit: false,
+    });
+  });
+
+  it("advances to the captured head when eviction leaves no surviving rows", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    log.insert([
+      { ...event(1, "selected"), ephemeral: true },
+      { ...event(2, "selected"), ephemeral: true },
+    ]);
+    log.evictEphemeralThrough(2, transactionRunner(db));
+
+    expect(
+      log.scanPushEventTypesFrame({
+        afterOffset: 0,
+        throughOffset: 2,
+        eventTypes: ["selected"],
+        rawLimit: 8,
+        selectedByteLimit: 1,
+      }),
+    ).toEqual({
+      events: [],
+      scannedRawRows: 0,
+      rawThroughOffset: 2,
+      byteLength: 0,
+      stoppedByByteLimit: false,
+    });
+  });
+
+  it("stops at exactly the raw row limit before advancing the captured head", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    log.insert(Array.from({ length: 8_001 }, (_, index) => event(index + 1, "ignored")));
+
+    expect(
+      log.scanPushEventTypesFrame({
+        afterOffset: 0,
+        throughOffset: 8_001,
+        eventTypes: ["selected"],
+        rawLimit: 8_000,
+        selectedByteLimit: 1,
+      }),
+    ).toEqual({
+      events: [],
+      scannedRawRows: 8_000,
+      rawThroughOffset: 8_000,
+      byteLength: 0,
+      stoppedByByteLimit: false,
+    });
+  });
+
+  it("binds large exact type sets as one JSON value", () => {
+    const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
+    const selectedType = "type-127";
+    const inserted = log.insert([event(1, selectedType)])[0]!;
+
+    expect(
+      log.scanPushEventTypesFrame({
+        afterOffset: 0,
+        throughOffset: 1,
+        eventTypes: Array.from({ length: 128 }, (_, index) => `type-${index}`),
+        rawLimit: 8,
+        selectedByteLimit: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual({
+      events: [inserted],
+      scannedRawRows: 1,
+      rawThroughOffset: 1,
+      byteLength: inserted.byteLength,
+      stoppedByByteLimit: false,
+    });
+  });
+
   it("round-trips the exact committed source and payload representation", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
     const committed: StreamEvent = {
@@ -1033,14 +1228,20 @@ describe("reconcileSubscriptionCursorRows", () => {
   it("drops orphaned rows, keeps progress, clears failure state (version-mismatch rebuild)", () => {
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
     store.ensure("survivor-clean", 5);
-    store.ensure("survivor-backing-off", 3);
+    const survivor = store.ensure("survivor-backing-off", 3);
     store.nack("survivor-backing-off", {
       attempt: 7,
       nextAttemptAt: 99_999,
       error: "old-code bug",
+      epoch: survivor.epoch,
     });
-    store.ensure("orphan", 2);
-    store.nack("orphan", { attempt: 14, nextAttemptAt: 88_888, error: "config no longer folds" });
+    const orphan = store.ensure("orphan", 2);
+    store.nack("orphan", {
+      attempt: 14,
+      nextAttemptAt: 88_888,
+      error: "config no longer folds",
+      epoch: orphan.epoch,
+    });
 
     reconcileSubscriptionCursorRows(store, new Set(["survivor-clean", "survivor-backing-off"]));
 
@@ -1230,10 +1431,10 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
 
     store.ack("k", 3, row.epoch);
     store.ack("k", 2);
-    store.advanceWatermark("k", 3);
+    store.advanceWatermark("k", 3, row.epoch);
     expect(writes).toBe(0);
 
-    store.nack("k", { attempt: 1, nextAttemptAt: 10, error: "retry" });
+    store.nack("k", { attempt: 1, nextAttemptAt: 10, error: "retry", epoch: row.epoch });
     writes = 0;
     store.ack("k", 3, row.epoch);
     expect(writes).toBe(1);
@@ -1257,17 +1458,65 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(store.get("k")!.ackedOffset).toBe(0); // full history still owed
   });
 
+  it("rejects a stale delivery nack after a seek or remove+recreate", () => {
+    const store = makeStore();
+    const oldEpoch = store.ensure("k", 0).epoch;
+
+    store.setCursor("k", 2);
+    store.nack("k", {
+      attempt: 4,
+      nextAttemptAt: 123,
+      error: "old target failed",
+      epoch: oldEpoch,
+    });
+    expect(store.get("k")).toMatchObject({
+      ackedOffset: 2,
+      attempt: 0,
+      nextAttemptAt: null,
+    });
+
+    const seekEpoch = store.get("k")!.epoch;
+    store.delete("k");
+    store.ensure("k", 0);
+    store.nack("k", {
+      attempt: 4,
+      nextAttemptAt: 123,
+      error: "removed target failed",
+      epoch: seekEpoch,
+    });
+    expect(store.get("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 0,
+      nextAttemptAt: null,
+    });
+  });
+
   it("advanceWatermark keeps the failure streak but clears the retry schedule", () => {
     const store = makeStore();
-    store.ensure("k", 0);
-    store.nack("k", { attempt: 3, nextAttemptAt: 12345, error: "ingest failing" });
+    const ensured = store.ensure("k", 0);
+    store.nack("k", {
+      attempt: 3,
+      nextAttemptAt: 12345,
+      error: "ingest failing",
+      epoch: ensured.epoch,
+    });
 
-    store.advanceWatermark("k", 7);
+    store.advanceWatermark("k", 7, ensured.epoch);
     const row = store.get("k")!;
     expect(row.ackedOffset).toBe(7);
     expect(row.attempt).toBe(3); // a reachable host is not a healthy one
     expect(row.lastError).toBe("ingest failing");
     expect(row.nextAttemptAt).toBeNull(); // the poke consumed the retry
+  });
+
+  it("rejects an observational watermark fenced on a stale epoch", () => {
+    const store = makeStore();
+    const oldEpoch = store.ensure("k", 0).epoch;
+    store.setCursor("k", 2);
+
+    store.advanceWatermark("k", 100, oldEpoch);
+
+    expect(store.get("k")!.ackedOffset).toBe(2);
   });
 
   it("serves cursor reads and repeated ensures from its write-through cache", () => {
@@ -1294,7 +1543,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(sqlCalls).toBe(callsAfterInsert);
     expect(store.get("k")!.ackedOffset).toBe(2);
 
-    store.nack("k", { attempt: 3, nextAttemptAt: 123, error: "retry" });
+    store.nack("k", { attempt: 3, nextAttemptAt: 123, error: "retry", epoch: ensured.epoch });
     expect(sqlCalls).toBeGreaterThan(callsAfterInsert);
     const callsAfterWrite = sqlCalls;
     expect(store.get("k")).toMatchObject({ attempt: 3, nextAttemptAt: 123 });
@@ -1454,7 +1703,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
     let epoch = store.ensure("k", 0).epoch;
     store.stageAck("k", 100, epoch);
-    store.nack("k", { attempt: 1, nextAttemptAt: 10, error: "retry" });
+    store.nack("k", { attempt: 1, nextAttemptAt: 10, error: "retry", epoch });
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")).toMatchObject({
       ackedOffset: 100,
       attempt: 1,
@@ -1523,8 +1772,13 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
   it("persists a skip immediately when it consumes an existing backoff", () => {
     const db = new DatabaseSync(":memory:");
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
-    store.ensure("k", 0);
-    store.nack("k", { attempt: 2, nextAttemptAt: 1, error: "receiver was down" });
+    const ensured = store.ensure("k", 0);
+    store.nack("k", {
+      attempt: 2,
+      nextAttemptAt: 1,
+      error: "receiver was down",
+      epoch: ensured.epoch,
+    });
 
     store.skip("k", 1, store.get("k")!.epoch);
 

@@ -63,6 +63,7 @@ import type {
 import { StreamSubscriberDescriptor as StreamSubscriberDescriptorSchema } from "./core-processor-contract.ts";
 import { compileEventSelector, type CompiledEventSelector } from "./event-selector.ts";
 import type {
+  SelectedStreamFrame,
   SizedStreamEvent,
   SubscriptionCursorRow,
   SubscriptionCursorSet,
@@ -241,7 +242,19 @@ type StreamSubscribersHooks = {
    * event arrives with its serialized byte length so batch construction can
    * enforce the byte cap without re-stringifying what storage just parsed.
    */
-  readEvents(args: { afterOffset: number; limit: number }): SizedStreamEvent[];
+  readEvents(args: {
+    afterOffset: number;
+    throughOffset: number;
+    limit: number;
+  }): SizedStreamEvent[];
+  /** Optional exact-type push frame that omits nonmatching payload materialization. */
+  scanPushEventTypesFrame?(args: {
+    afterOffset: number;
+    throughOffset: number;
+    eventTypes: readonly string[];
+    rawLimit: number;
+    selectedByteLimit: number;
+  }): SelectedStreamFrame;
   /** Current core reduced state, read in the same synchronous block as each delivery. */
   coreState(): CoreProcessorState;
   /** The spine's durable cursor rows (SQLite next to the event log). */
@@ -282,6 +295,37 @@ type PushDrainStart = {
   row: SubscriptionCursorRow;
 };
 
+function sharedPushEventTypes(
+  entries: readonly [string, ConfiguredSubscribers[string]][],
+): readonly string[] | undefined {
+  let shared: readonly string[] | undefined;
+  for (const [, entry] of entries) {
+    const config = entry.latestConfiguredEvent.payload;
+    if (config.delivery.mode !== "push") continue;
+    const configuredTypes = config.selector?.eventTypes;
+    if (
+      configuredTypes === undefined ||
+      configuredTypes.length === 0 ||
+      configuredTypes.includes("*") ||
+      config.selector?.condition !== undefined
+    ) {
+      return undefined;
+    }
+    const normalized = [...new Set(configuredTypes)].sort();
+    if (shared === undefined) {
+      shared = normalized;
+      continue;
+    }
+    if (
+      shared.length !== normalized.length ||
+      shared.some((eventType, index) => eventType !== normalized[index])
+    ) {
+      return undefined;
+    }
+  }
+  return shared;
+}
+
 type SelectorConditionFailure = { event: StreamEvent; error: string };
 type SelectorProjection = {
   matched: StreamEvent[];
@@ -295,8 +339,12 @@ type SelectorProjectionsByVisibility = {
 
 type ReadBatchProjection = {
   afterOffset: number;
+  throughOffset: number;
   limit: number;
   byteLimit: number;
+  scannedEventCount: number;
+  selectedEventTypesKey?: string;
+  selectedThroughOffset?: number;
   includesEventByteLengths: boolean;
   events: StreamEvent[];
   durableEvents: StreamEvent[];
@@ -305,6 +353,7 @@ type ReadBatchProjection = {
   byteLength: number;
   durableByteLength: number;
   lastOffset: number | undefined;
+  stoppedByByteLimit: boolean;
   selectorProjections?: Map<CompiledEventSelector, SelectorProjectionsByVisibility>;
 };
 
@@ -316,6 +365,7 @@ type ReadBatchResult = {
   byteLength: number;
   projection: ReadBatchProjection | undefined;
   durableOnly: boolean;
+  stoppedByByteLimit: boolean;
 };
 
 export class StreamSubscribers {
@@ -440,12 +490,16 @@ export class StreamSubscribers {
   /** Immutable SQLite ranges partitioned by frame budget so mixed modes cannot evict each other. */
   readonly #storageReadCachesByByteLimit = new Map<
     number,
-    { afterOffset: number; limit: number; entries: SizedStreamEvent[] }[]
+    { afterOffset: number; throughOffset: number; limit: number; entries: SizedStreamEvent[] }[]
   >();
   /** Complete frame-bounded projections; sized entries also serve unsized readers. */
   readonly #storageReadProjectionsByByteLimit = new Map<number, ReadBatchProjection[]>();
   #configuredSubscribers: ConfiguredSubscribers | undefined;
   #configuredSubscriberEntries: [string, ConfiguredSubscribers[string]][] = [];
+  /** Exact type set shared by every push config; undefined disables SQL prefiltering. */
+  #sharedPushEventTypes: readonly string[] | undefined;
+  /** Config side-effect fence for deliveries that await across a replacement. */
+  readonly #latestConfiguredOffsets = new Map<string, number>();
 
   /**
    * Re-arm every live connection's pump and reconcile durable subscriptions
@@ -599,7 +653,7 @@ export class StreamSubscribers {
       if (row.ackedOffset >= state.maxOffset) continue; // caught up; nothing to say
 
       if (config.delivery.mode === "wake") {
-        this.#poke(subscriptionKey, config.delivery, configOffset);
+        this.#poke(subscriptionKey, config.delivery, configOffset, row.epoch);
         continue;
       }
 
@@ -611,6 +665,7 @@ export class StreamSubscribers {
     if (configuredSubscribers !== this.#configuredSubscribers) {
       this.#configuredSubscribers = configuredSubscribers;
       this.#configuredSubscriberEntries = Object.entries(configuredSubscribers);
+      this.#sharedPushEventTypes = sharedPushEventTypes(this.#configuredSubscriberEntries);
     }
     return this.#configuredSubscriberEntries;
   }
@@ -628,6 +683,7 @@ export class StreamSubscribers {
     subscriptionKey: string,
     delivery: Extract<SubscriptionDelivery, { mode: "wake" }>,
     configOffset: number,
+    epoch: number,
   ): void {
     const state = this.#hooks.coreState();
     if (state.projectId === undefined || state.path === undefined) return;
@@ -652,7 +708,8 @@ export class StreamSubscribers {
         if (
           current === undefined ||
           current.latestConfiguredEvent.offset !== configOffset ||
-          current.latestConfiguredEvent.payload.delivery.mode !== "wake"
+          current.latestConfiguredEvent.payload.delivery.mode !== "wake" ||
+          this.#hooks.store.get(subscriptionKey)?.epoch !== epoch
         ) {
           response.sink[Symbol.dispose]();
           // The fence dropped a stale poke, but the CURRENT config (if any) is
@@ -702,12 +759,14 @@ export class StreamSubscribers {
         // digested since the failure.
         const watermarkRow = this.#hooks.store.get(subscriptionKey);
         if (watermarkRow === undefined || response.checkpointOffset > watermarkRow.ackedOffset) {
-          this.#hooks.store.ack(subscriptionKey, response.checkpointOffset);
+          this.#hooks.store.ack(subscriptionKey, response.checkpointOffset, epoch);
         } else {
-          this.#hooks.store.advanceWatermark(subscriptionKey, response.checkpointOffset);
+          this.#hooks.store.advanceWatermark(subscriptionKey, response.checkpointOffset, epoch);
         }
       } catch (error) {
-        this.#onDeliveryFailure(subscriptionKey, error);
+        if (!this.#onDeliveryFailure({ subscriptionKey, configOffset, epoch, error })) {
+          queueMicrotask(() => this.wake());
+        }
       } finally {
         this.#pokesInFlight.delete(subscriptionKey);
       }
@@ -764,14 +823,18 @@ export class StreamSubscribers {
             config.selector === undefined
               ? undefined
               : this.#selectorFor(subscriptionKey, entry.latestConfiguredEvent.offset, config);
+          const selectedEventTypes =
+            config.delivery.mode === "push" ? this.#sharedPushEventTypes : undefined;
           const read = this.#readBatch(
             row.ackedOffset,
             limit,
+            state.maxOffset,
             true,
             selector !== undefined && !selector.matchesAll,
             config.delivery.mode === "push"
               ? PUSH_DELIVERY_BATCH_BYTE_LIMIT
               : DELIVERY_BATCH_BYTE_LIMIT,
+            selectedEventTypes,
           );
           let durable = read.events;
           let lastOffset = read.lastOffset;
@@ -807,6 +870,7 @@ export class StreamSubscribers {
             matchedByteLength !== undefined &&
             matchedByteLength < PUSH_DELIVERY_BATCH_BYTE_LIMIT &&
             !this.#batchLimits.has(subscriptionKey) &&
+            !(read.stoppedByByteLimit && read.projection?.selectedEventTypesKey !== undefined) &&
             scannedEventCount < limit &&
             lastOffset < state.maxOffset
           ) {
@@ -814,9 +878,11 @@ export class StreamSubscribers {
               const nextRead = this.#readBatch(
                 lastOffset,
                 limit - scannedEventCount,
+                state.maxOffset,
                 true,
                 true,
                 PUSH_DELIVERY_BATCH_BYTE_LIMIT,
+                selectedEventTypes,
               );
               const nextLastOffset = nextRead.lastOffset;
               if (nextLastOffset === undefined) break;
@@ -845,7 +911,9 @@ export class StreamSubscribers {
               if (
                 scannedEventCount >= limit ||
                 lastOffset >= state.maxOffset ||
-                matchedByteLength >= PUSH_DELIVERY_BATCH_BYTE_LIMIT
+                matchedByteLength >= PUSH_DELIVERY_BATCH_BYTE_LIMIT ||
+                (nextRead.stoppedByByteLimit &&
+                  nextRead.projection?.selectedEventTypesKey !== undefined)
               ) {
                 break;
               }
@@ -923,6 +991,8 @@ export class StreamSubscribers {
             if (
               this.#onPushFailure({
                 subscriptionKey,
+                configOffset: entry.latestConfiguredEvent.offset,
+                epoch: row.epoch,
                 config,
                 matched,
                 scannedEventCount,
@@ -945,16 +1015,23 @@ export class StreamSubscribers {
             subscriptionMetrics.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
           }
           subscriptionMetrics.bytesSent += deliveredBytes;
-          // Fenced on the epoch read above: a seek (cursor-set, replacement
-          // deliver, remove+recreate) that landed while this delivery was in
-          // flight bumped the epoch, and this ack no-ops instead of
-          // clobbering it — the next iteration re-reads the row and drains
-          // from wherever the seek pointed.
-          if (config.delivery.mode === "push") {
-            this.#hooks.store.stageAck(subscriptionKey, lastOffset, row.epoch);
-          } else {
-            this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+          // Config replacements can preserve the cursor epoch. Their
+          // synchronous side effect publishes the new offset, giving this hot
+          // path a zero-read fence after the awaited RPC.
+          const latestConfiguredOffset = this.#latestConfiguredOffsets.get(subscriptionKey);
+          if (
+            latestConfiguredOffset !== undefined &&
+            latestConfiguredOffset !== entry.latestConfiguredEvent.offset
+          ) {
+            continue;
           }
+          let acknowledged: boolean;
+          if (config.delivery.mode === "push") {
+            acknowledged = this.#hooks.store.stageAck(subscriptionKey, lastOffset, row.epoch);
+          } else {
+            acknowledged = this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
+          }
+          if (!acknowledged) continue;
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
           if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) return;
@@ -980,10 +1057,16 @@ export class StreamSubscribers {
   #readBatch(
     afterOffset: number,
     limit: number,
+    throughOffset: number,
     durableOnly = false,
     includeEventByteLengths = false,
     byteLimit = DELIVERY_BATCH_BYTE_LIMIT,
+    selectedEventTypes?: readonly string[],
   ): ReadBatchResult {
+    const selectedEventTypesKey =
+      selectedEventTypes === undefined || this.#hooks.scanPushEventTypesFrame === undefined
+        ? undefined
+        : selectedEventTypes.join("\u0000");
     const firstFreshOffset = this.#freshTail[0]?.event.offset;
     const freshStart = firstFreshOffset === undefined ? -1 : afterOffset + 1 - firstFreshOffset;
     const useFreshTail =
@@ -997,39 +1080,104 @@ export class StreamSubscribers {
           ?.find(
             (projection) =>
               projection.afterOffset === afterOffset &&
+              projection.throughOffset === throughOffset &&
               projection.limit === limit &&
               projection.byteLimit === byteLimit &&
+              (selectedEventTypesKey === undefined
+                ? projection.selectedEventTypesKey === undefined
+                : projection.selectedEventTypesKey === undefined ||
+                  (projection.selectedEventTypesKey === selectedEventTypesKey &&
+                    projection.selectedThroughOffset === throughOffset)) &&
               (!includeEventByteLengths || projection.includesEventByteLengths),
           );
     if (
       cached !== undefined &&
       cached.afterOffset === afterOffset &&
+      cached.throughOffset === throughOffset &&
       cached.limit === limit &&
       cached.byteLimit === byteLimit &&
       (!includeEventByteLengths || cached.includesEventByteLengths)
     ) {
       return {
         events: (durableOnly ? cached.durableEvents : cached.events).slice(),
-        scannedEventCount: cached.events.length,
+        scannedEventCount: cached.scannedEventCount,
         lastOffset: cached.lastOffset,
         eventByteLengths: durableOnly ? cached.durableEventByteLengths : cached.eventByteLengths,
         byteLength: durableOnly ? cached.durableByteLength : cached.byteLength,
         projection: cached,
         durableOnly,
+        stoppedByByteLimit: cached.stoppedByByteLimit,
       };
     }
     const hintedLimit = this.#storageReadLimitHints.get(byteLimit);
-    const storageLimit = Math.min(limit, hintedLimit ?? limit);
+    const storageLimit =
+      selectedEventTypesKey === undefined ? Math.min(limit, hintedLimit ?? limit) : limit;
     const storageReadCaches = this.#storageReadCachesByByteLimit.get(byteLimit);
     const cachedStorageRead = storageReadCaches?.find(
-      (entry) => entry.afterOffset === afterOffset && entry.limit === storageLimit,
+      (entry) =>
+        entry.afterOffset === afterOffset &&
+        entry.throughOffset === throughOffset &&
+        entry.limit === storageLimit,
     );
     const sourceFromStorageCache = !useFreshTail && cachedStorageRead !== undefined;
+    if (
+      !useFreshTail &&
+      !sourceFromStorageCache &&
+      selectedEventTypesKey !== undefined &&
+      selectedEventTypes !== undefined &&
+      this.#hooks.scanPushEventTypesFrame !== undefined
+    ) {
+      const selected = this.#hooks.scanPushEventTypesFrame({
+        afterOffset,
+        throughOffset,
+        eventTypes: selectedEventTypes,
+        rawLimit: storageLimit,
+        selectedByteLimit: byteLimit,
+      });
+      const events = selected.events.map((entry) => entry.event);
+      const eventByteLengths = selected.events.map((entry) => entry.byteLength);
+      const projection: ReadBatchProjection = {
+        afterOffset,
+        throughOffset,
+        limit,
+        byteLimit,
+        scannedEventCount: selected.scannedRawRows,
+        selectedEventTypesKey,
+        selectedThroughOffset: throughOffset,
+        includesEventByteLengths: true,
+        events,
+        durableEvents: events,
+        eventByteLengths,
+        durableEventByteLengths: eventByteLengths,
+        byteLength: selected.byteLength,
+        durableByteLength: selected.byteLength,
+        lastOffset: selected.rawThroughOffset,
+        stoppedByByteLimit: selected.stoppedByByteLimit,
+      };
+      if (selected.byteLength <= byteLimit) {
+        const projections = this.#storageReadProjectionsByByteLimit.get(byteLimit) ?? [];
+        projections.unshift(projection);
+        this.#storageReadProjectionsByByteLimit.set(byteLimit, projections);
+        const maxEntries =
+          byteLimit === PUSH_DELIVERY_BATCH_BYTE_LIMIT ? MAX_PUSH_STORAGE_READ_CACHE_ENTRIES : 1;
+        if (projections.length > maxEntries) projections.pop();
+      }
+      return {
+        events: events.slice(),
+        scannedEventCount: selected.scannedRawRows,
+        lastOffset: selected.rawThroughOffset,
+        eventByteLengths,
+        byteLength: selected.byteLength,
+        projection,
+        durableOnly: true,
+        stoppedByByteLimit: selected.stoppedByByteLimit,
+      };
+    }
     const source = useFreshTail
       ? this.#freshTail
       : sourceFromStorageCache
         ? cachedStorageRead.entries
-        : this.#hooks.readEvents({ afterOffset, limit: storageLimit });
+        : this.#hooks.readEvents({ afterOffset, throughOffset, limit: storageLimit });
     const start = useFreshTail ? freshStart : 0;
     const events: StreamEvent[] = [];
     let durable: StreamEvent[] | undefined;
@@ -1065,6 +1213,9 @@ export class StreamSubscribers {
       }
       bytes = nextBytes;
     }
+    if (!useFreshTail && !exceededByteLimit && source.length < storageLimit) {
+      lastOffset = throughOffset;
+    }
     if (!useFreshTail && (limit === DELIVERY_BATCH_LIMIT || limit === PUSH_DELIVERY_BATCH_LIMIT)) {
       if (exceededByteLimit) {
         this.#storageReadLimitHints.set(byteLimit, Math.max(2, events.length + 1));
@@ -1090,11 +1241,12 @@ export class StreamSubscribers {
         const boundedLength = events.length + 1;
         caches.unshift({
           afterOffset,
+          throughOffset,
           limit: boundedLength,
           entries: source.length === boundedLength ? source : source.slice(0, boundedLength),
         });
       } else if (!exceededByteLimit && bytes <= byteLimit) {
-        caches.unshift({ afterOffset, limit: storageLimit, entries: source });
+        caches.unshift({ afterOffset, throughOffset, limit: storageLimit, entries: source });
       }
       if (caches.length > 0) {
         this.#storageReadCachesByByteLimit.set(byteLimit, caches);
@@ -1115,8 +1267,10 @@ export class StreamSubscribers {
       // while aligned raw and durable readers share both scans through slice().
       const projection = {
         afterOffset,
+        throughOffset,
         limit,
         byteLimit,
+        scannedEventCount: events.length,
         includesEventByteLengths: includeEventByteLengths,
         events,
         durableEvents,
@@ -1125,6 +1279,7 @@ export class StreamSubscribers {
         byteLength: bytes,
         durableByteLength: durableBytes,
         lastOffset,
+        stoppedByByteLimit: exceededByteLimit,
       };
       if (useFreshTail) {
         if (includeEventByteLengths) this.#freshTailSizedProjection = projection;
@@ -1147,6 +1302,7 @@ export class StreamSubscribers {
         byteLength: durableOnly ? durableBytes : bytes,
         projection,
         durableOnly,
+        stoppedByByteLimit: exceededByteLimit,
       };
     }
     return {
@@ -1157,6 +1313,7 @@ export class StreamSubscribers {
       byteLength: durableOnly ? durableBytes : bytes,
       projection: undefined,
       durableOnly,
+      stoppedByByteLimit: exceededByteLimit,
     };
   }
 
@@ -1253,12 +1410,17 @@ export class StreamSubscribers {
    */
   #onPushFailure(args: {
     subscriptionKey: string;
+    configOffset: number;
+    epoch: number;
     config: SubscriptionConfiguredPayload;
     matched: StreamEvent[];
     scannedEventCount: number;
     error: unknown;
   }): "continue" | "stop" {
-    const { subscriptionKey, config, matched, scannedEventCount, error } = args;
+    const { subscriptionKey, configOffset, epoch, config, matched, scannedEventCount, error } =
+      args;
+    const row = this.#currentDeliveryRow(subscriptionKey, configOffset, epoch);
+    if (row === undefined) return "continue";
     // A receiver that DECLARED itself unavailable (see
     // StreamReceiverUnavailableError) is down, not poisoned: no bisecting, no
     // skip confirmation — the same batch backs off and redelivers whole, and
@@ -1269,7 +1431,7 @@ export class StreamSubscribers {
     // tries — a mis-skip needs a poison event racing the recovery boundary,
     // versus today's guaranteed skip of healthy events during the outage.
     if (isStreamReceiverUnavailableError(error)) {
-      this.#onDeliveryFailure(subscriptionKey, error);
+      this.#onDeliveryFailure({ subscriptionKey, configOffset, epoch, error, row });
       return "stop";
     }
     if (config.onPoison === "skip") {
@@ -1281,10 +1443,9 @@ export class StreamSubscribers {
         this.#batchLimits.set(subscriptionKey, halveBatchLimit(scannedEventCount));
         return "continue";
       }
-      const row = this.#hooks.store.get(subscriptionKey);
-      const attempt = (row?.attempt ?? 0) + 1;
+      const attempt = row.attempt + 1;
       if (attempt < SKIP_CONFIRM_ATTEMPTS) {
-        this.#backoff(subscriptionKey, attempt, error);
+        this.#backoff(subscriptionKey, epoch, attempt, error);
         return "stop";
       }
       // Confirmed poison — unless skips are running consecutive, in which
@@ -1292,7 +1453,7 @@ export class StreamSubscribers {
       // event) and mass-skipping its backlog would be silent data loss: park.
       const skips = (this.#consecutiveSkips.get(subscriptionKey) ?? 0) + 1;
       if (skips >= MAX_CONSECUTIVE_SKIPS) {
-        this.#park(subscriptionKey, attempt, error);
+        this.#park(subscriptionKey, configOffset, epoch, row, attempt, error);
         return "stop";
       }
       const poison = matched[0]!;
@@ -1306,33 +1467,53 @@ export class StreamSubscribers {
       });
       // Step over the confirmed poison event and reset the bisect window +
       // failure streak: the receiver is alive, it just cannot digest that one.
-      this.#hooks.store.ack(subscriptionKey, poison.offset);
+      this.#hooks.store.ack(subscriptionKey, poison.offset, epoch);
       this.#batchLimits.delete(subscriptionKey);
       return "continue";
     }
 
-    const row = this.#hooks.store.get(subscriptionKey);
-    this.#onDeliveryFailure(subscriptionKey, error, row?.attempt ?? 0);
+    this.#onDeliveryFailure({ subscriptionKey, configOffset, epoch, error, row });
     return "stop";
   }
 
-  /** Shared failure path for pokes and park-mode pushes: back off, then park. */
-  #onDeliveryFailure(subscriptionKey: string, error: unknown, previousAttempts?: number): void {
-    const attempts = previousAttempts ?? this.#hooks.store.get(subscriptionKey)?.attempt ?? 0;
-    const attempt = attempts + 1;
-    if (attempt >= MAX_DELIVERY_ATTEMPTS) {
-      this.#park(subscriptionKey, attempt, error);
-      return;
-    }
-    this.#backoff(subscriptionKey, attempt, error);
+  #currentDeliveryRow(
+    subscriptionKey: string,
+    configOffset: number,
+    epoch: number,
+  ): SubscriptionCursorRow | undefined {
+    const current = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
+    if (current?.latestConfiguredEvent.offset !== configOffset) return undefined;
+    const row = this.#hooks.store.get(subscriptionKey);
+    return row?.epoch === epoch ? row : undefined;
   }
 
-  #backoff(subscriptionKey: string, attempt: number, error: unknown): void {
+  /** Shared failure path for pokes and park-mode pushes: back off, then park. */
+  #onDeliveryFailure(args: {
+    subscriptionKey: string;
+    configOffset: number;
+    epoch: number;
+    error: unknown;
+    row?: SubscriptionCursorRow;
+  }): boolean {
+    const { subscriptionKey, configOffset, epoch, error } = args;
+    const row = args.row ?? this.#currentDeliveryRow(subscriptionKey, configOffset, epoch);
+    if (row === undefined) return false;
+    const attempt = row.attempt + 1;
+    if (attempt >= MAX_DELIVERY_ATTEMPTS) {
+      this.#park(subscriptionKey, configOffset, epoch, row, attempt, error);
+      return true;
+    }
+    this.#backoff(subscriptionKey, epoch, attempt, error);
+    return true;
+  }
+
+  #backoff(subscriptionKey: string, epoch: number, attempt: number, error: unknown): void {
     const nextAttemptAt = this.#hooks.now() + computeBackoffMs(attempt, this.#hooks.random());
     this.#hooks.store.nack(subscriptionKey, {
       attempt,
       nextAttemptAt,
       error: errorMessage(error),
+      epoch,
     });
     this.#hooks.armAlarm(nextAttemptAt);
   }
@@ -1343,24 +1524,31 @@ export class StreamSubscribers {
    * failure cannot spam the log. `subscription-resumed` (or a fresh
    * `subscription-configured`) is the way back.
    */
-  #park(subscriptionKey: string, attempts: number, error: unknown): void {
+  #park(
+    subscriptionKey: string,
+    configOffset: number,
+    epoch: number,
+    row: SubscriptionCursorRow,
+    attempts: number,
+    error: unknown,
+  ): void {
     // State-guarded, not idempotency-keyed: a park after resume at an unmoved
     // cursor is a NEW transition and must land as a new fact (an idempotency
     // key derived from the cursor would swallow it and the subscription would
     // retry forever without ever turning red again). Duplicate suppression
     // comes from the fold: while parked, the pump never runs this path.
+    const current = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
     if (
-      this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey]?.parkedAtOffset !==
-      undefined
+      current?.latestConfiguredEvent.offset !== configOffset ||
+      current.parkedAtOffset !== undefined
     ) {
       return;
     }
-    const row = this.#hooks.store.get(subscriptionKey);
     this.#hooks.appendFact({
       type: "events.iterate.com/stream/subscription-parked",
       payload: {
         subscriptionKey,
-        atOffset: row?.ackedOffset ?? 0,
+        atOffset: row.ackedOffset,
         attempts,
         error: errorMessage(error),
       },
@@ -1370,7 +1558,7 @@ export class StreamSubscribers {
     // every onAlarm forever — a permanent alarm hot loop per parked
     // subscription. Clear the backoff, keep the cursor (the park fact carries
     // the attempts + error for the audit trail).
-    if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
+    this.#hooks.store.ack(subscriptionKey, row.ackedOffset, epoch);
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#batchLimits.delete(subscriptionKey);
   }
@@ -1403,6 +1591,7 @@ export class StreamSubscribers {
     options?: ControlSideEffectOptions,
   ): void {
     const key = payload.subscriptionKey;
+    this.#latestConfiguredOffsets.set(key, eventOffset);
     this.#configuredSubscribers = undefined;
     this.#compiledSelectors.delete(key);
     // A replaced config's live connection belongs to the old config; drop it
@@ -1428,6 +1617,7 @@ export class StreamSubscribers {
 
   /** A `subscription-removed` event committed. Deleting the row is revocation. */
   onSubscriptionRemoved(subscriptionKey: string): void {
+    this.#latestConfiguredOffsets.delete(subscriptionKey);
     this.#configuredSubscribers = undefined;
     this.#hooks.store.delete(subscriptionKey);
     this.#connections.get(subscriptionKey)?.close("subscription-removed");
@@ -1532,6 +1722,7 @@ export class StreamSubscribers {
                   ? this.#readBatch(
                       cursor,
                       DELIVERY_BATCH_LIMIT,
+                      stateMaxOffset,
                       subscriptionType === "configured",
                       args.selector !== undefined && !args.selector.matchesAll,
                     )
@@ -1715,7 +1906,17 @@ export class StreamSubscribers {
       subscriptionKey,
       error,
     });
-    this.#onDeliveryFailure(subscriptionKey, error);
+    const entry = this.#hooks.coreState().configuredSubscribersByKey[subscriptionKey];
+    const row = this.#hooks.store.get(subscriptionKey);
+    if (entry !== undefined && row !== undefined) {
+      this.#onDeliveryFailure({
+        subscriptionKey,
+        configOffset: entry.latestConfiguredEvent.offset,
+        epoch: row.epoch,
+        error,
+        row,
+      });
+    }
     connection.close("delivery-failed");
   }
 

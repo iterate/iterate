@@ -53,20 +53,22 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
     },
     ack: (k, acked, epoch) => {
       const row = rows.get(k);
-      if (!row) return;
-      if (epoch !== undefined && row.epoch !== epoch) return;
+      if (!row) return false;
+      if (epoch !== undefined && row.epoch !== epoch) return false;
       row.ackedOffset = Math.max(row.ackedOffset, acked);
       row.attempt = 0;
       row.nextAttemptAt = null;
       row.lastError = null;
+      return true;
     },
     stageAck: (k, acked, epoch) => {
       const row = rows.get(k);
-      if (!row || row.epoch !== epoch) return;
+      if (!row || row.epoch !== epoch) return false;
       row.ackedOffset = Math.max(row.ackedOffset, acked);
       row.attempt = 0;
       row.nextAttemptAt = null;
       row.lastError = null;
+      return true;
     },
     skip: (k, acked, epoch) => {
       const row = rows.get(k);
@@ -77,15 +79,15 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       row.lastError = null;
     },
     flushPending: () => {},
-    advanceWatermark: (k, acked) => {
+    advanceWatermark: (k, acked, epoch) => {
       const row = rows.get(k);
-      if (!row) return;
+      if (!row || row.epoch !== epoch) return;
       row.ackedOffset = Math.max(row.ackedOffset, acked);
       row.nextAttemptAt = null;
     },
     nack: (k, args) => {
       const row = rows.get(k);
-      if (!row) return;
+      if (!row || row.epoch !== args.epoch) return;
       Object.assign(row, {
         attempt: args.attempt,
         nextAttemptAt: args.nextAttemptAt,
@@ -149,9 +151,9 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
   const subscribers = new StreamSubscribers({
     idleTeardownMs: 60_000,
     hooks: {
-      readEvents: ({ afterOffset, limit }) =>
+      readEvents: ({ afterOffset, throughOffset, limit }) =>
         log
-          .filter((event) => event.offset > afterOffset)
+          .filter((event) => event.offset > afterOffset && event.offset <= throughOffset)
           .slice(0, limit)
           .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
       coreState: () =>

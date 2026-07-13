@@ -92,25 +92,27 @@ class FakeCursorStore implements SubscriptionCursorStore {
     return { ...row };
   }
 
-  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
+  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): boolean {
     this.ackCalls += 1;
     const row = this.rows.get(subscriptionKey);
-    if (row === undefined) return;
-    if (epoch !== undefined && row.epoch !== epoch) return;
+    if (row === undefined) return false;
+    if (epoch !== undefined && row.epoch !== epoch) return false;
     row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    return true;
   }
 
-  stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): void {
+  stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): boolean {
     this.stageAckCalls += 1;
     const row = this.rows.get(subscriptionKey);
-    if (row === undefined || row.epoch !== epoch) return;
+    if (row === undefined || row.epoch !== epoch) return false;
     row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    return true;
   }
 
   skip(subscriptionKey: string, ackedOffset: number, epoch: number): void {
@@ -119,19 +121,19 @@ class FakeCursorStore implements SubscriptionCursorStore {
 
   flushPending(): void {}
 
-  advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
+  advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch: number): void {
     const row = this.rows.get(subscriptionKey);
-    if (row === undefined) return;
+    if (row === undefined || row.epoch !== epoch) return;
     row.ackedOffset = Math.max(row.ackedOffset, ackedOffset);
     row.nextAttemptAt = null;
   }
 
   nack(
     subscriptionKey: string,
-    args: { attempt: number; nextAttemptAt: number; error: string },
+    args: { attempt: number; nextAttemptAt: number; error: string; epoch: number },
   ): void {
     const row = this.rows.get(subscriptionKey);
-    if (row === undefined) return;
+    if (row === undefined || row.epoch !== args.epoch) return;
     row.attempt = args.attempt;
     row.nextAttemptAt = args.nextAttemptAt;
     row.lastError = args.error.slice(0, 2_000);
@@ -181,8 +183,9 @@ type ConfiguredEntry = {
   parkedAtOffset?: number;
 };
 
-function makeHarness() {
+function makeHarness(options?: { scanPushEventTypesFrame?: boolean }) {
   let now = 0;
+  let maxOffsetFloor = 0;
   let nowCalls = 0;
   let coreStateCalls = 0;
   const log: StreamEvent[] = [];
@@ -240,15 +243,16 @@ function makeHarness() {
   };
 
   let storageReads = 0;
+  let selectedStorageReads = 0;
   let eventByteLengthReads = 0;
   const subscribers = new StreamSubscribers({
     idleTeardownMs: 60_000,
     hooks: {
-      readEvents: ({ afterOffset, limit }) => {
+      readEvents: ({ afterOffset, throughOffset, limit }) => {
         storageReads += 1;
         storageReadLimits.push(limit);
         return log
-          .filter((event) => event.offset > afterOffset)
+          .filter((event) => event.offset > afterOffset && event.offset <= throughOffset)
           .slice(0, limit)
           .map((event) => ({
             event,
@@ -258,12 +262,64 @@ function makeHarness() {
             },
           }));
       },
+      ...(options?.scanPushEventTypesFrame === true
+        ? {
+            scanPushEventTypesFrame: ({
+              afterOffset,
+              throughOffset,
+              eventTypes,
+              rawLimit,
+              selectedByteLimit,
+            }) => {
+              storageReads += 1;
+              selectedStorageReads += 1;
+              storageReadLimits.push(rawLimit);
+              const selectedEvents: { event: StreamEvent; byteLength: number }[] = [];
+              const raw = log
+                .filter(
+                  (candidate) =>
+                    candidate.offset > afterOffset && candidate.offset <= throughOffset,
+                )
+                .slice(0, rawLimit);
+              let scannedRawRows = 0;
+              let rawThroughOffset = afterOffset;
+              let byteLength = 0;
+              let stoppedByByteLimit = false;
+              for (const event of raw) {
+                if (event.ephemeral !== true && eventTypes.includes(event.type)) {
+                  eventByteLengthReads += 1;
+                  const selectedByteLength =
+                    eventByteLengths.get(event.offset) ?? JSON.stringify(event).length;
+                  if (
+                    selectedEvents.length > 0 &&
+                    byteLength + selectedByteLength > selectedByteLimit
+                  ) {
+                    stoppedByByteLimit = true;
+                    break;
+                  }
+                  selectedEvents.push({ event, byteLength: selectedByteLength });
+                  byteLength += selectedByteLength;
+                }
+                scannedRawRows += 1;
+                rawThroughOffset = event.offset;
+              }
+              if (!stoppedByByteLimit && raw.length < rawLimit) rawThroughOffset = throughOffset;
+              return {
+                events: selectedEvents,
+                scannedRawRows,
+                rawThroughOffset,
+                byteLength,
+                stoppedByByteLimit,
+              };
+            },
+          }
+        : {}),
       coreState: (): CoreProcessorState => {
         coreStateCalls += 1;
         return CoreProcessorContract.stateSchema.parse({
           projectId: "p1",
           path: "/t",
-          maxOffset: log.at(-1)?.offset ?? 0,
+          maxOffset: Math.max(maxOffsetFloor, log.at(-1)?.offset ?? 0),
           configuredSubscribersByKey: configured,
         });
       },
@@ -321,6 +377,7 @@ function makeHarness() {
     settle,
     append: (...events: StreamEvent[]) => log.push(...events),
     storageReads: () => storageReads,
+    selectedStorageReads: () => selectedStorageReads,
     eventByteLengthReads: () => eventByteLengthReads,
     storageReadLimits,
     setEventByteLength: (offset: number, byteLength: number) => {
@@ -334,6 +391,9 @@ function makeHarness() {
     coreStateCalls: () => coreStateCalls,
     advanceTo: (ms: number) => {
       now = ms;
+    },
+    setMaxOffsetFloor: (offset: number) => {
+      maxOffsetFloor = offset;
     },
     configure: (payload: SubscriptionConfiguredPayload, offset = 0) => {
       configured[payload.subscriptionKey] = {
@@ -996,6 +1056,154 @@ describe("StreamSubscribers", () => {
       "selector-condition-failed:k:3",
     ]);
     expect(h.row("k")?.ackedOffset).toBe(6);
+  });
+
+  it("g11. exact-type SQL scans advance raw progress while delivering only matches", async () => {
+    const h = makeHarness({ scanPushEventTypesFrame: true });
+    h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
+    h.append(
+      evt(1, "ignored"),
+      evt(2, "selected"),
+      evt(3, "ignored"),
+      evt(4, "selected"),
+      evt(5, "ignored"),
+    );
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[2, 4]]);
+    expect(h.pushes[0]!.deliveryId).toBe("k:2-5");
+    expect(h.egress).toEqual([
+      {
+        count: 2,
+        bytes: JSON.stringify(h.log[1]).length + JSON.stringify(h.log[3]).length,
+      },
+    ]);
+    expect(h.selectedStorageReads()).toBe(1);
+    expect(h.row("k")?.ackedOffset).toBe(5);
+  });
+
+  it("g12. aligned exact-type push lanes share one selected SQL scan", async () => {
+    const h = makeHarness({ scanPushEventTypesFrame: true });
+    const subscriptionCount = 100;
+    for (let index = 0; index < subscriptionCount; index += 1) {
+      h.configure(
+        pushPayload({
+          subscriptionKey: `k-${index}`,
+          selector: { eventTypes: ["selected"] },
+        }),
+        0,
+      );
+    }
+    h.append(evt(1, "ignored"), evt(2, "selected"), evt(3, "ignored"));
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(subscriptionCount);
+    expect(h.pushes.every((batch) => batch.deliveryId.endsWith(":2-3"))).toBe(true);
+    expect(h.storageReads()).toBe(1);
+    expect(h.selectedStorageReads()).toBe(1);
+  });
+
+  it("g13. mixed push selector type sets retain the shared raw reader", async () => {
+    const h = makeHarness({ scanPushEventTypesFrame: true });
+    h.configure(pushPayload({ subscriptionKey: "a", selector: { eventTypes: ["a"] } }), 0);
+    h.configure(pushPayload({ subscriptionKey: "b", selector: { eventTypes: ["b"] } }), 0);
+    h.append(evt(1, "a"), evt(2, "b"));
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events[0]!.type).sort()).toEqual(["a", "b"]);
+    expect(h.storageReads()).toBe(1);
+    expect(h.selectedStorageReads()).toBe(0);
+  });
+
+  it("g14. exact-type SQL poison bisection halves the raw scanned row count", async () => {
+    const h = makeHarness({ scanPushEventTypesFrame: true });
+    h.configure(pushPayload({ onPoison: "skip", selector: { eventTypes: ["selected"] } }), 0);
+    h.append(
+      ...Array.from({ length: 8 }, (_, index) =>
+        evt(index + 1, (index + 1) % 4 === 0 ? "selected" : "ignored"),
+      ),
+    );
+    h.dialImpl.push = async () => {
+      throw new Error("reject selected events");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [4, 8],
+      [4],
+    ]);
+    expect(h.storageReadLimits).toEqual([PUSH_DELIVERY_BATCH_LIMIT, 4]);
+    expect(h.selectedStorageReads()).toBe(2);
+    expect(h.row("k")?.ackedOffset).toBe(0);
+  });
+
+  it("g15. selector conditions retain the shared raw reader", async () => {
+    const h = makeHarness({ scanPushEventTypesFrame: true });
+    h.configure(
+      pushPayload({
+        selector: {
+          eventTypes: ["selected"],
+          condition: "$number(payload.message) = 42",
+        },
+      }),
+      0,
+    );
+    h.append(evt(1, "selected", { message: 0 }), evt(2, "selected", { message: 42 }));
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[2]]);
+    expect(h.selectedStorageReads()).toBe(0);
+  });
+
+  it("g16. a sized fresh tail wins over the exact-type SQL reader", async () => {
+    const h = makeHarness({ scanPushEventTypesFrame: true });
+    h.configure(pushPayload({ selector: { eventTypes: ["selected"] } }), 0);
+    const fresh = evt(1, "selected");
+    h.append(fresh);
+
+    h.subscribers.wake([{ event: fresh, byteLength: 64 }], 64);
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1]]);
+    expect(h.selectedStorageReads()).toBe(0);
+  });
+
+  it("g17. oversized selected singletons are not retained in the wake cache", async () => {
+    const h = makeHarness({ scanPushEventTypesFrame: true });
+    h.configure(pushPayload({ subscriptionKey: "a", selector: { eventTypes: ["selected"] } }), 0);
+    h.configure(pushPayload({ subscriptionKey: "b", selector: { eventTypes: ["selected"] } }), 0);
+    h.append(evt(1, "selected"));
+    h.setEventByteLength(1, PUSH_DELIVERY_BATCH_BYTE_LIMIT + 1);
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(2);
+    expect(h.selectedStorageReads()).toBe(2);
+  });
+
+  it("g18. exhausted raw reads advance through an evicted trailing head", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "ephemeral"), evt(2, "ephemeral"));
+    h.setMaxOffsetFloor(2);
+    h.log.length = 0;
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.row("k")?.ackedOffset).toBe(2);
   });
 
   it("h. skip mode parks when everything fails instead of mass-skipping the backlog", async () => {
@@ -1715,6 +1923,134 @@ describe("StreamSubscribers", () => {
       (batch, index) => index > 0 && batch.events[0]?.offset === 1,
     );
     expect(firstNewDelivery).toBeDefined();
+    expect(h.row("k")?.ackedOffset).toBe(3);
+  });
+
+  it("u1. an in-flight push failure cannot back off or bisect a seeked cursor", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    for (let n = 1; n <= 4; n += 1) h.append(evt(n, "a"));
+
+    let rejectDelivery: ((error: Error) => void) | undefined;
+    h.dialImpl.push = () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectDelivery = reject;
+      });
+    h.subscribers.wake();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.pushes).toHaveLength(1);
+
+    h.subscribers.onCursorSet("k", 0);
+    h.dialImpl.push = async () => {};
+    rejectDelivery!(new Error("old target rejected the full batch"));
+    await h.settle();
+
+    expect(h.pushes[1]!.events.map((event) => event.offset)).toEqual([1, 2, 3, 4]);
+    expect(h.row("k")).toMatchObject({ attempt: 0, nextAttemptAt: null, ackedOffset: 4 });
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+  });
+
+  it("u2. an in-flight push failure cannot contaminate a remove+recreate", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+
+    let rejectDelivery: ((error: Error) => void) | undefined;
+    h.dialImpl.push = () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectDelivery = reject;
+      });
+    h.subscribers.wake();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    delete h.configured["k"];
+    h.subscribers.onSubscriptionRemoved("k");
+    const replacement = pushPayload();
+    h.configure(replacement, 4);
+    h.subscribers.onSubscriptionConfigured(replacement, 4);
+    h.dialImpl.push = async () => {};
+    rejectDelivery!(new Error("removed target failed"));
+    await h.settle();
+
+    expect(h.pushes[1]!.events.map((event) => event.offset)).toEqual([1, 2, 3]);
+    expect(h.row("k")).toMatchObject({ attempt: 0, nextAttemptAt: null, ackedOffset: 3 });
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+  });
+
+  it("u3. a replaced wake config ignores its old in-flight poke failure", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+
+    let rejectPoke: ((error: Error) => void) | undefined;
+    h.dialImpl.poke = () =>
+      new Promise<PokeResult>((_resolve, reject) => {
+        rejectPoke = reject;
+      });
+    h.subscribers.wake();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.pokes).toHaveLength(1);
+
+    const replacement = wakePayload();
+    h.configure(replacement, 2);
+    h.subscribers.onSubscriptionConfigured(replacement, 2);
+    const { sink } = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 1, sink });
+    rejectPoke!(new Error("old poke failed"));
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(2);
+    expect(h.row("k")).toMatchObject({ attempt: 0, nextAttemptAt: null });
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+  });
+
+  it("u4. a poke that resolves after a cursor seek cannot open or ack its stale sink", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+
+    let resolvePoke: ((result: PokeResult) => void) | undefined;
+    h.dialImpl.poke = () =>
+      new Promise<PokeResult>((resolve) => {
+        resolvePoke = resolve;
+      });
+    h.subscribers.wake();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    h.subscribers.onCursorSet("k", 0);
+    const current = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: current.sink });
+    resolvePoke!({ checkpointOffset: 1, sink: makeSink().sink });
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(2);
+    expect(current.batches[0]!.events.map((event) => event.offset)).toEqual([1]);
+    expect(h.row("k")?.ackedOffset).toBe(0);
+  });
+
+  it("u5. a successful push cannot acknowledge a replacement that preserves its cursor", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+
+    let releaseDelivery: (() => void) | undefined;
+    h.dialImpl.push = () =>
+      new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+    h.subscribers.wake();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.pushes).toHaveLength(1);
+
+    const replacement = pushPayload({ deliver: undefined });
+    h.configure(replacement, 4);
+    h.subscribers.onSubscriptionConfigured(replacement, 4);
+    h.dialImpl.push = async () => {};
+    releaseDelivery!();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(2);
+    expect(h.pushes[1]!.events.map((event) => event.offset)).toEqual([1, 2, 3]);
     expect(h.row("k")?.ackedOffset).toBe(3);
   });
 

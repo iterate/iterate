@@ -93,6 +93,13 @@ function isSubscriptionProgressDue(progress: PendingSubscriptionProgress): boole
  * instead of re-stringifying every event on every read.
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
+export type SelectedStreamFrame = {
+  events: SizedStreamEvent[];
+  scannedRawRows: number;
+  rawThroughOffset: number;
+  byteLength: number;
+  stoppedByByteLimit: boolean;
+};
 export type StreamOffsetBounds = { highestOffset: number; highestAssignedOffset: number };
 type EventChunks = ArrayBuffer | ArrayBuffer[];
 type StreamRangeArgs = {
@@ -622,6 +629,170 @@ export class StreamEventLog {
     return this.#readRange(args, true);
   }
 
+  /**
+   * Scan a bounded raw offset range while materializing only durable rows with
+   * one of the requested types. The raw cursor still advances over every row,
+   * so a caller can acknowledge selector misses without parsing their JSON.
+   */
+  scanPushEventTypesFrame(args: {
+    afterOffset: number;
+    throughOffset: number;
+    eventTypes: readonly string[];
+    rawLimit: number;
+    selectedByteLimit: number;
+  }): SelectedStreamFrame {
+    const eventTypesJson = JSON.stringify([...new Set(args.eventTypes)]);
+    const rows = this.sql
+      .exec(
+        `
+          with raw as materialized (
+            select events.offset,
+                   case
+                     when ephemeral = 0
+                      and type in (select value from json_each(?))
+                     then coalesce(
+                       length(event_json),
+                       (select chunk_index * ? + length(chunk_bytes)
+                        from event_chunks
+                        where event_chunks.offset = events.offset
+                        order by chunk_index desc
+                        limit 1)
+                     ) + ?
+                   end as byte_length
+            from events
+            where events.offset > ?
+              and events.offset <= ?
+            order by events.offset asc
+            limit ?
+          ),
+          ranked as materialized (
+            select offset,
+                   byte_length,
+                   row_number() over (order by offset) as selected_index,
+                   sum(byte_length) over (
+                     order by offset rows between unbounded preceding and current row
+                   ) as cumulative_bytes
+            from raw
+            where byte_length is not null
+          ),
+          cut as materialized (
+            select min(offset) as first_excluded_offset
+            from ranked
+            where selected_index > 1
+              and cumulative_bytes > ?
+          ),
+          raw_stats as materialized (
+            select count(*) as raw_row_count
+            from raw
+          ),
+          consumed as materialized (
+            select raw.offset
+            from raw cross join cut
+            where cut.first_excluded_offset is null
+               or raw.offset < cut.first_excluded_offset
+          ),
+          scan as materialized (
+            select case
+                     when cut.first_excluded_offset is null
+                      and raw_stats.raw_row_count < ?
+                     then ?
+                     else coalesce(max(consumed.offset), ?)
+                   end as raw_through_offset,
+                   count(consumed.offset) as scanned_raw_rows,
+                   cut.first_excluded_offset is not null as stopped_by_byte_limit
+            from cut
+            cross join raw_stats
+            left join consumed on true
+          )
+          select 0 as kind,
+                 raw_through_offset as row_offset,
+                 scanned_raw_rows,
+                 stopped_by_byte_limit,
+                 null as event_json_or_offset,
+                 null as byte_length
+          from scan
+          union all
+          select 1,
+                 ranked.offset,
+                 null,
+                 null,
+                 coalesce(cast(events.event_json as text), ranked.offset),
+                 ranked.byte_length
+          from ranked
+          join events using (offset)
+          cross join cut
+          where cut.first_excluded_offset is null
+             or ranked.offset < cut.first_excluded_offset
+          order by kind, row_offset
+        `,
+        eventTypesJson,
+        EVENT_CHUNK_SIZE,
+        this.#pathPropertyByteLength,
+        args.afterOffset,
+        args.throughOffset,
+        args.rawLimit,
+        args.selectedByteLimit,
+        args.rawLimit,
+        args.throughOffset,
+        args.afterOffset,
+      )
+      .raw<[number, number, number | null, number | null, string | number | null, number | null]>();
+
+    const events: Array<SizedStreamEvent | undefined> = [];
+    let chunkedRows: number[] | undefined;
+    let rawThroughOffset: number | undefined;
+    let scannedRawRows: number | undefined;
+    let stoppedByByteLimit: boolean | undefined;
+    for (const [kind, offset, rawRows, stopped, eventJsonOrOffset, byteLength] of rows) {
+      if (kind === 0) {
+        rawThroughOffset = offset;
+        scannedRawRows = rawRows ?? 0;
+        stoppedByByteLimit = stopped === 1;
+        continue;
+      }
+      if (eventJsonOrOffset === null || byteLength === null) continue;
+      if (typeof eventJsonOrOffset === "number") {
+        (chunkedRows ??= []).push(events.length, eventJsonOrOffset, byteLength);
+        events.push(undefined);
+      } else {
+        events.push({ event: this.#parseEvent(eventJsonOrOffset, 0), byteLength });
+      }
+    }
+    if (
+      rawThroughOffset === undefined ||
+      scannedRawRows === undefined ||
+      stoppedByByteLimit === undefined
+    ) {
+      throw new Error("Selected stream frame did not return scan metadata");
+    }
+
+    if (chunkedRows !== undefined) {
+      const chunkedOffsets = new Array<number>(chunkedRows.length / 3);
+      for (let index = 1; index < chunkedRows.length; index += 3) {
+        chunkedOffsets[Math.floor(index / 3)] = chunkedRows[index]!;
+      }
+      const chunkedEvents = this.#readChunkedEvents(chunkedOffsets);
+      for (let index = 0; index < chunkedRows.length; index += 3) {
+        const resultIndex = chunkedRows[index]!;
+        const stored = chunkedEvents.get(chunkedRows[index + 1]!);
+        if (stored === undefined) continue;
+        events[resultIndex] = {
+          event: this.#parseEvent(stored.chunks, stored.byteLength),
+          byteLength: chunkedRows[index + 2]!,
+        };
+      }
+    }
+
+    const completeEvents = events.filter((event) => event !== undefined);
+    return {
+      events: completeEvents,
+      scannedRawRows,
+      rawThroughOffset,
+      byteLength: completeEvents.reduce((total, event) => total + event.byteLength, 0),
+      stoppedByByteLimit,
+    };
+  }
+
   #readRange(args: StreamRangeArgs, includeByteLength: false): StreamEvent[];
   #readRange(args: StreamRangeArgs, includeByteLength: true): SizedStreamEvent[];
   #readRange(
@@ -797,7 +968,7 @@ export type SubscriptionCursorStore = {
    * matches the one the caller read before dialing — a seek that landed while
    * the delivery was in flight wins over the delivery's ack.
    */
-  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void;
+  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): boolean;
   /**
    * Successful internal RPC push delivery. Advance immediately, but permit a
    * bounded durable lag so consecutive remote calls do not each wait behind a
@@ -805,7 +976,7 @@ export type SubscriptionCursorStore = {
    * on the eighth successful batch or an explicit lifecycle/failure boundary.
    * Webhooks use {@link ack} instead.
    */
-  stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): void;
+  stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): boolean;
   /**
    * Advance across a batch that produced no receiver side effect (selector
    * miss / ephemeral-only). The in-memory cursor moves immediately; durable
@@ -822,11 +993,11 @@ export type SubscriptionCursorStore = {
    * that deliveries succeed, and resetting the counter here is what let a
    * deterministically failing subscriber spin forever without ever parking.
    */
-  advanceWatermark(subscriptionKey: string, ackedOffset: number): void;
+  advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch: number): void;
   /** Failed delivery: record the consecutive attempt count and when to retry. */
   nack(
     subscriptionKey: string,
-    args: { attempt: number; nextAttemptAt: number; error: string },
+    args: { attempt: number; nextAttemptAt: number; error: string; epoch: number },
   ): void;
   /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state, bumps the epoch. */
   setCursor(subscriptionKey: string, ackedOffset: number): void;
@@ -894,11 +1065,11 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       advanceWatermark: sql.run<{
-        parameters: { subscriptionKey: string; ackedOffset: number };
+        parameters: { subscriptionKey: string; ackedOffset: number; epoch: number };
       }>`
         update subscriptions
         set acked_offset = max(acked_offset, :ackedOffset), next_attempt_at = null
-        where subscription_key = :subscriptionKey
+        where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       nack: sql.run<{
         parameters: {
@@ -906,11 +1077,12 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
           attempt: number;
           nextAttemptAt: number;
           error: string;
+          epoch: number;
         };
       }>`
         update subscriptions
         set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error
-        where subscription_key = :subscriptionKey
+        where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       setCursor: sql.run<{
         parameters: {
@@ -1019,9 +1191,9 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     return { ...row };
   }
 
-  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
+  ack(subscriptionKey: string, ackedOffset: number, epoch?: number): boolean {
     const row = this.#rows().get(subscriptionKey);
-    if (row === undefined || (epoch !== undefined && row.epoch !== epoch)) return;
+    if (row === undefined || (epoch !== undefined && row.epoch !== epoch)) return false;
     // The cursor cache is write-through and this method is synchronous, so it
     // already owns the monotonic maximum; avoid recomputing it in SQLite.
     const nextOffset = Math.max(row.ackedOffset, ackedOffset);
@@ -1032,7 +1204,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       row.nextAttemptAt === null &&
       row.lastError === null
     ) {
-      return;
+      return true;
     }
     const params = {
       subscriptionKey,
@@ -1048,15 +1220,16 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    return true;
   }
 
-  stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): void {
+  stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): boolean {
     const row = this.#rows().get(subscriptionKey);
-    if (row === undefined || row.epoch !== epoch) return;
+    if (row === undefined || row.epoch !== epoch) return false;
     const nextOffset = Math.max(row.ackedOffset, ackedOffset);
     const clearsFailure = row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null;
     const pending = this.#pendingProgress.get(subscriptionKey);
-    if (nextOffset === row.ackedOffset && pending === undefined && !clearsFailure) return;
+    if (nextOffset === row.ackedOffset && pending === undefined && !clearsFailure) return true;
     this.#setPendingProgress(subscriptionKey, {
       ackedOffset: nextOffset,
       epoch,
@@ -1070,6 +1243,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     // Deliberately count across drain lifetimes: trickle traffic otherwise
     // turns every one-batch drain tail back into an output-gated cursor write.
     this.flushPending(clearsFailure ? "all" : "due");
+    return true;
   }
 
   skip(subscriptionKey: string, ackedOffset: number, epoch: number): void {
@@ -1107,9 +1281,9 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     }
   }
 
-  advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
+  advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch: number): void {
     const row = this.#rows().get(subscriptionKey);
-    if (row === undefined) return;
+    if (row === undefined || row.epoch !== epoch) return;
     const nextOffset = Math.max(row.ackedOffset, ackedOffset);
     if (
       !this.#pendingProgress.has(subscriptionKey) &&
@@ -1121,6 +1295,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     this.#db.advanceWatermark({
       subscriptionKey,
       ackedOffset: nextOffset,
+      epoch,
     });
     this.#deletePendingProgress(subscriptionKey);
     row.ackedOffset = nextOffset;
@@ -1129,10 +1304,10 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
 
   nack(
     subscriptionKey: string,
-    args: { attempt: number; nextAttemptAt: number; error: string },
+    args: { attempt: number; nextAttemptAt: number; error: string; epoch: number },
   ): void {
     const row = this.#rows().get(subscriptionKey);
-    if (row === undefined) return;
+    if (row === undefined || row.epoch !== args.epoch) return;
     if (this.#pendingProgress.has(subscriptionKey)) this.flushPending("all");
     const error = args.error.slice(0, 2_000);
     this.#db.nack({
@@ -1141,6 +1316,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       nextAttemptAt: args.nextAttemptAt,
       // Bound the stored error so a pathological message cannot bloat the row.
       error,
+      epoch: args.epoch,
     });
     row.attempt = args.attempt;
     row.nextAttemptAt = args.nextAttemptAt;

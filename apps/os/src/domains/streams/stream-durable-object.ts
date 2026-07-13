@@ -104,7 +104,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       readEvents: (args) =>
         this.#log.getRangeSized({
           afterOffset: args.afterOffset,
-          beforeOffset: Number.MAX_SAFE_INTEGER,
+          beforeOffset: args.throughOffset + 1,
           limit: args.limit,
           // RAW, ephemeral included: the spine's cursors advance over every
           // offset (skip-not-defer, like selector-filtered events), and the
@@ -112,6 +112,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           // DELIVERY in stream-subscribers.ts.
           includeEphemeral: true,
         }),
+      scanPushEventTypesFrame: (args) => this.#log.scanPushEventTypesFrame(args),
       coreState: () => this.#coreProcessorState,
       store: this.#subscriptionCursorStore,
       dial: createSubscriberDial({
