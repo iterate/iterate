@@ -240,7 +240,12 @@ The one property of a Secret: material goes in; nothing comes out except a
 request to a pinned host. No read lane, no reveal lane, no compute methods,
 no cross-secret chaining — the Secret Durable Object's only material-touching
 verb is `fetch()` (substitute header placeholders, dispatch under the egress
-pin). See ADR 0005.
+pin). Ciphertext is authenticated to its project, secret path, exact effective
+origins, and storing event offset; every update without replacement material
+clears it, while replacement material requires its complete egress policy in
+the same update. Credential redirects are manual, bounded, and same-origin. Secret
+stream facts remain user-appendable; replayed ciphertext cannot authenticate in
+a different event or policy context. See ADR 0005.
 _Avoid_: revealForPlatformUse, secret read API, hmac/sign/matches on secrets
 
 **Secret Refresh Strategy**:

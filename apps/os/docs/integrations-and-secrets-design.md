@@ -27,7 +27,12 @@ One Durable Object per path under `/secrets/**` (`secret-durable-object.ts`).
 Folded state: encrypted material (one JSON blob, write-only), an egress URL
 allowlist, an optional refresh strategy, an audit record.
 
-- `update({ material?, egress?, refresh? })` — the only write verb.
+- `update({ material, egress, refresh? } | { egress?, refresh? })` — the only
+  write verb. Replacement material always carries its complete egress policy.
+- Ciphertext is authenticated to its project, secret path, exact egress
+  origins, and storing event offset. Every update without replacement material
+  clears it (including refresh-only updates); copied ciphertext cannot be
+  re-pinned or replayed.
 - `__describe()` — the node's self-report, metadata only (hasMaterial,
   egress, refresh kind, audit); material never leaves, in snapshots or pushes.
 - `fetch(request)` — the only lane material travels. Every request must carry
@@ -38,6 +43,13 @@ allowlist, an optional refresh strategy, an audit record.
   (added for Telegram, whose Bot API authenticates in the path
   `/bot<token>/…`) — never the query string, never the body; a placeholder
   elsewhere in the URL is rejected loudly rather than passed through.
+- Credential-bearing fetches follow at most five same-origin redirects, with
+  every hop requested manually and revalidated before rebuilding the request.
+  Cross-origin redirects are rejected rather than forwarding headers or bodies.
+- Secret streams accept user-appended events, including
+  `events.iterate.com/secret/*`. Forged facts may change public metadata or
+  clear material, but cannot install usable ciphertext outside its authenticated
+  project/path/policy/event context.
 
 ### Refresh strategies
 
@@ -65,6 +77,11 @@ missing (the first-use mint):
 
 Exchange endpoints falling within the secret's own pin is what keeps refresh
 inside the cell: refresh moves bytes only toward pinned hosts, like any use.
+The selected strategy and reducer-owned update offset must still match current
+state before provider I/O, and the result is compare-appended at the snapshotted
+next event offset. Any intervening update at either side of that snapshot—even
+one repeating the same strategy—prevents stale material from being minted or
+restored.
 One shared implementation per protocol replaces the per-secret worker that
 used to be copied into every secret; configuring the strategy is the trust
 event.

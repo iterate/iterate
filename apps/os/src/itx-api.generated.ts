@@ -1266,7 +1266,9 @@ export interface Secret {
   fetch(request: Request): Promise<Response>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** Set the secret material and/or its egress allowlist. */
+  /** Set secret material, its egress allowlist, and/or refresh strategy.
+   * Replacement material requires its complete egress policy in the same
+   * update. Every update without replacement material clears stored material. */
   update(input: SecretUpdateInput): Promise<StreamEvent>;
   /** The secret stream processor; its public state IS the SecretDescription. */
   processor: WakeableStreamProcessorRpc<SecretDescription>;
@@ -2695,17 +2697,29 @@ export type SecretDescription = {
  * processor facade projects it away (write-only material) before anything
  * crosses the RPC boundary.
  */
-export type SecretUpdateInput = {
-  egress?: { urls: string[] };
-  /** Any serializable value (write-only, one JSON blob). A plain string keeps
-   * the whole-material placeholder working; structured material is addressed
-   * by `field` in placeholders (design §2.1). */
-  material?: unknown;
-  /** A named refresh strategy the secret runs in trusted DO code when a
-   * substituted request 401s (or a referenced field is missing), or `null` to
-   * clear it. Omitted leaves any configured strategy unchanged. */
-  refresh?: SecretRefresh | null;
-};
+export type SecretUpdateInput =
+  | {
+      /** Replacement material must name its complete egress policy in the same
+       * authorized update. It never inherits a policy chosen by a public event. */
+      egress: { urls: string[] };
+      /** Any serializable value (write-only, one JSON blob). A plain string keeps
+       * the whole-material placeholder working; structured material is addressed
+       * by `field` in placeholders (design §2.1). */
+      material: unknown;
+      /** A named refresh strategy the secret runs in trusted DO code when a
+       * substituted request 401s (or a referenced field is missing), or `null` to
+       * clear it. Omitted leaves the strategy unchanged. */
+      refresh?: SecretRefresh | null;
+    }
+  | {
+      /** Replaces the effective egress origins. Every update without `material`
+       * clears stored material, including egress-only and refresh-only updates. */
+      egress?: { urls: string[] };
+      material?: never;
+      /** Omitted leaves the strategy unchanged. A refresh-only update still
+       * clears material because it does not contain replacement material. */
+      refresh?: SecretRefresh | null;
+    };
 
 /**
  * One repo file mutation.
