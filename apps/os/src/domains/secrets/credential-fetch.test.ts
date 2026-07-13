@@ -87,7 +87,10 @@ describe("fetchWithCredentialRedirects", () => {
       fetchWithCredentialRedirects(
         new Request("https://allowed.example/start", {
           body: "refresh_token=secret",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
+          headers: {
+            "content-length": "20",
+            "content-type": "application/x-www-form-urlencoded",
+          },
           method: "POST",
         }),
         { fetcher },
@@ -96,6 +99,7 @@ describe("fetchWithCredentialRedirects", () => {
 
     expect(fetcher).toHaveBeenCalledTimes(MAX_CREDENTIAL_REDIRECTS + 1);
     expect(requests[1]).toMatchObject({ method: "GET" });
+    expect(requests[1]!.headers.has("content-length")).toBe(false);
     expect(requests[1]!.headers.has("content-type")).toBe(false);
     await expect(requests[1]!.text()).resolves.toBe("");
   });

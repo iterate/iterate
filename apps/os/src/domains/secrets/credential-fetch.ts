@@ -6,6 +6,7 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const REQUEST_BODY_HEADERS = [
   "content-encoding",
   "content-language",
+  "content-length",
   "content-location",
   "content-type",
 ] as const;
