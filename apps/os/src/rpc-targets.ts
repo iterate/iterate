@@ -385,10 +385,11 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), appendAck(events), head(), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), appendAck(events), appendOffsets(events), head(), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         appendAck: "Commit events without returning their committed envelopes.",
+        appendOffsets: "Commit events and return only their input-aligned offsets.",
         at: "The stream at a sub-path.",
         crossPostTo:
           "Copy matching events onto another stream (optionally JSONata-transformed). Rides durable delivery, so ephemeral events are never cross-posted; a selector matching only ephemeral types delivers nothing.",
@@ -436,6 +437,11 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /** Commit events and wait for durability without returning their committed envelopes. */
   appendAck(...events: StreamEventInput[]): Promise<void> {
     return this.durableObjectStub.appendAck(...events);
+  }
+
+  /** Commit events; resolves with one input-aligned offset per event. */
+  appendOffsets(...events: StreamEventInput[]): Promise<number[]> {
+    return this.durableObjectStub.appendOffsets(...events);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -837,8 +843,8 @@ async function requestRepoCreate(input: {
     projectId: input.projectId,
   });
   const timing = { projectId: input.projectId, path };
-  const [, createRequested] = await timedStep("create-timing", timing, "repo-append", () =>
-    stream.append(
+  const [, createRequestedOffset] = await timedStep("create-timing", timing, "repo-append", () =>
+    stream.appendOffsets(
       buildDurableObjectProcessorSubscriptionConfiguredEvent({
         durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
         processor: ["repos", ["get", path], "processor"],
@@ -854,7 +860,7 @@ async function requestRepoCreate(input: {
 
   await timedStep("create-timing", timing, "wait-repo-created", () =>
     stream.waitForEvent({
-      afterOffset: createRequested.offset - 1,
+      afterOffset: createRequestedOffset! - 1,
       eventTypes: ["events.iterate.com/repo/created"],
       predicate: (event) =>
         event.payload?.projectId === input.projectId && event.payload?.path === path,
@@ -3670,7 +3676,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // `/`, and its create request) is armed by the project processor's
     // create-requested lane, on the repo's own stream at CONFIG_REPO_PATH.
     const appendRootEvents = () =>
-      stream.append(
+      stream.appendOffsets(
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName: streamDurableObjectName({
             projectId: registered.projectId,
@@ -3721,8 +3727,11 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
               payload: { pattern: creatorEmail, reason: "project-owner" },
             },
           );
-    const [[, createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
-      Promise.all([appendRootEvents(), seedEmailAllowlist()]),
+    const [[, createRequestedOffset]] = await timedStep(
+      "create-timing",
+      timing,
+      "root-append",
+      () => Promise.all([appendRootEvents(), seedEmailAllowlist()]),
     );
     // The project now EXISTS (identity, directory, bootstrap events); whether
     // to also wait for the saga to finish is the caller's choice — the
@@ -3730,7 +3739,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     if (args.waitUntilCreated !== false) {
       await timedStep("create-timing", timing, "wait-project-created", () =>
         stream.waitForEvent({
-          afterOffset: createRequested.offset - 1,
+          afterOffset: createRequestedOffset! - 1,
           eventTypes: ["events.iterate.com/project/created"],
           predicate: (event) => event.payload?.projectId === args.projectId,
           // Tight on purpose: the saga should complete in seconds (see

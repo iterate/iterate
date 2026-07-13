@@ -1050,6 +1050,8 @@ export interface Stream {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
   /** Commit events and wait for durability without returning their committed envelopes. */
   appendAck(...events: StreamEventInput[]): Promise<void>;
+  /** Commit events; resolves with one input-aligned offset per event. */
+  appendOffsets(...events: StreamEventInput[]): Promise<number[]>;
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
   /** One event by offset or idempotencyKey; undefined when it does not exist.

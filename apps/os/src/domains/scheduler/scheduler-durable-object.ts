@@ -99,28 +99,28 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   async setSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {
     // Fail loudly at set time; raw appends bypass this and park via the reducer.
     assertValidRecurrence(input.recurrence);
-    const [event] = await this.#stream.append(
+    const [offset] = await this.#stream.appendOffsets(
       this.#schedulerProcessor.buildScheduleSetEvent(input),
     );
-    await this.#ingestThrough(event!.offset);
+    await this.#ingestThrough(offset!);
     const view = this.#schedulerProcessor.getScheduleView(input.key);
     if (view === undefined) throw new Error(`schedule "${input.key}" not visible after set`);
     return view;
   }
 
   async cancelSchedule(key: string): Promise<void> {
-    const [event] = await this.#stream.append(
+    const [offset] = await this.#stream.appendOffsets(
       this.#schedulerProcessor.buildScheduleCancelledEvent(key),
     );
-    await this.#ingestThrough(event!.offset);
+    await this.#ingestThrough(offset!);
   }
 
   /** Manual "run now" for an existing key; the Trigger executes like any other. */
   async triggerSchedule(key: string): Promise<{ executionId: string }> {
     await this.#processorHost.catchUp(PROCESSOR_SLUG);
     const { event, executionId } = this.#schedulerProcessor.buildManualTriggerEvent(key);
-    const [committed] = await this.#stream.append(event);
-    await this.#ingestThrough(committed!.offset);
+    const [offset] = await this.#stream.appendOffsets(event);
+    await this.#ingestThrough(offset!);
     return { executionId };
   }
 

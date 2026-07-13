@@ -375,11 +375,11 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
     let committedOffset: number;
     try {
-      const [committed] = await this.append({
+      const committedOffsets = await this.append({
         type: "events.iterate.com/capability-host/capability-provided",
         payload: record,
       });
-      committedOffset = committed.offset;
+      committedOffset = committedOffsets[0]!;
     } catch (error) {
       nextLive?.dispose();
       throw error;
@@ -455,7 +455,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
     const key = liveKey(path);
     const previousLive = this.#liveCapabilities.get(key);
-    const [committed] = await this.append({
+    const [committedOffset] = await this.append({
       type: "events.iterate.com/capability-host/capability-revoked",
       payload: {
         path,
@@ -464,7 +464,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     });
     this.#liveCapabilities.delete(key);
     previousLive?.dispose();
-    await this.waitUntilEvent({ offset: committed.offset });
+    await this.waitUntilEvent({ offset: committedOffset! });
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {

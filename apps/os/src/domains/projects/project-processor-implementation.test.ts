@@ -89,7 +89,7 @@ function processEventHarness(state = projectState()) {
             path: "/projects/test",
           }));
           appended.push(...(events as CustomDomainReduceInput["event"][]));
-          return events;
+          return events.map((event) => event.offset);
         },
         blockProcessorWhile: (task) => {
           pending.push(Promise.resolve(task()));

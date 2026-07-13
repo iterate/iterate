@@ -61,6 +61,10 @@ class MemoryStream implements Stream {
     await this.append(...inputs);
   }
 
+  async appendOffsets(...inputs: StreamEventInput[]): Promise<number[]> {
+    return (await this.append(...inputs)).map((event) => event.offset);
+  }
+
   at(): Stream {
     return this;
   }

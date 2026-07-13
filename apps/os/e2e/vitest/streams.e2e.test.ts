@@ -111,6 +111,37 @@ test("creates a project and uses project streams through v4 itx", async () => {
   const headAfterMixed = await stream.head();
   expect(headAfterMixed.maxOffset).toBe(headAfterSameBatch.maxOffset + 1);
 
+  const offsetKey = `stream-e2e-offsets:${ackMarker}`;
+  expect(
+    await stream.appendOffsets(
+      {
+        type: STREAM_EVENT_TYPE,
+        payload: { marker: `${ackMarker}-existing-offset` },
+        idempotencyKey: `stream-e2e-ack:${ackMarker}`,
+      },
+      {
+        type: STREAM_EVENT_TYPE,
+        payload: { marker: `${ackMarker}-offset` },
+        idempotencyKey: offsetKey,
+      },
+      {
+        type: STREAM_EVENT_TYPE,
+        payload: { marker: `${ackMarker}-same-batch-offset` },
+        idempotencyKey: offsetKey,
+      },
+      {
+        type: STREAM_EVENT_TYPE,
+        payload: { marker: `${ackMarker}-unkeyed-offset` },
+      },
+    ),
+  ).toEqual([
+    headAfterAck.maxOffset,
+    headAfterMixed.maxOffset + 1,
+    headAfterMixed.maxOffset + 1,
+    headAfterMixed.maxOffset + 2,
+  ]);
+  expect((await stream.head()).maxOffset).toBe(headAfterMixed.maxOffset + 2);
+
   const read = await stream.getEvents({ afterOffset: 0 });
   expect(read).toEqual(
     expect.arrayContaining([

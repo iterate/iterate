@@ -328,11 +328,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
     };
 
     const stream = this.#ownStream();
-    const [requested] = await stream.append({
+    const [approvalRequestEventOffset] = await stream.appendOffsets({
       type: "events.iterate.com/project/human-approval-requested",
       payload: requestedPayload,
     });
-    const approvalRequestEventOffset = requested!.offset;
+    if (approvalRequestEventOffset === undefined)
+      throw new Error("approval append returned no offset");
 
     const resolution = await this.#awaitApprovalResolution({
       approvalRequestEventOffset,

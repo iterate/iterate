@@ -1,7 +1,6 @@
 import type { EmittedInput } from "../streams/processor-contracts.ts";
 import type { StreamProcessor } from "../streams/stream-processor.ts";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import {
   ProjectProcessorContract,
@@ -177,7 +176,7 @@ function projectRecordFromState(
 }
 
 async function appendCustomDomainObservation(input: {
-  append: (...input: EmittedInput<typeof ProjectProcessorContract>[]) => Promise<StreamEvent[]>;
+  append: (...input: EmittedInput<typeof ProjectProcessorContract>[]) => Promise<number[]>;
   hostname: string;
   /** The host processor's `idempotencyKey`, pre-bound to the triggering event. */
   idempotencyKey: (key: string) => string;

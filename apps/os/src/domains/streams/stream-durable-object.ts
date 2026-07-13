@@ -245,17 +245,23 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Returns the persisted events (including offsets + `createdAt`) in input order.
    */
   append(...eventInputs: StreamEventInput[]): StreamEvent[] {
-    return this.#append(eventInputs, true);
+    return this.#append(eventInputs, "events");
   }
 
-  /** The shared commit path; void callers need only duplicate offsets, not stored envelopes. */
+  #append(eventInputs: readonly StreamEventInput[], result: "events"): StreamEvent[];
+  #append(eventInputs: readonly StreamEventInput[], result: "offsets"): number[];
+  #append(eventInputs: readonly StreamEventInput[], result: "void"): void;
+
+  /** The shared commit path; compact callers resolve duplicates by offset, not envelope. */
   #append(
     eventInputs: readonly StreamEventInput[],
-    materializeIdempotencyHits: boolean,
-  ): StreamEvent[] {
+    result: "events" | "offsets" | "void",
+  ): StreamEvent[] | number[] | void {
+    const materializeIdempotencyHits = result === "events";
     let workingState = this.#coreProcessorState;
     let nextOffset = workingState.maxOffset;
     const events: StreamEvent[] = [];
+    const offsets: number[] | undefined = result === "offsets" ? [] : undefined;
     // Undefined means every result so far is newly committed. Only an actual
     // idempotency hit splits the input-aligned result from the insert batch.
     let newEvents: StreamEvent[] | undefined;
@@ -335,6 +341,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             newEvents ??= events.slice();
             events.push(existing);
           }
+          offsets?.push(existingOffset);
           continue;
         }
       }
@@ -397,6 +404,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       events.push(committed);
+      offsets?.push(committed.offset);
       newEvents?.push(committed);
       if (committed.idempotencyKey !== undefined) {
         (idempotencyHitsInBatch ??= new Map()).set(
@@ -415,7 +423,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
 
     const eventsToInsert = newEvents ?? events;
-    if (eventsToInsert.length === 0) return events;
+    if (eventsToInsert.length === 0) {
+      if (result === "events") return events;
+      if (result === "offsets") return offsets!;
+      return;
+    }
 
     // 2. Persist event rows and reduced core state. Durable Object SQL storage
     // runs synchronously in the object's thread. A bounded append that fits
@@ -464,12 +476,18 @@ export class StreamDurableObject extends DurableObject<Env> {
     // and lets both DOs hibernate.
     this.#subscribers.armOrClearIdleTimer(committedAtMs);
 
-    return events;
+    if (result === "events") return events;
+    if (result === "offsets") return offsets!;
   }
 
   /** Commit events without serializing their committed envelopes back to the caller. */
   appendAck(...eventInputs: StreamEventInput[]): void {
-    this.#append(eventInputs, false);
+    this.#append(eventInputs, "void");
+  }
+
+  /** Commit events and return only their input-aligned offsets. */
+  appendOffsets(...eventInputs: StreamEventInput[]): number[] {
+    return this.#append(eventInputs, "offsets");
   }
 
   /**

@@ -126,11 +126,12 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
      * stamped with `source.processor` provenance pointing at THIS event as
      * `whileProcessing`. The binding is a closure, so appends made later from
      * `blockProcessorWhile`/`runInBackground` work scheduled here still stamp
-     * the event that was being processed.
+     * the event that was being processed. Resolves with one input-aligned
+     * committed offset per event.
      */
-    append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
+    append: (...input: EmittedInput<Contract>[]) => Promise<number[]>;
     /** Like `append`, onto a sibling stream (resolved via `stream.at(path)`). */
-    appendTo: (path: string, ...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
+    appendTo: (path: string, ...input: EmittedInput<Contract>[]) => Promise<number[]>;
     streamMaxOffset: number;
     /**
      * The offset this batch will checkpoint through once all blocking work
@@ -148,7 +149,7 @@ type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
    * omission. Per-event attribution comes from the `processEvent` lane
    * (`super.processEventBatch(args)` keeps it running).
    */
-  append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
+  append: (...input: EmittedInput<Contract>[]) => Promise<number[]>;
   /** Newly delivered events past the checkpoint, in stream order. */
   events: readonly StreamEvent[];
   /** The consumed subset of `events`, each with its reduction result. */
@@ -655,7 +656,7 @@ export abstract class StreamProcessor<
       // runtime speaking, not the processor author. It still carries the full
       // provenance stamp (which processor skipped which event).
       this.runInBackground(() =>
-        this.stream.append({
+        this.stream.appendAck({
           type: "events.iterate.com/stream/error-occurred",
           idempotencyKey: this.idempotencyKey("event-parse-failed", event),
           source: { processor: this.#processorStamp(event) },
@@ -675,12 +676,12 @@ export abstract class StreamProcessor<
    * for batch-level decisions derived from the whole fold). Inside
    * `processEvent`, prefer the event-bound `args.append`.
    */
-  protected append(...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
+  protected append(...input: EmittedInput<Contract>[]): Promise<number[]> {
     return this.#appendStamped({ target: this.stream }, input);
   }
 
-  /** Like {@link append}, onto a sibling stream (resolved via `stream.at(path)`). */
-  protected appendTo(path: string, ...input: EmittedInput<Contract>[]): Promise<StreamEvent[]> {
+  /** Like {@link append}, onto a sibling stream; returns input-aligned offsets. */
+  protected appendTo(path: string, ...input: EmittedInput<Contract>[]): Promise<number[]> {
     return this.#appendStamped({ target: this.stream.at(path) }, input);
   }
 
@@ -722,7 +723,7 @@ export abstract class StreamProcessor<
   #appendStamped(
     args: { target: Stream; whileProcessing?: Pick<StreamEvent, "offset" | "type"> },
     input: EmittedInput<Contract>[],
-  ): Promise<StreamEvent[]> {
+  ): Promise<number[]> {
     const processor = this.#processorStamp(args.whileProcessing);
     const events = input.map((event) => {
       const built = this.#buildEmittedEvent(event) as StreamEventInput;
@@ -732,14 +733,14 @@ export abstract class StreamProcessor<
     // offsets come back through this processor's own subscription, and
     // noteBatchIngested closes the sample. Sibling-stream appends (appendTo)
     // never loop back here, so they are not timed.
-    if (args.target !== this.stream) return args.target.append(...events);
+    if (args.target !== this.stream) return args.target.appendOffsets(...events);
     const t0 = Date.now();
-    return Promise.resolve(this.stream.append(...events)).then((committed) => {
-      const maxCommittedOffset = committed.reduce((max, event) => Math.max(max, event.offset), 0);
+    return Promise.resolve(this.stream.appendOffsets(...events)).then((committedOffsets) => {
+      const maxCommittedOffset = committedOffsets.reduce((max, offset) => Math.max(max, offset), 0);
       if (maxCommittedOffset > 0) {
         this.subscriberMetrics.noteAppendCommitted({ maxCommittedOffset, t0, atMs: Date.now() });
       }
-      return committed;
+      return committedOffsets;
     });
   }
 

@@ -193,15 +193,9 @@ describe("StreamProcessor parse-failure skipping", () => {
   function recordingStream() {
     const appends: StreamEventInput[] = [];
     const stream = {
-      append: (...events: StreamEventInput[]) => {
+      appendAck: (...events: StreamEventInput[]) => {
         appends.push(...events);
-        return Promise.resolve(
-          events.map((event, index) => ({
-            ...event,
-            offset: 1_000 + appends.length + index,
-            createdAt: new Date(0).toISOString(),
-          })),
-        );
+        return Promise.resolve();
       },
     } as unknown as Stream;
     return { appends, stream };
@@ -295,7 +289,7 @@ describe("StreamProcessor parse-failure skipping", () => {
         path: "/tests/counter",
         projectId: null,
         stream: {
-          append: () => Promise.reject(new Error("append transport down")),
+          appendAck: () => Promise.reject(new Error("append transport down")),
         } as unknown as Stream,
       });
 
@@ -394,22 +388,30 @@ describe("StreamProcessor provenance stamping", () => {
   // tagged with the destination path.
   function recordingNetwork() {
     const appends: { path: string; event: StreamEventInput }[] = [];
-    const streamAt = (path: string): Stream =>
-      ({
+    const resultProjections: Array<"events" | "offsets"> = [];
+    const streamAt = (path: string): Stream => {
+      const commit = (events: StreamEventInput[]) => {
+        appends.push(...events.map((event) => ({ path, event })));
+        return events.map((event, index) => ({
+          ...event,
+          offset: 1_000 + appends.length + index,
+          createdAt: new Date(0).toISOString(),
+          path,
+        }));
+      };
+      return {
         append: (...events: StreamEventInput[]) => {
-          appends.push(...events.map((event) => ({ path, event })));
-          return Promise.resolve(
-            events.map((event, index) => ({
-              ...event,
-              offset: 1_000 + appends.length + index,
-              createdAt: new Date(0).toISOString(),
-              path,
-            })),
-          );
+          resultProjections.push("events");
+          return Promise.resolve(commit(events));
+        },
+        appendOffsets: (...events: StreamEventInput[]) => {
+          resultProjections.push("offsets");
+          return Promise.resolve(commit(events).map((event) => event.offset));
         },
         at: (child: string) => streamAt(child),
-      }) as unknown as Stream;
-    return { appends, stream: streamAt(HOME.path) };
+      } as unknown as Stream;
+    };
+    return { appends, resultProjections, stream: streamAt(HOME.path) };
   }
 
   class EchoProcessor extends StreamProcessor<typeof EchoContract> {
@@ -453,7 +455,7 @@ describe("StreamProcessor provenance stamping", () => {
   }
 
   it("stamps per-event appends with the processor and the event being processed", async () => {
-    const { appends, stream } = recordingNetwork();
+    const { appends, resultProjections, stream } = recordingNetwork();
     const processor = new EchoProcessor({ stream, ...HOME });
 
     await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
@@ -469,6 +471,7 @@ describe("StreamProcessor provenance stamping", () => {
         },
       },
     });
+    expect(resultProjections).toEqual(["offsets", "offsets"]);
   });
 
   it("self-measured metrics: home appends open the consume-own-append loop; ingest past the committed offset closes it", async () => {
