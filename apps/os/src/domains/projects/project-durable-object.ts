@@ -624,6 +624,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
     };
 
     // Binding path: same door agent BYOK uses. Endpoint is the path after /v1/.
+    // Prefer this for POST/PUT JSON (chat/completions, responses) — pre-auth on
+    // Authenticated Gateway. GET (e.g. /v1/models) has no binding `run` shape,
+    // so we inject the platform key and hit OpenAI directly (still never uses
+    // the container's dummy key).
     const endpoint = new URL(request.url).pathname.replace(/^\/v1\/?/, "");
     const gateway = this.env.AI?.gateway?.(routing.gatewayId);
     if (
@@ -650,8 +654,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
           query,
         });
       } catch (error) {
-        // Non-JSON body or binding failure → REST rewrite below.
-        console.warn("openai AI gateway binding path failed; trying REST rewrite", {
+        // Non-JSON body or binding failure → inject key + direct OpenAI below.
+        console.warn("openai AI gateway binding path failed; falling back to direct OpenAI", {
           projectId: this.#name.projectId,
           endpoint,
           error: error instanceof Error ? error.message : String(error),
@@ -659,16 +663,22 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }
     }
 
-    const rewritten = rewriteOpenAiRequestToAiGateway({
-      request,
-      accountId: routing.accountId,
-      gatewayId: routing.gatewayId,
-      openaiApiKey: routing.openaiApiKey,
-      metadata,
-      cfAigAuthorization: routing.cfAigAuthorization,
-      skipCache: routing.skipCache,
-    });
-    return fetch(rewritten);
+    // Direct OpenAI with platform key (GET/models, or binding fallback). Prefer
+    // this over the provider-native REST gateway URL: Authenticated Gateway
+    // requires an AI Gateway Run token our Doppler CF tokens often lack.
+    const headers = new Headers(request.headers);
+    headers.set("Authorization", `Bearer ${routing.openaiApiKey}`);
+    headers.delete("host");
+    const init: RequestInit & { duplex?: "half" } = {
+      method: request.method,
+      headers,
+      redirect: "manual",
+    };
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      init.body = request.body;
+      if (request.body !== null) init.duplex = "half";
+    }
+    return fetch(new Request(request.url, init));
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
