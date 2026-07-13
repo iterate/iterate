@@ -99,11 +99,25 @@ One preview e2e: seed → sync job → query returns the seeded marker with
 kind/context; tenancy negative check from a second project. (The manual proof
 script recipes are in the PR thread.)
 
+## Shipped in the #1941 fix-it round (2026-07-14)
+
+- Custom kinds ARE `source`-scopable now (case-insensitive; `docs` rejected
+  with a federation pointer); exclude normalized the same way.
+- Generous inclusion: query defaults 20 results @ 0.2 threshold (Jonas:
+  recall over precision, fast-LLM filter downstream); same at instance birth.
+- Instance born with the project (create-saga step, best-effort) + public
+  `itx.search.ensureIndex()`; `reindex()` whole-project backfill verb.
+- `erase-data` deletes all namespace instances + wipes the search-index and
+  files buckets (one e2e run birthed 162 instances — leakage found live).
+- FILTER GRAMMAR CONSTRAINT (live-proven, engine v3): hybrid keyword lane
+  ignores RANGE filters ($gte/$lt) — they bind only the vector lane, and
+  excluded docs leak back via rrf fusion at ~0.5x score. Only kind TERM
+  operators ($eq/$nin) bind both lanes. Never reintroduce folder-range query
+  filters; tenancy is structural (include_items), never query-time.
+
 ## Known non-goals / accepted limitations
 
 - Images are vision-CAPTIONED, not OCR'd — text inside screenshots is not
   searchable (platform limitation).
-- Custom kinds can be `exclude`d but not `source`-scoped (source is the closed
-  streams/files/repos enum); revisit if custom kinds proliferate.
 - Webhook near-duplication is an accepted embedding cost; segment batching
   already keeps it out of retrieval results.
