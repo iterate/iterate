@@ -262,10 +262,10 @@ match, or OS was not redeployed after the Doppler update.
    workspace.
 
 This writes the workspace bot token into the project secret
-`/secrets/integrations/slack/bot-token`, appends
-`events.iterate.com/slack/connected` on `/integrations/slack`, and claims the
-Slack team in the preview deployment's `/integrations/slack-team-directory`
-stream.
+`/secrets/integrations/slack/<connection>/bot-token`, appends
+`events.iterate.com/slack/connected` on
+`/integrations/slack/<connection>`, and claims the Slack team in the preview
+deployment's `/integrations/_directory` stream.
 
 If OS returns `slack_team_already_claimed`, that workspace is already claimed
 by a different project in the same preview deployment. Disconnect Slack from
