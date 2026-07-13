@@ -69,14 +69,82 @@ export function messageDataToText(data: unknown): string {
 }
 
 /**
- * Wait until the socket delivers a JSON text frame with `op === expectedOp`.
- * Non-matching frames are ignored (not forwarded — caller has not bridged yet).
+ * Capture every upstream message from accept until the pair-bridge attaches.
+ * Attach immediately after `accept()` and before any `await` so server-first
+ * frames (hello / ready / dispatch) are never dropped.
+ */
+export type UpstreamMessageBuffer = {
+  readonly frames: Array<string | ArrayBuffer>;
+  attach(socket: WebSocket): void;
+  /** Stop capturing; remaining frames stay in `frames` for the client flush. */
+  detach(socket: WebSocket): void;
+};
+
+export function createUpstreamMessageBuffer(): UpstreamMessageBuffer {
+  const frames: Array<string | ArrayBuffer> = [];
+  let active = true;
+  const onMessage = (event: MessageEvent) => {
+    if (!active) return;
+    frames.push(event.data as string | ArrayBuffer);
+  };
+  return {
+    frames,
+    attach(socket) {
+      active = true;
+      socket.addEventListener("message", onMessage);
+    },
+    detach(socket) {
+      active = false;
+      socket.removeEventListener("message", onMessage);
+    },
+  };
+}
+
+function parseJsonOp(data: string | ArrayBuffer): Record<string, unknown> | null {
+  try {
+    const text = messageDataToText(data);
+    const parsed: unknown = JSON.parse(text);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // non-JSON
+  }
+  return null;
+}
+
+/**
+ * Wait until the buffer holds a JSON text frame with `op === expectedOp`.
+ * Frames up through the match are **consumed** (handshake-only; not forwarded
+ * to the client). Later frames stay in the buffer for the pair-bridge flush.
+ *
+ * Requires `buffer` to already be attached to `socket` so arrivals during the
+ * wait are recorded even if this helper's own listener races.
  */
 export function waitForJsonOp(
   socket: WebSocket,
   expectedOp: string,
   timeoutMs: number,
+  buffer?: UpstreamMessageBuffer,
 ): Promise<Record<string, unknown>> {
+  const frames = buffer?.frames;
+
+  const tryConsume = (): Record<string, unknown> | null => {
+    if (frames === undefined) return null;
+    for (let i = 0; i < frames.length; i++) {
+      const parsed = parseJsonOp(frames[i]!);
+      if (parsed !== null && parsed.op === expectedOp) {
+        // Handshake-consumed: drop everything through the match.
+        frames.splice(0, i + 1);
+        return parsed;
+      }
+    }
+    return null;
+  };
+
+  const early = tryConsume();
+  if (early !== null) return Promise.resolve(early);
+
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
@@ -84,20 +152,19 @@ export function waitForJsonOp(
     }, timeoutMs);
 
     const onMessage = (event: MessageEvent) => {
-      try {
-        const text = messageDataToText(event.data);
-        const parsed: unknown = JSON.parse(text);
-        if (
-          parsed !== null &&
-          typeof parsed === "object" &&
-          !Array.isArray(parsed) &&
-          (parsed as { op?: unknown }).op === expectedOp
-        ) {
+      // When no shared buffer, scan the live event (legacy path / tests).
+      if (frames === undefined) {
+        const parsed = parseJsonOp(event.data as string | ArrayBuffer);
+        if (parsed !== null && parsed.op === expectedOp) {
           cleanup();
-          resolve(parsed as Record<string, unknown>);
+          resolve(parsed);
         }
-      } catch {
-        // non-JSON or parse error — keep waiting
+        return;
+      }
+      const matched = tryConsume();
+      if (matched !== null) {
+        cleanup();
+        resolve(matched);
       }
     };
 
@@ -121,6 +188,13 @@ export function waitForJsonOp(
     socket.addEventListener("message", onMessage);
     socket.addEventListener("close", onClose);
     socket.addEventListener("error", onError);
+
+    // Race: frame may have landed in the buffer between tryConsume and attach.
+    const raced = tryConsume();
+    if (raced !== null) {
+      cleanup();
+      resolve(raced);
+    }
   });
 }
 

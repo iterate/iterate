@@ -81,4 +81,19 @@ describe("bridgeUpstreamWebSocket", () => {
       (upstream as unknown as { accept: ReturnType<typeof vi.fn> }).accept,
     ).toHaveBeenCalledWith({ allowHalfOpen: true });
   });
+
+  test("skips upstream accept when already accepted (relay path)", () => {
+    if (typeof WebSocketPair === "undefined") {
+      return;
+    }
+
+    const upstream = mockSocket() as unknown as WebSocket;
+    const response = bridgeUpstreamWebSocket(upstream, undefined, {
+      upstreamAlreadyAccepted: true,
+    });
+    expect(response.status).toBe(101);
+    expect(
+      (upstream as unknown as { accept: ReturnType<typeof vi.fn> }).accept,
+    ).not.toHaveBeenCalled();
+  });
 });

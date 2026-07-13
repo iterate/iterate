@@ -29,19 +29,40 @@ export function maybeBridgeWebSocketResponse(request: Request, response: Respons
   return bridgeUpstreamWebSocket(upstream, response);
 }
 
+export type BridgeUpstreamWebSocketOptions = {
+  /**
+   * When true, `upstream` was already `accept()`ed (e.g. after a trusted
+   * IDENTIFY handshake in `relayWebSocket`). Workers allow accept only once.
+   */
+  upstreamAlreadyAccepted?: boolean;
+  /**
+   * Frames received on `upstream` before the bridge attached listeners.
+   * Flushed to the client leg in order before live pump starts.
+   */
+  pendingUpstreamMessages?: Array<string | ArrayBuffer>;
+};
+
 /**
  * Present `upstream` to the caller through a fresh WebSocketPair.
  * Caller must only invoke this when `upstream` is a live accepted-or-accepting socket.
  */
-export function bridgeUpstreamWebSocket(upstream: WebSocket, source?: Response): Response {
+export function bridgeUpstreamWebSocket(
+  upstream: WebSocket,
+  source?: Response,
+  options?: BridgeUpstreamWebSocketOptions,
+): Response {
   const pair = new WebSocketPair();
   const client = pair[0];
   const server = pair[1];
 
   // Half-open: we coordinate the close handshake while proxying (Workers
   // default auto-reply-to-close would race with bidirectional close).
+  // Attach listeners immediately after accept so server-first frames are not
+  // dropped before the pump is live.
   server.accept({ allowHalfOpen: true });
-  upstream.accept({ allowHalfOpen: true });
+  if (!options?.upstreamAlreadyAccepted) {
+    upstream.accept({ allowHalfOpen: true });
+  }
 
   // Match binary framing so ArrayBuffer frames are not coerced to strings.
   try {
@@ -49,6 +70,15 @@ export function bridgeUpstreamWebSocket(upstream: WebSocket, source?: Response):
     upstream.binaryType = "arraybuffer";
   } catch {
     // Some test doubles omit binaryType; production WebSockets support it.
+  }
+
+  // Replay frames that arrived during a pre-bridge handshake (IDENTIFY, audit).
+  for (const data of options?.pendingUpstreamMessages ?? []) {
+    try {
+      server.send(data);
+    } catch {
+      // Peer already closed; close handlers will finish teardown.
+    }
   }
 
   pipeWebSocket(server, upstream);
@@ -87,6 +117,27 @@ export function normalizeWebSocketClose(
     return truncated === "" ? {} : { code: 1000, reason: truncated };
   }
   return truncated === "" ? { code } : { code, reason: truncated };
+}
+
+/** Best-effort close that never throws (failed relay teardown). */
+export function closeWebSocketQuietly(
+  socket: WebSocket | null | undefined,
+  code = 1011,
+  reason = "websocket error",
+): void {
+  if (socket == null) return;
+  try {
+    const normalized = normalizeWebSocketClose(code, reason);
+    if (normalized.code === undefined) {
+      socket.close();
+    } else if (normalized.reason === undefined || normalized.reason === "") {
+      socket.close(normalized.code);
+    } else {
+      socket.close(normalized.code, normalized.reason);
+    }
+  } catch {
+    // already closed or non-settable
+  }
 }
 
 function pipeWebSocket(from: WebSocket, to: WebSocket): void {

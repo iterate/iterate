@@ -19,9 +19,14 @@ import type { StreamEventInput } from "../streams/schemas.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.ts";
 import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
-import { bridgeUpstreamWebSocket, maybeBridgeWebSocketResponse } from "./websocket-bridge.ts";
+import {
+  bridgeUpstreamWebSocket,
+  closeWebSocketQuietly,
+  maybeBridgeWebSocketResponse,
+} from "./websocket-bridge.ts";
 import {
   buildIdentifyFrame,
+  createUpstreamMessageBuffer,
   type SecretWebSocketRelayInput,
   waitForJsonOp,
   waitForOpen,
@@ -273,6 +278,9 @@ export class SecretDurableObject extends DurableObject<Env> {
    * Petshop: `wss://…/gateway` with `identify: {}` (defaults to hello → identify).
    */
   async relayWebSocket(input: SecretWebSocketRelayInput): Promise<Response> {
+    // Closed on every failure path after accept so the DO does not leak sockets.
+    let upstream: WebSocket | null = null;
+    let messageBuffer: ReturnType<typeof createUpstreamMessageBuffer> | null = null;
     try {
       const state = await this.#snapshot();
       if (state.encryptedMaterial === null) {
@@ -293,7 +301,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         headers: { Upgrade: "websocket", Connection: "Upgrade" },
       });
       const upgradeResponse = await fetch(upgradeRequest);
-      const upstream = upgradeResponse.webSocket;
+      upstream = upgradeResponse.webSocket;
       if (upstream == null) {
         return new Response(
           JSON.stringify({
@@ -304,12 +312,17 @@ export class SecretDurableObject extends DurableObject<Env> {
         );
       }
 
+      // Accept once. Immediately buffer messages so server-first frames that
+      // arrive during open / hello / IDENTIFY / audit are not dropped, and so
+      // bridgeUpstreamWebSocket does not call accept() a second time.
       upstream.accept({ allowHalfOpen: true });
       try {
         upstream.binaryType = "arraybuffer";
       } catch {
         // ignore
       }
+      messageBuffer = createUpstreamMessageBuffer();
+      messageBuffer.attach(upstream);
 
       await waitForOpen(upstream, timeoutMs);
 
@@ -317,15 +330,31 @@ export class SecretDurableObject extends DurableObject<Env> {
         const waitForOp =
           input.identify.waitForOp === undefined ? "hello" : input.identify.waitForOp;
         if (waitForOp !== null) {
-          await waitForJsonOp(upstream, waitForOp, timeoutMs);
+          // Consumes hello (and any pre-hello frames) from the buffer; post-
+          // hello frames stay for the client.
+          await waitForJsonOp(upstream, waitForOp, timeoutMs, messageBuffer);
         }
         upstream.send(buildIdentifyFrame(token, input.identify.frame));
       }
 
+      // Audit while still buffering — ready/dispatch must not race the bridge.
       await this.#appendUsed(input.url);
+
+      messageBuffer.detach(upstream);
+      const pendingUpstreamMessages = messageBuffer.frames.slice();
+      messageBuffer = null;
+
       // Bridge after IDENTIFY so the client never sees/sends the token frame.
-      return bridgeUpstreamWebSocket(upstream, upgradeResponse);
+      // upstreamAlreadyAccepted: Workers allow accept() only once.
+      return bridgeUpstreamWebSocket(upstream, upgradeResponse, {
+        upstreamAlreadyAccepted: true,
+        pendingUpstreamMessages,
+      });
     } catch (error) {
+      if (messageBuffer !== null && upstream !== null) {
+        messageBuffer.detach(upstream);
+      }
+      closeWebSocketQuietly(upstream, 1011, "websocket relay failed");
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       const message = error instanceof Error ? error.message : String(error);
       return new Response(JSON.stringify({ error: "websocket_relay_failed", message }), {
