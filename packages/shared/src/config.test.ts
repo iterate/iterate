@@ -356,7 +356,7 @@ describe("redacted", () => {
 
 describe("public config helpers", () => {
   const Config = z.object({
-    redactedSecret: redacted(z.string()),
+    pirateSecret: redacted(z.string()),
     posthog: z.object({
       apiKey: publicValue(z.string()),
     }),
@@ -372,7 +372,7 @@ describe("public config helpers", () => {
 
   it("extracts the public config schema and value", () => {
     const config = Config.parse({
-      redactedSecret: "hidden",
+      pirateSecret: "ahoy",
       posthog: {
         apiKey: "phc_public_key",
       },
@@ -417,7 +417,7 @@ describe("public config helpers", () => {
 
   it("exposes the correct public config types", () => {
     const config = Config.parse({
-      redactedSecret: "hidden",
+      pirateSecret: "ahoy",
       posthog: {
         apiKey: "phc_public_key",
       },
