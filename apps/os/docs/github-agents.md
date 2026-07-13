@@ -99,9 +99,18 @@ const reviewThreads = await octokit.graphql(
 `octokit` is the `Octokit` exported by the main `octokit` package; Iterate
 supplies its GitHub App installation authentication and request transport.
 Use `.rest.*` for routine endpoint calls and `.graphql(query, variables)` when
-GraphQL's query shape or API coverage is useful. `.request(...)` and
-`.paginate(...)` are available too. The connection's `__describe()` exposes
-the exact type as:
+GraphQL's query shape or API coverage is useful. `.request(...)` is available
+too. Pagination uses the serializable route-string form:
+
+```js
+await octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+  owner,
+  repo,
+  pull_number,
+});
+```
+
+The connection's `__describe()` exposes the exact package type as:
 
 ```ts
 export type GithubConnection = {
@@ -110,11 +119,16 @@ export type GithubConnection = {
 ```
 
 Use the package types and [official Octokit documentation](https://github.com/octokit/octokit.js/).
-Automatic retry and throttling are disabled at this RPC boundary so a failed
-write cannot be replayed invisibly; inspect GitHub state before retrying one.
-Also call `paginate(...)` directly rather than `paginate.iterator()`, because
-an async iterator cannot cross the boundary. The explicit `.octokit` segment
-is mandatory; direct `.rest` or `.graphql` on the connection is rejected.
+Octokit's retry and throttling plugins are disabled, so it does not replay
+5xx, 429, or 408 responses. The secret transport may refresh credentials and
+repeat once after a 401. Inspect GitHub state before manually retrying an
+ambiguous failed write.
+
+RPC arguments must be serializable. For pagination, pass a route string and
+params as above; endpoint-function overloads, map callbacks, and
+`paginate.iterator()` cannot cross the boundary. The explicit `.octokit`
+segment is mandatory; direct `.rest` or `.graphql` on the connection is
+rejected.
 
 For code work, the agent fetches the live PR, clones its head repository/ref
 into a project sandbox, edits and tests normally, commits, and non-force

@@ -25,6 +25,9 @@ vi.mock("../../env.ts", () => ({
           if (new URL(request.url).pathname === "/graphql") {
             return Response.json({ data: { repository: { name: "iterate" } } });
           }
+          if (new URL(request.url).pathname === "/repos/iterate/os/pulls/42/files") {
+            return Response.json([{ filename: "apps/os/package.json" }]);
+          }
           return Response.json({ id: 1, login: "octocat" });
         },
       }),
@@ -125,7 +128,20 @@ describe("connectionOctokit", () => {
     });
   });
 
-  test("does not automatically replay a failed write", async () => {
+  test("paginate() supports the RPC-safe route-string overload", async () => {
+    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+    const files = await octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+      owner: "iterate",
+      repo: "os",
+      pull_number: 42,
+    });
+
+    expect(files).toEqual([{ filename: "apps/os/package.json" }]);
+    expect(new URL(captured.request!.url).pathname).toBe("/repos/iterate/os/pulls/42/files");
+    expect(captured.request!.headers.get("authorization")).toContain("getSecret(");
+  });
+
+  test("does not automatically replay a write after a 5xx", async () => {
     captured.responseStatus = 500;
     const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
 

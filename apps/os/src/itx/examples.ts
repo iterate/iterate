@@ -1124,7 +1124,7 @@ return {
     e2eProven: false,
     title: "List repositories through the built-in GitHub integration",
     description:
-      'itx.integrations.github["<connection>"].octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying GitHub App installation auth and transport. Its normal surface includes `.rest.*`, `.graphql(...)`, `.request(...)`, and `.paginate(...)`; see https://github.com/octokit/octokit.js/. The `.octokit` segment is mandatory. Resolve the connection with itx.integrations.list() first. Needs a connected GitHub installation — interactive-only.',
+      'itx.integrations.github["<connection>"].octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying GitHub App installation auth and transport. Its normal `.rest.*`, `.graphql(...)`, and `.request(...)` calls work; pagination uses `.paginate("GET /...", params)` because RPC arguments must be serializable. See https://github.com/octokit/octokit.js/. The `.octokit` segment is mandatory. Resolve the connection with itx.integrations.list() first. Needs a connected GitHub installation — interactive-only.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
