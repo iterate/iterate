@@ -51,9 +51,40 @@ buffering — not a blanket intercept limitation.
    that survives DO fetch hops). `defineProperty` fallback is **unit-test only**;
    production throws rather than returning a silent non-upgrade.
 
+## Discord / frame-token shape (`relayWebSocket`)
+
+Secrets that ride in **application frames** (Discord IDENTIFY, petshop
+`/gateway`) are **not** substituted by scanning frames for `getSecret(...)`.
+
+Instead:
+
+```ts
+// material is a plain access-token string (or use identify.tokenField)
+await itx.secrets.get("/secrets/discord-bot").update({
+  egress: { urls: ["https://gateway.discord.gg"] }, // or petshop origin
+  material: "bot-token-or-sealed-access-token",
+});
+
+const res = await itx.secrets.get("/secrets/discord-bot").relayWebSocket({
+  url: "wss://dummy-petshop.iterate.com/gateway",
+  identify: {}, // wait for hello, send { op: "identify", token: <material> }
+});
+const ws = res.webSocket!; // already past IDENTIFY; listen for ready/echo
+```
+
+Trusted path: Secret DO opens wss → waits for `hello` → sends IDENTIFY with
+real token → pair-bridges. Agent never holds the token.
+
+| Shape                           | Mechanism                                     |
+| ------------------------------- | --------------------------------------------- |
+| Header / subprotocol on upgrade | `secret.fetch(upgradeRequest)` + placeholders |
+| Token in IDENTIFY frame         | `secret.relayWebSocket({ identify })`         |
+
 ## Known limitations (GA blockers — Claude Fable review)
 
 - **Secret-header WSS e2e not yet landed** (handshake with `getSecret` placeholder).
+- **`relayWebSocket` e2e against petshop `/gateway` not yet landed** (needs live
+  sealed access token material + deployed worker).
 - Long-lived bridges pin the Project DO (and Secret DO on secret path) as a
   non-hibernatable frame pump — no per-project socket cap, no hibernation API.
 - Double-bridge (Secret then Project) is correct but wasteful.

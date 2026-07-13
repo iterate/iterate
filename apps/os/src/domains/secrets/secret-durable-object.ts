@@ -19,7 +19,13 @@ import type { StreamEventInput } from "../streams/schemas.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.ts";
 import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
-import { maybeBridgeWebSocketResponse } from "./websocket-bridge.ts";
+import { bridgeUpstreamWebSocket, maybeBridgeWebSocketResponse } from "./websocket-bridge.ts";
+import {
+  buildIdentifyFrame,
+  type SecretWebSocketRelayInput,
+  waitForJsonOp,
+  waitForOpen,
+} from "./websocket-relay.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
@@ -47,12 +53,13 @@ const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
  * within the pin — so a refresh, like any use, only ever moves bytes toward
  * pinned hosts.
  *
- * WebSocket egress (an Upgrade request through this same `fetch()`) is
- * supported on the same surface as ordinary secret substitution: handshake
- * headers (and URL path placeholders) are rewritten, then the request is
- * `fetch`ed. Frame-level substitution is intentionally out of scope — after
- * 101 the socket is opaque duplex. A 401 mid-handshake still gets one
- * refresh-and-retry when a strategy is configured; a live socket does not.
+ * WebSocket egress:
+ * - `fetch()` with `Upgrade: websocket` substitutes **handshake** headers/URL
+ *   only (OpenAI-Realtime / browser-subprotocol shapes).
+ * - `relayWebSocket()` is the **Discord IDENTIFY** shape: open a pinned wss,
+ *   optionally wait for hello, send IDENTIFY with real material from this DO,
+ *   then pair-bridge the rest. Frames are never scanned for placeholders —
+ *   the token is composed here in trusted code (ADR 0005).
  */
 export class SecretDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -255,6 +262,76 @@ export class SecretDurableObject extends DurableObject<Env> {
     } catch (error) {
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       throw error;
+    }
+  }
+
+  /**
+   * Discord-shaped WebSocket relay: open a pinned host, send IDENTIFY with
+   * material held only in this DO, return a pair-bridged 101. The caller never
+   * sees the token — only subsequent app frames (ready, dispatch, echo, …).
+   *
+   * Petshop: `wss://…/gateway` with `identify: {}` (defaults to hello → identify).
+   */
+  async relayWebSocket(input: SecretWebSocketRelayInput): Promise<Response> {
+    try {
+      const state = await this.#snapshot();
+      if (state.encryptedMaterial === null) {
+        throw new SecretSubstitutionError("secret_not_found");
+      }
+      assertOriginPinned(input.url, state);
+      await this.#assertGithubInstallationUseAuthorized(state.refresh);
+
+      const material = await this.#decrypt(state.encryptedMaterial, state.egress);
+      const token =
+        input.identify === undefined
+          ? null
+          : selectSecretField(material, input.identify.tokenField);
+
+      const timeoutMs = input.timeoutMs ?? 15_000;
+      const upgradeUrl = websocketUpgradeUrl(input.url);
+      const upgradeRequest = new Request(upgradeUrl, {
+        headers: { Upgrade: "websocket", Connection: "Upgrade" },
+      });
+      const upgradeResponse = await fetch(upgradeRequest);
+      const upstream = upgradeResponse.webSocket;
+      if (upstream == null) {
+        return new Response(
+          JSON.stringify({
+            error: "upstream_refused_websocket",
+            status: upgradeResponse.status,
+          }),
+          { status: 502, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      upstream.accept({ allowHalfOpen: true });
+      try {
+        upstream.binaryType = "arraybuffer";
+      } catch {
+        // ignore
+      }
+
+      await waitForOpen(upstream, timeoutMs);
+
+      if (input.identify !== undefined && token !== null) {
+        const waitForOp =
+          input.identify.waitForOp === undefined ? "hello" : input.identify.waitForOp;
+        if (waitForOp !== null) {
+          await waitForJsonOp(upstream, waitForOp, timeoutMs);
+        }
+        upstream.send(buildIdentifyFrame(token, input.identify.frame));
+      }
+
+      await this.#appendUsed(input.url);
+      // Bridge after IDENTIFY so the client never sees/sends the token frame.
+      return bridgeUpstreamWebSocket(upstream, upgradeResponse);
+    } catch (error) {
+      if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
+      const message = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: "websocket_relay_failed", message }), {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      });
     }
   }
 
@@ -617,6 +694,17 @@ function assertOriginPinned(url: string, state: SecretState): void {
   if (!state.egress.urls.some((pinned) => new URL(pinned).origin === origin)) {
     throw new SecretSubstitutionError("secret_not_allowed_for_origin");
   }
+}
+
+/** Normalize ws(s) → http(s) so Workers `fetch` Upgrade works. */
+function websocketUpgradeUrl(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.protocol === "ws:") parsed.protocol = "http:";
+  else if (parsed.protocol === "wss:") parsed.protocol = "https:";
+  else if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new SecretSubstitutionError("secret_not_allowed_for_origin");
+  }
+  return parsed.href;
 }
 
 function asMaterialRecord(material: unknown): Record<string, unknown> {

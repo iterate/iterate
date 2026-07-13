@@ -84,6 +84,7 @@ import { isRootWorkspacePath, normalizeWorkspacePath } from "./domains/workspace
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
+import type { SecretWebSocketRelayInput } from "./domains/secrets/websocket-relay.ts";
 import {
   completeConnect,
   connectTelegram,
@@ -1795,10 +1796,13 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   async __describe(): Promise<Description & SecretDescription> {
     const state = await this.durableObjectStub.describe();
     return describeNode({
-      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
+      instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() for header/URL placeholder egress, relayWebSocket() for Discord-shaped IDENTIFY (token sent by the Secret DO, never returned to you).`,
       children: {
-        fetch: "Egress fetch with secret placeholders substituted server-side.",
+        fetch:
+          "Egress fetch with secret placeholders substituted server-side (HTTP headers/URL, including Upgrade handshake).",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
+        relayWebSocket:
+          "Discord-shaped WS: open pinned wss, send IDENTIFY with material held in the Secret DO, return a pair-bridged socket (token never exposed).",
         update:
           "Set the value, egress URLs, and/or refresh strategy. A value requires its complete egress policy in the same update; every update without a value clears stored material.",
       },
@@ -1825,6 +1829,15 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response> {
     return this.durableObjectStub.fetch(request);
+  }
+
+  /**
+   * Discord-shaped WebSocket relay: IDENTIFY with material held only in the
+   * Secret DO, then a pair-bridged socket for app frames. See
+   * `SecretWebSocketRelayInput` / petshop `/gateway`.
+   */
+  relayWebSocket(input: SecretWebSocketRelayInput): Promise<Response> {
+    return this.durableObjectStub.relayWebSocket(input);
   }
 
   /** Restart the secret's server-side object; the next request boots it fresh. */
