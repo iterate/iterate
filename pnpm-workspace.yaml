@@ -75,7 +75,7 @@ overrides:
   agents>x402: '-'
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
-  capnweb: https://github.com/iterate/capnweb.git#1dab0fea6135232e52fe08afa60f8be5c0b299d5
+  capnweb: https://github.com/iterate/capnweb.git#0e54bcf70853f5af754d53e6b9ab1fadcfdfca98
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0
