@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, tracing } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
@@ -166,8 +166,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /** The keepalive's revival alarm — see stream-processor-host.ts. */
-  alarm(): Promise<void> {
-    return this.#processorHost.handleAlarm();
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    return tracing.enterSpan("alarm processor keepalive", (span) =>
+      this.#processorHost.handleAlarm(alarmInfo, span),
+    );
   }
 
   get emailProcessor() {
