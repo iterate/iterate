@@ -68,10 +68,10 @@ doppler run --project os --config prd -- pnpm cli itx run \
 
 A healthy turn should include the user-message event, LLM request lifecycle
 events, the generated itx script execution events, and the web-message-sent
-event. Agent replies are itx JavaScript scripts; for the PING prompt a correct
+event. Agent replies are itx TypeScript scripts; for the PING prompt a correct
 reply usually calls:
 
-```js
+```ts
 await itx.chat.sendMessage("PONG");
 ```
 

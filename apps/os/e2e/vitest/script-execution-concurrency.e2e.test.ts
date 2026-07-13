@@ -16,7 +16,7 @@ const SCRIPT_HOLD_MS = 30_000;
 const MAX_CONCURRENT_COMPLETION_MS = 50_000;
 
 test(
-  "concurrent long-running ITX scripts all complete",
+  "concurrent long-running itx scripts all complete",
   { timeout: 90_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "script-concurrency" });

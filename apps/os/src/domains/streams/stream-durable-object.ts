@@ -10,6 +10,7 @@ import type {
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "./rpc-types.ts";
+import { StreamOffsetConflictError } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import { compileEventSelector } from "./event-selector.ts";
@@ -261,7 +262,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         path: this.name.path,
       };
       if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
-        throw new Error(`expected offset ${committed.offset}, got ${expectedOffset}`);
+        throw new StreamOffsetConflictError(
+          `expected next offset ${expectedOffset}, found ${committed.offset}`,
+        );
       }
 
       const previousState = workingState;

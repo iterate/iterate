@@ -46,7 +46,7 @@ function agentHarness() {
                 }
                 return {
                   response:
-                    "```js\nasync (itx) => {\n  await itx.chat.sendMessage('recovered!');\n}\n```",
+                    "```ts\nasync (itx) => {\n  await itx.chat.sendMessage('recovered!');\n}\n```",
                 };
               },
             },

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import { EMAIL_AGENT_SYSTEM_PROMPT, agentDefaultsForPath } from "./agent-defaults.ts";
+import {
+  EMAIL_AGENT_SYSTEM_PROMPT,
+  agentDefaultsForPath,
+  slackAgentSystemPrompt,
+  telegramAgentSystemPrompt,
+} from "./agent-defaults.ts";
 
 const PROJECT_ID = "prj_defaults_test";
 
@@ -68,6 +73,27 @@ describe("agentDefaultsForPath", () => {
     expect(prompt).toContain("rest.issues.createComment");
   });
 
+  it("standardizes every platform agent prompt on TypeScript ts fences", () => {
+    const prompts = {
+      default: defaultsFor("/agents/demo").systemPrompt,
+      email: EMAIL_AGENT_SYSTEM_PROMPT,
+      pullRequest: defaultsFor("/agents/repos/root/pull-requests/7").systemPrompt,
+      slack: slackAgentSystemPrompt("main"),
+      telegram: telegramAgentSystemPrompt({
+        agentPath: "/agents/telegram/main/chat-42",
+        chatId: "42",
+        connection: "main",
+      }),
+    };
+
+    for (const [name, prompt] of Object.entries(prompts)) {
+      expect(prompt, `${name} prompt is missing the ts fence`).toContain("```ts");
+      expect(prompt, `${name} prompt still mentions JavaScript or a js fence`).not.toMatch(
+        /JavaScript|```(?:js|javascript)(?:\s|$)/,
+      );
+    }
+  });
+
   it("only the onboarding agent gets the kickoff input", () => {
     const kickoffTypes = (path: string) =>
       defaultsFor(path).events.filter(
@@ -79,14 +105,14 @@ describe("agentDefaultsForPath", () => {
 
   it("bakes overrides into the returned events — a systemPrompt override replaces wholesale", () => {
     const custom = defaultsFor("/agents/demo", {
-      systemPrompt: "Answer only in pirate speak.",
+      systemPrompt: "Answer in one short sentence.",
       model: "openai/gpt-5.5",
     });
-    expect(custom.systemPrompt).toBe("Answer only in pirate speak.");
+    expect(custom.systemPrompt).toBe("Answer in one short sentence.");
     const config = custom.events.find(
       (event) => event.type === "events.iterate.com/agent/config-updated",
     );
-    expect(config?.payload.systemPrompt).toBe("Answer only in pirate speak.");
+    expect(config?.payload.systemPrompt).toBe("Answer in one short sentence.");
     const provider = custom.events.find(
       (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
     );

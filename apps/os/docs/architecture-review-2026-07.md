@@ -221,7 +221,7 @@ deployment's own public `/api`**:
 - `src/domains/integrations/integration-api.ts:37-44` — every OAuth callback dials
   the public URL with the **admin API secret**, under two
   `no-capnweb-http-batch` lint suppressions (`:10`, `:40`).
-- `src/domains/inbound-mcp-server/mcp-handler.ts:434-441` — **every MCP `exec_js`**
+- `src/domains/inbound-mcp-server/mcp-handler.ts:434-441` — **every MCP `exec_typescript`**
   pays a network round-trip to the machine it is already on.
 - `src/lib/project-server-fns.ts:183-190` — SSR root redirect, same pattern, same
   suppression.

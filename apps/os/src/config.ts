@@ -195,6 +195,9 @@ export const AppConfig = z.object({
        * (resolved by the Secret DO's oauth-refresh-token strategy). */
       petshop: z
         .object({
+          /** Deployment-matched dummy provider origin. Platform OAuth client
+           * credentials and the tokens they mint are confined to this origin. */
+          baseUrl: publicValue(z.url()).optional(),
           oauthClientId: publicValue(z.string().trim().min(1)),
           oauthClientSecret: redacted(z.string().trim().min(1)),
         })

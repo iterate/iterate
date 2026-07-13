@@ -14,13 +14,12 @@ import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
+import { isStreamOffsetConflictError } from "../streams/rpc-types.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
-import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
-import {
-  PLATFORM_GITHUB_API_BASE,
-  resolvePlatformClientCreds,
-  resolvePlatformGithubAppKey,
-} from "./platform-secrets.ts";
+import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.ts";
+import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
+import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
@@ -32,6 +31,8 @@ import {
 } from "./utils.ts";
 
 type SecretState = InstanceType<typeof SecretProcessor>["state"];
+type SecretSnapshot = { offset: number; state: SecretState };
+const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
 
 /**
  * One path-addressed secret. THE INVARIANT (the whole design, one sentence):
@@ -75,6 +76,11 @@ export class SecretDurableObject extends DurableObject<Env> {
   // trip provider rate limits and race last-write-wins on the stored token.
   #refreshing: Promise<void> | undefined;
 
+  // update() snapshots the next stream offset, encrypts for that exact commit,
+  // then compare-and-appends. Serialize local callers to avoid wasted crypto;
+  // public stream appends remain concurrent and are handled by the assertion.
+  #updates: Promise<void> = Promise.resolve();
+
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
@@ -104,36 +110,57 @@ export class SecretDurableObject extends DurableObject<Env> {
     return new LiveStateRpcTarget<SecretDescription>(this.#processorHost);
   }
 
-  async update(input: SecretUpdateInput) {
+  update(input: SecretUpdateInput) {
+    const result = this.#updates.then(() => this.#update(input));
+    this.#updates = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async #update(input: SecretUpdateInput) {
     if (input.material === undefined && input.egress === undefined && input.refresh === undefined) {
       throw new Error("secret.update requires material, egress, or refresh");
     }
-
-    if (input.egress !== undefined && input.material === undefined) {
-      if ((await this.#snapshot()).encryptedMaterial === null) {
-        throw new Error("secret.update with egress requires existing material");
-      }
+    if (input.material !== undefined && input.egress === undefined) {
+      throw new Error("secret.update requires egress with replacement material");
     }
 
-    const [event] = await this.#processorHost.stream.append({
-      type: "events.iterate.com/secret/updated",
-      payload: {
-        ...(input.egress === undefined ? {} : { egress: normalizeEgress(input.egress) }),
-        ...(input.material === undefined
-          ? {}
-          : {
-              // Material is any serializable value, encrypted as one JSON blob.
-              // The DO owns the JSON boundary so crypto.ts stays string-based
-              // and every legacy string caller keeps round-tripping.
-              encryptedMaterial: await encryptSecretMaterial(
-                JSON.stringify(input.material),
-                this.env.SECRET_ENCRYPTION_KEY,
-              ),
-            }),
-        ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
-      },
-    });
-    return event!;
+    const egress = input.egress === undefined ? undefined : normalizeEgress(input.egress);
+
+    // A material-less update is intentionally destructive in the fold. It
+    // needs no privileged append lane: egress, refresh, and audit facts are all
+    // ordinary public stream coordination.
+    if (input.material === undefined) {
+      const [event] = await this.#appendSecretEvent({
+        type: "events.iterate.com/secret/updated",
+        payload: {
+          ...(egress === undefined ? {} : { egress }),
+          ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
+        },
+      });
+      return event!;
+    }
+
+    // Encryption authenticates the committed offset, so contention means the
+    // blob must be thrown away and recomputed for a fresh snapshot.
+    for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
+      const snapshot = await this.#snapshotWithOffset();
+      try {
+        return await this.#appendMaterialUpdate({
+          egress: egress!,
+          material: input.material,
+          offset: snapshot.offset + 1,
+          ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
+        });
+      } catch (error) {
+        if (!isStreamOffsetConflictError(error) || attempt === MAX_MATERIAL_APPEND_ATTEMPTS) {
+          throw error;
+        }
+      }
+    }
+    throw new Error("unreachable material append retry state");
   }
 
   async describe(): Promise<SecretDescription> {
@@ -169,7 +196,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
 
     try {
-      const state = await this.#snapshot();
+      let state = await this.#snapshot();
       assertOriginPinned(request.url, state);
 
       // A refresh-and-retry needs the body twice; clone while it is still
@@ -177,7 +204,11 @@ export class SecretDurableObject extends DurableObject<Env> {
       let retry =
         state.refresh === null
           ? null
-          : { source: request.clone() as unknown as Request, strategy: state.refresh };
+          : {
+              source: request.clone() as unknown as Request,
+              strategy: state.refresh,
+              updatedOffset: state.updatedOffset,
+            };
 
       let substituted: Request;
       try {
@@ -186,27 +217,33 @@ export class SecretDurableObject extends DurableObject<Env> {
         // No material / missing field with a strategy configured: mint first
         // (the first-use case — e.g. a fresh GitHub installation), then retry.
         if (retry === null || !isMintableMiss(error)) throw error;
-        await this.#refresh(retry.strategy);
-        substituted = await this.#substitute(retry.source, await this.#snapshot());
+        await this.#refresh(retry);
+        state = await this.#snapshot();
+        substituted = await this.#substitute(retry.source, state);
         retry = null; // one refresh per request: a just-minted token gets no second go
       }
 
       await this.#appendUsed(request.url);
       await this.#assertGithubInstallationUseAuthorized(state.refresh);
-      const response = await fetch(substituted);
+      const response = await fetchWithCredentialRedirects(substituted, {
+        assertUrlAllowed: (url) => assertOriginPinned(url, state),
+      });
       if (response.status !== 401 || retry === null) return response;
 
       try {
-        await this.#refresh(retry.strategy);
+        await this.#refresh(retry);
       } catch {
         // The provider (or config) refused the refresh: the original 401 is
         // the caller's answer, not an opaque exception.
         return response;
       }
-      const retried = await this.#substitute(retry.source, await this.#snapshot());
+      const retriedState = await this.#snapshot();
+      const retried = await this.#substitute(retry.source, retriedState);
       await this.#appendUsed(request.url);
-      await this.#assertGithubInstallationUseAuthorized(retry.strategy);
-      return await fetch(retried);
+      await this.#assertGithubInstallationUseAuthorized(retriedState.refresh);
+      return await fetchWithCredentialRedirects(retried, {
+        assertUrlAllowed: (url) => assertOriginPinned(url, retriedState),
+      });
     } catch (error) {
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       throw error;
@@ -216,15 +253,17 @@ export class SecretDurableObject extends DurableObject<Env> {
   /** Substitute this secret's placeholders (headers + URL) from decrypted material. */
   async #substitute(request: Request, state: SecretState): Promise<Request> {
     const material =
-      state.encryptedMaterial === null ? null : await this.#decrypt(state.encryptedMaterial);
+      state.encryptedMaterial === null
+        ? null
+        : await this.#decrypt(state.encryptedMaterial, state.egress);
     return substituteSecretRequest(request, (reference) => {
       if (material === null) throw new SecretSubstitutionError("secret_not_found");
       return selectSecretField(material, reference.field);
     });
   }
 
-  #refresh(refresh: SecretRefresh): Promise<void> {
-    this.#refreshing ??= this.#doRefresh(refresh).finally(() => {
+  #refresh(expected: { strategy: SecretRefresh; updatedOffset: number }): Promise<void> {
+    this.#refreshing ??= this.#doRefresh(expected).finally(() => {
       this.#refreshing = undefined;
     });
     return this.#refreshing;
@@ -232,24 +271,42 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   async #assertGithubInstallationUseAuthorized(refresh: SecretRefresh | null): Promise<void> {
     if (refresh?.kind !== "github-app-installation") return;
-    await assertGithubInstallationTokenMintAuthorized({
-      installationId: refresh.installationId,
-      privateKey: refresh.privateKey,
-      projectId: this.#name.projectId,
-    });
+    try {
+      await assertGithubInstallationTokenMintAuthorized({
+        installationId: refresh.installationId,
+        privateKey: refresh.privateKey,
+        projectId: this.#name.projectId,
+      });
+    } catch {
+      throw new SecretSubstitutionError("secret_not_found");
+    }
   }
 
-  async #doRefresh(refresh: SecretRefresh): Promise<void> {
-    const state = await this.#snapshot();
+  async #doRefresh(expected: { strategy: SecretRefresh; updatedOffset: number }): Promise<void> {
+    const snapshot = await this.#snapshotWithOffset();
+    const { state } = snapshot;
+    if (
+      state.updatedOffset !== expected.updatedOffset ||
+      !sameRefresh(state.refresh, expected.strategy)
+    ) {
+      // fetch() selected this strategy from an earlier snapshot. A public
+      // event may freely replace or clear it, but the stale strategy must not
+      // mint after that change. The append offset check below independently
+      // fences changes that land after this snapshot.
+      throw new SecretSubstitutionError("secret_not_found");
+    }
     const material =
-      state.encryptedMaterial === null ? {} : await this.#decrypt(state.encryptedMaterial);
+      state.encryptedMaterial === null
+        ? {}
+        : await this.#decrypt(state.encryptedMaterial, state.egress);
     const record = asMaterialRecord(material);
+    const refresh = expected.strategy;
     if (refresh.kind === "oauth-refresh-token") {
-      await this.#refreshOAuthToken(refresh, state, record);
+      await this.#refreshOAuthToken(refresh, snapshot, record);
     } else if (refresh.kind === "github-app-installation") {
-      await this.#mintGithubInstallationToken(refresh, state, record);
+      await this.#mintGithubInstallationToken(refresh, snapshot, record);
     } else {
-      await this.#mintWaitroseSession(refresh, state, record);
+      await this.#mintWaitroseSession(refresh, snapshot, record);
     }
   }
 
@@ -263,9 +320,10 @@ export class SecretDurableObject extends DurableObject<Env> {
    */
   async #refreshOAuthToken(
     refresh: Extract<SecretRefresh, { kind: "oauth-refresh-token" }>,
-    state: SecretState,
+    snapshot: SecretSnapshot,
     material: Record<string, unknown>,
   ): Promise<void> {
+    const { state } = snapshot;
     assertOriginPinned(refresh.tokenEndpoint, state);
     const refreshToken = readStringField(material, "refreshToken");
     // Material creds may be a confidential client (clientId + clientSecret) or a
@@ -277,38 +335,43 @@ export class SecretDurableObject extends DurableObject<Env> {
             clientId: readStringField(material, "clientId"),
             clientSecret: optionalStringField(material, "clientSecret"),
           }
-        : resolvePlatformClientCreds(
-            parseConfig(this.env),
-            refresh.clientCreds,
-            refresh.tokenEndpoint,
-          );
+        : resolvePlatformClientCreds({
+            config: parseConfig(this.env),
+            ref: refresh.clientCreds,
+            secretEgressUrls: state.egress.urls,
+            tokenEndpoint: refresh.tokenEndpoint,
+          });
     const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken });
     // A confidential client authenticates with HTTP Basic; a public client (no
     // secret) instead identifies itself with client_id in the body (RFC 6749 §6).
     if (creds.clientSecret === undefined) body.set("client_id", creds.clientId);
-    const response = await fetch(refresh.tokenEndpoint, {
-      method: "POST",
-      headers: {
-        ...(creds.clientSecret === undefined
-          ? {}
-          : { authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}` }),
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body,
-    });
+    const response = await fetchWithCredentialRedirects(
+      new Request(refresh.tokenEndpoint, {
+        method: "POST",
+        headers: {
+          ...(creds.clientSecret === undefined
+            ? {}
+            : { authorization: `Basic ${btoa(`${creds.clientId}:${creds.clientSecret}`)}` }),
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body,
+      }),
+      { assertUrlAllowed: (url) => assertOriginPinned(url, state) },
+    );
     if (!response.ok) throw new Error(`oauth refresh failed with HTTP ${response.status}`);
     const data = (await response.json()) as { access_token?: string; refresh_token?: string };
     if (typeof data.access_token !== "string") {
       throw new Error("oauth refresh returned no access_token");
     }
-    await this.update({
-      material: {
+    await this.#commitRefreshedMaterial(
+      {
         ...material,
         accessToken: data.access_token,
         // Providers may rotate the refresh token on use; keep the newest.
         ...(typeof data.refresh_token === "string" ? { refreshToken: data.refresh_token } : {}),
       },
-    });
+      snapshot,
+    );
   }
 
   /**
@@ -320,34 +383,31 @@ export class SecretDurableObject extends DurableObject<Env> {
    */
   async #mintGithubInstallationToken(
     refresh: Extract<SecretRefresh, { kind: "github-app-installation" }>,
-    state: SecretState,
+    snapshot: SecretSnapshot,
     material: Record<string, unknown>,
   ): Promise<void> {
+    const { state } = snapshot;
     assertOriginPinned(refresh.apiBase, state);
-    let apiBase = refresh.apiBase;
-    let appId = refresh.appId;
     let privateKeyPem: string;
     if (refresh.privateKey === "material") {
       privateKeyPem = readStringField(material, "privateKey");
     } else {
       await this.#assertGithubInstallationUseAuthorized(refresh);
-      const config = parseConfig(this.env);
-      privateKeyPem = resolvePlatformGithubAppKey(
-        config,
-        refresh.privateKey,
-        refresh.apiBase,
-        refresh.appId,
-      );
-      apiBase = PLATFORM_GITHUB_API_BASE;
-      appId = config.integrations.github!.appId!;
+      privateKeyPem = resolvePlatformGithubAppKey({
+        apiBase: refresh.apiBase,
+        appId: refresh.appId,
+        config: parseConfig(this.env),
+        ref: refresh.privateKey,
+        secretEgressUrls: state.egress.urls,
+      });
     }
     const token = await mintGithubInstallationToken({
-      apiBase,
-      appId,
+      apiBase: refresh.apiBase,
+      appId: refresh.appId,
       installationId: refresh.installationId,
       privateKeyPem,
     });
-    await this.update({ material: { ...material, accessToken: token } });
+    await this.#commitRefreshedMaterial({ ...material, accessToken: token }, snapshot);
   }
 
   /**
@@ -361,26 +421,30 @@ export class SecretDurableObject extends DurableObject<Env> {
    */
   async #mintWaitroseSession(
     refresh: Extract<SecretRefresh, { kind: "waitrose-session" }>,
-    state: SecretState,
+    snapshot: SecretSnapshot,
     material: Record<string, unknown>,
   ): Promise<void> {
+    const { state } = snapshot;
     assertOriginPinned(refresh.graphqlUrl, state);
     const username = readStringField(material, "username");
     const password = readStringField(material, "password");
-    const response = await fetch(refresh.graphqlUrl, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        // Waitrose's edge answers UA-less requests with HTTP 520 (proven live
-        // 2026-07-07); the Android app's UA is the known-good request shape.
-        "user-agent": "Waitrose/3.9.1 (Android)",
-      },
-      body: JSON.stringify({
-        query: WAITROSE_NEW_SESSION_MUTATION,
-        variables: { input: { clientId: "ANDROID_APP", password, username } },
+    const response = await fetchWithCredentialRedirects(
+      new Request(refresh.graphqlUrl, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          // Waitrose's edge answers UA-less requests with HTTP 520 (proven live
+          // 2026-07-07); the Android app's UA is the known-good request shape.
+          "user-agent": "Waitrose/3.9.1 (Android)",
+        },
+        body: JSON.stringify({
+          query: WAITROSE_NEW_SESSION_MUTATION,
+          variables: { input: { clientId: "ANDROID_APP", password, username } },
+        }),
       }),
-    });
+      { assertUrlAllowed: (url) => assertOriginPinned(url, state) },
+    );
     if (response.status === 401) {
       // The live API answers wrong credentials with a 401 GraphQL error (the
       // failures[] shape below is the app-client contract, not what the edge
@@ -408,23 +472,104 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (typeof session?.accessToken !== "string") {
       throw new Error("waitrose session mint returned no accessToken");
     }
-    await this.update({ material: { ...material, accessToken: session.accessToken } });
+    await this.#commitRefreshedMaterial(
+      { ...material, accessToken: session.accessToken },
+      snapshot,
+    );
   }
 
   async #snapshot(): Promise<SecretState> {
-    await this.#processorHost.catchUp(SecretProcessorContract.slug);
-    return (await this.#secretProcessor.snapshot()).state;
+    return (await this.#snapshotWithOffset()).state;
   }
 
-  async #decrypt(encrypted: NonNullable<SecretState["encryptedMaterial"]>): Promise<unknown> {
-    return JSON.parse(await decryptSecretMaterial(encrypted, this.env.SECRET_ENCRYPTION_KEY));
+  async #snapshotWithOffset(): Promise<SecretSnapshot> {
+    await this.#processorHost.catchUp(SecretProcessorContract.slug);
+    return await this.#secretProcessor.snapshot();
+  }
+
+  async #decrypt(
+    encrypted: NonNullable<SecretState["encryptedMaterial"]>,
+    egress: SecretState["egress"],
+  ): Promise<unknown> {
+    try {
+      return JSON.parse(
+        await decryptSecretCellMaterial(encrypted, this.env.SECRET_ENCRYPTION_KEY, {
+          egressOrigins: egressOrigins(egress),
+          offset: encrypted.offset,
+          path: this.#name.path,
+          projectId: this.#name.projectId,
+        }),
+      );
+    } catch {
+      // Invalid, copied, or policy-mismatched ciphertext is indistinguishable
+      // from no material and never leaks a raw WebCrypto exception.
+      throw new SecretSubstitutionError("secret_not_found");
+    }
+  }
+
+  async #appendMaterialUpdate(input: {
+    egress: SecretState["egress"];
+    material: unknown;
+    offset: number;
+    refresh?: SecretRefresh | null;
+  }) {
+    const encryptedMaterial = await encryptSecretCellMaterial(
+      JSON.stringify(input.material),
+      this.env.SECRET_ENCRYPTION_KEY,
+      {
+        egressOrigins: egressOrigins(input.egress),
+        offset: input.offset,
+        path: this.#name.path,
+        projectId: this.#name.projectId,
+      },
+    );
+    const [event] = await this.#appendSecretEvent({
+      offset: input.offset,
+      type: "events.iterate.com/secret/updated",
+      payload: {
+        egress: input.egress,
+        encryptedMaterial,
+        ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
+      },
+    });
+    return event!;
+  }
+
+  async #commitRefreshedMaterial(material: unknown, snapshot: SecretSnapshot): Promise<void> {
+    try {
+      await this.#appendMaterialUpdate({
+        egress: snapshot.state.egress,
+        material,
+        offset: snapshot.offset + 1,
+      });
+    } catch (error) {
+      if (isStreamOffsetConflictError(error)) {
+        // The token was derived from a state that is no longer current. Never
+        // resurrect it under a later policy or refresh configuration.
+        throw new SecretSubstitutionError("secret_not_found");
+      }
+      throw error;
+    }
   }
 
   #appendUsed(url: string): Promise<unknown> {
-    return this.#processorHost.stream.append({
+    return this.#appendSecretEvent({
       type: "events.iterate.com/secret/used",
       payload: { url, usedAt: new Date().toISOString(), usedBy: this.#name.projectId },
     });
+  }
+
+  #appendSecretEvent(event: {
+    offset?: number;
+    type: `events.iterate.com/secret/${string}`;
+    payload: Record<string, unknown>;
+  }) {
+    return this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.#name.projectId,
+        path: this.#name.path,
+      }),
+    ).append(event as StreamEventInput);
   }
 }
 
@@ -435,8 +580,17 @@ const WAITROSE_NEW_SESSION_MUTATION =
   "mutation NewSession($input: SessionInput) { generateSession(session: $input) { __typename ...SessionPayload failures { type message } } }  fragment SessionPayload on SetSessionPayload { accessToken refreshToken customerId customerOrderId customerOrderState defaultBranchId expiresIn }";
 
 function normalizeEgress(egress: { urls: string[] }): { urls: string[] } {
-  for (const url of egress.urls) new URL(url);
+  for (const url of egress.urls) {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error(`secret egress URL must use http or https: ${url}`);
+    }
+  }
   return { urls: [...egress.urls] };
+}
+
+function egressOrigins(egress: { urls: string[] }): string[] {
+  return egress.urls.map((url) => new URL(url).origin);
 }
 
 /** A substitution miss a refresh strategy can fill: no material yet, or the
@@ -478,6 +632,14 @@ function readStringField(material: Record<string, unknown>, field: string): stri
 function optionalStringField(material: Record<string, unknown>, field: string): string | undefined {
   const value = material[field];
   return typeof value === "string" ? value : undefined;
+}
+
+function sameRefresh(current: SecretRefresh | null, expected: SecretRefresh): boolean {
+  if (current === null || current.kind !== expected.kind) return false;
+  // Refresh facts are JSON values produced by the same schema. Comparing their
+  // serialized form preserves the exact-fact semantics: even a configuration
+  // replacement that is nearly identical invalidates an already-started use.
+  return JSON.stringify(current) === JSON.stringify(expected);
 }
 
 /**

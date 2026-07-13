@@ -6,6 +6,7 @@
 // App private key comes from deployment config and never reaches a caller.
 
 import { computeSignatureBase64Url } from "../secrets/utils.ts";
+import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import type { PlatformCredsRef } from "../secrets/types.ts";
 import { lookupConnectionClaim } from "./integration-streams.ts";
 
@@ -55,16 +56,18 @@ export async function mintGithubInstallationToken(input: {
     payload: signingInput,
     privateKeyPem: input.privateKeyPem,
   });
-  const response = await fetch(
-    `${input.apiBase.replace(/\/$/, "")}/app/installations/${input.installationId}/access_tokens`,
-    {
-      method: "POST",
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${signingInput}.${signature}`,
-        "user-agent": "iterate-os",
+  const response = await fetchWithCredentialRedirects(
+    new Request(
+      `${input.apiBase.replace(/\/$/, "")}/app/installations/${input.installationId}/access_tokens`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${signingInput}.${signature}`,
+          "user-agent": "iterate-os",
+        },
       },
-    },
+    ),
   );
   if (!response.ok) {
     throw new Error(`github installation token mint failed: HTTP ${response.status}`);

@@ -1,4 +1,4 @@
-// ITX expressions: a persisted name for a capability, as plain data.
+// itx expressions: a persisted name for a capability, as plain data.
 //
 // An expression is a walk from an itx root to a value: string steps are
 // property reads, `[method, ...args]` steps are calls. Persisting one is
@@ -113,7 +113,7 @@ export async function evaluateItxExpression(
       assertObjectLike(target, method);
       const handler = Reflect.get(target, method);
       if (typeof handler !== "function") {
-        throw new Error(`ITX expression method "${method}" did not resolve to a function`);
+        throw new Error(`itx expression method "${method}" did not resolve to a function`);
       }
       receiver = undefined;
       value = Reflect.apply(handler, target, args);
@@ -133,19 +133,19 @@ export async function evaluateItxExpression(
 /** Structural validation of an expression (shape only, no evaluation). */
 function assertItxExpression(expression: ItxExpression): void {
   if (!Array.isArray(expression) || expression.length === 0) {
-    throw new Error("ITX expression must contain at least one step");
+    throw new Error("itx expression must contain at least one step");
   }
 
   for (const step of expression) {
     if (typeof step === "string") continue;
     if (Array.isArray(step) && typeof step[0] === "string") continue;
-    throw new Error(`invalid ITX expression step ${JSON.stringify(step)}`);
+    throw new Error(`invalid itx expression step ${JSON.stringify(step)}`);
   }
 }
 
 function assertObjectLike(value: unknown, segment: string): asserts value is object | Function {
   if (!isObjectLike(value)) {
-    throw new Error(`ITX expression segment "${segment}" hit ${String(value)}`);
+    throw new Error(`itx expression segment "${segment}" hit ${String(value)}`);
   }
 }
 

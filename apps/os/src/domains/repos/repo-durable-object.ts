@@ -1086,7 +1086,7 @@ async function seedArtifactRepo(input: {
   try {
     await git.commit({
       author: { email: "support@iterate.com", name: "Iterate" },
-      message: "Seed minimal ITX project worker",
+      message: "Seed minimal itx project worker",
     });
     await ensureBranchRef({ branch: input.branch, git });
   } catch (error) {

@@ -16,7 +16,10 @@ import packageJson from "../../../package.json" with { type: "json" };
 import { ensureMcpSessionAgentReady } from "./mcp-session-agent-ready.ts";
 import { resolveMcpSessionAgentPath } from "./mcp-session-agent-path.ts";
 import { readInboundMcpToolOptions, type InboundMcpToolOptions } from "./mcp-tool-options.ts";
-import { EXEC_JS_DESCRIPTION } from "./exec-js-description.ts";
+import {
+  EXEC_TYPESCRIPT_DESCRIPTION,
+  inboundMcpServerInstructions,
+} from "./exec-typescript-description.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
@@ -41,11 +44,11 @@ type McpAuth = {
 
 const requiredToolScope = "profile";
 const ASK_ASSISTANT_TIMEOUT_MS = 120_000;
-const ExecJsInput = z.object({
+const ExecTypescriptInput = z.object({
   code: z
     .string()
     .describe(
-      "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.__describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
+      "One itx TypeScript async arrow function to execute, e.g. async (itx) => { return await itx.__describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
     ),
   project: z.string().optional().describe("Project slug to run this code against."),
 });
@@ -104,14 +107,7 @@ function createServer(input: {
   const server = new McpServer(
     { name: "os", version: packageJson.version },
     {
-      instructions: [
-        "This is an Iterate OS project MCP server.",
-        "Use exec_js to run a JavaScript async arrow function against a project.",
-        ...(input.toolOptions.withAgent
-          ? ["Use ask_assistant to ask the project's assistant agent in plain language."]
-          : []),
-        "Prefer several small single-purpose calls (fetch data, return it, look at it, act) over one giant defensive script; use Promise.all inside a call to parallelize independent requests.",
-      ].join("\n"),
+      instructions: inboundMcpServerInstructions(input.toolOptions),
     },
   );
 
@@ -141,14 +137,14 @@ function createServer(input: {
     }).get(projectId);
 
   server.registerTool(
-    "exec_js",
+    "exec_typescript",
     {
-      title: "Run code",
-      description: EXEC_JS_DESCRIPTION,
-      inputSchema: ExecJsInput,
+      title: "Run TypeScript",
+      description: EXEC_TYPESCRIPT_DESCRIPTION,
+      inputSchema: ExecTypescriptInput,
     },
     async (rawInput) => {
-      const parsedInput = ExecJsInput.parse(rawInput);
+      const parsedInput = ExecTypescriptInput.parse(rawInput);
       const project = await resolveProject(parsedInput.project);
 
       // runScript executes the async arrow function in a fresh dynamic-worker
@@ -197,7 +193,7 @@ function createServer(input: {
         // reply server-side. Reply matching is by order on the session stream,
         // not per-request correlation — the session belongs to this one MCP
         // client, so interleaved replies are the client's own doing (same trust
-        // model as one person running exec_js mid-conversation).
+        // model as one person running exec_typescript mid-conversation).
         let reply;
         try {
           const projectItx = await projectItxFor(project.id);

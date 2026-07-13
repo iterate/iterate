@@ -322,7 +322,7 @@ describe("itx", () => {
     expect(await project.replaceProbe.value()).toBe(`new:${marker}`);
   });
 
-  test("ITX expression replacement records the recipe without evaluating it", async () => {
+  test("itx expression replacement records the recipe without evaluating it", async () => {
     const marker = crypto.randomUUID();
 
     using session = withItxSession();

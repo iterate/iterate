@@ -1,5 +1,5 @@
 /**
- * The public ITX capability surface.
+ * The public itx capability surface.
  *
  * `/api` — os' one API — gives callers one unauthenticated object.
  * Authentication returns a root catalog, and every object reachable from that
@@ -17,7 +17,7 @@
  * - a PROJECT is the tenant / isolation boundary — a `prj_…` id, its Durable
  *   Objects, its streams. You never hold a "project object"; you hold an itx
  *   scoped into a project.
- * - an ITX is a capability context scoped into one project at one path. It is
+ * - an itx is a capability context scoped into one project at one path. It is
  *   the `itx` in every `async (itx) => { … }` script and what `env.ITX.get()`
  *   returns; `session.projects.get(id)` gives you the itx at the project root,
  *   and an itx at "/agents/…" is what "an agent context" means.
@@ -1799,7 +1799,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
       children: {
         fetch: "Egress fetch with secret placeholders substituted server-side.",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
-        update: "Set the value, egress URLs, and/or refresh strategy.",
+        update:
+          "Set the value, egress URLs, and/or refresh strategy. A value requires its complete egress policy in the same update; every update without a value clears stored material.",
       },
       parent: "itx.secrets.get(path)",
       ...state,
@@ -1831,7 +1832,9 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
 
-  /** Set the secret material and/or its egress allowlist. */
+  /** Set secret material, its egress allowlist, and/or refresh strategy.
+   * Replacement material requires its complete egress policy in the same
+   * update. Every update without replacement material clears stored material. */
   update(input: SecretUpdateInput): Promise<StreamEvent> {
     return this.durableObjectStub.update(input);
   }
@@ -1941,7 +1944,7 @@ class FilesRpcTarget extends IterateRpcTarget<"Files"> {
   }
 }
 
-/** Workers AI binding exposed through ITX as a project/agent capability. */
+/** Workers AI binding exposed through itx as a project/agent capability. */
 class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -1992,7 +1995,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   }
 }
 
-/** Cloudflare Browser Run binding exposed through ITX. */
+/** Cloudflare Browser Run binding exposed through itx. */
 class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -2035,7 +2038,7 @@ class CfBrowserCapabilityRpcTarget extends IterateRpcTarget<"CfBrowserCapability
   }
 }
 
-/** Cloudflare Images binding exposed through ITX as one-call helpers. */
+/** Cloudflare Images binding exposed through itx as one-call helpers. */
 class CfImagesCapabilityRpcTarget extends IterateRpcTarget<"CfImagesCapability"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -2072,7 +2075,7 @@ class CfImagesCapabilityRpcTarget extends IterateRpcTarget<"CfImagesCapability">
   }
 }
 
-/** Cloudflare Media Transformations binding exposed through ITX as one-call helpers. */
+/** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */
 class CfVideosCapabilityRpcTarget extends IterateRpcTarget<"CfVideosCapability"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -2104,7 +2107,7 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare first-party platform bindings grouped for agents: ai, browser, images, videos. These wrap env.AI, env.BROWSER, env.IMAGES, and env.MEDIA with project-scoped ITX discovery. Each child __describe() links to the relevant Cloudflare docs.",
+        "Cloudflare first-party platform bindings grouped for agents: ai, browser, images, videos. These wrap env.AI, env.BROWSER, env.IMAGES, and env.MEDIA with project-scoped itx discovery. Each child __describe() links to the relevant Cloudflare docs.",
       children: {
         ai: "Workers AI: run(), models(), toMarkdown().",
         browser: "Browser Run: quickAction() and raw fetch().",
@@ -2174,7 +2177,7 @@ function describeConnectionSdk(input: {
  * there is NO generic `.api.request({ method, path })` shape, and the
  * connection acts as a GitHub App INSTALLATION, so user-scoped
  * `...ForAuthenticatedUser` endpoints answer 403 — and every other slug
- * resolves through the ITX capability table under the `integrations` prefix.
+ * resolves through the itx capability table under the `integrations` prefix.
  * The exception is `itx.integrations.parallel`: a first-party API-key RPC
  * target, not a connection and not returned by `list()`. There is no implicit
  * connection: a built-in call without a connection name is an error.
@@ -3477,7 +3480,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
 
   // Lazy: __describe answers from the ref alone and must not mint loopback
   // stubs; only an actual invocation needs a runner. A worker reached through
-  // the public collection runs in the itx scope of its own path — the ITX
+  // the public collection runs in the itx scope of its own path — the itx
   // binding and egress fetcher come from the HOSTING context, not the ref.
   get #runner(): DynamicWorkerRunner {
     this.#lazyRunner ??= new DynamicWorkerRunner({
@@ -3543,7 +3546,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   }) {
     // Every dynamic worker invocation goes through DynamicWorkerRunner:
     // stateless entrypoints, stateful DO facets, provided worker
-    // capabilities, and project.worker all share its loader/egress/ITX
+    // capabilities, and project.worker all share its loader/egress/itx
     // binding rules. Args and return values pass through untouched on
     // purpose: both directions may carry live RPC stubs, and an RpcTarget
     // returned by the dynamic worker must remain a live object-capability so
