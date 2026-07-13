@@ -5,6 +5,7 @@ import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { parseStreamAppendInput } from "./stream-event-validation.ts";
+import type { ProcessorEvent } from "./processor-contracts.ts";
 import {
   appendOrdinaryEventToRun,
   foldOrdinaryEventRun,
@@ -886,10 +887,12 @@ export class StreamDurableObject extends DurableObject<Env> {
         continue;
       }
 
-      const cursorSet = CoreProcessorContract.parseEvent(
-        "events.iterate.com/stream/subscription-cursor-set",
-        event,
-      );
+      // #reduceCore parsed this exact first-hand event before it was retained
+      // for post-commit effects; avoid repeating the schema walk here.
+      const cursorSet = event as ProcessorEvent<
+        CoreProcessorContract,
+        "events.iterate.com/stream/subscription-cursor-set"
+      >;
       (cursorSets ??= []).push({
         subscriptionKey: cursorSet.payload.subscriptionKey,
         ackedOffset: cursorSet.payload.afterOffset,
