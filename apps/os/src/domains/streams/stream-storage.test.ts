@@ -549,6 +549,31 @@ describe("StreamEventLog.getRange", () => {
     expect(log.getByOffset(2)?.ephemeral).toBe(true);
   });
 
+  it("abandons derived metadata when a later event is keyed or ephemeral", () => {
+    const inserts: Array<{ sql: string; bindings: number }> = [];
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(
+      wrapSqlStorage(db, (statement, bindings) => {
+        if (statement.startsWith("insert into events ")) {
+          inserts.push({ sql: statement, bindings: bindings.length });
+        }
+      }),
+      "/tests/stream",
+    );
+    const committedEvents = Array.from({ length: 34 }, (_, index) => ({
+      ...event(index + 1, "same-type"),
+      ...(index === 17 ? { idempotencyKey: "late-key" } : {}),
+      ...(index === 33 ? { ephemeral: true } : {}),
+    }));
+
+    log.insert(committedEvents, transactionRunner(db));
+
+    expect(inserts.map((insert) => insert.bindings)).toEqual([100, 70]);
+    expect(inserts.every((insert) => !insert.sql.includes("select ? + column1"))).toBe(true);
+    expect(log.getByIdempotencyKey("late-key")?.offset).toBe(18);
+    expect(log.getByOffset(34)?.ephemeral).toBe(true);
+  });
+
   it("rejects an event belonging to another stream", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
     expect(() => log.insert([{ ...event(1, "wrong-path"), path: "/other" }])).toThrow(
@@ -694,7 +719,8 @@ describe("StreamEventLog.getRange", () => {
 
   it("batches inserts within Durable Object SQL's 100-binding limit", () => {
     const inserts: Array<{ sql: string; bindings: number }> = [];
-    const sql = wrapSqlStorage(new DatabaseSync(":memory:"), (statement, bindings) => {
+    const db = new DatabaseSync(":memory:");
+    const sql = wrapSqlStorage(db, (statement, bindings) => {
       if (statement.startsWith("insert into event")) {
         inserts.push({ sql: statement, bindings: bindings.length });
       }
@@ -717,6 +743,38 @@ describe("StreamEventLog.getRange", () => {
     expect(offsets(read(log, { afterOffset: 0, limit: 100 }))).toEqual(
       committedEvents.map((entry) => entry.offset),
     );
+    expect(db.prepare("select offset, type from events order by offset").all()).toEqual(
+      committedEvents.map(({ offset, type }) => ({ offset, type })),
+    );
+  });
+
+  it("pins the 98-row derived binding ceiling and 99-row split", () => {
+    for (const [eventCount, expectedBindings] of [
+      [98, [100]],
+      [99, [100, 3]],
+    ] as const) {
+      const inserts: Array<{ sql: string; bindings: number }> = [];
+      const db = new DatabaseSync(":memory:");
+      const log = new StreamEventLog(
+        wrapSqlStorage(db, (statement, bindings) => {
+          if (statement.startsWith("insert into events ")) {
+            inserts.push({ sql: statement, bindings: bindings.length });
+          }
+        }),
+        "/tests/stream",
+      );
+      const committedEvents = Array.from({ length: eventCount }, (_, index) =>
+        event(index + 50, "same-type"),
+      );
+
+      log.insert(committedEvents, transactionRunner(db));
+
+      expect(inserts.map((insert) => insert.bindings)).toEqual(expectedBindings);
+      expect(inserts.every((insert) => insert.sql.includes("select ? + column1"))).toBe(true);
+      expect(db.prepare("select offset, type from events order by offset").all()).toEqual(
+        committedEvents.map(({ offset, type }) => ({ offset, type })),
+      );
+    }
   });
 
   it("keeps an at-capacity keyless batch on the direct values statement", () => {
