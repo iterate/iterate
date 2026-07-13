@@ -48,7 +48,7 @@ export function openAiAiGatewayUrl(input: {
 }
 
 /** Metadata stamped on every rewritten request (AI Gateway allows ≤5 entries). */
-export type OpenAiAiGatewayMetadata = {
+type OpenAiAiGatewayMetadata = {
   projectId: string;
   source: "project-egress";
   /** Optional sandbox / agent path when known from headers; otherwise omitted. */
