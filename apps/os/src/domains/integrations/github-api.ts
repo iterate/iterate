@@ -11,7 +11,7 @@
 // `rest.repos.get(...)`, `request("GET /...")`, `graphql(...)` — never a
 // hand-mapped surface. Mirrors the Slack WebClient wrapping in slack-api.ts.
 
-import { Octokit } from "@octokit/rest";
+import { Octokit } from "octokit";
 import { itxEnv } from "../../env.ts";
 import { isPathMissMessage } from "../../itx/path-proxy.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -54,7 +54,7 @@ export function connectionOctokit(input: {
  * replayed onto that connection's wrapped Octokit. The single source of truth,
  * shared by the dispatch guard (rpc-targets) and the error normalizer below. */
 export const GITHUB_CALL_GRAMMAR =
-  'itx.integrations.github expected `<connection>.octokit.<path>` (e.g. itx.integrations.github["jonas"].octokit.rest.apps.listReposAccessibleToInstallation() or .octokit.request("GET /installation/repositories")); use itx.integrations.list() to see connections.';
+  'itx.integrations.github expected `<connection>.octokit.<path>` (e.g. itx.integrations.github["jonas"].octokit.rest.apps.listReposAccessibleToInstallation(), .octokit.graphql(query, variables), or .octokit.request("GET /installation/repositories")); use itx.integrations.list() to see connections.';
 
 /**
  * Turn an Octokit failure into a caller-facing Error whose message survives the

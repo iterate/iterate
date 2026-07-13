@@ -83,20 +83,33 @@ The GitHub capability is deliberately ordinary:
 const octokit = itx.integrations.github[connection].octokit;
 const pr = await octokit.rest.pulls.get({ owner, repo, pull_number });
 await octokit.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
+
+const reviewThreads = await octokit.graphql(
+  `query ($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100) { nodes { isResolved } }
+      }
+    }
+  }`,
+  { owner, repo, number: pull_number },
+);
 ```
 
-`octokit` is the `Octokit` exported by `@octokit/rest`; Iterate supplies its
-GitHub App installation authentication and request transport. `.rest` is the
-package's normal property. The connection's `__describe()` exposes the exact
-type as:
+`octokit` is the `Octokit` exported by the main `octokit` package; Iterate
+supplies its GitHub App installation authentication and request transport.
+Use `.rest.*` for routine endpoint calls and `.graphql(query, variables)` when
+GraphQL's query shape or API coverage is useful. `.request(...)` and
+`.paginate(...)` are available too. The connection's `__describe()` exposes
+the exact type as:
 
 ```ts
 export type GithubConnection = {
-  octokit: import("@octokit/rest").Octokit;
+  octokit: import("octokit").Octokit;
 };
 ```
 
-Use the package types and [official Octokit documentation](https://octokit.github.io/rest.js/).
+Use the package types and [official Octokit documentation](https://github.com/octokit/octokit.js/).
 The only RPC-specific caveat is to call `paginate(...)` directly rather than
 `paginate.iterator()`, because an async iterator cannot cross the ITX RPC
 boundary. The explicit `.octokit` segment is mandatory; a direct `.rest` on

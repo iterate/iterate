@@ -1,7 +1,8 @@
 // connectionOctokit: the wrapped Octokit's transport must ride the connection
 // secret's fetch with an access-token PLACEHOLDER (never a real token), so the
-// itx caller surface (github["<conn>"].octokit.rest.* / .octokit.request()) keeps the token in
-// its Secret DO. Only the secret stub is mocked; the Octokit is real.
+// itx caller surface (github["<conn>"].octokit.rest.* / .octokit.graphql() /
+// .octokit.request()) keeps the token in its Secret DO. Only the secret stub
+// is mocked; the all-in-one Octokit is real.
 
 import { describe, expect, test, vi } from "vitest";
 
@@ -12,6 +13,9 @@ vi.mock("../../env.ts", () => ({
       getByName: () => ({
         fetch: async (request: Request) => {
           captured.request = request;
+          if (new URL(request.url).pathname === "/graphql") {
+            return Response.json({ data: { repository: { name: "iterate" } } });
+          }
           return Response.json({ id: 1, login: "octocat" });
         },
       }),
@@ -26,6 +30,7 @@ describe("normalizeGithubError", () => {
   test("the public call grammar makes the Octokit namespace mandatory", () => {
     expect(GITHUB_CALL_GRAMMAR).toContain("<connection>.octokit.<path>");
     expect(GITHUB_CALL_GRAMMAR).toContain(".octokit.rest.apps");
+    expect(GITHUB_CALL_GRAMMAR).toContain(".octokit.graphql(query, variables)");
   });
 
   // Both replayPathCall miss shapes must answer with the grammar: a live
@@ -87,5 +92,21 @@ describe("connectionOctokit", () => {
 
     expect(new URL(captured.request!.url).pathname).toBe("/repos/iterate/os");
     expect(captured.request!.headers.get("authorization")).toContain("getSecret(");
+  });
+
+  test("graphql() hits GitHub's GraphQL endpoint over the same jailed transport", async () => {
+    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+    const data = await octokit.graphql<{ repository: { name: string } }>(
+      "query ($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { name } }",
+      { owner: "iterate", repo: "iterate" },
+    );
+
+    expect(data.repository.name).toBe("iterate");
+    expect(new URL(captured.request!.url).pathname).toBe("/graphql");
+    expect(captured.request!.method).toBe("POST");
+    expect(captured.request!.headers.get("authorization")).toContain("getSecret(");
+    await expect(captured.request!.clone().json()).resolves.toMatchObject({
+      variables: { owner: "iterate", repo: "iterate" },
+    });
   });
 });
