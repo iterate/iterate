@@ -1,33 +1,34 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "cloudflare-api": {
+    "cloudflare": {
       "type": "remote",
       "url": "https://mcp.cloudflare.com/mcp",
       "enabled": true,
-      "oauth": false,
-      "headers": {
-        "Authorization": "Bearer {env:CLOUDFLARE_API_TOKEN}"
-      }
-    },
-    "posthog": {
-      "type": "remote",
-      "url": "https://mcp-eu.posthog.com/mcp",
-      "enabled": true,
-      "oauth": false,
-      "headers": {
-        "Authorization": "Bearer {env:POSTHOG_KEY}"
-      }
+      "oauth": {}
     },
     "exa": {
       "type": "remote",
       "url": "https://mcp.exa.ai/mcp",
-      "enabled": true
+      "enabled": true,
+      "oauth": {}
     },
     "context7": {
       "type": "remote",
       "url": "https://mcp.context7.com/mcp",
       "enabled": true
+    },
+    "iterate": {
+      "type": "remote",
+      "url": "https://mcp.iterate.com",
+      "enabled": true,
+      "oauth": {}
+    },
+    "posthog": {
+      "type": "remote",
+      "url": "https://mcp-eu.posthog.com/mcp",
+      "enabled": true,
+      "oauth": {}
     }
   }
 }

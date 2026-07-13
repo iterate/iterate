@@ -53,7 +53,7 @@ function scriptWorkerRef(input: { code: string; scopePath: string }): StatelessD
   `;
   // runScript is deliberately expressed as a stateless inline DynamicWorkerRef.
   // That keeps script execution on the same DynamicWorkerRunner dispatch path as
-  // project workers and provided stateless capabilities; ITX adds only the
+  // project workers and provided stateless capabilities; itx adds only the
   // journal events. `bundle: false` over plain JavaScript is the loader-ready
   // fast path in resolveWorkerSource: scripts run on every agent turn and must
   // not pay a build round trip.

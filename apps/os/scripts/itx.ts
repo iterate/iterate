@@ -128,13 +128,13 @@ type AgentSmokeOptions = {
   baseUrl?: string;
   /** Single user message to send to the agent. */
   message: string;
-  /** Project id to connect into over ITX. */
+  /** Project id to connect into over itx. */
   project: string;
   /** Maximum time to wait for an assistant response. */
   timeoutMs?: number;
 };
 
-/** Send one user message to an agent over ITX and wait for the assistant response. */
+/** Send one user message to an agent over itx and wait for the assistant response. */
 export async function agentSmoke(options: AgentSmokeOptions) {
   const agentPath = options.agentPath.trim();
   const project = options.project.trim();

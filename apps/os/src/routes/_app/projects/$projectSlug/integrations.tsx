@@ -58,7 +58,6 @@ import {
   Plus,
   Search as SearchIcon,
   Send,
-  Sparkles,
   type LucideIcon,
   Unplug,
 } from "lucide-react";
@@ -67,7 +66,11 @@ import type { Project } from "../../../../itx-api.generated.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamPathPill } from "~/components/stream-path-pill.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
@@ -133,19 +136,11 @@ const BUILTIN_API_INTEGRATIONS = [
     name: "Cloudflare Edge AI",
     namespace: "itx.ai",
   },
-  {
-    description:
-      "OpenAI API calls through project egress or workers without storing a project-owned OpenAI key.",
-    docsUrl: "https://platform.openai.com/docs/api-reference",
-    icon: Sparkles,
-    keyReference: 'Authorization: Bearer getSecret({ platform: "openAiApiKey" })',
-    name: "OpenAI",
-    namespace: "itx.egress.fetch",
-  },
 ] as const;
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
   validateSearch: Search,
+  staticData: streamPageStaticData(),
   ssr: false,
   loader: ({ context }) =>
     breadcrumbLoaderData({

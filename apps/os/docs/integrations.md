@@ -13,7 +13,7 @@ connection's facts and routed events, and the convention root for its secrets
 
 `itx.integrations` is a collection, like `itx.secrets` and `itx.streams`:
 
-```js
+```ts
 await itx.integrations.slack["main-slack"].chat.postMessage({ channel, thread_ts, text });
 await itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" });
 await itx.integrations.list(); // every connection, built-in and provided
@@ -29,11 +29,11 @@ Two kinds of member, one address space — every dotted call is
   scripts, so a typed per-provider class ladder bought nothing (an earlier cut
   had one; it was deleted). `BUILTIN_INTEGRATION_SLUGS` is the single constant
   the dispatch, `list()`'s labeling, and the mount collision guard all share.
-- **Everything else resolves through the ordinary ITX capability table** under
+- **Everything else resolves through the ordinary itx capability table** under
   the `integrations` prefix. A project adds its own integration with
   `provideCapability({ path: ["integrations", ...] })` — **data, not
   deployment**. No registry, no provider files, no new dispatch machinery: the
-  ITX processor's longest-prefix mount resolution does the rest. Mounting
+  itx processor's longest-prefix mount resolution does the rest. Mounting
   UNDER a built-in slug (`["integrations", "slack", ...]`) is rejected loudly
   at provide time — the dispatch would shadow it, making the mount durable,
   journaled, and silently unreachable.
@@ -123,7 +123,7 @@ operations — its GraphQL gateway rejects hand-slimmed selections, so the
 queries are the app's verbatim). What makes it the interesting archetype is
 its connect flow: there is none. A connection exists when its secret does —
 
-```js
+```ts
 await itx.secrets.get("/secrets/integrations/waitrose/mum/session").update({
   egress: { urls: ["https://www.waitrose.com"] },
   material: { username: "mum@example.com", password: "…" },
@@ -134,7 +134,7 @@ await itx.secrets.get("/secrets/integrations/waitrose/mum/session").update({
 });
 ```
 
-```js
+```ts
 await itx.integrations.waitrose.mum.shoppingContext();
 await itx.integrations.waitrose.mum.searchProducts("milk", { size: 5 });
 ```
@@ -170,7 +170,7 @@ repo — no platform change needed. Two shapes:
   `provideCapability({ path: ["integrations", "<slug>"], type:
 "itx-expression", flattenNestedPaths: true })` mounts any expression (a
   standalone dynamic worker, an MCP connection, …) into the collection; the
-  mount is a `capability-provided` event on the ITX journal — replayable,
+  mount is a `capability-provided` event on the itx journal — replayable,
   revocable, enumerable by `integrations.list()`. Mount at the project root
   (`itx.capabilityHosts.get("/")`) so the collection's dispatch can see it.
   Exercised in `e2e/vitest/integrations-userspace.e2e.test.ts` with an
@@ -214,10 +214,11 @@ GitHub connects as a **GitHub App installation** (deep-link to
   connection secret's `accessToken` as a `getSecret` placeholder;
   lexicographically first connection when several exist), and `gh` reads it
   from the env natively. `git` gets a
-  `git http."https://github.com/".extraheader` with a raw Bearer placeholder
-  (set by the warm-up script) — deliberately not a credential helper or
-  `gh auth setup-git`, which send Basic auth (base64) and would hide the
-  placeholder from header substitution.
+  `git http."https://github.com/".extraheader` with Basic auth
+  (`x-access-token` + base64 of the placeholder — GitHub's git smart-HTTP
+  rejects Bearer). Project egress peels Basic Authorization headers before
+  substituting so the placeholder stays findable without putting token bytes
+  in the container.
 
 The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 (GitHub's MCP server mounted under the `github-mcp` slug — built-in slugs

@@ -21,6 +21,9 @@ const OAuthStateData = z.object({
   callbackUrl: z.string().optional(),
   codeVerifier: z.string().optional(),
   expiresAt: z.number(),
+  /** Tentative setup-URL input carried into GitHub's user OAuth callback.
+   * It is not authority until the resulting user token proves access. */
+  githubInstallationId: z.string().optional(),
   nonce: z.string(),
   projectId: z.string(),
   provider: z.enum(["github", "google", "slack"]),

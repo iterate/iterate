@@ -13,9 +13,15 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
         return {
           ...state,
           ...(event.payload.egress === undefined ? {} : { egress: event.payload.egress }),
-          ...(event.payload.encryptedMaterial === undefined
-            ? {}
-            : { encryptedMaterial: event.payload.encryptedMaterial }),
+          // An update is a complete material decision: omission destroys the
+          // retained value. The committed offset is reducer-owned context for
+          // AES-GCM authentication, so replaying this blob at another offset
+          // cannot make it decrypt.
+          encryptedMaterial:
+            event.payload.encryptedMaterial === undefined
+              ? null
+              : { ...event.payload.encryptedMaterial, offset: event.offset },
+          updatedOffset: event.offset,
           // `refresh` present (incl. null-to-clear) replaces; omitted leaves it.
           ...(event.payload.refresh === undefined ? {} : { refresh: event.payload.refresh }),
         };

@@ -1,0 +1,23 @@
+# Project-scoped MCP servers for Grok (and any tool that reads .grok/config.toml).
+# Mirrored in .mcp.json (Claude), .cursor/mcp.json (Cursor), and opencode.json.
+# OAuth servers authenticate per-user on first use — no secrets in this file.
+
+[mcp_servers.cloudflare]
+url = "https://mcp.cloudflare.com/mcp"
+enabled = true
+
+[mcp_servers.exa]
+url = "https://mcp.exa.ai/mcp"
+enabled = true
+
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+enabled = true
+
+[mcp_servers.iterate]
+url = "https://mcp.iterate.com"
+enabled = true
+
+[mcp_servers.posthog]
+url = "https://mcp-eu.posthog.com/mcp"
+enabled = true

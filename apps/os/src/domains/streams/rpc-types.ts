@@ -171,6 +171,17 @@ export class StreamReceiverUnavailableError extends Error {
   override readonly name = StreamReceiverUnavailableError.NAME;
 }
 
+/** A compare-and-append assertion lost to another committed stream event. */
+export class StreamOffsetConflictError extends Error {
+  static readonly NAME = "StreamOffsetConflictError";
+  override readonly name = StreamOffsetConflictError.NAME;
+}
+
+/** Match by name because Durable Object RPC preserves names, not prototypes. */
+export function isStreamOffsetConflictError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === StreamOffsetConflictError.NAME;
+}
+
 export function isStreamReceiverUnavailableError(error: unknown): boolean {
   return (error as { name?: string } | null)?.name === StreamReceiverUnavailableError.NAME;
 }

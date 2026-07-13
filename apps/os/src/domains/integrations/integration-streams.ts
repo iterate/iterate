@@ -34,32 +34,31 @@ async function readAllStreamEvents(projectId: string | null, path: string): Prom
   }
 }
 
-const TAIL_PAGE_SIZE = 200;
+const FILTERED_PAGE_SIZE = 500;
 
 /**
- * A stream's events NEWEST FIRST, paged backwards from the journal head.
+ * The latest event matching any of the requested types.
  *
- * Integration journals grow forever (one token-refreshed event per Gmail-token
- * expiry, one webhook per Slack message), but lifecycle questions ("is this
- * connection connected? what is its current token?") are answered by the most
- * recent few facts. Folding over this generator makes those reads O(tail) and
- * — because it is ONE iteration, not one fold per page — accumulators in the
- * consuming fold naturally span page boundaries.
+ * Integration journals grow forever (one webhook per GitHub or Slack event),
+ * while lifecycle questions only need connected/disconnected facts. Filtering
+ * in Stream storage keeps unrelated event chunks and one-RPC-per-tail-page
+ * round trips out of the status path. Page forward in the unlikely case a
+ * connection has more than 500 lifecycle transitions so latest still wins.
  */
-export async function* streamEventsNewestFirst(
+export async function latestStreamEventOfTypes(
   projectId: string | null,
   path: string,
-): AsyncGenerator<StreamEvent> {
+  eventTypes: readonly string[],
+): Promise<StreamEvent | null> {
   const stream = integrationStreamStub(projectId, path);
-  const { coreProcessorState } = await stream.runtimeState();
-  let beforeOffset = coreProcessorState.maxOffset + 1;
-  while (beforeOffset > 1) {
-    // getEvents bounds are exclusive on both ends, so consecutive windows
-    // (afterOffset, beforeOffset) tile the offset space with no gap/overlap.
-    const afterOffset = Math.max(0, beforeOffset - 1 - TAIL_PAGE_SIZE);
-    const page = await stream.getEvents({ afterOffset, beforeOffset });
-    for (let index = page.length - 1; index >= 0; index -= 1) yield page[index]!;
-    beforeOffset = afterOffset + 1;
+  let afterOffset = 0;
+  let latest: StreamEvent | null = null;
+  for (;;) {
+    const page = await stream.getEvents({ afterOffset, eventTypes, limit: FILTERED_PAGE_SIZE });
+    if (page.length === 0) return latest;
+    latest = page.at(-1)!;
+    if (page.length < FILTERED_PAGE_SIZE) return latest;
+    afterOffset = latest.offset;
   }
 }
 
@@ -75,12 +74,13 @@ function directoryKey(slug: string, externalId: string): string {
 
 /**
  * Folds the deployment-wide integration directory: for each `(slug,
- * externalId)`, latest claim wins; an unclaim clears it only when BOTH the
- * project and the connection match the live claim — one project can hold
- * several external accounts, and a stale connection's disconnect must not tear
- * down the claim a newer connection now owns. This is the provider-agnostic
- * generalization of the old Slack team directory (D4): the same fold serves
- * Slack team ids, GitHub installation ids, and any future provider.
+ * externalId)`, the first live project owner wins. That project may update the
+ * connection name; another project can claim the id only after a matching
+ * unclaim clears it. Requiring BOTH the project and connection on an unclaim
+ * also prevents a stale connection's disconnect from tearing down the claim a
+ * newer connection now owns. This is the provider-agnostic generalization of
+ * the old Slack team directory (D4): the same fold serves Slack team ids,
+ * GitHub installation ids, and any future provider.
  */
 export function foldConnectionDirectory(
   events: readonly StreamEvent[],
@@ -103,7 +103,10 @@ export function foldConnectionDirectory(
     const key = directoryKey(payload.slug, payload.externalId);
     if (event.type === CONNECTION_CLAIMED_EVENT_TYPE) {
       if (typeof payload.connection !== "string") continue;
-      claims.set(key, { connection: payload.connection, projectId: payload.projectId });
+      const existingClaim = claims.get(key);
+      if (existingClaim === undefined || existingClaim.projectId === payload.projectId) {
+        claims.set(key, { connection: payload.connection, projectId: payload.projectId });
+      }
     } else if (
       event.type === CONNECTION_UNCLAIMED_EVENT_TYPE &&
       claims.get(key)?.projectId === payload.projectId &&

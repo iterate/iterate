@@ -35,6 +35,7 @@ import {
   runWorkersAiAttempt,
   type CloudflareAiGatewayTransport,
   type WorkersAiBinding,
+  type WorkersAiMessage,
 } from "./workers-ai-transport.ts";
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
@@ -48,7 +49,7 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  *   instead of crashing at construction.
  * - `writeWorkspaceFile` writes one file into THIS agent's own workspace (the
  *   same checkout `itx.workspace` resolves to) so oversized script results can
- *   spill to a file the model pages through with plain JavaScript. Optional:
+ *   spill to a file the model pages through with plain TypeScript. Optional:
  *   without it (bare test hosts), oversized results fall back to inline
  *   truncation.
  * - `now` is the injected clock (expiry stamps, durations, backstop deadline);
@@ -62,6 +63,9 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  *   it reads deployment config and the host's secrets, and a bad config must
  *   fail the ATTEMPT (journaled, retried) rather than DO construction.
  *   Defaults to unified billing.
+ * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
+ *   file immediately before a model request. Production hosts provide it;
+ *   bare tests without it retain the stored attachment URL.
  */
 type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
@@ -69,6 +73,7 @@ type AgentProcessorDeps = {
   now?: () => number;
   llmRetryBackoffBaseMs?: number;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
+  resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
 };
 
 /** Page size for full-journal reads (prompt building, currency checks). */
@@ -233,7 +238,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         return;
       case "events.iterate.com/agent/output-added":
         blockProcessorWhile(async () => {
-          const extraction = extractAsyncJsSnippet(event.payload.content);
+          const extraction = extractAsyncTypescriptSnippet(event.payload.content);
           if (extraction.kind === "none") return;
           if (extraction.kind === "malformed") {
             // Same corrective lane as multi-block: the model believes its
@@ -243,7 +248,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
               idempotencyKey: this.idempotencyKey("malformed-snippet-rejected", event),
               payload: {
                 content:
-                  "Your code block did NOT run. Only a ```js fence whose content STARTS with `async` executes — a single `async (itx) => { ... }`, JavaScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
+                  "Your code block did NOT run. Use a ```ts fence whose content STARTS with `async` — a single `async (itx) => { ... }`, TypeScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
                 llmRequestPolicy: { behaviour: "after-current-request" },
               },
             });
@@ -257,7 +262,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
               type: "events.iterate.com/agent/input-added",
               idempotencyKey: this.idempotencyKey("multi-snippet-rejected", event),
               payload: {
-                content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`js block.`,
+                content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`ts block.`,
                 llmRequestPolicy: { behaviour: "after-current-request" },
               },
             });
@@ -408,10 +413,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         ai,
         transport: this.deps.cloudflareAiGatewayTransport?.(),
         deadlineMs: DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
-        messages: buildAgentCompactionRequestBody(state).messages.map((message) => ({
-          role: message.role,
-          content: flattenMessageToText(message),
-        })),
+        messages: await prepareAgentLlmMessages(
+          buildAgentCompactionRequestBody(state).messages,
+          this.deps.resolveModelFileUrl,
+        ),
         model: state.llmConfig.model,
         onChunk: async () => {},
       });
@@ -748,12 +753,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // the intent-expiry horizon, so a wedged binding releases the live
         // set here instead of pinning the obligation until the backstop.
         deadlineMs: DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
-        // Workers AI chat bodies are text-only here: file attachments flatten
-        // to hint lines telling the agent how to fetch/convert the bytes.
-        messages: body.messages.map((message) => ({
-          role: message.role,
-          content: flattenMessageToText(message),
-        })),
+        // This chat-completions transport is text-only: file attachments use
+        // just-in-time signed hint URLs, not OpenAI Files or provider file IDs.
+        messages: await prepareAgentLlmMessages(body.messages, this.deps.resolveModelFileUrl),
         model,
         onChunk: async (chunk, index) => {
           // Accumulated text is what an interrupt hands back to the model as
@@ -1209,6 +1211,32 @@ export function flattenMessageToText(message: AgentChatMessage): string {
   return [message.content, ...files.map(renderFileHintLine)].join("\n");
 }
 
+/** Resolve attachment URLs immediately before provider dispatch. The URLs in
+ * journaled events remain deterministic UI/share links; model requests get a
+ * separate short-lived capability bound to the current object version. */
+export async function prepareAgentLlmMessages(
+  messages: AgentChatMessage[],
+  resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>,
+): Promise<WorkersAiMessage[]> {
+  return await Promise.all(
+    messages.map(async (message) => {
+      const files = message.files ?? [];
+      if (files.length === 0) return { role: message.role, content: message.content };
+      const resolvedFiles =
+        resolveModelFileUrl === undefined
+          ? files
+          : await Promise.all(
+              files.map(async (file) => ({ ...file, url: await resolveModelFileUrl(file) })),
+            );
+      return {
+        role: message.role,
+        content: flattenMessageToText({ ...message, files: resolvedFiles }),
+        containsFiles: true,
+      };
+    }),
+  );
+}
+
 /**
  * The model-visible text for a file the current model cannot ingest natively:
  * never fail the turn — tell the agent where the bytes live and how to read
@@ -1237,8 +1265,8 @@ function renderFileHintLine(file: AgentFileAttachment): string {
  * prompt with the transcript re-rendered behind it. Compaction fires at the
  * biggest prompt this agent will ever send (~half the context window), and
  * the tail position means that whole prompt is a prefix the provider already
- * has cached from the previous turn (90% input discount on gpt-5.5) instead
- * of a from-scratch prompt sharing no bytes with it.
+ * has cached from the previous turn (the provider's cached-input discount)
+ * instead of a from-scratch prompt sharing no bytes with it.
  */
 const AGENT_COMPACTION_PROMPT = [
   "You are compacting this AI agent conversation because it is close to overflowing the model's context window. Do not respond to the messages above. Instead, write a summary that will REPLACE everything above as the agent's only memory of it.",
@@ -1281,10 +1309,12 @@ export function buildAgentCompactionRequestBody(state: {
 /**
  * Context windows per model family, longest-prefix matched so dated variants
  * inherit their family's window. The OpenAI figures are our OPERATING window,
- * not the documented one: gpt-5.5's real window is 1.05M tokens, but 272k is
- * where OpenAI's pricing doubles, so compaction should treat that as full.
+ * not the documented one: GPT-5.6 Sol and GPT-5.5 have 1.05M-token windows,
+ * but 272k is where OpenAI's pricing doubles, so compaction should treat that
+ * as full.
  */
 const MODEL_CONTEXT_WINDOW_TOKENS: Record<string, number> = {
+  "openai/gpt-5.6": 272_000,
   "openai/gpt-5.5": 272_000,
   "openai/gpt-5": 272_000,
 };
@@ -1340,8 +1370,8 @@ function isRateLimitErrorMessage(message: string): boolean {
   return /\b3021\b|rate.?limit/i.test(message);
 }
 
-const FENCED_SNIPPET_RE =
-  /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im;
+const FENCED_SNIPPET_RE = /^[ \t]*```(?:ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im;
+const ANY_FENCED_BLOCK_RE = /^[ \t]*```[^\n]*\n[\s\S]*?\n[ \t]*```[ \t]*$/gim;
 
 type SnippetExtraction =
   | { kind: "script"; code: string }
@@ -1351,21 +1381,25 @@ type SnippetExtraction =
   // rejects the whole output with corrective feedback instead.
   | { kind: "multiple"; count: number }
   // A fenced block exists but nothing runnable came out of it: leading
-  // comments or statements before the arrow function, or a non-JavaScript
+  // comments or statements before the arrow function, or a non-TypeScript
   // language tag the extraction regex refuses. Nothing can run; the caller
   // sends corrective feedback (models habitually open code with a comment
   // line, and silence here reads as the platform hanging).
   | { kind: "malformed" }
   | { kind: "none" };
 
-function extractAsyncJsSnippet(content: string): SnippetExtraction {
+function extractAsyncTypescriptSnippet(content: string): SnippetExtraction {
   // Fences count only at line starts: scripts legitimately carry ``` inside
-  // string literals (chat messages formatted as markdown), and in valid JS
+  // string literals (chat messages formatted as markdown), and in valid TypeScript
   // those always sit mid-line — a raw newline cannot appear in a string
   // literal, and an unescaped ``` would terminate a template literal. A fence
   // match anywhere used to cut the script at the first embedded ``` and
   // execute an unparseable prefix (unclosed string literal).
-  const blocks = content.match(new RegExp(FENCED_SNIPPET_RE, "gim")) ?? [];
+  // Count every fenced block before validating its language tag. A mixed
+  // response (one runnable TypeScript block plus another fenced block) must
+  // reject the whole output instead of executing the first and silently
+  // dropping the rest.
+  const blocks = content.match(ANY_FENCED_BLOCK_RE) ?? [];
   if (blocks.length > 1) return { kind: "multiple", count: blocks.length };
   const fenced = content.match(FENCED_SNIPPET_RE);
   const code = (fenced?.[1] ?? content).trim();
@@ -1373,7 +1407,7 @@ function extractAsyncJsSnippet(content: string): SnippetExtraction {
     return { kind: "script", code };
   }
   // Any response carrying a line-start fence that did not yield a runnable
-  // script is a malformed attempt — including fences with a non-JS language
+  // script is a malformed attempt — including fences with a non-TypeScript language
   // tag, which FENCED_SNIPPET_RE refuses to match. Only a fence-free
   // non-script response is a deliberate no-op turn; the system prompt
   // promises rejection-with-feedback for everything else.
@@ -1489,7 +1523,7 @@ async function spillScriptResult(input: {
 /**
  * The model-facing text after a truncated preview: where the full result
  * lives and a concrete next-script recipe for paging it, so the model reads
- * the file with plain JavaScript instead of re-running the expensive fetch.
+ * the file with plain TypeScript instead of re-running the expensive fetch.
  */
 function spillNotice(input: { isRawText: boolean; path: string; totalChars: number }): string {
   const readRecipe = input.isRawText
@@ -1502,8 +1536,8 @@ function spillNotice(input: { isRawText: boolean; path: string; totalChars: numb
         "  return Object.keys(data); // then slice/filter/regex to return only what you need",
       ];
   return [
-    `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
-    "```js",
+    `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
+    "```ts",
     "async (itx) => {",
     ...readRecipe,
     "}",

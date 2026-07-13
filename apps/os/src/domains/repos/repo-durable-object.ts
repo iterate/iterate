@@ -15,7 +15,11 @@ import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
-import { mintGithubInstallationToken } from "../integrations/github-app.ts";
+import {
+  assertGithubInstallationTokenMintAuthorized,
+  mintGithubInstallationToken,
+} from "../integrations/github-app.ts";
+import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import { indexRepoSnapshotToSearchIndex } from "../search/search-index.ts";
 import { ROOT_WORKSPACE_PATH } from "../workspaces/utils.ts";
 import type {
@@ -857,12 +861,20 @@ export class RepoDurableObject extends DurableObject<Env> {
    * needs the token as a Basic password, which the placeholder-substitution
    * pipeline cannot produce.
    */
-  #mintGithubToken(link: GithubRepoLink): Promise<string> {
+  async #mintGithubToken(link: GithubRepoLink): Promise<string> {
+    if (this.#name.projectId === null) {
+      throw new Error("GitHub-backed repos require a project-scoped repo.");
+    }
     const github = parseConfig(this.env).integrations.github;
     if (!github?.appId || !github.privateKey) {
       throw new Error("GitHub App is not configured for this deployment (appId/privateKey).");
     }
-    return mintGithubInstallationToken({
+    await assertGithubInstallationTokenMintAuthorized({
+      installationId: link.installationId,
+      privateKey: { platform: "integrations.github" },
+      projectId: this.#name.projectId,
+    });
+    return await mintGithubInstallationToken({
       apiBase: "https://api.github.com",
       appId: github.appId,
       installationId: link.installationId,
@@ -1126,8 +1138,11 @@ async function seedArtifactRepo(input: {
 
   try {
     await git.commit({
-      author: { email: "support@iterate.com", name: "Iterate" },
-      message: "Seed minimal ITX project worker",
+      author: {
+        email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+        name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+      },
+      message: "Seed minimal itx project worker",
     });
     await ensureBranchRef({ branch: input.branch, git });
   } catch (error) {
@@ -1275,7 +1290,10 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
   }
 
   const commit = await git.commit({
-    author: input.author ?? { email: "support@iterate.com", name: "Iterate" },
+    author: input.author ?? {
+      email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+      name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+    },
     message: input.message,
   });
   // No force: writes are serialized by the DO's #writeChain, so a fresh

@@ -17,7 +17,11 @@ import type {
 } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
-import { substitutePlatformApiKeyReferences } from "../secrets/platform-secrets.ts";
+import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
+import {
+  assertPlatformApiKeyReferencesAllowed,
+  substitutePlatformApiKeyReferences,
+} from "../secrets/platform-secrets.ts";
 import {
   platformReferencesFromHeaders,
   secretErrorResponse,
@@ -556,9 +560,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
     if (platformReferences.length > 0) {
       if (secretPaths.length > 0) return secretErrorResponse("secret_reference_foreign");
       try {
-        return await fetch(
-          substitutePlatformApiKeyReferences({ config: parseConfig(this.env), request }),
-        );
+        const substituted = substitutePlatformApiKeyReferences({
+          config: parseConfig(this.env),
+          request,
+        });
+        return await fetchWithCredentialRedirects(substituted, {
+          assertUrlAllowed: (url) => assertPlatformApiKeyReferencesAllowed(platformReferences, url),
+        });
       } catch (error) {
         if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
         throw error;

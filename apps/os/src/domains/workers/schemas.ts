@@ -109,7 +109,7 @@ export type DynamicWorkerSource = {
  * built from. */
 export type DynamicWorkerRefBase = {
   /**
-   * ITX scope path for the worker's `env.ITX` binding and for stateful worker
+   * itx scope path for the worker's `env.ITX` binding and for stateful worker
    * Durable Object names. This is intentionally not the mounted capability path:
    * one worker can be mounted at `db`, `counter`, etc. while all events still
    * belong to the host stream path.

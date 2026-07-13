@@ -1,5 +1,6 @@
 import { Workspace } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
+import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
 import type { RepoFileChange } from "../repos/types.ts";
 import type {
@@ -30,7 +31,10 @@ const WHITEOUTS_KEY = "whiteouts:v1";
 // everything else is disposable).
 const LEGACY_CLONE_SENTINEL_KEY = "workspace-cloned:v1";
 
-const DEFAULT_COMMIT_AUTHOR = { email: "support@iterate.com", name: "Iterate" };
+const DEFAULT_COMMIT_AUTHOR = {
+  email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+  name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+};
 
 // The Artifacts git endpoint intermittently returns 503 on a cold repo
 // (observed in preview e2e; the sandbox clone path carries the same loop).

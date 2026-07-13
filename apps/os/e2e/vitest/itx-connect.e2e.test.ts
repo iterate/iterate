@@ -178,7 +178,7 @@ describe("itx", () => {
     }
   });
 
-  test("ITX expression capabilities mount MCP and OpenAPI built-ins through connect()", async () => {
+  test("itx expression capabilities mount MCP and OpenAPI built-ins through connect()", async () => {
     const secretMaterial = "expr-secret";
     const api = await startMockOpenApi({ expectedAuthorization: `Bearer ${secretMaterial}` });
     const mcp = await startMockMcp({ expectedAuthorization: `Bearer ${secretMaterial}` });
@@ -263,7 +263,7 @@ describe("itx", () => {
     }
   });
 
-  test("ITX expression capabilities mount project workers, streams, method aliases, and functions", async () => {
+  test("itx expression capabilities mount project workers, streams, method aliases, and functions", async () => {
     const marker = crypto.randomUUID();
     using session = withItxSession();
     using itx = session.authenticate({
@@ -416,7 +416,7 @@ describe("itx", () => {
     expect(domainObjectDescription?.types).toBeUndefined();
   });
 
-  test("ITX expression capabilities resolve aliases against the current ITX host path", async () => {
+  test("itx expression capabilities resolve aliases against the current itx host path", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",
@@ -457,7 +457,7 @@ describe("itx", () => {
     ).rejects.toThrow(/no capability "exprAgentSomeMethod"/);
   });
 
-  test("ITX expression capabilities reject self-aliases at provide time", async () => {
+  test("itx expression capabilities reject self-aliases at provide time", async () => {
     using session = withItxSession();
     using itx = session.authenticate({
       type: "admin-secret",

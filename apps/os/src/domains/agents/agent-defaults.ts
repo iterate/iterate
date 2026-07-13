@@ -28,6 +28,9 @@ import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import { DEFAULT_AGENT_MODEL, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 
+const TYPESCRIPT_FENCE_INSTRUCTION =
+  "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
+
 // The onboarding script ships INSIDE the seeded repo (the agent can read the
 // same file the prompt embeds); the prompt below needs its text at build time.
 const PROJECT_REPO_ONBOARDING_MD = PROJECT_REPO_INITIAL_FILES.find(
@@ -46,7 +49,7 @@ export function slackAgentSystemPrompt(connection: string): string {
   const postMessage = `itx.integrations.slack[${JSON.stringify(connection)}].chat.postMessage`;
   return [
     "You are an iterate AI agent running inside a Slack thread.",
-    "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+    TYPESCRIPT_FENCE_INSTRUCTION,
     "The code block must contain a single async arrow function: async (itx) => { ... }.",
     "Incoming Slack webhook events arrive as your inputs. Reply only when mentioned, directly asked, or clearly needed.",
     `To reply in the thread, use await ${postMessage}({ channel, thread_ts, text }) with the channel and thread_ts from the incoming webhook payloads. Never use itx.chat.sendMessage for Slack replies.`,
@@ -84,7 +87,7 @@ export function telegramAgentSystemPrompt(input: {
     `itx.streams.get(${JSON.stringify(streamPath)}).append({ type: "events.iterate.com/telegram/send-requested", payload: { text: ${text} } })`;
   return [
     "You are an iterate AI agent running inside a Telegram chat.",
-    "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+    TYPESCRIPT_FENCE_INSTRUCTION,
     "The code block must contain a single async arrow function: async (itx) => { ... }.",
     "Incoming Telegram webhook updates arrive as your inputs (message text, sender, chat).",
     `To reply in the chat, append a SEND REQUEST to your own stream — it is delivered reliably and recorded in this thread's journal: await ${sendRequest(input.agentPath, '"..."')}. The payload is a plain Bot API sendMessage body: chat_id${chatIdNote} is set for you and ALWAYS this stream's chat (to message a different chat, use the raw sendMessage call below instead); other sendMessage params (parse_mode, reply_to_message_id, ...) can ride along in the payload. Never use itx.chat.sendMessage for Telegram replies.`,
@@ -108,7 +111,7 @@ export function telegramAgentSystemPrompt(input: {
  */
 export const EMAIL_AGENT_SYSTEM_PROMPT = [
   "You are an iterate AI agent handling one email conversation.",
-  "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+  TYPESCRIPT_FENCE_INSTRUCTION,
   "The code block must contain a single async arrow function: async (itx) => { ... }.",
   "Inbound emails on this thread arrive as your inputs (from, subject, body, attachments).",
   "To answer, use await itx.email.reply({ text }) (or { html }). It emails the thread's counterpart with the correct subject and threading headers — never assemble those yourself, and never use itx.chat.sendMessage or itx.email.send to answer this thread.",
@@ -132,7 +135,7 @@ export const EMAIL_AGENT_SYSTEM_PROMPT = [
  */
 const PR_AGENT_SYSTEM_PROMPT = [
   "You are an iterate AI agent attached to one GitHub pull request.",
-  "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+  TYPESCRIPT_FENCE_INSTRUCTION,
   "The code block must contain a single async arrow function: async (itx) => { ... }.",
   "This pull request's GitHub webhooks (opens, pushes, reviews, comments) arrive as your inputs. You are woken when a human comment mentions you; treat the rest as context.",
   'To reply, post a PR comment through the connection named in your route-context input: await itx.integrations.github["<connection>"].rest.issues.createComment({ owner, repo, issue_number, body }). Never use itx.chat.sendMessage to answer the PR.',

@@ -3,7 +3,7 @@ import { defineProcessorContract, type ProcessorState } from "../streams/process
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
-export const DEFAULT_AGENT_MODEL = "openai/gpt-5.5";
+export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
 export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 100;
 
@@ -72,12 +72,12 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "You are a general-purpose agent on the iterate platform. You live at an agent stream path inside a project; the transcript you see is that stream's history, and everything you do is an event on it.",
   "",
   "Two ideas govern everything you do:",
-  "1. You write CODE instead of making tool calls: every action is a JavaScript script run against `itx`, this project's capability tree.",
+  "1. You write CODE instead of making tool calls: every action is a TypeScript script run against `itx`, this project's capability tree.",
   "2. The project itself IS code you can edit: its website, its apps, its event reactions, and its agents' configuration — including your own prompt and tools — are TypeScript in a git repo, the config repo. One-off work is a script; anything lasting, you build into the repo.",
   "",
-  "HOW YOU ACT: respond with exactly ONE fenced JavaScript code block and no prose outside the fence. The block must contain a single async arrow function and START with `async` — no comments or statements before it:",
+  "HOW YOU ACT: respond with exactly ONE fenced TypeScript code block and no prose outside the fence. The block must contain a single async arrow function and START with `async` — no comments or statements before it:",
   "",
-  "```js",
+  "```ts",
   "async (itx) => {",
   "  // your code",
   "}",
@@ -99,7 +99,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "",
   "FIND WORKING CODE FIRST — `itx.docs`. Everything is searchable: the platform's catalogue of working example scripts (most are PROVEN — the platform's own test suite runs them unattended against a live project on every change), every type declaration, and this project's mounted capabilities. Before writing calls against anything unfamiliar:",
   "",
-  "```js",
+  "```ts",
   "async (itx) => {",
   "  // Matching is dumb word overlap — pass MANY related words; synonyms buy recall.",
   '  const hits = await itx.docs.search({ q: "email gmail inbox unread messages send" });',
@@ -111,7 +111,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "",
   "A TOUR IN CODE — every call below is real (one script would never do all this at once); `itx.docs.search` has the full story and a working example for each:",
   "",
-  "```js",
+  "```ts",
   "async (itx) => {",
   "  // FIND HOW — search before writing calls against anything unfamiliar:",
   '  const hits = await itx.docs.search({ q: "email gmail inbox unread send" });',
@@ -194,8 +194,8 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "",
   "THE SHAPE OF WORK — scripts are tool calls, not programs:",
   "- Most scripts should fetch data and RETURN it. You cannot see data while writing the script, so code that interprets response shapes you have never seen is guesswork. Get the data in front of your eyes; decide on the next turn.",
-  "- The script body is real JavaScript: `Promise.all` fans out independent calls, `Promise.race` bounds anything that might hang (scripts get minutes, not hours), map/filter/loops handle mechanical iteration.",
-  "- Return only what you need: pick fields, slice arrays. Oversized results are truncated and the FULL result is saved to a workspace file — the notice names the path; read it with `itx.workspace.readFile` and filter it in plain JavaScript instead of re-fetching.",
+  "- The script body is real TypeScript: `Promise.all` fans out independent calls, `Promise.race` bounds anything that might hang (scripts get minutes, not hours), map/filter/loops handle mechanical iteration.",
+  "- Return only what you need: pick fields, slice arrays. Oversized results are truncated and the FULL result is saved to a workspace file — the notice names the path; read it with `itx.workspace.readFile` and filter it in plain TypeScript instead of re-fetching.",
   "- Send as many chat messages per script as helps: an acknowledgement before slow work, one message per result, a final summary.",
   "",
   "OTHER AGENTS — the semantics behind the tour's delegation calls:",
@@ -531,7 +531,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "The model answered with a codemode script; llmRequestOffset is the offset of the llm-request-requested event it answers.",
           payload: {
             content:
-              '```js\nasync (itx) => {\n  await itx.chat.sendMessage("Checking your email now...");\n}\n```',
+              '```ts\nasync (itx) => {\n  await itx.chat.sendMessage("Checking your email now...");\n}\n```',
             llmRequestOffset: 57,
           },
         },
@@ -549,12 +549,12 @@ export const AgentProcessorContract = defineProcessorContract({
             "Agent birth applies the platform default model unless something already chose one.",
           payload: {
             ifUnset: true,
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
           },
         },
         {
           description: "The project explicitly selects a Workers AI model.",
-          payload: { model: "openai/gpt-5.5" },
+          payload: { model: "openai/gpt-5.6-sol" },
         },
       ],
     },
@@ -571,7 +571,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "A user input triggered a request, debounced 250ms so rapid-fire inputs collapse into one turn.",
           payload: {
             debounceMs: 250,
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
             requestId: "llm-request:gen-3",
           },
         },
@@ -593,7 +593,7 @@ export const AgentProcessorContract = defineProcessorContract({
           description:
             "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestOffset the processor answers to.",
           payload: {
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
             requestId: "llm-request:gen-3",
           },
         },
@@ -608,7 +608,7 @@ export const AgentProcessorContract = defineProcessorContract({
       examples: [
         {
           description: "The agent picks up a prepared request and dials the AI binding.",
-          payload: { llmRequestOffset: 57, model: "openai/gpt-5.5" },
+          payload: { llmRequestOffset: 57, model: "openai/gpt-5.6-sol" },
         },
       ],
     },
@@ -693,7 +693,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "An OpenAI model reports a mostly-cache-hit request at about a tenth of the model's window.",
           payload: {
             llmRequestOffset: 57,
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
             maxContextTokens: 272000,
             inputTokens: 29295,
             outputTokens: 111,

@@ -6,17 +6,19 @@ import {
   buildAgentLlmRequestBody,
   contextWindowTokens,
   flattenMessageToText,
+  prepareAgentLlmMessages,
   reduceAgentEvents,
 } from "./agent-processor-implementation.ts";
 import { normalizeLlmUsage } from "./workers-ai-transport.ts";
 import {
   AgentProcessorContract,
+  DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   DEFAULT_AGENT_SYSTEM_PROMPT,
 } from "./agent-processor-contract.ts";
 import { MemoryStream, deliverNewEvents, type ProcessorLike } from "./test-helpers.ts";
 
-function agentRequestEvents(content: string, model = "openai/gpt-5.5"): StreamEventInput[] {
+function agentRequestEvents(content: string, model = DEFAULT_AGENT_MODEL): StreamEventInput[] {
   return [
     {
       type: "events.iterate.com/agent/input-added",
@@ -51,10 +53,12 @@ function sseStream(...chunks: unknown[]): ReadableStream<Uint8Array> {
 }
 
 describe("minimal web-chat agent processors", () => {
-  it("explains the exact codemode shape expected by the ITX script runner", () => {
+  it("explains the exact codemode shape expected by the itx script runner", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
       "The block must contain a single async arrow function",
     );
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("```ts");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toMatch(/JavaScript|```js(?:\s|$)|\bITX\b/);
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("async (itx) => {");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
@@ -329,7 +333,7 @@ describe("minimal web-chat agent processors", () => {
           aiCalls.push(body);
           return {
             response: [
-              "```js",
+              "```ts",
               "async (itx) => {",
               "  await itx.chat.sendMessage('hello from ai');",
               "}",
@@ -400,7 +404,7 @@ describe("minimal web-chat agent processors", () => {
     ].join("\n");
     await stream.append({
       type: "events.iterate.com/agent/output-added",
-      payload: { content: `Reading the saved output now.\n\n\`\`\`js\n${script}\n\`\`\`` },
+      payload: { content: `Reading the saved output now.\n\n\`\`\`ts\n${script}\n\`\`\`` },
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
 
@@ -417,7 +421,7 @@ describe("minimal web-chat agent processors", () => {
     // Mirrors a prd incident (agents/web/2026-07-10t05-13-04-967z): the model
     // planned a whole workflow as four sequential scripts in one response.
     // Only the first used to run — silently; the model believed all four did.
-    const block = (body: string) => `\`\`\`js\nasync (itx) => {\n  ${body}\n}\n\`\`\``;
+    const block = (body: string) => `\`\`\`ts\nasync (itx) => {\n  ${body}\n}\n\`\`\``;
     await stream.append({
       type: "events.iterate.com/agent/output-added",
       payload: {
@@ -437,8 +441,40 @@ describe("minimal web-chat agent processors", () => {
         event.payload.content.includes("3 fenced code blocks"),
     );
     expect(corrective?.payload).toMatchObject({
+      content: expect.stringContaining("```ts block"),
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
+    expect(corrective?.payload?.content).not.toContain("```js block");
+  });
+
+  it("rejects mixed-language multi-block responses without executing the TypeScript block", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: {
+        content: [
+          "```ts\nasync (itx) => {\n  return 1;\n}\n```",
+          "```python\nprint('planned next step')\n```",
+        ].join("\n\n"),
+      },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+
+    expect(
+      stream.events.filter(
+        (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      ),
+    ).toHaveLength(0);
+    expect(
+      stream.events.find(
+        (event) =>
+          event.type === "events.iterate.com/agent/input-added" &&
+          typeof event.payload?.content === "string" &&
+          event.payload.content.includes("2 fenced code blocks"),
+      )?.payload,
+    ).toMatchObject({ llmRequestPolicy: { behaviour: "after-current-request" } });
   });
 
   it("rejects a fenced block that does not start with async, with corrective feedback", async () => {
@@ -450,7 +486,7 @@ describe("minimal web-chat agent processors", () => {
     await stream.append({
       type: "events.iterate.com/agent/output-added",
       payload: {
-        content: "```js\n// Plan: greet the user first\nasync (itx) => {\n  return 1;\n}\n```",
+        content: "```ts\n// Plan: greet the user first\nasync (itx) => {\n  return 1;\n}\n```",
       },
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
@@ -469,7 +505,7 @@ describe("minimal web-chat agent processors", () => {
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
 
-    // A fence with a non-JS language tag is the same mistake in a different
+    // A fence with a non-TypeScript language tag is the same mistake in a different
     // costume — the extraction regex refuses it, and the system prompt
     // promises rejection-with-feedback, not silence.
     await stream.append({
@@ -635,7 +671,7 @@ describe("minimal web-chat agent processors", () => {
         async run(_model, body) {
           aiCalls.push(body);
           resolveFirstCall();
-          return { response: "```js\nasync (itx) => {}\n```" };
+          return { response: "```ts\nasync (itx) => {}\n```" };
         },
       },
     });
@@ -733,7 +769,7 @@ describe("minimal web-chat agent processors", () => {
       ai: {
         async run() {
           return sseStream(
-            { choices: [{ delta: { content: "```js\n" } }] },
+            { choices: [{ delta: { content: "```ts\n" } }] },
             {
               choices: [
                 {
@@ -1572,6 +1608,22 @@ describe("file attachments in the LLM request", () => {
     expect(flattened).toContain(attachment.url);
     expect(flattenMessageToText({ role: "user", content: "no files" })).toBe("no files");
   });
+
+  it("remints attachment URLs immediately before a provider request", async () => {
+    const freshUrl =
+      "https://iterate-files--demo.iterate.app/agents/web/demo/abc-cat.png?exp=900&ver=v2&sig=fresh";
+    const resolveModelFileUrl = vi.fn(async () => freshUrl);
+
+    const [message] = await prepareAgentLlmMessages(
+      [{ role: "user", content: "look at this", files: [attachment] }],
+      resolveModelFileUrl,
+    );
+
+    expect(resolveModelFileUrl).toHaveBeenCalledWith(attachment);
+    expect(message).toMatchObject({ role: "user", containsFiles: true });
+    expect(message?.content).toContain(freshUrl);
+    expect(message?.content).not.toContain(attachment.url);
+  });
 });
 
 describe("inter-agent mail", () => {
@@ -1677,7 +1729,7 @@ describe("token usage and history reset", () => {
     );
     expect(report?.payload).toEqual({
       llmRequestOffset: requested!.offset,
-      model: "openai/gpt-5.5",
+      model: DEFAULT_AGENT_MODEL,
       maxContextTokens: 272_000,
       inputTokens: 2900,
       outputTokens: 111,
@@ -1772,6 +1824,8 @@ describe("token usage and history reset", () => {
   });
 
   it("longest-prefix matches context windows, with a conservative default", () => {
+    expect(contextWindowTokens("openai/gpt-5.6-sol")).toBe(272_000);
+    expect(contextWindowTokens("openai/gpt-5.6-sol-2026-07-13")).toBe(272_000);
     expect(contextWindowTokens("openai/gpt-5.5")).toBe(272_000);
     expect(contextWindowTokens("openai/gpt-5.5-2026-01-15")).toBe(272_000);
     expect(contextWindowTokens("@cf/qwen/qwen3-coder-plus")).toBe(128_000);
@@ -1944,7 +1998,7 @@ describe("token usage and history reset", () => {
             if (messages.at(-1)!.content.includes("compacting this AI agent conversation")) {
               return { response: "The user likes teal and is building STICKYMEETING." };
             }
-            // A turn that ran at over half of gpt-5.5's 272k window.
+            // A turn that ran at over half of GPT-5.6 Sol's 272k operating window.
             return {
               response: "noted!",
               usage: { prompt_tokens: 140_000, completion_tokens: 500 },
@@ -1987,7 +2041,7 @@ describe("token usage and history reset", () => {
       );
     expect(compactionCalls()).toHaveLength(1);
     // The summary sees the whole conversation and runs on the agent's model.
-    expect(compactionCalls()[0]!.model).toBe("openai/gpt-5.5");
+    expect(compactionCalls()[0]!.model).toBe(DEFAULT_AGENT_MODEL);
     // The compaction request extends the normal turn's request byte for byte
     // (same system prompt, same history messages) so the provider's prompt
     // cache — an exact-prefix match — covers the biggest request an agent

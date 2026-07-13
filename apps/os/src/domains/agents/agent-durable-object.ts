@@ -18,7 +18,7 @@ import {
 } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { PrAgentProcessor } from "../repos/pr-agent-processor-implementation.ts";
-import { mintProjectFileUrl } from "../files/project-files.ts";
+import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
@@ -59,6 +59,13 @@ export class AgentDurableObject extends DurableObject<Env> {
             responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
           };
         },
+        resolveModelFileUrl: (file) =>
+          mintProjectFileUrl({
+            config: parseConfig(this.env),
+            expiresInSeconds: MODEL_FILE_URL_TTL_SECONDS,
+            path: file.path,
+            projectId: this.#name.projectId,
+          }),
         // Oversized script results spill into the agent's OWN workspace (the
         // same checkout itx.workspace resolves to), so the model can page
         // through the file instead of blowing its context window. The first

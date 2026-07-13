@@ -10,7 +10,10 @@
 import { expect, test } from "vitest";
 import { ITX_API_DECLARATIONS } from "../../itx-api-graph.generated.ts";
 import { ITX_EXAMPLES } from "../../itx/examples.ts";
-import { EXEC_JS_DESCRIPTION } from "../inbound-mcp-server/exec-js-description.ts";
+import {
+  EXEC_TYPESCRIPT_DESCRIPTION,
+  inboundMcpServerInstructions,
+} from "../inbound-mcp-server/exec-typescript-description.ts";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 import {
   EMAIL_AGENT_SYSTEM_PROMPT,
@@ -29,10 +32,12 @@ const DEFAULT_PROMPT_TOKEN_CEILING = 3_500;
 
 const CHANNEL_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
-  // The inbound MCP tool description is a prompt in all but name — it rides
-  // every MCP client conversation, so it obeys the same budget and
-  // name-resolution rules.
-  execJsTool: EXEC_JS_DESCRIPTION,
+  // The inbound MCP instructions and tool description are prompts in all but
+  // name — they ride MCP client conversations, so they obey the same budget
+  // and name-resolution rules.
+  execTypescriptTool: EXEC_TYPESCRIPT_DESCRIPTION,
+  mcpServer: inboundMcpServerInstructions({ withAgent: false }),
+  mcpServerWithAgent: inboundMcpServerInstructions({ withAgent: true }),
   email: EMAIL_AGENT_SYSTEM_PROMPT,
   slack: slackAgentSystemPrompt("main-slack"),
   telegram: telegramAgentSystemPrompt({

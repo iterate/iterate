@@ -102,8 +102,8 @@ function ProjectSecretsIndexContent() {
       // Material and egress land in ONE update, so the secret is born already
       // pinned to its hosts — no window where it exists but cannot be used.
       await itx.secrets.get(secretPathFromName(input.name)).update({
+        egress: { urls: input.egressUrls },
         material: input.material,
-        ...(input.egressUrls.length === 0 ? {} : { egress: { urls: input.egressUrls } }),
       });
       return input.name;
     },
