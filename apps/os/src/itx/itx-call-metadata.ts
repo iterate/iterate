@@ -6,7 +6,7 @@
  * protocol metadata, not a method argument, so adding observability never
  * changes the public itx contract.
  */
-export type ItxCallMetadata = {
+type ItxCallMetadata = {
   version: 1;
   callId: string;
   connectionId: string;
