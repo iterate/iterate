@@ -585,13 +585,13 @@ describe("StreamEventLog.getRange", () => {
       Array.from({ length: 34 }, (_, index) => event(index + 4, "large-batch")),
       transactionRunner,
     );
-    expect(transactions).toBe(1);
+    expect(transactions).toBe(0);
 
     log.insert(
       [{ ...event(38, "large"), payload: { text: "x".repeat(600 * 1024) } }],
       transactionRunner,
     );
-    expect(transactions).toBe(2);
+    expect(transactions).toBe(1);
     expect(offsets(read(log, { afterOffset: 0, limit: 38 }))).toEqual(
       Array.from({ length: 38 }, (_, index) => index + 1),
     );
@@ -710,11 +710,129 @@ describe("StreamEventLog.getRange", () => {
     const chunkInserts = inserts.filter((insert) =>
       insert.sql.startsWith("insert into event_chunks "),
     );
-    expect(eventInserts.map((insert) => insert.bindings)).toEqual([99, 99, 99, 3]);
+    expect(eventInserts.map((insert) => insert.bindings)).toEqual([100, 4]);
+    expect(eventInserts.every((insert) => insert.sql.includes("select ? + column1"))).toBe(true);
     expect(chunkInserts).toHaveLength(0);
     expect(inserts.every((insert) => insert.bindings <= 100)).toBe(true);
     expect(offsets(read(log, { afterOffset: 0, limit: 100 }))).toEqual(
       committedEvents.map((entry) => entry.offset),
+    );
+  });
+
+  it("keeps an at-capacity keyless batch on the direct values statement", () => {
+    const inserts: Array<{ sql: string; bindings: number }> = [];
+    const log = new StreamEventLog(
+      wrapSqlStorage(new DatabaseSync(":memory:"), (statement, bindings) => {
+        if (statement.startsWith("insert into events ")) {
+          inserts.push({ sql: statement, bindings: bindings.length });
+        }
+      }),
+      "/tests/stream",
+    );
+
+    log.insert(Array.from({ length: 33 }, (_, index) => event(index + 1, "same-type")));
+
+    expect(inserts.map((insert) => insert.bindings)).toEqual([99]);
+    expect(inserts[0]?.sql).toContain(" values ");
+    expect(inserts[0]?.sql).not.toContain("select ? + column1");
+  });
+
+  it("uses explicit row metadata when a keyless batch is heterogeneous or noncontiguous", () => {
+    for (const committedEvents of [
+      Array.from({ length: 34 }, (_, index) =>
+        event(index + 1, index === 17 ? "different-type" : "same-type"),
+      ),
+      Array.from({ length: 34 }, (_, index) => event(index === 17 ? 100 : index + 1, "same-type")),
+    ]) {
+      const inserts: Array<{ sql: string; bindings: number }> = [];
+      const log = new StreamEventLog(
+        wrapSqlStorage(new DatabaseSync(":memory:"), (statement, bindings) => {
+          if (statement.startsWith("insert into events ")) {
+            inserts.push({ sql: statement, bindings: bindings.length });
+          }
+        }),
+        "/tests/stream",
+      );
+
+      log.insert(committedEvents);
+
+      expect(inserts.map((insert) => insert.bindings)).toEqual([99, 3]);
+      expect(inserts.every((insert) => !insert.sql.includes("select ? + column1"))).toBe(true);
+    }
+  });
+
+  it("rolls back earlier derived-offset statements when a later row conflicts", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    log.insert([event(100, "existing")]);
+
+    expect(() =>
+      log.insert(
+        Array.from({ length: 100 }, (_, index) => event(index + 1, "same-type")),
+        transactionRunner(db),
+      ),
+    ).toThrow();
+
+    expect(db.prepare("select offset, type from events").all()).toEqual([
+      { offset: 100, type: "existing" },
+    ]);
+  });
+
+  it("rebinds the derived base offset after a byte-bounded metadata flush", () => {
+    const db = new DatabaseSync(":memory:");
+    const eventInsertBindings: number[] = [];
+    const log = new StreamEventLog(
+      wrapSqlStorage(db, (statement, bindings) => {
+        if (statement.startsWith("insert into events ")) {
+          eventInsertBindings.push(bindings.length);
+        }
+      }),
+      "/tests/stream",
+    );
+    let payloadReads = 0;
+    const committedEvents = Array.from({ length: 34 }, (_, index) => {
+      const payload: Record<string, unknown> = {};
+      Object.defineProperty(payload, "text", {
+        enumerable: true,
+        get: () => {
+          payloadReads += 1;
+          return `${index}-${"x".repeat(40 * 1024)}`;
+        },
+      });
+      return { ...event(index + 1, "same-type"), payload };
+    });
+
+    log.insert(committedEvents, transactionRunner(db));
+
+    expect(eventInsertBindings).toHaveLength(2);
+    expect(eventInsertBindings.every((bindings) => bindings <= 100)).toBe(true);
+    expect(payloadReads).toBe(committedEvents.length);
+    expect(offsets(read(log, { afterOffset: 0, limit: 34 }))).toEqual(
+      committedEvents.map((event) => event.offset),
+    );
+  });
+
+  it("keeps derived metadata and chunks in one transaction", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    const committedEvents = Array.from({ length: 34 }, (_, index) => ({
+      ...event(index + 1, "same-type"),
+      ...(index === 17 ? { payload: { text: "x".repeat(600 * 1024) } } : {}),
+    }));
+    let transactions = 0;
+    const runner = {
+      transactionSync<T>(callback: () => T): T {
+        transactions += 1;
+        return transactionRunner(db).transactionSync(callback);
+      },
+    };
+
+    log.insert(committedEvents, runner);
+
+    expect(transactions).toBe(1);
+    expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 2 });
+    expect(offsets(read(log, { afterOffset: 0, limit: 34 }))).toEqual(
+      committedEvents.map((event) => event.offset),
     );
   });
 

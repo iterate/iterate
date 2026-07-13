@@ -474,3 +474,58 @@ the stream head. Raw records are in
 `/tmp/packed-batch-{baseline,candidate}-{1..5}.log` and
 `/tmp/packed-batch500-{baseline,candidate}-{1..5}.log` for the life of this
 workstation.
+
+## 2026-07-13: Derived Metadata For Homogeneous Batches
+
+Keyless durable batches above the direct 33-row `VALUES` capacity now use an
+`insert ... select` statement over bound event BLOBs. The statement binds the
+batch's first offset and shared type once, derives each later contiguous offset
+from a literal row index, and keeps every serialized event as an ordinary SQLite
+binding. It does not pack or reparse JSON.
+
+The specialization is deliberately narrow. Singletons and batches through 33
+rows retain the previous direct statement. Keyed, ephemeral, mixed-type, and
+noncontiguous batches retain explicit per-row metadata. The Stream DO assigns
+new rows contiguous offsets even when idempotency hits are interleaved, but the
+storage boundary verifies contiguity instead of relying on that caller detail.
+Multi-statement batches remain inside `transactionSync()`.
+
+The SQL work changes as follows:
+
+| Batch | Parent statements / bindings | Candidate statements / bindings | Transaction change |
+| ----: | ---------------------------: | ------------------------------: | ------------------ |
+|    34 |                      2 / 102 |                          1 / 36 | removed            |
+|   100 |                      4 / 300 |                         2 / 104 | unchanged          |
+|   500 |                   16 / 1,500 |                         6 / 512 | unchanged          |
+
+Five alternating host-timed rounds per width compared the working tree on
+candidate parent `9a20eb193` with baseline server `5da765519`. The intervening
+commit changes only this ledger and the benchmark harness, so the baseline's
+production Stream code is identical to the candidate parent. Every timer
+enclosed the awaited append RPC, and every round replayed the final bounded
+batch through workerd and asserted all markers:
+
+| Batch | Samples/side |   Baseline p50 / p95 / mean |  Candidate p50 / p95 / mean |   Candidate change p50 / p95 / mean |
+| ----: | -----------: | --------------------------: | --------------------------: | ----------------------------------: |
+|    34 |        2,500 |    3.291 / 5.675 / 3.676 ms |    3.074 / 5.308 / 3.419 ms |           6.6% / 6.5% / 7.0% faster |
+|   100 |        2,500 |    5.512 / 8.853 / 6.128 ms |    5.353 / 8.465 / 5.961 ms | 2.9% / 4.4% / 2.7% faster (neutral) |
+|   500 |          500 | 17.657 / 28.280 / 19.226 ms | 16.619 / 25.660 / 17.780 ms |           5.9% / 9.3% / 7.5% faster |
+
+The 34- and 500-event throughput translations are 7.1% and 6.2% more events
+per second at pooled p50. All five 34-event rounds improved by mean; all five
+500-event rounds also improved by mean. The 100-event result remains neutral
+under the 5% attribution threshold.
+
+Tests cover the direct 33-row boundary, derived metadata and binding ceilings,
+heterogeneous and noncontiguous fallback, byte-bounded sub-batches, chunked
+rows, exact replay, and rollback when a conflict in the second statement
+follows a successful first statement. All 363 Stream-domain tests pass, along
+with OS typecheck and focused lint/format. The
+implementation costs net `+39` production lines and `+118` test lines. It adds
+one generated statement family and one insertion-mode branch, but no schema,
+queue, timer, persistence model, protocol, or compatibility path.
+
+Raw records are in `/tmp/derived-batch34-{baseline,candidate}-{1..5}.log`,
+`/tmp/derived-batch100-{baseline,candidate}-{1..5}.log`, and
+`/tmp/derived-batch500-{baseline,candidate}-{1..5}.log` for the life of this
+workstation.

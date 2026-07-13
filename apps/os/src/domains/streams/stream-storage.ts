@@ -30,11 +30,16 @@ const MAX_PENDING_INSERT_BYTES = EVENT_CHUNK_SIZE * 2;
 const MAX_CARRIED_INSERT_BYTES = MAX_PENDING_INSERT_BYTES;
 const EVENT_INSERT_ROW_WIDTH = 5;
 const KEYLESS_DURABLE_EVENT_INSERT_ROW_WIDTH = 3;
+const DERIVED_KEYLESS_DURABLE_EVENT_FIXED_BINDINGS = 2;
 const CHUNK_INSERT_ROW_WIDTH = 3;
 const MAX_EVENT_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / EVENT_INSERT_ROW_WIDTH);
 const MAX_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT = Math.floor(
   MAX_SQL_BINDINGS / KEYLESS_DURABLE_EVENT_INSERT_ROW_WIDTH,
 );
+// Above the direct VALUES capacity, contiguous rows of one type can bind the
+// base offset and type once, leaving one binding per serialized event.
+const MAX_DERIVED_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT =
+  MAX_SQL_BINDINGS - DERIVED_KEYLESS_DURABLE_EVENT_FIXED_BINDINGS;
 const MAX_CHUNK_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / CHUNK_INSERT_ROW_WIDTH);
 const EVENT_INSERT_STATEMENTS = createInsertStatements(
   "insert into events (offset, type, idempotency_key, ephemeral, event_json) values",
@@ -47,6 +52,9 @@ const KEYLESS_DURABLE_EVENT_INSERT_STATEMENTS = createInsertStatements(
   "insert into events (offset, type, event_json) values",
   KEYLESS_DURABLE_EVENT_INSERT_ROW_WIDTH,
   MAX_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT,
+);
+const DERIVED_KEYLESS_DURABLE_EVENT_INSERT_STATEMENTS = createDerivedEventInsertStatements(
+  MAX_DERIVED_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT,
 );
 const CHUNK_INSERT_STATEMENTS = createInsertStatements(
   "insert into event_chunks (offset, chunk_index, chunk_bytes) values",
@@ -300,16 +308,29 @@ export class StreamEventLog {
     transactionRunner?: TransactionRunner,
   ): SizedStreamEvent[] {
     const firstEvent = events[0];
-    const useKeylessDurableInsert =
-      events.length === 1
-        ? firstEvent!.idempotencyKey === undefined && firstEvent!.ephemeral !== true
-        : events.every((event) => event.idempotencyKey === undefined && event.ephemeral !== true);
-    const eventInsertStatements = useKeylessDurableInsert
-      ? KEYLESS_DURABLE_EVENT_INSERT_STATEMENTS
-      : EVENT_INSERT_STATEMENTS;
-    const maxEventRowsPerInsert = useKeylessDurableInsert
-      ? MAX_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT
-      : MAX_EVENT_ROWS_PER_INSERT;
+    let useKeylessDurableInsert =
+      firstEvent!.idempotencyKey === undefined && firstEvent!.ephemeral !== true;
+    let useDerivedKeylessDurableInsert =
+      useKeylessDurableInsert && events.length > MAX_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT;
+    for (let index = 1; index < events.length && useKeylessDurableInsert; index += 1) {
+      const event = events[index]!;
+      if (event.idempotencyKey !== undefined || event.ephemeral === true) {
+        useKeylessDurableInsert = false;
+        useDerivedKeylessDurableInsert = false;
+      } else if (event.type !== firstEvent!.type || event.offset !== firstEvent!.offset + index) {
+        useDerivedKeylessDurableInsert = false;
+      }
+    }
+    const eventInsertStatements = useDerivedKeylessDurableInsert
+      ? DERIVED_KEYLESS_DURABLE_EVENT_INSERT_STATEMENTS
+      : useKeylessDurableInsert
+        ? KEYLESS_DURABLE_EVENT_INSERT_STATEMENTS
+        : EVENT_INSERT_STATEMENTS;
+    const maxEventRowsPerInsert = useDerivedKeylessDurableInsert
+      ? MAX_DERIVED_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT
+      : useKeylessDurableInsert
+        ? MAX_KEYLESS_DURABLE_EVENT_ROWS_PER_INSERT
+        : MAX_EVENT_ROWS_PER_INSERT;
     let carriedSerialization: { eventIndex: number; bytes: Uint8Array } | undefined;
     let serializedPrefix: Uint8Array[] | undefined;
     if (events.length === 1) {
@@ -355,12 +376,16 @@ export class StreamEventLog {
       }
 
       if (candidate.length === events.length) {
-        const eventBindings: SqlStorageValue[] = [];
+        const eventBindings: SqlStorageValue[] = useDerivedKeylessDurableInsert
+          ? [firstEvent!.offset, firstEvent!.type]
+          : [];
         const sizedEvents: SizedStreamEvent[] = [];
         for (let index = 0; index < events.length; index += 1) {
           const event = events[index]!;
           const bytes = candidate[index]!;
-          if (useKeylessDurableInsert) {
+          if (useDerivedKeylessDurableInsert) {
+            eventBindings.push(exactArrayBuffer(bytes));
+          } else if (useKeylessDurableInsert) {
             eventBindings.push(event.offset, event.type, exactArrayBuffer(bytes));
           } else {
             eventBindings.push(
@@ -388,7 +413,9 @@ export class StreamEventLog {
 
       while (batchStart < events.length) {
         const serializedEvents: Uint8Array[] = [];
-        const eventBindings: SqlStorageValue[] = [];
+        const eventBindings: SqlStorageValue[] = useDerivedKeylessDurableInsert
+          ? [events[batchStart]!.offset, firstEvent!.type]
+          : [];
         let serializedByteLength = 0;
         let batchEnd = batchStart;
         let hasChunkedEvents = false;
@@ -411,7 +438,9 @@ export class StreamEventLog {
           }
           serializedEvents.push(bytes);
           const eventJson = bytes.byteLength <= EVENT_CHUNK_SIZE ? exactArrayBuffer(bytes) : null;
-          if (useKeylessDurableInsert) {
+          if (useDerivedKeylessDurableInsert) {
+            eventBindings.push(eventJson);
+          } else if (useKeylessDurableInsert) {
             eventBindings.push(event.offset, event.type, eventJson);
           } else {
             eventBindings.push(
@@ -900,6 +929,16 @@ function createInsertStatements(prefix: string, rowWidth: number, maxRows: numbe
   const row = `(${Array.from({ length: rowWidth }, () => "?").join(", ")})`;
   return Array.from({ length: maxRows + 1 }, (_, rowCount) =>
     rowCount === 0 ? "" : `${prefix} ${Array.from({ length: rowCount }, () => row).join(", ")}`,
+  );
+}
+
+function createDerivedEventInsertStatements(maxRows: number): string[] {
+  return Array.from({ length: maxRows + 1 }, (_, rowCount) =>
+    rowCount === 0
+      ? ""
+      : `insert into events (offset, type, event_json)
+         select ? + column1, ?, column2
+         from (values ${Array.from({ length: rowCount }, (_, index) => `(${index}, ?)`).join(", ")})`,
   );
 }
 
