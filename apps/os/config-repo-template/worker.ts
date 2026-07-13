@@ -85,8 +85,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // platform announces it on the project root stream and this
     // reaction appends the agent's policy: system prompt, model,
     // capability mounts, boot context. `itx.agents.defaults.forPath` returns
-    // the platform's defaults as data — edit the result (or pass overrides:
-    // { systemPrompt, model }) to change how YOUR agents behave.
+    // the platform's defaults as data — edit the result (or pass overrides)
+    // to change how YOUR agents behave. GitHub PR agents expose one complete
+    // `githubAgent` policy here, including the switch that turns reviews off.
     if (event.path === "/" && event.type === "events.iterate.com/stream/child-stream-created") {
       const childPath = event.payload?.childPath;
       if (typeof childPath === "string" && childPath.startsWith("/agents/")) {
@@ -97,7 +98,21 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // bundler at target es2022, which cannot transform `using` yet.
         const itx = await this.env.ITX.get();
         try {
-          const defaults = await itx.agents.defaults.forPath(childPath);
+          const overrides = childPath.startsWith("/agents/repos/")
+            ? {
+                githubAgent: {
+                  automaticReview: {
+                    // Set true to review every new non-draft PR head. A PR's
+                    // `iterate:review` / `iterate:skip-review` labels override
+                    // this project default; `@iterate review now` is one-off.
+                    enabled: false,
+                    instructions:
+                      "Review the complete diff for correctness, security, regressions, and missing tests. Report only specific actionable findings supported by changed code.",
+                  },
+                },
+              }
+            : undefined;
+          const defaults = await itx.agents.defaults.forPath(childPath, overrides);
           await itx.streams.get(childPath).append(...defaults.events);
         } finally {
           // Guarded: stub disposal is contractually non-throwing, but a throw

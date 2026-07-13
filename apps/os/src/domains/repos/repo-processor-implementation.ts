@@ -1,7 +1,7 @@
 import type { ProcessorEvent } from "../streams/processor-contracts.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
-import { prAgentPath, pullRequestNumberFromWebhookBody } from "./pr-agent-utils.ts";
+import { githubAgentPath, pullRequestNumbersFromWebhookBody } from "./github-agent-utils.ts";
 
 /** The one event this processor acts on, narrowed from the contract by its type string. */
 type RepoCreateRequested = ProcessorEvent<
@@ -91,38 +91,46 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       // route event births the agent (child-stream-created lane) and durably
       // records which PR it serves; idempotency keys make replays and repeat
       // deliveries fold to nothing.
-      const prNumber = pullRequestNumberFromWebhookBody((event.payload as { body?: unknown }).body);
+      const prNumbers = pullRequestNumbersFromWebhookBody(
+        (event.payload as { body?: unknown }).body,
+      );
       const github = state.github;
-      if (prNumber === null || github === null) return;
-      const streamPath = prAgentPath(this.path, prNumber);
-      // The key carries the FULL GitHub coordinates, not just the PR number:
-      // relinking the repo to a different repository or connection must emit
-      // a fresh route event that repoints existing PR agents — a coordinate-
-      // free key would dedupe forever against the stale link and the agent
-      // would keep replying to the OLD repository's PR.
-      const routeEvent = {
-        type: "events.iterate.com/github-pr/route-configured" as const,
-        idempotencyKey: this.idempotencyKey(
-          `pr-route:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
-        ),
-        payload: {
-          ...github,
-          number: prNumber,
-          repoPath: this.path,
-          streamPath,
-        },
-      };
-      const forwardedEvent = {
-        type: "events.iterate.com/github/webhook-received" as const,
-        idempotencyKey: this.idempotencyKey("pr-forward", event),
-        payload: event.payload,
-      };
+      if (prNumbers.length === 0 || github === null) return;
       // Durable obligation, not best-effort: this forward is the webhook's
       // only path to the PR agent (the Slack router once lost a message to a
-      // fire-and-forget append). blockProcessorWhile holds the checkpoint so
-      // a failed append replays; the keys above dedupe the replay.
+      // fire-and-forget append). A check/workflow delivery may name several
+      // PRs, so every target append belongs to the same held obligation.
+      // blockProcessorWhile holds the checkpoint so a failed append replays;
+      // the keys below dedupe each target's replay.
       blockProcessorWhile(async () => {
-        await appendTo(streamPath, routeEvent, forwardedEvent);
+        await Promise.all(
+          prNumbers.map(async (prNumber) => {
+            const streamPath = githubAgentPath(this.path, prNumber);
+            // The key carries the FULL GitHub coordinates, not just the PR
+            // number: relinking the repo to a different repository or
+            // connection must repoint existing PR agents.
+            await appendTo(
+              streamPath,
+              {
+                type: "events.iterate.com/github-agent/route-configured" as const,
+                idempotencyKey: this.idempotencyKey(
+                  `pr-route:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
+                ),
+                payload: {
+                  ...github,
+                  number: prNumber,
+                  repoPath: this.path,
+                  streamPath,
+                },
+              },
+              {
+                type: "events.iterate.com/github/webhook-received" as const,
+                idempotencyKey: this.idempotencyKey("pr-forward", event),
+                payload: event.payload,
+              },
+            );
+          }),
+        );
       });
       return;
     }

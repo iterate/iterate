@@ -241,7 +241,7 @@ export const RepoProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/github-pr/route-configured": {
+    "events.iterate.com/github-agent/route-configured": {
       description:
         "Binds one PR agent stream to its pull request: the GitHub coordinates (via the repo's link), the PR number, and the repo path the webhooks route from. Appended to the agent stream by the repo processor's PR webhook forward.",
       payloadSchema: z
@@ -287,7 +287,7 @@ export const RepoProcessorContract = defineProcessorContract({
   emits: [
     "events.iterate.com/repo/created",
     "events.iterate.com/github/webhook-received",
-    "events.iterate.com/github-pr/route-configured",
+    "events.iterate.com/github-agent/route-configured",
   ],
 });
 

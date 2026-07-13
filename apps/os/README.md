@@ -198,6 +198,7 @@ test coverage removed without replacement is
 
 - [itx README](./src/README.md)
 - [Integrations](./docs/integrations.md)
+- [GitHub pull-request agents](./docs/github-agents.md)
 - [Worker Topology](./docs/worker-topology.md)
 - [Dynamic Worker Dispatch](./docs/dynamic-worker-dispatch.md) — the capability tree vs the fetch lane; why WebSockets demand the class's own `fetch` handler
 - [Sandboxes](./docs/sandboxes.md) — how OUR sandbox works: identity, persistence, egress, the repo checkout (incl. local dev with OrbStack)
