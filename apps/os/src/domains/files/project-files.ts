@@ -110,6 +110,32 @@ export async function deleteProjectFile(input: { path: string; projectId: string
 }
 
 /**
+ * Every stored file of one project, as `{ path, bytes, contentType }` — the
+ * enumeration the search-corpus backfill consumes. Lives here so the
+ * `{projectId}.iterate{path}` key convention stays owned by this domain (via
+ * the codec) instead of being re-derived by callers.
+ */
+export async function* listProjectFiles(
+  projectId: string,
+): AsyncGenerator<{ bytes: Uint8Array; contentType: string; path: string }> {
+  const prefix = DurableObjectNameCodec.stringify({ path: "/", projectId });
+  let cursor: string | undefined;
+  do {
+    const page = await itxEnv.FILES_BUCKET.list({ cursor, limit: 500, prefix });
+    for (const entry of page.objects) {
+      const object = await itxEnv.FILES_BUCKET.get(entry.key);
+      if (object === null) continue;
+      yield {
+        bytes: new Uint8Array(await object.arrayBuffer()),
+        contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+        path: DurableObjectNameCodec.parse(entry.key).path,
+      };
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor !== undefined);
+}
+
+/**
  * Mints the signed public URL for a file. The hostname identifier prefers the
  * project slug (pretty) and falls back to the `prj_` id, which ingress
  * resolvers pass through just the same.

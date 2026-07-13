@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
   fileSearchKey,
+  normalizeCustomSearchKind,
   projectSearchPrefix,
   renderStreamSegmentDocument,
   repoFileSearchKey,
@@ -9,10 +10,10 @@ import {
   SEARCH_SEGMENT_SIZE,
   segmentForOffset,
   segmentOffsetRange,
-  shouldIndexStreamPath,
+  sanitizeSearchDocumentId,
   streamSegmentContext,
   streamSegmentKey,
-} from "./search-index.ts";
+} from "./search-corpus.ts";
 
 function event(overrides: Partial<StreamEvent> & { offset: number }): StreamEvent {
   return {
@@ -77,17 +78,20 @@ describe("searchFilters", () => {
     expect(filter.type).toBe("and");
     const [gte, lt] = filter.filters;
     expect(gte).toMatchObject({ type: "gte", key: "folder", value: "prj_1/" });
-    expect(lt?.type).toBe("lt");
-    // Every folder under the project sorts inside [gte, lt); the next
-    // project id sorts outside it.
+    // The upper bound bumps the trailing "/" to "0" (Cloudflare's documented
+    // starts-with trick), so the range is exactly the prefix match.
+    expect(lt).toMatchObject({ type: "lt", key: "folder", value: "prj_10" });
+    // Every folder under the project sorts inside [gte, lt); other project
+    // ids — including ones the prefix is a prefix OF — sort outside it.
     expect("prj_1/streams/a/" >= String(gte?.value)).toBe(true);
     expect("prj_1/streams/a/" < String(lt?.value)).toBe(true);
     expect("prj_2/" < String(lt?.value) && "prj_2/" >= String(gte?.value)).toBe(false);
+    expect("prj_10abc/" < String(lt?.value) && "prj_10abc/" >= String(gte?.value)).toBe(false);
   });
 
   it("narrows to one source kind via the folder prefix", () => {
     const filter = searchFilters({ projectId: "prj_1", source: "repos" });
-    expect(filter.filters[0]?.value).toBe("prj_1/repos");
+    expect(filter.filters[0]?.value).toBe("prj_1/repos/");
   });
 
   it("adds a `kind != x` condition per excluded kind (flat AND)", () => {
@@ -97,23 +101,6 @@ describe("searchFilters", () => {
       { type: "ne", key: "kind", value: "streams" },
       { type: "ne", key: "kind", value: "files" },
     ]);
-  });
-});
-
-describe("shouldIndexStreamPath (index-time selectivity)", () => {
-  it("never indexes secrets or the integration webhook firehoses", () => {
-    expect(shouldIndexStreamPath("/secrets/integrations/github/install-1/token")).toBe(false);
-    expect(shouldIndexStreamPath("/secrets")).toBe(false);
-    expect(shouldIndexStreamPath("/integrations/github/install-115079265")).toBe(false);
-    expect(shouldIndexStreamPath("/integrations")).toBe(false);
-  });
-
-  it("indexes ordinary content streams (agents, repos)", () => {
-    expect(shouldIndexStreamPath("/agents/slack/T1/thr-9")).toBe(true);
-    expect(shouldIndexStreamPath("/repos/config")).toBe(true);
-    expect(shouldIndexStreamPath("/")).toBe(true);
-    // A path that merely CONTAINS the word is fine — only the prefix matters.
-    expect(shouldIndexStreamPath("/agents/secrets-helper")).toBe(true);
   });
 });
 
@@ -160,5 +147,25 @@ describe("renderStreamSegmentDocument", () => {
     });
     expect(document).toContain("… (truncated)");
     expect(document!.length).toBeLessThan(20_000);
+  });
+});
+
+describe("normalizeCustomSearchKind / sanitizeSearchDocumentId", () => {
+  it("rejects the reserved platform kinds so index() cannot invade their namespaces", () => {
+    for (const kind of ["streams", "files", "repos", "docs", "REPOS"]) {
+      expect(() => normalizeCustomSearchKind(kind)).toThrow(/reserved/);
+    }
+  });
+
+  it("rejects kinds with slashes or spaces (would nest under another kind's folder)", () => {
+    expect(() => normalizeCustomSearchKind("repos/config")).toThrow(/no slashes/);
+    expect(() => normalizeCustomSearchKind("my notes")).toThrow(/no slashes/);
+    expect(() => normalizeCustomSearchKind("")).toThrow();
+  });
+
+  it("lowercases valid kinds and keeps ids path-shaped but prefix-safe", () => {
+    expect(normalizeCustomSearchKind("Notes")).toBe("notes");
+    expect(sanitizeSearchDocumentId("/2026/07/meeting notes.md")).toBe("2026/07/meeting-notes.md");
+    expect(sanitizeSearchDocumentId("")).toBe("untitled");
   });
 });

@@ -21,7 +21,7 @@ import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-he
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 import { emailDomainForDeployment } from "../src/domains/email/utils.ts";
-import { SEARCH_METADATA_SCHEMA } from "../src/domains/search/search-index.ts";
+import { SEARCH_METADATA_SCHEMA } from "../src/domains/search/search-corpus.ts";
 import { ensureWorkerEventQueueResources } from "./event-queue-resources.ts";
 
 /**
@@ -60,11 +60,8 @@ export async function ensureAiSearchInstance(
   },
 ): Promise<void> {
   try {
-    const existing = await cf<{ id?: string; name?: string }[] | null>(
-      `/ai-search/instances?per_page=100`,
-    );
-    const instances = Array.isArray(existing) ? existing : [];
-    if (instances.some((instance) => (instance.name ?? instance.id) === input.instanceName)) {
+    const instances = await cf<{ id: string; name: string }[]>(`/ai-search/instances?per_page=100`);
+    if (instances.some((instance) => instance.name === input.instanceName)) {
       console.log(`AI Search instance ${input.instanceName} exists`);
       return;
     }
@@ -74,8 +71,9 @@ export async function ensureAiSearchInstance(
         id: input.instanceName,
         name: input.instanceName,
         data_source: { type: "r2", source: input.bucketName },
-        // Poll the bucket as often as the product allows; the writers push
-        // continuously, so index freshness is bounded by this interval.
+        // Hourly bucket sync; the writers push continuously, so index
+        // freshness is bounded by this interval (a sync job can also be
+        // triggered on demand via the jobs API, min 30s apart).
         sync_interval: 3600,
         // Declare the custom metadata schema up front so the `kind`/`context`
         // attributes every document carries are filterable + returned on hits

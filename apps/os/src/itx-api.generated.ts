@@ -152,7 +152,7 @@ export interface Project {
   /** The project's sandboxes — explicitly created, sized Linux containers
    * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
-  /** SPIKE: search over this project's streams, files, and repos (Cloudflare AI Search). */
+  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */
   search: Search;
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   scheduler: Scheduler;
@@ -846,18 +846,21 @@ export interface SandboxCollection {
 }
 
 /**
- * SPIKE: project search over everything the project accumulates — stream
- * events, itx.files, repo files — indexed in a Cloudflare AI Search instance
- * over the deployment's search-index bucket (domains/search/search-index.ts).
- * One instance per deployment; every query is scoped to this project via a
- * folder-prefix metadata filter, so no query can see another project's data.
+ * Project search over everything the project accumulates — stream events,
+ * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
+ * instance over the deployment's search-index bucket
+ * (domains/search/search-index.ts). One instance per deployment; every query
+ * is scoped to this project via a folder-prefix metadata filter, so no query
+ * can see another project's data. Experimental — the surface may change.
  */
 export interface Search {
   __describe(): Promise<Description>;
   /**
    * Retrieve scored chunks matching a query, scoped to this project. Merges the
-   * AI Search corpus (streams/files/repos) with federated itx.docs, each result
-   * tagged with its `kind` and `context` so callers can contextualize a hit.
+   * AI Search corpus (streams/files/repos/custom kinds) with federated
+   * itx.docs, each result tagged with its `kind` and `context` so callers can
+   * contextualize a hit. When the corpus is unreachable (instance not created
+   * yet), docs results still return, with `warning` naming the fix.
    */
   query(input: {
     q: string;
@@ -870,7 +873,7 @@ export interface Search {
     /** Restrict to ONE corpus kind (skips docs federation). */
     source?: SearchSourceKind;
     /** Exclude kinds from results, e.g. `["streams"]` to skip the event log. */
-    exclude?: SearchKind[];
+    exclude?: readonly SearchKind[];
   }): Promise<SearchQueryResult>;
   /** Retrieve matching chunks AND generate an answer from them (RAG). */
   answer(input: {
@@ -879,7 +882,7 @@ export interface Search {
     rewriteQuery?: boolean;
     scoreThreshold?: number;
     source?: SearchSourceKind;
-    exclude?: SearchKind[];
+    exclude?: readonly SearchKind[];
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult>;
@@ -912,6 +915,7 @@ export interface Search {
     deleted: number;
     indexed: number;
     skipped: number;
+    failed: number;
   }>;
   /**
    * Re-mirror every existing itx.files object into the search corpus — the
@@ -2264,17 +2268,24 @@ export type CloudflareSandbox = object & {
  * The kinds a project's search corpus is folded from. The first segment of
  * every R2 key IS the kind (`{projectId}/{kind}/…`), so it doubles as the
  * folder-scoping token AND the `kind` metadata attribute. `docs` is federated
- * from the in-worker itx.docs index rather than stored in R2 (see query()),
- * but shares the vocabulary so callers filter uniformly.
+ * from the in-worker itx.docs index rather than stored in R2 (see
+ * Search.query), but shares the vocabulary so callers filter
+ * uniformly.
  */
 export type SearchSourceKind = "streams" | "files" | "repos";
 
+/** Every filterable kind: the stored corpus kinds plus the federated `docs`. */
 export type SearchKind = SearchSourceKind | "docs";
 
 /** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */
 export type SearchQueryResult = {
   searchQuery: string;
   results: SearchResultChunk[];
+  /**
+   * Present when the AI Search corpus was unreachable (e.g. the instance is
+   * not created yet) and only federated docs results are returned.
+   */
+  warning?: string;
 };
 
 /** What `itx.search.answer` returns: a generated answer plus the chunks it cited. */
@@ -2754,7 +2765,7 @@ export type SearchResultChunk = {
   score: number;
   /** The matched text content (the specific matching chunk). */
   content: string;
-  /** Which corpus this came from (`streams` | `files` | `repos` | `docs`). */
+  /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
   kind?: string;
   /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
   context?: string;

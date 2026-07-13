@@ -958,7 +958,7 @@ export class RepoDurableObject extends DurableObject<Env> {
    * chain as commits and `#scheduleSearchIndex` makes the last-committed
    * snapshot the last to run, so the corpus converges on current HEAD.
    */
-  reindexSearch(): Promise<{ deleted: number; indexed: number; skipped: number }> {
+  reindexSearch(): Promise<{ deleted: number; indexed: number; skipped: number; failed: number }> {
     const projectId = this.#name.projectId;
     if (projectId === null) {
       throw new Error("search indexing requires a project-scoped repo");

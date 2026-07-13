@@ -120,6 +120,7 @@ import {
 } from "./domains/integrations/waitrose-api.ts";
 import {
   deleteProjectFile,
+  listProjectFiles,
   mintProjectFileUrl,
   putProjectFile,
   readProjectFile,
@@ -201,17 +202,16 @@ import {
   indexEntireStream,
   indexStreamEventBatch,
   mirrorFileToSearchIndex,
-  searchFilters,
   searchInstanceName,
-  shouldIndexStreamPath,
 } from "./domains/search/search-index.ts";
+import { searchFilters } from "./domains/search/search-corpus.ts";
 import type {
   SearchAnswerResult,
   SearchKind,
   SearchQueryResult,
   SearchResultChunk,
   SearchSourceKind,
-} from "./domains/search/search-index.ts";
+} from "./domains/search/search-corpus.ts";
 import type { AgentFileAttachment } from "./domains/agents/agent-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
@@ -1958,11 +1958,12 @@ class FilesRpcTarget extends IterateRpcTarget<"Files"> {
 }
 
 /**
- * SPIKE: project search over everything the project accumulates — stream
- * events, itx.files, repo files — indexed in a Cloudflare AI Search instance
- * over the deployment's search-index bucket (domains/search/search-index.ts).
- * One instance per deployment; every query is scoped to this project via a
- * folder-prefix metadata filter, so no query can see another project's data.
+ * Project search over everything the project accumulates — stream events,
+ * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
+ * instance over the deployment's search-index bucket
+ * (domains/search/search-index.ts). One instance per deployment; every query
+ * is scoped to this project via a folder-prefix metadata filter, so no query
+ * can see another project's data. Experimental — the surface may change.
  */
 class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   constructor(
@@ -1982,8 +1983,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         'src/worker.ts", …). answer({ q }) additionally generates a cited answer. Narrow with ' +
         'source ("streams" | "files" | "repos") or exclude noisy kinds (exclude: ["streams"]). ' +
         "index({ kind, id, text }) adds an arbitrary document. indexStream/indexRepo/backfillFiles " +
-        "backfill content written before indexing. NOT indexed: /secrets/** and the /integrations/** " +
-        "webhook firehoses (a repo sync indexes the repo's files instead).",
+        "backfill content written before indexing. Every stream is indexed except ephemeral " +
+        "events; webhook streams are duplicative but valuable — expect many similar hits for " +
+        "busy PRs; exclude or scope to narrow.",
       children: {
         answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
@@ -1997,7 +1999,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     });
   }
 
-  #instance(): AutoRAG {
+  get #instance(): AutoRAG {
     return env.AI.autorag(searchInstanceName());
   }
 
@@ -2026,12 +2028,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   }
 
   /** Map one AI Search result item to a provenance-carrying chunk. */
-  #toChunk(item: {
-    filename: string;
-    score: number;
-    content: { text: string }[];
-    attributes?: Record<string, string | number | boolean | null>;
-  }): SearchResultChunk {
+  #toChunk(item: AutoRagSearchResponse["data"][number]): SearchResultChunk {
     const attributes = item.attributes ?? {};
     return {
       filename: item.filename,
@@ -2070,24 +2067,23 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
 
   // The instance is provisioned out-of-band (ensure-resources.ts); a missing
   // instance surfaces as an opaque binding error, so name the fix.
-  async #withInstanceHint<T>(work: () => Promise<T>): Promise<T> {
-    try {
-      return await work();
-    } catch (error) {
-      throw new Error(
-        `AI Search query failed (instance "${searchInstanceName()}"): ${String(error)}. ` +
-          "If the instance does not exist yet, create it via ensure-resources or the " +
-          "Cloudflare dashboard (AI > AI Search) over the deployment's search-index bucket.",
-      );
-    }
+  #instanceHintError(error: unknown): Error {
+    return new Error(
+      `AI Search request failed (instance "${searchInstanceName()}"). ` +
+        "If the instance does not exist yet, create it via ensure-resources or the " +
+        "Cloudflare dashboard (AI > AI Search) over the deployment's search-index bucket.",
+      { cause: error },
+    );
   }
 
   /**
    * Retrieve scored chunks matching a query, scoped to this project. Merges the
-   * AI Search corpus (streams/files/repos) with federated itx.docs, each result
-   * tagged with its `kind` and `context` so callers can contextualize a hit.
+   * AI Search corpus (streams/files/repos/custom kinds) with federated
+   * itx.docs, each result tagged with its `kind` and `context` so callers can
+   * contextualize a hit. When the corpus is unreachable (instance not created
+   * yet), docs results still return, with `warning` naming the fix.
    */
-  query(input: {
+  async query(input: {
     q: string;
     /** Max chunks to return (1–50). */
     limit?: number;
@@ -2098,47 +2094,59 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     /** Restrict to ONE corpus kind (skips docs federation). */
     source?: SearchSourceKind;
     /** Exclude kinds from results, e.g. `["streams"]` to skip the event log. */
-    exclude?: SearchKind[];
+    exclude?: readonly SearchKind[];
   }): Promise<SearchQueryResult> {
-    return this.#withInstanceHint(async () => {
-      const [response, docs] = await Promise.all([
-        this.#instance().search(this.#searchRequest({ ...input, query: input.q })),
-        this.#federatedDocs({
-          query: input.q,
-          source: input.source,
-          exclude: input.exclude,
-          limit: input.limit,
-        }),
-      ]);
-      const results = [...response.data.map((item) => this.#toChunk(item)), ...docs].sort(
-        (a, b) => b.score - a.score,
-      );
-      return { searchQuery: response.search_query, results };
-    });
+    const [corpus, docs] = await Promise.allSettled([
+      this.#instance.search(this.#searchRequest({ ...input, query: input.q })),
+      this.#federatedDocs({
+        query: input.q,
+        source: input.source,
+        exclude: input.exclude,
+        limit: input.limit,
+      }),
+    ]);
+    // Docs are in-worker and must not be lost to a corpus outage; the reverse
+    // (docs failing) is a real bug worth surfacing, so it still throws.
+    if (docs.status === "rejected") throw docs.reason;
+    if (corpus.status === "rejected") {
+      if (input.source !== undefined) throw this.#instanceHintError(corpus.reason);
+      return {
+        searchQuery: input.q,
+        results: docs.value,
+        warning: this.#instanceHintError(corpus.reason).message,
+      };
+    }
+    const results = [...corpus.value.data.map((item) => this.#toChunk(item)), ...docs.value].sort(
+      (a, b) => b.score - a.score,
+    );
+    return { searchQuery: corpus.value.search_query, results };
   }
 
   /** Retrieve matching chunks AND generate an answer from them (RAG). */
-  answer(input: {
+  async answer(input: {
     q: string;
     limit?: number;
     rewriteQuery?: boolean;
     scoreThreshold?: number;
     source?: SearchSourceKind;
-    exclude?: SearchKind[];
+    exclude?: readonly SearchKind[];
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult> {
-    return this.#withInstanceHint(async () => {
-      const response = await this.#instance().aiSearch({
+    let response: AutoRagAiSearchResponse;
+    try {
+      response = await this.#instance.aiSearch({
         ...this.#searchRequest({ ...input, query: input.q }),
         system_prompt: input.systemPrompt,
       });
-      return {
-        response: response.response,
-        searchQuery: response.search_query,
-        results: response.data.map((item) => this.#toChunk(item)),
-      };
-    });
+    } catch (error) {
+      throw this.#instanceHintError(error);
+    }
+    return {
+      response: response.response,
+      searchQuery: response.search_query,
+      results: response.data.map((item) => this.#toChunk(item)),
+    };
   }
 
   /**
@@ -2186,6 +2194,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     deleted: number;
     indexed: number;
     skipped: number;
+    failed: number;
   }> {
     return env.REPO.getByName(
       DurableObjectNameCodec.stringify({
@@ -2202,25 +2211,14 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
    */
   async backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }> {
-    const prefix = `${this.props.projectId}.iterate/`;
     const counts = { mirrored: 0, skipped: 0, failed: 0 };
-    let cursor: string | undefined;
-    do {
-      const page = await env.FILES_BUCKET.list({ cursor, limit: 500, prefix });
-      for (const entry of page.objects) {
-        const object = await env.FILES_BUCKET.get(entry.key);
-        if (object === null) continue;
-        const { path } = DurableObjectNameCodec.parse(entry.key);
-        const outcome = await mirrorFileToSearchIndex({
-          bytes: new Uint8Array(await object.arrayBuffer()),
-          contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
-          path,
-          projectId: this.props.projectId,
-        });
-        counts[outcome] += 1;
-      }
-      cursor = page.truncated ? page.cursor : undefined;
-    } while (cursor !== undefined);
+    for await (const file of listProjectFiles(this.props.projectId)) {
+      const outcome = await mirrorFileToSearchIndex({
+        ...file,
+        projectId: this.props.projectId,
+      });
+      counts[outcome] += 1;
+    }
     return counts;
   }
 }
@@ -4717,7 +4715,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** SPIKE: search over this project's streams, files, and repos (Cloudflare AI Search). */
+  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */
   get search(): SearchRpcTarget {
     return new SearchRpcTarget({
       auth: this.#props.auth,
@@ -4849,21 +4847,23 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    */
   #indexStreamSearch(batch: StreamPushEventBatch): void {
     if (batch.projectId === null) return;
-    // Skip non-indexable streams (/secrets/**, /integrations/** firehoses)
-    // before spending an RPC — indexStreamEventBatch re-checks as the boundary.
-    if (!shouldIndexStreamPath(batch.path)) return;
     const streamStub = env.STREAM.getByName(
       DurableObjectNameCodec.stringify(
         { projectId: batch.projectId, path: batch.path },
         { allowNullProjectId: true },
       ),
     );
-    void indexStreamEventBatch({
-      batch,
-      readEvents: (args) => streamStub.getEvents(args),
-    }).catch((error: unknown) => {
-      console.error("stream search index failed", { path: batch.path, error });
-    });
+    // waitUntil, not bare fire-and-forget: the segment re-read + R2 puts are a
+    // multi-hop pipeline that outlives this RPC's resolve, and an unanchored
+    // promise can be cancelled when the invocation's I/O context ends.
+    this.#props.ctx.waitUntil(
+      indexStreamEventBatch({
+        batch,
+        readEvents: (args) => streamStub.getEvents(args),
+      }).catch((error: unknown) => {
+        console.warn("search index stream batch failed", { path: batch.path, error });
+      }),
+    );
   }
 
   /**
