@@ -1,6 +1,13 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DragDropProvider, useDraggable, useDroppable } from "@dnd-kit/react";
-import { GripVerticalIcon, ListTodoIcon, PlusIcon, XIcon } from "lucide-react";
+import {
+  CircleCheckIcon,
+  CircleDashedIcon,
+  CircleDotDashedIcon,
+  CircleIcon,
+  PlusIcon,
+  XIcon,
+} from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
@@ -110,24 +117,24 @@ export function RepoTasksView({
   };
   const selectTask = (path: string | undefined) =>
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
+  const createTask = (title: string, state: string) => {
+    const created = createRepoTask(title, effectivePaths);
+    if (created === null) return false;
+    const content =
+      state === "todo" ? created.content : updateRepoTaskState(created.content, state);
+    onSetWorking(created.path, { type: "write", content });
+    selectTask(created.path);
+    return true;
+  };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-      <TasksSidebar
-        taskCount={tasks.length}
-        onCreate={(title, reset) => {
-          const created = createRepoTask(title, effectivePaths);
-          if (created === null) return;
-          onSetWorking(created.path, { type: "write", content: created.content });
-          reset();
-          selectTask(created.path);
-        }}
-      />
+    <div className="flex min-h-0 flex-1">
       <TaskBoard
         tasks={tasks}
         columns={columns}
         onOpen={(task) => selectTask(task.path)}
         onMove={(task, state) => writeTask(task, updateRepoTaskState(task.content, state))}
+        onCreate={createTask}
       />
       <TaskEditorSheet
         task={selectedTask}
@@ -151,75 +158,50 @@ export function RepoTasksView({
   );
 }
 
-function TasksSidebar({
-  taskCount,
-  onCreate,
-}: {
-  taskCount: number;
-  onCreate: (title: string, reset: () => void) => void;
-}) {
-  return (
-    <aside className="flex shrink-0 items-center gap-3 border-b p-3 md:h-full md:w-60 md:flex-col md:items-stretch md:border-r md:border-b-0">
-      <div className="flex items-center gap-2 md:justify-between">
-        <div className="flex items-center gap-2">
-          <ListTodoIcon className="size-4" />
-          <span className="text-sm font-medium">Tasks</span>
-        </div>
-        <Badge variant="secondary">{taskCount}</Badge>
-      </div>
-      <form
-        className="flex min-w-0 flex-1 gap-2 md:flex-none"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const form = event.currentTarget;
-          onCreate(String(new FormData(form).get("title") ?? ""), () => form.reset());
-        }}
-      >
-        <Input
-          aria-label="New task title"
-          name="title"
-          placeholder="New task"
-          className="min-w-0"
-        />
-        <Button type="submit" size="icon" title="Create task" aria-label="Create task">
-          <PlusIcon data-icon="inline-start" />
-        </Button>
-      </form>
-    </aside>
-  );
-}
-
 function TaskBoard({
   tasks,
   columns,
   onOpen,
   onMove,
+  onCreate,
 }: {
   tasks: readonly RepoTask[];
   columns: readonly string[];
   onOpen: (task: RepoTask) => void;
   onMove: (task: RepoTask, state: string) => void;
+  onCreate: (title: string, state: string) => boolean;
 }) {
+  const draggedPathRef = useRef<string | undefined>(undefined);
   return (
     <DragDropProvider
+      onDragStart={(event) => {
+        draggedPathRef.current = String(event.operation.source?.id ?? "");
+      }}
       onDragEnd={(event) => {
-        if (event.canceled) return;
         const path = String(event.operation.source?.id ?? "");
-        const targetId = String(event.operation.target?.id ?? "");
-        const state = targetId.startsWith("task-state:")
-          ? targetId.slice("task-state:".length)
-          : "";
-        const task = tasks.find((candidate) => candidate.path === path);
-        if (task !== undefined && state !== "" && task.state !== state) onMove(task, state);
+        if (!event.canceled) {
+          const targetId = String(event.operation.target?.id ?? "");
+          const state = targetId.startsWith("task-state:")
+            ? targetId.slice("task-state:".length)
+            : "";
+          const task = tasks.find((candidate) => candidate.path === path);
+          if (task !== undefined && state !== "" && task.state !== state) onMove(task, state);
+        }
+        setTimeout(() => {
+          if (draggedPathRef.current === path) draggedPathRef.current = undefined;
+        });
       }}
     >
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-x-auto">
+      <div className="flex min-h-0 min-w-0 flex-1 gap-2 overflow-x-auto bg-muted/30 p-2">
         {columns.map((state) => (
           <TaskColumn
             key={state}
             state={state}
             tasks={tasks.filter((task) => task.state === state)}
-            onOpen={onOpen}
+            onOpen={(task) => {
+              if (draggedPathRef.current !== task.path) onOpen(task);
+            }}
+            onCreate={onCreate}
           />
         ))}
       </div>
@@ -231,83 +213,130 @@ function TaskColumn({
   state,
   tasks,
   onOpen,
+  onCreate,
 }: {
   state: string;
   tasks: readonly RepoTask[];
   onOpen: (task: RepoTask) => void;
+  onCreate: (title: string, state: string) => boolean;
 }) {
   const { ref, isDropTarget } = useDroppable({ id: `task-state:${state}`, accept: "repo-task" });
+  const [creating, setCreating] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!creating) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [creating]);
+
   return (
     <section
       ref={ref}
       data-task-state={state}
       className={cn(
-        "flex min-h-full w-72 shrink-0 flex-col border-r last:border-r-0",
+        "flex min-h-full min-w-72 flex-1 basis-72 flex-col rounded-lg bg-background/70 transition-colors",
         isDropTarget && "bg-accent/40",
       )}
     >
-      <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
-        <h2 className="text-sm font-medium">{taskStateLabel(state)}</h2>
-        <span className="text-xs tabular-nums text-muted-foreground">{tasks.length}</span>
+      <header className="flex h-12 shrink-0 items-center justify-between px-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <TaskStateIcon state={state} />
+          <h2 className="truncate text-sm font-medium">{taskStateLabel(state)}</h2>
+          <span className="text-xs tabular-nums text-muted-foreground">{tasks.length}</span>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title={`Add task to ${taskStateLabel(state)}`}
+          aria-label={`Add task to ${taskStateLabel(state)}`}
+          onClick={() => setCreating(true)}
+        >
+          <PlusIcon data-icon="inline-start" />
+        </Button>
       </header>
-      <div className="flex flex-1 flex-col">
-        {tasks.length === 0 ? (
-          <p className="p-4 text-xs text-muted-foreground">Drop tasks here</p>
-        ) : (
-          tasks.map((task) => <TaskRow key={task.path} task={task} onOpen={onOpen} />)
-        )}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
+        {creating ? (
+          <form
+            className="mb-2 rounded-lg border bg-card p-2 shadow-xs"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const title = String(new FormData(event.currentTarget).get("title") ?? "");
+              if (onCreate(title, state)) setCreating(false);
+            }}
+          >
+            <Input
+              ref={inputRef}
+              aria-label={`New ${taskStateLabel(state)} task title`}
+              name="title"
+              placeholder="Task title"
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setCreating(false);
+              }}
+            />
+          </form>
+        ) : null}
+        <div className="flex flex-col gap-2">
+          {tasks.map((task) => (
+            <TaskCard key={task.path} task={task} onOpen={onOpen} />
+          ))}
+        </div>
       </div>
     </section>
   );
 }
 
-function TaskRow({ task, onOpen }: { task: RepoTask; onOpen: (task: RepoTask) => void }) {
-  const { ref, handleRef, isDragging } = useDraggable({ id: task.path, type: "repo-task" });
+function TaskCard({ task, onOpen }: { task: RepoTask; onOpen: (task: RepoTask) => void }) {
+  const { ref, isDragging } = useDraggable({ id: task.path, type: "repo-task" });
   const summary = task.description.replace(/\s+/g, " ").slice(0, 160);
   return (
-    <article
+    <button
+      type="button"
       ref={ref}
       data-task-path={task.path}
+      aria-label={task.title}
+      onClick={() => onOpen(task)}
       className={cn(
-        "group border-b px-3 py-3 transition-colors hover:bg-muted/40",
-        isDragging && "opacity-50",
+        "w-full cursor-grab rounded-lg border bg-card p-3 text-left shadow-xs transition-[background-color,border-color,box-shadow,opacity] hover:border-foreground/15 hover:bg-accent/30 hover:shadow-sm active:cursor-grabbing",
+        isDragging && "opacity-40 shadow-none",
       )}
     >
-      <div className="flex items-start gap-1">
-        <Button
-          ref={handleRef}
-          variant="ghost"
-          size="icon-xs"
-          className="mt-0.5 shrink-0 text-muted-foreground opacity-40 group-hover:opacity-100"
-          title={`Drag ${task.title}`}
-          aria-label={`Drag ${task.title}`}
-        >
-          <GripVerticalIcon data-icon="inline-start" />
-        </Button>
-        <div className="min-w-0 flex-1">
-          <button
-            type="button"
-            className="block w-full text-left text-sm font-medium hover:underline"
-            onClick={() => onOpen(task)}
-          >
-            {task.title}
-          </button>
-          {summary === "" ? null : (
-            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-              {summary}
-            </p>
-          )}
-          <div className="mt-2 flex flex-wrap gap-1">
-            {task.labels.map((label, index) => (
-              <Badge key={label} variant={index === 0 ? "outline" : "secondary"}>
-                {label}
-              </Badge>
-            ))}
-          </div>
-        </div>
+      <div className="flex items-start gap-2">
+        <TaskStateIcon state={task.state} className="mt-0.5" />
+        <span className="min-w-0 flex-1 text-sm font-medium leading-snug">{task.title}</span>
       </div>
-    </article>
+      {summary === "" ? null : (
+        <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{summary}</p>
+      )}
+      <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
+        <span className="truncate font-mono text-[10px] text-muted-foreground">
+          {task.labels[0]}
+        </span>
+        {task.explicitLabels.map((label) => (
+          <Badge key={label} variant="secondary">
+            {label}
+          </Badge>
+        ))}
+      </div>
+    </button>
   );
+}
+
+function TaskStateIcon({ state, className }: { state: string; className?: string }) {
+  const Icon =
+    state === "backlog"
+      ? CircleDashedIcon
+      : state === "done"
+        ? CircleCheckIcon
+        : state === "in-progress"
+          ? CircleDotDashedIcon
+          : CircleIcon;
+  const tone =
+    state === "done"
+      ? "text-emerald-500"
+      : state === "in-progress"
+        ? "text-primary"
+        : "text-muted-foreground";
+  return <Icon aria-hidden className={cn("size-4 shrink-0", tone, className)} />;
 }
 
 function TaskEditorSheet({
@@ -326,6 +355,13 @@ function TaskEditorSheet({
   onChangeLabels: (labels: string[]) => void;
 }) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const taskPath = task?.path;
+  useEffect(() => {
+    if (taskPath === undefined) return;
+    const frame = requestAnimationFrame(() => editorRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [taskPath]);
+
   return (
     <Sheet open={task !== undefined} onOpenChange={onOpenChange}>
       {task === undefined ? null : (
