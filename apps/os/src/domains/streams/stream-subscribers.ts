@@ -846,7 +846,7 @@ export class StreamSubscribers {
           const settledAtMs = this.#hooks.now();
           const subscriptionMetrics = this.#subscriptionMetricsFor(subscriptionKey);
           subscriptionMetrics.deliveryDuration.record(settledAtMs - dispatchAtMs, settledAtMs);
-          const newestCreatedAtMs = Date.parse(matched.at(-1)!.createdAt);
+          const newestCreatedAtMs = this.#parseCreatedAt(matched.at(-1)!.createdAt);
           if (Number.isFinite(newestCreatedAtMs)) {
             subscriptionMetrics.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
           }

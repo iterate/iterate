@@ -5,7 +5,7 @@
 // skip-not-defer, backoff/park/resume, poison bisection, wake pokes with the
 // observational watermark, and the ephemeral lane.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type {
   CoreProcessorState,
@@ -2137,6 +2137,25 @@ describe("StreamSubscribers runtime metrics", () => {
     expect(subscription.settleLatencyMs).toMatchObject({ last: 1_047, samples: 1 });
     expect(subscription.bytesSent).toBeGreaterThan(0);
     expect(h.egress).toEqual([{ count: 3, bytes: subscription.bytesSent }]);
+  });
+
+  it("parses one shared commit timestamp once across aligned push lanes", async () => {
+    const h = makeHarness();
+    for (let index = 0; index < 100; index += 1) {
+      h.configure(pushPayload({ subscriptionKey: `k-${index}` }), index);
+    }
+    h.append(evt(1, "a"));
+    h.advanceTo(1_000);
+    const parse = vi.spyOn(Date, "parse");
+    try {
+      h.subscribers.wake();
+      await h.settle();
+      expect(parse).toHaveBeenCalledTimes(1);
+    } finally {
+      parse.mockRestore();
+    }
+
+    expect(h.pushes).toHaveLength(100);
   });
 
   it("wake-lane settle latency: the pulled batch result settling records commit→consumed", async () => {
