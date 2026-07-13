@@ -369,6 +369,36 @@ test("project streams are born with the project-worker push feed and replace it 
   expect(record?.latestConfiguredEvent?.payload?.selector?.eventTypes).toEqual(narrowedTypes);
 });
 
+test("a contiguous cursor-set batch preserves the final audited seek", async () => {
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `lifecycle-cursor-batch-${marker}` });
+  using stream = project.streams.get(`/lifecycle-cursor-batch-${marker}`);
+
+  const initial = asStreamRuntimeState(await stream.runtimeState());
+  expect(initial.runtime.subscriptions["project-worker"]?.mode).toBe("push");
+
+  await stream.appendAck(
+    ...Array.from({ length: 100 }, (_, index) => ({
+      type: "events.iterate.com/stream/subscription-cursor-set",
+      payload: {
+        subscriptionKey: "project-worker",
+        // Stay beyond this isolated stream's head so post-append reconcile
+        // cannot immediately advance the row and obscure the winning seek.
+        afterOffset: 10_000 + index,
+      },
+    })),
+  );
+
+  const after = asStreamRuntimeState(await stream.runtimeState());
+  expect(after.runtime.subscriptions["project-worker"]?.ackedOffset).toBe(10_099);
+});
+
 test("stream idle teardown severs configured processor subscriptions", async () => {
   const marker = crypto.randomUUID();
 

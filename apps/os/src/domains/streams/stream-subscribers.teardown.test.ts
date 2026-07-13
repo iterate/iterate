@@ -104,6 +104,20 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         epoch: lastEpoch,
       });
     },
+    setCursors: (cursors) => {
+      for (const { subscriptionKey: k, ackedOffset } of cursors) {
+        const row = rows.get(k);
+        if (!row) continue;
+        lastEpoch += 1;
+        Object.assign(row, {
+          ackedOffset,
+          attempt: 0,
+          nextAttemptAt: null,
+          lastError: null,
+          epoch: lastEpoch,
+        });
+      }
+    },
     delete: (k) => void rows.delete(k),
     minNextAttemptAt: () => {
       const pending = [...rows.values()]

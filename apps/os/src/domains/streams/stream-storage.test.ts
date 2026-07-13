@@ -1045,6 +1045,55 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(store.get("k")!.ackedOffset).toBe(5);
   });
 
+  it("batches contiguous cursor sets at the SQL binding limit with exact last-seek state", () => {
+    const db = new DatabaseSync(":memory:");
+    const cursorSetBindings: number[] = [];
+    const store = new SqliteSubscriptionCursorStore(
+      wrapSqlStorage(db, (statement, bindings) => {
+        if (statement.includes("with cursor_updates")) cursorSetBindings.push(bindings.length);
+      }),
+    );
+    for (let index = 0; index < 100; index += 1) store.ensure(`k-${index}`, 0);
+    const stagedEpoch = store.get("k-50")!.epoch;
+    store.stageAck("k-50", 500, stagedEpoch);
+
+    store.setCursors([
+      ...Array.from({ length: 100 }, (_, index) => ({
+        subscriptionKey: `k-${index}`,
+        ackedOffset: index + 1,
+      })),
+      { subscriptionKey: "missing", ackedOffset: 1_000 },
+      { subscriptionKey: "k-0", ackedOffset: 999 },
+    ]);
+    store.flushPending("all");
+
+    expect(cursorSetBindings).toEqual([99, 99, 99, 3]);
+    expect(store.get("k-0")).toMatchObject({ ackedOffset: 999, attempt: 0 });
+    expect(store.get("k-50")).toMatchObject({ ackedOffset: 51, attempt: 0 });
+    expect(store.get("k-0")!.epoch).toBeGreaterThan(store.get("k-99")!.epoch);
+    expect(store.get("missing")).toBeUndefined();
+
+    const reloaded = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    expect(reloaded.get("k-0")).toEqual(store.get("k-0"));
+    expect(reloaded.get("k-50")).toEqual(store.get("k-50"));
+  });
+
+  it("keeps a singleton cursor set on the cached one-row update", () => {
+    const db = new DatabaseSync(":memory:");
+    const statements: string[] = [];
+    const store = new SqliteSubscriptionCursorStore(
+      wrapSqlStorage(db, (statement) => statements.push(statement)),
+    );
+    store.ensure("k", 0);
+    statements.length = 0;
+
+    store.setCursors([{ subscriptionKey: "k", ackedOffset: 7 }]);
+
+    expect(store.get("k")?.ackedOffset).toBe(7);
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).not.toContain("with cursor_updates");
+  });
+
   it("persists monotonic fenced and unfenced acknowledgements", () => {
     const db = new DatabaseSync(":memory:");
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));

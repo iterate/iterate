@@ -44,6 +44,8 @@ const MAX_EVENT_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / EVENT_INSERT_ROW
 const MAX_CHUNK_ROWS_PER_INSERT = Math.floor(MAX_SQL_BINDINGS / CHUNK_INSERT_ROW_WIDTH);
 const CURSOR_PROGRESS_ROW_WIDTH = 3;
 const MAX_CURSOR_PROGRESS_ROWS = Math.floor(MAX_SQL_BINDINGS / CURSOR_PROGRESS_ROW_WIDTH);
+const CURSOR_SET_ROW_WIDTH = 3;
+const MAX_CURSOR_SET_ROWS = Math.floor(MAX_SQL_BINDINGS / CURSOR_SET_ROW_WIDTH);
 const MAX_UNPERSISTED_SKIP_OFFSETS = 64;
 const MAX_UNPERSISTED_DELIVERY_BATCHES = 8;
 const EVENT_INSERT_STATEMENTS = createInsertStatements(
@@ -57,6 +59,7 @@ const CHUNK_INSERT_STATEMENTS = createInsertStatements(
   MAX_CHUNK_ROWS_PER_INSERT,
 );
 const CURSOR_PROGRESS_STATEMENTS = createCursorProgressStatements(MAX_CURSOR_PROGRESS_ROWS);
+const CURSOR_SET_STATEMENTS = createCursorSetStatements(MAX_CURSOR_SET_ROWS);
 const textEncoder = new TextEncoder();
 
 type PendingSubscriptionProgress = {
@@ -699,6 +702,11 @@ export type SubscriptionCursorRow = {
   epoch: number;
 };
 
+export type SubscriptionCursorSet = {
+  subscriptionKey: string;
+  ackedOffset: number;
+};
+
 /**
  * The delivery spine's durable rows, behind an interface so the spine's logic
  * is unit-testable with an in-memory twin (stream-subscribers.test.ts). All
@@ -748,6 +756,8 @@ export type SubscriptionCursorStore = {
   ): void;
   /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state, bumps the epoch. */
   setCursor(subscriptionKey: string, ackedOffset: number): void;
+  /** Apply a contiguous run of explicit seeks with bounded multi-row SQL updates. */
+  setCursors(cursors: readonly SubscriptionCursorSet[]): void;
   delete(subscriptionKey: string): void;
   /** Earliest pending retry across all rows, for arming the DO alarm. */
   minNextAttemptAt(): number | null;
@@ -866,8 +876,13 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   }
 
   #nextEpoch(): number {
-    this.#lastEpoch = Math.max(this.#lastEpoch + 1, Date.now());
-    return this.#lastEpoch;
+    return this.#reserveEpochs(1);
+  }
+
+  #reserveEpochs(count: number): number {
+    const first = Math.max(this.#lastEpoch + 1, Date.now());
+    this.#lastEpoch = first + count - 1;
+    return first;
   }
 
   #rows(): Map<string, SubscriptionCursorRow> {
@@ -1075,6 +1090,53 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     row.epoch = epoch;
   }
 
+  setCursors(cursors: readonly SubscriptionCursorSet[]): void {
+    if (cursors.length === 1) {
+      const cursor = cursors[0]!;
+      this.setCursor(cursor.subscriptionKey, cursor.ackedOffset);
+      return;
+    }
+
+    const rows = this.#rows();
+    const existing: Array<{ cursor: SubscriptionCursorSet; row: SubscriptionCursorRow }> = [];
+    for (const cursor of cursors) {
+      const row = rows.get(cursor.subscriptionKey);
+      if (row !== undefined) existing.push({ cursor, row });
+    }
+    if (existing.length === 0) return;
+    const firstEpoch = this.#reserveEpochs(existing.length);
+    const updates = new Map<
+      string,
+      { row: SubscriptionCursorRow; ackedOffset: number; epoch: number }
+    >();
+    for (let index = 0; index < existing.length; index += 1) {
+      const { cursor, row } = existing[index]!;
+      updates.set(cursor.subscriptionKey, {
+        row,
+        ackedOffset: cursor.ackedOffset,
+        epoch: firstEpoch + index,
+      });
+    }
+
+    const pending = [...updates.entries()];
+    for (let start = 0; start < pending.length; start += MAX_CURSOR_SET_ROWS) {
+      const batch = pending.slice(start, start + MAX_CURSOR_SET_ROWS);
+      const bindings: SqlStorageValue[] = [];
+      for (const [subscriptionKey, update] of batch) {
+        bindings.push(subscriptionKey, update.ackedOffset, update.epoch);
+      }
+      this.#sql.exec(CURSOR_SET_STATEMENTS[batch.length]!, ...bindings);
+      for (const [subscriptionKey, update] of batch) {
+        this.#deletePendingProgress(subscriptionKey);
+        update.row.ackedOffset = update.ackedOffset;
+        update.row.attempt = 0;
+        update.row.nextAttemptAt = null;
+        update.row.lastError = null;
+        update.row.epoch = update.epoch;
+      }
+    }
+  }
+
   delete(subscriptionKey: string): void {
     const rows = this.#rows();
     if (!rows.has(subscriptionKey)) return;
@@ -1161,6 +1223,26 @@ function createCursorProgressStatements(maxRows: number): string[] {
         and current.epoch = progress.epoch
     `;
   });
+}
+
+function createCursorSetStatements(maxRows: number): string[] {
+  const statements = new Array<string>(maxRows + 1);
+  for (let rows = 1; rows <= maxRows; rows += 1) {
+    statements[rows] = `
+      with cursor_updates(subscription_key, acked_offset, epoch) as (
+        values ${Array.from({ length: rows }, () => "(?, ?, ?)").join(", ")}
+      )
+      update subscriptions as current
+      set acked_offset = cursor_updates.acked_offset,
+          attempt = 0,
+          next_attempt_at = null,
+          last_error = null,
+          epoch = cursor_updates.epoch
+      from cursor_updates
+      where current.subscription_key = cursor_updates.subscription_key
+    `;
+  }
+  return statements;
 }
 
 function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {

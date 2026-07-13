@@ -24,6 +24,7 @@ import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
+  type SubscriptionCursorSet,
   type StreamOffsetBounds,
 } from "./stream-storage.ts";
 import {
@@ -430,7 +431,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // just-committed events (sized by the log write) so caught-up consumers
     // skip the per-lane SQLite re-read.
     if (reducedEvents !== undefined) {
-      for (const reduced of reducedEvents) this.#processEvent(reduced);
+      this.#processEvents(reducedEvents);
     }
     this.#subscribers.wake(freshTail);
 
@@ -846,6 +847,55 @@ export class StreamDurableObject extends DurableObject<Env> {
       default:
         return this.#reduceCircuitBreaker({ event: args.event, state: next });
     }
+  }
+
+  /**
+   * Preserve control-effect order while batching only uninterrupted cursor
+   * seeks. A breaker trip can recursively append `paused`, so it remains on
+   * the ordinary one-at-a-time path with the preceding seek batch flushed.
+   */
+  #processEvents(reducedEvents: readonly ReducedCoreEvent[]): void {
+    if (reducedEvents.length === 1) {
+      this.#processEvent(reducedEvents[0]!);
+      return;
+    }
+    let cursorSets: SubscriptionCursorSet[] | undefined;
+    const flushCursorSets = () => {
+      if (cursorSets === undefined) return;
+      if (cursorSets.length === 1) {
+        const cursor = cursorSets[0]!;
+        this.#subscribers.onCursorSet(cursor.subscriptionKey, cursor.ackedOffset, DEFER_RECONCILE);
+      } else {
+        this.#subscribers.onCursorSets(cursorSets);
+      }
+      cursorSets = undefined;
+    };
+
+    for (const reduced of reducedEvents) {
+      const event = reduced.event;
+      const tripsCircuitBreaker =
+        reduced.state.circuitBreaker.trippedAtOffset === event.offset &&
+        reduced.previousState.circuitBreaker.trippedAtOffset !== event.offset;
+      if (
+        event.type !== "events.iterate.com/stream/subscription-cursor-set" ||
+        event.source?.crossPostedFrom !== undefined ||
+        tripsCircuitBreaker
+      ) {
+        flushCursorSets();
+        this.#processEvent(reduced);
+        continue;
+      }
+
+      const cursorSet = CoreProcessorContract.parseEvent(
+        "events.iterate.com/stream/subscription-cursor-set",
+        event,
+      );
+      (cursorSets ??= []).push({
+        subscriptionKey: cursorSet.payload.subscriptionKey,
+        ackedOffset: cursorSet.payload.afterOffset,
+      });
+    }
+    flushCursorSets();
   }
 
   /**

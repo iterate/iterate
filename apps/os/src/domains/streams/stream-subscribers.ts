@@ -65,6 +65,7 @@ import { compileEventSelector, type CompiledEventSelector } from "./event-select
 import type {
   SizedStreamEvent,
   SubscriptionCursorRow,
+  SubscriptionCursorSet,
   SubscriptionCursorStore,
 } from "./stream-storage.ts";
 import {
@@ -1345,6 +1346,11 @@ export class StreamSubscribers {
   ): void {
     this.#hooks.store.setCursor(subscriptionKey, afterOffset);
     if (options?.deferReconcile !== true) this.wake();
+  }
+
+  /** A contiguous committed run of audited seeks; the enclosing append owns the final wake. */
+  onCursorSets(cursors: readonly SubscriptionCursorSet[]): void {
+    this.#hooks.store.setCursors(cursors);
   }
 
   /**

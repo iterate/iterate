@@ -149,6 +149,10 @@ class FakeCursorStore implements SubscriptionCursorStore {
     row.epoch = this.#lastEpoch;
   }
 
+  setCursors(cursors: readonly { subscriptionKey: string; ackedOffset: number }[]): void {
+    for (const cursor of cursors) this.setCursor(cursor.subscriptionKey, cursor.ackedOffset);
+  }
+
   delete(subscriptionKey: string): void {
     this.rows.delete(subscriptionKey);
   }
