@@ -12,6 +12,7 @@ import {
 import { SecretSubstitutionError } from "./utils.ts";
 
 const config = {
+  baseUrl: "https://os.iterate-preview-3.com",
   openAiApiKey: { exposeSecret: () => "openai-platform-key" },
   integrations: {
     exa: {
@@ -21,6 +22,7 @@ const config = {
       apiKey: { exposeSecret: () => "parallel-platform-key" },
     },
     petshop: {
+      baseUrl: "https://dummy-petshop.iterate-preview-3.com",
       oauthClientId: "petshop-default",
       oauthClientSecret: { exposeSecret: () => "petshop-default-secret" },
     },
@@ -83,29 +85,85 @@ describe("substitutePlatformApiKeyReferences", () => {
 
 describe("resolvePlatformClientCreds", () => {
   test("google creds resolve only toward Google's token endpoint", () => {
-    const creds = resolvePlatformClientCreds(
+    const creds = resolvePlatformClientCreds({
       config,
-      { platform: "integrations.google" },
-      "https://oauth2.googleapis.com/token",
-    );
+      ref: { platform: "integrations.google" },
+      secretEgressUrls: ["https://oauth2.googleapis.com", "https://gmail.googleapis.com"],
+      tokenEndpoint: "https://oauth2.googleapis.com/token",
+    });
     expect(creds).toEqual({ clientId: "google-client", clientSecret: "google-secret" });
 
     expect(() =>
-      resolvePlatformClientCreds(
+      resolvePlatformClientCreds({
         config,
-        { platform: "integrations.google" },
-        "https://attacker.example/token",
-      ),
+        ref: { platform: "integrations.google" },
+        secretEgressUrls: ["https://gmail.googleapis.com"],
+        tokenEndpoint: "https://attacker.example/token",
+      }),
+    ).toThrow(SecretSubstitutionError);
+
+    expect(() =>
+      resolvePlatformClientCreds({
+        config,
+        ref: { platform: "integrations.google" },
+        secretEgressUrls: ["https://gmail.googleapis.com", "https://attacker.example"],
+        tokenEndpoint: "https://oauth2.googleapis.com/token",
+      }),
     ).toThrow(SecretSubstitutionError);
   });
 
-  test("petshop creds have no registry origin pin (the secret's own egress pin is the boundary)", () => {
-    const creds = resolvePlatformClientCreds(
+  test("petshop creds and resulting tokens stay on the configured deployment origin", () => {
+    const creds = resolvePlatformClientCreds({
       config,
-      { platform: "integrations.petshop" },
-      "https://dummy-petshop.iterate-preview-3.com/oauth/token",
-    );
+      ref: { platform: "integrations.petshop" },
+      secretEgressUrls: ["https://dummy-petshop.iterate-preview-3.com/api"],
+      tokenEndpoint: "https://dummy-petshop.iterate-preview-3.com/oauth/token",
+    });
     expect(creds).toEqual({
+      clientId: "petshop-default",
+      clientSecret: "petshop-default-secret",
+    });
+
+    for (const input of [
+      {
+        secretEgressUrls: ["https://dummy-petshop.iterate-preview-3.com/api"],
+        tokenEndpoint: "https://attacker.example/token",
+      },
+      {
+        secretEgressUrls: [
+          "https://dummy-petshop.iterate-preview-3.com/api",
+          "https://attacker.example",
+        ],
+        tokenEndpoint: "https://dummy-petshop.iterate-preview-3.com/oauth/token",
+      },
+    ]) {
+      expect(() =>
+        resolvePlatformClientCreds({
+          config,
+          ref: { platform: "integrations.petshop" },
+          ...input,
+        }),
+      ).toThrow(SecretSubstitutionError);
+    }
+  });
+
+  test("petshop derives its deployment sibling origin when no override is configured", () => {
+    const withoutOverride = {
+      ...config,
+      integrations: {
+        ...config.integrations,
+        petshop: { ...config.integrations.petshop, baseUrl: undefined },
+      },
+    } as unknown as AppConfig;
+
+    expect(
+      resolvePlatformClientCreds({
+        config: withoutOverride,
+        ref: { platform: "integrations.petshop" },
+        secretEgressUrls: ["https://dummy-petshop.iterate-preview-3.com/api"],
+        tokenEndpoint: "https://dummy-petshop.iterate-preview-3.com/oauth/token",
+      }),
+    ).toEqual({
       clientId: "petshop-default",
       clientSecret: "petshop-default-secret",
     });
@@ -113,40 +171,67 @@ describe("resolvePlatformClientCreds", () => {
 
   test("unknown or unconfigured refs throw secret_not_found", () => {
     expect(() =>
-      resolvePlatformClientCreds(
+      resolvePlatformClientCreds({
         config,
-        { platform: "integrations.unconfigured" },
-        "https://example.com/token",
-      ),
+        ref: { platform: "integrations.unconfigured" },
+        secretEgressUrls: ["https://example.com"],
+        tokenEndpoint: "https://example.com/token",
+      }),
     ).toThrow(SecretSubstitutionError);
   });
 });
 
 describe("resolvePlatformGithubAppKey", () => {
   test("the first-party App key resolves only toward the real GitHub API", () => {
-    const privateKey = resolvePlatformGithubAppKey(
+    const privateKey = resolvePlatformGithubAppKey({
+      apiBase: "https://api.github.com",
+      appId: "12345",
       config,
-      { platform: "integrations.github" },
-      "https://api.github.com",
-    );
+      ref: { platform: "integrations.github" },
+      secretEgressUrls: ["https://api.github.com", "https://github.com"],
+    });
     expect(privateKey).toContain("BEGIN PRIVATE KEY");
 
     expect(() =>
-      resolvePlatformGithubAppKey(
+      resolvePlatformGithubAppKey({
+        apiBase: "https://dummy-petshop.example.com",
+        appId: "12345",
         config,
-        { platform: "integrations.github" },
-        "https://dummy-petshop.example.com",
-      ),
+        ref: { platform: "integrations.github" },
+        secretEgressUrls: ["https://api.github.com"],
+      }),
+    ).toThrow(SecretSubstitutionError);
+
+    expect(() =>
+      resolvePlatformGithubAppKey({
+        apiBase: "https://api.github.com",
+        appId: "attacker-app",
+        config,
+        ref: { platform: "integrations.github" },
+        secretEgressUrls: ["https://api.github.com"],
+      }),
+    ).toThrow(SecretSubstitutionError);
+
+    expect(() =>
+      resolvePlatformGithubAppKey({
+        apiBase: "https://api.github.com",
+        appId: "12345",
+        config,
+        ref: { platform: "integrations.github" },
+        secretEgressUrls: ["https://api.github.com", "https://attacker.example"],
+      }),
     ).toThrow(SecretSubstitutionError);
   });
 
   test("only the github config path resolves an App key", () => {
     expect(() =>
-      resolvePlatformGithubAppKey(
+      resolvePlatformGithubAppKey({
+        apiBase: "https://api.github.com",
+        appId: "12345",
         config,
-        { platform: "integrations.google" },
-        "https://api.github.com",
-      ),
+        ref: { platform: "integrations.google" },
+        secretEgressUrls: ["https://api.github.com"],
+      }),
     ).toThrow(SecretSubstitutionError);
   });
 });

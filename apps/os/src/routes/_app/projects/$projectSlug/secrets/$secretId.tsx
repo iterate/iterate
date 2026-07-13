@@ -13,7 +13,7 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import type { SecretDescription } from "../../../../../domains/secrets/types.ts";
+import type { SecretDescription, SecretUpdateInput } from "../../../../../domains/secrets/types.ts";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
@@ -89,7 +89,7 @@ function SecretDetail({
   const itx = useItx();
 
   const updateSecret = useMutation({
-    mutationFn: async (input: { material?: string; egress?: { urls: string[] } }) => {
+    mutationFn: async (input: SecretUpdateInput) => {
       return await itx.secrets.get(secretPath).update(input);
     },
     onSuccess: () => {
@@ -115,10 +115,11 @@ function SecretDetail({
         .split("\n")
         .map((url) => url.trim())
         .filter((url) => url !== "");
-      await updateSecret.mutateAsync({
-        ...(parsed.material === "" ? {} : { material: parsed.material }),
-        egress: { urls },
-      });
+      await updateSecret.mutateAsync(
+        parsed.material === ""
+          ? { egress: { urls } }
+          : { egress: { urls }, material: parsed.material },
+      );
     },
   });
 
@@ -164,8 +165,8 @@ function SecretDetail({
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      Leave blank to keep the current material. Adding an egress origin requires a
-                      replacement value; filling this rotates the material.
+                      Leave blank to clear the current material. Entering a value replaces it and
+                      binds it to the egress origins below.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>
@@ -191,8 +192,8 @@ function SecretDetail({
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      One URL pattern per line. Existing material can only keep or remove origins;
-                      adding one requires entering a replacement value above.
+                      One URL pattern per line. Updating these origins without entering a
+                      replacement value above clears the stored material.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>

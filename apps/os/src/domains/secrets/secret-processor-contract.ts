@@ -29,11 +29,16 @@ const SecretRefresh = z.discriminatedUnion("kind", [
   }),
 ]);
 
-/** The encrypted-at-rest material blob, exactly as crypto.ts produces it. */
+/** The policy- and position-bound encrypted-at-rest blob produced by crypto.ts. */
 const EncryptedMaterial = z.strictObject({
-  algorithm: z.literal("AES-GCM-SHA256"),
+  algorithm: z.literal("AES-GCM-SHA256+SECRET-CELL-V1"),
   ciphertext: z.string().trim().min(1),
   iv: z.string().trim().min(1),
+});
+
+/** The reducer adds the committed offset; it is deliberately not caller input. */
+const StoredEncryptedMaterial = EncryptedMaterial.extend({
+  offset: z.number().int().positive(),
 });
 
 /** The egress allowlist: substituted requests may only target these origins. */
@@ -41,7 +46,7 @@ const Egress = z.object({ urls: z.array(z.string()) });
 
 export const SecretProcessorContract = defineProcessorContract({
   slug: "secret",
-  version: "0.4.0",
+  version: "0.5.0",
   description: "Folds one path-addressed secret without exposing material.",
   stateSchema: z.object({
     audit: z
@@ -53,7 +58,11 @@ export const SecretProcessorContract = defineProcessorContract({
       })
       .default({ usedCount: 0 }),
     egress: Egress.default({ urls: [] }),
-    encryptedMaterial: EncryptedMaterial.nullable().default(null),
+    encryptedMaterial: StoredEncryptedMaterial.nullable().default(null),
+    // Last secret/updated fact, including a material-clearing public update.
+    // Refresh uses this reducer-owned position to reject stale strategies even
+    // when an attacker repeats an otherwise identical refresh configuration.
+    updatedOffset: z.number().int().min(0).default(0),
     // The refresh strategy this secret runs on a 401 / missing field, if any.
     // Stored as one fact: configure-time declaration is the trust event.
     refresh: SecretRefresh.nullable().default(null),
@@ -73,7 +82,7 @@ export const SecretProcessorContract = defineProcessorContract({
             "A Slack bot token is stored: encrypted-at-rest material plus the egress origins it may be substituted into.",
           payload: {
             encryptedMaterial: {
-              algorithm: "AES-GCM-SHA256",
+              algorithm: "AES-GCM-SHA256+SECRET-CELL-V1",
               ciphertext: "nJ2xkV8mPqvGdL5tYw3eBg==",
               iv: "9EMTZWEeC2Iy5W5m",
             },

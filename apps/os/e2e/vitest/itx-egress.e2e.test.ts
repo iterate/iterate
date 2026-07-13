@@ -11,7 +11,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // These are hand written tests - they MUST pass
 describe("itx", () => {
-  test("secret control events cannot be forged through the public stream API", async () => {
+  test("public secret events can change egress but copied ciphertext cannot follow", async () => {
     await using original = await startEgressEcho();
     await using attacker = await startEgressEcho();
     using session = withItxSession();
@@ -27,21 +27,40 @@ describe("itx", () => {
       material: "user-submitted-material",
     });
 
-    let appendError: unknown;
-    try {
-      await project.streams.get(secretPath).append({
-        type: "events.iterate.com/secret/updated",
-        payload: { egress: { urls: [attacker.url] } },
-      });
-    } catch (error) {
-      appendError = error;
-    }
+    const stream = project.streams.get(secretPath);
+    const originalUpdate = (await stream.getEvents()).find(
+      (event) => event.type === "events.iterate.com/secret/updated",
+    );
+    const encryptedMaterial = (originalUpdate?.payload as Record<string, unknown> | undefined)?.[
+      "encryptedMaterial"
+    ];
+    expect(encryptedMaterial).toBeDefined();
 
-    expect(String(appendError)).toMatch(/Secret Durable Object/);
-    expect((await secret.__describe()).egress.urls).toEqual([original.url]);
+    await stream.append({
+      type: "events.iterate.com/secret/updated",
+      payload: { egress: { urls: [attacker.url] } },
+    });
+    expect(await secret.__describe()).toMatchObject({
+      egress: { urls: [attacker.url] },
+      hasMaterial: false,
+    });
+
+    // Supplying the publicly readable old blob does not count as authority:
+    // its AES-GCM context names the original origin and committed offset.
+    await stream.append({
+      type: "events.iterate.com/secret/updated",
+      payload: { egress: { urls: [attacker.url] }, encryptedMaterial },
+    });
+    using probe = egressProbeWorker(project);
+    expect(
+      await probe.probeFetch({
+        headerValue: `Bearer getSecret({ path: "${secretPath}" })`,
+        url: attacker.url,
+      }),
+    ).toEqual({ error: "secret_not_found" });
   });
 
-  test("retained secret material cannot be re-pinned to a new origin", async () => {
+  test("every egress-only update clears retained secret material", async () => {
     await using original = await startEgressEcho();
     await using attacker = await startEgressEcho();
     using session = withItxSession();
@@ -59,15 +78,26 @@ describe("itx", () => {
 
     const sameOriginPath = new URL("/narrower-path", original.url).toString();
     await secret.update({ egress: { urls: [sameOriginPath] } });
+    expect(await secret.__describe()).toMatchObject({
+      egress: { urls: [sameOriginPath] },
+      hasMaterial: false,
+    });
 
-    let updateError: unknown;
-    try {
-      await secret.update({ egress: { urls: [attacker.url] } });
-    } catch (error) {
-      updateError = error;
-    }
-    expect(String(updateError)).toMatch(/resubmitting material/);
-    expect((await secret.__describe()).egress.urls).toEqual([sameOriginPath]);
+    await secret.update({ egress: { urls: [attacker.url] } });
+    expect(await secret.__describe()).toMatchObject({
+      egress: { urls: [attacker.url] },
+      hasMaterial: false,
+    });
+
+    await expect(
+      secret.update({ material: "must-not-inherit-public-egress" } as unknown as Parameters<
+        typeof secret.update
+      >[0]),
+    ).rejects.toThrow("secret.update requires egress with replacement material");
+    expect(await secret.__describe()).toMatchObject({
+      egress: { urls: [attacker.url] },
+      hasMaterial: false,
+    });
 
     await secret.update({
       egress: { urls: [attacker.url] },
@@ -79,17 +109,142 @@ describe("itx", () => {
       egress: { urls: [original.url, attacker.url] },
       material: "concurrent-update-material",
     });
-    const concurrentNarrowings = await Promise.allSettled([
+    const concurrentChanges = await Promise.allSettled([
       secret.update({ egress: { urls: [original.url] } }),
       secret.update({ egress: { urls: [attacker.url] } }),
     ]);
-    expect(concurrentNarrowings.map(({ status }) => status).sort()).toEqual([
-      "fulfilled",
-      "rejected",
-    ]);
+    expect(concurrentChanges.map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
     expect([[original.url], [attacker.url]]).toContainEqual(
       (await secret.__describe()).egress.urls,
     );
+    expect((await secret.__describe()).hasMaterial).toBe(false);
+  });
+
+  test("an in-flight refresh cannot resurrect material after an egress event", async () => {
+    let announceRefresh!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => (announceRefresh = resolve));
+    let releaseRefresh!: () => void;
+    const refreshMayFinish = new Promise<void>((resolve) => (releaseRefresh = resolve));
+    await using provider = await withTunnel({
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/oauth/token") {
+          announceRefresh();
+          await refreshMayFinish;
+          return Response.json({ access_token: "fresh-access-token" });
+        }
+        if (path === "/resource") {
+          return Response.json({ stale: true }, { status: 401 });
+        }
+        return Response.json({ error: "not_found" }, { status: 404 });
+      },
+    });
+    await using attacker = await startEgressEcho();
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({ slug: `secret-refresh-race-${crypto.randomUUID()}` });
+    const secretPath = `/secrets/refresh-race/${crypto.randomUUID()}`;
+    using secret = project.secrets.get(secretPath);
+    await secret.update({
+      egress: { urls: [provider.url] },
+      material: {
+        accessToken: "stale-access-token",
+        clientId: "public-client",
+        refreshToken: "refresh-token",
+      },
+      refresh: {
+        clientCreds: "material",
+        kind: "oauth-refresh-token",
+        tokenEndpoint: `${provider.url}/oauth/token`,
+      },
+    });
+
+    using probe = egressProbeWorker(project);
+    const request = probe.probeFetch({
+      headerValue: `Bearer getSecret({ path: "${secretPath}", field: "accessToken" })`,
+      url: `${provider.url}/resource`,
+    });
+    await refreshStarted;
+    await project.streams.get(secretPath).append({
+      type: "events.iterate.com/secret/updated",
+      payload: { egress: { urls: [attacker.url] } },
+    });
+    releaseRefresh();
+
+    await expect(request).resolves.toEqual({ stale: true });
+    expect(await secret.__describe()).toMatchObject({
+      egress: { urls: [attacker.url] },
+      hasMaterial: false,
+    });
+  });
+
+  test("a repeated refresh event before its snapshot cannot resurrect material", async () => {
+    let announceResource!: () => void;
+    const resourceStarted = new Promise<void>((resolve) => (announceResource = resolve));
+    let releaseResource!: () => void;
+    const resourceMayFinish = new Promise<void>((resolve) => (releaseResource = resolve));
+    let tokenRequests = 0;
+    await using provider = await withTunnel({
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/oauth/token") {
+          tokenRequests += 1;
+          return Response.json({ access_token: "must-not-be-minted" });
+        }
+        if (path === "/resource") {
+          announceResource();
+          await resourceMayFinish;
+          return Response.json({ stale: true }, { status: 401 });
+        }
+        return Response.json({ error: "not_found" }, { status: 404 });
+      },
+    });
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({
+      slug: `secret-refresh-cleared-${crypto.randomUUID()}`,
+    });
+    const secretPath = `/secrets/refresh-cleared/${crypto.randomUUID()}`;
+    using secret = project.secrets.get(secretPath);
+    const refresh = {
+      clientCreds: "material",
+      kind: "oauth-refresh-token",
+      tokenEndpoint: `${provider.url}/oauth/token`,
+    } as const;
+    await secret.update({
+      egress: { urls: [provider.url] },
+      material: {
+        accessToken: "stale-access-token",
+        clientId: "public-client",
+        refreshToken: "refresh-token",
+      },
+      refresh,
+    });
+
+    using probe = egressProbeWorker(project);
+    const request = probe.probeFetch({
+      headerValue: `Bearer getSecret({ path: "${secretPath}", field: "accessToken" })`,
+      url: `${provider.url}/resource`,
+    });
+    await resourceStarted;
+    await project.streams.get(secretPath).append({
+      type: "events.iterate.com/secret/updated",
+      payload: { refresh },
+    });
+    releaseResource();
+
+    await expect(request).resolves.toEqual({ stale: true });
+    expect(tokenRequests).toBe(0);
+    expect(await secret.__describe()).toMatchObject({
+      hasMaterial: false,
+      refresh: "oauth-refresh-token",
+    });
   });
 
   test("secret egress rejects a cross-origin redirect without forwarding material", async () => {

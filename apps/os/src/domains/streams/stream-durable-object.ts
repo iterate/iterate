@@ -10,6 +10,7 @@ import type {
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "./rpc-types.ts";
+import { StreamOffsetConflictError } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
 import { compileEventSelector } from "./event-selector.ts";
@@ -35,8 +36,6 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
-const SECRET_STREAM_PREFIX = "/secrets/";
-const SECRET_CONTROL_EVENT_PREFIX = "events.iterate.com/secret/";
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -224,38 +223,6 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Returns the persisted events (including offsets + `createdAt`) in input order.
    */
   append(...eventInputs: StreamEventInput[]): StreamEvent[] {
-    if (
-      this.name.path.startsWith(SECRET_STREAM_PREFIX) &&
-      eventInputs.some((event) => event.type.startsWith(SECRET_CONTROL_EVENT_PREFIX))
-    ) {
-      throw new Error("secret control events may only be appended by the Secret Durable Object");
-    }
-    return this.#append(...eventInputs);
-  }
-
-  /**
-   * Trusted commit lane for the Secret Durable Object's private control facts.
-   *
-   * Secret streams remain ordinary public streams for user-defined events, but
-   * their `secret/*` facts are commands to the trusted processor: forging an
-   * `updated` event would otherwise bypass SecretDurableObject.update's egress
-   * confinement. The encryption key is never present in a project Worker and
-   * acts here only as an internal DO-to-DO bearer capability.
-   */
-  appendSecretEvents(authorization: string, ...eventInputs: StreamEventInput[]): StreamEvent[] {
-    if (authorization !== this.env.SECRET_ENCRYPTION_KEY) {
-      throw new Error("unauthorized secret control event append");
-    }
-    if (
-      !this.name.path.startsWith(SECRET_STREAM_PREFIX) ||
-      eventInputs.some((event) => !event.type.startsWith(SECRET_CONTROL_EVENT_PREFIX))
-    ) {
-      throw new Error("secret control events require a secret stream and secret event types");
-    }
-    return this.#append(...eventInputs);
-  }
-
-  #append(...eventInputs: StreamEventInput[]): StreamEvent[] {
     let workingState = this.#coreProcessorState;
     const events: StreamEvent[] = [];
     const newEvents: StreamEvent[] = [];
@@ -295,7 +262,9 @@ export class StreamDurableObject extends DurableObject<Env> {
         path: this.name.path,
       };
       if (expectedOffset !== undefined && expectedOffset !== committed.offset) {
-        throw new Error(`expected offset ${committed.offset}, got ${expectedOffset}`);
+        throw new StreamOffsetConflictError(
+          `expected next offset ${expectedOffset}, found ${committed.offset}`,
+        );
       }
 
       const previousState = workingState;

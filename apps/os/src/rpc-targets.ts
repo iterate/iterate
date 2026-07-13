@@ -1799,7 +1799,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
       children: {
         fetch: "Egress fetch with secret placeholders substituted server-side.",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
-        update: "Set the value, egress URLs, and/or refresh strategy.",
+        update:
+          "Set the value, egress URLs, and/or refresh strategy. A value requires its complete egress policy in the same update; every update without a value clears stored material.",
       },
       parent: "itx.secrets.get(path)",
       ...state,
@@ -1831,8 +1832,9 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
 
-  /** Set secret material and/or narrow its egress allowlist. Adding an origin
-   * requires replacement material in the same update. */
+  /** Set secret material, its egress allowlist, and/or refresh strategy.
+   * Replacement material requires its complete egress policy in the same
+   * update. Every update without replacement material clears stored material. */
   update(input: SecretUpdateInput): Promise<StreamEvent> {
     return this.durableObjectStub.update(input);
   }

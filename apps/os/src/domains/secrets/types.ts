@@ -6,19 +6,29 @@
  * crosses the RPC boundary.
  */
 
-export type SecretUpdateInput = {
-  /** Retained material may only keep or remove effective origins. Adding an
-   * origin requires supplying replacement material in the same update. */
-  egress?: { urls: string[] };
-  /** Any serializable value (write-only, one JSON blob). A plain string keeps
-   * the whole-material placeholder working; structured material is addressed
-   * by `field` in placeholders (design §2.1). */
-  material?: unknown;
-  /** A named refresh strategy the secret runs in trusted DO code when a
-   * substituted request 401s (or a referenced field is missing), or `null` to
-   * clear it. Omitted leaves any configured strategy unchanged. */
-  refresh?: SecretRefresh | null;
-};
+export type SecretUpdateInput =
+  | {
+      /** Replacement material must name its complete egress policy in the same
+       * authorized update. It never inherits a policy chosen by a public event. */
+      egress: { urls: string[] };
+      /** Any serializable value (write-only, one JSON blob). A plain string keeps
+       * the whole-material placeholder working; structured material is addressed
+       * by `field` in placeholders (design §2.1). */
+      material: unknown;
+      /** A named refresh strategy the secret runs in trusted DO code when a
+       * substituted request 401s (or a referenced field is missing), or `null` to
+       * clear it. Omitted leaves the strategy unchanged. */
+      refresh?: SecretRefresh | null;
+    }
+  | {
+      /** Replaces the effective egress origins. Every update without `material`
+       * clears stored material, including egress-only and refresh-only updates. */
+      egress?: { urls: string[] };
+      material?: never;
+      /** Omitted leaves the strategy unchanged. A refresh-only update still
+       * clears material because it does not contain replacement material. */
+      refresh?: SecretRefresh | null;
+    };
 
 /**
  * Input to `itx.secrets.collectFromUser`: which path the secret should land
