@@ -199,8 +199,20 @@ export class SecretDurableObject extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     // IDENTIFY relay must ride DO **fetch** so Response.webSocket survives the
     // hop (JSRPC method returns reject webSocket with DataCloneError).
+    // Only SecretRpcTarget.relayWebSocket encodes this shape (magic URL + header,
+    // no getSecret placeholders). Project egress that merely embeds getSecret
+    // cannot invent a trusted IDENTIFY by targeting the internal URL.
     if (isSecretWebSocketRelayRequest(request)) {
       try {
+        let placeholderPaths: string[] = [];
+        try {
+          placeholderPaths = secretReferencesFromRequest(request).map((r) => r.path);
+        } catch {
+          // malformed placeholder syntax is not a relay request
+        }
+        if (placeholderPaths.length > 0) {
+          return secretErrorResponse("secret_reference_foreign");
+        }
         return await this.#relayWebSocket(await parseSecretWebSocketRelayRequest(request));
       } catch (error) {
         if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);

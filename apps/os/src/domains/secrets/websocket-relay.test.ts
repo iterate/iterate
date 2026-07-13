@@ -110,8 +110,11 @@ describe("createUpstreamMessageBuffer + waitForJsonOp", () => {
 
     const hello = await waitForJsonOp(socket as unknown as WebSocket, "hello", 1000, buffer);
     expect(hello).toEqual({ op: "hello", d: { heartbeat: 1 } });
-    // Hello consumed; ready stays for pair-bridge pendingUpstreamMessages.
-    expect(buffer.frames.map((f) => JSON.parse(String(f)))).toEqual([{ op: "ready", user: "u1" }]);
+    // Hello kept for the client (heartbeat params); ready stays after it.
+    expect(buffer.frames.map((f) => JSON.parse(String(f)))).toEqual([
+      { op: "hello", d: { heartbeat: 1 } },
+      { op: "ready", user: "u1" },
+    ]);
   });
 
   test("waits for hello that arrives after attach", async () => {
@@ -127,7 +130,10 @@ describe("createUpstreamMessageBuffer + waitForJsonOp", () => {
     });
 
     await expect(pending).resolves.toEqual({ op: "hello" });
-    expect(buffer.frames.map((f) => JSON.parse(String(f)))).toEqual([{ op: "ready" }]);
+    expect(buffer.frames.map((f) => JSON.parse(String(f)))).toEqual([
+      { op: "hello" },
+      { op: "ready" },
+    ]);
   });
 
   test("records close during the audit gap so throwIfClosed fails the relay", () => {

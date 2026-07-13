@@ -46,17 +46,26 @@ export type SecretWebSocketRelayInput = {
   timeoutMs?: number;
 };
 
+/** Header set only by encodeSecretWebSocketRelayRequest (not by sandbox egress). */
+export const SECRET_WS_RELAY_FETCH_HEADER = "x-iterate-secret-ws-relay";
+
 /** Build the DO-fetch request that carries `relayWebSocket` input over the fetch hop. */
 export function encodeSecretWebSocketRelayRequest(input: SecretWebSocketRelayInput): Request {
   return new Request(SECRET_WS_RELAY_FETCH_URL, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      [SECRET_WS_RELAY_FETCH_HEADER]: "1",
+    },
     body: JSON.stringify(input),
   });
 }
 
 export function isSecretWebSocketRelayRequest(request: Request): boolean {
-  return new URL(request.url).href === SECRET_WS_RELAY_FETCH_URL;
+  return (
+    new URL(request.url).href === SECRET_WS_RELAY_FETCH_URL &&
+    request.headers.get(SECRET_WS_RELAY_FETCH_HEADER) === "1"
+  );
 }
 
 export async function parseSecretWebSocketRelayRequest(
@@ -225,8 +234,9 @@ export function waitForJsonOp(
     for (let i = 0; i < frames.length; i++) {
       const parsed = parseJsonOp(frames[i]!);
       if (parsed !== null && parsed.op === expectedOp) {
-        // Handshake-consumed: drop everything through the match.
-        frames.splice(0, i + 1);
+        // Drop pre-match noise only. Keep the matched frame (e.g. hello) so the
+        // client still sees heartbeat_interval / session params after IDENTIFY.
+        frames.splice(0, i);
         return parsed;
       }
     }
