@@ -3,7 +3,7 @@
 Every pull request on a linked repo gets one durable agent stream:
 
 ```text
-/agents/repos/<repo-slug>/pull-requests/<number>
+/agents/repos/<github-link-identity>/pull-requests/<number>
 ```
 
 GitHub deliveries remain raw `events.iterate.com/github/webhook-received`
@@ -54,16 +54,25 @@ untrusted even if GitHub supplies a repository association.
 
 Drafts stay quiet until `ready_for_review`. Automatic review inputs name the
 immutable head SHA, require the agent to verify it is still current, and ask
-for one COMMENT review. A hidden `<!-- iterate-review:<sha> -->` marker makes
-retries idempotent.
+for one COMMENT review. The bounded link fingerprint covers the project repo
+path, GitHub App installation, owner, and repository, so relinking cannot
+inherit a different repository's LLM conversation. A hidden marker derived from the
+trusted `project + installation + PR + head/request` external ID makes retries
+idempotent; only a review authored by the configured Iterate App may satisfy
+that marker.
 
 ### Visible review lifecycle
 
 Every eligible head immediately gets an `Iterate Review` Check Run, so GitHub's
 PR checks UI shows that Iterate is working before the LLM starts. This small
 shell is deterministic and idempotent: the platform binds its external ID to
-the repository, PR, immutable head, and review request. A repeated delivery
-recovers the same check instead of creating another one.
+the project, installation, PR, immutable head, and review request. A repeated
+delivery recovers the same App-owned check instead of creating another one.
+When a new push supersedes a running review, the platform cancels the prior
+head's check. A 30-minute watchdog fails a shell only if neither the agent nor
+the superseding-head path terminalized it; the next push or trusted manual
+review request starts a fresh attempt. Its terminalization retry is bounded,
+so a disconnected installation cannot leave a permanent alarm loop.
 
 The review itself stays agent-owned. Its turn receives that trusted check ID
 and uses the ordinary Octokit `rest.checks.update` API to write useful Markdown
@@ -111,7 +120,8 @@ Set `enabled: false` in the same shape to turn reviews off. An existing PR
 agent can be reconfigured directly:
 
 ```js
-await itx.agents.get("/agents/repos/config/pull-requests/42").configure({
+// `childPath` is the exact path from the stream/child-stream-created event.
+await itx.agents.get(childPath).configure({
   githubAgent: { automaticReview: { enabled: false } },
 });
 ```

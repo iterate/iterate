@@ -214,6 +214,9 @@ describe("provided integrations", () => {
           }),
         ]),
       );
+      await expect(integrations.ocado.get().searchProducts("milk")).rejects.toThrow(
+        /No concrete ocado integration connection is available/,
+      );
 
       // get() is the only selector and teaches the missing-connection case;
       // unknown integration names still stay loud.

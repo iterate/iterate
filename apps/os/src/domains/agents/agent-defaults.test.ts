@@ -8,6 +8,7 @@ import {
 } from "./agent-defaults.ts";
 
 const PROJECT_ID = "prj_defaults_test";
+const GITHUB_AGENT_PATH = `/agents/repos/g~${"0".repeat(64)}/pull-requests/7`;
 
 function defaultsFor(
   agentPath: string,
@@ -68,7 +69,7 @@ describe("agentDefaultsForPath", () => {
   });
 
   it("gives pull-request agents the GitHub prompt and a complete disabled review policy", () => {
-    const prompt = defaultsFor("/agents/repos/root/pull-requests/7").systemPrompt;
+    const prompt = defaultsFor(GITHUB_AGENT_PATH).systemPrompt;
     expect(prompt).toContain("attached to one GitHub pull request");
     expect(prompt).toContain(".octokit.rest.issues.createComment");
     expect(prompt).toContain("all-in-one Octokit");
@@ -77,7 +78,7 @@ describe("agentDefaultsForPath", () => {
     expect(prompt).toContain("Use Promise.all");
     expect(prompt).toContain("VISIBLE HANDOFF INVARIANT");
 
-    const configured = defaultsFor("/agents/repos/root/pull-requests/7").events.find(
+    const configured = defaultsFor(GITHUB_AGENT_PATH).events.find(
       (event) => event.type === "events.iterate.com/github-agent/configure",
     );
     expect(configured?.payload).toEqual({
@@ -90,7 +91,7 @@ describe("agentDefaultsForPath", () => {
   });
 
   it("materializes GitHub review overrides into that same complete configured fact", () => {
-    const configured = defaultsFor("/agents/repos/root/pull-requests/7", {
+    const configured = defaultsFor(GITHUB_AGENT_PATH, {
       githubAgent: {
         automaticReview: {
           enabled: true,
@@ -116,7 +117,7 @@ describe("agentDefaultsForPath", () => {
     const prompts = {
       default: defaultsFor("/agents/demo").systemPrompt,
       email: EMAIL_AGENT_SYSTEM_PROMPT,
-      pullRequest: defaultsFor("/agents/repos/root/pull-requests/7").systemPrompt,
+      pullRequest: defaultsFor(GITHUB_AGENT_PATH).systemPrompt,
       slack: slackAgentSystemPrompt("main"),
       telegram: telegramAgentSystemPrompt({
         agentPath: "/agents/telegram/main/chat-42",

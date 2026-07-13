@@ -18,6 +18,11 @@ import {
 } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { GithubAgentProcessor } from "../repos/github-agent-processor-implementation.ts";
+import {
+  ensureGithubReviewCheck,
+  expireGithubReviewCheck,
+  type GithubReviewCheckShell,
+} from "../repos/github-review-check.ts";
 import { connectionOctokit } from "../integrations/github-api.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -25,6 +30,23 @@ import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { parseAgentDurableObjectName } from "./utils.ts";
+
+const GITHUB_REVIEW_WATCHDOG_STORAGE_KEY = "github-review-watchdogs";
+const GITHUB_REVIEW_WATCHDOG_ALARM_SLICE = "github-review-watchdog";
+const GITHUB_REVIEW_TIMEOUT_MS = 30 * 60_000;
+const GITHUB_REVIEW_WATCHDOG_RETRY_MS = 60_000;
+const GITHUB_REVIEW_WATCHDOG_MAX_ATTEMPTS = 3;
+
+type PendingGithubReviewCheck = {
+  appSlug?: string;
+  attempts: number;
+  connection: string;
+  expiresAt: number;
+  externalId: string;
+  headSha: string;
+  owner: string;
+  repo: string;
+};
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
@@ -274,52 +296,34 @@ export class AgentDurableObject extends DurableObject<Env> {
         },
         beginReviewCheck: async ({
           connection,
+          externalId,
           headSha,
           owner,
-          pullRequestNumber,
           repo,
           reviewKey,
+          superseded,
         }) => {
+          const appSlug = parseConfig(this.env).integrations.github?.appSlug;
+          let shell: GithubReviewCheckShell;
           try {
             const octokit = connectionOctokit({
               connection,
               projectId: this.#name.projectId,
             });
-            const externalId = `iterate-review:${owner}/${repo}#${pullRequestNumber}:${reviewKey}`;
-            const existing = await octokit.rest.checks.listForRef({
-              check_name: "Iterate Review",
-              filter: "all",
-              owner,
-              per_page: 100,
-              ref: headSha,
-              repo,
-            });
-            const check = existing.data.check_runs.find(
-              (candidate) => candidate.external_id === externalId,
-            );
-            if (check !== undefined) {
-              return {
-                id: check.id,
-                ...(check.html_url === null ? {} : { url: check.html_url }),
-              };
-            }
-
-            const created = await octokit.rest.checks.create({
-              external_id: externalId,
-              head_sha: headSha,
-              name: "Iterate Review",
-              output: {
-                summary: "Reviewing this revision against the configured rules.",
-                title: "Iterate is reviewing",
-              },
+            const check = await ensureGithubReviewCheck({
+              appSlug,
+              checks: octokit.rest.checks,
+              externalId,
+              headSha,
               owner,
               repo,
-              started_at: new Date().toISOString(),
-              status: "in_progress",
+              superseded,
             });
-            return {
-              id: created.data.id,
-              ...(created.data.html_url === null ? {} : { url: created.data.html_url }),
+            shell = {
+              ...check,
+              externalId,
+              ...(appSlug === undefined ? {} : { appSlug }),
+              ...(superseded === undefined ? {} : { superseded }),
             };
           } catch (error) {
             // The review turn is the durable obligation. If GitHub cannot
@@ -331,19 +335,119 @@ export class AgentDurableObject extends DurableObject<Env> {
               path: this.#name.path,
               reviewKey,
             });
-            return null;
+            shell = {
+              externalId,
+              ...(appSlug === undefined ? {} : { appSlug }),
+              ...(superseded === undefined ? {} : { superseded }),
+            };
           }
+          try {
+            await this.#trackGithubReviewCheck({
+              appSlug,
+              connection,
+              externalId,
+              headSha,
+              owner,
+              repo,
+            });
+          } catch (error) {
+            // The shell prompt still owns normal completion; watchdog setup
+            // is a final safety net and must not suppress the review turn.
+            console.error("[github-agent] GitHub review watchdog setup failed", {
+              error,
+              externalId,
+              path: this.#name.path,
+            });
+          }
+          return shell;
         },
       }),
   );
+
+  async #trackGithubReviewCheck(
+    check: Omit<PendingGithubReviewCheck, "attempts" | "expiresAt">,
+  ): Promise<void> {
+    const pending =
+      this.ctx.storage.kv.get<PendingGithubReviewCheck[]>(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY) ?? [];
+    const existing = pending.find((candidate) => candidate.externalId === check.externalId);
+    const next = [
+      ...pending.filter((candidate) => candidate.externalId !== check.externalId),
+      {
+        ...check,
+        attempts: existing?.attempts ?? 0,
+        expiresAt: existing?.expiresAt ?? Date.now() + GITHUB_REVIEW_TIMEOUT_MS,
+      },
+    ];
+    this.ctx.storage.kv.put(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY, next);
+    await this.#processorHost.setAlarmSlice(
+      GITHUB_REVIEW_WATCHDOG_ALARM_SLICE,
+      Math.min(...next.map((candidate) => candidate.expiresAt)),
+    );
+  }
+
+  async #runGithubReviewWatchdog(): Promise<void> {
+    const pending =
+      this.ctx.storage.kv.get<PendingGithubReviewCheck[]>(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY) ?? [];
+    const now = Date.now();
+    const future = pending.filter((check) => check.expiresAt > now);
+    const retried = (
+      await Promise.all(
+        pending
+          .filter((check) => check.expiresAt <= now)
+          .map(async (check) => {
+            try {
+              const octokit = connectionOctokit({
+                connection: check.connection,
+                projectId: this.#name.projectId,
+              });
+              await expireGithubReviewCheck({
+                appSlug: check.appSlug,
+                checks: octokit.rest.checks,
+                externalId: check.externalId,
+                headSha: check.headSha,
+                owner: check.owner,
+                repo: check.repo,
+              });
+              return null;
+            } catch (error) {
+              const attempts = (check.attempts ?? 0) + 1;
+              console.error("[github-agent] GitHub review watchdog failed", {
+                attempts,
+                error,
+                externalId: check.externalId,
+                path: this.#name.path,
+              });
+              return attempts >= GITHUB_REVIEW_WATCHDOG_MAX_ATTEMPTS
+                ? null
+                : {
+                    ...check,
+                    attempts,
+                    expiresAt: now + GITHUB_REVIEW_WATCHDOG_RETRY_MS,
+                  };
+            }
+          }),
+      )
+    ).filter((check): check is PendingGithubReviewCheck => check !== null);
+    const next = [...future, ...retried];
+    if (next.length === 0) {
+      this.ctx.storage.kv.delete(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY);
+    } else {
+      this.ctx.storage.kv.put(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY, next);
+    }
+    await this.#processorHost.setAlarmSlice(
+      GITHUB_REVIEW_WATCHDOG_ALARM_SLICE,
+      next.length === 0 ? null : Math.min(...next.map((check) => check.expiresAt)),
+    );
+  }
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
   /** The keepalive's revival alarm — see stream-processor-host.ts. */
-  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#processorHost.handleAlarm(alarmInfo);
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#processorHost.handleAlarm(alarmInfo);
+    await this.#runGithubReviewWatchdog();
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */

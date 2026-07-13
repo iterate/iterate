@@ -2844,10 +2844,10 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       );
     }
 
-    const first = candidates.find((entry) => entry.connection !== null) ?? candidates[0];
+    const first = candidates.find((entry) => entry.connection !== null);
     if (first) return first.connection;
     throw new Error(
-      `No ${slug} integration connection is available. Mount one under ["integrations", "${slug}"] or pass an exact slug to .get("<connection-slug>").`,
+      `No concrete ${slug} integration connection is available. Mount one under ["integrations", "${slug}", "<connection-slug>"] or pass an exact slug to .get("<connection-slug>").`,
     );
   }
 

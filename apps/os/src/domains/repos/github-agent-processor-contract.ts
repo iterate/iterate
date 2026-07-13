@@ -64,6 +64,7 @@ const ReviewCandidate = z.object({
   draft: z.boolean(),
   headSha: z.string(),
   offset: z.number().int().positive(),
+  supersededHeadSha: z.string().optional(),
 });
 
 /**

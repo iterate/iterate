@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Stream } from "../../../itx-api.generated.ts";
 import { GithubAgentProcessor } from "../../repos/github-agent-processor-implementation.ts";
+import { githubAgentPath } from "../../repos/github-agent-utils.ts";
 import { RepoProcessor } from "../../repos/repo-processor-implementation.ts";
 import type { StreamEvent } from "../../streams/schemas.ts";
 import { deliverNewEvents, MemoryStream } from "../test-helpers.ts";
@@ -33,11 +34,16 @@ class NetworkMemoryStream extends MemoryStream {
 }
 
 describe("production stream repro: iterate PR 1933 mention was never delivered", () => {
-  it("repairs obsolete GitHub-agent mechanics before forwarding the next webhook", async () => {
+  it("isolates obsolete history and forwards the next webhook to the current agent", async () => {
     const network = new MemoryStreamNetwork();
     const repo = network.get(fixture.repoPath);
-    const agent = network.get(fixture.agentPath);
-    agent.events = fixture.legacyTargetEvents as StreamEvent[];
+    const legacyAgent = network.get(fixture.agentPath);
+    legacyAgent.events = fixture.legacyTargetEvents as StreamEvent[];
+    const agentPath = await githubAgentPath(
+      { ...fixture.githubLink, repoPath: fixture.repoPath },
+      1933,
+    );
+    const agent = network.get(agentPath);
     repo.events = [
       {
         type: "events.iterate.com/repo/github-link-configured",
@@ -99,7 +105,7 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
       addEyesReaction: async (input) => {
         reactions.push(input);
       },
-      path: fixture.agentPath,
+      path: agentPath,
       projectId: fixture.projectId,
       stream: agent,
     });
@@ -124,5 +130,6 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
         repo: "iterate",
       },
     ]);
+    expect(legacyAgent.events).toEqual(fixture.legacyTargetEvents);
   });
 });

@@ -113,7 +113,15 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       blockProcessorWhile(async () => {
         await Promise.all(
           prNumbers.map(async (prNumber) => {
-            const streamPath = githubAgentPath(this.path, prNumber);
+            const streamPath = await githubAgentPath(
+              {
+                installationId: github.installationId,
+                owner: github.owner,
+                repo: github.repo,
+                repoPath: this.path,
+              },
+              prNumber,
+            );
             // The key carries the FULL GitHub coordinates, not just the PR
             // number: relinking the repo to a different repository or
             // connection must repoint existing PR agents.
@@ -122,7 +130,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
               {
                 type: "events.iterate.com/github-agent/route-configured" as const,
                 idempotencyKey: this.idempotencyKey(
-                  `github-agent-route:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
+                  `github-agent-route:${github.installationId}:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
                 ),
                 payload: {
                   ...github,
