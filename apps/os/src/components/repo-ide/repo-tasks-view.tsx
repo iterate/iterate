@@ -1,25 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { DragDropProvider, useDraggable, useDroppable } from "@dnd-kit/react";
 import { GripVerticalIcon, ListTodoIcon, PlusIcon, XIcon } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@iterate-com/ui/components/card";
-import { Empty, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
-import { Field, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@iterate-com/ui/components/resizable";
 import {
   Select,
   SelectContent,
@@ -29,8 +13,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@iterate-com/ui/components/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@iterate-com/ui/components/sheet";
+import { Textarea } from "@iterate-com/ui/components/textarea";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { RepoEditorPane } from "./repo-editor-pane.tsx";
 import {
   createRepoTask,
   isRepoTaskPath,
@@ -59,15 +50,8 @@ export function RepoTasksView({
   headPaths,
   changes,
   selectedPath,
-  diffOpen,
-  previewOpen,
-  stagedView,
   onPatchSearch,
   onSetWorking,
-  onSetStaged,
-  onStage,
-  onUnstage,
-  onRestore,
 }: {
   projectId: string;
   repoPath: string;
@@ -75,15 +59,8 @@ export function RepoTasksView({
   headPaths: readonly string[];
   changes: WorkingTreeChanges;
   selectedPath: string | undefined;
-  diffOpen: boolean;
-  previewOpen: boolean;
-  stagedView: boolean;
   onPatchSearch: (patch: SearchPatch) => void;
   onSetWorking: (path: string, entry: FileEntry | undefined) => void;
-  onSetStaged: (path: string, entry: FileEntry | undefined) => void;
-  onStage: (path: string) => void;
-  onUnstage: (path: string) => void;
-  onRestore: (path: string) => void;
 }) {
   const headTaskPaths = useMemo(() => headPaths.filter(isRepoTaskPath), [headPaths]);
   const headContents = useItxQuery({
@@ -135,201 +112,80 @@ export function RepoTasksView({
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
 
   return (
-    <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-      <ResizablePanel defaultSize="20%" minSize="12rem" className="min-w-0">
-        <TasksSidebar
-          tasks={tasks}
-          columns={columns}
-          selectedTask={selectedTask}
-          onShowBoard={() => selectTask(undefined)}
-          onCreate={(title, reset) => {
-            const created = createRepoTask(title, effectivePaths);
-            if (created === null) return;
-            onSetWorking(created.path, { type: "write", content: created.content });
-            reset();
-            selectTask(created.path);
-          }}
-          onChangeState={(state) => {
-            if (selectedTask !== undefined)
-              writeTask(selectedTask, updateRepoTaskState(selectedTask.content, state));
-          }}
-          onChangeLabels={(labels) => {
-            if (selectedTask !== undefined)
-              writeTask(selectedTask, updateRepoTaskLabels(selectedTask.content, labels));
-          }}
-        />
-      </ResizablePanel>
-      <ResizableHandle />
-      <ResizablePanel className="flex min-w-0 flex-col">
-        {selectedTask === undefined ? (
-          <TaskBoard
-            tasks={tasks}
-            columns={columns}
-            onOpen={(task) => selectTask(task.path)}
-            onMove={(task, state) => writeTask(task, updateRepoTaskState(task.content, state))}
-          />
-        ) : (
-          <RepoEditorPane
-            key={selectedTask.path}
-            projectId={projectId}
-            repoPath={repoPath}
-            path={selectedTask.path}
-            headCommitOid={headCommitOid}
-            headHasPath={headPaths.includes(selectedTask.path)}
-            change={changes.get(selectedTask.path)}
-            diffOpen={diffOpen}
-            onToggleDiff={(open) =>
-              onPatchSearch({ diff: open ? true : undefined, preview: undefined })
-            }
-            previewOpen={previewOpen}
-            onTogglePreview={(open) =>
-              onPatchSearch({ preview: open ? true : undefined, diff: undefined })
-            }
-            onSetWorking={(entry) => onSetWorking(selectedTask.path, entry)}
-            onSetStaged={(entry) => onSetStaged(selectedTask.path, entry)}
-            onStageFile={() => onStage(selectedTask.path)}
-            onUnstageFile={() => {
-              onUnstage(selectedTask.path);
-              onPatchSearch({ staged: undefined });
-            }}
-            onOpenWorking={() =>
-              onPatchSearch({ staged: undefined, diff: undefined, preview: undefined })
-            }
-            stagedView={stagedView && changes.get(selectedTask.path)?.staged !== undefined}
-            onRestore={() => onRestore(selectedTask.path)}
-          />
-        )}
-      </ResizablePanel>
-    </ResizablePanelGroup>
+    <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+      <TasksSidebar
+        taskCount={tasks.length}
+        onCreate={(title, reset) => {
+          const created = createRepoTask(title, effectivePaths);
+          if (created === null) return;
+          onSetWorking(created.path, { type: "write", content: created.content });
+          reset();
+          selectTask(created.path);
+        }}
+      />
+      <TaskBoard
+        tasks={tasks}
+        columns={columns}
+        onOpen={(task) => selectTask(task.path)}
+        onMove={(task, state) => writeTask(task, updateRepoTaskState(task.content, state))}
+      />
+      <TaskEditorSheet
+        task={selectedTask}
+        columns={columns}
+        onOpenChange={(open) => {
+          if (!open) selectTask(undefined);
+        }}
+        onChangeContent={(content) => {
+          if (selectedTask !== undefined) writeTask(selectedTask, content);
+        }}
+        onChangeState={(state) => {
+          if (selectedTask !== undefined)
+            writeTask(selectedTask, updateRepoTaskState(selectedTask.content, state));
+        }}
+        onChangeLabels={(labels) => {
+          if (selectedTask !== undefined)
+            writeTask(selectedTask, updateRepoTaskLabels(selectedTask.content, labels));
+        }}
+      />
+    </div>
   );
 }
 
 function TasksSidebar({
-  tasks,
-  columns,
-  selectedTask,
-  onShowBoard,
+  taskCount,
   onCreate,
-  onChangeState,
-  onChangeLabels,
 }: {
-  tasks: readonly RepoTask[];
-  columns: readonly string[];
-  selectedTask: RepoTask | undefined;
-  onShowBoard: () => void;
+  taskCount: number;
   onCreate: (title: string, reset: () => void) => void;
-  onChangeState: (state: string) => void;
-  onChangeLabels: (labels: string[]) => void;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center justify-between border-b p-3">
+    <aside className="flex shrink-0 items-center gap-3 border-b p-3 md:h-full md:w-60 md:flex-col md:items-stretch md:border-r md:border-b-0">
+      <div className="flex items-center gap-2 md:justify-between">
         <div className="flex items-center gap-2">
-          <ListTodoIcon />
+          <ListTodoIcon className="size-4" />
           <span className="text-sm font-medium">Tasks</span>
         </div>
-        <Badge variant="secondary">{tasks.length}</Badge>
+        <Badge variant="secondary">{taskCount}</Badge>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-3">
-        <Button
-          variant={selectedTask === undefined ? "secondary" : "ghost"}
-          className="w-full justify-start"
-          onClick={onShowBoard}
-        >
-          Board
+      <form
+        className="flex min-w-0 flex-1 gap-2 md:flex-none"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const form = event.currentTarget;
+          onCreate(String(new FormData(form).get("title") ?? ""), () => form.reset());
+        }}
+      >
+        <Input
+          aria-label="New task title"
+          name="title"
+          placeholder="New task"
+          className="min-w-0"
+        />
+        <Button type="submit" size="icon" title="Create task" aria-label="Create task">
+          <PlusIcon data-icon="inline-start" />
         </Button>
-
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            const form = event.currentTarget;
-            onCreate(String(new FormData(form).get("title") ?? ""), () => form.reset());
-          }}
-        >
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="new-task-title">New task</FieldLabel>
-              <div className="flex gap-2">
-                <Input id="new-task-title" name="title" placeholder="Task title" />
-                <Button type="submit" size="icon" title="Create task" aria-label="Create task">
-                  <PlusIcon data-icon="inline-start" />
-                </Button>
-              </div>
-            </Field>
-          </FieldGroup>
-        </form>
-
-        {selectedTask === undefined ? null : (
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="task-state">State</FieldLabel>
-              <Select
-                value={selectedTask.state}
-                onValueChange={(value) => value && onChangeState(value)}
-              >
-                <SelectTrigger id="task-state" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectLabel>State</SelectLabel>
-                    {columns.map((state) => (
-                      <SelectItem key={state} value={state}>
-                        {taskStateLabel(state)}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel>Labels</FieldLabel>
-              <div className="flex flex-col gap-2">
-                <Badge variant="outline">{selectedTask.labels[0]}</Badge>
-                {selectedTask.explicitLabels.map((label) => (
-                  <div key={label} className="flex items-center justify-between gap-2">
-                    <Badge variant="secondary">{label}</Badge>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      title={`Remove ${label}`}
-                      aria-label={`Remove ${label}`}
-                      onClick={() =>
-                        onChangeLabels(
-                          selectedTask.explicitLabels.filter((candidate) => candidate !== label),
-                        )
-                      }
-                    >
-                      <XIcon data-icon="inline-start" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </Field>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const form = event.currentTarget;
-                const label = String(new FormData(form).get("label") ?? "").trim();
-                if (label === "") return;
-                onChangeLabels([...selectedTask.explicitLabels, label]);
-                form.reset();
-              }}
-            >
-              <Field>
-                <FieldLabel htmlFor="new-task-label">Add label</FieldLabel>
-                <div className="flex gap-2">
-                  <Input id="new-task-label" name="label" placeholder="Label" />
-                  <Button type="submit" size="icon" title="Add label" aria-label="Add label">
-                    <PlusIcon data-icon="inline-start" />
-                  </Button>
-                </div>
-              </Field>
-            </form>
-          </FieldGroup>
-        )}
-      </div>
-    </div>
+      </form>
+    </aside>
   );
 }
 
@@ -357,7 +213,7 @@ function TaskBoard({
         if (task !== undefined && state !== "" && task.state !== state) onMove(task, state);
       }}
     >
-      <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-4">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-x-auto">
         {columns.map((state) => (
           <TaskColumn
             key={state}
@@ -382,63 +238,169 @@ function TaskColumn({
 }) {
   const { ref, isDropTarget } = useDroppable({ id: `task-state:${state}`, accept: "repo-task" });
   return (
-    <Card
+    <section
       ref={ref}
       data-task-state={state}
-      className={cn("min-h-full w-72 shrink-0 self-start", isDropTarget && "ring-2 ring-primary")}
+      className={cn(
+        "flex min-h-full w-72 shrink-0 flex-col border-r last:border-r-0",
+        isDropTarget && "bg-accent/40",
+      )}
     >
-      <CardHeader>
-        <CardTitle>{taskStateLabel(state)}</CardTitle>
-        <CardAction>
-          <Badge variant="secondary">{tasks.length}</Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
+      <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
+        <h2 className="text-sm font-medium">{taskStateLabel(state)}</h2>
+        <span className="text-xs tabular-nums text-muted-foreground">{tasks.length}</span>
+      </header>
+      <div className="flex flex-1 flex-col">
         {tasks.length === 0 ? (
-          <Empty className="min-h-24 border">
-            <EmptyHeader>
-              <EmptyTitle>No tasks</EmptyTitle>
-            </EmptyHeader>
-          </Empty>
+          <p className="p-4 text-xs text-muted-foreground">Drop tasks here</p>
         ) : (
-          tasks.map((task) => <TaskCard key={task.path} task={task} onOpen={onOpen} />)
+          tasks.map((task) => <TaskRow key={task.path} task={task} onOpen={onOpen} />)
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
-function TaskCard({ task, onOpen }: { task: RepoTask; onOpen: (task: RepoTask) => void }) {
+function TaskRow({ task, onOpen }: { task: RepoTask; onOpen: (task: RepoTask) => void }) {
   const { ref, handleRef, isDragging } = useDraggable({ id: task.path, type: "repo-task" });
   const summary = task.description.replace(/\s+/g, " ").slice(0, 160);
   return (
-    <Card ref={ref} size="sm" data-task-path={task.path} className={cn(isDragging && "opacity-50")}>
-      <CardHeader>
-        <CardTitle>
-          <button type="button" className="text-left hover:underline" onClick={() => onOpen(task)}>
+    <article
+      ref={ref}
+      data-task-path={task.path}
+      className={cn(
+        "group border-b px-3 py-3 transition-colors hover:bg-muted/40",
+        isDragging && "opacity-50",
+      )}
+    >
+      <div className="flex items-start gap-1">
+        <Button
+          ref={handleRef}
+          variant="ghost"
+          size="icon-xs"
+          className="mt-0.5 shrink-0 text-muted-foreground opacity-40 group-hover:opacity-100"
+          title={`Drag ${task.title}`}
+          aria-label={`Drag ${task.title}`}
+        >
+          <GripVerticalIcon data-icon="inline-start" />
+        </Button>
+        <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            className="block w-full text-left text-sm font-medium hover:underline"
+            onClick={() => onOpen(task)}
+          >
             {task.title}
           </button>
-        </CardTitle>
-        <CardAction>
-          <Button
-            ref={handleRef}
-            variant="ghost"
-            size="icon-sm"
-            title={`Drag ${task.title}`}
-            aria-label={`Drag ${task.title}`}
-          >
-            <GripVerticalIcon data-icon="inline-start" />
-          </Button>
-        </CardAction>
-        {summary === "" ? null : <CardDescription>{summary}</CardDescription>}
-      </CardHeader>
-      <CardFooter className="flex-wrap gap-1.5">
-        {task.labels.map((label, index) => (
-          <Badge key={label} variant={index === 0 ? "outline" : "secondary"}>
-            {label}
-          </Badge>
-        ))}
-      </CardFooter>
-    </Card>
+          {summary === "" ? null : (
+            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+              {summary}
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap gap-1">
+            {task.labels.map((label, index) => (
+              <Badge key={label} variant={index === 0 ? "outline" : "secondary"}>
+                {label}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function TaskEditorSheet({
+  task,
+  columns,
+  onOpenChange,
+  onChangeContent,
+  onChangeState,
+  onChangeLabels,
+}: {
+  task: RepoTask | undefined;
+  columns: readonly string[];
+  onOpenChange: (open: boolean) => void;
+  onChangeContent: (content: string) => void;
+  onChangeState: (state: string) => void;
+  onChangeLabels: (labels: string[]) => void;
+}) {
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  return (
+    <Sheet open={task !== undefined} onOpenChange={onOpenChange}>
+      {task === undefined ? null : (
+        <SheetContent
+          initialFocus={editorRef}
+          className="w-full gap-0 p-0 data-[side=right]:sm:w-[60vw] data-[side=right]:sm:max-w-[60vw]"
+        >
+          <SheetHeader className="shrink-0 border-b pr-14">
+            <SheetTitle>{task.title}</SheetTitle>
+            <SheetDescription className="font-mono text-xs">{task.path}</SheetDescription>
+          </SheetHeader>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
+            <Select value={task.state} onValueChange={(value) => value && onChangeState(value)}>
+              <SelectTrigger aria-label="Task state" size="sm" className="w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel>State</SelectLabel>
+                  {columns.map((state) => (
+                    <SelectItem key={state} value={state}>
+                      {taskStateLabel(state)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Badge variant="outline">{task.labels[0]}</Badge>
+            {task.explicitLabels.map((label) => (
+              <span key={label} className="flex items-center gap-0.5">
+                <Badge variant="secondary">{label}</Badge>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title={`Remove ${label}`}
+                  aria-label={`Remove ${label}`}
+                  onClick={() =>
+                    onChangeLabels(task.explicitLabels.filter((candidate) => candidate !== label))
+                  }
+                >
+                  <XIcon data-icon="inline-start" />
+                </Button>
+              </span>
+            ))}
+            <form
+              className="ml-auto flex items-center gap-1"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const form = event.currentTarget;
+                const label = String(new FormData(form).get("label") ?? "").trim();
+                if (label === "") return;
+                onChangeLabels([...task.explicitLabels, label]);
+                form.reset();
+              }}
+            >
+              <Input
+                aria-label="New task label"
+                name="label"
+                placeholder="Add label"
+                className="h-8 w-28"
+              />
+              <Button type="submit" size="icon-sm" variant="ghost" aria-label="Add label">
+                <PlusIcon data-icon="inline-start" />
+              </Button>
+            </form>
+          </div>
+          <Textarea
+            ref={editorRef}
+            aria-label={`Edit ${task.title} Markdown`}
+            value={task.content}
+            onChange={(event) => onChangeContent(event.currentTarget.value)}
+            className="min-h-0 flex-1 resize-none rounded-none border-0 px-5 py-4 font-mono text-sm leading-relaxed focus-visible:border-transparent focus-visible:ring-0"
+          />
+        </SheetContent>
+      )}
+    </Sheet>
   );
 }

@@ -29,7 +29,7 @@ test("projects a bare Markdown file into a task", () => {
     description: "Measure first.",
     state: "todo",
     explicitLabels: [],
-    labels: ["folder:apps/os"],
+    labels: ["folder:/apps/os"],
     content: "# Make OS faster\n\nMeasure first.\n",
   });
 });
@@ -38,7 +38,7 @@ test("falls back to the filename and infers the root folder label", () => {
   const task = parseRepoTask("tasks/fix-auth.md", "There is no heading yet.");
   expect(task?.title).toBe("fix-auth");
   expect(task?.description).toBe("There is no heading yet.");
-  expect(task?.labels).toEqual(["folder:."]);
+  expect(task?.labels).toEqual(["folder:/"]);
 });
 
 test("reads canonical and legacy frontmatter without requiring it", () => {
@@ -48,7 +48,7 @@ test("reads canonical and legacy frontmatter without requiring it", () => {
   );
   expect(canonical?.state).toBe("in-progress");
   expect(canonical?.explicitLabels).toEqual(["ui", "polish", "v1"]);
-  expect(canonical?.labels).toEqual(["folder:packages/ui", "ui", "polish", "v1"]);
+  expect(canonical?.labels).toEqual(["folder:/packages/ui", "ui", "polish", "v1"]);
 
   const legacy = parseRepoTask(
     "tasks/legacy.md",

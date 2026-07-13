@@ -40,8 +40,8 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
     ...stringArray(metadata.labels),
     ...stringArray(metadata.tags),
   ]);
-  const folderPath = taskDirectoryPath.split("/").slice(0, -1).join("/") || ".";
-  const folderLabel = `folder:${folderPath}`;
+  const folderPath = taskDirectoryPath.split("/").slice(0, -1).join("/");
+  const folderLabel = `folder:/${folderPath}`;
   const heading = firstHeading(frontmatter.body);
   const fallbackTitle = (pathSegments(path).at(-1) ?? "task").replace(/\.(?:md|markdown)$/i, "");
 

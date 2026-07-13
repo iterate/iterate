@@ -337,15 +337,8 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
             headPaths={headPaths}
             changes={changes}
             selectedPath={selectedPath}
-            diffOpen={diff}
-            previewOpen={preview}
-            stagedView={stagedView}
             onPatchSearch={patchSearch}
             onSetWorking={(path, entry) => store.setWorking(path, entry)}
-            onSetStaged={(path, entry) => store.setStaged(path, entry)}
-            onStage={(path) => store.stage(path)}
-            onUnstage={(path) => store.unstage(path)}
-            onRestore={dropChange}
           />
         </Suspense>
       ) : (
