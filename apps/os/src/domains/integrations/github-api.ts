@@ -37,6 +37,11 @@ export function connectionOctokit(input: {
   );
   return new Octokit({
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    // The ITX call itself is the retry boundary. Replaying an opaque write
+    // after a 5xx can duplicate a comment or review, and throttling has its
+    // own retry path, so preserve one caller invocation = one HTTP attempt.
+    retry: { enabled: false },
+    throttle: { enabled: false },
     userAgent: "iterate-os",
     // No `auth`: Octokit emits no Authorization of its own; our fetch sets the
     // placeholder, which the secret pipeline substitutes and pins.

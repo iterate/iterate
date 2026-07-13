@@ -2326,7 +2326,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           connection,
           example: `await itx.integrations.github[${JSON.stringify(connection)}].octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
           grammar: GITHUB_CALL_GRAMMAR,
-          sdk: "the all-in-one Octokit exported by octokit, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://github.com/octokit/octokit.js; `.rest`, `.graphql(...)`, `.request(...)`, and `.paginate(...)` are the normal SDK surface. Prefer REST for routine endpoint calls and GraphQL when its query shape or API coverage is useful. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Call paginate(...), not paginate.iterator(), because async iterators cannot cross the ITX RPC boundary",
+          sdk: "the all-in-one Octokit exported by octokit, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://github.com/octokit/octokit.js; `.rest`, `.graphql(...)`, `.request(...)`, and `.paginate(...)` are the normal SDK surface. Prefer REST for routine endpoint calls and GraphQL when its query shape or API coverage is useful. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Automatic retry and throttling are disabled at this RPC boundary so failed writes are not replayed invisibly; inspect remote state before retrying one. Call paginate(...), not paginate.iterator(), because async iterators cannot cross the ITX RPC boundary",
           slug: "github",
           types: 'export type GithubConnection = { octokit: import("octokit").Octokit };',
         });

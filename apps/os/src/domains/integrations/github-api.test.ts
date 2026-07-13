@@ -4,15 +4,24 @@
 // .octokit.request()) keeps the token in its Secret DO. Only the secret stub
 // is mocked; the all-in-one Octokit is real.
 
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const captured: { request?: Request } = {};
+const captured: { request?: Request; requestCount: number; responseStatus?: number } = {
+  requestCount: 0,
+};
 vi.mock("../../env.ts", () => ({
   itxEnv: {
     SECRET: {
       getByName: () => ({
         fetch: async (request: Request) => {
           captured.request = request;
+          captured.requestCount += 1;
+          if (captured.responseStatus !== undefined) {
+            return Response.json(
+              { message: "transient GitHub failure" },
+              { status: captured.responseStatus },
+            );
+          }
           if (new URL(request.url).pathname === "/graphql") {
             return Response.json({ data: { repository: { name: "iterate" } } });
           }
@@ -25,6 +34,12 @@ vi.mock("../../env.ts", () => ({
 
 const { connectionOctokit, normalizeGithubError, GITHUB_CALL_GRAMMAR } =
   await import("./github-api.ts");
+
+beforeEach(() => {
+  captured.request = undefined;
+  captured.requestCount = 0;
+  captured.responseStatus = undefined;
+});
 
 describe("normalizeGithubError", () => {
   test("the public call grammar makes the Octokit namespace mandatory", () => {
@@ -108,5 +123,20 @@ describe("connectionOctokit", () => {
     await expect(captured.request!.clone().json()).resolves.toMatchObject({
       variables: { owner: "iterate", repo: "iterate" },
     });
+  });
+
+  test("does not automatically replay a failed write", async () => {
+    captured.responseStatus = 500;
+    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+
+    await expect(
+      octokit.rest.issues.createComment({
+        body: "one comment",
+        issue_number: 42,
+        owner: "iterate",
+        repo: "iterate",
+      }),
+    ).rejects.toMatchObject({ status: 500 });
+    expect(captured.requestCount).toBe(1);
   });
 });

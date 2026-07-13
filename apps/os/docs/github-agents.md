@@ -110,10 +110,11 @@ export type GithubConnection = {
 ```
 
 Use the package types and [official Octokit documentation](https://github.com/octokit/octokit.js/).
-The only RPC-specific caveat is to call `paginate(...)` directly rather than
-`paginate.iterator()`, because an async iterator cannot cross the ITX RPC
-boundary. The explicit `.octokit` segment is mandatory; a direct `.rest` on
-the connection is rejected.
+Automatic retry and throttling are disabled at this RPC boundary so a failed
+write cannot be replayed invisibly; inspect GitHub state before retrying one.
+Also call `paginate(...)` directly rather than `paginate.iterator()`, because
+an async iterator cannot cross the boundary. The explicit `.octokit` segment
+is mandatory; direct `.rest` or `.graphql` on the connection is rejected.
 
 For code work, the agent fetches the live PR, clones its head repository/ref
 into a project sandbox, edits and tests normally, commits, and non-force
