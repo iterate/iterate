@@ -40,10 +40,6 @@ const PLATFORM_API_KEYS: Record<
     origins: ["https://api.parallel.ai"],
     value: (config) => config.integrations.parallel?.apiKey.exposeSecret(),
   },
-  openAiApiKey: {
-    origins: ["https://api.openai.com"],
-    value: (config) => config.openAiApiKey.exposeSecret(),
-  },
 };
 
 /**

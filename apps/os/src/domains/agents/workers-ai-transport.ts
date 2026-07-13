@@ -59,6 +59,15 @@ type WorkersAiCompletion = {
   usage?: unknown;
 };
 
+/** One provider-facing chat message. `containsFiles` is transport metadata,
+ * not provider input: it forces cache bypass when the text carries temporary
+ * project-file capability URLs. */
+export type WorkersAiMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+  containsFiles?: boolean;
+};
+
 /**
  * One complete attempt: dial `ai.run`, drain the response (streaming or not),
  * and enforce `deadlineMs` over the WHOLE phase — dial plus drain. The cap is
@@ -77,7 +86,7 @@ type WorkersAiCompletion = {
 export async function runWorkersAiAttempt(input: {
   ai: WorkersAiBinding;
   deadlineMs: number;
-  messages: { role: "system" | "user" | "assistant"; content: string }[];
+  messages: WorkersAiMessage[];
   model: string;
   onChunk: (chunk: unknown, index: number) => Promise<void>;
   /** Defaults to unified billing when omitted (bare test hosts, non-OpenAI models). */
@@ -94,9 +103,10 @@ export async function runWorkersAiAttempt(input: {
     if (transport.kind === "byok" && input.model.startsWith("openai/")) {
       return await runByokAttempt({ ...input, deadline, transport });
     }
+    const messages = input.messages.map(({ content, role }) => ({ content, role }));
     const raw = await deadline.race(
       input.ai.run(input.model, {
-        messages: input.messages,
+        messages,
         stream: true,
         ...openAiReasoningExtras(input.model),
       }),
@@ -124,7 +134,7 @@ export async function runWorkersAiAttempt(input: {
 async function runByokAttempt(input: {
   ai: WorkersAiBinding;
   deadline: { race<T>(work: Promise<T>): Promise<T> };
-  messages: { role: "system" | "user" | "assistant"; content: string }[];
+  messages: WorkersAiMessage[];
   model: string;
   onChunk: (chunk: unknown, index: number) => Promise<void>;
   transport: Extract<CloudflareAiGatewayTransport, { kind: "byok" }>;
@@ -134,9 +144,10 @@ async function runByokAttempt(input: {
   if (gateway === undefined) {
     throw new Error("AI binding does not expose gateway(); BYOK transport unavailable.");
   }
+  const containsFiles = input.messages.some((message) => message.containsFiles === true);
   const body = {
     model: input.model.replace(/^openai\//, ""),
-    messages: input.messages,
+    messages: input.messages.map(({ content, role }) => ({ content, role })),
     stream: true,
     ...openAiReasoningExtras(input.model),
     ...(transport.openaiPromptCacheKey === undefined
@@ -145,18 +156,18 @@ async function runByokAttempt(input: {
   };
   const headers: Record<string, string> = {
     authorization: `Bearer ${transport.openaiApiKey}`,
+    "cf-aig-collect-log-payload": "false",
     "content-type": "application/json",
   };
   const ttlSeconds = transport.responseCacheTtlSeconds;
-  if (ttlSeconds !== undefined) {
+  if (ttlSeconds !== undefined && !containsFiles) {
     headers["cf-aig-cache-ttl"] = String(ttlSeconds);
     headers["cf-aig-cache-key"] = await cloudflareAiGatewayResponseCacheKey(body);
   } else {
-    // No TTL configured means this deployment must NEVER serve a cached
-    // reply (prd). Said explicitly per request: the gateway otherwise falls
-    // back to its dashboard-level cache setting, which is account state this
-    // code can't see — live prd evidence showed cache lookups (MISS) even
-    // with no cache headers sent.
+    // File-bearing requests carry short-lived signed URL capabilities and
+    // must never enter Gateway cache. No TTL configured likewise means this
+    // deployment must NEVER serve a cached reply (prd): the dashboard-level
+    // cache setting is account state this code cannot see.
     headers["cf-aig-skip-cache"] = "true";
   }
   const response = await input.deadline.race(

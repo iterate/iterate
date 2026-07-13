@@ -46,12 +46,13 @@ export function sanitizeFileFilename(filename: string): string {
   return (trimmed || "file").slice(0, 100);
 }
 
-/** The HMAC over (projectId, path, expiry) that authorizes a public fetch. */
+/** The HMAC over (projectId, path, object version, expiry) that authorizes a public fetch. */
 export async function fileUrlSignature(input: {
   expiresAtSeconds: number;
   path: string;
   projectId: string;
   secret: string;
+  version: string;
 }): Promise<string> {
   // Domain-separated reuse of the deployment's encryption key — same pattern
   // as oauth-state.ts, and no new per-env secret to provision.
@@ -62,7 +63,9 @@ export async function fileUrlSignature(input: {
     false,
     ["sign"],
   );
-  const payload = `${input.projectId}\n${normalizeFilePath(input.path)}\n${input.expiresAtSeconds}`;
+  const payload =
+    `${input.projectId}\n${normalizeFilePath(input.path)}\n${input.version}\n` +
+    input.expiresAtSeconds;
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
   return base64UrlEncode(new Uint8Array(signature));
 }
@@ -74,10 +77,12 @@ export async function buildSignedFileUrl(input: {
   path: string;
   projectId: string;
   secret: string;
+  version: string;
 }): Promise<string> {
   const path = normalizeFilePath(input.path);
   const url = new URL(input.origin + path.split("/").map(encodeURIComponent).join("/"));
   url.searchParams.set("exp", String(input.expiresAtSeconds));
+  url.searchParams.set("ver", input.version);
   url.searchParams.set(
     "sig",
     await fileUrlSignature({
@@ -85,6 +90,7 @@ export async function buildSignedFileUrl(input: {
       path,
       projectId: input.projectId,
       secret: input.secret,
+      version: input.version,
     }),
   );
   return url.toString();
@@ -100,11 +106,14 @@ export async function checkSignedFileRequest(input: {
   projectId: string;
   secret: string;
   url: URL;
-}): Promise<{ ok: true; path: string } | { message: string; ok: false; status: number }> {
+}): Promise<
+  { ok: true; path: string; version: string } | { message: string; ok: false; status: number }
+> {
   const path = normalizeFilePath(decodeURIComponent(input.url.pathname));
   const expiresAtSeconds = Number(input.url.searchParams.get("exp"));
   const signature = input.url.searchParams.get("sig");
-  if (!signature || !Number.isFinite(expiresAtSeconds)) {
+  const version = input.url.searchParams.get("ver");
+  if (!signature || !version || !Number.isFinite(expiresAtSeconds)) {
     return { message: "missing signature", ok: false, status: 403 };
   }
   if (expiresAtSeconds * 1000 < input.nowMs) {
@@ -115,11 +124,12 @@ export async function checkSignedFileRequest(input: {
     path,
     projectId: input.projectId,
     secret: input.secret,
+    version,
   });
   if (!constantTimeEqual(signature, expected)) {
     return { message: "invalid signature", ok: false, status: 403 };
   }
-  return { ok: true, path };
+  return { ok: true, path, version };
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {

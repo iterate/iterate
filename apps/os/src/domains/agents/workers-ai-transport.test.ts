@@ -186,6 +186,7 @@ describe("the BYOK gateway lane", () => {
     expect(request.provider).toBe("openai");
     expect(request.endpoint).toBe("chat/completions");
     expect(request.headers.authorization).toBe("Bearer sk-test");
+    expect(request.headers["cf-aig-collect-log-payload"]).toBe("false");
     expect(request.headers["cf-aig-cache-ttl"]).toBe("600");
     expect(request.headers["cf-aig-cache-key"]).toMatch(/^[0-9a-f]{64}$/);
     expect(request.query).toMatchObject({
@@ -218,6 +219,38 @@ describe("the BYOK gateway lane", () => {
     expect(request.headers["cf-aig-skip-cache"]).toBe("true");
     // No header on the response either -> no cache-status claim in evidence.
     expect(completion.rawResponse).not.toHaveProperty("cloudflareAiGatewayResponseCacheStatus");
+  });
+
+  it("never caches file-bearing turns even when the deployment enables response caching", async () => {
+    const fake = byokAi(() => new Response(sseBody(okFrames)));
+    await runWorkersAiAttempt({
+      ai: fake.ai,
+      deadlineMs: 1_000,
+      messages: [
+        {
+          role: "user",
+          content:
+            "[Attached file: report.pdf; public url: https://iterate-files--demo.iterate.app/report.pdf?exp=1&ver=v1&sig=x]",
+          containsFiles: true,
+        },
+      ],
+      model: DEFAULT_AGENT_MODEL,
+      onChunk: async () => {},
+      transport: {
+        kind: "byok",
+        gatewayId: "default",
+        openaiApiKey: "sk-test",
+        responseCacheTtlSeconds: 600,
+      },
+    });
+
+    const request = fake.requests[0]!;
+    expect(request.endpoint).toBe("chat/completions");
+    expect(request.headers["cf-aig-collect-log-payload"]).toBe("false");
+    expect(request.headers["cf-aig-skip-cache"]).toBe("true");
+    expect(request.headers).not.toHaveProperty("cf-aig-cache-ttl");
+    expect(request.headers).not.toHaveProperty("cf-aig-cache-key");
+    expect(JSON.stringify(request.query)).toContain("iterate-files--demo.iterate.app");
   });
 
   it("falls back to unified billing for non-OpenAI models", async () => {

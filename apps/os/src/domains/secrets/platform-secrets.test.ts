@@ -12,7 +12,6 @@ import {
 import { SecretSubstitutionError } from "./utils.ts";
 
 const config = {
-  openAiApiKey: { exposeSecret: () => "openai-platform-key" },
   integrations: {
     exa: {
       apiKey: { exposeSecret: () => "exa-platform-key" },
@@ -70,14 +69,14 @@ describe("substitutePlatformApiKeyReferences", () => {
     );
   });
 
-  test("openAiApiKey resolves toward the OpenAI origin", () => {
+  test("does not expose the internal agent OpenAI key through project egress", () => {
     const request = new Request("https://api.openai.com/v1/responses", {
       headers: { authorization: 'Bearer getSecret({ platform: "openAiApiKey" })' },
     });
 
-    const substituted = substitutePlatformApiKeyReferences({ config, request });
-
-    expect(substituted.headers.get("authorization")).toBe("Bearer openai-platform-key");
+    expect(() => substitutePlatformApiKeyReferences({ config, request })).toThrow(
+      SecretSubstitutionError,
+    );
   });
 });
 

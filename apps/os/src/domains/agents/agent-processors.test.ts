@@ -6,6 +6,7 @@ import {
   buildAgentLlmRequestBody,
   contextWindowTokens,
   flattenMessageToText,
+  prepareAgentLlmMessages,
   reduceAgentEvents,
 } from "./agent-processor-implementation.ts";
 import { normalizeLlmUsage } from "./workers-ai-transport.ts";
@@ -1572,6 +1573,22 @@ describe("file attachments in the LLM request", () => {
     expect(flattened).toContain('itx.files.get("/agents/web/demo/abc-cat.png").bytes()');
     expect(flattened).toContain(attachment.url);
     expect(flattenMessageToText({ role: "user", content: "no files" })).toBe("no files");
+  });
+
+  it("remints attachment URLs immediately before a provider request", async () => {
+    const freshUrl =
+      "https://iterate-files--demo.iterate.app/agents/web/demo/abc-cat.png?exp=900&ver=v2&sig=fresh";
+    const resolveModelFileUrl = vi.fn(async () => freshUrl);
+
+    const [message] = await prepareAgentLlmMessages(
+      [{ role: "user", content: "look at this", files: [attachment] }],
+      resolveModelFileUrl,
+    );
+
+    expect(resolveModelFileUrl).toHaveBeenCalledWith(attachment);
+    expect(message).toMatchObject({ role: "user", containsFiles: true });
+    expect(message?.content).toContain(freshUrl);
+    expect(message?.content).not.toContain(attachment.url);
   });
 });
 

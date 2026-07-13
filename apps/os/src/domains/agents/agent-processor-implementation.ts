@@ -35,6 +35,7 @@ import {
   runWorkersAiAttempt,
   type CloudflareAiGatewayTransport,
   type WorkersAiBinding,
+  type WorkersAiMessage,
 } from "./workers-ai-transport.ts";
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
@@ -62,6 +63,9 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  *   it reads deployment config and the host's secrets, and a bad config must
  *   fail the ATTEMPT (journaled, retried) rather than DO construction.
  *   Defaults to unified billing.
+ * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
+ *   file immediately before a model request. Production hosts provide it;
+ *   bare tests without it retain the stored attachment URL.
  */
 type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
@@ -69,6 +73,7 @@ type AgentProcessorDeps = {
   now?: () => number;
   llmRetryBackoffBaseMs?: number;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
+  resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
 };
 
 /** Page size for full-journal reads (prompt building, currency checks). */
@@ -408,10 +413,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         ai,
         transport: this.deps.cloudflareAiGatewayTransport?.(),
         deadlineMs: DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
-        messages: buildAgentCompactionRequestBody(state).messages.map((message) => ({
-          role: message.role,
-          content: flattenMessageToText(message),
-        })),
+        messages: await prepareAgentLlmMessages(
+          buildAgentCompactionRequestBody(state).messages,
+          this.deps.resolveModelFileUrl,
+        ),
         model: state.llmConfig.model,
         onChunk: async () => {},
       });
@@ -748,12 +753,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // the intent-expiry horizon, so a wedged binding releases the live
         // set here instead of pinning the obligation until the backstop.
         deadlineMs: DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
-        // Workers AI chat bodies are text-only here: file attachments flatten
-        // to hint lines telling the agent how to fetch/convert the bytes.
-        messages: body.messages.map((message) => ({
-          role: message.role,
-          content: flattenMessageToText(message),
-        })),
+        // This chat-completions transport is text-only: file attachments use
+        // just-in-time signed hint URLs, not OpenAI Files or provider file IDs.
+        messages: await prepareAgentLlmMessages(body.messages, this.deps.resolveModelFileUrl),
         model,
         onChunk: async (chunk, index) => {
           // Accumulated text is what an interrupt hands back to the model as
@@ -1207,6 +1209,32 @@ export function flattenMessageToText(message: AgentChatMessage): string {
   const files = message.files ?? [];
   if (files.length === 0) return message.content;
   return [message.content, ...files.map(renderFileHintLine)].join("\n");
+}
+
+/** Resolve attachment URLs immediately before provider dispatch. The URLs in
+ * journaled events remain deterministic UI/share links; model requests get a
+ * separate short-lived capability bound to the current object version. */
+export async function prepareAgentLlmMessages(
+  messages: AgentChatMessage[],
+  resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>,
+): Promise<WorkersAiMessage[]> {
+  return await Promise.all(
+    messages.map(async (message) => {
+      const files = message.files ?? [];
+      if (files.length === 0) return { role: message.role, content: message.content };
+      const resolvedFiles =
+        resolveModelFileUrl === undefined
+          ? files
+          : await Promise.all(
+              files.map(async (file) => ({ ...file, url: await resolveModelFileUrl(file) })),
+            );
+      return {
+        role: message.role,
+        content: flattenMessageToText({ ...message, files: resolvedFiles }),
+        containsFiles: true,
+      };
+    }),
+  );
 }
 
 /**

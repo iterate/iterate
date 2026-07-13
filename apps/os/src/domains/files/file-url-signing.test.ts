@@ -9,6 +9,7 @@ import {
 
 const SECRET = "test-secret";
 const PROJECT_ID = "prj_test123";
+const VERSION = "object-version-1";
 
 async function signedUrl(input?: { expiresAtSeconds?: number; path?: string }) {
   return new URL(
@@ -18,6 +19,7 @@ async function signedUrl(input?: { expiresAtSeconds?: number; path?: string }) {
       path: input?.path ?? "/agents/web/demo/abc123-cat.png",
       projectId: PROJECT_ID,
       secret: SECRET,
+      version: VERSION,
     }),
   );
 }
@@ -31,7 +33,11 @@ describe("signed file urls", () => {
       secret: SECRET,
       url,
     });
-    expect(check).toEqual({ ok: true, path: "/agents/web/demo/abc123-cat.png" });
+    expect(check).toEqual({
+      ok: true,
+      path: "/agents/web/demo/abc123-cat.png",
+      version: VERSION,
+    });
   });
 
   it("percent-encodes path segments and verifies against the decoded path", async () => {
@@ -43,7 +49,11 @@ describe("signed file urls", () => {
       secret: SECRET,
       url,
     });
-    expect(check).toEqual({ ok: true, path: "/agents/web/demo/has space.png" });
+    expect(check).toEqual({
+      ok: true,
+      path: "/agents/web/demo/has space.png",
+      version: VERSION,
+    });
   });
 
   it("rejects expired links before touching the signature", async () => {
@@ -81,6 +91,18 @@ describe("signed file urls", () => {
     expect(check).toMatchObject({ message: "invalid signature", ok: false, status: 403 });
   });
 
+  it("rejects a changed object version so an overwritten path cannot expose new bytes", async () => {
+    const url = await signedUrl();
+    url.searchParams.set("ver", "object-version-2");
+    const check = await checkSignedFileRequest({
+      nowMs: Date.now(),
+      projectId: PROJECT_ID,
+      secret: SECRET,
+      url,
+    });
+    expect(check).toMatchObject({ message: "invalid signature", ok: false, status: 403 });
+  });
+
   it("rejects a signature minted for another project", async () => {
     const url = await signedUrl();
     const check = await checkSignedFileRequest({
@@ -104,12 +126,25 @@ describe("signed file urls", () => {
     expect(check).toMatchObject({ message: "missing signature", ok: false, status: 403 });
   });
 
+  it("rejects legacy links that are not bound to an object version", async () => {
+    const url = await signedUrl();
+    url.searchParams.delete("ver");
+    const check = await checkSignedFileRequest({
+      nowMs: Date.now(),
+      projectId: PROJECT_ID,
+      secret: SECRET,
+      url,
+    });
+    expect(check).toMatchObject({ message: "missing signature", ok: false, status: 403 });
+  });
+
   it("signatures are url-safe base64", async () => {
     const signature = await fileUrlSignature({
       expiresAtSeconds: 1_900_000_000,
       path: "/x.png",
       projectId: PROJECT_ID,
       secret: SECRET,
+      version: VERSION,
     });
     expect(signature).toMatch(/^[A-Za-z0-9_-]+$/);
   });
