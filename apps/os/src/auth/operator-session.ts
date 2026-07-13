@@ -180,7 +180,11 @@ async function createOperatorSessionResponse(input: OperatorSessionHandlerInput)
           { headers: noStoreHeaders(), status: 404 },
         );
       }
-      const organizationId = project.organizationId ?? `operator:${project.id}`;
+      // Keep the synthetic principal outside every customer organization.
+      // The project claim is the complete authority; using the real owning
+      // organization here would let organization-based route fallbacks widen
+      // a project grant to sibling projects.
+      const organizationId = `operator:${project.id}`;
       grant = {
         ...common,
         email: emailForOperatorId(parsed.data.operatorId),

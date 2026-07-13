@@ -107,8 +107,11 @@ doppler run --config prd -- pnpm cli session create \
 The resulting browser session exposes only that project. Cross-project access
 checks do not consult or widen from the normal user membership directory for
 operator grants, so navigating to another project's route or capability does
-not add access. The account menu labels the browser as "Project-scoped operator
-access" so it cannot be mistaken for the customer's login.
+not add access. The synthetic principal uses a project-specific synthetic
+organization ID rather than the customer's real organization ID; this keeps
+organization membership and stale-claim route fallbacks from authorizing a
+sibling project. The account menu labels the browser as "Project-scoped
+operator access" so it cannot be mistaken for the customer's login.
 
 By default, the CLI records the first available value from
 `OPERATOR_IDENTITY`, `GITHUB_ACTOR`, or `USER` as audit attribution. Override

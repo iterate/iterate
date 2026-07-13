@@ -89,19 +89,37 @@ describe("operator sessions", () => {
       }),
     });
     expect(authenticated?.principal).toMatchObject({
+      organizations: [{ id: `operator:${project.id}` }],
+      projects: [
+        {
+          id: project.id,
+          organizationId: `operator:${project.id}`,
+          slug: project.slug,
+        },
+      ],
       type: "user",
       userId: "support-engineer",
-      projects: [{ id: project.id, slug: project.slug }],
     });
     expect(publicSessionForOperator(authenticated)).toMatchObject({
       authenticated: true,
-      session: { projects: [{ id: project.id, slug: project.slug }] },
+      session: {
+        activeOrganizationId: `operator:${project.id}`,
+        organizations: [{ id: `operator:${project.id}` }],
+        projects: [
+          {
+            id: project.id,
+            organizationId: `operator:${project.id}`,
+            slug: project.slug,
+          },
+        ],
+      },
       user: {
         email: "support-engineer@operator.invalid",
         id: "support-engineer",
         isAdmin: false,
       },
     });
+    expect(JSON.stringify(authenticated?.principal)).not.toContain(project.organizationId);
   });
 
   it("requires the matching deployment secret and an existing project", async () => {

@@ -4,6 +4,7 @@ import type { ProjectDeploymentStatus } from "../project-deployment-status.ts";
 import { itxAuthFromPrincipal } from "~/auth.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
 import { isOnboardingActive } from "~/lib/onboarding-agent.ts";
+import { canReadDirectoryProject } from "~/lib/project-directory-authorization.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
   chooseRootProjectRedirect,
@@ -161,17 +162,24 @@ export const getProjectBySlugServerFn: (input: {
 
     // Claims miss: consult the directory (KV cache in front of the auth
     // worker — src/project-directory.ts). A platform operator grant or
-    // admin-role user may read any project; a signed-in user may read a
-    // project whose owning organization they belong to (covers the
-    // stale-claims window right after a create on another device).
+    // admin-role user may read any project; an ordinary signed-in user may
+    // read a project whose owning organization they belong to (covers the
+    // stale-claims window right after a create on another device). A scoped
+    // operator grant may never use this fallback: its one project claim is
+    // the complete authorization boundary.
+    const isProjectScopedOperator = context.operatorSession?.grant.kind === "project";
+    if (isProjectScopedOperator) throw new Error(`Project ${data.slug} not found`);
+
     const record = await readProjectBySlug(context.config, env.PROJECT_DIRECTORY, data.slug);
     if (!record) throw new Error(`Project ${data.slug} not found`);
 
-    const userPrincipal = getUserPrincipal(context.principal);
-    const memberOfOwningOrg = userPrincipal?.organizations.some(
-      (organization) => organization.id === record.organizationId,
-    );
-    if (!isAdminContext(context) && !memberOfOwningOrg) {
+    if (
+      !canReadDirectoryProject({
+        isProjectScopedOperator,
+        principal: context.principal,
+        recordOrganizationId: record.organizationId,
+      })
+    ) {
       throw new Error(`Project ${data.slug} not found`);
     }
 
@@ -185,13 +193,6 @@ export const getProjectBySlugServerFn: (input: {
       deploymentStatus: "unknown",
     });
   });
-
-/** Admin cookie, admin-role user, or the capnweb admin header. */
-function isAdminContext(context: RequestContext): boolean {
-  return (
-    context.principal?.type === "admin" || getUserPrincipal(context.principal)?.isAdmin === true
-  );
-}
 
 function withIngressUrl(
   context: Pick<RequestContext, "config">,
