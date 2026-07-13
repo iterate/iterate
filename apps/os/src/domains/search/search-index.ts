@@ -9,6 +9,15 @@
 // attribute with a lexicographic prefix range
 // (https://developers.cloudflare.com/ai-search/how-to/per-tenant-search/).
 //
+// LOCAL DEV runs against the real cloud service, not a local emulation — no
+// special-casing needed. Workers AI (env.AI, incl. `.autorag()`) has no local
+// simulator, so it always hits the account
+// (https://developers.cloudflare.com/workers-ai/ — "no local simulator"), and
+// SEARCH_BUCKET is a remote binding in dev exactly like FILES_BUCKET, so `pnpm
+// dev` writes the corpus to (and queries) the real `os-search-index` bucket /
+// `os-search` instance on the preview+dev account. Deploying is only needed to
+// create that instance; querying works from a dev worker.
+//
 // Bucket layout (one folder per source kind, so queries can scope to a kind
 // by tightening the prefix):
 //
