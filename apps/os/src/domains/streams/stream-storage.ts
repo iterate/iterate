@@ -57,6 +57,20 @@ const CHUNK_INSERT_STATEMENTS = createInsertStatements(
 const CURSOR_PROGRESS_STATEMENTS = createCursorProgressStatements(MAX_CURSOR_PROGRESS_ROWS);
 const textEncoder = new TextEncoder();
 
+type PendingSubscriptionProgress = {
+  ackedOffset: number;
+  epoch: number;
+  skippedOffsets: number;
+  deliveredBatches: number;
+};
+
+function isSubscriptionProgressDue(progress: PendingSubscriptionProgress): boolean {
+  return (
+    progress.deliveredBatches >= MAX_UNPERSISTED_DELIVERY_BATCHES ||
+    progress.skippedOffsets >= MAX_UNPERSISTED_SKIP_OFFSETS
+  );
+}
+
 /**
  * A committed event paired with its serialized byte length (the exact bytes
  * stored inline or in `event_chunks`). Delivery batching sizes batches against the byte
@@ -808,10 +822,8 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   >;
   readonly #sql: SqlStorage;
   #cachedRows: Map<string, SubscriptionCursorRow> | undefined;
-  readonly #pendingProgress = new Map<
-    string,
-    { ackedOffset: number; epoch: number; skippedOffsets: number; deliveredBatches: number }
-  >();
+  readonly #pendingProgress = new Map<string, PendingSubscriptionProgress>();
+  #dueProgressRows = 0;
 
   constructor(sql: SqlStorage) {
     this.#sql = sql;
@@ -834,6 +846,20 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     }
     this.#cachedRows = rows;
     return rows;
+  }
+
+  #setPendingProgress(subscriptionKey: string, progress: PendingSubscriptionProgress): void {
+    const previous = this.#pendingProgress.get(subscriptionKey);
+    if (previous !== undefined && isSubscriptionProgressDue(previous)) this.#dueProgressRows -= 1;
+    this.#pendingProgress.set(subscriptionKey, progress);
+    if (isSubscriptionProgressDue(progress)) this.#dueProgressRows += 1;
+  }
+
+  #deletePendingProgress(subscriptionKey: string): void {
+    const previous = this.#pendingProgress.get(subscriptionKey);
+    if (previous === undefined) return;
+    if (isSubscriptionProgressDue(previous)) this.#dueProgressRows -= 1;
+    this.#pendingProgress.delete(subscriptionKey);
   }
 
   get(subscriptionKey: string): SubscriptionCursorRow | undefined {
@@ -894,7 +920,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     } else {
       this.#db.ackFenced({ ...params, epoch });
     }
-    this.#pendingProgress.delete(subscriptionKey);
+    this.#deletePendingProgress(subscriptionKey);
     row.ackedOffset = nextOffset;
     row.attempt = 0;
     row.nextAttemptAt = null;
@@ -908,7 +934,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     const clearsFailure = row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null;
     const pending = this.#pendingProgress.get(subscriptionKey);
     if (nextOffset === row.ackedOffset && pending === undefined && !clearsFailure) return;
-    this.#pendingProgress.set(subscriptionKey, {
+    this.#setPendingProgress(subscriptionKey, {
       ackedOffset: nextOffset,
       epoch,
       skippedOffsets: pending?.skippedOffsets ?? 0,
@@ -928,7 +954,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     if (row === undefined || row.epoch !== epoch || ackedOffset <= row.ackedOffset) return;
     const clearsFailure = row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null;
     const pending = this.#pendingProgress.get(subscriptionKey);
-    this.#pendingProgress.set(subscriptionKey, {
+    this.#setPendingProgress(subscriptionKey, {
       ackedOffset,
       epoch,
       skippedOffsets: (pending?.skippedOffsets ?? 0) + ackedOffset - row.ackedOffset,
@@ -945,13 +971,8 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
 
   flushPending(mode: "due" | "all" = "due"): void {
     if (this.#pendingProgress.size === 0) return;
+    if (mode === "due" && this.#dueProgressRows === 0) return;
     const all = [...this.#pendingProgress.entries()];
-    const checkpointDue = all.some(
-      ([, pending]) =>
-        pending.deliveredBatches >= MAX_UNPERSISTED_DELIVERY_BATCHES ||
-        pending.skippedOffsets >= MAX_UNPERSISTED_SKIP_OFFSETS,
-    );
-    if (mode === "due" && !checkpointDue) return;
     for (let start = 0; start < all.length; start += MAX_CURSOR_PROGRESS_ROWS) {
       const batch = all.slice(start, start + MAX_CURSOR_PROGRESS_ROWS);
       const bindings: SqlStorageValue[] = [];
@@ -959,7 +980,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         bindings.push(subscriptionKey, row.ackedOffset, row.epoch);
       }
       this.#sql.exec(CURSOR_PROGRESS_STATEMENTS[batch.length]!, ...bindings);
-      for (const [subscriptionKey] of batch) this.#pendingProgress.delete(subscriptionKey);
+      for (const [subscriptionKey] of batch) this.#deletePendingProgress(subscriptionKey);
     }
   }
 
@@ -978,7 +999,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       subscriptionKey,
       ackedOffset: nextOffset,
     });
-    this.#pendingProgress.delete(subscriptionKey);
+    this.#deletePendingProgress(subscriptionKey);
     row.ackedOffset = nextOffset;
     row.nextAttemptAt = null;
   }
@@ -1012,7 +1033,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       ackedOffset,
       epoch,
     });
-    this.#pendingProgress.delete(subscriptionKey);
+    this.#deletePendingProgress(subscriptionKey);
     row.ackedOffset = ackedOffset;
     row.attempt = 0;
     row.nextAttemptAt = null;
@@ -1024,7 +1045,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     const rows = this.#rows();
     if (!rows.has(subscriptionKey)) return;
     this.#db.delete({ subscriptionKey });
-    this.#pendingProgress.delete(subscriptionKey);
+    this.#deletePendingProgress(subscriptionKey);
     rows.delete(subscriptionKey);
   }
 

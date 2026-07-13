@@ -1206,6 +1206,28 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(1);
   });
 
+  it("does not flush quiet progress after the only due row is deleted", () => {
+    const db = new DatabaseSync(":memory:");
+    let progressWrites = 0;
+    const store = new SqliteSubscriptionCursorStore(
+      wrapSqlStorage(db, (statement) => {
+        if (statement.includes("with progress(subscription_key")) progressWrites += 1;
+      }),
+    );
+    store.ensure("due", 0);
+    store.ensure("quiet", 0);
+    store.skip("due", 64, store.get("due")!.epoch);
+    store.skip("quiet", 1, store.get("quiet")!.epoch);
+
+    store.delete("due");
+    store.flushPending();
+
+    expect(progressWrites).toBe(0);
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("quiet")!.ackedOffset).toBe(0);
+    store.flushPending("all");
+    expect(progressWrites).toBe(1);
+  });
+
   it("bounds successful push replay to seven batches across drain tails", () => {
     const db = new DatabaseSync(":memory:");
     let progressWrites = 0;
