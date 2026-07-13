@@ -77,10 +77,43 @@ export async function fetchWithCredentialRedirects(
  * A freshly constructed Response has an empty `url` and `redirected: false`;
  * URL-bearing navigation headers are removed while the status and streaming
  * body remain the provider's response.
+ *
+ * WebSocket upgrades: reconstructing with only `body` drops `webSocket` and
+ * silently turns a successful upgrade into a broken non-upgrade response.
+ * Preserve the socket when present (project egress pair-bridges the client leg).
+ *
+ * workerd accepts `webSocket` in ResponseInit (and status 101). Node/undici
+ * rejects 101 and ignores `webSocket` in init — fall back to defineProperty so
+ * unit tests and any non-workerd path still keep the socket reference.
  */
 function sanitizeResponse(response: Response): Response {
   const headers = new Headers(response.headers);
   for (const name of RESPONSE_URL_HEADERS) headers.delete(name);
+  const socket = response.webSocket;
+  if (socket != null) {
+    let sanitized: Response;
+    try {
+      sanitized = new Response(null, {
+        headers,
+        status: response.status,
+        statusText: response.statusText,
+        webSocket: socket,
+      });
+    } catch {
+      sanitized = new Response(null, {
+        headers,
+        status: 200,
+        statusText: response.statusText,
+      });
+    }
+    if (sanitized.webSocket == null) {
+      Object.defineProperty(sanitized, "webSocket", {
+        configurable: true,
+        value: socket,
+      });
+    }
+    return sanitized;
+  }
   return new Response(response.body, {
     headers,
     status: response.status,

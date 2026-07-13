@@ -153,27 +153,6 @@ async function resolveEgressProjectId(
 }
 
 /**
- * How sandbox outbound handles `Upgrade: websocket` requests.
- *
- * - `"direct-fetch"` — ContainerProxy returns bare `fetch(request)`, bypassing
- *   the project DO entirely. Isolates whether Cloudflare containers HTTPS MITM
- *   + ContainerProxy can complete a WebSocket upgrade at all (P0 experiment).
- *   Skips project policy and secret substitution for those upgrades.
- * - `"project"` — normal path: every request (including upgrades) goes through
- *   project egress (policy + secrets), same as ordinary HTTPS.
- *
- * Experiment result (local containers, 2026-07-13): `"direct-fetch"` successfully
- * completed WSS to ws.postman-echo.com under Intercept CA (101 + echo frame).
- * Product default is therefore `"project"` so upgrades keep policy + secrets;
- * set `"direct-fetch"` only when isolating MITM without the project DO hop.
- */
-const SANDBOX_WEBSOCKET_EGRESS: "direct-fetch" | "project" = "project";
-
-function isWebSocketUpgrade(request: Request): boolean {
-  return request.headers.get("Upgrade")?.toLowerCase() === "websocket";
-}
-
-/**
  * The catch-all container-egress handler, per instance type: EVERY outbound
  * request a sandbox container makes (HTTP and, via `interceptHttps`, HTTPS)
  * arrives here and is forwarded to the owning project's Durable Object — the
@@ -195,25 +174,12 @@ function isWebSocketUpgrade(request: Request): boolean {
  * never runs, nothing registers, and every request silently falls through to
  * a direct `fetch` (TLS still MITM'd, but egress bypasses project policy).
  *
- * WebSocket upgrades may take the {@link SANDBOX_WEBSOCKET_EGRESS} shortcut
- * (see constant above) so we can prove MITM upgrade support independently of
- * project/secret DO hops.
+ * WebSocket upgrades use the same project egress door. The Project DO
+ * pair-bridges accepted upgrades (`maybeBridgeWebSocketResponse`) so the
+ * sandbox client leg is owned after handshake secret substitution.
  */
 function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<Env> {
   return async (request, env, ctx) => {
-    if (SANDBOX_WEBSOCKET_EGRESS === "direct-fetch" && isWebSocketUpgrade(request)) {
-      // P0 experiment: bare Workers fetch, no project policy. Logs are the
-      // only observability — check Workers logs for upgrade reachability.
-      console.log("sandbox-ws-direct-fetch", {
-        url: request.url,
-        upgrade: request.headers.get("Upgrade"),
-        connection: request.headers.get("Connection"),
-        secWebSocketKey: request.headers.get("Sec-WebSocket-Key") ? "present" : "absent",
-        containerId: ctx.containerId,
-      });
-      return fetch(request);
-    }
-
     const projectId = await resolveEgressProjectId(env, ctx.containerId, instanceType);
     return projectStub(env.PROJECT, projectId).fetch(request);
   };

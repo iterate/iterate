@@ -2,6 +2,26 @@ import { describe, expect, test, vi } from "vitest";
 import { fetchWithCredentialRedirects, MAX_CREDENTIAL_REDIRECTS } from "./credential-fetch.ts";
 
 describe("fetchWithCredentialRedirects", () => {
+  test("preserves response.webSocket on WebSocket upgrade responses", async () => {
+    // undici/Node rejects status 101 in the Response constructor; workerd
+    // accepts it. Use a normal status and attach `webSocket` the way the
+    // runtime does after a successful upgrade — sanitize must still keep it.
+    const upstreamSocket = { tag: "upstream-ws" };
+    const upstream = new Response(null, { status: 200, statusText: "OK" });
+    Object.defineProperty(upstream, "webSocket", {
+      configurable: true,
+      value: upstreamSocket,
+    });
+
+    const response = await fetchWithCredentialRedirects(
+      new Request("https://allowed.example/ws", { headers: { Upgrade: "websocket" } }),
+      { fetcher: async () => upstream },
+    );
+
+    expect(response.webSocket).toBe(upstreamSocket);
+    expect(response.url).toBe("");
+  });
+
   test("removes the credential-bearing upstream URL from terminal response metadata", async () => {
     const upstream = await fetch("data:application/json,%7B%22ok%22%3Atrue%7D");
     expect(upstream.url).not.toBe("");

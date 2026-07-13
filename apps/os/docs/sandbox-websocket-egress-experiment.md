@@ -44,10 +44,12 @@ buffering — not a blanket intercept limitation.
 2. **Approval hold**: WebSocket upgrades that match a `hold` rule are **denied**
    with a clear message (hold buffers the body and is incompatible with
    upgrades).
-3. **`SANDBOX_WEBSOCKET_EGRESS`**: diagnostic switch in
-   `cloudflare-sandbox-durable-object.ts`:
-   - `"project"` (default) — upgrades through project egress
-   - `"direct-fetch"` — bare `fetch(request)` for upgrades only (MITM isolation)
+3. **Explicit pair bridge** (`websocket-bridge.ts`): project `#egress` always
+   pair-bridges accepted upgrades (`WebSocketPair` + half-open pump) so the
+   sandbox client leg is owned after handshake substitution — not a fragile
+   pass-through of `Response.webSocket`.
+4. **`sanitizeResponse`**: preserves `webSocket` (previously reconstructed body
+   only, which silently killed upgrades on the secret path).
 
 ## How to re-run
 

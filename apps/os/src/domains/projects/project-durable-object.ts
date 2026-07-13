@@ -18,6 +18,7 @@ import type {
 import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
+import { maybeBridgeWebSocketResponse } from "../secrets/websocket-bridge.ts";
 import {
   assertPlatformApiKeyReferencesAllowed,
   substitutePlatformApiKeyReferences,
@@ -577,26 +578,32 @@ export class ProjectDurableObject extends DurableObject<Env> {
           config: parseConfig(this.env),
           request,
         });
-        return await fetchWithCredentialRedirects(substituted, {
+        const response = await fetchWithCredentialRedirects(substituted, {
           assertUrlAllowed: (url) => assertPlatformApiKeyReferencesAllowed(platformReferences, url),
         });
+        return maybeBridgeWebSocketResponse(request, response);
       } catch (error) {
         if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
         throw error;
       }
     }
 
-    if (secretPaths.length === 0) return fetch(request);
+    if (secretPaths.length === 0) {
+      // Bare fetch (no secrets): still pair-bridge WebSocket upgrades so the
+      // sandbox client leg is owned here, not a fragile pass-through socket.
+      return maybeBridgeWebSocketResponse(request, await fetch(request));
+    }
     // One request, one secret: the referenced Secret DO substitutes its own
     // placeholders under its own host pin (cross-secret chaining is gone).
     if (secretPaths.length > 1) return secretErrorResponse("secret_reference_foreign");
 
-    return this.env.SECRET.getByName(
+    const secretResponse = await this.env.SECRET.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,
         path: secretPaths[0]!,
       }),
     ).fetch(request);
+    return maybeBridgeWebSocketResponse(request, secretResponse);
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
