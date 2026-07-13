@@ -176,13 +176,10 @@ export function RepoTasksView({
     setEditorPath(path);
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
   };
-  const persistDraft = (path = draft?.path) => {
-    if (draft === undefined) return;
-    const persisted = path === undefined ? null : repoTaskWithPath(draft, path, effectivePaths);
-    if (persisted === null) return false;
-    onSetWorking(persisted.path, { type: "write", content: persisted.content });
+  const persistDraft = (task = draft) => {
+    if (task === undefined) return;
+    onSetWorking(task.path, { type: "write", content: task.content });
     setDraft(undefined);
-    return true;
   };
   const openTask = (task: RepoTask) => {
     // Starting another action should never silently replace a new task. Put
@@ -248,16 +245,15 @@ export function RepoTasksView({
     );
     moveTaskToPath(task, targetPath, content);
   };
-  const renameTask = (task: RepoTask, path: string) => {
-    const renamed = repoTaskWithPath(task, path, effectivePaths);
-    return renamed !== null && moveTaskToPath(task, renamed.path);
-  };
-  const renameDraft = (path: string) => {
-    if (draft === undefined) return false;
-    const renamed = repoTaskWithPath(draft, path, effectivePaths);
-    if (renamed === null) return false;
-    setDraft(renamed);
-    return true;
+  const resolveEditorPath = (path: string) => {
+    const task = editorTask;
+    if (task === undefined) return undefined;
+    const resolved = repoTaskWithPath(task, path, effectivePaths);
+    if (resolved === null) return undefined;
+    if (resolved.path === task.path) return task;
+    if (draft !== undefined) setDraft(resolved);
+    else if (!moveTaskToPath(task, resolved.path)) return undefined;
+    return resolved;
   };
   const updateEditorContent = (content: string, syncPath: boolean) => {
     const task = editorTask;
@@ -273,14 +269,11 @@ export function RepoTasksView({
     } else if (nextPath === task.path) writeTask(task, content);
     else moveTaskToPath(task, nextPath, content);
   };
-  const closeEditor = (path?: string) => {
+  const closeEditor = (task: RepoTask) => {
     // Dismissing a new-task sheet should behave like switching cards: keep
     // what was typed as an ordinary uncommitted working-tree file.
-    if (draft !== undefined && persistDraft(path) === false) return false;
-    if (draft === undefined && selectedTask !== undefined && path !== undefined)
-      if (!renameTask(selectedTask, path)) return false;
+    if (draft !== undefined) persistDraft(task);
     selectTask(undefined);
-    return true;
   };
   useEffect(() => setEditorPath(selectedPath), [selectedPath]);
 
@@ -313,9 +306,7 @@ export function RepoTasksView({
         projectSlug={projectSlug}
         isNew={draft !== undefined}
         columns={columns}
-        onOpenChange={(open, path) => {
-          if (!open) closeEditor(path);
-        }}
+        onDismiss={closeEditor}
         onChangeContent={updateEditorContent}
         onChangeState={(state) => {
           if (draft !== undefined) {
@@ -324,33 +315,19 @@ export function RepoTasksView({
           } else if (selectedTask !== undefined)
             writeTask(selectedTask, updateRepoTaskState(selectedTask.content, state));
         }}
-        onRenamePath={(path) =>
-          draft !== undefined
-            ? renameDraft(path)
-            : selectedTask === undefined
-              ? false
-              : renameTask(selectedTask, path)
+        onResolvePath={resolveEditorPath}
+        onOpenInEditor={(task) =>
+          onPatchSearch({
+            file: task.path,
+            tasks: undefined,
+            diff: undefined,
+            preview: undefined,
+            staged: undefined,
+          })
         }
-        onOpenInEditor={() => {
-          if (selectedTask !== undefined)
-            onPatchSearch({
-              file: selectedTask.path,
-              tasks: undefined,
-              diff: undefined,
-              preview: undefined,
-              staged: undefined,
-            });
-        }}
-        onDelete={() => {
-          if (selectedTask !== undefined) deleteTask(selectedTask);
-        }}
+        onDelete={deleteTask}
         onSubmit={closeEditor}
-        onAssignAgent={async (path) => {
-          if (selectedTask === undefined) return undefined;
-          const renamed = repoTaskWithPath(selectedTask, path, effectivePaths);
-          if (renamed === null || !moveTaskToPath(selectedTask, renamed.path)) return undefined;
-          return onAssignAgent(renamed);
-        }}
+        onAssignAgent={onAssignAgent}
       />
     </div>
   );
@@ -702,10 +679,10 @@ function TaskEditorSheet({
   projectSlug,
   isNew,
   columns,
-  onOpenChange,
+  onDismiss,
   onChangeContent,
   onChangeState,
-  onRenamePath,
+  onResolvePath,
   onOpenInEditor,
   onDelete,
   onSubmit,
@@ -715,14 +692,14 @@ function TaskEditorSheet({
   projectSlug: string;
   isNew: boolean;
   columns: readonly string[];
-  onOpenChange: (open: boolean, path: string) => void;
+  onDismiss: (task: RepoTask) => void;
   onChangeContent: (content: string, syncPath: boolean) => void;
   onChangeState: (state: string) => void;
-  onRenamePath: (path: string) => boolean;
-  onOpenInEditor: () => void;
-  onDelete: () => void;
-  onSubmit: (path: string) => boolean;
-  onAssignAgent: (path: string) => Promise<string | undefined>;
+  onResolvePath: (path: string) => RepoTask | undefined;
+  onOpenInEditor: (task: RepoTask) => void;
+  onDelete: (task: RepoTask) => void;
+  onSubmit: (task: RepoTask) => void;
+  onAssignAgent: (task: RepoTask) => Promise<string | undefined>;
 }) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -755,13 +732,32 @@ function TaskEditorSheet({
     setAssigning(false);
   }, [taskPath]);
 
-  const submit = () => {
-    if (task === undefined) return;
-    onSubmit(pathValue);
+  const resolvePath = () => {
+    if (task === undefined) return undefined;
+    if (!pathWasEdited) return task;
+    const resolved = onResolvePath(pathValue);
+    if (resolved === undefined) {
+      setPathValue(`/${task.path}`);
+      setPathWasEdited(false);
+      return undefined;
+    }
+    setPathValue(`/${resolved.path}`);
+    setPathWasEdited(false);
+    return resolved;
+  };
+
+  const withResolvedPath = (action: (resolved: RepoTask) => void) => {
+    const resolved = resolvePath();
+    if (resolved !== undefined) action(resolved);
   };
 
   return (
-    <Sheet open={task !== undefined} onOpenChange={(open) => onOpenChange(open, pathValue)}>
+    <Sheet
+      open={task !== undefined}
+      onOpenChange={(open) => {
+        if (!open) withResolvedPath(onDismiss);
+      }}
+    >
       {task === undefined ? null : (
         <SheetContent
           initialFocus={false}
@@ -780,15 +776,10 @@ function TaskEditorSheet({
                 setPathWasEdited(true);
                 setPathValue(event.currentTarget.value);
               }}
-              onBlur={(event) => {
-                if (!onRenamePath(event.currentTarget.value)) {
-                  setPathValue(`/${task.path}`);
-                  setPathWasEdited(false);
-                }
-              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
+                  resolvePath();
                   event.currentTarget.blur();
                 } else if (event.key === "Escape") {
                   setPathValue(`/${task.path}`);
@@ -816,7 +807,7 @@ function TaskEditorSheet({
             </Select>
             <div className="ml-auto flex min-w-0 items-center gap-1">
               {isNew ? (
-                <Button size="sm" onClick={submit}>
+                <Button size="sm" onClick={() => withResolvedPath(onSubmit)}>
                   Create task
                   <kbd className="ml-1 hidden font-sans text-[10px] opacity-70 sm:inline">⌘↵</kbd>
                 </Button>
@@ -828,8 +819,10 @@ function TaskEditorSheet({
                       size="sm"
                       disabled={assigning}
                       onClick={async () => {
+                        const resolved = resolvePath();
+                        if (resolved === undefined) return;
                         setAssigning(true);
-                        const agent = await onAssignAgent(pathValue);
+                        const agent = await onAssignAgent(resolved);
                         if (agent !== undefined) setAssignedAgent(agent);
                         setAssigning(false);
                       }}
@@ -853,7 +846,7 @@ function TaskEditorSheet({
                     size="sm"
                     className="shrink-0 text-muted-foreground"
                     title="Open in editor"
-                    onClick={onOpenInEditor}
+                    onClick={() => withResolvedPath(onOpenInEditor)}
                   >
                     <FilePenLineIcon data-icon="inline-start" />
                     <span className="hidden sm:inline">Editor</span>
@@ -864,7 +857,7 @@ function TaskEditorSheet({
                     className="shrink-0 text-muted-foreground hover:text-destructive"
                     title="Delete task"
                     aria-label="Delete task"
-                    onClick={() => setDeleteOpen(true)}
+                    onClick={() => withResolvedPath(() => setDeleteOpen(true))}
                   >
                     <Trash2Icon data-icon="inline-start" />
                   </Button>
@@ -886,7 +879,7 @@ function TaskEditorSheet({
                 !event.nativeEvent.isComposing
               ) {
                 event.preventDefault();
-                submit();
+                withResolvedPath(onSubmit);
               }
             }}
             className="min-h-0 flex-1 resize-none rounded-none border-0 px-5 py-4 font-mono text-sm leading-relaxed focus-visible:border-transparent focus-visible:ring-0"
@@ -906,7 +899,7 @@ function TaskEditorSheet({
                   variant="destructive"
                   onClick={() => {
                     setDeleteOpen(false);
-                    onDelete();
+                    withResolvedPath(onDelete);
                   }}
                 >
                   Delete task

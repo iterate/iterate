@@ -70,7 +70,7 @@ test("reads canonical frontmatter fields literally", () => {
   expect(unrelatedMetadata?.labels).toEqual([]);
 
   const backlog = parseRepoTask("tasks/backlog.md", "---\nstate: backlog\n---\n# Backlog\n");
-  expect(backlog?.state).toBe("backlog");
+  expect(backlog?.state).toBe("todo");
 });
 
 test("uses an explicit title before the first heading", () => {
@@ -212,7 +212,7 @@ test("reserves a task path that exists at HEAD while its deletion is pending", (
 
 test("keeps the core columns and appends states found in the repo", () => {
   const task = parseRepoTask("tasks/review.md", "---\nstate: in-review\n---\n# Review\n")!;
-  expect(taskStateColumns([task])).toEqual(["backlog", "todo", "in-progress", "in-review", "done"]);
+  expect(taskStateColumns([task])).toEqual(["todo", "in-progress", "in-review", "done"]);
 });
 
 test("queries a status board with folders as an independent row dimension", () => {
@@ -223,7 +223,7 @@ test("queries a status board with folders as an independent row dimension", () =
   ];
   const board = queryRepoTaskBoard(tasks, { filter: "", columns: "state", rows: "folder" });
 
-  expect(board.states).toEqual(["backlog", "todo", "in-progress", "in-review", "done"]);
+  expect(board.states).toEqual(["todo", "in-progress", "in-review", "done"]);
   expect(board.visibleProperties).toEqual({ folder: false, state: false, labels: true });
   expect(board.rows.map((row) => row.label)).toEqual(["/", "/apps/os"]);
   expect(board.rows[1]?.cells.find((cell) => cell.state === "todo")?.tasks[0]?.title).toBe(
