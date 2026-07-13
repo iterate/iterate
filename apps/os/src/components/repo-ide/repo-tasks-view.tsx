@@ -116,6 +116,7 @@ export function RepoTasksView({
   onAssignAgent: (task: RepoTask) => Promise<string | undefined>;
 }) {
   const [draft, setDraft] = useState<RepoTask | undefined>();
+  const [editorPath, setEditorPath] = useState(selectedPath);
   const lastCreationContext = useRef<{
     state: string;
     folderPath: string;
@@ -162,14 +163,18 @@ export function RepoTasksView({
   }, [changes, headPaths]);
 
   const columns = taskStateColumns(tasks);
-  const selectedTask = tasks.find((task) => task.path === selectedPath);
+  const selectedTask = tasks.find((task) => task.path === editorPath);
   const editorTask = draft ?? selectedTask;
   const writeTask = (task: RepoTask, content: string) => {
     const baseline = textContentForEntry(changes.get(task.path)?.staged) ?? headContents[task.path];
     onSetWorking(task.path, content === baseline ? undefined : { type: "write", content });
   };
-  const selectTask = (path: string | undefined) =>
+  const selectTask = (path: string | undefined) => {
+    // Keep the editor bound to its destination synchronously. Working-tree
+    // renames update the task list before router navigation can update the URL.
+    setEditorPath(path);
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
+  };
   const persistDraft = () => {
     if (draft === undefined) return;
     onSetWorking(draft.path, { type: "write", content: draft.content });
@@ -209,7 +214,7 @@ export function RepoTasksView({
   const moveTaskToPath = (task: RepoTask, targetPath: string, content = task.content) => {
     if (targetPath === task.path) return true;
     if (effectivePaths.has(targetPath)) return false;
-    const wasSelected = selectedPath === task.path;
+    const wasSelected = editorPath === task.path;
     onDelete(task.path);
     onSetWorking(targetPath, { type: "write", content });
     if (wasSelected) selectTask(targetPath);
@@ -279,13 +284,12 @@ export function RepoTasksView({
     else moveTaskToPath(task, nextPath, content);
   };
   const closeEditor = () => {
-    setDraft(undefined);
+    // Dismissing a new-task sheet should behave like switching cards: keep
+    // what was typed as an ordinary uncommitted working-tree file.
+    persistDraft();
     selectTask(undefined);
   };
-  const submitEditor = () => {
-    if (draft !== undefined) onSetWorking(draft.path, { type: "write", content: draft.content });
-    closeEditor();
-  };
+  useEffect(() => setEditorPath(selectedPath), [selectedPath]);
 
   useEffect(() => {
     const createFromKeyboard = (event: KeyboardEvent) => {
@@ -347,7 +351,7 @@ export function RepoTasksView({
         onDelete={() => {
           if (selectedTask !== undefined) deleteTask(selectedTask);
         }}
-        onSubmit={submitEditor}
+        onSubmit={closeEditor}
         onAssignAgent={async () => {
           if (selectedTask !== undefined) return onAssignAgent(selectedTask);
           return undefined;
