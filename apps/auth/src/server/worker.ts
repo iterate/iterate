@@ -18,6 +18,7 @@ import { hono, variablesProvider, type Variables } from "./utils/hono.ts";
 import { appRouter } from "./orpc/index.ts";
 import type { CloudflareEnv } from "./env.ts";
 import { appendSetCookieHeaders, resolveAuthLogoutReturnTo } from "./logout.ts";
+import { makeAuthorizationResponseIssuerOptional } from "./oauth-metadata.ts";
 
 const app = hono();
 const allowedBrowserOrigins = new Set(getAllowedBrowserOrigins());
@@ -38,17 +39,17 @@ app.use(
   variablesProvider(),
 );
 
-app.get("/api/auth/.well-known/openid-configuration", (c) =>
-  oauthProviderOpenIdConfigMetadata(auth)(c.req.raw),
+app.get("/api/auth/.well-known/openid-configuration", async (c) =>
+  makeAuthorizationResponseIssuerOptional(await oauthProviderOpenIdConfigMetadata(auth)(c.req.raw)),
 );
-app.get(`/.well-known/openid-configuration${AUTH_ISSUER_PATH}`, (c) =>
-  oauthProviderOpenIdConfigMetadata(auth)(c.req.raw),
+app.get(`/.well-known/openid-configuration${AUTH_ISSUER_PATH}`, async (c) =>
+  makeAuthorizationResponseIssuerOptional(await oauthProviderOpenIdConfigMetadata(auth)(c.req.raw)),
 );
-app.get("/api/auth/.well-known/oauth-authorization-server", (c) =>
-  oauthProviderAuthServerMetadata(auth)(c.req.raw),
+app.get("/api/auth/.well-known/oauth-authorization-server", async (c) =>
+  makeAuthorizationResponseIssuerOptional(await oauthProviderAuthServerMetadata(auth)(c.req.raw)),
 );
-app.get(`/.well-known/oauth-authorization-server${AUTH_ISSUER_PATH}`, (c) =>
-  oauthProviderAuthServerMetadata(auth)(c.req.raw),
+app.get(`/.well-known/oauth-authorization-server${AUTH_ISSUER_PATH}`, async (c) =>
+  makeAuthorizationResponseIssuerOptional(await oauthProviderAuthServerMetadata(auth)(c.req.raw)),
 );
 app.all("/api/auth/oauth2/authorize", async (c) =>
   preserveOAuthResourceRedirect(c.req.raw, await auth.handler(c.req.raw)),
