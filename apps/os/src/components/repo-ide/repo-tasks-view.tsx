@@ -5,6 +5,7 @@ import {
   CircleDashedIcon,
   CircleDotDashedIcon,
   CircleIcon,
+  BotIcon,
   FilePenLineIcon,
   FolderIcon,
   PlusIcon,
@@ -57,7 +58,9 @@ import {
   isRepoTaskPath,
   parseRepoTask,
   queryRepoTaskBoard,
+  repoTaskHeadingTitle,
   repoTaskCreationPaths,
+  repoTaskPathForTitle,
   repoTaskPathInDirectory,
   taskDirectoryForFolder,
   taskStateColumns,
@@ -95,6 +98,7 @@ export function RepoTasksView({
   onPatchSearch,
   onSetWorking,
   onDelete,
+  onAssignAgent,
 }: {
   projectId: string;
   repoPath: string;
@@ -105,7 +109,14 @@ export function RepoTasksView({
   onPatchSearch: (patch: SearchPatch) => void;
   onSetWorking: (path: string, entry: FileEntry | undefined) => void;
   onDelete: (path: string) => void;
+  onAssignAgent: (task: RepoTask) => Promise<void>;
 }) {
+  const [draft, setDraft] = useState<RepoTask | undefined>();
+  const lastCreationContext = useRef<{
+    state: string;
+    folderPath: string;
+    labels?: readonly string[];
+  }>({ state: "todo", folderPath: "/" });
   const headTaskPaths = useMemo(() => headPaths.filter(isRepoTaskPath), [headPaths]);
   const headContents = useItxQuery({
     key: ["repo-task-files", projectId, repoPath, headCommitOid, headTaskPaths.join("\n")],
@@ -148,6 +159,7 @@ export function RepoTasksView({
 
   const columns = taskStateColumns(tasks);
   const selectedTask = tasks.find((task) => task.path === selectedPath);
+  const editorTask = draft ?? selectedTask;
   const writeTask = (task: RepoTask, content: string) => {
     const baseline = textContentForEntry(changes.get(task.path)?.staged) ?? headContents[task.path];
     onSetWorking(task.path, content === baseline ? undefined : { type: "write", content });
@@ -155,13 +167,21 @@ export function RepoTasksView({
   const selectTask = (path: string | undefined) =>
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
   const createTask = (state: string, folderPath: string, labels?: readonly string[]) => {
+    lastCreationContext.current = {
+      state,
+      folderPath,
+      ...(labels === undefined ? {} : { labels }),
+    };
     const created = createRepoTask("New task", effectivePaths, taskDirectoryForFolder(folderPath));
     if (created === null) return;
-    const initialContent = `${created.content}\n`;
+    const initialContent = created.content;
     let content = state === "todo" ? initialContent : updateRepoTaskState(initialContent, state);
     if (labels !== undefined && labels.length > 0) content = updateRepoTaskLabels(content, labels);
-    onSetWorking(created.path, { type: "write", content });
-    selectTask(created.path);
+    const createdDraft = parseRepoTask(created.path, content);
+    if (createdDraft !== null) {
+      selectTask(undefined);
+      setDraft(createdDraft);
+    }
   };
   const deleteTask = (task: RepoTask) => {
     onDelete(task.path);
@@ -210,6 +230,64 @@ export function RepoTasksView({
       return false;
     return moveTaskToPath(task, targetPath);
   };
+  const renameDraft = (path: string) => {
+    if (draft === undefined) return false;
+    const targetPath = path.trim().replace(/^\/+/, "");
+    const segments = targetPath.split("/");
+    if (
+      !isRepoTaskPath(targetPath) ||
+      effectivePaths.has(targetPath) ||
+      segments.some((segment) => segment === "" || segment === "." || segment === "..")
+    )
+      return false;
+    const renamed = parseRepoTask(targetPath, draft.content);
+    if (renamed === null) return false;
+    setDraft(renamed);
+    return true;
+  };
+  const updateEditorContent = (content: string, syncPath: boolean) => {
+    const task = editorTask;
+    if (task === undefined) return;
+    const headingTitle = syncPath ? repoTaskHeadingTitle(content) : undefined;
+    const nextPath =
+      headingTitle === undefined
+        ? task.path
+        : repoTaskPathForTitle(task.path, headingTitle, effectivePaths);
+    if (draft !== undefined) {
+      const updated = parseRepoTask(nextPath, content);
+      if (updated !== null) setDraft(updated);
+    } else if (nextPath === task.path) writeTask(task, content);
+    else moveTaskToPath(task, nextPath, content);
+  };
+  const closeEditor = () => {
+    setDraft(undefined);
+    selectTask(undefined);
+  };
+  const submitEditor = () => {
+    if (draft !== undefined) onSetWorking(draft.path, { type: "write", content: draft.content });
+    closeEditor();
+  };
+
+  useEffect(() => {
+    const createFromKeyboard = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        event.key.toLocaleLowerCase() !== "c" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        editorTask !== undefined ||
+        (target instanceof HTMLElement &&
+          (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)))
+      )
+        return;
+      event.preventDefault();
+      const context = lastCreationContext.current;
+      createTask(context.state, context.folderPath, context.labels);
+    };
+    window.addEventListener("keydown", createFromKeyboard);
+    return () => window.removeEventListener("keydown", createFromKeyboard);
+  });
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -220,20 +298,26 @@ export function RepoTasksView({
         onCreate={createTask}
       />
       <TaskEditorSheet
-        task={selectedTask}
+        task={editorTask}
+        isNew={draft !== undefined}
         columns={columns}
         onOpenChange={(open) => {
-          if (!open) selectTask(undefined);
+          if (!open) closeEditor();
         }}
-        onChangeContent={(content) => {
-          if (selectedTask !== undefined) writeTask(selectedTask, content);
-        }}
+        onChangeContent={updateEditorContent}
         onChangeState={(state) => {
-          if (selectedTask !== undefined)
+          if (draft !== undefined) {
+            const updated = parseRepoTask(draft.path, updateRepoTaskState(draft.content, state));
+            if (updated !== null) setDraft(updated);
+          } else if (selectedTask !== undefined)
             writeTask(selectedTask, updateRepoTaskState(selectedTask.content, state));
         }}
         onRenamePath={(path) =>
-          selectedTask === undefined ? false : renameTask(selectedTask, path)
+          draft !== undefined
+            ? renameDraft(path)
+            : selectedTask === undefined
+              ? false
+              : renameTask(selectedTask, path)
         }
         onOpenInEditor={() => {
           if (selectedTask !== undefined)
@@ -247,6 +331,10 @@ export function RepoTasksView({
         }}
         onDelete={() => {
           if (selectedTask !== undefined) deleteTask(selectedTask);
+        }}
+        onSubmit={submitEditor}
+        onAssignAgent={async () => {
+          if (selectedTask !== undefined) await onAssignAgent(selectedTask);
         }}
       />
     </div>
@@ -471,8 +559,8 @@ function TaskColumn({
       ref={ref}
       data-task-cell={dropId}
       className={cn(
-        "flex min-h-52 min-w-[calc(100vw-3.5rem)] flex-1 basis-72 snap-start flex-col rounded-lg bg-background/70 transition-colors sm:min-w-72",
-        isDropTarget && "bg-accent/40",
+        "flex min-h-36 min-w-[calc(100vw-3.5rem)] flex-1 basis-72 snap-start flex-col pb-4 transition-colors sm:min-w-72",
+        isDropTarget && "rounded-lg bg-accent/40",
       )}
     >
       {showHeader ? (
@@ -480,11 +568,10 @@ function TaskColumn({
           <div className="flex min-w-0 items-center gap-2">
             <TaskStateIcon state={state} />
             <h2 className="truncate text-sm font-medium">{label}</h2>
-            <span className="text-xs tabular-nums text-muted-foreground">{tasks.length}</span>
           </div>
         </header>
       ) : null}
-      <div className="flex min-h-0 flex-1 flex-col px-2 pb-1">
+      <div className="flex min-h-0 flex-col px-2">
         <div className="flex flex-col gap-2">
           {tasks.map((task) => (
             <TaskCard
@@ -496,17 +583,15 @@ function TaskColumn({
             />
           ))}
         </div>
-        <div className="group/task-footer mt-auto min-h-16 pt-3 pb-2">
-          <Button
-            variant="ghost"
-            className="h-10 w-full border border-dashed border-border/70 text-muted-foreground/60 opacity-100 transition-[opacity,background-color,color] pointer-fine:opacity-0 group-hover/task-footer:opacity-100! focus-visible:opacity-100! hover:bg-muted/70 hover:text-muted-foreground"
-            title={`Add task to ${creationLabel}`}
-            aria-label={`Add task to ${creationLabel}`}
-            onClick={onCreate}
-          >
-            <PlusIcon className="size-5" data-icon="inline-start" />
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          className="mt-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
+          title={`Add task to ${creationLabel}`}
+          aria-label={`Add task to ${creationLabel}`}
+          onClick={onCreate}
+        >
+          <PlusIcon data-icon="inline-start" />
+        </Button>
       </div>
     </section>
   );
@@ -597,6 +682,7 @@ function TaskStateIcon({ state, className }: { state: string; className?: string
 
 function TaskEditorSheet({
   task,
+  isNew,
   columns,
   onOpenChange,
   onChangeContent,
@@ -604,30 +690,66 @@ function TaskEditorSheet({
   onRenamePath,
   onOpenInEditor,
   onDelete,
+  onSubmit,
+  onAssignAgent,
 }: {
   task: RepoTask | undefined;
+  isNew: boolean;
   columns: readonly string[];
   onOpenChange: (open: boolean) => void;
-  onChangeContent: (content: string) => void;
+  onChangeContent: (content: string, syncPath: boolean) => void;
   onChangeState: (state: string) => void;
   onRenamePath: (path: string) => boolean;
   onOpenInEditor: () => void;
   onDelete: () => void;
+  onSubmit: () => void;
+  onAssignAgent: () => Promise<void>;
 }) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const wasOpenRef = useRef(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [pathValue, setPathValue] = useState("");
+  const [pathWasEdited, setPathWasEdited] = useState(false);
+  const [assigning, setAssigning] = useState(false);
   const taskPath = task?.path;
+
   useEffect(() => {
-    if (taskPath === undefined) return;
+    if (taskPath === undefined) {
+      wasOpenRef.current = false;
+      setPathWasEdited(false);
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
+    setPathValue(`/${taskPath}`);
+    setPathWasEdited(false);
     const focusEditor = () => {
       const editor = editorRef.current;
       if (editor === null) return;
       editor.focus();
+      if (isNew) {
+        const heading = /^#\s+(.+?)\s*#*\s*$/m.exec(editor.value);
+        const title = heading?.[1];
+        if (heading?.index !== undefined && title !== undefined) {
+          const start = heading.index + heading[0].indexOf(title);
+          editor.setSelectionRange(start, start + title.length);
+          return;
+        }
+      }
       editor.setSelectionRange(editor.value.length, editor.value.length);
     };
     const timeout = window.setTimeout(focusEditor, 250);
     return () => window.clearTimeout(timeout);
-  }, [taskPath]);
+  }, [isNew, taskPath]);
+
+  useEffect(() => {
+    if (taskPath !== undefined && !pathWasEdited) setPathValue(`/${taskPath}`);
+  }, [pathWasEdited, taskPath]);
+
+  const submit = () => {
+    if (task === undefined) return;
+    onSubmit();
+  };
 
   return (
     <Sheet open={task !== undefined} onOpenChange={onOpenChange}>
@@ -642,26 +764,32 @@ function TaskEditorSheet({
               Edit the task Markdown and file metadata.
             </SheetDescription>
             <Input
-              key={task.path}
-              defaultValue={`/${task.path}`}
+              value={pathValue}
               aria-label="Task file path"
               className="h-6 rounded-none border-0 px-0 font-mono text-xs text-muted-foreground shadow-none focus-visible:ring-0"
+              onChange={(event) => {
+                setPathWasEdited(true);
+                setPathValue(event.currentTarget.value);
+              }}
               onBlur={(event) => {
-                if (!onRenamePath(event.currentTarget.value))
-                  event.currentTarget.value = `/${task.path}`;
+                if (!onRenamePath(event.currentTarget.value)) {
+                  setPathValue(`/${task.path}`);
+                  setPathWasEdited(false);
+                }
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
                   event.currentTarget.blur();
                 } else if (event.key === "Escape") {
-                  event.currentTarget.value = `/${task.path}`;
+                  setPathValue(`/${task.path}`);
+                  setPathWasEdited(false);
                   event.currentTarget.blur();
                 }
               }}
             />
           </SheetHeader>
-          <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+          <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
             <Select value={task.state} onValueChange={(value) => value && onChangeState(value)}>
               <SelectTrigger aria-label="Task state" size="sm" className="w-32 shrink-0">
                 <SelectValue />
@@ -677,36 +805,76 @@ function TaskEditorSheet({
                 </SelectGroup>
               </SelectContent>
             </Select>
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-muted-foreground">
-              <FolderIcon aria-hidden className="size-3.5 shrink-0" />
-              <span className="truncate font-mono">{task.folderPath}</span>
+            <div className="ml-auto flex min-w-0 items-center gap-1">
+              {isNew ? (
+                <Button size="sm" onClick={submit}>
+                  Create task
+                  <kbd className="ml-1 hidden font-sans text-[10px] opacity-70 sm:inline">⌘↵</kbd>
+                </Button>
+              ) : (
+                <>
+                  {task.agent === undefined ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={assigning}
+                      onClick={() => {
+                        setAssigning(true);
+                        void onAssignAgent().finally(() => setAssigning(false));
+                      }}
+                    >
+                      <BotIcon data-icon="inline-start" />
+                      {assigning ? "Assigning…" : "Assign agent"}
+                    </Button>
+                  ) : (
+                    <span
+                      className="hidden max-w-48 truncate font-mono text-xs text-muted-foreground sm:block"
+                      title={task.agent}
+                    >
+                      {task.agent}
+                    </span>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 text-muted-foreground"
+                    title="Open in editor"
+                    onClick={onOpenInEditor}
+                  >
+                    <FilePenLineIcon data-icon="inline-start" />
+                    <span className="hidden sm:inline">Editor</span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="shrink-0 text-muted-foreground hover:text-destructive"
+                    title="Delete task"
+                    aria-label="Delete task"
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    <Trash2Icon data-icon="inline-start" />
+                  </Button>
+                </>
+              )}
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="shrink-0 text-muted-foreground"
-              title="Open in editor"
-              onClick={onOpenInEditor}
-            >
-              <FilePenLineIcon data-icon="inline-start" />
-              Editor
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="shrink-0 text-muted-foreground hover:text-destructive"
-              title="Delete task"
-              aria-label="Delete task"
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2Icon data-icon="inline-start" />
-            </Button>
           </div>
           <Textarea
             ref={editorRef}
             aria-label={`Edit ${task.title} Markdown`}
             value={task.content}
-            onChange={(event) => onChangeContent(event.currentTarget.value)}
+            onChange={(event) =>
+              onChangeContent(event.currentTarget.value, isNew && !pathWasEdited)
+            }
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                (event.metaKey || event.ctrlKey) &&
+                !event.nativeEvent.isComposing
+              ) {
+                event.preventDefault();
+                submit();
+              }
+            }}
             className="min-h-0 flex-1 resize-none rounded-none border-0 px-5 py-4 font-mono text-sm leading-relaxed focus-visible:border-transparent focus-visible:ring-0"
           />
           <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>

@@ -3,13 +3,18 @@ import {
   createRepoTask,
   isRepoTaskPath,
   parseRepoTask,
+  prepareRepoTaskAssignment,
   queryRepoTaskBoard,
+  repoTaskAgentPath,
+  repoTaskHeadingTitle,
+  repoTaskPathForTitle,
   repoTaskPathInDirectory,
   repoTaskCreationPaths,
   taskDirectoryForFolder,
   taskDirectoryForPath,
   taskStateColumns,
   updateRepoTaskLabels,
+  updateRepoTaskAgent,
   updateRepoTaskState,
 } from "./repo-tasks.ts";
 
@@ -33,6 +38,8 @@ test("projects a bare Markdown file into a task", () => {
     description: "Measure first.",
     state: "todo",
     labels: [],
+    agent: undefined,
+    comments: [],
     content: "# Make OS faster\n\nMeasure first.\n",
   });
 });
@@ -71,6 +78,27 @@ test("uses an explicit title before the first heading", () => {
   expect(task?.description).toBe("Description.");
 });
 
+test("reads an assigned agent and a permissive final comments log", () => {
+  const task = parseRepoTask(
+    "tasks/assigned.md",
+    "---\nagent: /agents/repos/config/tasks/assigned\n---\n# Assigned\n\nDo it.\n\n## Comments\n\nA loose note.\n\n### 2026-07-13T12:00:00Z — agent\n\nStarted.\n\n### malformed but fine\nDone.\n",
+  );
+
+  expect(task?.description).toBe("Do it.");
+  expect(task?.agent).toBe("/agents/repos/config/tasks/assigned");
+  expect(task?.comments).toEqual([
+    { heading: undefined, body: "A loose note." },
+    { heading: "2026-07-13T12:00:00Z — agent", body: "Started." },
+    { heading: "malformed but fine", body: "Done." },
+  ]);
+});
+
+test("treats an unstructured comments section as one lightweight comment", () => {
+  const task = parseRepoTask("tasks/log.md", "# Log\n\nBody.\n\n## Comments\nnot structured");
+  expect(task?.description).toBe("Body.");
+  expect(task?.comments).toEqual([{ heading: undefined, body: "not structured" }]);
+});
+
 test("updates state while preserving unrelated YAML, comments, and Markdown", () => {
   const content = "---\n# keep this\nstate: todo\nsize: small\n---\n\n# Ship it\n\nBody.\n";
   const updated = updateRepoTaskState(content, "in-progress");
@@ -96,6 +124,12 @@ test("updates labels stored in frontmatter", () => {
   expect(removed).toBe("\n# Labels\n");
 });
 
+test("updates and clears an agent property", () => {
+  const assigned = updateRepoTaskAgent("# Assign me\n", "/agents/repos/config/tasks/assign-me");
+  expect(assigned).toContain("agent: /agents/repos/config/tasks/assign-me");
+  expect(updateRepoTaskAgent(assigned, undefined)).toBe("\n# Assign me\n");
+});
+
 test("replaces mixed canonical and legacy labels without leaving stale tags", () => {
   const content = "---\nlabels: [ui, polish]\ntags: [v1, polish]\n---\n# Mixed labels\n";
   const updated = updateRepoTaskLabels(content, ["ui"]);
@@ -111,6 +145,42 @@ test("creates a bare task with a stable collision-free path", () => {
     content: "# Ship the board!\n",
   });
   expect(createRepoTask("   ", paths)).toBeNull();
+});
+
+test("derives bounded collision-safe filenames from the first heading", () => {
+  expect(repoTaskHeadingTitle("---\nstate: todo\n---\n# A Better Name\n\nBody")).toBe(
+    "A Better Name",
+  );
+  expect(
+    repoTaskPathForTitle(
+      "apps/os/tasks/new-task.md",
+      "A Better Name",
+      new Set(["apps/os/tasks/a-better-name.md"]),
+    ),
+  ).toBe("apps/os/tasks/a-better-name-2.md");
+  const longPath = repoTaskPathForTitle(
+    "tasks/new-task.md",
+    "A title that is intentionally much much much much much much much much much much longer than a filename should be",
+    new Set(),
+  );
+  expect(longPath).toMatch(/^tasks\/[a-z0-9-]{1,64}\.md$/);
+});
+
+test("prepares a deterministic durable agent assignment", () => {
+  const task = parseRepoTask("apps/os/tasks/Ship This.md", "# Ship this\n\nPlease finish it.\n")!;
+  const assignment = prepareRepoTaskAssignment(task, "/repos/config");
+
+  expect(repoTaskAgentPath("/repos/config", task.path)).toBe(
+    "/agents/repos/config/tasks/apps-os-tasks-ship-this",
+  );
+  expect(assignment.agentPath).toBe("/agents/repos/config/tasks/apps-os-tasks-ship-this");
+  expect(parseRepoTask(task.path, assignment.content)).toMatchObject({
+    state: "in-progress",
+    agent: assignment.agentPath,
+  });
+  expect(assignment.instructions).toContain(task.path);
+  expect(assignment.instructions).toContain("## Comments");
+  expect(assignment.instructions).toContain("in-review");
 });
 
 test("creates tasks in a folder's conventional task directory", () => {

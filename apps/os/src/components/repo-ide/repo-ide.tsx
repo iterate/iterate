@@ -28,6 +28,7 @@ import { RepoEditorPane } from "./repo-editor-pane.tsx";
 import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import { RepoTasksView } from "./repo-tasks-view.tsx";
+import { prepareRepoTaskAssignment, type RepoTask } from "./repo-tasks.ts";
 import {
   commitPlan,
   effectiveEntry,
@@ -210,6 +211,43 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
     },
   });
 
+  const assignTaskAgent = async (task: RepoTask) => {
+    const assignment = prepareRepoTaskAssignment(task, repoPath);
+    const sourceStore = store;
+    let committed = false;
+    try {
+      const result = await itx.repos.get(repoPath).commitFiles({
+        message: `Assign task: ${task.title}`,
+        changes: [{ path: task.path, content: assignment.content }],
+      });
+      committed = true;
+
+      // This one task is now durable at HEAD. Preserve unrelated working-tree
+      // changes, but stop showing this committed snapshot as locally dirty.
+      sourceStore.setWorking(task.path, undefined);
+      sourceStore.setStaged(task.path, undefined);
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-files", projectId, repoPath],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-log", projectId, repoPath],
+      });
+      sourceStore.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
+
+      // Messaging a fresh path births the agent. The task commit intentionally
+      // happens first so its first turn can always read the durable assignment.
+      await itx.agents.get(assignment.agentPath).message(assignment.instructions);
+      toast.success(`Assigned ${task.title} to ${assignment.agentPath}.`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error";
+      toast.error(
+        committed
+          ? `The assignment was committed, but the agent did not start: ${detail}`
+          : `Could not assign the task: ${detail}`,
+      );
+    }
+  };
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row">
       {/* vscode-style activity strip: Files / Tasks / Source control / History / GitHub. */}
@@ -340,6 +378,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
             onPatchSearch={patchSearch}
             onSetWorking={(path, entry) => store.setWorking(path, entry)}
             onDelete={removePath}
+            onAssignAgent={assignTaskAgent}
           />
         </Suspense>
       ) : (
