@@ -47,11 +47,17 @@ official patterns (docs how-tos) confirm our design and suggest follow-ups:
 
 # Plan (TODO)
 
-- [x] Remediate findings 1–6, 8–14 (this commit)
-- [ ] Live proof on the preview+dev account (task #10/#12): run ensure-resources to
-      create `os-search` over `os-search-index` (verify the REST create body incl.
-      `custom_metadata`), index real content, trigger a sync job, run `query`/`answer`,
-      verify finding 7 (`attributes` round-trip) and tenancy filtering.
-- [ ] Update PR description.
+- [x] Remediate findings 1–6, 8–14
+- [x] Live proof on preview_4 (2026-07-13): instance `os-preview-4-search` created
+      (wrangler + dashboard-minted service token, stored in Doppler `_shared`
+      dev+preview as CLOUDFLARE_AI_SEARCH_TOKEN); event-driven indexing proven
+      (17 files, first sync ~20s); `query`/`answer` with kind+context provenance
+      and cited sources; tenancy 0-leak from a sibling project. Finding 7 resolved
+      live: the legacy binding nests custom metadata under `attributes.file`
+      (now read nested-or-flat).
+- [x] Update PR description.
+- [ ] Follow-up: add "AI Search Read/Edit" to the deploy token so ensure-resources
+      can create instances itself (today it degrades to the dashboard recipe); prd
+      needs its own service token + instance before this matters in prod.
 - Follow-ups (PR-noted, not this spike): standalone AI Search binding migration,
   sync-job trigger after writes, instance-per-project via namespaces binding.
