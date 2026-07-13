@@ -74,15 +74,18 @@ send IDENTIFY immediately after open.
 | `credential-fetch` `sanitizeResponse` | Preserves workerd `webSocket` slot across hops                 |
 | Approval hold                         | **Denies** WebSocket upgrades (cannot buffer/hold a handshake) |
 
-## Sandbox e2e
+## Sandbox e2e (opt-in)
 
-Deployed (non-local base URL):
+Cold sandbox + public `wss` is slow (~50s+) and is **opt-in** so preview wall
+clock stays inside budget:
 
 ```bash
-pnpm --dir apps/os exec vitest run e2e/vitest/sandbox-websocket-egress.e2e.test.ts
+RUN_SANDBOX_WS_E2E=1 pnpm --dir apps/os exec vitest run \
+  e2e/vitest/sandbox-websocket-egress.e2e.test.ts
 ```
 
-Proves MITM cert + echo over `wss://ws.postman-echo.com/raw` from a lite sandbox.
+Requires a deployed OS (`APP_CONFIG_BASE_URL` not localhost). Proves echo over
+`wss://ws.postman-echo.com/raw` from a lite sandbox.
 
 ## Manual local probe
 

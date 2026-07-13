@@ -20,12 +20,21 @@ function deployedBaseUrl(): string | null {
   return url.toString();
 }
 
+/**
+ * Opt-in: cold sandbox + public wss is slow (~50s+) and can stretch the
+ * preview e2e wall clock. Default off in CI; set RUN_SANDBOX_WS_E2E=1 to run.
+ * Local proof already covered pair-bridge + Intercept CA (see docs).
+ */
+function sandboxWsE2eEnabled(): boolean {
+  return process.env.RUN_SANDBOX_WS_E2E === "1" || process.env.RUN_SANDBOX_WS_E2E === "true";
+}
+
 /** Public echo that speaks WebSocket over TLS (reliable under MITM). */
 const WSS_ECHO_URL = "wss://ws.postman-echo.com/raw";
 const WSS_ECHO_HOST = "ws.postman-echo.com";
 
 describe("sandbox websocket egress", () => {
-  test.skipIf(deployedBaseUrl() === null)(
+  test.skipIf(deployedBaseUrl() === null || !sandboxWsE2eEnabled())(
     "outbound wss through container HTTPS MITM and project egress",
     { timeout: 240_000 },
     async () => {
