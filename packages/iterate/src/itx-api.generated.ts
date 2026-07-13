@@ -857,6 +857,13 @@ export interface SandboxCollection {
 export interface Search {
   __describe(): Promise<Description>;
   /**
+   * Ensure this project's search instance exists (idempotent). The project
+   * CREATE SAGA calls this so search is warm from birth; the lazy
+   * query/index paths remain as self-heal for projects that predate it.
+   * Safe to call any time — an existing instance is a no-op.
+   */
+  ensureIndex(): Promise<{ created: boolean }>;
+  /**
    * Retrieve scored chunks matching a query, scoped to this project's own
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
@@ -870,11 +877,11 @@ export interface Search {
    */
   query(input: {
     q: string;
-    /** Max chunks to return (1–50). */
+    /** Max chunks to return (1–50, default 20 — tuned for recall). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1). */
+    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
     scoreThreshold?: number;
     /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
     source?: string;

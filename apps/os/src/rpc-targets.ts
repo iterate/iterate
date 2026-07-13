@@ -209,6 +209,7 @@ import {
 } from "./domains/search/search-index.ts";
 import {
   narrowStreamRefToChunk,
+  normalizeSearchExcludeKinds,
   normalizeSearchSource,
   projectSearchInstanceId,
   searchFilters,
@@ -2019,6 +2020,8 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       children: {
         answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
+        ensureIndex:
+          "Ensure this project's search instance exists (idempotent; created at project birth).",
         index:
           "Add/replace one standalone document ({ kind, id, text, ref, title?, context? }) — " +
           "ref (itx expression) is required.",
@@ -2056,10 +2059,18 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
           source: input.source === undefined ? undefined : normalizeSearchSource(input.source),
           // "docs" is federated, never in the R2 corpus, so it can't be an R2
           // filter; drop it here and let #federatedDocs honour the exclusion.
-          excludeKinds: input.exclude?.filter((kind) => kind !== "docs"),
+          excludeKinds:
+            input.exclude === undefined
+              ? undefined
+              : normalizeSearchExcludeKinds(input.exclude).filter((kind) => kind !== "docs"),
         }),
-        max_num_results: input.limit,
-        match_threshold: input.scoreThreshold,
+        // Tuned for GENEROUS INCLUSION (Jonas, 2026-07-13): recall over
+        // precision — a downstream fast-LLM pass can always filter the result
+        // set in conversation context, but a hit that never surfaces is gone.
+        // Defaults beat the instance's (10 results, 0.4 threshold); explicit
+        // caller values still win.
+        max_num_results: input.limit ?? 20,
+        match_threshold: input.scoreThreshold ?? 0.2,
         // OR-mode keyword matching: dogfooding showed the default AND-mode
         // misses exact-token queries whose terms don't co-occur in one chunk;
         // hybrid rrf fusion keeps precision.
@@ -2105,7 +2116,12 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     limit?: number;
   }): Promise<SearchResultChunk[]> {
     if (input.source !== undefined) return []; // a corpus source was pinned
-    if (input.exclude?.includes("docs")) return [];
+    if (
+      input.exclude !== undefined &&
+      normalizeSearchExcludeKinds(input.exclude).includes("docs")
+    ) {
+      return [];
+    }
     const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
     const hits = await docs.search({ q: input.query });
     return hits.slice(0, Math.min(input.limit ?? 5, 5)).map((hit, index) => ({
@@ -2135,6 +2151,17 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   }
 
   /**
+   * Ensure this project's search instance exists (idempotent). The project
+   * CREATE SAGA calls this so search is warm from birth; the lazy
+   * query/index paths remain as self-heal for projects that predate it.
+   * Safe to call any time — an existing instance is a no-op.
+   */
+  async ensureIndex(): Promise<{ created: boolean }> {
+    const { created } = await ensureProjectSearchInstance(this.props.projectId);
+    return { created };
+  }
+
+  /**
    * Retrieve scored chunks matching a query, scoped to this project's own
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
@@ -2148,11 +2175,11 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    */
   async query(input: {
     q: string;
-    /** Max chunks to return (1–50). */
+    /** Max chunks to return (1–50, default 20 — tuned for recall). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1). */
+    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
     scoreThreshold?: number;
     /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
     source?: string;
