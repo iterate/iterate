@@ -49,7 +49,7 @@ type GithubInstallationReposPage = {
  * Every repository the connection's GitHub App installation can see (its
  * "selected repositories" set — an unselected repo simply isn't in this list),
  * most recently pushed first. `invokeCapability` is the typed spelling of the
- * dotted `itx.integrations.github[<connection>].rest...` surface. A GitHub
+ * dotted `itx.integrations.github[<connection>].octokit.rest...` surface. A GitHub
  * failure is returned as data, not thrown: the caller reads through a
  * suspense query, and a throw there would take down the whole repos page
  * instead of one panel of the dialog.
@@ -66,7 +66,14 @@ async function listInstallationRepos(
     try {
       response = (await itx.integrations.invokeCapability({
         args: [{ page, per_page: 100 }],
-        path: ["github", connection, "rest", "apps", "listReposAccessibleToInstallation"],
+        path: [
+          "github",
+          connection,
+          "octokit",
+          "rest",
+          "apps",
+          "listReposAccessibleToInstallation",
+        ],
       })) as GithubInstallationReposPage;
     } catch (caught) {
       // A later page's failure keeps what earlier pages returned: a partial

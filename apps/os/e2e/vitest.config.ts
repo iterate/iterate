@@ -25,7 +25,6 @@ const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
 const vitestRunSlug = createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("os-e2e-");
-const ITX_ADMIN_AUTH_COOKIE = "iterate-admin-auth";
 const baseUrl = resolveBaseUrl(appRoot) ?? "";
 
 console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
@@ -166,7 +165,6 @@ export default defineConfig({
       {
         define: {
           __ITX_BROWSER_E2E__: JSON.stringify({
-            adminApiSecret: process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "",
             baseUrl,
           }),
         },
@@ -182,32 +180,32 @@ export default defineConfig({
           retry: ci ? { count: E2E_CI_RETRIES, delay: E2E_CI_RETRY_DELAY_MS } : 0,
           browser: {
             commands: {
-              // Browser WebSockets cannot set Authorization headers, so the
-              // admin cookie goes in via Playwright's context (see the
-              // browser test for why /admin-cookie alone isn't enough here).
-              async setItxAdminCookie(context: any, input: { secret: string; url: string }) {
-                const url = new URL(input.url);
-                const page = context.provider.getPage(context.sessionId);
-                await page.context().addCookies([
-                  {
-                    httpOnly: true,
-                    name: ITX_ADMIN_AUTH_COOKIE,
-                    sameSite: url.protocol === "https:" ? "None" : "Lax",
-                    secure: url.protocol === "https:",
-                    url: url.origin,
-                    value: Buffer.from(JSON.stringify({ secret: input.secret })).toString(
-                      "base64url",
-                    ),
+              // The test page deliberately lives on Vitest's origin. Mint an
+              // explicit short-lived grant server-side instead of exposing
+              // the deployment admin secret to that browser bundle.
+              async mintItxOperatorToken(_context: any, input: { url: string }) {
+                const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+                if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
+                const response = await fetch(new URL("/api/operator-sessions", input.url), {
+                  body: JSON.stringify({
+                    kind: "admin",
+                    operatorId: "itx-browser-e2e",
+                    ttlSeconds: 900,
+                  }),
+                  headers: {
+                    authorization: `Bearer ${secret}`,
+                    "content-type": "application/json",
                   },
-                ]);
-                const cookies = await page.context().cookies(url.origin);
-                return {
-                  cookies: cookies.map((cookie: { name: string; value: string }) => ({
-                    name: cookie.name,
-                    value: cookie.value,
-                  })),
-                  ok: true,
-                };
+                  method: "POST",
+                });
+                if (!response.ok) {
+                  throw new Error(
+                    `operator session issuance failed (${response.status}): ${await response.text()}`,
+                  );
+                }
+                const result = (await response.json()) as { token?: unknown };
+                if (typeof result.token !== "string") throw new Error("issuer returned no token");
+                return { token: result.token };
               },
             },
             enabled: true,

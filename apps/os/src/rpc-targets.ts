@@ -1198,7 +1198,7 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus the onboarding kickoff for the onboarding agent). Pass overrides ({ systemPrompt?, model? }) to bake customizations into the returned events. The seeded project worker calls this from its child-stream-created reaction.",
+        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus path-specific policy and the onboarding kickoff). Pass overrides ({ systemPrompt?, model?, githubAgent? }) to bake customizations into the returned events. githubAgent configures automatic reviews with enabled and instructions; mentions and push interruption use the platform's fixed GitHub-agent semantics. The seeded project worker calls this from its child-stream-created reaction.",
       children: { forPath: "Default policy (and its event batch) for one agent path." },
       parent: "the agent catalog (itx.agents.defaults)",
     });
@@ -2168,6 +2168,7 @@ function describeConnectionSdk(input: {
   grammar: string;
   sdk: string;
   slug: string;
+  types?: string;
 }) {
   return describeNode({
     instructions: [
@@ -2176,6 +2177,7 @@ function describeConnectionSdk(input: {
       input.grammar,
     ].join("\n"),
     parent: `the integrations collection (itx.integrations.${input.slug})`,
+    ...(input.types === undefined ? {} : { types: input.types }),
   });
 }
 
@@ -2187,8 +2189,8 @@ function describeConnectionSdk(input: {
  * dispatch to deployment code —
  * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
  * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
- * the Gmail REST proxy, and `itx.integrations.github["jonas"]` is a real
- * Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
+ * the Gmail REST proxy, and `itx.integrations.github["jonas"].octokit` is a
+ * real Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
  * `.request("GET /repos/{owner}/{repo}")` escape hatch, `.graphql(...)`;
  * there is NO generic `.api.request({ method, path })` shape, and the
  * connection acts as a GitHub App INSTALLATION, so user-scoped
@@ -2338,18 +2340,22 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.github[${JSON.stringify(connection)}].rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
+          example: `await itx.integrations.github[${JSON.stringify(connection)}].octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
           grammar: GITHUB_CALL_GRAMMAR,
-          sdk: 'a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request("GET /repos/{owner}/{repo}", params) escape hatch, graphql(query, variables), and paginate(route, params). There is NO generic api.request({ method, path }) shape. The connection acts as a GitHub App INSTALLATION: enumerate repos with rest.apps.listReposAccessibleToInstallation() (data.repositories); user-scoped ...ForAuthenticatedUser endpoints answer 403',
+          sdk: "the ordinary Octokit exported by @octokit/rest, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://octokit.github.io/rest.js/; `.rest` is Octokit's normal property. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Call paginate(...), not paginate.iterator(), because async iterators cannot cross the ITX RPC boundary",
           slug: "github",
+          types: 'export type GithubConnection = { octokit: import("@octokit/rest").Octokit };',
         });
       }
-      // The connection's wrapped Octokit: replay the caller's dotted path onto
-      // it (rest.*, request(...), graphql(...)) — a real Octokit whose transport
+      if (method.length < 2 || method[0] !== "octokit") {
+        throw new Error(GITHUB_CALL_GRAMMAR);
+      }
+      // The connection's mandatory `.octokit` namespace identifies the SDK;
+      // replay the remaining dotted path onto the real Octokit. Its transport
       // rides the connection secret's substituting egress (github-api.ts).
       const octokit = connectionOctokit({ connection, projectId: this.props.projectId });
       try {
-        return await replayPathCall(octokit, { args, path: method });
+        return await replayPathCall(octokit, { args, path: method.slice(1) });
       } catch (error) {
         throw normalizeGithubError(error, connection);
       }
@@ -2478,7 +2484,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "await itx.integrations.list() enumerates every connection (built-in and provided).",
         'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-        'GitHub: itx.integrations.github["<connection>"] is a wrapped Octokit acting as a GitHub App installation — await itx.integrations.github["<connection>"].rest.apps.listReposAccessibleToInstallation() (data.repositories), .rest.issues.create({ owner, repo, title }), or the escape hatch .request("GET /repos/{owner}/{repo}", { owner, repo }). User-scoped ...ForAuthenticatedUser endpoints answer 403.',
+        'GitHub: itx.integrations.github["<connection>"].octokit is the ordinary Octokit from @octokit/rest, with Iterate supplying installation auth and transport. Use its package types and https://octokit.github.io/rest.js/; `.rest` is Octokit\'s normal property and the `.octokit` segment is mandatory.',
         'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
         'Waitrose: await itx.integrations.waitrose["<connection>"].searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
@@ -2496,20 +2502,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "interface GoogleConnection {",
         "  gmail: { request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
         "}",
-        '// itx.integrations.github["<connection>"] IS a wrapped Octokit (@octokit/rest):',
-        "// its whole surface works — rest.<namespace>.<method>(params), the",
-        "// request(route, params) escape hatch, and graphql(query, variables).",
-        "// The connection acts as a GitHub App INSTALLATION: enumerate repos with",
-        "// rest.apps.listReposAccessibleToInstallation() (data.repositories);",
-        "// user-scoped ...ForAuthenticatedUser endpoints answer 403.",
-        "interface GithubConnection {",
-        "  rest: RestEndpointMethods; // e.g. rest.repos.get({ owner, repo }) -> { data, status, headers, url }",
-        "  request(route: string, params?: Record<string, unknown>): Promise<{ data: unknown; headers: Record<string, string>; status: number; url: string }>;",
-        "  graphql(query: string, variables?: Record<string, unknown>): Promise<unknown>;",
-        "  // paginate(route, params) returns ALL pages as one array. Use it, not",
-        "  // paginate.iterator() (an async generator can't cross the itx RPC boundary).",
-        "  paginate(route: string, params?: Record<string, unknown>): Promise<unknown[]>;",
-        "}",
+        "// Exact package type; Iterate supplies auth and transport. See https://octokit.github.io/rest.js/.",
+        'type GithubConnection = { octokit: import("@octokit/rest").Octokit };',
         '// itx.integrations.slack["<connection>"] IS a wrapped Slack WebClient',
         "// (@slack/web-api): any Web API method as a dotted path, ONE body arg.",
         "interface SlackConnection {",
@@ -2534,7 +2528,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         disconnect: "Disconnect one connection: { provider, connection }.",
         getConnection: "Connection status for { provider, connection }.",
         github:
-          'Per-connection wrapped Octokit (a GitHub App installation): github["<connection>"].rest.apps.listReposAccessibleToInstallation(), .request("GET /..."), .graphql(...).',
+          'Per-connection wrapped Octokit (a GitHub App installation): github["<connection>"].octokit.rest.apps.listReposAccessibleToInstallation(), .octokit.request("GET /..."), .octokit.graphql(...).',
         google:
           'Per-connection Gmail: google["<connection>"].gmail.request({ path: "/users/me/messages", query }).',
         list: "Every connection the project holds (built-in journals plus provided mounts).",
@@ -3258,7 +3252,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Set THIS agent's policy: system prompt and/or model. Works on an agent
+   * Set THIS agent's policy: system prompt, model, and/or GitHub behavior. Works on an agent
    * that already ran (a plain last-write-wins update) AND on a path that has
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
@@ -3294,6 +3288,17 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         type: "events.iterate.com/agent/llm-provider-selected",
         payload: { model: defaults.model },
       });
+    }
+    if (input.githubAgent !== undefined) {
+      const configured = defaults.events.find(
+        (event) => event.type === "events.iterate.com/github-agent/configure",
+      );
+      if (configured !== undefined) {
+        events.push({
+          type: configured.type,
+          payload: configured.payload,
+        });
+      }
     }
     await this.stream.appendAck(...events);
   }
@@ -4072,7 +4077,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
-    'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].rest.repos.get({ owner, repo }) (a wrapped Octokit); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
+    'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].octokit.rest.repos.get({ owner, repo }) (a wrapped Octokit); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
   kill: "Restart the project's server-side object; the next request boots it fresh.",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",

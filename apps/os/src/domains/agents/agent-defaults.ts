@@ -24,7 +24,11 @@ import {
   telegramConnectionFromAgentPath,
 } from "../integrations/utils.ts";
 import { isEmailAgentPath } from "../email/utils.ts";
-import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
+import {
+  GithubAgentConfiguration,
+  type GithubAgentConfigurationInput,
+} from "../repos/github-agent-processor-contract.ts";
+import { isGithubAgentPath } from "../repos/github-agent-utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
 import { DEFAULT_AGENT_MODEL, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
 
@@ -57,7 +61,7 @@ export function slackAgentSystemPrompt(connection: string): string {
     `To SEND a file or image to the thread — including ones you generate with itx.ai.run (image models return base64 in response.image) — store it and post its signed url; Slack unfurls image urls into inline previews. NEVER paste base64 into message text: const stored = await itx.agent.addFiles({ files: [{ filename: "cat.png", contentType: "image/png", data: response.image }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); await ${postMessage}({ channel, thread_ts, text: "Here you go! " + stored.files[0].url }); Stored images also stay visible to you on later turns, so you can iterate on what you made.`,
     'If someone posts a URL to an image you need to look at, download it and attach it to your conversation so you can actually see it: const resp = await fetch(url); await itx.agent.addFiles({ files: [{ filename: "photo.jpg", contentType: resp.headers.get("content-type") ?? "application/octet-stream", data: await resp.blob() }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); then return a short confirmation — the image is visible to you from your next turn.',
     'If asked about email, Gmail, or an inbox: await itx.integrations.list() shows the project\'s connections; a connected Google connection gives Gmail access via await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). Do not claim you lack inbox access before checking.',
-    'If asked about GitHub: itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest) acting as a GitHub App INSTALLATION — enumerate repos with await itx.integrations.github["<conn>"].rest.apps.listReposAccessibleToInstallation({ per_page: 5 }) (repos are in data.repositories; user-scoped ...ForAuthenticatedUser endpoints answer 403), .rest.issues.create({ owner, repo, title }), the escape hatch .request("GET /repos/{owner}/{repo}/readme", { owner, repo, headers: { accept: "application/vnd.github.raw+json" } }), or .graphql(query, variables). There is NO generic .api.request({ method, path }) shape. Known-good snippets: itx.docs.get({ name: "github-list-repos" }) and itx.docs.get({ name: "github-read-file" }).',
+    'If asked about GitHub, find the connection with itx.integrations.list(). Its `.octokit` property is the ordinary Octokit from `@octokit/rest`, with Iterate supplying installation auth and transport: itx.integrations.github["<connection>"].octokit.rest.... Use the package types and https://octokit.github.io/rest.js/; there is no direct `.rest` on the connection. Known-good snippets: itx.docs.get({ name: "github-list-repos" }) and itx.docs.get({ name: "github-read-file" }).',
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${postMessage}({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.google["<connection>"].gmail.request(...)]) — so the thread is never silent while you fetch.`,
     "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
@@ -127,20 +131,21 @@ export const EMAIL_AGENT_SYSTEM_PROMPT = [
 /**
  * Agents under `/agents/repos/<slug>/pull-requests/<n>` are pull-request
  * agents: the repo processor forwards that PR's GitHub webhooks to their
- * stream, the `github-pr-agent` processor transcribes them (mention-gated —
- * only human comments naming the agent trigger a turn), and replies go out
- * through the linked connection's itx.integrations.github[connection] Octokit
- * as PR comments. The exact coordinates arrive as a route-context input from
- * the `github-pr/route-configured` fact on the stream.
+ * stream, and the `github-agent` processor folds them into a bounded current
+ * projection. Human mentions queue turns; project policy and native per-PR
+ * controls can request an automatic review of each new head. Replies go out
+ * through the linked connection's `.octokit` capability. Exact coordinates
+ * arrive in `github-agent/route-configured`.
  */
 const PR_AGENT_SYSTEM_PROMPT = [
   "You are an iterate AI agent attached to one GitHub pull request.",
   TYPESCRIPT_FENCE_INSTRUCTION,
   "The code block must contain a single async arrow function: async (itx) => { ... }.",
-  "This pull request's GitHub webhooks (opens, pushes, reviews, comments) arrive as your inputs. You are woken when a human comment mentions you; treat the rest as context.",
-  'To reply, post a PR comment through the connection named in your route-context input: await itx.integrations.github["<connection>"].rest.issues.createComment({ owner, repo, issue_number, body }). Never use itx.chat.sendMessage to answer the PR.',
-  'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest) acting as a GitHub App INSTALLATION: rest.pulls.get / rest.pulls.listFiles read the PR and its diff, the escape hatch .request("GET /repos/{owner}/{repo}/...", { ... }) covers everything else (user-scoped ...ForAuthenticatedUser endpoints answer 403).',
-  "The linked project repo is readable via itx.repos.get(<repoPath from your route-context input>).readFile({ path }) / .listFiles() when you need file contents beyond the diff.",
+  "GitHub webhooks are folded into bounded turn snapshots: current PR metadata and recent activity, including CI. The exact raw webhook remains point-readable by the stream offset in each turn. Read that one event when its summary omits a field; never bulk-load the webhook stream into context.",
+  "A human mention normally queues a turn. A configured automatic review of a new head normally interrupts obsolete work. The current turn says exactly what woke you and whether to comment, review, or take repository action.",
+  'To reply, use the connection named in route context: await itx.integrations.github["<connection>"].octokit.rest.issues.createComment({ owner, repo, issue_number, body }). To review, use `.octokit.rest.pulls.createReview(...)`. Never use itx.chat.sendMessage to answer the PR.',
+  "The `.octokit` property is the ordinary Octokit from `@octokit/rest`, with Iterate supplying installation auth and transport. Use the package types and https://octokit.github.io/rest.js/; `.rest` is Octokit's normal property. There is deliberately no direct `.rest` on the connection.",
+  "When asked to change code, fetch the live PR, then clone its head repo/ref into a project sandbox. Sandboxes have git, gh, and the GitHub installation's GH_TOKEN: edit, test, commit, and non-force push the exact head branch there. Never use itx.repo or itx.workspace for PR changes because both write the linked project's default branch. Fork heads may be outside the installation: report that blocker instead of changing the base branch.",
   "GitHub is not chat: one complete, well-written comment per request. Do the work first (read the diff, fetch files, run scripts across turns), then comment once with the full answer. Write in GitHub-flavored markdown.",
   "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply.",
   "Web search is built in: await itx.mcp.exa.web_search_exa({ query, numResults }); read pages with itx.mcp.exa.web_fetch_exa({ urls }).",
@@ -196,7 +201,7 @@ function agentSystemPromptForPath(agentPath: string): string {
     });
   }
   if (isEmailAgentPath(agentPath)) return EMAIL_AGENT_SYSTEM_PROMPT;
-  if (isPrAgentPath(agentPath)) return PR_AGENT_SYSTEM_PROMPT;
+  if (isGithubAgentPath(agentPath)) return PR_AGENT_SYSTEM_PROMPT;
   if (isMcpAgentPath(agentPath)) return MCP_AGENT_SYSTEM_PROMPT;
   return DEFAULT_AGENT_SYSTEM_PROMPT;
 }
@@ -205,6 +210,9 @@ function agentSystemPromptForPath(agentPath: string): string {
  * systemPrompt override REPLACES the path's platform prompt wholesale — the
  * caller owns the whole contract, including how the agent acts (codemode). */
 export type AgentDefaultsOverrides = {
+  /** GitHub pull-request behavior. The resulting configured fact always
+   * contains the complete materialized policy, including `enabled: false`. */
+  githubAgent?: GithubAgentConfigurationInput;
   systemPrompt?: string;
   model?: string;
 };
@@ -245,6 +253,13 @@ export function agentDefaultsForPath(input: {
   overrides?: AgentDefaultsOverrides;
 }): AgentDefaultPolicy {
   const { agentPath, projectId, project } = input;
+  const isGithubAgent = isGithubAgentPath(agentPath);
+  // Project workers can pass one policy to every agent birth without
+  // duplicating the platform's path classifier. It materializes only on an
+  // actual GitHub PR agent.
+  const githubAgentConfiguration = isGithubAgent
+    ? GithubAgentConfiguration.parse(input.overrides?.githubAgent ?? {})
+    : null;
   const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
   // An override replaces the path prompt wholesale. There is no baked-in
   // child-agent prompt either: child-agent-ness rides on the parent's MESSAGE
@@ -263,6 +278,15 @@ export function agentDefaultsForPath(input: {
       idempotencyKey: `agent/llm-provider-selected:${projectId}:${agentPath}`,
       payload: { ifUnset: true, model },
     },
+    ...(githubAgentConfiguration === null
+      ? []
+      : [
+          {
+            type: "events.iterate.com/github-agent/configure",
+            idempotencyKey: `github-agent/configure:${projectId}:${agentPath}`,
+            payload: githubAgentConfiguration,
+          },
+        ]),
     // The agent's own workspace, a durable itx-expression re-evaluated per
     // call, so agent birth never touches the workspace Durable Object. (No
     // sandbox mount: sandboxes are pets, created explicitly via

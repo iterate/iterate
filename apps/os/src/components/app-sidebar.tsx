@@ -231,9 +231,30 @@ function AppSidebarUser() {
   const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
   const isAdmin = user?.isAdmin ?? false;
+  const operatorScope = session?.authenticated
+    ? ["operator admin", "operator project"].includes(session.session.scope)
+      ? session.session.scope
+      : null
+    : null;
+  const isOperatorSession = operatorScope !== null;
   const label = [user?.name, user?.email, "Account"].find((value) => value?.trim())?.trim() ?? "";
-  const email = user?.email?.trim() ?? "";
+  const detail =
+    operatorScope === "operator admin"
+      ? "Platform-wide operator access"
+      : operatorScope === "operator project"
+        ? "Project-scoped operator access"
+        : (user?.email?.trim() ?? "");
   const initials = userInitials(label);
+
+  async function endCurrentSession() {
+    if (!isOperatorSession) return await signOut();
+    const response = await fetch("/api/operator-sessions/current", {
+      credentials: "same-origin",
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error(`Could not end operator session (${response.status}).`);
+    window.location.assign("/");
+  }
   const debugInfo = useMemo(
     () => ({
       auth: {
@@ -271,7 +292,7 @@ function AppSidebarUser() {
                   </Avatar>
                   <span className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{label}</span>
-                    {email ? <span className="truncate text-xs">{email}</span> : null}
+                    {detail ? <span className="truncate text-xs">{detail}</span> : null}
                   </span>
                   <ChevronsUpDown className="ml-auto" />
                 </SidebarMenuButton>
@@ -290,21 +311,23 @@ function AppSidebarUser() {
                   </Avatar>
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{label}</span>
-                    {email ? <span className="truncate text-xs">{email}</span> : null}
+                    {detail ? <span className="truncate text-xs">{detail}</span> : null}
                   </div>
                 </div>
               </div>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuItem
-                  render={
-                    <a href={accountManagementUrl}>
-                      <UserCircle />
-                      <span>Manage account</span>
-                      <ExternalLink className="ml-auto" />
-                    </a>
-                  }
-                />
+                {!isOperatorSession && (
+                  <DropdownMenuItem
+                    render={
+                      <a href={accountManagementUrl}>
+                        <UserCircle />
+                        <span>Manage account</span>
+                        <ExternalLink className="ml-auto" />
+                      </a>
+                    }
+                  />
+                )}
                 {isAdmin && (
                   <DropdownMenuItem render={<Link to="/admin" />}>
                     <Shield />
@@ -318,9 +341,9 @@ function AppSidebarUser() {
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuItem onClick={() => void signOut()}>
+                <DropdownMenuItem onClick={() => void endCurrentSession()}>
                   <LogOut />
-                  <span>Sign out</span>
+                  <span>{isOperatorSession ? "End operator session" : "Sign out"}</span>
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>

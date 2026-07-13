@@ -10,7 +10,7 @@ the dashboard, the itx api, and every Durable Object class live in a single
 script (`src/worker.ts`), plus the builder sidecar for dynamic worker builds.
 Traffic is dispatched on hostname and path:
 
-1. Rpc lanes: `/api` (+ `/api/admin-cookie`), `/prj_<id>/...`, and project
+1. Rpc lanes: `/api` (+ `/api/operator-sessions`), `/prj_<id>/...`, and project
    platform hosts (`<slug>.iterate.app`, `<slug>.localhost:<port>`) take the
    api pipeline. Project-host requests route to the project's seeded worker,
    never the dashboard.
@@ -78,10 +78,14 @@ The browser talks to itx over `/api`: one Cap'n Web WebSocket per
 context, managed by `src/itx/itx-react.tsx` (`useItx`/`useItxQuery`/
 `useItxEffect`). `POST /api` serves one-shot HTTP batch sessions (used by
 the project-create server function and MCP `exec_typescript`).
-`/api/admin-cookie` is the browser admin-auth bridge (WebSockets cannot
-set headers). The dashboard's Start routes keep only `/api/mcp` and `/api/health`; the
-catch-all `src/routes/api.$.ts` returns 404 (integration callbacks return
-with the integrations domain).
+`/api/operator-sessions` mints short-lived, origin-bound grants for either one
+resolved project or explicit platform-wide operation. Project grants create a
+synthetic operator principal; they do not impersonate a customer, inherit the
+customer's other memberships, or widen through the project directory. Browser
+redemption installs an HttpOnly `SameSite=Strict` cookie; see
+[Operator Sessions](./operator-sessions.md). The dashboard's Start routes keep
+only `/api/mcp` and `/api/health`; the catch-all `src/routes/api.$.ts` returns
+404 (integration callbacks return with the integrations domain).
 
 ## Streams
 

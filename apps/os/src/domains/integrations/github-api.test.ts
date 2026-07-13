@@ -1,6 +1,6 @@
 // connectionOctokit: the wrapped Octokit's transport must ride the connection
 // secret's fetch with an access-token PLACEHOLDER (never a real token), so the
-// itx caller surface (github["<conn>"].rest.* / .request()) keeps the token in
+// itx caller surface (github["<conn>"].octokit.rest.* / .octokit.request()) keeps the token in
 // its Secret DO. Only the secret stub is mocked; the Octokit is real.
 
 import { describe, expect, test, vi } from "vitest";
@@ -23,6 +23,11 @@ const { connectionOctokit, normalizeGithubError, GITHUB_CALL_GRAMMAR } =
   await import("./github-api.ts");
 
 describe("normalizeGithubError", () => {
+  test("the public call grammar makes the Octokit namespace mandatory", () => {
+    expect(GITHUB_CALL_GRAMMAR).toContain("<connection>.octokit.<path>");
+    expect(GITHUB_CALL_GRAMMAR).toContain(".octokit.rest.apps");
+  });
+
   // Both replayPathCall miss shapes must answer with the grammar: a live
   // agent invented `.api.request(...)` (a MID-path miss — "hit undefined"),
   // got a generic failure, and burned turns rediscovering the surface.

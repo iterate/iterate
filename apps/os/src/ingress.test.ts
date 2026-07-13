@@ -34,7 +34,7 @@ it("keeps the event docs host on the app lane", async () => {
 });
 
 it("does not let api or project path lanes steal the event docs host", async () => {
-  for (const path of ["/api", "/api/admin-cookie", "/prj_123/increment"]) {
+  for (const path of ["/api", "/api/operator-sessions", "/prj_123/increment"]) {
     const route = await decideIngressRoute({
       config: PREVIEW_CONFIG,
       method: "GET",
@@ -70,7 +70,7 @@ it("treats the bare localhost project-host base as an OS app-host alias", async 
 });
 
 it("sends itx paths on the OS host to the api lane", async () => {
-  for (const path of ["/api", "/api/admin-cookie"]) {
+  for (const path of ["/api", "/api/operator-sessions/redeem"]) {
     const route = await decideIngressRoute({
       config: DEV_CONFIG,
       method: "GET",

@@ -16,6 +16,7 @@ connection's facts and routed events, and the convention root for its secrets
 ```ts
 await itx.integrations.slack["main-slack"].chat.postMessage({ channel, thread_ts, text });
 await itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" });
+await itx.integrations.github["install-123"].octokit.rest.repos.get({ owner, repo });
 await itx.integrations.list(); // every connection, built-in and provided
 ```
 
@@ -201,8 +202,10 @@ GitHub connects as a **GitHub App installation** (deep-link to
   `APP_CONFIG_INTEGRATIONS__GITHUB` at mint time), `github/connected` on the
   journal, `installation_id` claimed in the directory. One exchange half +
   one `recordConnection` call — the shape every provider pays.
-- **API calls**: `itx.integrations.github["<connection>"]` is a real wrapped
-  Octokit (`rest.*`, `request(...)`, `graphql(...)`) whose transport carries a
+- **API calls**: `itx.integrations.github["<connection>"].octokit` is a real
+  wrapped Octokit (`rest.*`, `request(...)`, `graphql(...)`, `paginate(...)`).
+  The `.octokit` namespace is mandatory: it makes the SDK boundary explicit
+  and a direct `.rest` on the connection is rejected. Its transport carries a
   `getSecret` placeholder through the connection secret's fetch. The Secret
   DO mints the installation token on first use and re-mints on 401 — trusted
   DO code signing the App JWT, no worker, no jail.
@@ -226,6 +229,10 @@ The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 (GitHub's MCP server mounted under the `github-mcp` slug — built-in slugs
 cannot be shadowed) and `github-webhooks-project-worker` (deliveries landing
 on the project host's own worker).
+
+Linked repositories also route pull-request deliveries into durable
+per-PR agent streams, with bounded LLM context, automatic review policy, and
+label controls. See [GitHub pull-request agents](./github-agents.md).
 
 ## Telegram: the fourth builtin
 

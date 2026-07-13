@@ -17,7 +17,7 @@ import {
   telegramConnectionFromAgentPath,
 } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
-import { PrAgentProcessor } from "../repos/pr-agent-processor-implementation.ts";
+import { GithubAgentProcessor } from "../repos/github-agent-processor-implementation.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
@@ -241,7 +241,7 @@ export class AgentDurableObject extends DurableObject<Env> {
   // (`/agents/repos/<slug>/pull-requests/<n>`). Replies leave through the
   // linked connection's itx.integrations.github Octokit, called by the agent
   // itself, so there are no side-effect deps here.
-  readonly prAgentProcessor = this.#processorHost.add((deps) => new PrAgentProcessor(deps));
+  readonly githubAgentProcessor = this.#processorHost.add((deps) => new GithubAgentProcessor(deps));
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
