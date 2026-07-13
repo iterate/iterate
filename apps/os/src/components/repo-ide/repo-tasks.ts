@@ -72,8 +72,7 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
 
   const frontmatter = parseMarkdownFrontmatter(content);
   const metadata = markdownFrontmatterRecord(frontmatter.document);
-  const rawState = stringValue(metadata.state) ?? DEFAULT_TASK_STATE;
-  const state = rawState === "backlog" ? DEFAULT_TASK_STATE : rawState;
+  const state = stringValue(metadata.state) ?? DEFAULT_TASK_STATE;
   const labels = uniqueStrings(stringArray(metadata.labels));
   const agent = stringValue(metadata.agent);
   const folderPath = `/${taskDirectoryPath.split("/").slice(0, -1).join("/")}`;
