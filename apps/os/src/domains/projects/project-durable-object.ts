@@ -626,16 +626,25 @@ export class ProjectDurableObject extends DurableObject<Env> {
         undefined,
     };
 
+    // Parse JSON once so binding + REST share the same cache-key body.
+    let parsedBody: unknown | undefined;
+    if (request.method === "POST" || request.method === "PUT") {
+      try {
+        parsedBody = await request.clone().json();
+      } catch {
+        parsedBody = undefined;
+      }
+    }
+
     // Binding path: same door agent BYOK uses. Endpoint = path after /v1/ + query.
     const endpoint = openAiGatewayBindingEndpoint(request.url);
     const gateway = this.env.AI?.gateway?.(routing.gatewayId);
     if (
       gateway !== undefined &&
-      (request.method === "POST" || request.method === "PUT") &&
+      parsedBody !== undefined &&
       endpoint.replace(/\?.*$/, "").length > 0
     ) {
       try {
-        const query: unknown = await request.clone().json();
         const headers: Record<string, string> = {
           authorization: `Bearer ${routing.openaiApiKey}`,
           "content-type": "application/json",
@@ -647,14 +656,21 @@ export class ProjectDurableObject extends DurableObject<Env> {
         };
         await applyOpenAiAiGatewayCacheHeaders({
           headers,
-          body: query,
+          body: parsedBody,
           responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
         });
-        return await gateway.run({
+        const bindingResponse = await gateway.run({
           provider: "openai",
           endpoint,
           headers,
-          query,
+          query: parsedBody,
+        });
+        // 401 from the binding is treated like REST gateway auth failure so we
+        // still try the REST rewrite / direct OpenAI ladder (parity with GET).
+        if (bindingResponse.status !== 401) return bindingResponse;
+        console.warn("openai AI gateway binding returned 401; trying REST rewrite", {
+          projectId: this.#name.projectId,
+          endpoint,
         });
       } catch (error) {
         console.warn("openai AI gateway binding path failed; trying REST rewrite", {
@@ -665,7 +681,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }
     }
 
-    // Provider-native REST rewrite (GET /models, non-JSON, binding failure).
+    // Provider-native REST rewrite (GET /models, non-JSON, binding failure/401).
     const rewritten = await rewriteOpenAiRequestToAiGateway({
       request,
       accountId: routing.accountId,
@@ -674,6 +690,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       metadata,
       cfAigAuthorization: routing.cfAigAuthorization,
       responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
+      bodyForCacheKey: parsedBody ?? null,
     });
     const gatewayResponse = await fetch(rewritten);
     if (gatewayResponse.status !== 401) return gatewayResponse;
