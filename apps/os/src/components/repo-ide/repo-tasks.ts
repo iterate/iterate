@@ -7,10 +7,10 @@ const STANDARD_TASK_STATES = ["backlog", DEFAULT_TASK_STATE, "in-progress", "don
 export type RepoTask = {
   path: string;
   taskDirectoryPath: string;
+  folderPath: string;
   title: string;
   description: string;
   state: string;
-  explicitLabels: string[];
   labels: string[];
   content: string;
 };
@@ -21,7 +21,7 @@ export function isRepoTaskPath(path: string): boolean {
   return /\.(?:md|markdown)$/i.test(segments.at(-1) ?? "") && segments.includes("tasks");
 }
 
-/** The nearest `tasks` directory owns a task; its parent becomes the folder label. */
+/** The nearest `tasks` directory owns a task. */
 export function taskDirectoryForPath(path: string): string | null {
   if (!isRepoTaskPath(path)) return null;
   const segments = pathSegments(path);
@@ -36,26 +36,22 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
   const frontmatter = readFrontmatter(content);
   const metadata = documentRecord(frontmatter.document);
   const state = stringValue(metadata.state) ?? stringValue(metadata.status) ?? DEFAULT_TASK_STATE;
-  const explicitLabels = uniqueStrings([
-    ...stringArray(metadata.labels),
-    ...stringArray(metadata.tags),
-  ]);
-  const folderPath = taskDirectoryPath.split("/").slice(0, -1).join("/");
-  const folderLabel = `folder:/${folderPath}`;
+  const labels = uniqueStrings([...stringArray(metadata.labels), ...stringArray(metadata.tags)]);
+  const folderPath = `/${taskDirectoryPath.split("/").slice(0, -1).join("/")}`;
   const heading = firstHeading(frontmatter.body);
   const fallbackTitle = (pathSegments(path).at(-1) ?? "task").replace(/\.(?:md|markdown)$/i, "");
 
   return {
     path,
     taskDirectoryPath,
+    folderPath,
     title: heading?.title ?? fallbackTitle,
     description:
       heading === undefined
         ? frontmatter.body.trim()
         : `${frontmatter.body.slice(0, heading.start)}${frontmatter.body.slice(heading.end)}`.trim(),
     state,
-    explicitLabels,
-    labels: uniqueStrings([folderLabel, ...explicitLabels]),
+    labels,
     content,
   };
 }
@@ -71,7 +67,7 @@ export function updateRepoTaskState(content: string, state: string): string {
   });
 }
 
-/** Folder labels are inferred, so callers pass only labels that belong in YAML. */
+/** Change labels stored in YAML while preserving unrelated frontmatter and Markdown. */
 export function updateRepoTaskLabels(content: string, labels: readonly string[]): string {
   const normalized = uniqueStrings(labels);
   return updateFrontmatter(content, (document, metadata) => {
@@ -91,18 +87,48 @@ export function updateRepoTaskLabels(content: string, labels: readonly string[])
 export function createRepoTask(
   title: string,
   existingPaths: ReadonlySet<string>,
+  taskDirectoryPath = "tasks",
 ): { path: string; content: string } | null {
   const normalizedTitle = title.trim();
   if (normalizedTitle === "") return null;
 
   const base = slugify(normalizedTitle) || "task";
+  const directory = pathSegments(taskDirectoryPath).join("/") || "tasks";
   let suffix = 1;
-  let path = `tasks/${base}.md`;
+  let path = `${directory}/${base}.md`;
   while (existingPaths.has(path)) {
     suffix += 1;
-    path = `tasks/${base}-${suffix}.md`;
+    path = `${directory}/${base}-${suffix}.md`;
   }
   return { path, content: `# ${normalizedTitle}\n` };
+}
+
+/** The conventional task directory for a repo folder shown as `/apps/os`. */
+export function taskDirectoryForFolder(folderPath: string): string {
+  const directory = pathSegments(folderPath).join("/");
+  return directory === "" ? "tasks" : `${directory}/tasks`;
+}
+
+/** Pick a collision-free path when a task file moves to another task directory. */
+export function repoTaskPathInDirectory(
+  path: string,
+  taskDirectoryPath: string,
+  existingPaths: ReadonlySet<string>,
+): string {
+  const filename = pathSegments(path).at(-1) ?? "task.md";
+  const directory = pathSegments(taskDirectoryPath).join("/") || "tasks";
+  const directPath = `${directory}/${filename}`;
+  if (directPath === path || !existingPaths.has(directPath)) return directPath;
+
+  const extension = /\.(?:md|markdown)$/i.exec(filename)?.[0] ?? ".md";
+  const base = filename.slice(0, -extension.length) || "task";
+  let suffix = 2;
+  let candidate = `${directory}/${base}-${suffix}${extension}`;
+  while (existingPaths.has(candidate)) {
+    suffix += 1;
+    candidate = `${directory}/${base}-${suffix}${extension}`;
+  }
+  return candidate;
 }
 
 export function repoTaskCreationPaths(

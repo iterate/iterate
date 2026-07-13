@@ -3,7 +3,9 @@ import {
   createRepoTask,
   isRepoTaskPath,
   parseRepoTask,
+  repoTaskPathInDirectory,
   repoTaskCreationPaths,
+  taskDirectoryForFolder,
   taskDirectoryForPath,
   taskStateColumns,
   updateRepoTaskLabels,
@@ -25,20 +27,21 @@ test("projects a bare Markdown file into a task", () => {
   ).toEqual({
     path: "apps/os/tasks/speed-up.md",
     taskDirectoryPath: "apps/os/tasks",
+    folderPath: "/apps/os",
     title: "Make OS faster",
     description: "Measure first.",
     state: "todo",
-    explicitLabels: [],
-    labels: ["folder:/apps/os"],
+    labels: [],
     content: "# Make OS faster\n\nMeasure first.\n",
   });
 });
 
-test("falls back to the filename and infers the root folder label", () => {
+test("falls back to the filename and infers the root folder", () => {
   const task = parseRepoTask("tasks/fix-auth.md", "There is no heading yet.");
   expect(task?.title).toBe("fix-auth");
   expect(task?.description).toBe("There is no heading yet.");
-  expect(task?.labels).toEqual(["folder:/"]);
+  expect(task?.folderPath).toBe("/");
+  expect(task?.labels).toEqual([]);
 });
 
 test("reads canonical and legacy frontmatter without requiring it", () => {
@@ -47,15 +50,15 @@ test("reads canonical and legacy frontmatter without requiring it", () => {
     "---\nstate: in-progress\nlabels: [ui, polish]\ntags: [polish, v1]\n---\n# Card\n",
   );
   expect(canonical?.state).toBe("in-progress");
-  expect(canonical?.explicitLabels).toEqual(["ui", "polish", "v1"]);
-  expect(canonical?.labels).toEqual(["folder:/packages/ui", "ui", "polish", "v1"]);
+  expect(canonical?.folderPath).toBe("/packages/ui");
+  expect(canonical?.labels).toEqual(["ui", "polish", "v1"]);
 
   const legacy = parseRepoTask(
     "tasks/legacy.md",
     "---\nstatus: in-review\ntags: backend\n---\nLegacy task\n",
   );
   expect(legacy?.state).toBe("in-review");
-  expect(legacy?.explicitLabels).toEqual(["backend"]);
+  expect(legacy?.labels).toEqual(["backend"]);
 });
 
 test("updates state while preserving unrelated YAML, comments, and Markdown", () => {
@@ -74,7 +77,7 @@ test("adds state frontmatter to a bare task and updates the legacy key in place"
   expect(legacy).not.toContain("state:");
 });
 
-test("updates explicit labels without serializing the inferred folder label", () => {
+test("updates labels stored in frontmatter", () => {
   const updated = updateRepoTaskLabels("# Labels\n", ["frontend", "frontend", "v1"]);
   expect(updated).toBe("---\nlabels:\n  - frontend\n  - v1\n---\n\n# Labels\n");
   expect(updated).not.toContain("folder:");
@@ -87,7 +90,7 @@ test("replaces mixed canonical and legacy labels without leaving stale tags", ()
   const content = "---\nlabels: [ui, polish]\ntags: [v1, polish]\n---\n# Mixed labels\n";
   const updated = updateRepoTaskLabels(content, ["ui"]);
 
-  expect(parseRepoTask("tasks/mixed-labels.md", updated)?.explicitLabels).toEqual(["ui"]);
+  expect(parseRepoTask("tasks/mixed-labels.md", updated)?.labels).toEqual(["ui"]);
   expect(updated).not.toContain("tags:");
 });
 
@@ -98,6 +101,22 @@ test("creates a bare task with a stable collision-free path", () => {
     content: "# Ship the board!\n",
   });
   expect(createRepoTask("   ", paths)).toBeNull();
+});
+
+test("creates tasks in a folder's conventional task directory", () => {
+  expect(taskDirectoryForFolder("/apps/os")).toBe("apps/os/tasks");
+  expect(taskDirectoryForFolder("/")).toBe("tasks");
+  expect(createRepoTask("Ship it", new Set(), taskDirectoryForFolder("/apps/os"))?.path).toBe(
+    "apps/os/tasks/ship-it.md",
+  );
+});
+
+test("picks a collision-free path when moving a task between folders", () => {
+  const paths = new Set(["tasks/plan.md", "apps/os/tasks/plan.md", "apps/os/tasks/plan-2.md"]);
+  expect(repoTaskPathInDirectory("tasks/plan.md", "apps/os/tasks", paths)).toBe(
+    "apps/os/tasks/plan-3.md",
+  );
+  expect(repoTaskPathInDirectory("tasks/plan.md", "tasks", paths)).toBe("tasks/plan.md");
 });
 
 test("reserves a task path that exists at HEAD while its deletion is pending", () => {
