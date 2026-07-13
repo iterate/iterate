@@ -156,10 +156,27 @@ export type SearchAnswerResult = SearchQueryResult & {
 };
 
 /** Root key prefix for one project (the multi-tenancy boundary), or one kind within it. */
-export function projectSearchPrefix(projectId: string, source?: SearchSourceKind): string {
+export function projectSearchPrefix(projectId: string, source?: string): string {
   // The trailing slash matters both times: without it, `prj/files` would also
   // match a custom kind like `prj/filesystem/…` in the folder range.
   return source === undefined ? `${projectId}/` : `${projectId}/${source}/`;
+}
+
+/**
+ * Validate a caller-supplied `source` for query scoping: a platform corpus
+ * kind passes as-is, a custom kind is normalized by the same rules `index()`
+ * applied when writing it. `docs` gets its own error — it is federated, never
+ * stored, so it cannot be a folder scope.
+ */
+export function normalizeSearchSource(source: string): string {
+  if (source === "docs") {
+    throw new Error(
+      'source "docs" cannot be pinned: docs are federated at query time, not stored in the ' +
+        "corpus. Query without `source` (docs merge in automatically) or use itx.docs.search.",
+    );
+  }
+  if ((["streams", "files", "repos"] as const).some((kind) => kind === source)) return source;
+  return normalizeCustomSearchKind(source);
 }
 
 /** Object key for one stream's segment document (segment n covers the n-th SEARCH_SEGMENT_SIZE offsets). */
@@ -332,8 +349,9 @@ export function renderStreamSegmentDocument(input: {
  */
 export function searchFilters(input: {
   projectId: string;
-  source?: SearchSourceKind;
-  excludeKinds?: readonly SearchKind[];
+  /** A platform corpus kind or a normalized custom kind (see normalizeSearchSource). */
+  source?: string;
+  excludeKinds?: readonly string[];
 }): Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> {
   const prefix = projectSearchPrefix(input.projectId, input.source);
   const filters: Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> = {

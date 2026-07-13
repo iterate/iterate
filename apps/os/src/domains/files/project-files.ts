@@ -28,7 +28,11 @@
 
 import { itxEnv } from "../../env.ts";
 import type { AppConfig } from "../../config.ts";
-import { mirrorFileToSearchIndex, removeFileFromSearchIndex } from "../search/search-index.ts";
+import {
+  mirrorFileToSearchIndex,
+  removeFileFromSearchIndex,
+  triggerProjectSearchSyncDebounced,
+} from "../search/search-index.ts";
 import { readProjectById } from "../../project-directory.ts";
 import { normalizeProjectHostnameBase } from "../../lib/project-host-routing.ts";
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
@@ -81,13 +85,16 @@ export async function putProjectFile(input: {
   await itxEnv.FILES_BUCKET.put(fileObjectKey(input), bytes, {
     httpMetadata: { contentType },
   });
-  // SPIKE: mirror into the itx.search corpus (best-effort; never fails the put).
+  // Mirror into the itx.search corpus (best-effort; never fails the put),
+  // then nudge the project's search instance so the file is findable in
+  // minutes rather than on the hourly sync.
   await mirrorFileToSearchIndex({
     bytes,
     contentType,
     path: normalizePath(input.path),
     projectId: input.projectId,
   });
+  await triggerProjectSearchSyncDebounced(input.projectId);
   return { contentType, path: normalizePath(input.path), size: bytes.byteLength };
 }
 

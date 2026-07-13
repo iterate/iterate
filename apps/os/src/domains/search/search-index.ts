@@ -105,6 +105,26 @@ export async function triggerProjectSearchSync(projectId: string): Promise<void>
 }
 
 /**
+ * Debounced flavour for the AUTOMATIC write lanes (per-batch stream indexing,
+ * file mirroring, repo commits): at most one trigger per project per interval
+ * per isolate, so passive content becomes searchable in minutes instead of
+ * waiting for the hourly schedule. Never creates instances — a project nobody
+ * has ever searched keeps costing nothing (the trigger 404s and is swallowed);
+ * once a first query/index creates the instance, the passive lanes keep it
+ * fresh. Isolate-local state means restarts re-trigger early — harmless, the
+ * jobs API itself rate-limits at one per 30s.
+ */
+const lastPassiveSyncTrigger = new Map<string, number>();
+const PASSIVE_SYNC_DEBOUNCE_MS = 120_000;
+export function triggerProjectSearchSyncDebounced(projectId: string): Promise<void> {
+  const last = lastPassiveSyncTrigger.get(projectId);
+  const now = Date.now();
+  if (last !== undefined && now - last < PASSIVE_SYNC_DEBOUNCE_MS) return Promise.resolve();
+  lastPassiveSyncTrigger.set(projectId, now);
+  return triggerProjectSearchSync(projectId);
+}
+
+/**
  * Pin ONE stream event into the corpus as a focused document (the write side
  * of `itx.search.indexEvent`). The event already lives in its 100-offset
  * segment doc; pinning gives it a document of its own — sharper retrieval,
