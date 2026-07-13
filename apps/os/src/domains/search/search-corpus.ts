@@ -47,18 +47,14 @@ const SEARCH_EVENT_TYPE_DISALLOW_LIST: ReadonlySet<string> = new Set([
   "events.iterate.com/stream/child-stream-created",
 ]);
 
-/**
- * The kinds a project's search corpus is folded from. The first segment of
- * every R2 key IS the kind (`{projectId}/{kind}/…`), so it doubles as the
- * folder-scoping token AND the `kind` metadata attribute. `docs` is federated
- * from the in-worker itx.docs index rather than stored in R2 (see
- * SearchRpcTarget.query), but shares the vocabulary so callers filter
- * uniformly.
- */
-export type SearchSourceKind = "streams" | "files" | "repos";
-
-/** Every filterable kind: the stored corpus kinds plus the federated `docs`. */
-export type SearchKind = SearchSourceKind | "docs";
+// The kinds a project's search corpus is folded from: `streams`, `files`,
+// `repos`, plus arbitrary custom kinds written by itx.search.index(). The
+// first segment of every R2 key IS the kind (`{projectId}/{kind}/…`), so it
+// doubles as the folder-scoping token AND the `kind` metadata attribute.
+// `docs` is federated from the in-worker itx.docs index rather than stored in
+// R2 (see SearchRpcTarget.query), but shares the vocabulary so callers filter
+// uniformly. Kinds are plain strings on the API surface (custom kinds made a
+// closed union wrong); normalizeSearchSource is the validation gate.
 
 /**
  * Kinds `itx.search.index()` must not write: the three platform namespaces
