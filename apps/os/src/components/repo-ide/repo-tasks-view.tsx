@@ -9,6 +9,8 @@ import {
   FolderIcon,
   PlusIcon,
   SearchIcon,
+  SlidersHorizontalIcon,
+  TagIcon,
   Trash2Icon,
 } from "lucide-react";
 import {
@@ -24,6 +26,14 @@ import {
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@iterate-com/ui/components/popover";
 import {
   Select,
   SelectContent,
@@ -46,13 +56,18 @@ import {
   createRepoTask,
   isRepoTaskPath,
   parseRepoTask,
+  queryRepoTaskBoard,
   repoTaskCreationPaths,
   repoTaskPathInDirectory,
   taskDirectoryForFolder,
   taskStateColumns,
   taskStateLabel,
+  updateRepoTaskLabels,
   updateRepoTaskState,
   type RepoTask,
+  type RepoTaskBoardProjection,
+  type RepoTaskBoardQuery,
+  type RepoTaskBoardRowField,
 } from "./repo-tasks.ts";
 import { effectiveEntry, type FileEntry, type WorkingTreeChanges } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
@@ -64,8 +79,6 @@ type SearchPatch = {
   staged?: boolean;
   tasks?: boolean;
 };
-
-type GroupMode = "state" | "folder";
 
 export function RepoTasksView({
   projectId,
@@ -138,11 +151,12 @@ export function RepoTasksView({
   };
   const selectTask = (path: string | undefined) =>
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
-  const createTask = (state: string, folderPath: string) => {
+  const createTask = (state: string, folderPath: string, labels?: readonly string[]) => {
     const created = createRepoTask("New task", effectivePaths, taskDirectoryForFolder(folderPath));
     if (created === null) return;
     const initialContent = `${created.content}\n`;
-    const content = state === "todo" ? initialContent : updateRepoTaskState(initialContent, state);
+    let content = state === "todo" ? initialContent : updateRepoTaskState(initialContent, state);
+    if (labels !== undefined && labels.length > 0) content = updateRepoTaskLabels(content, labels);
     onSetWorking(created.path, { type: "write", content });
     selectTask(created.path);
   };
@@ -151,24 +165,40 @@ export function RepoTasksView({
     onDelete(task.path);
     selectTask(undefined);
   };
-  const moveTaskToPath = (task: RepoTask, targetPath: string) => {
+  const moveTaskToPath = (task: RepoTask, targetPath: string, content = task.content) => {
     if (targetPath === task.path) return true;
     if (effectivePaths.has(targetPath)) return false;
     const wasSelected = selectedPath === task.path;
     onSetStaged(task.path, undefined);
     onDelete(task.path);
     onSetStaged(targetPath, undefined);
-    onSetWorking(targetPath, { type: "write", content: task.content });
+    onSetWorking(targetPath, { type: "write", content });
     if (wasSelected) selectTask(targetPath);
     return true;
   };
-  const moveTaskToFolder = (task: RepoTask, folderPath: string) => {
+  const moveTaskOnBoard = (
+    task: RepoTask,
+    state: string,
+    folderPath: string,
+    labels?: readonly string[],
+  ) => {
+    let content = state === task.state ? task.content : updateRepoTaskState(task.content, state);
+    if (
+      labels !== undefined &&
+      (labels.length !== task.labels.length ||
+        labels.some((label, index) => label !== task.labels[index]))
+    )
+      content = updateRepoTaskLabels(content, labels);
+    if (folderPath === task.folderPath) {
+      if (content !== task.content) writeTask(task, content);
+      return;
+    }
     const targetPath = repoTaskPathInDirectory(
       task.path,
       taskDirectoryForFolder(folderPath),
       effectivePaths,
     );
-    moveTaskToPath(task, targetPath);
+    moveTaskToPath(task, targetPath, content);
   };
   const renameTask = (task: RepoTask, path: string) => {
     const targetPath = path.trim().replace(/^\/+/, "");
@@ -185,10 +215,8 @@ export function RepoTasksView({
     <div className="flex min-h-0 min-w-0 flex-1">
       <TaskBoard
         tasks={tasks}
-        columns={columns}
         onOpen={(task) => selectTask(task.path)}
-        onMoveState={(task, state) => writeTask(task, updateRepoTaskState(task.content, state))}
-        onMoveFolder={moveTaskToFolder}
+        onMove={moveTaskOnBoard}
         onCreate={createTask}
       />
       <TaskEditorSheet
@@ -225,64 +253,62 @@ export function RepoTasksView({
   );
 }
 
+const TASK_CARD_PREFIX = "task-card:";
+const TASK_CELL_PREFIX = "task-cell:";
+
 function TaskBoard({
   tasks,
-  columns,
   onOpen,
-  onMoveState,
-  onMoveFolder,
+  onMove,
   onCreate,
 }: {
   tasks: readonly RepoTask[];
-  columns: readonly string[];
   onOpen: (task: RepoTask) => void;
-  onMoveState: (task: RepoTask, state: string) => void;
-  onMoveFolder: (task: RepoTask, folderPath: string) => void;
-  onCreate: (state: string, folderPath: string) => void;
+  onMove: (task: RepoTask, state: string, folderPath: string, labels?: readonly string[]) => void;
+  onCreate: (state: string, folderPath: string, labels?: readonly string[]) => void;
 }) {
-  const [groupMode, setGroupMode] = useState<GroupMode>("state");
+  const [rowField, setRowField] = useState<RepoTaskBoardRowField>("folder");
   const [filter, setFilter] = useState("");
   const draggedPathRef = useRef<string | undefined>(undefined);
   const boardScrollRef = useRef<HTMLDivElement>(null);
-  const filteredTasks = useMemo(() => {
-    const query = filter.trim().toLocaleLowerCase();
-    if (query === "") return tasks;
-    return tasks.filter((task) =>
-      [task.title, task.description, task.state, task.folderPath, ...task.labels].some((value) =>
-        value.toLocaleLowerCase().includes(query),
-      ),
-    );
-  }, [filter, tasks]);
-  const folderPaths = useMemo(() => {
-    const paths = [...new Set(tasks.map((task) => task.folderPath))];
-    if (paths.length === 0) return ["/"];
-    return paths.sort((left, right) => {
-      if (left === "/") return -1;
-      if (right === "/") return 1;
-      return left.localeCompare(right);
-    });
-  }, [tasks]);
-  const groups = groupMode === "state" ? columns : folderPaths;
+  const query = useMemo<RepoTaskBoardQuery>(
+    () => ({ filter, columns: "state", rows: rowField }),
+    [filter, rowField],
+  );
+  const board = useMemo<RepoTaskBoardProjection>(
+    () => queryRepoTaskBoard(tasks, query),
+    [query, tasks],
+  );
   useEffect(() => {
-    boardScrollRef.current?.scrollTo({ left: 0 });
-  }, [groupMode]);
+    boardScrollRef.current?.scrollTo({ left: 0, top: 0 });
+  }, [rowField]);
 
   return (
     <DragDropProvider
       onDragStart={(event) => {
-        draggedPathRef.current = String(event.operation.source?.id ?? "");
+        draggedPathRef.current = taskFromDragId(String(event.operation.source?.id ?? ""))?.path;
       }}
       onDragEnd={(event) => {
-        const path = String(event.operation.source?.id ?? "");
-        if (!event.canceled) {
-          const targetId = String(event.operation.target?.id ?? "");
-          const task = tasks.find((candidate) => candidate.path === path);
-          if (task !== undefined && targetId.startsWith("task-state:")) {
-            const state = targetId.slice("task-state:".length);
-            if (state !== "" && task.state !== state) onMoveState(task, state);
-          } else if (task !== undefined && targetId.startsWith("task-folder:")) {
-            const folderPath = targetId.slice("task-folder:".length);
-            if (folderPath !== "" && task.folderPath !== folderPath) onMoveFolder(task, folderPath);
+        const source = taskFromDragId(String(event.operation.source?.id ?? ""));
+        const path = source?.path;
+        if (!event.canceled && source !== undefined) {
+          const target = taskCellFromDropId(String(event.operation.target?.id ?? ""));
+          const task = tasks.find((candidate) => candidate.path === source.path);
+          const row = board.rows.find((candidate) => candidate.key === target?.rowKey);
+          if (task !== undefined && target !== undefined && row !== undefined) {
+            const folderPath = rowField === "folder" ? (row.value ?? "/") : task.folderPath;
+            const labels =
+              rowField === "label" && source.rowKey !== target.rowKey
+                ? row.value === null
+                  ? []
+                  : [row.value]
+                : undefined;
+            if (
+              task.state !== target.state ||
+              task.folderPath !== folderPath ||
+              labels !== undefined
+            )
+              onMove(task, target.state, folderPath, labels);
           }
         }
         setTimeout(() => {
@@ -305,101 +331,168 @@ function TaskBoard({
               className="h-8 bg-background pl-8"
             />
           </div>
-          <Select
-            value={groupMode}
-            onValueChange={(value) => {
-              if (value === "state" || value === "folder") setGroupMode(value);
-            }}
-          >
-            <SelectTrigger aria-label="Group tasks by" className="w-28 shrink-0">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectLabel>Group by</SelectLabel>
-                <SelectItem value="state">State</SelectItem>
-                <SelectItem value="folder">Folder</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <BoardDisplaySettings rowField={rowField} onChangeRowField={setRowField} />
           <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground sm:inline">
-            {filteredTasks.length} {filteredTasks.length === 1 ? "task" : "tasks"}
+            {board.taskCount} {board.taskCount === 1 ? "task" : "tasks"}
           </span>
         </div>
-        <div
-          ref={boardScrollRef}
-          className="flex min-h-0 min-w-0 flex-1 snap-x snap-mandatory gap-2 overflow-x-auto p-2 sm:snap-none"
-        >
-          {groups.map((group) => (
-            <TaskColumn
-              key={`${groupMode}:${group}`}
-              groupMode={groupMode}
-              group={group}
-              tasks={filteredTasks.filter((task) =>
-                groupMode === "state" ? task.state === group : task.folderPath === group,
-              )}
-              onOpen={(task) => {
-                if (draggedPathRef.current !== task.path) onOpen(task);
-              }}
-              onCreate={() =>
-                groupMode === "state" ? onCreate(group, "/") : onCreate("todo", group)
-              }
-            />
-          ))}
+        <div ref={boardScrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto p-2">
+          <div className="flex min-h-full w-max min-w-full flex-col gap-4">
+            {board.rows.map((row) => (
+              <section
+                key={row.key}
+                data-task-row={row.key}
+                className={cn(
+                  "flex min-w-full flex-col",
+                  board.rows.length === 1 && "min-h-full flex-1",
+                )}
+              >
+                {rowField === null ? null : (
+                  <header className="sticky left-0 flex h-9 w-fit max-w-[calc(100vw-4rem)] items-center gap-2 px-2 text-sm font-medium">
+                    {rowField === "folder" ? (
+                      <FolderIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <TagIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="truncate">{row.label}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {row.tasks.length}
+                    </span>
+                  </header>
+                )}
+                <div className="flex min-h-0 min-w-full flex-1 snap-x snap-mandatory gap-2 sm:snap-none">
+                  {row.cells.map((cell) => (
+                    <TaskColumn
+                      key={`${row.key}:${cell.state}`}
+                      state={cell.state}
+                      rowKey={row.key}
+                      rowLabel={row.label}
+                      tasks={cell.tasks}
+                      onOpen={(task) => {
+                        if (draggedPathRef.current !== task.path) onOpen(task);
+                      }}
+                      onCreate={() => {
+                        const labels =
+                          rowField === "label" && row.value !== null ? [row.value] : undefined;
+                        onCreate(
+                          cell.state,
+                          rowField === "folder" ? (row.value ?? "/") : "/",
+                          labels,
+                        );
+                      }}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
         </div>
       </div>
     </DragDropProvider>
   );
 }
 
+function BoardDisplaySettings({
+  rowField,
+  onChangeRowField,
+}: {
+  rowField: RepoTaskBoardRowField;
+  onChangeRowField: (field: RepoTaskBoardRowField) => void;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger render={<Button variant="outline" size="default" />}>
+        <SlidersHorizontalIcon data-icon="inline-start" />
+        Display
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 gap-4 p-4">
+        <PopoverHeader>
+          <PopoverTitle>Board display</PopoverTitle>
+          <PopoverDescription>
+            Choose the two dimensions used to query the tasks.
+          </PopoverDescription>
+        </PopoverHeader>
+        <div className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-3">
+          <span className="text-muted-foreground">Columns</span>
+          <Badge variant="secondary">Status</Badge>
+          <span className="text-muted-foreground">Rows</span>
+          <Select
+            value={rowField ?? "none"}
+            onValueChange={(value) => {
+              if (value === "none") onChangeRowField(null);
+              else if (value === "folder" || value === "label") onChangeRowField(value);
+            }}
+          >
+            <SelectTrigger aria-label="Task board row grouping" size="sm" className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectLabel>Group rows by</SelectLabel>
+                <SelectItem value="none">No grouping</SelectItem>
+                <SelectItem value="folder">Folder</SelectItem>
+                <SelectItem value="label">Label</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function TaskColumn({
-  groupMode,
-  group,
+  state,
+  rowKey,
+  rowLabel,
   tasks,
   onOpen,
   onCreate,
 }: {
-  groupMode: GroupMode;
-  group: string;
+  state: string;
+  rowKey: string;
+  rowLabel: string | null;
   tasks: readonly RepoTask[];
   onOpen: (task: RepoTask) => void;
   onCreate: () => void;
 }) {
-  const dropId = `task-${groupMode}:${group}`;
+  const dropId = `${TASK_CELL_PREFIX}${encodeURIComponent(rowKey)}:${encodeURIComponent(state)}`;
   const { ref, isDropTarget } = useDroppable({ id: dropId, accept: "repo-task" });
-  const label = groupMode === "state" ? taskStateLabel(group) : group;
+  const label = taskStateLabel(state);
+  const creationLabel = rowLabel === null ? label : `${label} in ${rowLabel}`;
 
   return (
     <section
       ref={ref}
-      data-task-group={dropId}
+      data-task-cell={dropId}
       className={cn(
-        "flex min-h-full min-w-full flex-1 basis-72 snap-start flex-col rounded-lg bg-background/70 transition-colors sm:min-w-72",
+        "flex min-h-52 min-w-[calc(100vw-3.5rem)] flex-1 basis-72 snap-start flex-col rounded-lg bg-background/70 transition-colors sm:min-w-72",
         isDropTarget && "bg-accent/40",
       )}
     >
       <header className="flex h-12 shrink-0 items-center px-3">
         <div className="flex min-w-0 items-center gap-2">
-          {groupMode === "state" ? (
-            <TaskStateIcon state={group} />
-          ) : (
-            <FolderIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-          )}
+          <TaskStateIcon state={state} />
           <h2 className="truncate text-sm font-medium">{label}</h2>
           <span className="text-xs tabular-nums text-muted-foreground">{tasks.length}</span>
         </div>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
+      <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
         <div className="flex flex-col gap-2">
           {tasks.map((task) => (
-            <TaskCard key={task.path} task={task} onOpen={onOpen} />
+            <TaskCard
+              key={task.path}
+              task={task}
+              dragId={`${TASK_CARD_PREFIX}${encodeURIComponent(task.path)}:${encodeURIComponent(rowKey)}`}
+              onOpen={onOpen}
+            />
           ))}
         </div>
         <Button
           variant="ghost"
           className="mt-2 h-10 w-full text-muted-foreground/50 hover:bg-muted/70 hover:text-muted-foreground"
-          title={`Add task to ${label}`}
-          aria-label={`Add task to ${label}`}
+          title={`Add task to ${creationLabel}`}
+          aria-label={`Add task to ${creationLabel}`}
           onClick={onCreate}
         >
           <PlusIcon className="size-5" data-icon="inline-start" />
@@ -409,8 +502,30 @@ function TaskColumn({
   );
 }
 
-function TaskCard({ task, onOpen }: { task: RepoTask; onOpen: (task: RepoTask) => void }) {
-  const { ref, isDragging } = useDraggable({ id: task.path, type: "repo-task" });
+function taskFromDragId(id: string): { path: string; rowKey: string } | undefined {
+  if (!id.startsWith(TASK_CARD_PREFIX)) return undefined;
+  const [encodedPath, encodedRow] = id.slice(TASK_CARD_PREFIX.length).split(":", 2);
+  if (encodedPath === undefined || encodedRow === undefined) return undefined;
+  return { path: decodeURIComponent(encodedPath), rowKey: decodeURIComponent(encodedRow) };
+}
+
+function taskCellFromDropId(id: string): { rowKey: string; state: string } | undefined {
+  if (!id.startsWith(TASK_CELL_PREFIX)) return undefined;
+  const [encodedRow, encodedState] = id.slice(TASK_CELL_PREFIX.length).split(":", 2);
+  if (encodedRow === undefined || encodedState === undefined) return undefined;
+  return { rowKey: decodeURIComponent(encodedRow), state: decodeURIComponent(encodedState) };
+}
+
+function TaskCard({
+  task,
+  dragId,
+  onOpen,
+}: {
+  task: RepoTask;
+  dragId: string;
+  onOpen: (task: RepoTask) => void;
+}) {
+  const { ref, isDragging } = useDraggable({ id: dragId, type: "repo-task" });
   const summary = task.description.replace(/\s+/g, " ").slice(0, 160);
   return (
     <button

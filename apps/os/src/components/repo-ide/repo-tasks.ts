@@ -15,6 +15,28 @@ export type RepoTask = {
   content: string;
 };
 
+export type RepoTaskBoardRowField = "folder" | "label" | null;
+
+export type RepoTaskBoardQuery = {
+  filter: string;
+  columns: "state";
+  rows: RepoTaskBoardRowField;
+};
+
+type RepoTaskBoardRow = {
+  key: string;
+  label: string | null;
+  value: string | null;
+  tasks: RepoTask[];
+  cells: Array<{ state: string; tasks: RepoTask[] }>;
+};
+
+export type RepoTaskBoardProjection = {
+  states: string[];
+  rows: RepoTaskBoardRow[];
+  taskCount: number;
+};
+
 /** Markdown files below any directory segment named `tasks` are repo tasks. */
 export function isRepoTaskPath(path: string): boolean {
   const segments = pathSegments(path);
@@ -151,6 +173,34 @@ export function taskStateColumns(tasks: readonly RepoTask[]): string[] {
   ];
 }
 
+/** Query tasks into the row × state cells consumed by the board renderer. */
+export function queryRepoTaskBoard(
+  tasks: readonly RepoTask[],
+  query: RepoTaskBoardQuery,
+): RepoTaskBoardProjection {
+  const states = taskStateColumns(tasks);
+  const filter = query.filter.trim().toLocaleLowerCase();
+  const matchingTasks = tasks.filter(
+    (task) =>
+      filter === "" ||
+      [task.title, task.description, task.state, task.folderPath, ...task.labels].some((value) =>
+        value.toLocaleLowerCase().includes(filter),
+      ),
+  );
+  const rowGroups = taskBoardRowGroups(matchingTasks, query.rows);
+  return {
+    states,
+    rows: rowGroups.map((row) => ({
+      ...row,
+      cells: states.map((state) => ({
+        state,
+        tasks: row.tasks.filter((task) => task.state === state),
+      })),
+    })),
+    taskCount: matchingTasks.length,
+  };
+}
+
 export function taskStateLabel(state: string): string {
   return state
     .split(/[-_\s]+/)
@@ -161,6 +211,53 @@ export function taskStateLabel(state: string): string {
 
 function pathSegments(path: string): string[] {
   return path.split("/").filter(Boolean);
+}
+
+function taskBoardRowGroups(
+  tasks: readonly RepoTask[],
+  rowField: RepoTaskBoardRowField,
+): Array<Pick<RepoTaskBoardRow, "key" | "label" | "value" | "tasks">> {
+  if (rowField === null) return [{ key: "all", label: null, value: null, tasks: [...tasks] }];
+
+  const groups = new Map<string, RepoTask[]>();
+  if (rowField === "folder") {
+    for (const task of tasks) {
+      const group = groups.get(task.folderPath) ?? [];
+      group.push(task);
+      groups.set(task.folderPath, group);
+    }
+    if (groups.size === 0) groups.set("/", []);
+    return [...groups]
+      .sort(([left], [right]) => {
+        if (left === "/") return -1;
+        if (right === "/") return 1;
+        return left.localeCompare(right);
+      })
+      .map(([folderPath, groupedTasks]) => ({
+        key: `folder:${folderPath}`,
+        label: folderPath,
+        value: folderPath,
+        tasks: groupedTasks,
+      }));
+  }
+
+  for (const task of tasks) {
+    const labels = task.labels.length === 0 ? [""] : task.labels;
+    for (const label of labels) {
+      const group = groups.get(label) ?? [];
+      group.push(task);
+      groups.set(label, group);
+    }
+  }
+  if (groups.size === 0) groups.set("", []);
+  return [...groups]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([label, groupedTasks]) => ({
+      key: `label:${label}`,
+      label: label === "" ? "No label" : label,
+      value: label === "" ? null : label,
+      tasks: groupedTasks,
+    }));
 }
 
 function firstHeading(body: string): { start: number; end: number; title: string } | undefined {

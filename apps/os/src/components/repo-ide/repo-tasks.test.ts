@@ -3,6 +3,7 @@ import {
   createRepoTask,
   isRepoTaskPath,
   parseRepoTask,
+  queryRepoTaskBoard,
   repoTaskPathInDirectory,
   repoTaskCreationPaths,
   taskDirectoryForFolder,
@@ -137,4 +138,36 @@ test("reserves a task path that exists at HEAD while its deletion is pending", (
 test("keeps the core columns and appends states found in the repo", () => {
   const task = parseRepoTask("tasks/review.md", "---\nstate: in-review\n---\n# Review\n")!;
   expect(taskStateColumns([task])).toEqual(["backlog", "todo", "in-progress", "done", "in-review"]);
+});
+
+test("queries a status board with folders as an independent row dimension", () => {
+  const tasks = [
+    parseRepoTask("tasks/root.md", "# Root\n")!,
+    parseRepoTask("apps/os/tasks/ship.md", "---\nstate: in-progress\n---\n# Ship OS\n")!,
+    parseRepoTask("apps/os/tasks/test.md", "---\nlabels: [quality]\n---\n# Test OS\n")!,
+  ];
+  const board = queryRepoTaskBoard(tasks, { filter: "", columns: "state", rows: "folder" });
+
+  expect(board.states).toEqual(["backlog", "todo", "in-progress", "done"]);
+  expect(board.rows.map((row) => row.label)).toEqual(["/", "/apps/os"]);
+  expect(board.rows[1]?.cells.find((cell) => cell.state === "todo")?.tasks[0]?.title).toBe(
+    "Test OS",
+  );
+  expect(board.rows[1]?.cells.find((cell) => cell.state === "in-progress")?.tasks[0]?.title).toBe(
+    "Ship OS",
+  );
+});
+
+test("filters the board projection and can group multi-label tasks", () => {
+  const task = parseRepoTask(
+    "tasks/card.md",
+    "---\nlabels: [frontend, polish]\n---\n# Polish card\n",
+  )!;
+  const byLabel = queryRepoTaskBoard([task], { filter: "card", columns: "state", rows: "label" });
+
+  expect(byLabel.taskCount).toBe(1);
+  expect(byLabel.rows.map((row) => row.label)).toEqual(["frontend", "polish"]);
+  expect(
+    queryRepoTaskBoard([task], { filter: "missing", columns: "state", rows: null }).taskCount,
+  ).toBe(0);
 });
