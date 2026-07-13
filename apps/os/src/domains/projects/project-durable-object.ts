@@ -265,6 +265,19 @@ export class ProjectDurableObject extends DurableObject<Env> {
         ruleKey: rule.ruleKey,
       });
     }
+    // WebSocket upgrades cannot wait on a human: the hold path buffers the
+    // body and rebuilds the Request, and clients time out long before a
+    // grant lands. Deny with a clear code so policy authors re-scope holds
+    // to non-upgrade traffic (or allow via a non-hold rule).
+    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+      return approvalGateResponse({
+        code: "egress_denied",
+        detail:
+          `Egress rule "${rule.ruleKey}" would hold this WebSocket upgrade; ` +
+          `WebSocket upgrades cannot wait on human approval.`,
+        ruleKey: rule.ruleKey,
+      });
+    }
     return this.#holdForHumanApproval({ request, rule, secretPaths });
   }
 

@@ -47,8 +47,11 @@ const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
  * pinned hosts.
  *
  * WebSocket egress (an Upgrade request through this same `fetch()`) is
- * deliberately deferred, not foreclosed: it returns as a pure addition inside
- * this surface when a consumer exists.
+ * supported on the same surface as ordinary secret substitution: handshake
+ * headers (and URL path placeholders) are rewritten, then the request is
+ * `fetch`ed. Frame-level substitution is intentionally out of scope — after
+ * 101 the socket is opaque duplex. A 401 mid-handshake still gets one
+ * refresh-and-retry when a strategy is configured; a live socket does not.
  */
 export class SecretDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -189,10 +192,6 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (references.some((reference) => reference.path !== this.#name.path)) {
       // One request, one secret: cross-secret chaining is not supported.
       return secretErrorResponse("secret_reference_foreign");
-    }
-    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-      // Deferred, not foreclosed: WS egress returns inside this same surface.
-      return Response.json({ error: "websocket egress is not supported yet" }, { status: 501 });
     }
 
     try {
