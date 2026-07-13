@@ -100,6 +100,20 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("pnpm-workspace.yaml");
     expect(cloudflarePreviewSharedPaths).toContain("patches/**");
   });
+
+  it("rejects pre-RPC branches before the preview orchestrator can deploy Auth", () => {
+    const workflow = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
+      "utf8",
+    );
+    const epoch = readFileSync(resolve(repoRoot, "scripts/preview/deployment-epoch"), "utf8");
+
+    expect(epoch.trim()).toBe("os-auth-rpc-v1");
+    expect(workflow).toContain('expected="os-auth-rpc-v1"');
+    expect(workflow.indexOf("Enforce preview deployment epoch")).toBeLessThan(
+      workflow.indexOf("pnpm preview deploy"),
+    );
+  });
 });
 
 describe("draft preview policy", () => {

@@ -100,51 +100,9 @@ jobs:
         run: |-
           set -euo pipefail
           DEPLOY_SHA="$(git rev-parse HEAD)" pnpm tsx scripts/ci/report-worker-size.ts
-  # One-release fleet migration. Every parked preview Worker may still carry
-  # Cloudflare's preserved secret binding and old HTTP client, so upgrade both
-  # sides before deleting that slot's source. Remove this job in the cleanup PR
-  # after the first successful main run proves all nine slots migrated.
-  migrate_preview_fleet:
-    name: Migrate auth binding (${{ matrix.environment }})
-    needs:
-      - deploy
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        environment:
-          - preview_1
-          - preview_2
-          - preview_3
-          - preview_4
-          - preview_5
-          - preview_6
-          - preview_7
-          - preview_8
-          - preview_9
-    runs-on:
-      size: 8x32
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ inputs.ref || github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Deploy apps/auth
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm --dir apps/auth run-script deploy --env ${{ matrix.environment }}
-      - name: Deploy apps/os and retire shared token
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm --dir apps/os run-script deploy --env ${{ matrix.environment }}
   notify:
     needs:
       - deploy
-      - migrate_preview_fleet
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on:
       size: 8x32
@@ -162,5 +120,5 @@ jobs:
         env:
           APP_DISPLAY_NAME: OS
           PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
-          DEPLOY_RESULT: ${{ needs.deploy.result == 'success' && needs.migrate_preview_fleet.result == 'success' && 'success' || 'failure' }}
+          DEPLOY_RESULT: ${{ needs.deploy.result == 'success' && 'success' || 'failure' }}
         run: pnpm tsx scripts/ci/notify.ts deploy-${DEPLOY_RESULT}

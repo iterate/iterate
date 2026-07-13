@@ -278,13 +278,43 @@ because Cloudflare preserves omitted secrets. The same per-environment deploy
 deletes and re-reads the matching Doppler source only after every live check
 succeeds; a failed cutover retains that source for diagnosis.
 
-The first main-branch rollout also upgrades auth and OS in all nine preview
-slots. This is required even for parked slots: each is a persistent Worker and
-may still carry both the old HTTP client and Cloudflare's preserved secret.
-The migration job is intentionally one-release machinery and is removed after
-that fleet-wide run succeeds. Config provisioning and OAuth-client sync never
-delete the retired source; they cannot prove the corresponding live Worker was
-revoked.
+Immediately after the first main-branch production rollout, an operator runs the
+one-release preview-fleet security cutover in
+`.depot/workflows/migrate-os-auth-preview-fleet.yml`. Preview deploy, preview
+cleanup, and that cutover temporarily share one non-cancelling concurrency
+gate. Before dispatching, list Depot's queued/running workflows and cancel or
+wait for every preview deploy/cleanup created before this change; the required
+confirmation attests to that drain. The cutover also snapshots and waits for any
+still-running check it finds. It then force-acquires all nine existing Semaphore
+`environment-config-lease` resources under the attributable
+`main-auth-rpc-security-cutover` holder. This is a deliberate breaking
+maintenance operation: an existing holder is evicted, but manual acquisition
+does not erase the slot's project data.
+
+With the complete fleet parked, the cutover sequentially deploys auth then OS
+to every slot. Each normal OS deployment must pass its exact RPC probe, revoke
+and re-list the live Worker secret, pass the post-revocation probes, and only
+then delete and re-read that slot's Doppler source. A final nine-slot retirement
+pass is defense in depth. The cutover releases leases only after every slot
+succeeds; a failed run leaves the fleet parked for a safe rerun (or bounded
+lease expiry). `scripts/preview/deployment-epoch` is a permanent pre-deploy
+floor: a stale branch fails before Auth can be rolled back and must rebase.
+The cutover job, script, and temporary fleet-wide gates are removed after the
+first successful cutover dispatch. Config provisioning and OAuth-client sync never
+delete the retired source because they cannot coordinate this fleet-wide drain
+or prove live revocation.
+
+```bash
+depot ci run list --org 0p91s0lz49 --repo iterate/iterate \
+  --status queued --status running --output json
+
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+  --workflow migrate-os-auth-preview-fleet.yml --ref main \
+  --input confirmation=MIGRATE_OS_AUTH_RPC
+```
+
+Do not dispatch from a branch or while a pre-cutover preview/cleanup run remains
+queued. New epoch-aware runs may queue behind the maintenance gate safely.
 
 The coordinated workflow sets `ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1` while
 generating OS's complete Wrangler config. A manual production OS deployment

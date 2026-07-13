@@ -390,6 +390,14 @@ invariants:
 CI and local machines run the **same commands against the same semaphore** —
 there is no CI-only path.
 
+The explicitly dispatched, one-release OS-to-auth RPC security cutover is the
+exception to the normal ownership rule. Its operator first drains pre-cutover
+preview/cleanup runs; during the maintenance window, one attributable
+automation holder force-acquires all nine leases without erasing project data,
+deploys auth then OS everywhere, verifies token retirement, and releases only
+after complete success. The permanent preview deployment-epoch check rejects
+pre-cutover branches before any app is touched; rebase is the only remedy.
+
 ### Story 1: CI previews my PR
 
 Opening/pushing a PR that touches preview-relevant paths triggers the

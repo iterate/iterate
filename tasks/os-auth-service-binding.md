@@ -40,10 +40,18 @@ or fallback.
   probes against that newly activated version, and only then deletes and
   re-reads the matching Doppler source. Config provisioning and OAuth-client
   sync do not mutate that source because they cannot prove live revocation.
-- The first main rollout deploys the new auth and OS revision to every preview
-  slot as well as production. This one-release fleet migration removes the old
-  client and preserved secret from persistent parked Workers; it is removed in
-  a cleanup PR after all nine matrix jobs pass.
+- Immediately after the first main production rollout, an operator drains or
+  cancels pre-cutover preview/cleanup runs and explicitly dispatches the
+  one-release preview-fleet workflow. It shares the temporary global gate with
+  preview deploy and cleanup, drains any still-running legacy checks, then
+  audibly force-acquires all nine Semaphore slots without erasing project data.
+  Auth and OS deploy sequentially in every slot through the normal exact-smoke
+  and retirement path; a final nine-slot pass enforces Worker and Doppler
+  absence. Leases release only after complete success. The permanent
+  `scripts/preview/deployment-epoch` floor rejects stale branches before any app
+  deploy, so old Auth cannot be rolled back ahead of a failed old OS deploy. The
+  cutover workflow, script, and temporary gates are removed in a cleanup PR
+  after the dispatch passes.
 
 ## Remaining public service-token surface
 
@@ -64,9 +72,13 @@ secret at runtime.
   matching auth worker's default entrypoint, local/remote selection is
   fail-closed, and the old runtime secret cannot enter generated OS
   configuration.
-- Deploy-helper tests prove live Worker and Doppler secret retirement are
-  idempotent and fail closed when either system still reports the retired
-  value; a response-aware smoke test covers the exact-body RPC proof.
+- Deploy-helper and OS deployment tests prove live Worker and Doppler secret
+  retirement are idempotent and fail closed when either system still reports
+  the retired value, a wrong-body RPC 404 cannot trigger deletion, and every
+  post-revocation probe must pass before a normal deploy removes its source.
+  Preview-fleet cutover tests prove the drain precedes whole-fleet acquisition,
+  every slot deploys before final retirement and release, a failed deployment
+  retains all maintenance leases, and a partial pre-deploy acquisition unwinds.
 - Preview orchestration tests prove dependencies deploy first while independent
   dependents retain parallelism.
 
