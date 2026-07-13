@@ -67,7 +67,11 @@ import type { Project } from "../../../../itx-api.generated.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamPathPill } from "~/components/stream-path-pill.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
@@ -146,6 +150,7 @@ const BUILTIN_API_INTEGRATIONS = [
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
   validateSearch: Search,
+  staticData: streamPageStaticData(),
   ssr: false,
   loader: ({ context }) =>
     breadcrumbLoaderData({

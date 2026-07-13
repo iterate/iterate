@@ -7,6 +7,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
+  GITHUB_CONNECTED_EVENT_TYPE,
+  GITHUB_DISCONNECTED_EVENT_TYPE,
   GOOGLE_CONNECTED_EVENT_TYPE,
   GOOGLE_DISCONNECTED_EVENT_TYPE,
   integrationConnectionStreamPath,
@@ -17,7 +19,13 @@ import {
 // runtimeState + getEvents.
 const streamNetwork = vi.hoisted(() => {
   const streams = new Map<string, { offset: number; payload: unknown; type: string }[]>();
-  return { streams };
+  const getEventsCalls: Array<{
+    afterOffset?: number;
+    beforeOffset?: number;
+    eventTypes?: readonly string[];
+    limit?: number;
+  }> = [];
+  return { getEventsCalls, streams };
 });
 
 // connect-flows imports slack-api (disconnect's auth.revoke) and telegram-api
@@ -40,8 +48,22 @@ vi.mock("../../env.ts", () => ({
           async runtimeState() {
             return { coreProcessorState: { maxOffset: events.length } };
           },
-          async getEvents({ afterOffset = 0, beforeOffset = Infinity }) {
-            return events.filter((e) => e.offset > afterOffset && e.offset < beforeOffset);
+          async getEvents(input: {
+            afterOffset?: number;
+            beforeOffset?: number;
+            eventTypes?: readonly string[];
+            limit?: number;
+          }) {
+            streamNetwork.getEventsCalls.push(input);
+            const { afterOffset = 0, beforeOffset = Infinity, eventTypes, limit = 500 } = input;
+            return events
+              .filter(
+                (event) =>
+                  event.offset > afterOffset &&
+                  event.offset < beforeOffset &&
+                  (eventTypes === undefined || eventTypes.includes(event.type)),
+              )
+              .slice(0, limit);
           },
         };
       },
@@ -51,9 +73,14 @@ vi.mock("../../env.ts", () => ({
 
 const { getConnectionStatus } = await import("./connect-flows.ts");
 
-function seed(projectId: string, connection: string, events: { payload: unknown; type: string }[]) {
+function seed(
+  projectId: string,
+  connection: string,
+  events: { payload: unknown; type: string }[],
+  slug = "google",
+) {
   const name = DurableObjectNameCodec.stringify({
-    path: integrationConnectionStreamPath("google", connection),
+    path: integrationConnectionStreamPath(slug, connection),
     projectId,
   });
   streamNetwork.streams.set(
@@ -62,7 +89,43 @@ function seed(projectId: string, connection: string, events: { payload: unknown;
   );
 }
 
-afterEach(() => streamNetwork.streams.clear());
+afterEach(() => {
+  streamNetwork.getEventsCalls.length = 0;
+  streamNetwork.streams.clear();
+});
+
+test("connection status filters lifecycle facts before reading a webhook-heavy journal", async () => {
+  seed(
+    "prj_1",
+    "install-1",
+    [
+      {
+        type: GITHUB_CONNECTED_EVENT_TYPE,
+        payload: {
+          connection: "install-1",
+          externalId: "115079265",
+          installationId: "115079265",
+        },
+      },
+      ...Array.from({ length: 15_385 }, (_, index) => ({
+        type: "events.iterate.com/github/webhook-received",
+        payload: { index },
+      })),
+    ],
+    "github",
+  );
+
+  expect(
+    await getConnectionStatus({ connection: "install-1", projectId: "prj_1", provider: "github" }),
+  ).toMatchObject({ connected: true, externalId: "115079265" });
+  expect(streamNetwork.getEventsCalls).toEqual([
+    {
+      afterOffset: 0,
+      eventTypes: [GITHUB_CONNECTED_EVENT_TYPE, GITHUB_DISCONNECTED_EVENT_TYPE],
+      limit: 500,
+    },
+  ]);
+});
 
 describe("getConnectionStatus (google)", () => {
   test("connected fact yields display metadata (no tokens)", async () => {
