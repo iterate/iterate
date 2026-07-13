@@ -21,8 +21,10 @@ export function inboundMcpServerInstructions(input: { withAgent: boolean }): str
 
 export const EXEC_TYPESCRIPT_DESCRIPTION = [
   "Execute TypeScript against an Iterate project. Pass exactly one async arrow function as code: async (itx) => { ... }. Its JSON-serializable return value becomes this tool result; a thrown error becomes the tool error.",
+  "STANDARD TYPESCRIPT FENCE: open examples with ```ts. Pass only the function inside the fence as exec_typescript.code.",
+  "DEEPER DOCS: https://github.com/iterate/iterate — start with apps/os/src/README.md, apps/os/docs/, apps/os/src/itx/examples.ts, and apps/os/src/itx-api.generated.ts.",
   "",
-  "QUICK START (examples use the standard ts fence; pass only the function inside the fence as exec_typescript.code):",
+  "QUICK START:",
   "```ts",
   "async (itx) => {",
   "  const project = await itx.__describe();",
