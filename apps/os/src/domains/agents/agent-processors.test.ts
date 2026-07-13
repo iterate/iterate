@@ -11,12 +11,13 @@ import {
 import { normalizeLlmUsage } from "./workers-ai-transport.ts";
 import {
   AgentProcessorContract,
+  DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   DEFAULT_AGENT_SYSTEM_PROMPT,
 } from "./agent-processor-contract.ts";
 import { MemoryStream, deliverNewEvents, type ProcessorLike } from "./test-helpers.ts";
 
-function agentRequestEvents(content: string, model = "openai/gpt-5.5"): StreamEventInput[] {
+function agentRequestEvents(content: string, model = DEFAULT_AGENT_MODEL): StreamEventInput[] {
   return [
     {
       type: "events.iterate.com/agent/input-added",
@@ -1819,7 +1820,7 @@ describe("token usage and history reset", () => {
     );
     expect(report?.payload).toEqual({
       llmRequestOffset: requested!.offset,
-      model: "openai/gpt-5.5",
+      model: DEFAULT_AGENT_MODEL,
       maxContextTokens: 272_000,
       inputTokens: 2900,
       outputTokens: 111,
@@ -1914,6 +1915,8 @@ describe("token usage and history reset", () => {
   });
 
   it("longest-prefix matches context windows, with a conservative default", () => {
+    expect(contextWindowTokens("openai/gpt-5.6-sol")).toBe(272_000);
+    expect(contextWindowTokens("openai/gpt-5.6-sol-2026-07-13")).toBe(272_000);
     expect(contextWindowTokens("openai/gpt-5.5")).toBe(272_000);
     expect(contextWindowTokens("openai/gpt-5.5-2026-01-15")).toBe(272_000);
     expect(contextWindowTokens("@cf/qwen/qwen3-coder-plus")).toBe(128_000);
@@ -2086,7 +2089,7 @@ describe("token usage and history reset", () => {
             if (messages.at(-1)!.content.includes("compacting this AI agent conversation")) {
               return { response: "The user likes teal and is building STICKYMEETING." };
             }
-            // A turn that ran at over half of gpt-5.5's 272k window.
+            // A turn that ran at over half of GPT-5.6 Sol's 272k operating window.
             return {
               response: "noted!",
               usage: { prompt_tokens: 140_000, completion_tokens: 500 },
@@ -2129,7 +2132,7 @@ describe("token usage and history reset", () => {
       );
     expect(compactionCalls()).toHaveLength(1);
     // The summary sees the whole conversation and runs on the agent's model.
-    expect(compactionCalls()[0]!.model).toBe("openai/gpt-5.5");
+    expect(compactionCalls()[0]!.model).toBe(DEFAULT_AGENT_MODEL);
     // The compaction request extends the normal turn's request byte for byte
     // (same system prompt, same history messages) so the provider's prompt
     // cache — an exact-prefix match — covers the biggest request an agent

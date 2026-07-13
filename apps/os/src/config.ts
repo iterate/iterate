@@ -86,10 +86,10 @@ export const AppConfig = z.object({
    * is per-deployment, not per-Doppler-secret.
    *
    * `byok` is the default AND what every deployed env sets explicitly: the
-   * platform is gpt-5.5-only, unified billing meters OpenAI-prompt-cached
-   * tokens at the uncached price (~6x at our hit rate), and BYOK benchmarked
-   * latency-neutral-or-better. The default matters for LOCAL DEV, which has
-   * no envs.ts entry — dev must ride the same lane as production.
+   * platform uses OpenAI GPT-5 reasoning models, unified billing meters
+   * prompt-cached tokens at the uncached price (~6x at our hit rate), and BYOK
+   * benchmarked latency-neutral-or-better. The default matters for LOCAL DEV,
+   * which has no envs.ts entry — dev must ride the same lane as production.
    *
    * `responseCacheTtlSeconds` opts the BYOK lane into the gateway's RESPONSE
    * cache (whole-answer replay — distinct from OpenAI's prompt cache, which

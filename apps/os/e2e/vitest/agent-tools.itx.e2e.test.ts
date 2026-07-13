@@ -79,7 +79,7 @@ test(
     // (llm-provider-selected wins over defaults), not any particular vendor;
     // asking the deployment keeps it green even if account model
     // availability shifts again (the 2026-07-10 lesson: a hardcoded
-    // openai/gpt-5.5 pin was unrunnable on the preview account until
+    // an explicit OpenAI model pin was unrunnable on the preview account until
     // unified billing was enabled, and watchdogged the whole lane).
     using defaultsItx = handle.itx();
     const policy = await defaultsItx.agents.defaults.forPath("/agents/e2e-model");
