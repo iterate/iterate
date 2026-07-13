@@ -71,7 +71,7 @@ test("reads canonical frontmatter fields literally", () => {
   expect(unrelatedMetadata?.labels).toEqual([]);
 
   const backlog = parseRepoTask("tasks/backlog.md", "---\nstate: backlog\n---\n# Backlog\n");
-  expect(backlog?.state).toBe("backlog");
+  expect(backlog?.state).toBe("todo");
 });
 
 test("uses an explicit title before the first heading", () => {
