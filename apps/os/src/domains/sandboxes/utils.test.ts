@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
+import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import {
   assertSandboxPath,
   githubTokenEnvForConnections,
   sandboxPathFor,
   SANDBOX_GIT_CONFIG_SHELL,
 } from "./utils.ts";
-import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 
 describe("sandboxPathFor", () => {
   test("a name mints /sandboxes/<name> — flat, no intermediate folders", () => {
