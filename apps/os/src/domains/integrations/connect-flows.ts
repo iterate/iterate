@@ -44,8 +44,8 @@ import {
   appendConnectionDirectoryEvent,
   appendConnectionDirectoryEvents,
   integrationStreamStub,
+  latestStreamEventOfTypes,
   lookupConnectionClaim,
-  streamEventsNewestFirst,
 } from "./integration-streams.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
@@ -926,14 +926,16 @@ async function latestLifecycleFact(input: {
   slug: string;
 }): Promise<{ connected: boolean; payload: Record<string, unknown> } | null> {
   const path = integrationConnectionStreamPath(input.slug, input.connection);
-  for await (const event of streamEventsNewestFirst(input.projectId, path)) {
-    if (event.type !== input.connectedType && event.type !== input.disconnectedType) continue;
-    return {
-      connected: event.type === input.connectedType,
-      payload: readRecord(event.payload) ?? {},
-    };
-  }
-  return null;
+  const event = await latestStreamEventOfTypes(input.projectId, path, [
+    input.connectedType,
+    input.disconnectedType,
+  ]);
+  return event === null
+    ? null
+    : {
+        connected: event.type === input.connectedType,
+        payload: readRecord(event.payload) ?? {},
+      };
 }
 
 /** The "never connected" status — also google's disconnected shape (its

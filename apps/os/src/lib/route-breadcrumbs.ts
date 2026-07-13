@@ -2,6 +2,8 @@ import { StreamPath } from "~/lib/stream-links.ts";
 
 export type RouteBreadcrumbStaticData = {
   breadcrumb?: string;
+  /** Marks a client-only route as a stream page before its loader data exists. */
+  streamPage?: boolean;
 };
 
 export type RouteBreadcrumbLoaderData = {
@@ -23,6 +25,10 @@ export type StreamBreadcrumb = {
 
 export function breadcrumbStaticData(breadcrumb: string): RouteBreadcrumbStaticData {
   return { breadcrumb };
+}
+
+export function streamPageStaticData(): RouteBreadcrumbStaticData {
+  return { streamPage: true };
 }
 
 export function breadcrumbLoaderData<T extends RouteBreadcrumbLoaderData>(data: T): T {
