@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { spawnSyncMock } = vi.hoisted(() => ({
+  spawnSyncMock: vi.fn(() => ({ status: 0 })),
+}));
+
+vi.mock("node:child_process", () => ({ spawnSync: spawnSyncMock }));
+
 import { create } from "./session.ts";
 
 afterEach(() => {
+  vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -49,6 +57,33 @@ describe("operator session CLI", () => {
     vi.stubEnv("APP_CONFIG_ADMIN_API_SECRET", "");
     await expect(create({ as: "support@example.test", project: "test" })).rejects.toThrow(
       "APP_CONFIG_ADMIN_API_SECRET",
+    );
+  });
+
+  it("opens browser sessions through the Windows URL handler", async () => {
+    vi.stubEnv("APP_CONFIG_BASE_URL", "https://preview.example.test");
+    vi.stubEnv("APP_CONFIG_ADMIN_API_SECRET", "preview-admin-secret");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        browserUrl: "https://preview.example.test/api/operator-sessions/redeem#token=grant",
+        expiresAt: "2030-01-01T00:00:00.000Z",
+        kind: "admin",
+        project: null,
+        token: "grant",
+      }),
+    );
+    vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await create({ admin: true, as: "operator:test", open: true });
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "rundll32.exe",
+      [
+        "url.dll,FileProtocolHandler",
+        "https://preview.example.test/api/operator-sessions/redeem#token=grant",
+      ],
+      { stdio: "inherit" },
     );
   });
 });

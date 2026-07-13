@@ -81,7 +81,8 @@ export async function create(options: CreateOptions = {}) {
   }
   const created = (await response.json()) as CreatedOperatorSession;
   if (options.open) {
-    const result = spawnSync(openCommand(), [created.browserUrl], { stdio: "inherit" });
+    const { args, command } = openInvocation(created.browserUrl);
+    const result = spawnSync(command, args, { stdio: "inherit" });
     if (result.status !== 0) throw new Error("Could not open the operator session URL.");
     console.info(`Opened ${created.kind} operator session; expires ${created.expiresAt}.`);
     return;
@@ -102,8 +103,10 @@ function resolveBaseUrl(explicit: string | undefined) {
   );
 }
 
-function openCommand() {
-  if (process.platform === "darwin") return "open";
-  if (process.platform === "win32") return "start";
-  return "xdg-open";
+function openInvocation(url: string) {
+  if (process.platform === "darwin") return { args: [url], command: "open" };
+  if (process.platform === "win32") {
+    return { args: ["url.dll,FileProtocolHandler", url], command: "rundll32.exe" };
+  }
+  return { args: [url], command: "xdg-open" };
 }
