@@ -15,6 +15,7 @@
  */
 
 import type { AppConfig } from "../../config.ts";
+import { cloudflareAiGatewayResponseCacheKey } from "../agents/workers-ai-transport.ts";
 
 /** True when the request targets OpenAI's public API host (http or https). */
 export function isOpenAiPublicApiRequest(request: Request): boolean {
@@ -56,10 +57,39 @@ type OpenAiAiGatewayMetadata = {
 };
 
 /**
+ * Apply gateway cache headers to match agent BYOK (`workers-ai-transport.ts`):
+ * - with TTL: `cf-aig-cache-ttl` + `cf-aig-cache-key` (body-derived)
+ * - without: `cf-aig-skip-cache: true` so dashboard defaults never serve cache
+ */
+export async function applyOpenAiAiGatewayCacheHeaders(input: {
+  headers: Headers | Record<string, string>;
+  body: unknown;
+  responseCacheTtlSeconds?: number;
+}): Promise<void> {
+  const set = (name: string, value: string) => {
+    if (input.headers instanceof Headers) input.headers.set(name, value);
+    else input.headers[name] = value;
+  };
+  const del = (name: string) => {
+    if (input.headers instanceof Headers) input.headers.delete(name);
+    else delete input.headers[name];
+  };
+  if (input.responseCacheTtlSeconds !== undefined) {
+    set("cf-aig-cache-ttl", String(input.responseCacheTtlSeconds));
+    set("cf-aig-cache-key", await cloudflareAiGatewayResponseCacheKey(input.body));
+    del("cf-aig-skip-cache");
+  } else {
+    set("cf-aig-skip-cache", "true");
+    del("cf-aig-cache-ttl");
+    del("cf-aig-cache-key");
+  }
+}
+
+/**
  * Rewrite an OpenAI API Request onto AI Gateway and inject the platform key +
  * gateway headers. Does not fetch — caller runs fetch / fetchWithCredentialRedirects.
  */
-export function rewriteOpenAiRequestToAiGateway(input: {
+export async function rewriteOpenAiRequestToAiGateway(input: {
   request: Request;
   accountId: string;
   gatewayId: string;
@@ -67,9 +97,10 @@ export function rewriteOpenAiRequestToAiGateway(input: {
   metadata: OpenAiAiGatewayMetadata;
   /** When the gateway requires Authenticated Gateway, pass a CF API token with AI Gateway Run. */
   cfAigAuthorization?: string;
-  /** prd-style: never serve a cached whole-answer (matches workers-ai-transport). */
-  skipCache?: boolean;
-}): Request {
+  responseCacheTtlSeconds?: number;
+  /** Optional pre-read body for cache key (avoids consuming request.body twice). */
+  bodyForCacheKey?: unknown;
+}): Promise<Request> {
   const gatewayUrl = openAiAiGatewayUrl({
     accountId: input.accountId,
     gatewayId: input.gatewayId,
@@ -87,11 +118,11 @@ export function rewriteOpenAiRequestToAiGateway(input: {
 
   headers.set("Authorization", `Bearer ${input.openaiApiKey}`);
   headers.set("cf-aig-metadata", JSON.stringify(compactMetadata(input.metadata)));
-  if (input.skipCache) {
-    headers.set("cf-aig-skip-cache", "true");
-  } else {
-    headers.delete("cf-aig-skip-cache");
-  }
+  await applyOpenAiAiGatewayCacheHeaders({
+    headers,
+    body: input.bodyForCacheKey ?? null,
+    responseCacheTtlSeconds: input.responseCacheTtlSeconds,
+  });
   if (input.cfAigAuthorization !== undefined && input.cfAigAuthorization.length > 0) {
     headers.set("cf-aig-authorization", `Bearer ${input.cfAigAuthorization}`);
   }
@@ -117,21 +148,31 @@ export function openAiAiGatewayRoutingFromConfig(config: AppConfig): {
   gatewayId: string;
   openaiApiKey: string;
   cfAigAuthorization?: string;
-  skipCache: boolean;
+  responseCacheTtlSeconds?: number;
 } | null {
   const accountId = config.cloudflare.accountId;
   if (accountId === undefined || accountId.length === 0) return null;
   const gatewayId = config.cloudflareAiGateway.id;
   const openaiApiKey = config.openAiApiKey.exposeSecret();
   const cfToken = config.cloudflare.apiToken?.exposeSecret();
+  const ttl = config.cloudflareAiGateway.responseCacheTtlSeconds;
   return {
     accountId,
     gatewayId,
     openaiApiKey,
     ...(cfToken !== undefined && cfToken.length > 0 ? { cfAigAuthorization: cfToken } : {}),
-    // Match agent BYOK: only preview/dev set a response-cache TTL; prd skips.
-    skipCache: config.cloudflareAiGateway.responseCacheTtlSeconds === undefined,
+    ...(ttl !== undefined ? { responseCacheTtlSeconds: ttl } : {}),
   };
+}
+
+/**
+ * Endpoint string for `AI.gateway().run`: path after `/v1/` plus any query
+ * (so `?foo=1` is not dropped relative to the REST rewrite path).
+ */
+export function openAiGatewayBindingEndpoint(openAiUrl: string): string {
+  const url = new URL(openAiUrl);
+  const rest = url.pathname.replace(/^\/v1\/?/, "");
+  return `${rest}${url.search}`;
 }
 
 function compactMetadata(

@@ -47,8 +47,10 @@ import {
   type HumanApprovalRequestedPayload,
 } from "./egress-approvals.ts";
 import {
+  applyOpenAiAiGatewayCacheHeaders,
   isOpenAiPublicApiRequest,
   openAiAiGatewayRoutingFromConfig,
+  openAiGatewayBindingEndpoint,
   rewriteOpenAiRequestToAiGateway,
 } from "./openai-ai-gateway-egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
@@ -605,9 +607,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * Route `api.openai.com` through Cloudflare AI Gateway with the platform
    * OpenAI key + project metadata. Prefer the Workers AI gateway binding
    * (pre-authenticated on this account — works when Authenticated Gateway is
-   * on). Fall back to a provider-native REST rewrite for GET/non-JSON and when
-   * the binding is unavailable. Returns null when config cannot route (caller
-   * falls through to normal egress).
+   * on). Otherwise rewrite to the provider-native REST gateway URL; if that
+   * 401s (missing AI Gateway Run token), fall back to direct OpenAI with the
+   * platform key so sandboxes still work. Returns null when config cannot
+   * route (caller falls through to normal egress).
    */
   async #egressOpenAiViaAiGateway(request: Request): Promise<Response | null> {
     const config = parseConfig(this.env);
@@ -623,17 +626,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
         undefined,
     };
 
-    // Binding path: same door agent BYOK uses. Endpoint is the path after /v1/.
-    // Prefer this for POST/PUT JSON (chat/completions, responses) — pre-auth on
-    // Authenticated Gateway. GET (e.g. /v1/models) has no binding `run` shape,
-    // so we inject the platform key and hit OpenAI directly (still never uses
-    // the container's dummy key).
-    const endpoint = new URL(request.url).pathname.replace(/^\/v1\/?/, "");
+    // Binding path: same door agent BYOK uses. Endpoint = path after /v1/ + query.
+    const endpoint = openAiGatewayBindingEndpoint(request.url);
     const gateway = this.env.AI?.gateway?.(routing.gatewayId);
     if (
       gateway !== undefined &&
       (request.method === "POST" || request.method === "PUT") &&
-      endpoint.length > 0
+      endpoint.replace(/\?.*$/, "").length > 0
     ) {
       try {
         const query: unknown = await request.clone().json();
@@ -646,7 +645,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
             ...(metadata.caller !== undefined ? { caller: metadata.caller } : {}),
           }),
         };
-        if (routing.skipCache) headers["cf-aig-skip-cache"] = "true";
+        await applyOpenAiAiGatewayCacheHeaders({
+          headers,
+          body: query,
+          responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
+        });
         return await gateway.run({
           provider: "openai",
           endpoint,
@@ -654,8 +657,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
           query,
         });
       } catch (error) {
-        // Non-JSON body or binding failure → inject key + direct OpenAI below.
-        console.warn("openai AI gateway binding path failed; falling back to direct OpenAI", {
+        console.warn("openai AI gateway binding path failed; trying REST rewrite", {
           projectId: this.#name.projectId,
           endpoint,
           error: error instanceof Error ? error.message : String(error),
@@ -663,9 +665,24 @@ export class ProjectDurableObject extends DurableObject<Env> {
       }
     }
 
-    // Direct OpenAI with platform key (GET/models, or binding fallback). Prefer
-    // this over the provider-native REST gateway URL: Authenticated Gateway
-    // requires an AI Gateway Run token our Doppler CF tokens often lack.
+    // Provider-native REST rewrite (GET /models, non-JSON, binding failure).
+    const rewritten = await rewriteOpenAiRequestToAiGateway({
+      request,
+      accountId: routing.accountId,
+      gatewayId: routing.gatewayId,
+      openaiApiKey: routing.openaiApiKey,
+      metadata,
+      cfAigAuthorization: routing.cfAigAuthorization,
+      responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
+    });
+    const gatewayResponse = await fetch(rewritten);
+    if (gatewayResponse.status !== 401) return gatewayResponse;
+
+    // Authenticated Gateway without a Run-capable token → last resort: direct
+    // OpenAI with the platform key (still never the container dummy).
+    console.warn("openai AI gateway REST rewrite unauthorized; falling back to direct OpenAI", {
+      projectId: this.#name.projectId,
+    });
     const headers = new Headers(request.headers);
     headers.set("Authorization", `Bearer ${routing.openaiApiKey}`);
     headers.delete("host");

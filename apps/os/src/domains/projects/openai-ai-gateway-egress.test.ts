@@ -4,6 +4,7 @@ import {
   isOpenAiPublicApiRequest,
   openAiAiGatewayRoutingFromConfig,
   openAiAiGatewayUrl,
+  openAiGatewayBindingEndpoint,
   rewriteOpenAiRequestToAiGateway,
 } from "./openai-ai-gateway-egress.ts";
 
@@ -49,6 +50,14 @@ describe("openAiAiGatewayUrl", () => {
   });
 });
 
+describe("openAiGatewayBindingEndpoint", () => {
+  test("includes query string", () => {
+    expect(openAiGatewayBindingEndpoint("https://api.openai.com/v1/chat/completions?x=1")).toBe(
+      "chat/completions?x=1",
+    );
+  });
+});
+
 describe("rewriteOpenAiRequestToAiGateway", () => {
   test("injects platform key, metadata, and skip-cache; drops host", async () => {
     const body = JSON.stringify({ model: "gpt-4.1-mini", messages: [] });
@@ -62,14 +71,14 @@ describe("rewriteOpenAiRequestToAiGateway", () => {
       body,
     });
 
-    const rewritten = rewriteOpenAiRequestToAiGateway({
+    const rewritten = await rewriteOpenAiRequestToAiGateway({
       request,
       accountId: "acc-1",
       gatewayId: "default",
       openaiApiKey: "sk-platform",
       metadata: { projectId: "prj_abc", source: "project-egress", caller: "sandbox" },
-      skipCache: true,
       cfAigAuthorization: "cf-token",
+      bodyForCacheKey: { model: "gpt-4.1-mini", messages: [] },
     });
 
     expect(rewritten.url).toBe(
@@ -86,6 +95,24 @@ describe("rewriteOpenAiRequestToAiGateway", () => {
     });
     expect(await rewritten.text()).toBe(body);
   });
+
+  test("sets cache-ttl and cache-key when responseCacheTtlSeconds is set", async () => {
+    const rewritten = await rewriteOpenAiRequestToAiGateway({
+      request: new Request("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        body: "{}",
+      }),
+      accountId: "acc",
+      gatewayId: "default",
+      openaiApiKey: "sk",
+      metadata: { projectId: "prj_x", source: "project-egress" },
+      responseCacheTtlSeconds: 600,
+      bodyForCacheKey: { model: "gpt-4.1-mini" },
+    });
+    expect(rewritten.headers.get("cf-aig-cache-ttl")).toBe("600");
+    expect(rewritten.headers.get("cf-aig-cache-key")).toMatch(/^[0-9a-f]{64}$/);
+    expect(rewritten.headers.get("cf-aig-skip-cache")).toBeNull();
+  });
 });
 
 describe("openAiAiGatewayRoutingFromConfig", () => {
@@ -98,7 +125,7 @@ describe("openAiAiGatewayRoutingFromConfig", () => {
     expect(openAiAiGatewayRoutingFromConfig(config)).toBeNull();
   });
 
-  test("maps config fields and skipCache from responseCacheTtlSeconds", () => {
+  test("maps config fields including optional response cache TTL", () => {
     const base = {
       openAiApiKey: { exposeSecret: () => "sk-x" },
       cloudflareAiGateway: { id: "default" },
@@ -118,7 +145,6 @@ describe("openAiAiGatewayRoutingFromConfig", () => {
       gatewayId: "default",
       openaiApiKey: "sk-x",
       cfAigAuthorization: "cfut_x",
-      skipCache: true,
     });
 
     expect(
@@ -126,6 +152,6 @@ describe("openAiAiGatewayRoutingFromConfig", () => {
         ...base,
         cloudflareAiGateway: { id: "e2e", responseCacheTtlSeconds: 600 },
       } as unknown as AppConfig),
-    ).toMatchObject({ gatewayId: "e2e", skipCache: false });
+    ).toMatchObject({ gatewayId: "e2e", responseCacheTtlSeconds: 600 });
   });
 });
