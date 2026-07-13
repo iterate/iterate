@@ -69,7 +69,12 @@ import {
   type RepoTaskBoardQuery,
   type RepoTaskBoardRowField,
 } from "./repo-tasks.ts";
-import { effectiveEntry, type FileEntry, type WorkingTreeChanges } from "./staged-changes.ts";
+import {
+  effectiveEntry,
+  textContentForEntry,
+  type FileEntry,
+  type WorkingTreeChanges,
+} from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
 
 type SearchPatch = {
@@ -122,7 +127,8 @@ export function RepoTasksView({
     for (const [path, change] of changes) {
       if (!isRepoTaskPath(path)) continue;
       const entry = effectiveEntry(change);
-      if (entry?.type === "write") contents.set(path, entry.content);
+      const content = textContentForEntry(entry);
+      if (content !== undefined) contents.set(path, content);
       else if (entry !== undefined) contents.delete(path);
     }
     return [...contents]

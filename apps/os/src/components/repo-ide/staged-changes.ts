@@ -174,6 +174,20 @@ export function effectiveEntry(change: FileChange): FileEntry | undefined {
   return change.working ?? change.staged;
 }
 
+/** Decode a text file regardless of which write lane produced it. Uploads use
+ * the base64 lane even for Markdown, so text consumers must decode valid UTF-8
+ * instead of treating every base64 entry as binary. */
+export function textContentForEntry(entry: FileEntry | undefined): string | undefined {
+  if (entry?.type === "write") return entry.content;
+  if (entry?.type !== "write-base64") return undefined;
+  try {
+    const bytes = Uint8Array.from(atob(entry.contentBase64.trim()), (char) => char.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The pierre-tree git-status annotation for every changed path. */
 export function workingTreeGitStatus(
   changes: WorkingTreeChanges,
