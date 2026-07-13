@@ -113,7 +113,7 @@ const CRASH_LOOP_EVIDENCE_THRESHOLD = 3;
 export const MAX_CONSECUTIVE_BUSY_REFIRES = 90;
 
 /** The semantic outcome of one platform alarm reaching the keepalive. */
-export type ProcessorKeepaliveAlarmAction =
+type ProcessorKeepaliveAlarmAction =
   | "not_due"
   | "busy_rearmed"
   | "revival_hung_backoff"
