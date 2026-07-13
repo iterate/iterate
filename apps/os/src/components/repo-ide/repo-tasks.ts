@@ -277,7 +277,7 @@ export function repoTaskCreationPaths(
 }
 
 export function taskStateColumns(tasks: readonly RepoTask[]): string[] {
-  const unknown = new Set(tasks.map((task) => task.state));
+  const unknown = new Set(tasks.map((task) => taskStateForBoard(task.state)));
   for (const state of STANDARD_TASK_STATES) unknown.delete(state);
   return [
     ...STANDARD_TASK_STATES,
@@ -306,7 +306,7 @@ export function queryRepoTaskBoard(
       ...row,
       cells: states.map((state) => ({
         state,
-        tasks: row.tasks.filter((task) => task.state === state),
+        tasks: row.tasks.filter((task) => taskStateForBoard(task.state) === state),
       })),
     })),
     taskCount: matchingTasks.length,
@@ -316,6 +316,11 @@ export function queryRepoTaskBoard(
       labels: query.rows !== "label",
     },
   };
+}
+
+/** Fold legacy Backlog files into the v1 board's single Todo state. */
+export function taskStateForBoard(state: string): string {
+  return state === "backlog" ? DEFAULT_TASK_STATE : state;
 }
 
 export function taskStateLabel(state: string): string {

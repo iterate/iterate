@@ -222,7 +222,21 @@ test("reserves a task path that exists at HEAD while its deletion is pending", (
 
 test("keeps the core columns and appends states found in the repo", () => {
   const task = parseRepoTask("tasks/review.md", "---\nstate: in-review\n---\n# Review\n")!;
-  expect(taskStateColumns([task])).toEqual(["todo", "in-progress", "in-review", "done"]);
+  const legacyBacklog = parseRepoTask("tasks/backlog.md", "---\nstate: backlog\n---\n# Backlog\n")!;
+  expect(taskStateColumns([task, legacyBacklog])).toEqual([
+    "todo",
+    "in-progress",
+    "in-review",
+    "done",
+  ]);
+  const board = queryRepoTaskBoard([legacyBacklog], {
+    filter: "",
+    columns: "state",
+    rows: null,
+  });
+  expect(board.rows[0]?.cells.find((cell) => cell.state === "todo")?.tasks).toEqual([
+    legacyBacklog,
+  ]);
 });
 
 test("queries a status board with folders as an independent row dimension", () => {
