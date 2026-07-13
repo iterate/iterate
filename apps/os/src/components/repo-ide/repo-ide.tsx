@@ -28,7 +28,7 @@ import { RepoEditorPane } from "./repo-editor-pane.tsx";
 import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import { RepoTasksView } from "./repo-tasks-view.tsx";
-import { prepareRepoTaskAssignment, type RepoTask } from "./repo-tasks.ts";
+import { isRepoTaskPath, prepareRepoTaskAssignment, type RepoTask } from "./repo-tasks.ts";
 import {
   commitPlan,
   effectiveEntry,
@@ -222,6 +222,16 @@ export function RepoIde({
   const assignTaskAgent = async (task: RepoTask) => {
     const assignment = prepareRepoTaskAssignment(task, repoPath);
     const sourceStore = store;
+    const previousTaskPaths = headPaths.filter(isRepoTaskPath);
+    const previousTaskContents =
+      queryClient.getQueryData<Record<string, string>>([
+        "itx",
+        "repo-task-files",
+        projectId,
+        repoPath,
+        files.commitOid,
+        previousTaskPaths.join("\n"),
+      ]) ?? {};
     let committed = false;
     try {
       const result = await itx.repos.get(repoPath).commitFiles({
@@ -230,9 +240,10 @@ export function RepoIde({
       });
       committed = true;
 
-      // This one task is now durable at HEAD. Preserve unrelated working-tree
-      // changes, but stop showing this committed snapshot as locally dirty.
-      sourceStore.setWorking(task.path, undefined);
+      // Keep the durable assignment as the local overlay while HEAD refreshes.
+      // This is load-bearing for tasks created only in the working tree: if we
+      // clear first, the board drops the card before listFiles catches up.
+      sourceStore.setWorking(task.path, { type: "write", content: assignment.content });
       sourceStore.setStaged(task.path, undefined);
       await queryClient.invalidateQueries({
         queryKey: ["itx", "repo-files", projectId, repoPath],
@@ -240,6 +251,26 @@ export function RepoIde({
       await queryClient.invalidateQueries({
         queryKey: ["itx", "repo-log", projectId, repoPath],
       });
+
+      const refreshedFiles = queryClient.getQueryData<{ commitOid: string; paths: string[] }>([
+        "itx",
+        "repo-files",
+        projectId,
+        repoPath,
+      ]);
+      if (refreshedFiles?.commitOid !== result.commitOid) {
+        throw new Error("The assignment is committed, but the new repository head is not ready.");
+      }
+      const nextTaskPaths = refreshedFiles.paths.filter(isRepoTaskPath);
+      // The assignment commit changes exactly one task. Seed the new HEAD's
+      // task query before removing the overlay, so React never observes a gap
+      // and the sheet immediately sees both `agent` and `in-progress`.
+      queryClient.setQueryData<Record<string, string>>(
+        ["itx", "repo-task-files", projectId, repoPath, result.commitOid, nextTaskPaths.join("\n")],
+        { ...previousTaskContents, [task.path]: assignment.content },
+      );
+      sourceStore.setWorking(task.path, undefined);
+      sourceStore.setStaged(task.path, undefined);
       sourceStore.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
 
       // Messaging a fresh path births the agent. The task commit intentionally
