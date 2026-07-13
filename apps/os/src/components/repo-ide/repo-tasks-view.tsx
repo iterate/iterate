@@ -5,6 +5,7 @@ import {
   CircleDashedIcon,
   CircleDotDashedIcon,
   CircleIcon,
+  FilePenLineIcon,
   FolderIcon,
   PlusIcon,
   SearchIcon,
@@ -61,6 +62,7 @@ type SearchPatch = {
   diff?: boolean;
   preview?: boolean;
   staged?: boolean;
+  tasks?: boolean;
 };
 
 type GroupMode = "state" | "folder";
@@ -136,19 +138,29 @@ export function RepoTasksView({
   };
   const selectTask = (path: string | undefined) =>
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
-  const createTask = (title: string, state: string, folderPath: string) => {
-    const created = createRepoTask(title, effectivePaths, taskDirectoryForFolder(folderPath));
-    if (created === null) return false;
-    const content =
-      state === "todo" ? created.content : updateRepoTaskState(created.content, state);
+  const createTask = (state: string, folderPath: string) => {
+    const created = createRepoTask("New task", effectivePaths, taskDirectoryForFolder(folderPath));
+    if (created === null) return;
+    const initialContent = `${created.content}\n`;
+    const content = state === "todo" ? initialContent : updateRepoTaskState(initialContent, state);
     onSetWorking(created.path, { type: "write", content });
     selectTask(created.path);
-    return true;
   };
   const deleteTask = (task: RepoTask) => {
     onSetStaged(task.path, undefined);
     onDelete(task.path);
     selectTask(undefined);
+  };
+  const moveTaskToPath = (task: RepoTask, targetPath: string) => {
+    if (targetPath === task.path) return true;
+    if (effectivePaths.has(targetPath)) return false;
+    const wasSelected = selectedPath === task.path;
+    onSetStaged(task.path, undefined);
+    onDelete(task.path);
+    onSetStaged(targetPath, undefined);
+    onSetWorking(targetPath, { type: "write", content: task.content });
+    if (wasSelected) selectTask(targetPath);
+    return true;
   };
   const moveTaskToFolder = (task: RepoTask, folderPath: string) => {
     const targetPath = repoTaskPathInDirectory(
@@ -156,14 +168,17 @@ export function RepoTasksView({
       taskDirectoryForFolder(folderPath),
       effectivePaths,
     );
-    if (targetPath === task.path) return;
-
-    const wasSelected = selectedPath === task.path;
-    onSetStaged(task.path, undefined);
-    onDelete(task.path);
-    onSetStaged(targetPath, undefined);
-    onSetWorking(targetPath, { type: "write", content: task.content });
-    if (wasSelected) selectTask(targetPath);
+    moveTaskToPath(task, targetPath);
+  };
+  const renameTask = (task: RepoTask, path: string) => {
+    const targetPath = path.trim().replace(/^\/+/, "");
+    const segments = targetPath.split("/");
+    if (
+      !isRepoTaskPath(targetPath) ||
+      segments.some((segment) => segment === "" || segment === "." || segment === "..")
+    )
+      return false;
+    return moveTaskToPath(task, targetPath);
   };
 
   return (
@@ -189,6 +204,19 @@ export function RepoTasksView({
           if (selectedTask !== undefined)
             writeTask(selectedTask, updateRepoTaskState(selectedTask.content, state));
         }}
+        onRenamePath={(path) =>
+          selectedTask === undefined ? false : renameTask(selectedTask, path)
+        }
+        onOpenInEditor={() => {
+          if (selectedTask !== undefined)
+            onPatchSearch({
+              file: selectedTask.path,
+              tasks: undefined,
+              diff: undefined,
+              preview: undefined,
+              staged: undefined,
+            });
+        }}
         onDelete={() => {
           if (selectedTask !== undefined) deleteTask(selectedTask);
         }}
@@ -210,7 +238,7 @@ function TaskBoard({
   onOpen: (task: RepoTask) => void;
   onMoveState: (task: RepoTask, state: string) => void;
   onMoveFolder: (task: RepoTask, folderPath: string) => void;
-  onCreate: (title: string, state: string, folderPath: string) => boolean;
+  onCreate: (state: string, folderPath: string) => void;
 }) {
   const [groupMode, setGroupMode] = useState<GroupMode>("state");
   const [filter, setFilter] = useState("");
@@ -313,8 +341,8 @@ function TaskBoard({
               onOpen={(task) => {
                 if (draggedPathRef.current !== task.path) onOpen(task);
               }}
-              onCreate={(title) =>
-                groupMode === "state" ? onCreate(title, group, "/") : onCreate(title, "todo", group)
+              onCreate={() =>
+                groupMode === "state" ? onCreate(group, "/") : onCreate("todo", group)
               }
             />
           ))}
@@ -335,18 +363,11 @@ function TaskColumn({
   group: string;
   tasks: readonly RepoTask[];
   onOpen: (task: RepoTask) => void;
-  onCreate: (title: string) => boolean;
+  onCreate: () => void;
 }) {
   const dropId = `task-${groupMode}:${group}`;
   const { ref, isDropTarget } = useDroppable({ id: dropId, accept: "repo-task" });
-  const [creating, setCreating] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
   const label = groupMode === "state" ? taskStateLabel(group) : group;
-  useEffect(() => {
-    if (!creating) return;
-    const frame = requestAnimationFrame(() => inputRef.current?.focus());
-    return () => cancelAnimationFrame(frame);
-  }, [creating]);
 
   return (
     <section
@@ -357,7 +378,7 @@ function TaskColumn({
         isDropTarget && "bg-accent/40",
       )}
     >
-      <header className="flex h-12 shrink-0 items-center justify-between px-3">
+      <header className="flex h-12 shrink-0 items-center px-3">
         <div className="flex min-w-0 items-center gap-2">
           {groupMode === "state" ? (
             <TaskStateIcon state={group} />
@@ -367,42 +388,22 @@ function TaskColumn({
           <h2 className="truncate text-sm font-medium">{label}</h2>
           <span className="text-xs tabular-nums text-muted-foreground">{tasks.length}</span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title={`Add task to ${label}`}
-          aria-label={`Add task to ${label}`}
-          onClick={() => setCreating(true)}
-        >
-          <PlusIcon data-icon="inline-start" />
-        </Button>
       </header>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
-        {creating ? (
-          <form
-            className="mb-2 rounded-lg border bg-card p-2 shadow-xs"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const title = String(new FormData(event.currentTarget).get("title") ?? "");
-              if (onCreate(title)) setCreating(false);
-            }}
-          >
-            <Input
-              ref={inputRef}
-              aria-label={`New ${label} task title`}
-              name="title"
-              placeholder="Task title"
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setCreating(false);
-              }}
-            />
-          </form>
-        ) : null}
         <div className="flex flex-col gap-2">
           {tasks.map((task) => (
             <TaskCard key={task.path} task={task} onOpen={onOpen} />
           ))}
         </div>
+        <Button
+          variant="ghost"
+          className="mt-2 h-10 w-full text-muted-foreground/50 hover:bg-muted/70 hover:text-muted-foreground"
+          title={`Add task to ${label}`}
+          aria-label={`Add task to ${label}`}
+          onClick={onCreate}
+        >
+          <PlusIcon className="size-5" data-icon="inline-start" />
+        </Button>
       </div>
     </section>
   );
@@ -471,6 +472,8 @@ function TaskEditorSheet({
   onOpenChange,
   onChangeContent,
   onChangeState,
+  onRenamePath,
+  onOpenInEditor,
   onDelete,
 }: {
   task: RepoTask | undefined;
@@ -478,6 +481,8 @@ function TaskEditorSheet({
   onOpenChange: (open: boolean) => void;
   onChangeContent: (content: string) => void;
   onChangeState: (state: string) => void;
+  onRenamePath: (path: string) => boolean;
+  onOpenInEditor: () => void;
   onDelete: () => void;
 }) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -485,7 +490,12 @@ function TaskEditorSheet({
   const taskPath = task?.path;
   useEffect(() => {
     if (taskPath === undefined) return;
-    const frame = requestAnimationFrame(() => editorRef.current?.focus());
+    const frame = requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      if (editor === null) return;
+      editor.focus();
+      editor.setSelectionRange(editor.value.length, editor.value.length);
+    });
     return () => cancelAnimationFrame(frame);
   }, [taskPath]);
 
@@ -498,7 +508,28 @@ function TaskEditorSheet({
         >
           <SheetHeader className="shrink-0 border-b pr-14">
             <SheetTitle>{task.title}</SheetTitle>
-            <SheetDescription className="truncate font-mono text-xs">{task.path}</SheetDescription>
+            <SheetDescription className="sr-only">
+              Edit the task Markdown and file metadata.
+            </SheetDescription>
+            <Input
+              key={task.path}
+              defaultValue={`/${task.path}`}
+              aria-label="Task file path"
+              className="h-6 rounded-none border-0 px-0 font-mono text-xs text-muted-foreground shadow-none focus-visible:ring-0"
+              onBlur={(event) => {
+                if (!onRenamePath(event.currentTarget.value))
+                  event.currentTarget.value = `/${task.path}`;
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                } else if (event.key === "Escape") {
+                  event.currentTarget.value = `/${task.path}`;
+                  event.currentTarget.blur();
+                }
+              }}
+            />
           </SheetHeader>
           <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
             <Select value={task.state} onValueChange={(value) => value && onChangeState(value)}>
@@ -520,6 +551,16 @@ function TaskEditorSheet({
               <FolderIcon aria-hidden className="size-3.5 shrink-0" />
               <span className="truncate font-mono">{task.folderPath}</span>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="shrink-0 text-muted-foreground"
+              title="Open in editor"
+              onClick={onOpenInEditor}
+            >
+              <FilePenLineIcon data-icon="inline-start" />
+              Editor
+            </Button>
             <Button
               variant="ghost"
               size="icon-sm"

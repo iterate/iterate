@@ -45,7 +45,7 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
     path,
     taskDirectoryPath,
     folderPath,
-    title: heading?.title ?? fallbackTitle,
+    title: stringValue(metadata.title) ?? heading?.title ?? fallbackTitle,
     description:
       heading === undefined
         ? frontmatter.body.trim()

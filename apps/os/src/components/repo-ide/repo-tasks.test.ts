@@ -61,6 +61,15 @@ test("reads canonical and legacy frontmatter without requiring it", () => {
   expect(legacy?.labels).toEqual(["backend"]);
 });
 
+test("uses an explicit title before the first heading", () => {
+  const task = parseRepoTask(
+    "tasks/rename-me.md",
+    "---\ntitle: Frontmatter title\n---\n# Heading title\n\nDescription.\n",
+  );
+  expect(task?.title).toBe("Frontmatter title");
+  expect(task?.description).toBe("Description.");
+});
+
 test("updates state while preserving unrelated YAML, comments, and Markdown", () => {
   const content = "---\n# keep this\nstate: todo\nsize: small\n---\n\n# Ship it\n\nBody.\n";
   const updated = updateRepoTaskState(content, "in-progress");
