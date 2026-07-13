@@ -17,7 +17,7 @@
 import handler from "@tanstack/react-start/server-entry";
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
 import { withEvlog } from "@iterate-com/shared/evlog";
-import type { Env } from "./env.ts";
+import { workerVersion, type Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { resolveProjectIdBySlug } from "./project-directory.ts";
@@ -87,9 +87,12 @@ export default {
     // isolate across binding-only deploys, so a module-scope copy can serve
     // stale secrets after a rotation. Parsing is pure and cheap.
     const config = parseConfig(env);
+    const deployment = { environment: env.WORKER_SELF, version: workerVersion(env) };
 
     const mcpRequest = rewriteMcpHostRequest({ config, request });
-    if (mcpRequest) return await appFetch(mcpRequest, ctx, config, { isEventDocsHost: false });
+    if (mcpRequest) {
+      return await appFetch(mcpRequest, ctx, config, deployment, { isEventDocsHost: false });
+    }
 
     const route = await decideIngressRoute({
       config,
@@ -98,9 +101,9 @@ export default {
       resolvers: directoryResolvers(config, env),
       url: request.url,
     });
-    if (route.lane !== "os") return await apiFetch(request, ctx, config, route);
+    if (route.lane !== "os") return await apiFetch(request, ctx, config, deployment, route);
 
-    return await appFetch(request, ctx, config, {
+    return await appFetch(request, ctx, config, deployment, {
       isEventDocsHost: route.hostKind === "eventDocs",
     });
   },
@@ -132,11 +135,13 @@ async function appFetch(
   request: Request,
   ctx: ExecutionContext,
   config: AppConfig,
+  deployment: { environment: string; version: string },
   host: { isEventDocsHost: boolean },
 ) {
   return withEvlog(
     { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
     async ({ log }) => {
+      log.set(deployment);
       // When baseUrl is not configured (for example workers.dev previews),
       // the request origin is the app's own URL. After this, baseUrl is
       // always set.
@@ -164,6 +169,22 @@ async function appFetch(
  * — every lane `decideIngressRoute` (src/ingress.ts) can resolve.
  */
 async function apiFetch(
+  request: Request,
+  ctx: ExecutionContext,
+  config: AppConfig,
+  deployment: { environment: string; version: string },
+  route: Exclude<Awaited<ReturnType<typeof decideIngressRoute>>, { lane: "os" }>,
+) {
+  return withEvlog(
+    { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
+    async ({ log }) => {
+      log.set({ ...deployment, ...apiIngressLogFields(request, route) });
+      return await apiFetchWithoutEvlog(request, ctx, config, route);
+    },
+  );
+}
+
+async function apiFetchWithoutEvlog(
   request: Request,
   ctx: ExecutionContext,
   config: AppConfig,
@@ -244,6 +265,51 @@ async function apiFetch(
     return newHttpBatchRpcResponse(request, unauthenticated);
   }
   return newWorkersWebSocketRpcResponse(request, unauthenticated);
+}
+
+function apiIngressLogFields(
+  request: Request,
+  route: Exclude<Awaited<ReturnType<typeof decideIngressRoute>>, { lane: "os" }>,
+) {
+  const path = new URL(request.url).pathname;
+  const operation =
+    route.lane === "project"
+      ? route.resolved.appSlug === FILES_APP_SLUG
+        ? "project_file"
+        : "project_fetch"
+      : route.lane === "notFound"
+        ? "not_found"
+        : path === "/api"
+          ? request.method === "POST"
+            ? "itx_http_batch"
+            : "itx_websocket_handshake"
+          : path === "/api/admin-cookie"
+            ? "admin_cookie"
+            : path.includes("/slack/")
+              ? "integration_slack_webhook"
+              : path.includes("/github/")
+                ? "integration_github_webhook"
+                : path.includes("/telegram/")
+                  ? "integration_telegram_webhook"
+                  : "api_not_found";
+
+  return {
+    ingress: {
+      lane: route.lane,
+      operation,
+      ...((route.lane === "project" || (route.lane === "api" && path === "/api")) && {
+        transport:
+          request.headers.get("upgrade")?.toLowerCase() === "websocket" ? "websocket" : "http",
+      }),
+      ...(route.lane === "project"
+        ? {
+            projectId: route.resolved.projectId,
+            appSlug: route.resolved.appSlug ?? undefined,
+            hostKind: route.fetch.headers.get("x-iterate-host-kind") ?? undefined,
+          }
+        : {}),
+    },
+  };
 }
 
 function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {

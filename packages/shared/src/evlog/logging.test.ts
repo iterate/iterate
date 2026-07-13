@@ -275,8 +275,15 @@ describe("apps logging pretty stdout", () => {
 
     await withEvlog(
       {
-        request: new Request("https://example.com/api/test/log-demo", {
+        request: new Request("https://example.com/api/test/log-demo?token=query-secret", {
           method: "POST",
+          headers: {
+            authorization: "Bearer auth-secret",
+            cookie: "session=cookie-secret",
+            "cf-ray": "ray-123",
+            traceparent: "00-trace-parent",
+          },
+          body: "body-secret",
         }),
         app: evlogApp,
         config: {
@@ -299,16 +306,56 @@ describe("apps logging pretty stdout", () => {
     expect(output).not.toContain("\u001b[");
 
     const parsed = JSON.parse(output.trimEnd()) as {
+      cfRay?: string;
+      config?: unknown;
       message: string;
+      requestId?: string;
       requestLogs: Array<{ level?: string; message?: string }>;
+      status?: number;
+      traceparent?: string;
     };
     expect(parsed.message).toMatch(/^POST \/api\/test\/log-demo 200 in \d+ms \(1 line\)$/);
     expect(parsed.message).not.toContain("\n");
+    expect(parsed).toMatchObject({
+      cfRay: "ray-123",
+      requestId: "ray-123",
+      status: 200,
+      traceparent: "00-trace-parent",
+    });
+    expect(parsed.config).toBeUndefined();
     expect(parsed.requestLogs).toEqual([
       expect.objectContaining({
         level: "info",
         message: "example.test.log-demo.received",
       }),
     ]);
+    expect(output).not.toContain("query-secret");
+    expect(output).not.toContain("auth-secret");
+    expect(output).not.toContain("cookie-secret");
+    expect(output).not.toContain("body-secret");
+  });
+
+  it("withEvlog emits one error event and preserves the thrown error", async () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const failure = new Error("request exploded");
+
+    await expect(
+      withEvlog(
+        {
+          request: new Request("https://example.com/api"),
+          app: evlogApp,
+          config: { logs: { stdoutFormat: "raw", filtering: { rules: [] } } },
+        },
+        async () => {
+          throw failure;
+        },
+      ),
+    ).rejects.toBe(failure);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const output = String(writeSpy.mock.calls[0]![0]);
+    const parsed = JSON.parse(output.trimEnd()) as { status?: number; error?: unknown };
+    expect(parsed.status).toBe(500);
+    expect(parsed.error).toBeDefined();
   });
 });

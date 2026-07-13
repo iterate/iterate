@@ -179,7 +179,6 @@ export async function withEvlog<TResponse extends Response>(
       slug: options.app.slug,
       packageName: options.app.name,
     },
-    config: options.config,
     ...createRequestContextFields(options.request),
   });
 

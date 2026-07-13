@@ -17,8 +17,14 @@ Traffic is dispatched on hostname and path:
 2. The MCP hostname (`mcp.iterate.com`) rewrites to the app's `/api/mcp`
    route.
 3. Everything else on the OS host lands on the TanStack Start dashboard
-   (SSR, server functions, assets) wrapped in one evlog "wide event" per
-   request.
+   (SSR, server functions, assets).
+
+Every fetch lane emits one accumulated evlog "wide event" at request exit:
+dashboard/MCP, HTTP itx, the WebSocket handshake, integration webhooks,
+project ingress, project files, and unresolved hosts. Events share stable
+environment/version fields plus an allowlisted ingress operation; project
+fields come only from the server-resolved route. Config, headers, query
+strings, and bodies are not copied into the event.
 
 The routing decision is one shared function (`src/ingress.ts`). Runtime
 config is parsed from `env` per request, never at module scope — isolates
@@ -82,6 +88,12 @@ the project-create server function and MCP `exec_typescript`).
 set headers). The dashboard's Start routes keep only `/api/mcp` and `/api/health`; the
 catch-all `src/routes/api.$.ts` returns 404 (integration callbacks return
 with the integrations domain).
+
+The request-wide WebSocket event covers only the initial `101` handshake. A
+socket can stay open across many logical itx calls, so per-call timing,
+outcome, connection/call IDs, and errors belong to the Cap'n Web `onCall`
+boundary rather than one socket-lifetime log. This is semantic boundary
+selection, not sampling: all request envelopes and logical calls are retained.
 
 ## Streams
 
