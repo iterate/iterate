@@ -329,7 +329,10 @@ export async function indexDocument(input: {
 }): Promise<{ key: string }> {
   const kind = normalizeCustomSearchKind(input.kind);
   const id = sanitizeSearchDocumentId(input.id);
-  const key = `${input.projectId}/${kind}/${id}`;
+  // AI Search decides indexability by file EXTENSION and silently skips
+  // extension-less keys (live-verified: an extension-less notes doc never
+  // became searchable), so the key must end in .md.
+  const key = `${input.projectId}/${kind}/${id}${/\.[a-z0-9]{1,8}$/i.test(id) ? "" : ".md"}`;
   const body =
     input.title !== undefined && input.title.length > 0
       ? `# ${input.title}\n\n${input.text}`
