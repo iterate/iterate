@@ -129,4 +129,12 @@ describe("createUpstreamMessageBuffer + waitForJsonOp", () => {
     await expect(pending).resolves.toEqual({ op: "hello" });
     expect(buffer.frames.map((f) => JSON.parse(String(f)))).toEqual([{ op: "ready" }]);
   });
+
+  test("records close during the audit gap so throwIfClosed fails the relay", () => {
+    const socket = mockSocket();
+    const buffer = createUpstreamMessageBuffer();
+    buffer.attach(socket as unknown as WebSocket);
+    socket.emit("close", { code: 4001, reason: "auth failed" });
+    expect(() => buffer.throwIfClosed("identify")).toThrow(/closed during relay identify/);
+  });
 });

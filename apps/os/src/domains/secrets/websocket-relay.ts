@@ -126,33 +126,67 @@ export function messageDataToText(data: unknown): string {
 }
 
 /**
- * Capture every upstream message from accept until the pair-bridge attaches.
- * Attach immediately after `accept()` and before any `await` so server-first
- * frames (hello / ready / dispatch) are never dropped.
+ * Capture every upstream message (and close/error) from accept until the
+ * pair-bridge attaches. Attach immediately after `accept()` and before any
+ * `await` so server-first frames and an early hangup are never dropped.
  */
 type UpstreamMessageBuffer = {
   readonly frames: Array<string | ArrayBuffer>;
+  /** Set when the upstream closed before the bridge took over. */
+  closed: { code: number; reason: string } | null;
+  /** Set when the upstream errored before the bridge took over. */
+  errored: boolean;
   attach(socket: WebSocket): void;
   /** Stop capturing; remaining frames stay in `frames` for the client flush. */
   detach(socket: WebSocket): void;
+  /** Throw if the upstream died during the handshake (after a named phase). */
+  throwIfClosed(phase: string): void;
 };
 
 export function createUpstreamMessageBuffer(): UpstreamMessageBuffer {
   const frames: Array<string | ArrayBuffer> = [];
   let active = true;
+  let closed: { code: number; reason: string } | null = null;
+  let errored = false;
   const onMessage = (event: MessageEvent) => {
     if (!active) return;
     frames.push(event.data as string | ArrayBuffer);
   };
+  const onClose = (event: CloseEvent) => {
+    closed = { code: event.code, reason: event.reason };
+  };
+  const onError = () => {
+    errored = true;
+  };
   return {
     frames,
+    get closed() {
+      return closed;
+    },
+    get errored() {
+      return errored;
+    },
     attach(socket) {
       active = true;
       socket.addEventListener("message", onMessage);
+      socket.addEventListener("close", onClose);
+      socket.addEventListener("error", onError);
     },
     detach(socket) {
       active = false;
       socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("close", onClose);
+      socket.removeEventListener("error", onError);
+    },
+    throwIfClosed(phase) {
+      if (errored) {
+        throw new Error(`websocket closed with error during relay ${phase}`);
+      }
+      if (closed !== null) {
+        throw new Error(
+          `websocket closed during relay ${phase} (code=${closed.code}${closed.reason ? ` reason=${closed.reason}` : ""})`,
+        );
+      }
     },
   };
 }

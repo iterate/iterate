@@ -306,7 +306,6 @@ export class SecretDurableObject extends DurableObject<Env> {
       if (state.encryptedMaterial === null) {
         throw new SecretSubstitutionError("secret_not_found");
       }
-      assertOriginPinned(input.url, state);
       await this.#assertGithubInstallationUseAuthorized(state.refresh);
 
       const material = await this.#decrypt(state.encryptedMaterial, state.egress);
@@ -316,7 +315,10 @@ export class SecretDurableObject extends DurableObject<Env> {
           : selectSecretField(material, input.identify.tokenField);
 
       const timeoutMs = input.timeoutMs ?? 15_000;
+      // Pin against the http(s) upgrade URL — egress pins are http/https only,
+      // and URL.origin keeps the ws/wss scheme (wss://host ≠ https://host).
       const upgradeUrl = websocketUpgradeUrl(input.url);
+      assertOriginPinned(upgradeUrl, state);
       const upgradeRequest = new Request(upgradeUrl, {
         headers: { Upgrade: "websocket", Connection: "Upgrade" },
       });
@@ -336,9 +338,9 @@ export class SecretDurableObject extends DurableObject<Env> {
         );
       }
 
-      // Accept once. Immediately buffer messages so server-first frames that
-      // arrive during open / hello / IDENTIFY / audit are not dropped, and so
-      // bridgeUpstreamWebSocket does not call accept() a second time.
+      // Accept once. Immediately buffer messages + close/error so server-first
+      // frames and an early upstream hangup during open/hello/IDENTIFY/audit
+      // are not lost before the pair-bridge attaches.
       upstream.accept({ allowHalfOpen: true });
       try {
         upstream.binaryType = "arraybuffer";
@@ -349,6 +351,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       messageBuffer.attach(upstream);
 
       await waitForOpen(upstream, timeoutMs);
+      messageBuffer.throwIfClosed("open");
 
       if (input.identify !== undefined && token !== null) {
         const waitForOp =
@@ -357,12 +360,14 @@ export class SecretDurableObject extends DurableObject<Env> {
           // Consumes hello (and any pre-hello frames) from the buffer; post-
           // hello frames stay for the client.
           await waitForJsonOp(upstream, waitForOp, timeoutMs, messageBuffer);
+          messageBuffer.throwIfClosed("hello");
         }
         upstream.send(buildIdentifyFrame(token, input.identify.frame));
       }
 
-      // Audit while still buffering — ready/dispatch must not race the bridge.
+      // Audit while still buffering — ready/dispatch/close must not race the bridge.
       await this.#appendUsed(input.url);
+      messageBuffer.throwIfClosed("identify");
 
       messageBuffer.detach(upstream);
       const pendingUpstreamMessages = messageBuffer.frames.slice();
