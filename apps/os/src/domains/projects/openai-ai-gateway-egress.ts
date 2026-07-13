@@ -1,12 +1,20 @@
 /**
- * Route sandbox OpenAI JSON API calls through Cloudflare AI Gateway via the
- * Workers AI binding (`env.AI.gateway(id).run`) — same door agent BYOK uses.
+ * Route project-egress OpenAI JSON API calls through Cloudflare AI Gateway via
+ * the Workers AI binding (`env.AI.gateway(id).run`) — same door agent BYOK uses.
  *
- * Only JSON POST/PUT to `api.openai.com` are handled (chat/completions,
- * responses, …). Other methods fall through to normal project egress.
+ * Scope: **all** project egress (sandbox MITM, project worker `egress.fetch`,
+ * etc.), not a sandbox-only branch. JSON POST/PUT to `api.openai.com` only;
+ * other methods fall through to normal project egress (GET /models with a
+ * dummy key will still 401).
  *
- * The platform OpenAI key is injected in trusted Project DO code; sandboxes
- * plant a dummy/placeholder `OPENAI_API_KEY` and never need the real key.
+ * The platform OpenAI key is always injected in trusted Project DO code (same
+ * key agent BYOK uses). Callers should plant a dummy/placeholder
+ * `OPENAI_API_KEY`; customer keys in Authorization are replaced. The key is
+ * not available via `getSecret({ platform: "openAiApiKey" })` — only via this
+ * rewrite path.
+ *
+ * Binding-only: no REST AI Gateway rewrite and no direct-OpenAI platform-key
+ * ladder (those paths 401'd under Authenticated Gateway without a Run token).
  */
 
 import type { AppConfig } from "../../config.ts";
@@ -50,17 +58,53 @@ export async function applyOpenAiAiGatewayCacheHeaders(input: {
   }
 }
 
+/**
+ * Headers for `AI.gateway().run` on the OpenAI provider path.
+ * Injects the platform key, BYOK-parity collect-log flags, project metadata,
+ * and allowlisted caller headers (OpenAI-* / Accept) for Codex and SDKs.
+ */
+export function openAiAiGatewayBindingHeaders(input: {
+  openaiApiKey: string;
+  projectId: string;
+  requestHeaders: Headers;
+}): Record<string, string> {
+  const caller =
+    input.requestHeaders.get("x-iterate-sandbox") ??
+    input.requestHeaders.get("x-iterate-agent") ??
+    undefined;
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${input.openaiApiKey}`,
+    "content-type": "application/json",
+    // Same collect-log posture as agent BYOK in workers-ai-transport.ts.
+    "cf-aig-collect-log": "true",
+    "cf-aig-collect-log-payload": "true",
+    "cf-aig-metadata": JSON.stringify({
+      projectId: input.projectId,
+      source: "project-egress",
+      ...(caller !== undefined ? { caller } : {}),
+    }),
+  };
+  for (const [name, value] of input.requestHeaders.entries()) {
+    const lower = name.toLowerCase();
+    if (lower === "authorization" || lower === "content-type" || lower === "host") continue;
+    if (lower.startsWith("openai-") || lower === "accept") {
+      headers[lower] = value;
+    }
+  }
+  return headers;
+}
+
 /** Pull binding-path inputs from typed AppConfig; null when routing is impossible. */
 export function openAiAiGatewayRoutingFromConfig(config: AppConfig): {
   gatewayId: string;
   openaiApiKey: string;
   responseCacheTtlSeconds?: number;
 } | null {
-  // accountId is not required for the Workers AI binding path.
+  // The Workers AI binding does not need accountId in the URL, but we still
+  // require a deployed-shaped config (ARTIFACTS_ACCOUNT_ID → cloudflare.accountId
+  // on preview/prd) so local miniflare without CF account does not call a
+  // missing/half-wired gateway binding with the real platform key.
   if (config.cloudflare.accountId === undefined || config.cloudflare.accountId.length === 0) {
-    // Still require a deployed-shaped config so local miniflare without CF account
-    // does not accidentally try to call a missing gateway binding with real keys.
-    // Preview/prd always set ARTIFACTS_ACCOUNT_ID → cloudflare.accountId.
     return null;
   }
   return {

@@ -49,6 +49,7 @@ import {
 import {
   applyOpenAiAiGatewayCacheHeaders,
   isOpenAiPublicApiRequest,
+  openAiAiGatewayBindingHeaders,
   openAiAiGatewayRoutingFromConfig,
   openAiGatewayBindingEndpoint,
 } from "./openai-ai-gateway-egress.ts";
@@ -629,19 +630,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
       return null;
     }
 
-    const caller =
-      request.headers.get("x-iterate-sandbox") ??
-      request.headers.get("x-iterate-agent") ??
-      undefined;
-    const headers: Record<string, string> = {
-      authorization: `Bearer ${routing.openaiApiKey}`,
-      "content-type": "application/json",
-      "cf-aig-metadata": JSON.stringify({
-        projectId: this.#name.projectId,
-        source: "project-egress",
-        ...(caller !== undefined ? { caller } : {}),
-      }),
-    };
+    const headers = openAiAiGatewayBindingHeaders({
+      openaiApiKey: routing.openaiApiKey,
+      projectId: this.#name.projectId,
+      requestHeaders: request.headers,
+    });
     await applyOpenAiAiGatewayCacheHeaders({
       headers,
       body,
