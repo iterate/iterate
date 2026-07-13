@@ -65,12 +65,22 @@ describe("preview deploy ordering", () => {
     ).toEqual([["semaphore"]]);
   });
 
-  it("deploys OS and auth in one parallel batch", () => {
+  it("deploys auth before OS", () => {
     expect(
       orderPreviewDeployBatches([cloudflarePreviewApps.os, cloudflarePreviewApps.auth]).map(
         (batch) => batch.map((app) => app.slug),
       ),
-    ).toEqual([["os", "auth"]]);
+    ).toEqual([["auth"], ["os"]]);
+  });
+
+  it("keeps auth dependents parallel after auth is ready", () => {
+    expect(
+      orderPreviewDeployBatches([
+        cloudflarePreviewApps.os,
+        cloudflarePreviewApps.semaphore,
+        cloudflarePreviewApps.auth,
+      ]).map((batch) => batch.map((app) => app.slug)),
+    ).toEqual([["auth"], ["os", "semaphore"]]);
   });
 });
 
@@ -89,6 +99,20 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("pnpm-lock.yaml");
     expect(cloudflarePreviewSharedPaths).toContain("pnpm-workspace.yaml");
     expect(cloudflarePreviewSharedPaths).toContain("patches/**");
+  });
+
+  it("rejects pre-RPC branches before the preview orchestrator can deploy Auth", () => {
+    const workflow = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
+      "utf8",
+    );
+    const epoch = readFileSync(resolve(repoRoot, "scripts/preview/deployment-epoch"), "utf8");
+
+    expect(epoch.trim()).toBe("os-auth-rpc-v1");
+    expect(workflow).toContain('expected="os-auth-rpc-v1"');
+    expect(workflow.indexOf("Enforce preview deployment epoch")).toBeLessThan(
+      workflow.indexOf("pnpm preview deploy"),
+    );
   });
 });
 

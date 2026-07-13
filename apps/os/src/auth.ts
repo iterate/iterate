@@ -33,8 +33,8 @@ import {
   authenticateOperatorToken,
   isSameOriginBrowserRequest,
 } from "./auth/operator-session.ts";
-import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
+import { itxEnv } from "./env.ts";
 import {
   principalFromAccessToken,
   principalFromSession,
@@ -225,7 +225,7 @@ export async function resolveItxAuth(input: {
       token: credentials.token,
     });
     if (!session) throw new Error("missing or invalid auth");
-    return itxAuthFromPrincipal(config, session.principal, { allowDirectoryFallback: false });
+    return itxAuthFromPrincipal(session.principal, { allowDirectoryFallback: false });
   }
 
   if (credentials.type === "impersonate") {
@@ -240,7 +240,7 @@ export async function resolveItxAuth(input: {
       headers: new Headers({ authorization: `Bearer ${credentials.token}` }),
     });
     if (!accessToken) throw new Error("missing or invalid auth");
-    return itxAuthFromPrincipal(config, principalFromAccessToken(accessToken));
+    return itxAuthFromPrincipal(principalFromAccessToken(accessToken));
   }
 
   // Ambient cookies are never authority on a cross-origin browser socket.
@@ -256,7 +256,7 @@ export async function resolveItxAuth(input: {
     request: cookieRequest,
   });
   if (operatorSession) {
-    return itxAuthFromPrincipal(config, operatorSession.principal, {
+    return itxAuthFromPrincipal(operatorSession.principal, {
       allowDirectoryFallback: false,
     });
   }
@@ -265,7 +265,7 @@ export async function resolveItxAuth(input: {
   if (!auth) throw new Error("iterate auth is not configured");
   const result = await auth.authenticate({ headers: input.headers, includeUserInfo: false });
   if (!result.session) throw new Error("missing or invalid auth");
-  return itxAuthFromPrincipal(config, principalFromSession(result.session));
+  return itxAuthFromPrincipal(principalFromSession(result.session));
 }
 
 function assertAdminSecret(config: AppConfig, secret: string): void {
@@ -285,7 +285,6 @@ function assertAdminSecret(config: AppConfig, secret: string): void {
  * explicitly disable that widening path.
  */
 export function itxAuthFromPrincipal(
-  config: AppConfig,
   principal: Principal,
   options: { allowDirectoryFallback?: boolean } = {},
 ): ItxAuthContext {
@@ -293,8 +292,7 @@ export function itxAuthFromPrincipal(
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }
   return new ItxAuthContext({
-    directory:
-      options.allowDirectoryFallback === false ? undefined : authWorkerProjectDirectory(config),
+    directory: options.allowDirectoryFallback === false ? undefined : authWorkerProjectDirectory(),
     isAdmin: principalIsAdmin(principal),
     principal: principal.userId,
     projectIds: principal.projects.map((project) => project.id),
@@ -319,37 +317,18 @@ function contextFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
 const DIRECTORY_CACHE_TTL_MS = 30_000;
 const directoryCache = new Map<string, { expiresAt: number; hasProject: boolean }>();
 
-function authWorkerProjectDirectory(config: AppConfig): ProjectDirectory | undefined {
-  if (!config.iterateAuth?.serviceToken) return undefined;
+function authWorkerProjectDirectory(): ProjectDirectory {
   return {
     async userHasProject(userPrincipal, projectId) {
       const cacheKey = `${userPrincipal.userId}:${projectId}`;
       const cached = directoryCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) return cached.hasProject;
 
-      let hasProject = false;
-      let lookupFailed = false;
-      for (const organization of userPrincipal.organizations) {
-        const client = createAuthWorkerServiceClient(
-          { config },
-          { asUserId: userPrincipal.userId },
-        );
-        let projects;
-        try {
-          projects = await client.project.list({ organizationSlug: organization.slug });
-        } catch {
-          // Auth worker unreachable is NOT "no membership": deny THIS check
-          // without caching the denial, so the next request retries instead
-          // of locking the user out for the cache window.
-          lookupFailed = true;
-          continue;
-        }
-        if (projects.some((project) => project.id === projectId)) {
-          hasProject = true;
-          break;
-        }
-      }
-      if (!hasProject && lookupFailed) return false;
+      // An RPC failure is a dependency outage, not a negative authorization
+      // decision. Let it propagate so callers can retry and no denial is
+      // cached under a false identity claim.
+      const projects = await itxEnv.AUTH.listProjectsForUser({ userId: userPrincipal.userId });
+      const hasProject = projects.some((project) => project.id === projectId);
       directoryCache.set(cacheKey, {
         expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
         hasProject,

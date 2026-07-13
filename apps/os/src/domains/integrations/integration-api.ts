@@ -141,7 +141,7 @@ async function handleMcpOAuthCallback(input: {
     // token is about to overwrite a project secret.
     if (input.auth?.type !== "user") return redirectWithError(null, "mcp_oauth_sign_in_required");
     try {
-      itxAuthFromPrincipal(input.context.config, input.auth, {
+      itxAuthFromPrincipal(input.auth, {
         allowDirectoryFallback: input.context.operatorSession == null,
       }).assertCanAccessProject(state.projectId);
     } catch {
