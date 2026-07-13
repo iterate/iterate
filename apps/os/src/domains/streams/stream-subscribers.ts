@@ -84,6 +84,7 @@ import {
   initialCursorFor,
   MAX_CONSECUTIVE_SKIPS,
   MAX_DELIVERY_ATTEMPTS,
+  PUSH_DELIVERY_BATCH_BYTE_LIMIT,
   SKIP_CONFIRM_ATTEMPTS,
 } from "./subscriber-math.ts";
 
@@ -282,6 +283,7 @@ type SelectorProjectionsByVisibility = {
 type ReadBatchProjection = {
   afterOffset: number;
   limit: number;
+  byteLimit: number;
   includesEventByteLengths: boolean;
   events: StreamEvent[];
   durableEvents: StreamEvent[];
@@ -350,12 +352,12 @@ export class StreamSubscribers {
   /** Bisect state for onPoison:"skip" — current batch ceiling per key. */
   readonly #batchLimits = new Map<string, number>();
   /**
-   * Row-count estimate for the 1 MiB storage-read cap. The first backlog read
+   * Row-count estimate for the current storage-read byte cap. The first backlog read
    * stays allocation-cheap at the full count limit; if its byte scan proves
    * that was an over-read, later reads fetch only the rows that fit plus one.
    * The estimate expands geometrically when smaller rows make it conservative.
    */
-  #storageReadLimitHint: number | undefined;
+  readonly #storageReadLimitHints = new Map<number, number>();
   /** Consecutive poison skips per key (no intervening success) — see MAX_CONSECUTIVE_SKIPS. */
   readonly #consecutiveSkips = new Map<string, number>();
   /**
@@ -737,6 +739,9 @@ export class StreamSubscribers {
             limit,
             true,
             selector !== undefined && !selector.matchesAll,
+            config.delivery.mode === "push"
+              ? PUSH_DELIVERY_BATCH_BYTE_LIMIT
+              : DELIVERY_BATCH_BYTE_LIMIT,
           );
           const { events: durable, lastOffset } = read;
           if (lastOffset === undefined) return; // caught up
@@ -879,6 +884,7 @@ export class StreamSubscribers {
     limit: number,
     durableOnly = false,
     includeEventByteLengths = false,
+    byteLimit = DELIVERY_BATCH_BYTE_LIMIT,
   ): ReadBatchResult {
     const firstFreshOffset = this.#freshTail[0]?.event.offset;
     const freshStart = firstFreshOffset === undefined ? -1 : afterOffset + 1 - firstFreshOffset;
@@ -895,6 +901,7 @@ export class StreamSubscribers {
       cached !== undefined &&
       cached.afterOffset === afterOffset &&
       cached.limit === limit &&
+      cached.byteLimit === byteLimit &&
       (!includeEventByteLengths || cached.includesEventByteLengths)
     ) {
       return {
@@ -906,7 +913,7 @@ export class StreamSubscribers {
         durableOnly,
       };
     }
-    const hintedLimit = this.#storageReadLimitHint;
+    const hintedLimit = this.#storageReadLimitHints.get(byteLimit);
     const storageLimit = Math.min(limit, hintedLimit ?? limit);
     const cachedStorageRead = this.#storageReadCache;
     const sourceFromStorageCache =
@@ -934,7 +941,7 @@ export class StreamSubscribers {
       const entry = source[start + index]!;
       const entryByteLength = entry.byteLength;
       const nextBytes = bytes + entryByteLength;
-      if (nextBytes > DELIVERY_BATCH_BYTE_LIMIT && index > 0) {
+      if (nextBytes > byteLimit && index > 0) {
         exceededByteLimit = true;
         crossingEntryByteLength = entryByteLength;
         break;
@@ -956,25 +963,24 @@ export class StreamSubscribers {
     }
     if (!useFreshTail && limit === DELIVERY_BATCH_LIMIT) {
       if (exceededByteLimit) {
-        this.#storageReadLimitHint = Math.max(2, events.length + 1);
+        this.#storageReadLimitHints.set(byteLimit, Math.max(2, events.length + 1));
       } else if (
         hintedLimit !== undefined &&
         storageLimit < limit &&
         source.length === storageLimit
       ) {
         const expanded = Math.min(limit, storageLimit * 2);
-        this.#storageReadLimitHint = expanded === limit ? undefined : expanded;
+        if (expanded === limit) this.#storageReadLimitHints.delete(byteLimit);
+        else this.#storageReadLimitHints.set(byteLimit, expanded);
       } else if (storageLimit === limit) {
-        this.#storageReadLimitHint = undefined;
+        this.#storageReadLimitHints.delete(byteLimit);
       }
     }
     if (!useFreshTail && !sourceFromStorageCache) {
       // Never pin an initial over-read. Retain at most one complete frame or
       // its fit+1 prefix (whose crossing row is itself frame-bounded).
       const boundedCrossing =
-        exceededByteLimit &&
-        bytes <= DELIVERY_BATCH_BYTE_LIMIT &&
-        crossingEntryByteLength <= DELIVERY_BATCH_BYTE_LIMIT;
+        exceededByteLimit && bytes <= byteLimit && crossingEntryByteLength <= byteLimit;
       if (boundedCrossing) {
         const boundedLength = events.length + 1;
         this.#storageReadCache = {
@@ -982,7 +988,7 @@ export class StreamSubscribers {
           limit: boundedLength,
           entries: source.length === boundedLength ? source : source.slice(0, boundedLength),
         };
-      } else if (!exceededByteLimit && bytes <= DELIVERY_BATCH_BYTE_LIMIT) {
+      } else if (!exceededByteLimit && bytes <= byteLimit) {
         this.#storageReadCache = { afterOffset, limit: storageLimit, entries: source };
       }
     }
@@ -990,13 +996,14 @@ export class StreamSubscribers {
     const durableByteLengths = durableEventByteLengths ?? eventByteLengths;
     const projectionIsComplete =
       useFreshTail || exceededByteLimit || source.length < storageLimit || storageLimit === limit;
-    const cacheProjection = projectionIsComplete && bytes <= DELIVERY_BATCH_BYTE_LIMIT;
+    const cacheProjection = projectionIsComplete && bytes <= byteLimit;
     if (useFreshTail || cacheProjection) {
       // Keep canonical arrays private. Each lane still gets an isolated array,
       // while aligned raw and durable readers share both scans through slice().
       const projection = {
         afterOffset,
         limit,
+        byteLimit,
         includesEventByteLengths: includeEventByteLengths,
         events,
         durableEvents,

@@ -24,8 +24,8 @@ import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
 import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
 import {
-  DELIVERY_BATCH_BYTE_LIMIT,
   MAX_DELIVERY_ATTEMPTS,
+  PUSH_DELIVERY_BATCH_BYTE_LIMIT,
   SKIP_CONFIRM_ATTEMPTS,
   computeBackoffMs,
 } from "./subscriber-math.ts";
@@ -1461,7 +1461,9 @@ describe("StreamSubscribers", () => {
     // Every event fills the byte allowance by itself. The drain must produce
     // three batches while advancing through the same handed-over tail; only a
     // cursor outside that tail is allowed to fall back to storage.
-    h.subscribers.wake(fresh.map((event) => ({ event, byteLength: DELIVERY_BATCH_BYTE_LIMIT })));
+    h.subscribers.wake(
+      fresh.map((event) => ({ event, byteLength: PUSH_DELIVERY_BATCH_BYTE_LIMIT })),
+    );
     await h.settle();
 
     expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
@@ -1478,8 +1480,8 @@ describe("StreamSubscribers", () => {
     h.configure(pushPayload(), 0);
     const backlog = Array.from({ length: 10 }, (_, index) => evt(index + 1, "event"));
     h.append(...backlog);
-    h.setEventByteLength(1, DELIVERY_BATCH_BYTE_LIMIT);
-    h.setEventByteLength(2, DELIVERY_BATCH_BYTE_LIMIT);
+    h.setEventByteLength(1, PUSH_DELIVERY_BATCH_BYTE_LIMIT);
+    h.setEventByteLength(2, PUSH_DELIVERY_BATCH_BYTE_LIMIT);
 
     h.subscribers.wake();
     await h.settle();
@@ -1492,7 +1494,7 @@ describe("StreamSubscribers", () => {
       [9, 10],
     ]);
     expect(h.storageReadLimits).toEqual([1000, 2, 2, 4, 8]);
-    expect(h.egress.every(({ bytes }) => bytes <= DELIVERY_BATCH_BYTE_LIMIT)).toBe(true);
+    expect(h.egress.every(({ bytes }) => bytes <= PUSH_DELIVERY_BATCH_BYTE_LIMIT)).toBe(true);
     expect(h.row("k")?.ackedOffset).toBe(10);
   });
 
@@ -1551,10 +1553,10 @@ describe("StreamSubscribers", () => {
 
     expect(h.storageReadLimits).toEqual([1000]);
     expect(h.pushes).toHaveLength(subscriptionCount);
-    expect(h.pushes.every((batch) => batch.events.length === 64)).toBe(true);
+    expect(h.pushes.every((batch) => batch.events.length === 256)).toBe(true);
     // One unsized projection + one selector-sized projection; neither the
     // 1,000-row over-read nor either projection repeats per lane.
-    expect(h.eventByteLengthReads()).toBe(65 * 2);
+    expect(h.eventByteLengthReads()).toBe(257 * 2);
     expect(new Set(h.pushes.map((batch) => batch.events)).size).toBe(subscriptionCount);
 
     deliveryGate.resolve();
@@ -1568,7 +1570,7 @@ describe("StreamSubscribers", () => {
     h.configure(pushPayload({ subscriptionKey: "k-1" }), 0);
     h.configure(pushPayload({ subscriptionKey: "k-2" }), 0);
     h.append(evt(1, "oversized"));
-    h.setEventByteLength(1, DELIVERY_BATCH_BYTE_LIMIT + 1);
+    h.setEventByteLength(1, PUSH_DELIVERY_BATCH_BYTE_LIMIT + 1);
     const deliveryGate = Promise.withResolvers<void>();
     h.dialImpl.push = () => deliveryGate.promise;
 
@@ -1584,7 +1586,32 @@ describe("StreamSubscribers", () => {
     expect(h.row("k-2")?.ackedOffset).toBe(1);
   });
 
-  it("w1e. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
+  it("w1e. push and connection lanes keep independent byte projections and read hints", async () => {
+    const h = makeHarness();
+    const connection = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: connection.sink,
+      replayAfterOffset: 0,
+    });
+    await h.settle();
+
+    h.configure(pushPayload(), 0);
+    const backlog = Array.from({ length: 300 }, (_, index) => evt(index + 1, "event"));
+    h.append(...backlog);
+    for (const event of backlog) h.setEventByteLength(event.offset, 16 * 1024);
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(connection.batches.slice(1).map((batch) => batch.events.length)).toEqual([
+      64, 64, 64, 64, 44,
+    ]);
+    expect(h.pushes.map((batch) => batch.events.length)).toEqual([256, 44]);
+    expect(h.row("k")?.ackedOffset).toBe(300);
+  });
+
+  it("w1f. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
     const h = makeHarness();
     const subscriptionCount = 100;
     for (let index = 0; index < subscriptionCount; index += 1) {
@@ -1625,7 +1652,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1f. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
+  it("w1g. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
     const h = makeHarness();
     const all = makeSink();
     const selected = makeSink();
@@ -1657,7 +1684,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1g. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
+  it("w1h. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
     const h = makeHarness();
     const selector = { eventTypes: ["selected"] };
     const ephemeral = makeSink();
@@ -1697,7 +1724,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1h. aligned lanes evaluate one shared selector projection with isolated arrays", async () => {
+  it("w1i. aligned lanes evaluate one shared selector projection with isolated arrays", async () => {
     const h = makeHarness();
     const connectionCount = 100;
     const sinks = Array.from({ length: connectionCount }, () => makeSink());
@@ -1740,7 +1767,7 @@ describe("StreamSubscribers", () => {
     expect(sinks.every(({ batches }) => batches.at(-1)?.events[0]?.offset === 501)).toBe(true);
   });
 
-  it("w1i. cached selector failures still emit one keyed fact per durable lane", async () => {
+  it("w1j. cached selector failures still emit one keyed fact per durable lane", async () => {
     const h = makeHarness();
     const selector = { condition: "$number(payload.message) = 42" };
     h.configure(pushPayload({ subscriptionKey: "failure-a", selector }), 0);

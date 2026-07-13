@@ -38,8 +38,15 @@ export const MAX_CONSECUTIVE_SKIPS = 3;
  */
 export const DELIVERY_BATCH_LIMIT = 1000;
 
-/** Soft cap on a delivery frame's payload bytes (large events shrink the batch). */
+/** Soft cap for browser/hosted sink frames (large events shrink the batch). */
 export const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
+
+/**
+ * Internal push calls can amortize RPC dispatch over a larger frame. This stays
+ * well below workerd and Cap'n Web's 32 MiB message ceilings while wake and
+ * ephemeral sinks retain the lower memory/latency bound above.
+ */
+export const PUSH_DELIVERY_BATCH_BYTE_LIMIT = 4 * 1024 * 1024;
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30 * 60_000;

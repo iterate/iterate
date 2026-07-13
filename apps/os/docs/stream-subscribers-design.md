@@ -151,11 +151,16 @@ State machine (diagram goes in the README):
 - **Wake mode:** if watermark < maxOffset and no live sink → poke (below). In-memory retry
   (`#wakeRetryTimers`/`#wakeRetryAttempts`, `stream-durable-object.ts:82-91, 728-748`) is deleted;
   the spine's rows retry pokes durably, fixing the documented write-once-stream stall.
-- **Push mode:** drain serially per subscription, concurrently across subscriptions: read ≤100
-  events / ≤1 MiB after `acked_offset`, apply selector, evaluate expression, one awaited call with
+- **Push mode:** drain serially per subscription, concurrently across subscriptions: read ≤1000
+  events / ≤4 MiB after `acked_offset`, apply selector, evaluate expression, one awaited call with
   the frame, ack → advance row. `onPoison: "skip"`: bisect the batch (halve until the poison
-  offset is isolated, ≤~7 extra calls), append idempotent `error-occurred`, step over; park only
+  offset is isolated, ≤10 bisections), append idempotent `error-occurred`, step over; park only
   on _consecutive_ failures (endpoint down ≠ event poisoned).
+- **Connection mode:** wake and ephemeral sinks retain a ≤1 MiB frame cap. Push is internal
+  Workers RPC and uses 4 MiB to amortize serial invocation/clone overhead while staying far below
+  workerd and Cap'n Web's 32 MiB message ceilings. The larger cap trades up to 3 MiB more transient
+  payload memory per active push drain for fewer calls; event-count bounds, retries, cursor fencing,
+  and acknowledgement semantics are unchanged.
 - **Coalescing falls out of the cursor:** fifty appends while a poke/batch is in flight produce
   one follow-up, not fifty.
 
@@ -312,8 +317,8 @@ the re-wake-trigger event-type carve-out (`:218-225`); stringly `#`-parsed subsc
 | Knob               | Default                                                               |
 | ------------------ | --------------------------------------------------------------------- |
 | Backoff            | `min(30min, 1s·2^attempt)` ± 20% jitter                               |
-| Park threshold     | 10 consecutive failures (≈24h with backoff)                           |
-| Batch caps         | 100 events / 1 MiB per delivery                                       |
+| Park threshold     | 15 consecutive failures (≈3.5h with backoff)                          |
+| Batch caps         | 1000 events; 4 MiB push, 1 MiB wake/ephemeral                         |
 | Poke in flight     | 1 per subscription; drains serial per subscription, concurrent across |
 | Idle teardown      | unchanged (5 min, in-memory timer — correct for retained stubs)       |
 | `deliver` default  | `"new"` (worker feed explicitly sets `"all"`)                         |

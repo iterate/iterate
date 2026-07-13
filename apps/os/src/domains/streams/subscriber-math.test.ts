@@ -13,6 +13,7 @@ import {
   initialCursor,
   MAX_CONSECUTIVE_SKIPS,
   MAX_DELIVERY_ATTEMPTS,
+  PUSH_DELIVERY_BATCH_BYTE_LIMIT,
   SKIP_CONFIRM_ATTEMPTS,
 } from "./subscriber-math.ts";
 
@@ -23,6 +24,7 @@ describe("tuning constants", () => {
     expect(MAX_CONSECUTIVE_SKIPS).toBe(3);
     expect(DELIVERY_BATCH_LIMIT).toBe(1000);
     expect(DELIVERY_BATCH_BYTE_LIMIT).toBe(1024 * 1024);
+    expect(PUSH_DELIVERY_BATCH_BYTE_LIMIT).toBe(4 * 1024 * 1024);
   });
 });
 
