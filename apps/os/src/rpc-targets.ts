@@ -120,6 +120,7 @@ import {
 } from "./domains/integrations/waitrose-api.ts";
 import {
   deleteProjectFile,
+  listProjectFiles,
   mintProjectFileUrl,
   putProjectFile,
   readProjectFile,
@@ -196,6 +197,28 @@ import type {
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
+import {
+  ensureProjectSearchInstance,
+  indexDocument,
+  indexPinnedStreamEvent,
+  indexEntireStream,
+  indexStreamEventBatch,
+  mirrorFileToSearchIndex,
+  triggerProjectSearchSync,
+} from "./domains/search/search-index.ts";
+import {
+  narrowStreamRefToChunk,
+  projectSearchInstanceId,
+  searchFilters,
+} from "./domains/search/search-corpus.ts";
+import { ItxExpression } from "./itx/expression.ts";
+import type {
+  SearchAnswerResult,
+  SearchKind,
+  SearchQueryResult,
+  SearchResultChunk,
+  SearchSourceKind,
+} from "./domains/search/search-corpus.ts";
 import type { AgentFileAttachment } from "./domains/agents/agent-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
@@ -1941,6 +1964,366 @@ class FilesRpcTarget extends IterateRpcTarget<"Files"> {
       path: normalizePath(path),
       projectId: this.props.projectId,
     });
+  }
+}
+
+/** Parse a stored ref metadata value; malformed JSON/shape yields undefined, never a throw. */
+function parseStoredRef(serialized: string): ItxExpression | undefined {
+  try {
+    return ItxExpression.parse(JSON.parse(serialized));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Project search over everything the project accumulates — stream events,
+ * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
+ * instance over the deployment's search-index bucket
+ * (domains/search/search-index.ts). One instance per deployment; every query
+ * is scoped to this project via a folder-prefix metadata filter, so no query
+ * can see another project's data. Experimental — the surface may change.
+ */
+class SearchRpcTarget extends IterateRpcTarget<"Search"> {
+  constructor(
+    readonly props: { auth: ItxAuth; projectId: string; capabilityHost: CapabilityHostRpcTarget },
+  ) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "One search over everything this project accumulates — stream events, itx.files, repo " +
+        "files, and itx.docs — via this project's own AI Search instance. query({ q }) returns " +
+        "scored chunks; every hit carries a `ref` that leads BACK TO THE DOMAIN OBJECT — " +
+        '{ type: "stream", path, firstOffset, lastOffset } (fetch via itx.streams.get(path)' +
+        '.getEvents), { type: "file", path } (itx.files.get), { type: "repoFile", repoPath, ' +
+        "filePath } (itx.repos.get(repoPath).readFile), or an itx.docs entry — plus `kind` and a " +
+        "human-readable `context`. answer({ q }) generates a cited answer. Narrow with source " +
+        '("streams" | "files" | "repos") or exclude kinds. indexEvent({ stream, offset, note? }) ' +
+        "pins one event by coordinates; index({ kind, id, text }) adds a standalone document; " +
+        "indexStream/indexRepo/backfillFiles backfill pre-existing content. Everything indexes " +
+        "automatically except ephemeral events; expect up to ~a minute of indexing lag.",
+      children: {
+        answer: "RAG answer over the project corpus + docs, with cited source chunks.",
+        backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
+        index: "Add/replace one standalone document ({ kind, id, text, title?, context? }).",
+        indexEvent:
+          "Pin one stream event by coordinates ({ stream, offset, note? }) — ref leads back to it.",
+        indexRepo: "Snapshot one repo's default-branch HEAD into the search corpus now.",
+        indexStream: "Re-index one stream from the beginning (backfill/repair).",
+        query:
+          "Retrieve scored, kind-tagged chunks matching a query (with source/exclude filters).",
+      },
+      parent: "a project itx (itx.search)",
+    });
+  }
+
+  get #instance(): AiSearchInstance {
+    return env.SEARCH_INSTANCES.get(projectSearchInstanceId(this.props.projectId));
+  }
+
+  #searchOptions(input: {
+    limit?: number;
+    rewriteQuery?: boolean;
+    scoreThreshold?: number;
+    source?: SearchSourceKind;
+    exclude?: readonly SearchKind[];
+  }): AiSearchOptions {
+    return {
+      retrieval: {
+        filters: searchFilters({
+          projectId: this.props.projectId,
+          source: input.source,
+          // "docs" is federated, never in the R2 corpus, so it can't be an R2
+          // filter; drop it here and let #federatedDocs honour the exclusion.
+          excludeKinds: input.exclude?.filter((kind) => kind !== "docs"),
+        }),
+        max_num_results: input.limit,
+        match_threshold: input.scoreThreshold,
+        // OR-mode keyword matching: dogfooding showed the default AND-mode
+        // misses exact-token queries whose terms don't co-occur in one chunk;
+        // hybrid rrf fusion keeps precision.
+        keyword_match_mode: "or",
+        // One neighboring chunk heals JSON payloads split across chunk
+        // boundaries in stream segment documents.
+        context_expansion: 1,
+      },
+      query_rewrite: input.rewriteQuery === undefined ? undefined : { enabled: input.rewriteQuery },
+    };
+  }
+
+  /** Map one AI Search chunk to a provenance-carrying result. */
+  #toChunk(chunk: AiSearchSearchResponse["chunks"][number]): SearchResultChunk {
+    const metadata = chunk.item.metadata ?? {};
+    const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
+    return {
+      filename: chunk.item.key,
+      score: chunk.score,
+      content: chunk.text,
+      kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
+      context: typeof metadata.context === "string" ? metadata.context : undefined,
+      // Every corpus writer stores `ref` — the serialized itx expression back
+      // to the domain object. Parse defensively (a hit without one is still a
+      // valid result), then narrow stream refs to the exact events the chunk
+      // contains — the stored ref covers the whole storage segment.
+      ref: storedRef === undefined ? undefined : narrowStreamRefToChunk(storedRef, chunk.text),
+    };
+  }
+
+  /**
+   * Federated `docs` results: itx.docs is a static in-worker keyword index
+   * (examples + types + this scope's mounted capabilities), not part of the R2
+   * corpus, so query() merges it in unless docs are excluded / a different
+   * source is pinned. Docs scores are keyword-overlap counts, not comparable
+   * to the corpus's relevance scores — a descending band from 0.5 keeps
+   * strong corpus hits on top while docs still surface mid-list.
+   */
+  async #federatedDocs(input: {
+    query: string;
+    source?: SearchSourceKind;
+    exclude?: readonly SearchKind[];
+    limit?: number;
+  }): Promise<SearchResultChunk[]> {
+    if (input.source !== undefined) return []; // a corpus source was pinned
+    if (input.exclude?.includes("docs")) return [];
+    const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
+    const hits = await docs.search({ q: input.query });
+    return hits.slice(0, Math.min(input.limit ?? 5, 5)).map((hit, index) => ({
+      filename: hit.fetchCall,
+      score: 0.5 - index * 0.02,
+      content: hit.summary,
+      kind: "docs",
+      context: `${hit.kind}: ${hit.name} — fetch with ${hit.fetchCall}`,
+      ref: ["docs", ["get", { name: hit.name }]] as ItxExpression,
+    }));
+  }
+
+  /**
+   * A missing instance is the expected first-touch state: create it (its
+   * first sync then indexes the project's existing corpus slice) and tell the
+   * caller the index is warming instead of failing.
+   */
+  async #ensureInstanceAfterMiss(error: unknown): Promise<string> {
+    try {
+      const { created } = await ensureProjectSearchInstance(this.props.projectId);
+      return created
+        ? "Search instance created for this project; the first index is in progress — retry shortly."
+        : `AI Search request failed: ${String(error).slice(0, 200)}`;
+    } catch (provisionError) {
+      return `AI Search instance provisioning failed: ${String(provisionError).slice(0, 200)}`;
+    }
+  }
+
+  /**
+   * Retrieve scored chunks matching a query, scoped to this project's own
+   * search instance. Merges the corpus (streams/files/repos/custom kinds)
+   * with federated itx.docs, each result tagged with its `kind` and `context`
+   * so callers can contextualize a hit. On a project whose instance doesn't
+   * exist yet, the instance is created and docs results return with a
+   * `warning` — retry once its first index completes.
+   */
+  async query(input: {
+    q: string;
+    /** Max chunks to return (1–50). */
+    limit?: number;
+    /** Rewrite the query for retrieval first (extra LLM call). */
+    rewriteQuery?: boolean;
+    /** Drop chunks scoring below this threshold (0–1). */
+    scoreThreshold?: number;
+    /** Restrict to ONE corpus kind (skips docs federation). */
+    source?: SearchSourceKind;
+    /** Exclude kinds from results, e.g. `["streams"]` to skip the event log. */
+    exclude?: readonly SearchKind[];
+  }): Promise<SearchQueryResult> {
+    const [corpus, docs] = await Promise.allSettled([
+      this.#instance.search({ query: input.q, ai_search_options: this.#searchOptions(input) }),
+      this.#federatedDocs({
+        query: input.q,
+        source: input.source,
+        exclude: input.exclude,
+        limit: input.limit,
+      }),
+    ]);
+    // Docs are in-worker and must not be lost to a corpus outage; the reverse
+    // (docs failing) is a real bug worth surfacing, so it still throws.
+    if (docs.status === "rejected") throw docs.reason;
+    if (corpus.status === "rejected") {
+      const warning = await this.#ensureInstanceAfterMiss(corpus.reason);
+      if (input.source !== undefined) return { searchQuery: input.q, results: [], warning };
+      return { searchQuery: input.q, results: docs.value, warning };
+    }
+    const results = [
+      ...corpus.value.chunks.map((chunk) => this.#toChunk(chunk)),
+      ...docs.value,
+    ].sort((a, b) => b.score - a.score);
+    return { searchQuery: corpus.value.search_query, results };
+  }
+
+  /** Retrieve matching chunks AND generate an answer from them (RAG). */
+  async answer(input: {
+    q: string;
+    limit?: number;
+    rewriteQuery?: boolean;
+    scoreThreshold?: number;
+    source?: SearchSourceKind;
+    exclude?: readonly SearchKind[];
+    /** Optional system prompt for the answer generation. */
+    systemPrompt?: string;
+  }): Promise<SearchAnswerResult> {
+    let response: AiSearchChatCompletionsResponse;
+    try {
+      response = await this.#instance.chatCompletions({
+        messages: [
+          ...(input.systemPrompt === undefined
+            ? []
+            : [{ role: "system" as const, content: input.systemPrompt }]),
+          { role: "user" as const, content: input.q },
+        ],
+        ai_search_options: this.#searchOptions(input),
+      });
+    } catch (error) {
+      throw new Error(await this.#ensureInstanceAfterMiss(error), { cause: error });
+    }
+    return {
+      response: response.choices[0]?.message.content ?? "",
+      searchQuery: input.q,
+      results: response.chunks.map((chunk) => this.#toChunk(chunk)),
+    };
+  }
+
+  /**
+   * Add (or replace) one document in the search corpus — the general
+   * mechanism to make derived content (summaries, notes, digests) findable
+   * via `query`. `ref` is REQUIRED: the itx expression leading back to the
+   * domain object the text derives from (e.g. `["streams", ["get", path],
+   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
+   * a search result is never a dead end. `id` is stable within
+   * `(project, kind)`, so re-indexing the same id overwrites. `context` is
+   * the one-line descriptor shown on every hit and to the answer model.
+   */
+  async index(input: {
+    kind: string;
+    id: string;
+    text: string;
+    /** The itx expression that leads back to the source domain object. */
+    ref: ItxExpression;
+    title?: string;
+    context?: string;
+  }): Promise<{ key: string }> {
+    const result = await indexDocument({ ...input, projectId: this.props.projectId });
+    // First index() bootstraps the project's instance; the sync trigger makes
+    // the document searchable in seconds instead of the hourly schedule.
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
+  }
+
+  /**
+   * Pin one stream event into the search corpus by its coordinates — the
+   * domain-object way to make a specific moment findable. The event's content
+   * is read from the stream (never trusted from the caller) and indexed as a
+   * focused document together with the optional `note`; the search hit's
+   * `ref` leads back to `{ path, offset }`. Idempotent per (stream, offset).
+   */
+  async indexEvent(input: {
+    /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+    stream: string;
+    /** The event's offset on that stream. */
+    offset: number;
+    /** Optional annotation, indexed alongside the event ("decision made here"). */
+    note?: string;
+  }): Promise<{ key: string }> {
+    const path = normalizePath(input.stream);
+    const streamStub = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: this.props.projectId, path },
+        { allowNullProjectId: true },
+      ),
+    );
+    const [event] = await streamStub.getEvents({
+      afterOffset: input.offset - 1,
+      beforeOffset: input.offset + 1,
+      limit: 1,
+    });
+    if (event === undefined) {
+      throw new Error(`no event at offset ${input.offset} on stream ${path}`);
+    }
+    const result = await indexPinnedStreamEvent({
+      projectId: this.props.projectId,
+      event,
+      note: input.note,
+    });
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
+  }
+
+  /**
+   * Re-index one stream from the beginning — the repair verb for streams that
+   * predate search indexing, or the rare tail gap a failed per-batch write can
+   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   */
+  async indexStream(input: { path: string }): Promise<{ segments: number }> {
+    const streamStub = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: this.props.projectId, path: normalizePath(input.path) },
+        { allowNullProjectId: true },
+      ),
+    );
+    const result = await indexEntireStream({
+      projectId: this.props.projectId,
+      path: normalizePath(input.path),
+      readEvents: (args) => streamStub.getEvents(args),
+    });
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
+  }
+
+  /**
+   * Snapshot one repo's default-branch HEAD into the search corpus now — the
+   * backfill verb for repos that predate search indexing (writes index
+   * incrementally from here on). Runs on the repo Durable Object's own write
+   * chain so its stale-key sweep can't race post-commit indexing.
+   */
+  async indexRepo(input: { path: string }): Promise<{
+    deleted: number;
+    indexed: number;
+    skipped: number;
+    failed: number;
+  }> {
+    const result = await env.REPO.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: normalizePath(input.path),
+      }),
+    ).reindexSearch();
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
+  }
+
+  /**
+   * Re-mirror every existing itx.files object into the search corpus — the
+   * backfill verb for files that predate search indexing (puts mirror
+   * incrementally from here on). Counts reflect the actual mirror outcome:
+   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
+   */
+  async backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }> {
+    const counts = { mirrored: 0, skipped: 0, failed: 0 };
+    for await (const file of listProjectFiles(this.props.projectId)) {
+      const outcome = await mirrorFileToSearchIndex({
+        ...file,
+        projectId: this.props.projectId,
+      });
+      counts[outcome] += 1;
+    }
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return counts;
   }
 }
 
@@ -4441,6 +4824,15 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
+  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */
+  get search(): SearchRpcTarget {
+    return new SearchRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+      capabilityHost: this.#props.capabilityHost,
+    });
+  }
+
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   get scheduler(): SchedulerRpcTarget {
     return this.schedulers.get(SCHEDULER_PRIMARY_PATH);
@@ -4507,6 +4899,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
+    this.#indexStreamSearch(batch);
     try {
       return await this.worker.processEventBatch(batch);
     } catch (error) {
@@ -4549,6 +4942,37 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     ).catch(() => {
       // Recency self-heals from the next batch; never surface into worker delivery.
     });
+  }
+
+  /**
+   * SPIKE platform step: mirror the batch's stream events into the itx.search
+   * corpus (domains/search/search-index.ts) as fixed 100-offset segment
+   * documents. Same rules as {@link #indexStreamActivity}: idempotent
+   * (segment docs are deterministic rewrites), fire-and-forget, MUST NOT throw
+   * — only the worker delegation may reject into the spine's retry. It rides
+   * the same ordered, checkpointed delivery, re-reading each touched segment's
+   * full range from the stream so a transient failure self-heals on the next
+   * batch in that segment (see indexStreamEventBatch).
+   */
+  #indexStreamSearch(batch: StreamPushEventBatch): void {
+    if (batch.projectId === null) return;
+    const streamStub = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: batch.projectId, path: batch.path },
+        { allowNullProjectId: true },
+      ),
+    );
+    // waitUntil, not bare fire-and-forget: the segment re-read + R2 puts are a
+    // multi-hop pipeline that outlives this RPC's resolve, and an unanchored
+    // promise can be cancelled when the invocation's I/O context ends.
+    this.#props.ctx.waitUntil(
+      indexStreamEventBatch({
+        batch,
+        readEvents: (args) => streamStub.getEvents(args),
+      }).catch((error: unknown) => {
+        console.warn("search index stream batch failed", { path: batch.path, error });
+      }),
+    );
   }
 
   /**
