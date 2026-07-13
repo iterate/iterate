@@ -1,5 +1,8 @@
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
+import {
+  githubAccessTokenPlaceholder,
+  ITERATE_GITHUB_BOT_COMMIT_AUTHOR,
+} from "../integrations/utils.ts";
 import type { SandboxInstanceType } from "./instance-types.ts";
 
 /**
@@ -161,4 +164,29 @@ export function githubTokenEnvForConnections(
     .map((entry) => entry.connection)
     .sort();
   return first === undefined ? null : githubAccessTokenPlaceholder(first);
+}
+
+/**
+ * Shell run on every container start: stock git identity + optional GitHub HTTPS
+ * auth. Identity is always planted (local commits need an author even without a
+ * GitHub connection). Auth only runs when `GH_TOKEN` is set.
+ *
+ * - **Identity** — {@link ITERATE_GITHUB_BOT_COMMIT_AUTHOR} so commits pushed to
+ *   GitHub attribute to the iterate app bot (logo in history). Project slug is
+ *   deliberately not in name/email (that would break avatar linking).
+ * - **Auth** — Basic `x-access-token:$GH_TOKEN` extraheader. GitHub git smart-HTTP
+ *   rejects Bearer; the placeholder is base64-encoded and peeled at egress
+ *   (`substituteSecretHeaders`) so token bytes never enter the container.
+ */
+export const SANDBOX_GIT_CONFIG_SHELL = [
+  `git config --global user.name ${shellSingleQuote(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name)}`,
+  `git config --global user.email ${shellSingleQuote(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email)}`,
+  // base64 -w0: single-line output (GNU coreutils on the stock sandbox image).
+  // Do not pipe through tr -d "\\n" — that deletes backslash and n, not newlines.
+  `if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Basic $(printf %s "x-access-token:\${GH_TOKEN}" | base64 -w0)"; fi`,
+].join(" && ");
+
+/** Quote a literal for POSIX single-quoted shell (safe for `[bot]` emails). */
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }

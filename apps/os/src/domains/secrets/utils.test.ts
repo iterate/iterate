@@ -155,6 +155,42 @@ describe("substituteSecretHeaders", () => {
     // Request cloned from the original).
     expect(substituted.headers.get("upgrade")).toBe("websocket");
   });
+
+  // GitHub git-over-HTTPS only accepts Basic (`x-access-token:<token>`), not
+  // Bearer. Sandboxes plant the placeholder inside the base64 credential so
+  // the container never holds token bytes; egress must peel, substitute, and
+  // re-encode or git clone/push always 401s.
+  test("substitutes a placeholder inside Basic Authorization base64", () => {
+    const path = "/secrets/integrations/github/install-42";
+    const placeholder = `getSecret({ path: "${path}", field: "accessToken" })`;
+    const encoded = btoa(`x-access-token:${placeholder}`);
+    const request = new Request(
+      "https://github.com/acme/repo.git/info/refs?service=git-upload-pack",
+      {
+        headers: { authorization: `Basic ${encoded}` },
+      },
+    );
+    expect(secretReferencesFromHeaders(request.headers)).toEqual([{ field: "accessToken", path }]);
+    const substituted = substituteSecretHeaders(request, ({ path: p, field }) => {
+      expect(p).toBe(path);
+      expect(field).toBe("accessToken");
+      return "ghs_install_token_abc";
+    });
+    expect(substituted.headers.get("authorization")).toBe(
+      `Basic ${btoa("x-access-token:ghs_install_token_abc")}`,
+    );
+  });
+
+  test("leaves non-placeholder Basic Authorization unchanged", () => {
+    const encoded = btoa("user:already-real-token");
+    const request = new Request("https://example.com", {
+      headers: { authorization: `Basic ${encoded}` },
+    });
+    const substituted = substituteSecretHeaders(request, () => {
+      throw new Error("resolver must not run");
+    });
+    expect(substituted.headers.get("authorization")).toBe(`Basic ${encoded}`);
+  });
 });
 
 describe("substituteSecretRequest", () => {
