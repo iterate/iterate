@@ -50,20 +50,18 @@ Do not wholesale cherry-pick #1206. Improve these details while porting it:
 
 ## Current proof status
 
-- Draft `iterate/iterate#1914` plus minimal `iterate/capnweb#3` proves one
-  semantic custom span and one structured completion event per logical ITX call
-  over a long-running WebSocket.
-- Draft `iterate/iterate#1926` proves semantic alarm spans without inventing
-  request parentage across the time boundary.
-- Draft `iterate/iterate#1928` proves stateless, stateful, fetch-native, and
-  loopback dynamic-worker spans. Cloudflare starts a separate trace at the
-  `ctx.exports` boundary, so the proof reports both trace IDs honestly.
-- Draft `iterate/iterate#1930` used the current evlog wrapper. It is superseded
-  by the #1206 correction and should not be the logging foundation.
-- The replacement first slice starts one revived wide-log operation at the
-  outer OS `worker.fetch`, covering dashboard, API, webhook, project-fetch,
-  HTTP-batch, and WebSocket-handshake lanes with one clean structured
-  Cloudflare log line per request.
+- Draft `iterate/iterate#1933` is the single OS proof. It revives Misha's
+  operation logger, adds one bounded log and semantic custom span per logical
+  ITX call, and includes the alarm and dynamic-worker tracing proofs that were
+  previously split across drafts #1914, #1926, and #1928.
+- Draft `iterate/capnweb#3` is the only separate dependency PR. Its one
+  server-side `onCall(info, invoke)` hook survives promise pipelining, while the
+  client API and wire protocol remain unchanged.
+- Closed draft `iterate/iterate#1930` used the current evlog wrapper. It is
+  superseded by the #1206 correction and is not the logging foundation.
+- The outer OS `worker.fetch` operation covers dashboard, API, webhook,
+  project-fetch, HTTP-batch, and WebSocket-handshake lanes with one clean
+  structured Cloudflare log line per request.
 
 ## ITX lifecycle
 
@@ -75,12 +73,11 @@ Each logical call gets its own bounded operation and custom span:
 
 ```text
 HTTP WebSocket handshake operation
-  connectionId
+  sessionId
 
 ITX call operation + `itx <semantic method>` span
-  connectionId
+  sessionId
   callId
-  serverSessionId
   trusted projectId, when known
   semantic target/method name
   outcome and duration
@@ -92,13 +89,13 @@ name, for example `itx project.files.read`; never put arguments or results in a
 span name. Multiple calls over one socket produce N small call events, not one
 large session event.
 
-The Cap'n Web fork should be minimal. The server-side `onCall(info, invoke)`
-hook and promise-pipeline propagation are sufficient to wrap every call. A
-smaller follow-up should test whether the client metadata/wire-format changes
-in draft fork PR #3 can be deleted in favor of server-minted connection and
-call IDs. Browser/PostHog identity may still need a small per-call metadata
-envelope if a socket can outlive the current PostHog session; that decision
-must not be conflated with trace IDs.
+The Cap'n Web fork is deliberately minimal. The server-side
+`onCall(info, invoke)` hook and promise-pipeline propagation wrap every local
+application invocation. It sends no client metadata and changes no wire tuple;
+OS mints the session ID and uses the wide-log operation ID as the call ID.
+Browser/PostHog identity may eventually justify a separate, narrow correlation
+protocol if a socket can outlive the current PostHog session. That decision
+must not be conflated with Cloudflare trace IDs.
 
 Cloudflare does not expose its native trace/span IDs to ordinary Worker code.
 Do not invent fake IDs. Emitting the structured event while the custom span is
@@ -112,13 +109,14 @@ The target is one structured object per completed operation:
 ```ts
 {
   schema: "iterate.wide-log.v1",
+  message,
   log: { id, kind, parentId?, start, end, durationMs },
   service,
   deployment: { environment, workerName, version },
   outcome,
   http?: { requestId, method, path, status, cfRay, traceparent },
   ingress?: { lane, transport, projectId?, appSlug? },
-  itx?: { connectionId, callId, displayName, targetKind, method },
+  itx?: { sessionId, callId, method, rpcSystem, transport },
   messages?,
   errors?,
   dropped?
@@ -247,7 +245,7 @@ After HTTP and ITX calls, use the same primitive for:
 ## Primary references
 
 - Misha's PR #1206: https://github.com/iterate/iterate/pull/1206
-- Current tracing POC: https://github.com/iterate/iterate/pull/1914
+- Consolidated OS proof: https://github.com/iterate/iterate/pull/1933
 - Minimal Cap'n Web fork: https://github.com/iterate/capnweb/pull/3
 - PostHog exception capture: https://posthog.com/docs/error-tracking/capture
 - PostHog React tracking: https://posthog.com/docs/error-tracking/installation/react
