@@ -2087,6 +2087,13 @@ describe("token usage and history reset", () => {
             // conversation exactly as normal turns send it (prompt-cache
             // prefix reuse) — so that is where compaction is recognizable.
             if (messages.at(-1)!.content.includes("compacting this AI agent conversation")) {
+              await stream.append({
+                type: "events.iterate.com/agent/input-added",
+                payload: {
+                  content: "arrived while compaction was awaiting the model",
+                  llmRequestPolicy: { behaviour: "dont-trigger-request" },
+                },
+              });
               return { response: "The user likes teal and is building STICKYMEETING." };
             }
             // A turn that ran at over half of GPT-5.6 Sol's 272k operating window.
@@ -2117,6 +2124,10 @@ describe("token usage and history reset", () => {
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
     });
+    const usageReport = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/token-usage-reported",
+    )!;
+    const getEvents = vi.spyOn(stream, "getEvents");
     // Delivering the usage report trips the compaction trigger. Stop the
     // world: the delivery itself blocks until the summary lands, so the reset
     // is already in the journal when deliver() returns.
@@ -2156,14 +2167,20 @@ describe("token usage and history reset", () => {
           role: "user",
           content: expect.stringContaining("The user likes teal and is building STICKYMEETING."),
         },
+        {
+          role: "user",
+          content: "arrived while compaction was awaiting the model",
+        },
       ],
       reason: expect.stringMatching(/^compaction@\d+: ~140500 tokens > 136000$/),
     });
 
     // The fold's model-visible history is now just the summary.
     const state = reduceAgentEvents(stream.events);
-    expect(state.history).toHaveLength(1);
+    expect(state.history).toHaveLength(2);
     expect(state.history[0]!.content).toContain("[Earlier conversation history was compacted.");
+    expect(getEvents.mock.calls.map(([input]) => input?.afterOffset)).toContain(usageReport.offset);
+    expect(getEvents.mock.calls.map(([input]) => input?.afterOffset)).not.toContain(0);
 
     // A fresh incarnation redelivering the whole journal must not summarize
     // again: the durable guard sees this trigger's reset and skips before the

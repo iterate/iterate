@@ -423,7 +423,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         onChunk: async () => {},
       });
 
-      const stateNow = reduceAgentEvents(await this.#readConsumedEvents());
+      const stateNow = reduceAgentEventSuffix(await this.#readConsumedEvents(triggerOffset), state);
       const carriedForward = stateNow.history.slice(state.history.length);
       // The summary turn's own usage rides the reason string: compaction has
       // no llm-request-requested offset, so a token-usage-reported event (its
@@ -875,17 +875,17 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   /**
-   * The whole journal's consumed subset, paged from offset 0. Ordinary new
-   * requests build from their exact live reduction; this is the recovery
-   * fallback when the requested event predates the batch, and the compaction
-   * currency read. Filtering to `consumes` keeps bulk emitted-only types
-   * (response chunks) out of the transfer; paging means long histories are
+   * A consumed journal suffix. Ordinary new requests build from their exact
+   * live reduction; offset 0 is the recovery fallback when the requested
+   * event predates the batch, while compaction resumes from its captured
+   * trigger state. Filtering to `consumes` keeps bulk emitted-only types
+   * (response chunks) out of the transfer; paging means long suffixes are
    * never silently truncated.
    */
-  async #readConsumedEvents(): Promise<StreamEvent[]> {
+  async #readConsumedEvents(afterOffset = 0): Promise<StreamEvent[]> {
     const events: StreamEvent[] = [];
     using pager = this.stream.readEvents({
-      afterOffset: 0,
+      afterOffset,
       eventTypes: this.contract.consumes,
       limit: CONSUMED_EVENTS_PAGE_SIZE,
     });
@@ -1168,20 +1168,28 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
 
 /**
  * Folds a raw journal into agent state outside the processor runtime — the
- * recovery prompt and compaction read path. Non-consumed types and events
- * whose shape fails the contract parse are skipped exactly like the live fold
- * skips them (streams accept raw appends by design; a malformed event is a
- * fact of the log, not an exception). Reducer bugs, by contrast, throw —
- * swallowing them would silently fold wrong state.
+ * recovery prompt and compaction read path. An exact validated prefix state
+ * can seed a suffix fold. Non-consumed types and events whose shape fails the
+ * contract parse are skipped exactly like the live fold skips them (streams
+ * accept raw appends by design; a malformed event is a fact of the log, not
+ * an exception). Reducer bugs, by contrast, throw — swallowing them would
+ * silently fold wrong state.
  */
-export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
-  let state = AgentProcessorContract.stateSchema.parse({});
+function reduceAgentEventSuffix(
+  events: readonly StreamEvent[],
+  initialState: AgentState,
+): AgentState {
+  let state = initialState;
   for (const event of events) {
     const parsed = parseAgentConsumedEvent(event);
     if (parsed === undefined) continue;
     state = reduceAgentEvent({ event: parsed, state });
   }
   return state;
+}
+
+export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
+  return reduceAgentEventSuffix(events, AgentProcessorContract.stateSchema.parse({}));
 }
 
 function parseAgentConsumedEvent(event: StreamEvent): AgentConsumedEvent | undefined {
