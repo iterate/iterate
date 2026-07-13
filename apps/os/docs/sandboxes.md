@@ -207,6 +207,18 @@ Wiring (three points):
   `SANDBOX_INTERCEPT_HTTPS` is set, which the SDK sets from the `interceptHttps`
   flag — so no Dockerfile change is needed for the container to trust it.
 
+### OpenAI → Cloudflare AI Gateway
+
+Outbound calls to **`api.openai.com`** are rewritten at project egress onto the
+deployment's Cloudflare AI Gateway OpenAI provider-native base (same BYOK key
+and gateway id the agent Durable Object uses). The platform OpenAI key is
+injected there; sandboxes should plant a placeholder or any dummy
+`OPENAI_API_KEY` — the real key never needs to enter the container. Gateway
+requests carry `cf-aig-metadata` with at least `{ projectId, source:
+"project-egress" }` for log filtering. Implementation:
+`openai-ai-gateway-egress.ts` + `ProjectDurableObject.#egressOpenAiViaAiGateway`
+(Workers AI gateway binding preferred; REST rewrite as fallback).
+
 ## Deployment
 
 The domain lives in `src/domains/sandboxes/`; the container classes are

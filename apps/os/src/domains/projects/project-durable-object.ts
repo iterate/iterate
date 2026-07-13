@@ -46,6 +46,11 @@ import {
   type EgressRule,
   type HumanApprovalRequestedPayload,
 } from "./egress-approvals.ts";
+import {
+  isOpenAiPublicApiRequest,
+  openAiAiGatewayRoutingFromConfig,
+  rewriteOpenAiRequestToAiGateway,
+} from "./openai-ai-gateway-egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
@@ -543,6 +548,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   /** The egress lanes proper: platform references, secret substitution, bare fetch. */
   async #egress(request: Request): Promise<Response> {
+    // Sandbox coding agents (Codex, etc.) call api.openai.com with a placeholder
+    // or dummy key. Route them through Cloudflare AI Gateway with the platform
+    // OpenAI key + project metadata — same BYOK/observability posture as agent DO
+    // turns, without exposing openAiApiKey via getSecret({ platform }).
+    if (isOpenAiPublicApiRequest(request)) {
+      const routed = await this.#egressOpenAiViaAiGateway(request);
+      if (routed !== null) return routed;
+      // Fall through when accountId/gateway config is missing (local/dev edge).
+    }
+
     let secretPaths: string[];
     try {
       // Placeholders live in the request envelope: headers, or the URL for
@@ -584,6 +599,76 @@ export class ProjectDurableObject extends DurableObject<Env> {
         path: secretPaths[0]!,
       }),
     ).fetch(request);
+  }
+
+  /**
+   * Route `api.openai.com` through Cloudflare AI Gateway with the platform
+   * OpenAI key + project metadata. Prefer the Workers AI gateway binding
+   * (pre-authenticated on this account — works when Authenticated Gateway is
+   * on). Fall back to a provider-native REST rewrite for GET/non-JSON and when
+   * the binding is unavailable. Returns null when config cannot route (caller
+   * falls through to normal egress).
+   */
+  async #egressOpenAiViaAiGateway(request: Request): Promise<Response | null> {
+    const config = parseConfig(this.env);
+    const routing = openAiAiGatewayRoutingFromConfig(config);
+    if (routing === null) return null;
+
+    const metadata = {
+      projectId: this.#name.projectId,
+      source: "project-egress" as const,
+      caller:
+        request.headers.get("x-iterate-sandbox") ??
+        request.headers.get("x-iterate-agent") ??
+        undefined,
+    };
+
+    // Binding path: same door agent BYOK uses. Endpoint is the path after /v1/.
+    const endpoint = new URL(request.url).pathname.replace(/^\/v1\/?/, "");
+    const gateway = this.env.AI?.gateway?.(routing.gatewayId);
+    if (
+      gateway !== undefined &&
+      (request.method === "POST" || request.method === "PUT") &&
+      endpoint.length > 0
+    ) {
+      try {
+        const query: unknown = await request.clone().json();
+        const headers: Record<string, string> = {
+          authorization: `Bearer ${routing.openaiApiKey}`,
+          "content-type": "application/json",
+          "cf-aig-metadata": JSON.stringify({
+            projectId: metadata.projectId,
+            source: metadata.source,
+            ...(metadata.caller !== undefined ? { caller: metadata.caller } : {}),
+          }),
+        };
+        if (routing.skipCache) headers["cf-aig-skip-cache"] = "true";
+        return await gateway.run({
+          provider: "openai",
+          endpoint,
+          headers,
+          query,
+        });
+      } catch (error) {
+        // Non-JSON body or binding failure → REST rewrite below.
+        console.warn("openai AI gateway binding path failed; trying REST rewrite", {
+          projectId: this.#name.projectId,
+          endpoint,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const rewritten = rewriteOpenAiRequestToAiGateway({
+      request,
+      accountId: routing.accountId,
+      gatewayId: routing.gatewayId,
+      openaiApiKey: routing.openaiApiKey,
+      metadata,
+      cfAigAuthorization: routing.cfAigAuthorization,
+      skipCache: routing.skipCache,
+    });
+    return fetch(rewritten);
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
