@@ -55,7 +55,8 @@ const res = await itx.secrets.get("/secrets/discord-bot").relayWebSocket({
   url: "wss://dummy-petshop.iterate.com/gateway",
   identify: {}, // wait for op:"hello", send { op:"identify", token }
 });
-// res.webSocket is past IDENTIFY; listen for ready / app frames
+// res.webSocket is past IDENTIFY (hello is still forwarded for heartbeat
+// params; the token IDENTIFY was already sent by the Secret DO)
 ```
 
 Custom frame template: `identify.frame` with `"$token"` placeholders;
