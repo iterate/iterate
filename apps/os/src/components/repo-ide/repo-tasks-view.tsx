@@ -149,8 +149,7 @@ export function RepoTasksView({
   const columns = taskStateColumns(tasks);
   const selectedTask = tasks.find((task) => task.path === selectedPath);
   const writeTask = (task: RepoTask, content: string) => {
-    const staged = changes.get(task.path)?.staged;
-    const baseline = staged?.type === "write" ? staged.content : headContents[task.path];
+    const baseline = textContentForEntry(changes.get(task.path)?.staged) ?? headContents[task.path];
     onSetWorking(task.path, content === baseline ? undefined : { type: "write", content });
   };
   const selectTask = (path: string | undefined) =>

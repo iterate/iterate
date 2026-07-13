@@ -16,7 +16,12 @@ import { isPreviewablePath, repoFileKind } from "./repo-file-kinds.ts";
 import { useRepoFileJsonSchema } from "./repo-json-schema.ts";
 import { useRepoTypeScriptExtensions } from "./repo-typescript.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
-import { effectiveEntry, type FileChange, type FileEntry } from "./staged-changes.ts";
+import {
+  effectiveEntry,
+  textContentForEntry,
+  type FileChange,
+  type FileEntry,
+} from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
 
 /**
@@ -81,10 +86,16 @@ export function RepoEditorPane({
   const headContent = headRead?.content;
   const working = change?.working;
   const staged = change?.staged;
+  const workingText = kind.kind === "text" ? textContentForEntry(working) : undefined;
+  const stagedText = kind.kind === "text" ? textContentForEntry(staged) : undefined;
+  const hasUndecodableTextEntry =
+    kind.kind === "text" &&
+    ((working?.type === "write-base64" && workingText === undefined) ||
+      (staged?.type === "write-base64" && stagedText === undefined));
 
   // Diffs and dirty checks run against the git-shaped baseline: the staged
   // snapshot when one exists, else HEAD.
-  const textBaseline = staged?.type === "write" ? staged.content : (headContent ?? undefined);
+  const textBaseline = stagedText ?? headContent ?? undefined;
 
   // TypeScript language service (diagnostics, hover, autocomplete) for
   // ts/tsx/js/jsx working-tree buffers — empty for everything else, and for
@@ -112,7 +123,7 @@ export function RepoEditorPane({
   const jsonSchema = useRepoFileJsonSchema({
     path,
     language: schemaLanguage,
-    content: working?.type === "write" ? working.content : (textBaseline ?? ""),
+    content: workingText ?? textBaseline ?? "",
   });
   // The readonly Index view renders the STAGED snapshot, so it must validate
   // against the schema that snapshot declares — not the working buffer's, whose
@@ -120,7 +131,7 @@ export function RepoEditorPane({
   const stagedJsonSchema = useRepoFileJsonSchema({
     path,
     language: schemaLanguage,
-    content: staged?.type === "write" ? staged.content : "",
+    content: stagedText ?? "",
   });
 
   // The plain editor carries vscode-style gutter bars for lines differing
@@ -174,7 +185,7 @@ export function RepoEditorPane({
   // chunk controls — inspection only.
   const stagedDiffExtensions = useMemo(
     () =>
-      stagedView && staged?.type === "write"
+      stagedView && stagedText !== undefined
         ? [
             unifiedMergeView({
               original: headContent ?? "",
@@ -183,7 +194,7 @@ export function RepoEditorPane({
             }),
           ]
         : [],
-    [stagedView, staged, headContent],
+    [stagedView, stagedText, headContent],
   );
 
   const editorExtensionsWithSchema = useMemo(
@@ -270,7 +281,7 @@ export function RepoEditorPane({
   const status =
     entry === undefined ? undefined : headHasPath ? ("modified" as const) : ("added" as const);
 
-  if (stagedView && staged?.type === "write" && kind.kind === "text") {
+  if (stagedView && stagedText !== undefined && kind.kind === "text") {
     // Same Code/Preview toggle as the working view, over the staged snapshot
     // — the Index pseudo-file stays readonly either way.
     const showStagedPreview = previewOpen && isPreviewablePath(path);
@@ -316,9 +327,9 @@ export function RepoEditorPane({
       >
         {showStagedPreview ? (
           kind.language === "markdown" ? (
-            <MarkdownPreview markdown={staged.content} />
+            <MarkdownPreview markdown={stagedText} />
           ) : (
-            <HtmlPreview html={staged.content} />
+            <HtmlPreview html={stagedText} />
           )
         ) : (
           <SourceCodeBlock
@@ -328,7 +339,7 @@ export function RepoEditorPane({
             showLineNumbers
             editable={false}
             wrapLongLines={false}
-            code={staged.content}
+            code={stagedText}
             language={kind.language}
             codeMirrorExtensions={stagedDiffExtensionsWithSchema}
             onChange={() => {}}
@@ -338,8 +349,8 @@ export function RepoEditorPane({
     );
   }
 
-  if (kind.kind === "text" && working?.type !== "write-base64" && staged?.type !== "write-base64") {
-    const value = working?.type === "write" ? working.content : (textBaseline ?? "");
+  if (kind.kind === "text" && !hasUndecodableTextEntry) {
+    const value = workingText ?? textBaseline ?? "";
     const stageText = (content: string) => {
       // Typing back to the baseline un-dirties the file, like vscode.
       if (content === textBaseline) onSetWorking(undefined);
