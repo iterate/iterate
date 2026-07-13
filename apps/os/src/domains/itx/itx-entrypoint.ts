@@ -1,4 +1,4 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { tracing, WorkerEntrypoint } from "cloudflare:workers";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import { deploymentItxForTrustedInternal, itxForScope } from "../../rpc-targets.ts";
@@ -24,15 +24,21 @@ import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
     const { path, projectId } = scopeFromItxEntrypointProps(this.ctx.props);
-    if (projectId === null) {
-      // The deployment-global scope: what a GLOBAL (projectId: null) stream's
-      // delivery dial evaluates expressions against. It is the same root a
-      // trusted-internal session sees — deployment-wide repos/streams — so a
-      // global repo stream's wake expression walks the identical shape a
-      // project stream's does.
-      return deploymentItxForTrustedInternal({ ctx: this.ctx });
-    }
-    return itxForScope({ auth: trustedInternalAuthContext(), ctx: this.ctx, path, projectId });
+    const scopeName = path.replace(/[^a-zA-Z0-9_./:$-]+/g, "_").slice(0, 120) || "root";
+    return tracing.enterSpan(`itx binding.get ${scopeName}`, async (span) => {
+      span.setAttribute("iterate.scope.path", scopeName);
+      span.setAttribute("iterate.scope.type", projectId === null ? "global" : "project");
+      if (projectId === null) {
+        // The deployment-global scope: what a GLOBAL (projectId: null) stream's
+        // delivery dial evaluates expressions against. It is the same root a
+        // trusted-internal session sees — deployment-wide repos/streams — so a
+        // global repo stream's wake expression walks the identical shape a
+        // project stream's does.
+        return deploymentItxForTrustedInternal({ ctx: this.ctx });
+      }
+      span.setAttribute("iterate.project.id", projectId);
+      return itxForScope({ auth: trustedInternalAuthContext(), ctx: this.ctx, path, projectId });
+    });
   }
 
   /**
