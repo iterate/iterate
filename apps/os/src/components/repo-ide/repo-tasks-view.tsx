@@ -500,7 +500,7 @@ function TaskColumn({
         <div className="group/task-footer mt-auto min-h-16 pt-3 pb-2">
           <Button
             variant="ghost"
-            className="h-10 w-full border border-dashed border-border/70 text-muted-foreground/60 opacity-100 transition-[opacity,background-color,color] pointer-fine:opacity-0 group-hover/task-footer:opacity-100 focus-visible:opacity-100 hover:bg-muted/70 hover:text-muted-foreground"
+            className="h-10 w-full border border-dashed border-border/70 text-muted-foreground/60 opacity-100 transition-[opacity,background-color,color] pointer-fine:opacity-0 group-hover/task-footer:opacity-100! focus-visible:opacity-100! hover:bg-muted/70 hover:text-muted-foreground"
             title={`Add task to ${creationLabel}`}
             aria-label={`Add task to ${creationLabel}`}
             onClick={onCreate}
