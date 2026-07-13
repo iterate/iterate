@@ -351,7 +351,7 @@ export interface Agent {
         },
   ): Promise<StreamEvent>;
   /**
-   * Set THIS agent's policy: system prompt and/or model. Works on an agent
+   * Set THIS agent's policy: system prompt, model, and/or GitHub behavior. Works on an agent
    * that already ran (a plain last-write-wins update) AND on a path that has
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
@@ -656,8 +656,8 @@ export interface Files {
  * dispatch to deployment code —
  * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
  * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
- * the Gmail REST proxy, and `itx.integrations.github["jonas"]` is a real
- * Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
+ * the Gmail REST proxy, and `itx.integrations.github["jonas"].octokit` is a
+ * real Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
  * `.request("GET /repos/{owner}/{repo}")` escape hatch, `.graphql(...)`;
  * there is NO generic `.api.request({ method, path })` shape, and the
  * connection acts as a GitHub App INSTALLATION, so user-scoped
@@ -1935,6 +1935,9 @@ export type StreamEvent = {
  * systemPrompt override REPLACES the path's platform prompt wholesale — the
  * caller owns the whole contract, including how the agent acts (codemode). */
 export type AgentDefaultsOverrides = {
+  /** GitHub pull-request behavior. The resulting configured fact always
+   * contains the complete materialized policy, including `enabled: false`. */
+  githubAgent?: GithubAgentConfigurationInput;
   systemPrompt?: string;
   model?: string;
 };
@@ -2626,6 +2629,13 @@ export type CfMarkdownConversionOptions = {
       excludeMetadata?: boolean;
     };
   };
+};
+
+/** Partial GitHub pull-request agent policy accepted by agent defaults and configuration calls. */
+export type GithubAgentConfigurationInput = {
+  automaticReview?:
+    | { enabled?: boolean | undefined; instructions?: string | undefined }
+    | undefined;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
