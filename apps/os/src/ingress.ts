@@ -9,7 +9,7 @@
  * Lanes:
  *
  *   "os"       — the dashboard/app pipeline (OS host, non-itx paths)
- *   "api"      — rpc path lanes on the OS host: /api, /api/admin-cookie, and
+ *   "api"      — rpc path lanes on the OS host: /api, operator sessions, and
  *                Slack webhooks
  *   "project"  — a project worker target, resolved from:
  *                  /prj_<id>/...                      (URL rewritten)
@@ -141,7 +141,7 @@ function projectRoute(input: {
 
 /**
  * Path lanes served by the api pipeline on the OS host: the capnweb rpc
- * endpoint at exactly `/api` (plus its admin-cookie bridge), the Slack,
+ * endpoint at exactly `/api` (plus operator-session issuance/redemption), the Slack,
  * GitHub, and Telegram webhook ingress lanes. Deliberately exact-match —
  * except Telegram, whose webhook path carries the bot id as a segment
  * (`/api/integrations/telegram/webhook/<botId>`), so it is the one prefix.
@@ -149,7 +149,13 @@ function projectRoute(input: {
  * under `/api/integrations/...`) are app routes and stay on the "os" lane.
  */
 function isApiWorkerLanePath(pathname: string): boolean {
-  if (pathname === "/api" || pathname === "/api/admin-cookie") return true;
+  if (
+    pathname === "/api" ||
+    pathname === "/api/operator-sessions" ||
+    pathname.startsWith("/api/operator-sessions/")
+  ) {
+    return true;
+  }
   if (
     pathname === "/api/integrations/slack/webhook" ||
     pathname === "/api/integrations/slack/interactivity-webhook" ||

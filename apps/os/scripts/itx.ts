@@ -31,7 +31,7 @@ type RunOptions = {
   eval?: string;
   /** Path to a script file with the same body shape as `eval`. */
   file?: string;
-  /** Project id to connect into. Omit for the global admin session. */
+  /** Project id to connect into. Omit to retain platform-wide admin-secret authority. */
   context?: string;
   /** JSON object passed to the script as `vars`, e.g. '{"note":"hi"}'. */
   vars?: string;
@@ -92,7 +92,7 @@ export function formatScriptError(error: unknown): string {
 }
 
 type ReplOptions = {
-  /** Project id to connect into. Omit for the global admin session. */
+  /** Project id to connect into. Omit to retain platform-wide admin-secret authority. */
   context?: string;
   /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
   baseUrl?: string;

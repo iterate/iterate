@@ -20,7 +20,7 @@ import { withEvlog } from "@iterate-com/shared/evlog";
 import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
-import { resolveProjectIdBySlug } from "./project-directory.ts";
+import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import {
   WORKER_FETCH_DISPATCH_HEADER,
@@ -32,7 +32,7 @@ import { defaultProjectWorkerRef } from "./domains/repos/utils.ts";
 import { handleIntegrationWebhookApiRequest } from "./domains/integrations/integration-webhook-api.ts";
 import { handleInboundEmail } from "./domains/email/email-ingress.ts";
 import { FILES_APP_SLUG, serveProjectFileRequest } from "./domains/files/project-files.ts";
-import { handleCapnwebAdminCookieRequest } from "./auth/admin-auth-cookie.ts";
+import { handleOperatorSessionRequest } from "./auth/operator-session.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
 import { AppConfig, parseConfig } from "./config.ts";
 import type { RequestContext } from "./request-context.ts";
@@ -98,7 +98,7 @@ export default {
       resolvers: directoryResolvers(config, env),
       url: request.url,
     });
-    if (route.lane !== "os") return await apiFetch(request, ctx, config, route);
+    if (route.lane !== "os") return await apiFetch(request, env, ctx, config, route);
 
     return await appFetch(request, ctx, config, {
       isEventDocsHost: route.hostKind === "eventDocs",
@@ -160,11 +160,12 @@ async function appFetch(
 
 /**
  * The api pipeline: the capnweb surface at `/api`, the
- * `/api/admin-cookie` browser auth bridge, Slack webhooks, and project ingress
+ * operator-session browser auth, Slack webhooks, and project ingress
  * — every lane `decideIngressRoute` (src/ingress.ts) can resolve.
  */
 async function apiFetch(
   request: Request,
+  env: Env,
   ctx: ExecutionContext,
   config: AppConfig,
   route: Exclude<Awaited<ReturnType<typeof decideIngressRoute>>, { lane: "os" }>,
@@ -223,8 +224,18 @@ async function apiFetch(
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
-  if (url.pathname === "/api/admin-cookie") {
-    return await handleCapnwebAdminCookieRequest({ config, request });
+  if (
+    url.pathname === "/api/operator-sessions" ||
+    url.pathname.startsWith("/api/operator-sessions/")
+  ) {
+    return await handleOperatorSessionRequest({
+      config,
+      request,
+      resolveProject: async (reference) =>
+        reference.startsWith("prj_")
+          ? await readProjectById(env.PROJECT_DIRECTORY, reference)
+          : await readProjectBySlug(config, env.PROJECT_DIRECTORY, reference),
+    });
   }
 
   // Integration webhook ingress (Slack, GitHub, …) lives here (not the app

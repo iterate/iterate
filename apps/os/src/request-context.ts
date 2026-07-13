@@ -3,6 +3,7 @@ import type { AuthenticatedSession } from "@iterate-com/auth/server";
 import type { SignInAuthError } from "~/auth/errors.ts";
 import type { AppConfig } from "~/config.ts";
 import type { Principal } from "~/auth/principal.ts";
+import type { AuthenticatedOperatorSession } from "~/auth/operator-session.ts";
 
 /**
  * Per-request server context, passed to TanStack Start's server handler in
@@ -30,6 +31,7 @@ export interface RequestContext {
   executionCtx: ExecutionContext;
   // Set by the iterate auth request middleware (src/auth/middleware.ts).
   principal?: Principal | null;
+  operatorSession?: AuthenticatedOperatorSession | null;
   iterateAuthSession?: AuthenticatedSession | null;
   iterateAuthError?: SignInAuthError;
 }

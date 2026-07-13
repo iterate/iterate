@@ -51,7 +51,7 @@ doppler run --config prd -- pnpm cli itx run \
   -e 'const stream = itx.streams.get("/debugging-docs/example"); const [appended] = await stream.append({ type: "events.iterate.com/debugging-docs/example", payload: { source: "itx" } }); const history = await stream.getEvents({ afterOffset: appended.offset - 1 }); return { appended, history }'
 ```
 
-List project ids from the global admin session:
+List project IDs with the CLI's platform-wide admin-secret authority:
 
 ```bash
 doppler run --config prd -- pnpm cli itx run \

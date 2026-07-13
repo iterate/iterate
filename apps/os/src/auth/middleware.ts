@@ -10,6 +10,10 @@ import type { SignInAuthError } from "~/auth/errors.ts";
 import { createOsIterateAuth } from "~/auth/iterate-auth-client.ts";
 import type { OsIterateAuth } from "~/auth/iterate-auth-client.ts";
 import {
+  authenticateOperatorSession,
+  type AuthenticatedOperatorSession,
+} from "~/auth/operator-session.ts";
+import {
   principalFromAccessToken,
   principalFromSession,
   type Principal,
@@ -42,6 +46,7 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
       return next({
         context: {
           principal: null,
+          operatorSession: null,
           iterateAuthSession: null,
           iterateAuthError: undefined,
           rawRequest: request,
@@ -54,6 +59,7 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
     const result = await next({
       context: {
         principal: resolvedAuth.principal,
+        operatorSession: resolvedAuth.operatorSession,
         iterateAuthSession: resolvedAuth.session,
         iterateAuthError: resolvedAuth.error,
         rawRequest: request,
@@ -83,6 +89,7 @@ async function resolveRequestAuth(input: {
   principal: Principal | null;
   session: AuthenticatedSession | null;
   error?: SignInAuthError;
+  operatorSession: AuthenticatedOperatorSession | null;
   responseHeaders: Headers;
 }> {
   const adminApiPrincipal = authenticateAdminApiSecret(input.context, input.request);
@@ -91,6 +98,21 @@ async function resolveRequestAuth(input: {
       principal: adminApiPrincipal,
       session: null,
       error: undefined,
+      operatorSession: null,
+      responseHeaders: new Headers(),
+    };
+  }
+
+  const operatorSession = await authenticateOperatorSession({
+    config: input.context.config,
+    request: input.request,
+  });
+  if (operatorSession) {
+    return {
+      principal: operatorSession.principal,
+      session: null,
+      error: undefined,
+      operatorSession,
       responseHeaders: new Headers(),
     };
   }
@@ -102,7 +124,7 @@ async function resolveRequestAuth(input: {
     request: input.request,
   });
   if (sessionAuth.principal) {
-    return sessionAuth;
+    return { ...sessionAuth, operatorSession: null };
   }
 
   const bearerPrincipal = await authenticateBearerPrincipal({
@@ -113,6 +135,7 @@ async function resolveRequestAuth(input: {
     principal: bearerPrincipal,
     session: sessionAuth.session,
     error: sessionAuth.error,
+    operatorSession: null,
     responseHeaders: sessionAuth.responseHeaders,
   };
 }
