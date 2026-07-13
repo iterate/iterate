@@ -11,8 +11,8 @@ import type { StreamEvent } from "../streams/schemas.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   CONNECTION_UNCLAIMED_EVENT_TYPE,
-  INTEGRATION_DIRECTORY_STREAM_PATH,
   integrationConnectionStreamPath,
+  integrationDirectoryStreamPath,
 } from "./utils.ts";
 
 export function integrationStreamStub(projectId: string | null, path: string) {
@@ -65,26 +65,16 @@ export async function* streamEventsNewestFirst(
 /** One project+connection that owns a provider-side external id. */
 type ConnectionClaim = { connection: string; projectId: string };
 
-/** Directory key: `(slug, externalId)` flattened. The external id is only
- * unique WITHIN a provider (a Slack team id and a GitHub installation id could
- * collide as bare strings), so the slug is part of the key. */
-function directoryKey(slug: string, externalId: string): string {
-  return `${slug} ${externalId}`;
-}
-
 /**
- * Folds the deployment-wide integration directory: for each `(slug,
- * externalId)`, latest claim wins; an unclaim clears it only when BOTH the
- * project and the connection match the live claim — one project can hold
- * several external accounts, and a stale connection's disconnect must not tear
- * down the claim a newer connection now owns. This is the provider-agnostic
- * generalization of the old Slack team directory (D4): the same fold serves
- * Slack team ids, GitHub installation ids, and any future provider.
+ * Folds one claim from its integration-directory bucket. Latest claim wins;
+ * an unclaim clears it only when BOTH project and connection match the live
+ * claim, so a stale connection's disconnect cannot tear down a newer owner.
  */
-export function foldConnectionDirectory(
+export function foldConnectionClaim(
   events: readonly StreamEvent[],
-): Map<string, ConnectionClaim> {
-  const claims = new Map<string, ConnectionClaim>();
+  key: { externalId: string; slug: string },
+): ConnectionClaim | null {
+  let claim: ConnectionClaim | null = null;
   for (const event of events) {
     const payload = event.payload as {
       connection?: unknown;
@@ -93,25 +83,24 @@ export function foldConnectionDirectory(
       slug?: unknown;
     };
     if (
-      typeof payload?.slug !== "string" ||
-      typeof payload?.externalId !== "string" ||
-      typeof payload?.projectId !== "string"
+      payload?.slug !== key.slug ||
+      payload.externalId !== key.externalId ||
+      typeof payload.projectId !== "string"
     ) {
       continue;
     }
-    const key = directoryKey(payload.slug, payload.externalId);
     if (event.type === CONNECTION_CLAIMED_EVENT_TYPE) {
       if (typeof payload.connection !== "string") continue;
-      claims.set(key, { connection: payload.connection, projectId: payload.projectId });
+      claim = { connection: payload.connection, projectId: payload.projectId };
     } else if (
       event.type === CONNECTION_UNCLAIMED_EVENT_TYPE &&
-      claims.get(key)?.projectId === payload.projectId &&
-      claims.get(key)?.connection === payload.connection
+      claim?.projectId === payload.projectId &&
+      claim.connection === payload.connection
     ) {
-      claims.delete(key);
+      claim = null;
     }
   }
-  return claims;
+  return claim;
 }
 
 /** Resolve which project+connection a validly-signed webhook belongs to, by
@@ -120,8 +109,8 @@ export async function lookupConnectionClaim(
   slug: string,
   externalId: string,
 ): Promise<ConnectionClaim | null> {
-  const events = await readAllStreamEvents(null, INTEGRATION_DIRECTORY_STREAM_PATH);
-  return foldConnectionDirectory(events).get(directoryKey(slug, externalId)) ?? null;
+  const events = await readAllStreamEvents(null, integrationDirectoryStreamPath(slug, externalId));
+  return foldConnectionClaim(events, { externalId, slug });
 }
 
 /** The outcome of routing one inbound webhook: delivered to a connection, or
@@ -186,7 +175,15 @@ export async function appendConnectionDirectoryEvents(
     slug: string;
   }[],
 ): Promise<void> {
-  await integrationStreamStub(null, INTEGRATION_DIRECTORY_STREAM_PATH).appendAck(
+  const first = inputs[0];
+  if (first === undefined) return;
+  if (inputs.some((input) => input.slug !== first.slug || input.externalId !== first.externalId)) {
+    throw new Error("One directory append cannot span integration external ids.");
+  }
+  await integrationStreamStub(
+    null,
+    integrationDirectoryStreamPath(first.slug, first.externalId),
+  ).appendAck(
     ...inputs.map((input) => ({
       type: input.claimed ? CONNECTION_CLAIMED_EVENT_TYPE : CONNECTION_UNCLAIMED_EVENT_TYPE,
       payload: {

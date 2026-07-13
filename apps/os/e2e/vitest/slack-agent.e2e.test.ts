@@ -15,7 +15,7 @@ import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 import { DurableObjectNameCodec } from "../../src/domains/durable-object-names.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
-  INTEGRATION_DIRECTORY_STREAM_PATH,
+  integrationDirectoryStreamPath,
 } from "../../src/domains/integrations/utils.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../src/domains/streams/utils.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -134,7 +134,7 @@ test.skipIf(signingSecret === null)(
         },
       },
     );
-    using directory = root.streams.get(INTEGRATION_DIRECTORY_STREAM_PATH);
+    using directory = root.streams.get(integrationDirectoryStreamPath("slack", teamId));
     await directory.append({
       type: CONNECTION_CLAIMED_EVENT_TYPE,
       payload: { connection: CONNECTION, externalId: teamId, projectId, slug: "slack" },

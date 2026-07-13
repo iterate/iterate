@@ -5,17 +5,23 @@
 import { computeHmacHex } from "../secrets/utils.ts";
 import type { BuiltinIntegrationSlug } from "./types.ts";
 
-/**
- * Deployment-wide (projectId: null) stream mapping `(slug, externalId)` — a
- * provider-side account id like a Slack team id or a GitHub installation id —
- * to the project + named connection that claimed it. The generic webhook door
- * folds this to route a validly-signed event; connect/disconnect append the
- * claim/unclaim (D4). Provider-agnostic: one directory for every integration.
- */
-export const INTEGRATION_DIRECTORY_STREAM_PATH = "/integrations/_directory";
+const INTEGRATION_DIRECTORY_BUCKET_MASK = 63;
+
+/** Deployment-wide (projectId: null) claim-directory bucket. Sixty-four
+ * buckets bound lookup work and distribute webhook concurrency without paying
+ * for a separate SQLite Durable Object for every external account. */
+export function integrationDirectoryStreamPath(slug: string, externalId: string): string {
+  let hash = 0x811c9dc5;
+  const key = `${slug}\0${externalId}`;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = Math.imul(hash ^ key.charCodeAt(index), 0x01000193);
+  }
+  const bucket = (hash & INTEGRATION_DIRECTORY_BUCKET_MASK).toString(16).padStart(2, "0");
+  return `/integrations/_directory/${bucket}`;
+}
 
 /** Directory claim/unclaim facts, payload `{ slug, externalId, projectId,
- * connection }` — see `foldConnectionDirectory`. */
+ * connection }` — see `foldConnectionClaim`. */
 export const CONNECTION_CLAIMED_EVENT_TYPE = "events.iterate.com/integration/connection-claimed";
 export const CONNECTION_UNCLAIMED_EVENT_TYPE =
   "events.iterate.com/integration/connection-unclaimed";
@@ -295,7 +301,7 @@ export function slackConnectionFromAgentPath(agentPath: string): string | null {
 /**
  * The `{ slug, connection }` coordinates of an integration connection stream
  * path (`/integrations/{slug}/{connection}`), or null for any other path —
- * notably the connection directory stream and the project root.
+ * notably the connection directory buckets and the project root.
  */
 export function integrationCoordinatesFromStreamPath(
   path: string,

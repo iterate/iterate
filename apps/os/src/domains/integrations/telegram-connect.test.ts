@@ -12,10 +12,10 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   CONNECTION_UNCLAIMED_EVENT_TYPE,
-  INTEGRATION_DIRECTORY_STREAM_PATH,
   TELEGRAM_CONNECTED_EVENT_TYPE,
   TELEGRAM_DISCONNECTED_EVENT_TYPE,
   integrationConnectionStreamPath,
+  integrationDirectoryStreamPath,
   telegramBotTokenSecretPath,
   telegramWebhookSecretToken,
 } from "./utils.ts";
@@ -131,6 +131,7 @@ const { connectTelegram, disconnectProvider, getConnectionStatus } =
 const PROJECT_ID = "prj_test";
 const BOT_ID = "7000001";
 const BOT_TOKEN = `${BOT_ID}:AAHtestTOKENtestTOKENtestTOKEN`;
+const DIRECTORY_STREAM_PATH = integrationDirectoryStreamPath("telegram", BOT_ID);
 
 describe("connectTelegram", () => {
   afterEach(() => {
@@ -222,7 +223,7 @@ describe("connectTelegram", () => {
     });
     const claims = network.streams.get(
       DurableObjectNameCodec.stringify(
-        { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+        { projectId: null, path: DIRECTORY_STREAM_PATH },
         { allowNullProjectId: true },
       ),
     );
@@ -273,7 +274,7 @@ describe("connectTelegram", () => {
     expect(network.secrets.size).toBe(0);
     const claims = network.streams.get(
       DurableObjectNameCodec.stringify(
-        { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+        { projectId: null, path: DIRECTORY_STREAM_PATH },
         { allowNullProjectId: true },
       ),
     );
@@ -335,7 +336,7 @@ describe("connectTelegram", () => {
     // The directory fold now answers the CALLER's claim.
     const directory = network.streams.get(
       DurableObjectNameCodec.stringify(
-        { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+        { projectId: null, path: DIRECTORY_STREAM_PATH },
         { allowNullProjectId: true },
       ),
     );
@@ -348,7 +349,7 @@ describe("connectTelegram", () => {
     // a stolen bot has live traffic throughout, and any window between the
     // two would ACK-and-drop updates that Telegram never retries.
     const directoryName = DurableObjectNameCodec.stringify(
-      { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+      { projectId: null, path: DIRECTORY_STREAM_PATH },
       { allowNullProjectId: true },
     );
     const swapBatch = network.appendBatches.find(
@@ -549,7 +550,7 @@ describe("getConnectionStatus (telegram) + disconnect", () => {
 
     const claims = network.streams.get(
       DurableObjectNameCodec.stringify(
-        { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+        { projectId: null, path: DIRECTORY_STREAM_PATH },
         { allowNullProjectId: true },
       ),
     );
@@ -589,12 +590,12 @@ function config(apiBaseUrl: string) {
   });
 }
 
-/** The deployment-wide directory stream's events, as stored by the fake. */
+/** This bot's deployment-wide directory-bucket events, as stored by the fake. */
 function directoryEvents() {
   return (
     network.streams.get(
       DurableObjectNameCodec.stringify(
-        { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+        { projectId: null, path: DIRECTORY_STREAM_PATH },
         { allowNullProjectId: true },
       ),
     ) ?? []
@@ -604,7 +605,7 @@ function directoryEvents() {
 async function seedDirectoryClaim(input: { connection: string; projectId: string }) {
   await network.STREAM.getByName(
     DurableObjectNameCodec.stringify(
-      { projectId: null, path: INTEGRATION_DIRECTORY_STREAM_PATH },
+      { projectId: null, path: DIRECTORY_STREAM_PATH },
       { allowNullProjectId: true },
     ),
   ).append({

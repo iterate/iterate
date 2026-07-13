@@ -16,7 +16,7 @@
 //                     the Secret DO's own trusted code.
 //   - Facts:          `/integrations/<slug>/<connection>` project stream
 //                     (connected/disconnected + inbound webhook events).
-//   - Routing:        the deployment-wide `(slug, externalId)` directory
+//   - Routing:        the bucketed deployment-wide `(slug, externalId)` directory
 //                     (integration-streams.ts) — claimed at connect, folded by
 //                     the webhook door to route inbound events.
 //
@@ -300,7 +300,7 @@ async function recordConnection(input: {
     processor: (string | [string, ...unknown[]])[];
     processorSlug: string;
   };
-  /** Claim this connection's external id in the deployment-wide directory
+  /** Claim this connection's external id in the deployment-wide directory bucket
    * (providers with first-party webhook ingress). The generic door folds it to
    * route inbound events (D4). `unclaimFirst` names a claim being MOVED from
    * (telegram's steal): its unclaim commits in the SAME directory append as
