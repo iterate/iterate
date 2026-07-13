@@ -625,19 +625,15 @@ function TaskEditorSheet({
       editor.focus();
       editor.setSelectionRange(editor.value.length, editor.value.length);
     };
-    const frame = requestAnimationFrame(focusEditor);
     const timeout = window.setTimeout(focusEditor, 250);
-    return () => {
-      cancelAnimationFrame(frame);
-      window.clearTimeout(timeout);
-    };
+    return () => window.clearTimeout(timeout);
   }, [taskPath]);
 
   return (
     <Sheet open={task !== undefined} onOpenChange={onOpenChange}>
       {task === undefined ? null : (
         <SheetContent
-          initialFocus={editorRef}
+          initialFocus={false}
           className="w-full gap-0 p-0 data-[side=right]:sm:w-[60vw] data-[side=right]:sm:max-w-[60vw]"
         >
           <SheetHeader className="shrink-0 border-b pr-14">
