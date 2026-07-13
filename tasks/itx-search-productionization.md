@@ -62,26 +62,36 @@ Note the reranker's 512-token input truncates our 1024-token chunks; if
 reranking proves valuable, revisit chunk_size 512 / overlap 15% (full
 re-index).
 
-## 6. ~~prd rollout checklist~~ DONE 2026-07-13
+## 6. prd rollout — done EXCEPT one dashboard click (2026-07-13)
 
-Rolled out with the #1782 merge (416f9804b). Findings that made it smaller
-than planned:
+Rolled out with the #1782 merge (416f9804b). Findings:
 
-- NO dashboard service token needed: on an account with zero registered AI
-  Search service tokens, `SEARCH_INSTANCES.create()` works — the platform
-  wires the gateway itself (`token_id: null` on the instance). The preview
-  account's `fail_while_checking_for_gateway` was a POISONED stale token, not
-  a missing-registration requirement. Corollary unchanged: never edit a
-  registered AI Search service token.
+- The dashboard-minted AI Search service token IS required — but its absence
+  fails SILENTLY: `SEARCH_INSTANCES.create()` succeeds (`token_id: null` on
+  the instance) and every sync job "completes" in ~12s having read 0 files
+  (`/stats`: vectorsCount 0, objectCount 0). Diagnose with the instance
+  stats endpoint, not job status. Registering the deploy token via
+  `POST /ai-search/tokens {name, cf_api_id, cf_api_key}` is REJECTED
+  (`ai_search_instance_invalid_token` — the gateway wants the dashboard
+  service-token permission set exactly). ONE Jonas click on the prd account
+  (dash → AI → AI Search → create service token) unblocks retrieval; the R2
+  corpus is already fully written and the existing instance may need a
+  delete + lazy re-create to stamp the new `token_id`.
+- Never EDIT a registered AI Search service token (perms clobber →
+  `fail_while_checking_for_gateway` account-wide).
 - The `os-prd` namespace already existed; the prd deploy token already had AI
   Search write (create returned 409, not 403).
 - The legacy `wrangler ai-search create` recipe is obsolete — instances are
   per-project and lazy-created by the worker with hybrid+trigram+metadata
   schema from birth.
 - Backfill of the iterate prd project (245 streams incl. the 15k-webhook
-  GitHub install stream, 6 repos, files) executed deliberately on 2026-07-13.
-  Other prd projects fill passively (per-event lane) + lazily on first query;
-  backfill them only on demand.
+  GitHub install stream → 217 segment docs, 5/6 repos — `/repos/iterate` is
+  broken at the repo layer, predates search — and 5 files) executed
+  2026-07-13 via the hand-rolled loop that became `itx.search.reindex()`.
+  Other prd projects fill passively + lazily on first query.
+- Instances are never deleted with their project (leakage) — add instance
+  deletion to project erase, and consider disabling the default similarity
+  cache (`close_enough`, 48h TTL) at create time (see item 4).
 
 ## 7. e2e lane
 
