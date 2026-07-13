@@ -67,7 +67,7 @@ advertises `https://mcp.iterate.com` as the canonical OAuth resource URL, and
 ingress rewrites that hostname to the same route. The app-host
 `https://os.iterate.com/api/mcp` route is also valid. Fully-local dev defaults
 to `<baseUrl>/api/mcp`. `/projects/:slug/mcp` is the dashboard UI, not the
-transport URL. Admin-token sessions expose all projects and the `exec_js` tool
+transport URL. Admin-token sessions expose all projects and the `exec_typescript` tool
 requires a project slug when it runs.
 
 ```text
@@ -81,7 +81,7 @@ cd apps/os
 doppler run --config prd -- pnpm cli claude-mcp
 ```
 
-By default the MCP server exposes only `exec_js`. If you deliberately want the
+By default the MCP server exposes only `exec_typescript`. If you deliberately want the
 plain-language project-agent bridge too, opt in with the URL parameter via the
 CLI flag:
 

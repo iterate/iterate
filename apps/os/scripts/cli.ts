@@ -20,7 +20,7 @@ type ClaudeMcpOptions = {
   baseHost?: string;
   /** Initial prompt passed to Claude before entering interactive mode. */
   prompt?: string;
-  /** Include the ask_assistant tool in addition to exec_js. */
+  /** Include the ask_assistant tool in addition to exec_typescript. */
   withAgent?: boolean;
 };
 

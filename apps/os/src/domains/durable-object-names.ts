@@ -81,7 +81,7 @@ export function normalizePath(path: string): string {
  *
  * Capability scopes form a hierarchy along the path (`/agents/slack/ts-124`
  * is enclosed by `/agents/slack`, then `/agents`, then `/`). Capability
- * resolution chains up this hierarchy, so each ITX Durable Object needs to know
+ * resolution chains up this hierarchy, so each itx Durable Object needs to know
  * only its immediate parent; the recursion up to `/` (which has no parent, and
  * therefore terminates the chain) emerges from each scope forwarding one hop.
  */

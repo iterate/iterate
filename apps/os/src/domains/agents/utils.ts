@@ -1,9 +1,9 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
 
 /**
- * Agent RPC and agent-scoped ITX both use stream paths as durable identity.
+ * Agent RPC and agent-scoped itx both use stream paths as durable identity.
  * This guard keeps the `/agents/...` contract at the edge where callers choose
- * a path, before a stream, ITX Durable Object, or worker scope is minted for it.
+ * a path, before a stream, itx Durable Object, or worker scope is minted for it.
  */
 export function normalizeAgentPath(path: string): string {
   const normalized = normalizePath(path);

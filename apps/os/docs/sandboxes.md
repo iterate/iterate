@@ -15,7 +15,7 @@ stable path, and has an imperative lifecycle. Nothing on the platform mints a
 sandbox implicitly — agents don't get one at birth, and `get()` refuses paths
 that were never created.
 
-```js
+```ts
 // Create once (strict: an existing or destroyed name is an error) …
 const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" });
 

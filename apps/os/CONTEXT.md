@@ -119,7 +119,7 @@ The OS app's normal TanStack Start MCP route at `/api/mcp`. The canonical OAuth
 resource URL comes from `APP_CONFIG_MCP__BASE_URL` and may route through a
 dedicated MCP hostname, but the app-host `/api/mcp` route is also valid. OAuth
 access tokens expose projects granted by token claims and scopes; admin-token
-sessions expose all projects. Project-scoped tools such as `exec_js` select the
+sessions expose all projects. Project-scoped tools such as `exec_typescript` select the
 Project per invocation.
 _Avoid_: Project MCP hostname, ingress MCP alias
 
@@ -519,7 +519,7 @@ A capability that exposes one OpenAPI specification as itx capability paths.
 _Avoid_: OpenAPI metadata provider, describe callable, OpenAPI registry
 
 **Script**:
-User-authored TypeScript or JavaScript code that can be run by itx.
+User-authored TypeScript code that can be run by itx.
 _Avoid_: Function, tool, provider, execution
 
 **Script Execution**:
@@ -673,8 +673,8 @@ _Avoid_: Project MCP route, inbound MCP
 - Projects are not born with MCP hostname aliases; MCP access is centralized at
   the canonical OS MCP endpoint.
 - Slug changes should update slug-derived ingress routes at the same time; alias lifecycle is future work.
-- Project MCP server `exec_js` starts a **Script Execution** and therefore requires a **Script**.
-- Browser REPL execution and Project MCP server `exec_js` share the same itx
+- Project MCP server `exec_typescript` starts a **Script Execution** and therefore requires a **Script**.
+- Browser REPL execution and Project MCP server `exec_typescript` share the same itx
   script runner shape.
 - A **Project Route** resolves its **Project Slug** to the stable **Project ID**
   before opening a **Project-Scoped itx Handle**.
@@ -788,7 +788,7 @@ context while the provider remains connected.
 > **Dev:** "Should `docs.search` from an MCP server become `itx.docs.search(...)`?"
 > **Domain expert:** "No. External tool names and OpenAPI operation IDs are exact path segments, so use bracket syntax such as `itx.mcp.cloudflareDocs["docs.search"](...)` when needed."
 
-> **Dev:** "What script shape should MCP `exec_js` send?"
+> **Dev:** "What script shape should MCP `exec_typescript` send?"
 > **Domain expert:** "Use one async arrow function: `async (itx) => { ... }`. The `/api/itx/run` endpoint accepts `{ itx, vars }` at its API boundary and wraps it into that runner shape."
 
 > **Dev:** "Is an outbound MCP capability the same thing as OS's MCP server connection?"

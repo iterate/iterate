@@ -6,7 +6,7 @@
 // import-free module describing everything reachable from the /api entrypoint.
 
 /**
- * The public ITX capability surface.
+ * The public itx capability surface.
  *
  * `/api` — os' one API — gives callers one unauthenticated object.
  * Authentication returns a root catalog, and every object reachable from that
@@ -24,7 +24,7 @@
  * - a PROJECT is the tenant / isolation boundary — a `prj_…` id, its Durable
  *   Objects, its streams. You never hold a "project object"; you hold an itx
  *   scoped into a project.
- * - an ITX is a capability context scoped into one project at one path. It is
+ * - an itx is a capability context scoped into one project at one path. It is
  *   the `itx` in every `async (itx) => { … }` script and what `env.ITX.get()`
  *   returns; `session.projects.get(id)` gives you the itx at the project root,
  *   and an itx at "/agents/…" is what "an agent context" means.
@@ -262,7 +262,7 @@ export interface LiveDemo {
   increment(): Promise<void>;
 }
 
-/** Workers AI binding exposed through ITX as a project/agent capability. */
+/** Workers AI binding exposed through itx as a project/agent capability. */
 export interface Ai {
   __describe(): Promise<Description>;
   /** List the Workers AI model catalog. */
@@ -280,7 +280,7 @@ export interface Ai {
   >;
 }
 
-/** Cloudflare Browser Run binding exposed through ITX. */
+/** Cloudflare Browser Run binding exposed through itx. */
 export interface CfBrowserCapability {
   __describe(): Promise<Description>;
   /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */
@@ -662,7 +662,7 @@ export interface Files {
  * there is NO generic `.api.request({ method, path })` shape, and the
  * connection acts as a GitHub App INSTALLATION, so user-scoped
  * `...ForAuthenticatedUser` endpoints answer 403 — and every other slug
- * resolves through the ITX capability table under the `integrations` prefix.
+ * resolves through the itx capability table under the `integrations` prefix.
  * The exception is `itx.integrations.parallel`: a first-party API-key RPC
  * target, not a connection and not returned by `list()`. There is no implicit
  * connection: a built-in call without a connection name is an error.
@@ -1352,7 +1352,7 @@ export interface StreamEventPager {
   [Symbol.dispose](): void;
 }
 
-/** Cloudflare Images binding exposed through ITX as one-call helpers. */
+/** Cloudflare Images binding exposed through itx as one-call helpers. */
 export interface CfImagesCapability {
   __describe(): Promise<Description>;
   /** Inspect an image stream for format/dimensions/file size. */
@@ -1361,7 +1361,7 @@ export interface CfImagesCapability {
   transform(input: CfImageTransformInput): Promise<Response>;
 }
 
-/** Cloudflare Media Transformations binding exposed through ITX as one-call helpers. */
+/** Cloudflare Media Transformations binding exposed through itx as one-call helpers. */
 export interface CfVideosCapability {
   __describe(): Promise<Description>;
   /** Transform a video stream and return a Response (video, frame, spritesheet, or audio). */
@@ -2997,7 +2997,7 @@ export type SecretRefresh =
  * built from. */
 export type DynamicWorkerRefBase = {
   /**
-   * ITX scope path for the worker's `env.ITX` binding and for stateful worker
+   * itx scope path for the worker's `env.ITX` binding and for stateful worker
    * Durable Object names. This is intentionally not the mounted capability path:
    * one worker can be mounted at `db`, `counter`, etc. while all events still
    * belong to the host stream path.
