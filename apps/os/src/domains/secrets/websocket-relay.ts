@@ -47,7 +47,7 @@ export type SecretWebSocketRelayInput = {
 };
 
 /** Header set only by encodeSecretWebSocketRelayRequest (not by sandbox egress). */
-export const SECRET_WS_RELAY_FETCH_HEADER = "x-iterate-secret-ws-relay";
+const SECRET_WS_RELAY_FETCH_HEADER = "x-iterate-secret-ws-relay";
 
 /** Build the DO-fetch request that carries `relayWebSocket` input over the fetch hop. */
 export function encodeSecretWebSocketRelayRequest(input: SecretWebSocketRelayInput): Request {
