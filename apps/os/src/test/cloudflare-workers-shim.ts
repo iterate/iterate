@@ -18,9 +18,11 @@ export type RecordedSpan = {
 };
 
 export const recordedSpans: RecordedSpan[] = [];
+export const activeSpans = new Set<RecordedSpan>();
 
 export function resetRecordedSpans() {
   recordedSpans.length = 0;
+  activeSpans.clear();
 }
 
 export const tracing = {
@@ -30,10 +32,21 @@ export const tracing = {
   ): T => {
     const record: RecordedSpan = { attributes: {}, name };
     recordedSpans.push(record);
-    return callback({
-      setAttribute: (attribute, value) => {
-        record.attributes[attribute] = value;
-      },
-    });
+    activeSpans.add(record);
+    try {
+      const result = callback({
+        setAttribute: (attribute, value) => {
+          record.attributes[attribute] = value;
+        },
+      });
+      if (result instanceof Promise) {
+        return result.finally(() => activeSpans.delete(record)) as T;
+      }
+      activeSpans.delete(record);
+      return result;
+    } catch (error) {
+      activeSpans.delete(record);
+      throw error;
+    }
   },
 };

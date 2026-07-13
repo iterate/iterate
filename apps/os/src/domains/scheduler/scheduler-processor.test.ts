@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
+import {
+  activeSpans,
+  recordedSpans,
+  resetRecordedSpans,
+} from "../../test/cloudflare-workers-shim.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { StreamProcessorSnapshot } from "../streams/stream-processor.ts";
 import { emptyStreamRuntimeState } from "../streams/test-helpers.ts";
@@ -281,6 +286,40 @@ describe("SchedulerProcessor reduce", () => {
 });
 
 describe("triggering", () => {
+  it("traces the complete background Schedule Action without blocking delivery", async () => {
+    resetRecordedSpans();
+    let finishAction!: () => void;
+    const actionFinished = new Promise<void>((resolve) => {
+      finishAction = resolve;
+    });
+    const harness = makeHarness({
+      invokeCapability: async () => {
+        expect([...activeSpans].map((span) => span.name)).toContain("scheduler action attempt");
+        await actionFinished;
+      },
+    });
+    const { clock, deliver, processor, stream } = harness;
+    await stream.append(setEvent("report"));
+    await deliver();
+
+    clock.now = T0 + 61_000;
+    await processor.triggerDue();
+    await deliver();
+
+    const attempt = recordedSpans.find((span) => span.name === "scheduler action attempt");
+    expect(attempt).toMatchObject({
+      attributes: { "iterate.scheduler.execution_id": expect.any(String) },
+    });
+    expect(activeSpans.has(attempt!)).toBe(true);
+    await expect(processor.getRuntimeState()).resolves.toMatchObject({
+      runtime: { inflightExecutions: [expect.any(String)] },
+    });
+
+    finishAction();
+    await waitForCompletion(harness);
+    expect(activeSpans.has(attempt!)).toBe(false);
+  });
+
   it("requests due schedules with incarnation-scoped idempotency keys and advances the clock", async () => {
     const harness = makeHarness();
     const { clock, deliver, processor, stream } = harness;
@@ -674,6 +713,7 @@ describe("recovery and alarm derivation", () => {
   });
 
   it("an in-flight execution is never double-launched by concurrent sweeps or redelivery", async () => {
+    resetRecordedSpans();
     let invocations = 0;
     const harness = makeHarness({
       invokeCapability: () => {
@@ -695,6 +735,9 @@ describe("recovery and alarm derivation", () => {
     await processor.triggerDue();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(invocations).toBe(1);
+    const attempts = recordedSpans.filter((span) => span.name === "scheduler action attempt");
+    expect(attempts).toHaveLength(1);
+    expect(activeSpans.has(attempts[0]!)).toBe(true);
   });
 
   it("barren wakes back off exponentially instead of hot-looping at the minimum delay", async () => {
