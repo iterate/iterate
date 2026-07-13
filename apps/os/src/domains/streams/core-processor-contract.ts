@@ -736,9 +736,11 @@ export type CoreProcessorCheckpoint = {
   state: CoreProcessorState;
 };
 
-const CoreProcessorCheckpointState = CoreProcessorContract.stateSchema.strict();
-
-/** Parses present storage strictly; only an absent checkpoint may rebuild from the journal. */
+/**
+ * Verifies the exact internal checkpoint envelope without re-parsing and
+ * copying its growing state. The version is the state-shape discriminator;
+ * same-version state comes from the stream's checkpoint writer, not public input.
+ */
 export function parseCoreProcessorCheckpoint(input: unknown): CoreProcessorCheckpoint {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     throw new TypeError("Invalid core processor checkpoint envelope");
@@ -752,8 +754,12 @@ export function parseCoreProcessorCheckpoint(input: unknown): CoreProcessorCheck
       `Unsupported core processor checkpoint version: ${String(envelope.version)}`,
     );
   }
-  return {
-    version: CORE_STATE_VERSION,
-    state: CoreProcessorCheckpointState.parse(envelope.state),
-  };
+  if (
+    typeof envelope.state !== "object" ||
+    envelope.state === null ||
+    Array.isArray(envelope.state)
+  ) {
+    throw new TypeError("Invalid core processor checkpoint state");
+  }
+  return { version: CORE_STATE_VERSION, state: envelope.state as CoreProcessorState };
 }
