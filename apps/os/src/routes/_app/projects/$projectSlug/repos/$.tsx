@@ -65,7 +65,12 @@ function ProjectRepoDetailContent() {
         Loading repo…
       </div>
     ) : state.initialized ? (
-      <RepoIde key={`${project.id}:${repoPath}`} projectId={project.id} repoPath={repoPath} />
+      <RepoIde
+        key={`${project.id}:${repoPath}`}
+        projectId={project.id}
+        projectSlug={project.slug}
+        repoPath={repoPath}
+      />
     ) : (
       // data-spinner: this panel is live bootstrap progress (the processor
       // pushes each step in), and right after repos.create it can also show a

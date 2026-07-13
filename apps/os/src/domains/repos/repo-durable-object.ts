@@ -49,6 +49,7 @@ import {
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
+import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
 
@@ -57,6 +58,12 @@ const REPO_DEFAULT_BRANCH = "main";
 const CACHE_UNAVAILABLE = Symbol("cache-unavailable");
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const REPO_DIR = "/repo";
+const TASK_FILE_INCLUDE_PATTERNS = [
+  "tasks/**/*.md",
+  "tasks/**/*.markdown",
+  "**/tasks/**/*.md",
+  "**/tasks/**/*.markdown",
+];
 
 // The durable GitHub link record: the mirror-push hot path (every commit)
 // reads it from KV instead of re-folding the stream. The link lifecycle events
@@ -87,6 +94,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       new RepoProcessor({
         ...deps,
         createRepoArtifact: (input) => this.createArtifactRepo(input),
+        taskChangesForArtifactPush: (input) => this.#taskChangesForArtifactPush(input),
       }),
   );
 
@@ -378,6 +386,32 @@ export class RepoDurableObject extends DurableObject<Env> {
       occurrenceCount: result.occurrenceCount,
       path: result.path,
     };
+  }
+
+  async #taskFilesSnapshot(branch: string, commitOid: string): Promise<Record<string, string>> {
+    return (
+      await this.getFilesSnapshot({
+        branch,
+        commitOid,
+        include: TASK_FILE_INCLUDE_PATTERNS,
+      })
+    ).files;
+  }
+
+  async #taskChangesForArtifactPush(input: {
+    afterCommitOid: string | null;
+    beforeCommitOid: string | null;
+    branch: string;
+  }): Promise<RepoCommittedFileChange[]> {
+    const previous =
+      input.beforeCommitOid === null
+        ? {}
+        : await this.#taskFilesSnapshot(input.branch, input.beforeCommitOid);
+    const current =
+      input.afterCommitOid === null
+        ? {}
+        : await this.#taskFilesSnapshot(input.branch, input.afterCommitOid);
+    return diffRepoTaskFiles(previous, current);
   }
 
   /**
@@ -746,7 +780,6 @@ export class RepoDurableObject extends DurableObject<Env> {
         );
       }
     }
-
     // ONE transfer lane: clone GitHub in this isolate and force-push to the
     // Artifacts remote. Deliberately NOT the server-side Artifacts import —
     // import cannot overwrite an existing name, and the delete-then-reimport

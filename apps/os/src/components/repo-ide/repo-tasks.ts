@@ -1,10 +1,11 @@
 import type { Document } from "yaml";
+import { isRepoTaskMarkdownPath } from "../../domains/repos/repo-task-events.ts";
 import { markdownFrontmatterRecord, parseMarkdownFrontmatter } from "./markdown-frontmatter.ts";
 
 const DEFAULT_TASK_STATE = "todo";
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
 
-const STANDARD_TASK_STATES = ["backlog", DEFAULT_TASK_STATE, "in-progress", "done"] as const;
+const STANDARD_TASK_STATES = [DEFAULT_TASK_STATE, "in-progress", "in-review", "done"] as const;
 
 export type RepoTask = {
   path: string;
@@ -53,8 +54,7 @@ export type RepoTaskBoardProjection = {
 
 /** Markdown files below any directory segment named `tasks` are repo tasks. */
 export function isRepoTaskPath(path: string): boolean {
-  const segments = pathSegments(path);
-  return /\.(?:md|markdown)$/i.test(segments.at(-1) ?? "") && segments.includes("tasks");
+  return isRepoTaskMarkdownPath(path);
 }
 
 /** The nearest `tasks` directory owns a task. */
@@ -71,7 +71,11 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
 
   const frontmatter = parseMarkdownFrontmatter(content);
   const metadata = markdownFrontmatterRecord(frontmatter.document);
-  const state = stringValue(metadata.state) ?? stringValue(metadata.status) ?? DEFAULT_TASK_STATE;
+  const rawState =
+    stringValue(metadata.state) ?? stringValue(metadata.status) ?? DEFAULT_TASK_STATE;
+  // Older boards used `backlog` as a separate intake state. Collapse those
+  // files into the simpler Todo → In Progress → In Review → Done flow.
+  const state = rawState === "backlog" ? DEFAULT_TASK_STATE : rawState;
   const labels = uniqueStrings([...stringArray(metadata.labels), ...stringArray(metadata.tags)]);
   const agent = stringValue(metadata.agent);
   const folderPath = `/${taskDirectoryPath.split("/").slice(0, -1).join("/")}`;
@@ -178,15 +182,14 @@ export function prepareRepoTaskAssignment(
 ): { agentPath: string; content: string; instructions: string } {
   const agentPath = repoTaskAgentPath(repoPath, task.path);
   const stateContent =
-    task.state === DEFAULT_TASK_STATE
-      ? updateRepoTaskState(task.content, "in-progress")
-      : task.content;
+    task.state === "in-progress" ? task.content : updateRepoTaskState(task.content, "in-progress");
   const content = updateRepoTaskAgent(stateContent, agentPath);
   return {
     agentPath,
     content,
     instructions: [
       `Work on the repo task at ${task.path} in ${repoPath}.`,
+      "First, verify that the task frontmatter state is `in-progress`; set and commit it before doing any other work if it is not.",
       "Read the task Markdown before starting and treat it as the durable source of truth.",
       "Keep that task file current as you work. Commit implementation changes and task updates to the same repo.",
       "Keep a lightweight work log in a final `## Comments` section. Add entries as `### <ISO timestamp> — <agent path>` followed by a short Markdown note; keep this section at the end of the file.",

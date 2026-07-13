@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DragDropProvider, useDraggable, useDroppable } from "@dnd-kit/react";
+import { Link } from "@tanstack/react-router";
 import {
   CircleCheckIcon,
   CircleDashedIcon,
@@ -79,6 +80,7 @@ import {
   type WorkingTreeChanges,
 } from "./staged-changes.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
 type SearchPatch = {
   file?: string;
@@ -90,6 +92,7 @@ type SearchPatch = {
 
 export function RepoTasksView({
   projectId,
+  projectSlug,
   repoPath,
   headCommitOid,
   headPaths,
@@ -101,6 +104,7 @@ export function RepoTasksView({
   onAssignAgent,
 }: {
   projectId: string;
+  projectSlug: string;
   repoPath: string;
   headCommitOid: string;
   headPaths: readonly string[];
@@ -109,7 +113,7 @@ export function RepoTasksView({
   onPatchSearch: (patch: SearchPatch) => void;
   onSetWorking: (path: string, entry: FileEntry | undefined) => void;
   onDelete: (path: string) => void;
-  onAssignAgent: (task: RepoTask) => Promise<void>;
+  onAssignAgent: (task: RepoTask) => Promise<string | undefined>;
 }) {
   const [draft, setDraft] = useState<RepoTask | undefined>();
   const lastCreationContext = useRef<{
@@ -166,13 +170,28 @@ export function RepoTasksView({
   };
   const selectTask = (path: string | undefined) =>
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
+  const persistDraft = () => {
+    if (draft === undefined) return;
+    onSetWorking(draft.path, { type: "write", content: draft.content });
+    setDraft(undefined);
+  };
+  const openTask = (task: RepoTask) => {
+    // Starting another action should never silently replace a new task. Put
+    // the current draft into the ordinary working tree first; it remains
+    // uncommitted and can be edited, staged, or discarded like any file.
+    persistDraft();
+    selectTask(task.path);
+  };
   const createTask = (state: string, folderPath: string, labels?: readonly string[]) => {
     lastCreationContext.current = {
       state,
       folderPath,
       ...(labels === undefined ? {} : { labels }),
     };
-    const created = createRepoTask("New task", effectivePaths, taskDirectoryForFolder(folderPath));
+    const reservedPaths = new Set(effectivePaths);
+    if (draft !== undefined) reservedPaths.add(draft.path);
+    persistDraft();
+    const created = createRepoTask("New task", reservedPaths, taskDirectoryForFolder(folderPath));
     if (created === null) return;
     const initialContent = created.content;
     let content = state === "todo" ? initialContent : updateRepoTaskState(initialContent, state);
@@ -291,14 +310,10 @@ export function RepoTasksView({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <TaskBoard
-        tasks={tasks}
-        onOpen={(task) => selectTask(task.path)}
-        onMove={moveTaskOnBoard}
-        onCreate={createTask}
-      />
+      <TaskBoard tasks={tasks} onOpen={openTask} onMove={moveTaskOnBoard} onCreate={createTask} />
       <TaskEditorSheet
         task={editorTask}
+        projectSlug={projectSlug}
         isNew={draft !== undefined}
         columns={columns}
         onOpenChange={(open) => {
@@ -334,7 +349,8 @@ export function RepoTasksView({
         }}
         onSubmit={submitEditor}
         onAssignAgent={async () => {
-          if (selectedTask !== undefined) await onAssignAgent(selectedTask);
+          if (selectedTask !== undefined) return onAssignAgent(selectedTask);
+          return undefined;
         }}
       />
     </div>
@@ -559,7 +575,7 @@ function TaskColumn({
       ref={ref}
       data-task-cell={dropId}
       className={cn(
-        "flex min-h-36 min-w-[calc(100vw-3.5rem)] flex-1 basis-72 snap-start flex-col pb-4 transition-colors sm:min-w-72",
+        "group/task-column flex min-h-36 min-w-[calc(100vw-3.5rem)] flex-1 basis-72 snap-start flex-col pb-4 transition-colors sm:min-w-72",
         isDropTarget && "rounded-lg bg-accent/40",
       )}
     >
@@ -571,7 +587,7 @@ function TaskColumn({
           </div>
         </header>
       ) : null}
-      <div className="flex min-h-0 flex-col px-2">
+      <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
         <div className="flex flex-col gap-2">
           {tasks.map((task) => (
             <TaskCard
@@ -583,15 +599,17 @@ function TaskColumn({
             />
           ))}
         </div>
-        <Button
-          variant="ghost"
-          className="mt-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
-          title={`Add task to ${creationLabel}`}
-          aria-label={`Add task to ${creationLabel}`}
-          onClick={onCreate}
-        >
-          <PlusIcon data-icon="inline-start" />
-        </Button>
+        <div className="group/task-add mt-auto min-h-14 pt-4">
+          <Button
+            variant="ghost"
+            className="h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 opacity-0 transition-opacity group-hover/task-add:opacity-100 focus-visible:opacity-100 hover:bg-muted/70 hover:text-muted-foreground [@media(hover:none)]:opacity-100"
+            title={`Add task to ${creationLabel}`}
+            aria-label={`Add task to ${creationLabel}`}
+            onClick={onCreate}
+          >
+            <PlusIcon data-icon="inline-start" />
+          </Button>
+        </div>
       </div>
     </section>
   );
@@ -682,6 +700,7 @@ function TaskStateIcon({ state, className }: { state: string; className?: string
 
 function TaskEditorSheet({
   task,
+  projectSlug,
   isNew,
   columns,
   onOpenChange,
@@ -694,6 +713,7 @@ function TaskEditorSheet({
   onAssignAgent,
 }: {
   task: RepoTask | undefined;
+  projectSlug: string;
   isNew: boolean;
   columns: readonly string[];
   onOpenChange: (open: boolean) => void;
@@ -703,48 +723,38 @@ function TaskEditorSheet({
   onOpenInEditor: () => void;
   onDelete: () => void;
   onSubmit: () => void;
-  onAssignAgent: () => Promise<void>;
+  onAssignAgent: () => Promise<string | undefined>;
 }) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
-  const wasOpenRef = useRef(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [pathValue, setPathValue] = useState("");
   const [pathWasEdited, setPathWasEdited] = useState(false);
   const [assigning, setAssigning] = useState(false);
+  const [assignedAgent, setAssignedAgent] = useState<string | undefined>();
   const taskPath = task?.path;
+  const visibleAgent = task?.agent ?? assignedAgent;
 
   useEffect(() => {
     if (taskPath === undefined) {
-      wasOpenRef.current = false;
       setPathWasEdited(false);
       return;
     }
-    if (wasOpenRef.current) return;
-    wasOpenRef.current = true;
     setPathValue(`/${taskPath}`);
     setPathWasEdited(false);
     const focusEditor = () => {
       const editor = editorRef.current;
       if (editor === null) return;
       editor.focus();
-      if (isNew) {
-        const heading = /^#\s+(.+?)\s*#*\s*$/m.exec(editor.value);
-        const title = heading?.[1];
-        if (heading?.index !== undefined && title !== undefined) {
-          const start = heading.index + heading[0].indexOf(title);
-          editor.setSelectionRange(start, start + title.length);
-          return;
-        }
-      }
       editor.setSelectionRange(editor.value.length, editor.value.length);
     };
     const timeout = window.setTimeout(focusEditor, 250);
     return () => window.clearTimeout(timeout);
-  }, [isNew, taskPath]);
+  }, [taskPath]);
 
   useEffect(() => {
-    if (taskPath !== undefined && !pathWasEdited) setPathValue(`/${taskPath}`);
-  }, [pathWasEdited, taskPath]);
+    setAssignedAgent(undefined);
+    setAssigning(false);
+  }, [taskPath]);
 
   const submit = () => {
     if (task === undefined) return;
@@ -813,26 +823,31 @@ function TaskEditorSheet({
                 </Button>
               ) : (
                 <>
-                  {task.agent === undefined ? (
+                  {visibleAgent === undefined ? (
                     <Button
                       variant="secondary"
                       size="sm"
                       disabled={assigning}
-                      onClick={() => {
+                      onClick={async () => {
                         setAssigning(true);
-                        void onAssignAgent().finally(() => setAssigning(false));
+                        const agent = await onAssignAgent();
+                        if (agent !== undefined) setAssignedAgent(agent);
+                        setAssigning(false);
                       }}
                     >
                       <BotIcon data-icon="inline-start" />
                       {assigning ? "Assigning…" : "Assign agent"}
                     </Button>
                   ) : (
-                    <span
-                      className="hidden max-w-48 truncate font-mono text-xs text-muted-foreground sm:block"
-                      title={task.agent}
+                    <Link
+                      {...linkOptionsForStreamPath(projectSlug, visibleAgent)}
+                      className="flex min-w-0 max-w-48 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                      title={visibleAgent}
                     >
-                      {task.agent}
-                    </span>
+                      <BotIcon aria-hidden className="size-3.5 shrink-0" />
+                      <span className="sm:hidden">Agent</span>
+                      <span className="hidden truncate font-mono sm:block">{visibleAgent}</span>
+                    </Link>
                   )}
                   <Button
                     variant="ghost"

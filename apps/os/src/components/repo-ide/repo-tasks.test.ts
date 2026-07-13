@@ -67,6 +67,9 @@ test("reads canonical and legacy frontmatter without requiring it", () => {
   );
   expect(legacy?.state).toBe("in-review");
   expect(legacy?.labels).toEqual(["backend"]);
+
+  const oldDefault = parseRepoTask("tasks/old-default.md", "---\nstate: backlog\n---\n# Old\n");
+  expect(oldDefault?.state).toBe("todo");
 });
 
 test("uses an explicit title before the first heading", () => {
@@ -179,6 +182,7 @@ test("prepares a deterministic durable agent assignment", () => {
     agent: assignment.agentPath,
   });
   expect(assignment.instructions).toContain(task.path);
+  expect(assignment.instructions).toContain("First, verify");
   expect(assignment.instructions).toContain("## Comments");
   expect(assignment.instructions).toContain("in-review");
 });
@@ -207,7 +211,7 @@ test("reserves a task path that exists at HEAD while its deletion is pending", (
 
 test("keeps the core columns and appends states found in the repo", () => {
   const task = parseRepoTask("tasks/review.md", "---\nstate: in-review\n---\n# Review\n")!;
-  expect(taskStateColumns([task])).toEqual(["backlog", "todo", "in-progress", "done", "in-review"]);
+  expect(taskStateColumns([task])).toEqual(["todo", "in-progress", "in-review", "done"]);
 });
 
 test("queries a status board with folders as an independent row dimension", () => {
@@ -218,7 +222,7 @@ test("queries a status board with folders as an independent row dimension", () =
   ];
   const board = queryRepoTaskBoard(tasks, { filter: "", columns: "state", rows: "folder" });
 
-  expect(board.states).toEqual(["backlog", "todo", "in-progress", "done"]);
+  expect(board.states).toEqual(["todo", "in-progress", "in-review", "done"]);
   expect(board.visibleProperties).toEqual({ folder: false, state: false, labels: true });
   expect(board.rows.map((row) => row.label)).toEqual(["/", "/apps/os"]);
   expect(board.rows[1]?.cells.find((cell) => cell.state === "todo")?.tasks[0]?.title).toBe(

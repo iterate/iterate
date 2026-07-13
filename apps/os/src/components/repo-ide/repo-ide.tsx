@@ -45,7 +45,15 @@ import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
  * slots per path, localStorage-backed per HEAD oid) committed through
  * `itx.repos.get(path).commitFiles` as a single batch.
  */
-export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: string }) {
+export function RepoIde({
+  projectId,
+  projectSlug,
+  repoPath,
+}: {
+  projectId: string;
+  projectSlug: string;
+  repoPath: string;
+}) {
   const itx = useItx();
   const queryClient = useQueryClient();
   const files = useItxQuery({
@@ -238,6 +246,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
       // happens first so its first turn can always read the durable assignment.
       await itx.agents.get(assignment.agentPath).message(assignment.instructions);
       toast.success(`Assigned ${task.title} to ${assignment.agentPath}.`);
+      return assignment.agentPath;
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Unknown error";
       toast.error(
@@ -245,6 +254,9 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           ? `The assignment was committed, but the agent did not start: ${detail}`
           : `Could not assign the task: ${detail}`,
       );
+      // Once committed, the assignment is durable even if starting the agent
+      // failed. Surface its link immediately and prevent a second assignment.
+      return committed ? assignment.agentPath : undefined;
     }
   };
 
@@ -370,6 +382,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
         >
           <RepoTasksView
             projectId={projectId}
+            projectSlug={projectSlug}
             repoPath={repoPath}
             headCommitOid={files.commitOid}
             headPaths={headPaths}
