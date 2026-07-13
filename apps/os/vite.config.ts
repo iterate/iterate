@@ -159,8 +159,8 @@ function safeRollupChunkFileName(chunkInfo: { name: string }) {
 
   // Rollup lets chunkFileNames be a function:
   // https://rollupjs.org/configuration-options/#output-chunkfilenames
-  // OS imports sqlfu bundles from `.generated` directories. Without this
-  // sanitizer, Rollup can emit Worker module chunks like `assets/.generated-*`,
+  // Generated modules can retain leading-dot names. Without this sanitizer,
+  // Rollup can emit Worker module chunks like `assets/.generated-*`,
   // which Cloudflare rejects as missing modules during script upload.
   return `assets/${sanitizedName || "chunk"}-[hash].js`;
 }

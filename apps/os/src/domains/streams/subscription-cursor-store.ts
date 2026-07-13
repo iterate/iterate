@@ -9,7 +9,6 @@
 // Every method here is synchronous so cursor transitions stay in the Durable
 // Object's current transaction and output gate.
 
-import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import { initializeStreamStorage } from "./stream-storage.ts";
 
 const MAX_SQL_BINDINGS = 100;
@@ -20,6 +19,54 @@ const MAX_CURSOR_SET_ROWS = Math.floor(MAX_SQL_BINDINGS / CURSOR_SET_ROW_WIDTH);
 const MAX_UNPERSISTED_SKIP_OFFSETS = 64;
 const CURSOR_PROGRESS_STATEMENTS = createCursorProgressStatements(MAX_CURSOR_PROGRESS_ROWS);
 const CURSOR_SET_STATEMENTS = createCursorSetStatements(MAX_CURSOR_SET_ROWS);
+const SUBSCRIPTION_CURSOR_COLUMNS = `
+  subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch,
+  pending_through_offset, pending_stream_max_offset, pending_attempt, pending_recovery_at
+`;
+const LIST_SUBSCRIPTION_CURSORS = `
+  select ${SUBSCRIPTION_CURSOR_COLUMNS}
+  from subscriptions
+`;
+const ENSURE_SUBSCRIPTION_CURSOR = `
+  insert into subscriptions (subscription_key, acked_offset, epoch)
+  values (?, ?, ?)
+  on conflict (subscription_key) do nothing
+`;
+const ACK_SUBSCRIPTION_CURSOR = `
+  update subscriptions
+  set acked_offset = ?, attempt = 0, next_attempt_at = null, last_error = null,
+      pending_through_offset = null, pending_stream_max_offset = null,
+      pending_attempt = null, pending_recovery_at = null
+  where subscription_key = ?
+`;
+const ACK_FENCED_SUBSCRIPTION_CURSOR = `${ACK_SUBSCRIPTION_CURSOR.trimEnd()} and epoch = ?`;
+const CLAIM_PUSH_FRAME = `
+  update subscriptions
+  set acked_offset = ?,
+      pending_through_offset = ?,
+      pending_stream_max_offset = ?,
+      pending_attempt = ?,
+      pending_recovery_at = ?
+  where subscription_key = ? and epoch = ?
+`;
+const ADVANCE_SUBSCRIPTION_WATERMARK = `
+  update subscriptions
+  set acked_offset = max(acked_offset, ?), next_attempt_at = null
+  where subscription_key = ? and epoch = ?
+`;
+const NACK_SUBSCRIPTION_CURSOR = `
+  update subscriptions
+  set attempt = ?, next_attempt_at = ?, last_error = ?, pending_recovery_at = null
+  where subscription_key = ? and epoch = ?
+`;
+const SET_SUBSCRIPTION_CURSOR = `
+  update subscriptions
+  set acked_offset = ?, attempt = 0, next_attempt_at = null, last_error = null,
+      epoch = ?, pending_through_offset = null, pending_stream_max_offset = null,
+      pending_attempt = null, pending_recovery_at = null
+  where subscription_key = ?
+`;
+const DELETE_SUBSCRIPTION_CURSOR = "delete from subscriptions where subscription_key = ?";
 
 type PendingSubscriptionProgress = {
   ackedOffset: number;
@@ -143,145 +190,9 @@ export type SubscriptionCursorStore = {
 
 /** SQLite-backed {@link SubscriptionCursorStore}, sharing the stream's own database. */
 export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
-  static db = defineConfig({
-    // Current schema used by sqlfu's generated query types.
-    definitions: sql`
-      create table subscriptions (
-        subscription_key text primary key,
-        acked_offset integer not null,
-        attempt integer not null default 0,
-        next_attempt_at integer,
-        last_error text,
-        epoch integer not null default 0,
-        pending_through_offset integer,
-        pending_stream_max_offset integer,
-        pending_attempt integer,
-        pending_recovery_at integer,
-        check ((pending_through_offset is null) = (pending_stream_max_offset is null)),
-        check ((pending_through_offset is null) = (pending_attempt is null)),
-        check (pending_through_offset is null or pending_stream_max_offset >= pending_through_offset),
-        check (pending_attempt is null or pending_attempt >= 1),
-        check (pending_recovery_at is null or pending_attempt is not null)
-      );
-    `,
-    queries: {
-      get: sql.nullableOne<{
-        parameters: { subscriptionKey: string };
-        result: SubscriptionCursorRowRecord;
-      }>`
-        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch,
-               pending_through_offset, pending_stream_max_offset, pending_attempt,
-               pending_recovery_at
-        from subscriptions
-        where subscription_key = :subscriptionKey
-      `,
-      list: sql.many<{ result: SubscriptionCursorRowRecord }>`
-        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch,
-               pending_through_offset, pending_stream_max_offset, pending_attempt,
-               pending_recovery_at
-        from subscriptions
-      `,
-      ensure: sql.run<{
-        parameters: {
-          subscriptionKey: string;
-          ackedOffset: number;
-          epoch: number;
-        };
-      }>`
-        insert into subscriptions (subscription_key, acked_offset, epoch)
-        values (:subscriptionKey, :ackedOffset, :epoch)
-        on conflict (subscription_key) do nothing
-      `,
-      ack: sql.run<{
-        parameters: { subscriptionKey: string; ackedOffset: number };
-      }>`
-        update subscriptions
-        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null,
-            pending_through_offset = null, pending_stream_max_offset = null,
-            pending_attempt = null, pending_recovery_at = null
-        where subscription_key = :subscriptionKey
-      `,
-      ackFenced: sql.run<{
-        parameters: {
-          subscriptionKey: string;
-          ackedOffset: number;
-          epoch: number;
-        };
-      }>`
-        update subscriptions
-        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null,
-            pending_through_offset = null, pending_stream_max_offset = null,
-            pending_attempt = null, pending_recovery_at = null
-        where subscription_key = :subscriptionKey and epoch = :epoch
-      `,
-      claimPushFrame: sql.run<{
-        parameters: {
-          subscriptionKey: string;
-          ackedOffset: number;
-          throughOffset: number;
-          streamMaxOffset: number;
-          attempt: number;
-          recoveryAt: number;
-          epoch: number;
-        };
-      }>`
-        update subscriptions
-        set acked_offset = :ackedOffset,
-            pending_through_offset = :throughOffset,
-            pending_stream_max_offset = :streamMaxOffset,
-            pending_attempt = :attempt,
-            pending_recovery_at = :recoveryAt
-        where subscription_key = :subscriptionKey and epoch = :epoch
-      `,
-      advanceWatermark: sql.run<{
-        parameters: { subscriptionKey: string; ackedOffset: number; epoch: number };
-      }>`
-        update subscriptions
-        set acked_offset = max(acked_offset, :ackedOffset), next_attempt_at = null
-        where subscription_key = :subscriptionKey and epoch = :epoch
-      `,
-      nack: sql.run<{
-        parameters: {
-          subscriptionKey: string;
-          attempt: number;
-          nextAttemptAt: number;
-          error: string;
-          epoch: number;
-        };
-      }>`
-        update subscriptions
-        set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error,
-            pending_recovery_at = null
-        where subscription_key = :subscriptionKey and epoch = :epoch
-      `,
-      setCursor: sql.run<{
-        parameters: {
-          subscriptionKey: string;
-          ackedOffset: number;
-          epoch: number;
-        };
-      }>`
-        update subscriptions
-        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null,
-            epoch = :epoch, pending_through_offset = null, pending_stream_max_offset = null,
-            pending_attempt = null, pending_recovery_at = null
-        where subscription_key = :subscriptionKey
-      `,
-      delete: sql.run<{ parameters: { subscriptionKey: string } }>`
-        delete from subscriptions where subscription_key = :subscriptionKey
-      `,
-      minNextAttemptAt: sql.one<{ result: { next: number | null } }>`
-        select min(next_attempt_at) as next from subscriptions where next_attempt_at is not null
-      `,
-    },
-  });
-
   /** Monotonic within this instance; wall-clock floor covers restarts. */
   #lastEpoch = 0;
 
-  #db: ReturnType<
-    typeof SqliteSubscriptionCursorStore.db<ReturnType<typeof createDurableObjectClient>>
-  >;
   readonly #sql: SqlStorage;
   #cachedRows: Map<string, SubscriptionCursorRow> | undefined;
   readonly #pendingProgress = new Map<string, PendingSubscriptionProgress>();
@@ -290,7 +201,6 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   constructor(sql: SqlStorage) {
     this.#sql = sql;
     initializeStreamStorage(sql);
-    this.#db = SqliteSubscriptionCursorStore.db(createDurableObjectClient({ sql }));
   }
 
   #nextEpoch(): number {
@@ -306,7 +216,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   #rows(): Map<string, SubscriptionCursorRow> {
     if (this.#cachedRows !== undefined) return this.#cachedRows;
     const rows = new Map<string, SubscriptionCursorRow>();
-    for (const record of this.#db.list()) {
+    for (const record of this.#sql.exec<SubscriptionCursorRowRecord>(LIST_SUBSCRIPTION_CURSORS)) {
       const row = rowFromRecord(record);
       rows.set(row.subscriptionKey, row);
       this.#lastEpoch = Math.max(this.#lastEpoch, row.epoch);
@@ -343,14 +253,10 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     const existing = rows.get(subscriptionKey);
     if (existing !== undefined) return { ...existing };
     const epoch = this.#nextEpoch();
-    this.#db.ensure({
-      subscriptionKey,
-      ackedOffset,
-      // Fresh rows get a fresh epoch, so an ack fenced on a DELETED row's
-      // epoch cannot land on a same-key recreation (the remove+recreate
-      // deliver:"all" clobber).
-      epoch,
-    });
+    // Fresh rows get a fresh epoch, so an ack fenced on a DELETED row's
+    // epoch cannot land on a same-key recreation (the remove+recreate
+    // deliver:"all" clobber).
+    this.#sql.exec(ENSURE_SUBSCRIPTION_CURSOR, subscriptionKey, ackedOffset, epoch);
     const row: SubscriptionCursorRow = {
       subscriptionKey,
       ackedOffset,
@@ -383,14 +289,10 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     ) {
       return true;
     }
-    const params = {
-      subscriptionKey,
-      ackedOffset: nextOffset,
-    };
     if (epoch === undefined) {
-      this.#db.ack(params);
+      this.#sql.exec(ACK_SUBSCRIPTION_CURSOR, nextOffset, subscriptionKey);
     } else {
-      this.#db.ackFenced({ ...params, epoch });
+      this.#sql.exec(ACK_FENCED_SUBSCRIPTION_CURSOR, nextOffset, subscriptionKey, epoch);
     }
     this.#deletePendingProgress(subscriptionKey);
     row.ackedOffset = nextOffset;
@@ -444,15 +346,16 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     const sameDelivery = activeClaim && row.pendingThroughOffset === throughOffset;
     const stableStreamMaxOffset = sameDelivery ? row.pendingStreamMaxOffset! : streamMaxOffset;
     const attempt = sameDelivery ? Math.max(row.pendingAttempt ?? 0, row.attempt) + 1 : 1;
-    this.#db.claimPushFrame({
-      subscriptionKey,
-      ackedOffset: row.ackedOffset,
+    this.#sql.exec(
+      CLAIM_PUSH_FRAME,
+      row.ackedOffset,
       throughOffset,
-      streamMaxOffset: stableStreamMaxOffset,
+      stableStreamMaxOffset,
       attempt,
       recoveryAt,
+      subscriptionKey,
       epoch,
-    });
+    );
     this.#deletePendingProgress(subscriptionKey);
     row.pendingThroughOffset = throughOffset;
     row.pendingStreamMaxOffset = stableStreamMaxOffset;
@@ -510,11 +413,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     ) {
       return;
     }
-    this.#db.advanceWatermark({
-      subscriptionKey,
-      ackedOffset: nextOffset,
-      epoch,
-    });
+    this.#sql.exec(ADVANCE_SUBSCRIPTION_WATERMARK, nextOffset, subscriptionKey, epoch);
     this.#deletePendingProgress(subscriptionKey);
     row.ackedOffset = nextOffset;
     row.nextAttemptAt = null;
@@ -528,14 +427,15 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     if (row === undefined || row.epoch !== args.epoch) return;
     if (this.#pendingProgress.has(subscriptionKey)) this.flushPending("all");
     const error = args.error.slice(0, 2_000);
-    this.#db.nack({
-      subscriptionKey,
-      attempt: args.attempt,
-      nextAttemptAt: args.nextAttemptAt,
+    this.#sql.exec(
+      NACK_SUBSCRIPTION_CURSOR,
+      args.attempt,
+      args.nextAttemptAt,
       // Bound the stored error so a pathological message cannot bloat the row.
       error,
-      epoch: args.epoch,
-    });
+      subscriptionKey,
+      args.epoch,
+    );
     row.attempt = args.attempt;
     row.nextAttemptAt = args.nextAttemptAt;
     row.lastError = error;
@@ -546,11 +446,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     const row = this.#rows().get(subscriptionKey);
     if (row === undefined) return;
     const epoch = this.#nextEpoch();
-    this.#db.setCursor({
-      subscriptionKey,
-      ackedOffset,
-      epoch,
-    });
+    this.#sql.exec(SET_SUBSCRIPTION_CURSOR, ackedOffset, epoch, subscriptionKey);
     this.#deletePendingProgress(subscriptionKey);
     row.ackedOffset = ackedOffset;
     row.attempt = 0;
@@ -617,7 +513,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   delete(subscriptionKey: string): void {
     const rows = this.#rows();
     if (!rows.has(subscriptionKey)) return;
-    this.#db.delete({ subscriptionKey });
+    this.#sql.exec(DELETE_SUBSCRIPTION_CURSOR, subscriptionKey);
     this.#deletePendingProgress(subscriptionKey);
     rows.delete(subscriptionKey);
   }

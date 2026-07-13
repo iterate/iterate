@@ -387,3 +387,50 @@ Raw records are in `/tmp/cursor-reset-helper-{candidate,baseline}-{1..3}.log`,
 `/tmp/cursor-reset-crosspost-{candidate,baseline}-{1..4}.log`, and
 `/tmp/cursor-reset-calibration-{candidate,baseline}-{1..2}.log`; the interrupted
 candidate round was overwritten by a complete rerun and is not included.
+
+## 2026-07-13: Raw SQLite Cursor Store
+
+The cursor store now calls synchronous `SqlStorage.exec()` directly instead of
+wrapping the same SQLite statements in sqlfu's generated Durable Object client.
+This is not the rejected legacy-KV storage swap: events and cursors remain in
+the same SQLite database, synchronous writes remain in the current turn and
+output gate, and transition caching and fencing are unchanged.
+`initializeStreamStorage()` is now the sole schema authority, the OS package
+no longer depends on sqlfu, and the cursor module falls from 739 to 635 lines
+(`-104` production lines).
+
+Four mirrored rounds compared exact parent `88b34adb5` on port 5202 with the
+candidate on port 5201, using 500 host-timed operations per path per round
+(2,000 samples per side). Every timer enclosed an awaited RPC:
+
+| Cursor path               | Baseline p50 / p95 | Candidate p50 / p95 |     Change p50 / p95 |
+| ------------------------- | -----------------: | ------------------: | -------------------: |
+| Dense durable cross-post  |   4.849 / 7.743 ms |    4.612 / 7.543 ms |   4.9% / 2.6% faster |
+| Sparse durable cross-post |   6.132 / 9.891 ms |    5.423 / 8.473 ms | 11.6% / 14.3% faster |
+
+Sparse delivery was faster in every candidate round. Dense delivery was faster
+in three of four rounds but remains neutral under the 5% attribution threshold.
+Four additional forced-reactivation rounds (800 samples per side) were neutral
+at p50 (0.5% slower) and 14.9% slower at pooled p95 because one candidate round
+shifted upward; that tail did not reproduce consistently, so this experiment
+makes no cold-start claim. Five mirrored full-suite rounds degraded on both
+long-lived processes and moved unrelated paths by multiples; their
+equal-workload p50 geometric mean was a neutral 1.1% candidate regression and
+is not usable for path attribution.
+
+All 358 Stream-domain tests pass, including transaction rollback, cursor epoch,
+claim recovery, backoff, and teardown coverage, along with OS typecheck and
+focused lint/format checks. The cost is loss of sqlfu's generated named-binding
+types inside this one store; positional statement order is instead covered by
+the existing transition tests. The change removes an abstraction, duplicate
+schema declaration, generated client field, and package dependency without
+adding a queue, persistence model, transaction boundary, or distributed
+mechanism, so it reduces rather than increases the eventual collapse cost.
+Storage failures now expose Cloudflare's native error instead of sqlfu's
+decorated query metadata; no OS caller consumes that error shape, but this is
+an observability tradeoff when diagnosing an unexpected SQL failure.
+
+Raw records are in `/tmp/raw-cursor-crosspost-{baseline,candidate}-{1..4}.log`,
+`/tmp/raw-cursor-cold-{baseline,candidate}-{1..4}.log`, and
+`/tmp/raw-cursor-{baseline,candidate}-{1..5}.log` for the life of this
+workstation.

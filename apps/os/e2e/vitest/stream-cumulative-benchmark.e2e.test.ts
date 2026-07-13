@@ -18,6 +18,7 @@ const LARGE_PAYLOAD = "l".repeat(256 * 1_024);
 const TAIL_SAMPLES = Number(process.env.STREAM_BENCH_TAIL_SAMPLES ?? "0");
 const APPEND_SAMPLES = Number(process.env.STREAM_BENCH_APPEND_SAMPLES ?? "0");
 const CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_CROSSPOST_SAMPLES ?? "0");
+const COLD_SAMPLES = Number(process.env.STREAM_BENCH_COLD_SAMPLES ?? "0");
 
 type StreamHandle = Stream & Disposable;
 
@@ -495,7 +496,7 @@ test.skipIf(!ENABLED)(
       await commitDiscardingResult(stream, event({ marker: "cold-seed" }));
       let expectedHead = (await readHead(stream)).maxOffset;
       const samples: number[] = [];
-      for (let iteration = 0; iteration < 20; iteration += 1) {
+      for (let iteration = 0; iteration < (COLD_SAMPLES || 20); iteration += 1) {
         await stream.kill().catch(() => undefined);
         using reactivated = project.streams.get(path);
         const startedAt = performance.now();
