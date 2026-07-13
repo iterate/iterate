@@ -23,12 +23,12 @@ metadata are projected from their ordinary GitHub webhooks.
 
 ## Turn policy
 
-| Activity                                                                       | Agent behavior                                 |
-| ------------------------------------------------------------------------------ | ---------------------------------------------- |
-| New trusted comment, submitted review, or opened PR body containing `@iterate` | Queue after the current turn                   |
-| Later trusted comment or submitted review after that first mention             | Queue like a message in an active Slack thread |
-| Opened, ready, or synchronized reviewable head, when enabled                   | Interrupt work for the obsolete previous head  |
-| CI, unmentioned discussion before activation, edits, bot messages              | Record only                                    |
+| Activity                                                                       | Agent behavior                                    |
+| ------------------------------------------------------------------------------ | ------------------------------------------------- |
+| New trusted comment, submitted review, or opened PR body containing `@iterate` | Queue after the current turn                      |
+| Later trusted comment or submitted review after that first mention             | Queue like a message in an active Slack thread    |
+| Opened, ready, or synchronized reviewable head, when enabled                   | Start a visible check and interrupt obsolete work |
+| CI, unmentioned discussion before activation, edits, bot messages              | Record only                                       |
 
 Fresh mentions in issue comments and inline review comments get an immediate
 eyes reaction before the agent starts. A submitted review body also triggers,
@@ -56,6 +56,35 @@ Drafts stay quiet until `ready_for_review`. Automatic review inputs name the
 immutable head SHA, require the agent to verify it is still current, and ask
 for one COMMENT review. A hidden `<!-- iterate-review:<sha> -->` marker makes
 retries idempotent.
+
+### Visible review lifecycle
+
+Every eligible head immediately gets an `Iterate Review` Check Run, so GitHub's
+PR checks UI shows that Iterate is working before the LLM starts. This small
+shell is deterministic and idempotent: the platform binds its external ID to
+the repository, PR, immutable head, and review request. A repeated delivery
+recovers the same check instead of creating another one.
+
+The review itself stays agent-owned. Its turn receives that trusted check ID
+and uses the ordinary Octokit `rest.checks.update` API to write useful Markdown
+output or annotations, then submits the one consolidated COMMENT review. Only
+after the review write succeeds does it complete the check:
+
+- `success`: review completed with no actionable findings.
+- `neutral`: review completed with findings.
+- `cancelled`: a newer head superseded this review.
+- `failure`: the review itself or its infrastructure failed.
+
+If the platform's best-effort check creation fails, the prompt tells the agent
+to create the same shell as its first GitHub write. The check is public
+lifecycle, not authority: PR content cannot supply a check ID or tell the agent
+how to complete it. A trusted `@iterate review now` request gets a separate
+same-head check because it is deliberately repeatable. Disabled and draft
+reviews create no check.
+
+This uses GitHub's [Check Runs API](https://docs.github.com/en/rest/checks/runs),
+not the older commit-status API. Check Runs are GitHub App-native and can carry
+rich output and annotations while appearing in the PR's normal checks rollup.
 
 ## Configuration
 

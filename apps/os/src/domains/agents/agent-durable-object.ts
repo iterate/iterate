@@ -233,8 +233,9 @@ export class AgentDurableObject extends DurableObject<Env> {
   // Registered on every agent host; it wakes on routed PR agent streams
   // (`/agents/repos/<slug>/pull-requests/<n>`). Replies leave through the
   // linked connection's itx.integrations.github Octokit, called by the agent
-  // itself. The sole platform-side GitHub action is the best-effort 👀 ack on
-  // a fresh mention, mirroring Slack before the LLM turn begins.
+  // itself. The platform supplies two best-effort pieces of immediate UI
+  // before the LLM turn: a 👀 ack on a fresh mention and an idempotent
+  // head-bound check shell whose useful output the review agent owns.
   readonly githubAgentProcessor = this.#processorHost.add(
     (deps) =>
       new GithubAgentProcessor({
@@ -269,6 +270,68 @@ export class AgentDurableObject extends DurableObject<Env> {
               kind,
               path: this.#name.path,
             });
+          }
+        },
+        beginReviewCheck: async ({
+          connection,
+          headSha,
+          owner,
+          pullRequestNumber,
+          repo,
+          reviewKey,
+        }) => {
+          try {
+            const octokit = connectionOctokit({
+              connection,
+              projectId: this.#name.projectId,
+            });
+            const externalId = `iterate-review:${owner}/${repo}#${pullRequestNumber}:${reviewKey}`;
+            const existing = await octokit.rest.checks.listForRef({
+              check_name: "Iterate Review",
+              filter: "all",
+              owner,
+              per_page: 100,
+              ref: headSha,
+              repo,
+            });
+            const check = existing.data.check_runs.find(
+              (candidate) => candidate.external_id === externalId,
+            );
+            if (check !== undefined) {
+              return {
+                id: check.id,
+                ...(check.html_url === null ? {} : { url: check.html_url }),
+              };
+            }
+
+            const created = await octokit.rest.checks.create({
+              external_id: externalId,
+              head_sha: headSha,
+              name: "Iterate Review",
+              output: {
+                summary: "Reviewing this revision against the configured rules.",
+                title: "Iterate is reviewing",
+              },
+              owner,
+              repo,
+              started_at: new Date().toISOString(),
+              status: "in_progress",
+            });
+            return {
+              id: created.data.id,
+              ...(created.data.html_url === null ? {} : { url: created.data.html_url }),
+            };
+          } catch (error) {
+            // The review turn is the durable obligation. If GitHub cannot
+            // create the cosmetic shell, the turn prompt tells the agent to
+            // retry through its ordinary Octokit rather than losing review.
+            console.error("[github-agent] GitHub review check failed", {
+              error,
+              headSha,
+              path: this.#name.path,
+              reviewKey,
+            });
+            return null;
           }
         },
       }),

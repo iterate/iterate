@@ -995,6 +995,55 @@ describe("GithubAgentProcessor (projection and trigger policy)", () => {
     expect(latest).toContain("<!-- iterate-review:head-two -->");
   });
 
+  it("opens a visible head-bound check before waking the review agent", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const checks: unknown[] = [];
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      beginReviewCheck: async (input) => {
+        expect(
+          agentInputs(stream).some(
+            (event) => event.type === "events.iterate.com/agents/message-received",
+          ),
+        ).toBe(false);
+        checks.push(input);
+        return { id: 9_001, url: "https://github.com/acme/widgets/runs/9001" };
+      },
+    });
+    const cursors = new Map<object, number>();
+
+    await stream.append(ROUTE_EVENT, CONFIGURED(true), {
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhookPayload(pullRequestBody({ action: "opened", headSha: "visible-head" })),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(checks).toEqual([
+      {
+        connection: "install-789",
+        headSha: "visible-head",
+        owner: "acme",
+        pullRequestNumber: 7,
+        repo: "widgets",
+        reviewKey: "head:visible-head",
+      },
+    ]);
+    const reviews = agentInputs(stream).filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
+    );
+    expect(reviews).toHaveLength(1);
+    const content = (reviews[0]!.payload as { content: string }).content;
+    expect(content).toContain("`Iterate Review` check run 9001");
+    expect(content).toContain("https://github.com/acme/widgets/runs/9001");
+    expect(content).toContain(".octokit.rest.checks.update");
+    expect(content).toContain("`success` when the review completed with no actionable findings");
+    expect(content).toContain("`neutral` when it completed with findings");
+    expect(content).toContain("Submit the GitHub review first");
+  });
+
   it("renders project-repo Markdown rules into one idempotent automatic review request", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
@@ -1111,6 +1160,36 @@ describe("GithubAgentProcessor (projection and trigger policy)", () => {
         (event) => event.type === "events.iterate.com/agents/message-received",
       ),
     ).toHaveLength(1);
+  });
+
+  it("waits for route hydration and then reconciles a legacy candidate", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = newGithubAgentProcessor(stream);
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({ action: "opened", headSha: "candidate-before-route" }),
+        ),
+      },
+      CONFIGURED(true),
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(agentInputs(stream)).toHaveLength(0);
+
+    await stream.append(ROUTE_EVENT);
+    await deliverNewEvents({ cursors, processor, stream });
+    const reviews = agentInputs(stream).filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
+    );
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]!.idempotencyKey).toContain("automatic-review:candidate-before-route");
+    expect((reviews[0]!.payload as { content: string }).content).toContain(
+      'itx.integrations.github.get("install-789").octokit',
+    );
   });
 
   it("a relink's fresh route fact produces a fresh, corrected route-context input", async () => {
