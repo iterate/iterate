@@ -5,7 +5,13 @@ import { markdownFrontmatterRecord, parseMarkdownFrontmatter } from "./markdown-
 const DEFAULT_TASK_STATE = "todo";
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
 
-const STANDARD_TASK_STATES = [DEFAULT_TASK_STATE, "in-progress", "in-review", "done"] as const;
+const STANDARD_TASK_STATES = [
+  "backlog",
+  DEFAULT_TASK_STATE,
+  "in-progress",
+  "in-review",
+  "done",
+] as const;
 
 export type RepoTask = {
   path: string;
@@ -71,12 +77,8 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
 
   const frontmatter = parseMarkdownFrontmatter(content);
   const metadata = markdownFrontmatterRecord(frontmatter.document);
-  const rawState =
-    stringValue(metadata.state) ?? stringValue(metadata.status) ?? DEFAULT_TASK_STATE;
-  // Older boards used `backlog` as a separate intake state. Collapse those
-  // files into the simpler Todo → In Progress → In Review → Done flow.
-  const state = rawState === "backlog" ? DEFAULT_TASK_STATE : rawState;
-  const labels = uniqueStrings([...stringArray(metadata.labels), ...stringArray(metadata.tags)]);
+  const state = stringValue(metadata.state) ?? DEFAULT_TASK_STATE;
+  const labels = uniqueStrings(stringArray(metadata.labels));
   const agent = stringValue(metadata.agent);
   const folderPath = `/${taskDirectoryPath.split("/").slice(0, -1).join("/")}`;
   const commentsSection = taskCommentsSection(frontmatter.body);
@@ -104,28 +106,22 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
 /** Change only task metadata, preserving its Markdown body and unrelated YAML keys. */
 export function updateRepoTaskState(content: string, state: string): string {
   const normalized = state.trim() || DEFAULT_TASK_STATE;
-  return updateFrontmatter(content, (document, metadata) => {
-    document.set(
-      metadata.state === undefined && metadata.status !== undefined ? "status" : "state",
-      normalized,
-    );
+  return updateFrontmatter(content, (document) => {
+    document.set("state", normalized);
+    document.delete("status");
   });
 }
 
 /** Change labels stored in YAML while preserving unrelated frontmatter and Markdown. */
 export function updateRepoTaskLabels(content: string, labels: readonly string[]): string {
   const normalized = uniqueStrings(labels);
-  return updateFrontmatter(content, (document, metadata) => {
-    const usesLegacyTags = metadata.labels === undefined && metadata.tags !== undefined;
+  return updateFrontmatter(content, (document) => {
     if (normalized.length === 0) {
       document.delete("labels");
-      document.delete("tags");
-    } else if (usesLegacyTags) {
-      document.set("tags", normalized);
     } else {
       document.set("labels", normalized);
-      document.delete("tags");
     }
+    document.delete("tags");
   });
 }
 

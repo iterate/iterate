@@ -52,24 +52,24 @@ test("falls back to the filename and infers the root folder", () => {
   expect(task?.labels).toEqual([]);
 });
 
-test("reads canonical and legacy frontmatter without requiring it", () => {
+test("reads canonical frontmatter without requiring it", () => {
   const canonical = parseRepoTask(
     "packages/ui/tasks/card.md",
-    "---\nstate: in-progress\nlabels: [ui, polish]\ntags: [polish, v1]\n---\n# Card\n",
+    "---\nstate: in-progress\nlabels: [ui, polish]\n---\n# Card\n",
   );
   expect(canonical?.state).toBe("in-progress");
   expect(canonical?.folderPath).toBe("/packages/ui");
-  expect(canonical?.labels).toEqual(["ui", "polish", "v1"]);
+  expect(canonical?.labels).toEqual(["ui", "polish"]);
 
-  const legacy = parseRepoTask(
-    "tasks/legacy.md",
-    "---\nstatus: in-review\ntags: backend\n---\nLegacy task\n",
+  const aliases = parseRepoTask(
+    "tasks/aliases.md",
+    "---\nstatus: in-review\ntags: backend\n---\nAliases are ordinary metadata\n",
   );
-  expect(legacy?.state).toBe("in-review");
-  expect(legacy?.labels).toEqual(["backend"]);
+  expect(aliases?.state).toBe("todo");
+  expect(aliases?.labels).toEqual([]);
 
-  const oldDefault = parseRepoTask("tasks/old-default.md", "---\nstate: backlog\n---\n# Old\n");
-  expect(oldDefault?.state).toBe("todo");
+  const backlog = parseRepoTask("tasks/backlog.md", "---\nstate: backlog\n---\n# Backlog\n");
+  expect(backlog?.state).toBe("backlog");
 });
 
 test("uses an explicit title before the first heading", () => {
@@ -111,11 +111,11 @@ test("updates state while preserving unrelated YAML, comments, and Markdown", ()
   expect(updated.endsWith("\n# Ship it\n\nBody.\n")).toBe(true);
 });
 
-test("adds state frontmatter to a bare task and updates the legacy key in place", () => {
+test("adds canonical state frontmatter and removes a deprecated alias", () => {
   expect(updateRepoTaskState("# New task\n", "done")).toBe("---\nstate: done\n---\n\n# New task\n");
-  const legacy = updateRepoTaskState("---\nstatus: todo\n---\n# Old\n", "done");
-  expect(legacy).toContain("status: done");
-  expect(legacy).not.toContain("state:");
+  const updated = updateRepoTaskState("---\nstatus: todo\n---\n# Old\n", "done");
+  expect(updated).toContain("state: done");
+  expect(updated).not.toContain("status:");
 });
 
 test("updates labels stored in frontmatter", () => {
@@ -133,7 +133,7 @@ test("updates and clears an agent property", () => {
   expect(updateRepoTaskAgent(assigned, undefined)).toBe("\n# Assign me\n");
 });
 
-test("replaces mixed canonical and legacy labels without leaving stale tags", () => {
+test("writes only canonical labels without leaving a deprecated alias", () => {
   const content = "---\nlabels: [ui, polish]\ntags: [v1, polish]\n---\n# Mixed labels\n";
   const updated = updateRepoTaskLabels(content, ["ui"]);
 
@@ -211,7 +211,7 @@ test("reserves a task path that exists at HEAD while its deletion is pending", (
 
 test("keeps the core columns and appends states found in the repo", () => {
   const task = parseRepoTask("tasks/review.md", "---\nstate: in-review\n---\n# Review\n")!;
-  expect(taskStateColumns([task])).toEqual(["todo", "in-progress", "in-review", "done"]);
+  expect(taskStateColumns([task])).toEqual(["backlog", "todo", "in-progress", "in-review", "done"]);
 });
 
 test("queries a status board with folders as an independent row dimension", () => {
@@ -222,7 +222,7 @@ test("queries a status board with folders as an independent row dimension", () =
   ];
   const board = queryRepoTaskBoard(tasks, { filter: "", columns: "state", rows: "folder" });
 
-  expect(board.states).toEqual(["todo", "in-progress", "in-review", "done"]);
+  expect(board.states).toEqual(["backlog", "todo", "in-progress", "in-review", "done"]);
   expect(board.visibleProperties).toEqual({ folder: false, state: false, labels: true });
   expect(board.rows.map((row) => row.label)).toEqual(["/", "/apps/os"]);
   expect(board.rows[1]?.cells.find((cell) => cell.state === "todo")?.tasks[0]?.title).toBe(
