@@ -4,7 +4,8 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./worker": "./src/worker.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit"
@@ -16,6 +17,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@types/node": "^24.10.1",
     "@typescript/native-preview": "7.0.0-dev.20260315.1"
   }

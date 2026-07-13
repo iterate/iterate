@@ -12,10 +12,13 @@ import { spawnSync } from "node:child_process";
 import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DeployableEnv, EnvContext } from "./env-context.ts";
+import { z } from "zod";
+import { loadDopplerSecrets, type DeployableEnv, type EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext these helpers actually need: the Cloudflare API fetchers. */
 type CfContext = Pick<EnvContext<DeployableEnv>, "cf" | "cfV4">;
+
+const SecretBindings = z.array(z.object({ name: z.string(), type: z.string() }));
 
 /**
  * Spawn a command with inherited stdio and throw on a nonzero exit — the
@@ -48,13 +51,26 @@ export function run(
  * whole deploy+e2e job, whose retry costs ~5 minutes.
  */
 export async function smoke(url: string, ok: (status: number) => boolean, label: string) {
+  await smokeResponse(url, (response) => ok(response.status), label);
+}
+
+/**
+ * Response-aware variant of {@link smoke}. Use this when a status alone could
+ * be produced by an edge/router fallback and the response body is part of the
+ * deployment proof.
+ */
+export async function smokeResponse(
+  url: string,
+  ok: (response: Response) => boolean | Promise<boolean>,
+  label: string,
+) {
   for (let attempt = 1; attempt <= 18; attempt++) {
     try {
       const response = await fetch(url, {
         redirect: "manual",
         signal: AbortSignal.timeout(15_000),
       });
-      if (ok(response.status)) {
+      if (await ok(response)) {
         console.log(`smoke ok: ${label} (${url} → ${response.status})`);
         return;
       }
@@ -110,6 +126,96 @@ export async function deployWithSecrets(input: {
   } finally {
     rmSync(secretsDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Remove one retired secret from the currently deployed Worker, if present.
+ *
+ * `wrangler deploy --secrets-file` deliberately preserves omitted secrets, so
+ * removing a name from generated config is not enough to revoke an existing
+ * binding. Cloudflare's secret-delete API creates and immediately deploys a
+ * new version of the same Worker without that binding. A second list makes
+ * failure to revoke a hard deploy error rather than a silent credential leak.
+ *
+ * API: https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/secrets/methods/delete/
+ * Deployment semantics: https://developers.cloudflare.com/workers/configuration/secrets/#delete-secrets-from-your-project
+ * Omitted-secret semantics: https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code
+ */
+export async function deleteWorkerSecretIfPresent(input: {
+  cf: (path: string, init?: RequestInit) => Promise<unknown>;
+  workerName: string;
+  secretName: string;
+}): Promise<boolean> {
+  const scriptPath = `/workers/scripts/${encodeURIComponent(input.workerName)}/secrets`;
+  const current = SecretBindings.parse(await input.cf(scriptPath));
+  if (!current.some((binding) => binding.name === input.secretName)) {
+    console.log(`retired Worker secret absent: ${input.workerName}/${input.secretName}`);
+    return false;
+  }
+
+  await input.cf(`${scriptPath}/${encodeURIComponent(input.secretName)}?url_encoded=true`, {
+    method: "DELETE",
+  });
+
+  const remaining = SecretBindings.parse(await input.cf(scriptPath));
+  if (remaining.some((binding) => binding.name === input.secretName)) {
+    throw new Error(
+      `Cloudflare reported success but retired Worker secret remains: ${input.workerName}/${input.secretName}`,
+    );
+  }
+  console.log(`deleted retired Worker secret: ${input.workerName}/${input.secretName}`);
+  return true;
+}
+
+/**
+ * Delete a retired Doppler source only after its live runtime binding has been
+ * revoked and verified. The second download catches inherited values or a
+ * delete that targeted the wrong config; either condition keeps the deploy red.
+ */
+export function deleteDopplerSecretIfPresent(input: {
+  project: string;
+  config: string;
+  secretName: string;
+}): boolean {
+  const current = loadDopplerSecrets(input.project, input.config);
+  if (!Object.hasOwn(current, input.secretName)) {
+    console.log(
+      `retired Doppler secret absent: ${input.project}/${input.config}/${input.secretName}`,
+    );
+    return false;
+  }
+
+  const result = spawnSync(
+    "doppler",
+    [
+      "secrets",
+      "delete",
+      input.secretName,
+      "--project",
+      input.project,
+      "--config",
+      input.config,
+      "--yes",
+      "--silent",
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Failed to delete retired Doppler secret ${input.project}/${input.config}/${input.secretName} (exit ${result.status}).`,
+    );
+  }
+
+  const remaining = loadDopplerSecrets(input.project, input.config);
+  if (Object.hasOwn(remaining, input.secretName)) {
+    throw new Error(
+      `Retired Doppler secret remains after deletion: ${input.project}/${input.config}/${input.secretName}`,
+    );
+  }
+  console.log(
+    `deleted retired Doppler secret: ${input.project}/${input.config}/${input.secretName}`,
+  );
+  return true;
 }
 
 /**

@@ -15,13 +15,13 @@ signed-webhook smoke through the integrations domain).
 
 ## Authenticated Browser Smoke
 
-Preview OS configs use the production Iterate Auth Worker as their issuer. Run
-the OAuth client sync first if the preview was freshly created or auth callback
-URLs changed:
+Preview OS configs use the matching slot's Iterate Auth Worker as their issuer.
+The preview provisioner creates the clients and Doppler configs; run it when
+setting up slots or rotating their auth credentials:
 
 ```bash
-doppler run --project auth --config prd -- \
-  pnpm --dir apps/os auth:sync-clients
+doppler run --project _shared --config prd -- \
+  pnpm preview provision-auth-preview-configs
 ```
 
 Create or reuse an auth-worker user that has access to the target organization
@@ -73,19 +73,18 @@ nohup "$BIN" --headless=new --remote-debugging-port=9444 --user-data-dir=/tmp/ab
 AB() { AGENT_BROWSER_AUTO_CONNECT=0 agent-browser --cdp 9444 "$@"; }
 ```
 
-The hosted login UI (`auth.iterate.com/login`) **only offers "Continue with
-Google"** — there is no email/password form to fill, and sign-up is disabled
-(`apps/auth/src/server/auth.ts`). So you cannot log in by filling a form. Instead
-authenticate the bootstrap admin against better-auth's **API**, inject the
-resulting session cookies, then let the OAuth flow complete:
+For a fully unattended admin session, authenticate the slot's bootstrap admin
+against better-auth's API, inject the resulting session cookies, then let the
+OAuth flow complete:
 
 1. **Sign in via the better-auth API** (email/password IS enabled at the API
    level even though the UI hides it). Keep the secret in a shell var — never
    echo it:
 
    ```bash
-   export SECRET=$(doppler secrets get APP_CONFIG_SERVICE_AUTH_TOKEN --project auth --config prd --plain)
-   curl -s -c /tmp/auth.txt -X POST https://auth.iterate.com/api/auth/sign-in/email \
+   export AUTH_ORIGIN=https://auth.iterate-preview-N.com
+   export SECRET=$(doppler secrets get APP_CONFIG_SERVICE_AUTH_TOKEN --project auth --config preview_N --plain)
+   curl -s -c /tmp/auth.txt -X POST "$AUTH_ORIGIN/api/auth/sign-in/email" \
      -H 'content-type: application/json' \
      --data "$(python3 -c 'import json,os;print(json.dumps({"email":"admin@nustom.com","password":os.environ["SECRET"]}))')"
    ```
@@ -97,7 +96,7 @@ resulting session cookies, then let the OAuth flow complete:
    browser (`AB cookies set --curl <json>`; the jar uses `#HttpOnly_` lines —
    strip that prefix when converting to the JSON importer shape).
 3. **Run the OS OAuth flow**: `AB open https://os.iterate-preview-N.com/api/iterate-auth/login`.
-   With the session present it lands on `auth.iterate.com/consent`.
+   With the session present it lands on the matching preview auth consent page.
 4. **Approve consent.** The consent button is React-wired; a plain `click` may
    not fire it and the signed consent URL has a short `exp`, so click fast via
    the DOM:
@@ -108,9 +107,9 @@ resulting session cookies, then let the OAuth flow complete:
    It redirects through the OS callback and lands on `/projects`, authenticated.
 5. `AB state save /tmp/os-auth.json` immediately.
 
-Previews authenticate against **production** auth (`auth.iterate.com`), so this
-works against preview hosts too. For a fresh non-admin user, provision it
-via the auth worker's service-token-gated internal oRPC API
+Each preview authenticates against its own `auth.iterate-preview-N.com` worker
+and D1 database. For a fresh non-admin user, provision it via that auth
+worker's service-token-gated internal oRPC API
 (`internal.user.upsertVerifiedEmail` + `internal.organization.createForUser`).
 
 ### Driving a real agent conversation

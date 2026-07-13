@@ -18,7 +18,7 @@
  * exactly those keys from process.env under `doppler run -- vite dev`.
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
+import { authEnvs, envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -68,7 +68,6 @@ export const OPTIONAL_SECRETS = [
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
   "APP_CONFIG_ITERATE_AUTH__RESOURCE",
-  "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
   "APP_CONFIG_POSTHOG",
   "APP_CONFIG_SLACK_BOT_TOKEN",
   "APP_CONFIG_X_AI_API_KEY",
@@ -233,6 +232,8 @@ const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; prod
 function workerBindings(input: {
   workerName: string;
   accountId: string;
+  authWorkerName: string;
+  authRemote?: boolean;
   kvId?: string;
   workerBuildCacheKvId?: string;
   /** Which SANDBOX_MAX_INSTANCES column to apply — deploy-time memory quota
@@ -284,6 +285,16 @@ function workerBindings(input: {
       },
     ],
     services: [
+      // OS's privileged auth directory and token-introspection surface. This
+      // binding is the credential: Cloudflare resolves it directly to the
+      // selected auth Worker, so no bearer secret enters the OS process.
+      // Local dev uses `remote` unless dev-all has selected its local auth
+      // Worker through a loopback issuer.
+      {
+        binding: "AUTH",
+        service: input.authWorkerName,
+        ...(input.authRemote ? { remote: true } : {}),
+      },
       // The builder sidecar (src/builder.ts, wrangler.builder.jsonc): the one
       // script carrying the dynamic-worker bundler toolchain (esbuild-wasm,
       // ~14MB) so the product script stays small. Bound by name — deploy.ts
@@ -405,6 +416,7 @@ function envBlock(env: DeployedEnv) {
   const bindings = workerBindings({
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
+    authWorkerName: env.authWorkerName,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
     sandboxCaps: isProduction ? "production" : "preview",
@@ -426,8 +438,52 @@ function envBlock(env: DeployedEnv) {
  * Deploy-time generation runs without PORT, so deployed envs are unaffected
  * (they get baseUrl from envShapedVars).
  */
+export function localAuthServiceBinding(input: {
+  issuer: string | undefined;
+  allowProductionRemote: boolean;
+}) {
+  const trimmedIssuer = input.issuer?.trim();
+  if (!trimmedIssuer) {
+    return { authWorkerName: authEnvs.dev_global.authWorkerName, authRemote: true };
+  }
+
+  let issuerUrl: URL;
+  try {
+    issuerUrl = new URL(trimmedIssuer);
+  } catch {
+    throw new Error("APP_CONFIG_ITERATE_AUTH__ISSUER must be an absolute URL");
+  }
+
+  if (["localhost", "127.0.0.1", "[::1]"].includes(issuerUrl.hostname)) {
+    return { authWorkerName: "auth", authRemote: false };
+  }
+
+  const authEnv = Object.values(authEnvs).find(
+    (candidate) => new URL(candidate.authBaseUrl).origin === issuerUrl.origin,
+  );
+  if (!authEnv) {
+    throw new Error(
+      `APP_CONFIG_ITERATE_AUTH__ISSUER does not match a known auth environment: ${issuerUrl.origin}`,
+    );
+  }
+  if (authEnv === authEnvs.prd && !input.allowProductionRemote) {
+    throw new Error(
+      "Remote RPC to auth-prd requires ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1 because the binding carries production write authority",
+    );
+  }
+  return { authWorkerName: authEnv.authWorkerName, authRemote: true };
+}
+
 function localDevBindings() {
-  const bindings = workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID });
+  const authBinding = localAuthServiceBinding({
+    issuer: process.env.APP_CONFIG_ITERATE_AUTH__ISSUER,
+    allowProductionRemote: process.env.ALLOW_REMOTE_PRODUCTION_AUTH_RPC === "1",
+  });
+  const bindings = workerBindings({
+    workerName: "os",
+    accountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    ...authBinding,
+  });
   const localAuthJwks = localDevAuthJwks();
   return {
     ...bindings,
@@ -478,7 +534,7 @@ export const config = {
   // compatibility_date, so anything default-on at that date is redundant).
   // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker
   // loader need Node APIs. global_fetch_strictly_public: same-zone
-  // subrequests (auth worker and project egress) must traverse Worker routes
+  // subrequests (including project egress) must traverse Worker routes
   // instead of going to origin.
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
   // No `assets` here: the vite plugin injects the client build's assets

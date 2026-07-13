@@ -244,7 +244,10 @@ export function getAuthPlugins(options: AuthPluginOptions) {
           return scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
         },
         consentReferenceId: async ({ session }) => {
-          const selection = await resolveStoredProjectSelection({ sessionId: session?.id });
+          const selection = await resolveStoredProjectSelection({
+            sessionId: session?.id,
+            client: db,
+          });
           if (!selection || !session?.userId) {
             return undefined;
           }
@@ -265,11 +268,14 @@ export function getAuthPlugins(options: AuthPluginOptions) {
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
       customAccessTokenClaims: async ({ user, referenceId, scopes }) => {
-        const grants = await buildAccessTokenGrantClaims({
-          userId: userIdOf(user),
-          requestedScopes: scopes,
-          selection: parseOAuthProjectSelectionReferenceId(referenceId),
-        });
+        const grants = await buildAccessTokenGrantClaims(
+          {
+            userId: userIdOf(user),
+            requestedScopes: scopes,
+            selection: parseOAuthProjectSelectionReferenceId(referenceId),
+          },
+          db,
+        );
 
         return {
           ...buildIterateTokenClaims(user),
@@ -281,7 +287,7 @@ export function getAuthPlugins(options: AuthPluginOptions) {
       customIdTokenClaims: ({ user }) => buildIterateTokenClaims(user),
       customUserInfoClaims: async ({ user, jwt }) => {
         const [organizationClaims, activeOrganizationId] = await Promise.all([
-          listOrganizationClaimsForUser(userIdOf(user)),
+          listOrganizationClaimsForUser(userIdOf(user), db),
           getSessionActiveOrganizationId(jwt as Record<string, unknown> | null | undefined),
         ]);
         return {

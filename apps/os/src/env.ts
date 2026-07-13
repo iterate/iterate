@@ -1,4 +1,5 @@
 import { env as workerEnv } from "cloudflare:workers";
+import type { AuthWorker } from "@iterate-com/auth-contract/worker";
 import type { SendEmailBinding } from "./domains/email/utils.ts";
 
 /**
@@ -31,6 +32,14 @@ export interface Env {
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
+  /**
+   * Auth's default Worker binding. Its project-directory and token-
+   * introspection methods are private RPC capabilities; auth's public HTTP
+   * `fetch` remains a separate surface. Possession of this required same-
+   * account binding is the RPC credential; no auth service token is present
+   * in OS runtime configuration.
+   */
+  AUTH: Service<AuthWorker>;
   /**
    * Cloudflare Email Service send binding backing `itx.email`. Bound in every
    * wrangler env block including local dev, where miniflare simulates sends

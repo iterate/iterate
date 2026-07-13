@@ -65,12 +65,22 @@ describe("preview deploy ordering", () => {
     ).toEqual([["semaphore"]]);
   });
 
-  it("deploys OS and auth in one parallel batch", () => {
+  it("deploys auth before OS", () => {
     expect(
       orderPreviewDeployBatches([cloudflarePreviewApps.os, cloudflarePreviewApps.auth]).map(
         (batch) => batch.map((app) => app.slug),
       ),
-    ).toEqual([["os", "auth"]]);
+    ).toEqual([["auth"], ["os"]]);
+  });
+
+  it("keeps auth dependents parallel after auth is ready", () => {
+    expect(
+      orderPreviewDeployBatches([
+        cloudflarePreviewApps.os,
+        cloudflarePreviewApps.semaphore,
+        cloudflarePreviewApps.auth,
+      ]).map((batch) => batch.map((app) => app.slug)),
+    ).toEqual([["auth"], ["os", "semaphore"]]);
   });
 });
 

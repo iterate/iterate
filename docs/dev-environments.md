@@ -131,7 +131,21 @@ OAuth clients from Doppler on every deploy — see
 Working on the auth app itself? Run it locally
 (`pnpm --dir apps/auth dev`) and point OS at it by overriding
 `APP_CONFIG_ITERATE_AUTH__ISSUER` (e.g. `http://localhost:7101/api/auth`) in
-your env or Doppler branch config.
+your env or Doppler branch config. A local OS process may use a known preview
+or shared-dev auth deployment through a remote service binding. Production is
+blocked by default because that binding carries write authority; explicitly set
+`ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1` only when you intend local code to call
+`auth-prd`. The coordinated production workflow sets the same guard while it
+generates the complete Wrangler config. For a manual production OS deployment,
+use:
+
+```bash
+ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1 pnpm run deploy --env prd
+```
+
+Preview CI deploys auth before every selected dependent (`os` and
+`semaphore`). Production uses the coordinated `Deploy Auth + OS` workflow;
+the dedicated auth workflow deploys only `auth-dev-global`.
 
 ## Acting as users and admins
 
