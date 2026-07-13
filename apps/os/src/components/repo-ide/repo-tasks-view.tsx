@@ -629,7 +629,17 @@ function TaskEditorSheet({
   }, [taskPath]);
 
   return (
-    <Sheet open={task !== undefined} onOpenChange={onOpenChange}>
+    <Sheet
+      open={task !== undefined}
+      onOpenChange={onOpenChange}
+      onOpenChangeComplete={(open) => {
+        if (!open) return;
+        const editor = editorRef.current;
+        if (editor === null) return;
+        editor.focus();
+        editor.setSelectionRange(editor.value.length, editor.value.length);
+      }}
+    >
       {task === undefined ? null : (
         <SheetContent
           initialFocus={editorRef}
