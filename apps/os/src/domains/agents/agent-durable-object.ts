@@ -23,6 +23,8 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
+import { AgentProcessorContract } from "./agent-processor-contract.ts";
+import { AgentProcessorCheckpointStore } from "./agent-processor-checkpoint.ts";
 import { parseAgentDurableObjectName } from "./utils.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
@@ -38,10 +40,16 @@ export class AgentDurableObject extends DurableObject<Env> {
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
   });
+  readonly #agentCheckpoint = new AgentProcessorCheckpointStore(
+    this.ctx.storage,
+    AgentProcessorContract.version,
+  );
   readonly #agentProcessor = this.#processorHost.add(
     (deps) =>
       new AgentProcessor({
         ...deps,
+        readState: this.#agentCheckpoint.read,
+        writeState: this.#agentCheckpoint.write,
         ai: this.env.AI,
         // Resolved per attempt (not at construction) so a config problem
         // fails the turn with a journaled error instead of bricking the DO.
@@ -243,6 +251,8 @@ export class AgentDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#agentProcessor);
+    return new StreamProcessorRpcTarget(this.#agentProcessor, {
+      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(AgentProcessorContract.slug),
+    });
   }
 }

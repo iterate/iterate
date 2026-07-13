@@ -299,16 +299,33 @@ Two loose ends in the same substrate:
 The doctrine says checkpoints make folds cheap. Four places ignore the primitives
 and re-fold from offset zero on hot paths:
 
-| Site                                                                                               | Cost                                                                                                                                                                                                  | Fix (house primitive)                                         |
-| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `src/domains/integrations/connect-flows.ts:489-491`                                                | full team-directory fold **per Slack webhook**, on a singleton DO                                                                                                                                     | checkpoint the fold                                           |
-| `src/domains/integrations/google-tokens.ts:81-83` (`readGoogleTokenState` → `readAllStreamEvents`) | full token-stream fold **per `gmail.request`**                                                                                                                                                        | checkpoint the fold                                           |
-| agent checkpoint write path                                                                        | duplicates the **whole transcript** into one unchunked KV cell no consumer reads — O(N²) write amplification marching toward the ~2MB DO cell cap (the platform limit `event_chunks` exists to dodge) | stop persisting the transcript in the checkpoint, or chunk it |
-| agent prompt rebuild                                                                               | reads the **full journal including chunk spam** (see §3.4)                                                                                                                                            | `eventTypes` filter + bounded read                            |
+| Site                                                                                               | Cost                                                                                                                                    | Fix (house primitive)                                  |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `src/domains/integrations/connect-flows.ts:489-491`                                                | full team-directory fold **per Slack webhook**, on a singleton DO                                                                       | checkpoint the fold                                    |
+| `src/domains/integrations/google-tokens.ts:81-83` (`readGoogleTokenState` → `readAllStreamEvents`) | full token-stream fold **per `gmail.request`**                                                                                          | checkpoint the fold                                    |
+| agent checkpoint write path (fixed)                                                                | formerly duplicated the **whole transcript** into one unchunked KV cell per batch — O(N²) write amplification toward the ~2 MB cell cap | bounded mutable tail plus immutable SQL history chunks |
+| agent prompt rebuild                                                                               | reads the **full journal including chunk spam** (see §3.4)                                                                              | `eventTypes` filter + bounded read                     |
 
-Each fix is ~10 lines of using machinery the substrate already ships. These are
-worth fixing soon not for speed but because they teach readers that fold-from-zero
-is acceptable on hot paths — the doctrine erodes by example.
+The remaining fold-from-zero fixes are small uses of machinery the substrate
+already ships. They are worth fixing soon not only for speed but because each
+example teaches readers that fold-from-zero is acceptable on hot paths — the
+doctrine erodes by example.
+
+The agent checkpoint now publishes one metadata/128 KiB tail row as the commit
+marker and seals older history into immutable SQL rows. Chunk insertion, metadata
+publication, and generation replacement share one synchronous transaction; any
+missing or malformed row discards the whole cache and refolds the journal. Local
+workerd measurements put steady append-and-checkpoint p50 17%, 33%, and 52% below
+the former full snapshot at roughly 310 KiB, 600 KiB, and 1 MiB histories. Cold
+p50 changed by +2%, +1%, and -1%; cold p95 was noisy and reached about +20% at
+600 KiB because activation reads more rows.
+
+Ordinary checkpoints still write about one billed row, with an occasional chunk
+row when the tail seals. Cold activation reads one metadata row plus roughly one
+row per 128 KiB of history. Stored bytes remain approximately one transcript.
+The implementation is isolated to the Agent host: deleting its two cache tables
+and refolding, or restoring the generic checkpoint adapter, collapses it without
+changing the journal or processor contract.
 
 ### 3.6 `src/rpc-targets.ts` (2,566 lines): the pattern is load-bearing at the core, over-applied at the leaves
 
