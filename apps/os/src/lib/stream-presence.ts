@@ -1,56 +1,75 @@
-// Presence + (simulated) metrics helpers shared by the stream header chrome
-// and the processors panel.
+// Presence + real browser-measured metrics helpers shared by the stream
+// header chrome and the processors panel.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import type { BrowserStreamMetrics } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 
 // ---------------------------------------------------------------------------
-// Simulated round-trip metrics (per design — real data comes later)
+// Real browser-measured metrics (see stream-browser-store.metrics())
 // ---------------------------------------------------------------------------
 
-export type RttMetrics = {
+/**
+ * What the header sparkline and the processors panel render for THIS
+ * browser: measured transport RTT samples (spark accumulates the ring's new
+ * samples over time) plus the hosted processor's self-measured consumption
+ * report. Every value traces to a real measurement; `spark` is empty and
+ * stats are null until samples exist.
+ */
+export type BrowserStreamMetricsView = BrowserStreamMetrics & {
   spark: number[];
-  rttNow: number;
-  p50: number;
-  p95: number;
 };
 
-const INITIAL_SPARK = [
-  42, 38, 51, 36, 44, 39, 35, 62, 41, 38, 36, 55, 40, 37, 43, 39, 112, 48, 38, 36, 41, 39, 37, 38,
-];
+const SPARK_LENGTH = 24;
+const METRICS_POLL_MS = 1_000;
 
-/** Random-walk append RTT with the occasional spike, ticking every ~2.2s. */
-export function useSimulatedRttMetrics(): RttMetrics {
-  const [spark, setSpark] = useState<number[]>(INITIAL_SPARK);
+/** Poll the store's measured metrics and accumulate the RTT sparkline. */
+export function useBrowserStreamMetrics(store: {
+  metrics(): BrowserStreamMetrics;
+}): BrowserStreamMetricsView {
+  const [view, setView] = useState<BrowserStreamMetricsView>({
+    spark: [],
+    transportRttMs: null,
+    subscriber: undefined,
+  });
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setSpark((previous) => {
-        const next = previous.slice(1);
-        const value =
-          Math.random() > 0.93
-            ? Math.round(120 + Math.random() * 160)
-            : Math.round(30 + Math.random() * 30);
-        next.push(value);
-        return next;
-      });
-    }, 2200);
-    return () => clearInterval(timer);
-  }, []);
-
-  return useMemo(() => {
-    const sorted = [...spark].sort((a, b) => a - b);
-    return {
-      spark,
-      rttNow: spark[spark.length - 1] ?? 0,
-      p50: sorted[Math.floor(sorted.length * 0.5)] ?? 0,
-      p95: sorted[Math.floor(sorted.length * 0.95)] ?? 0,
+    let spark: number[] = [];
+    let lastSampleAt = 0;
+    let lastSerialized = "";
+    const tick = () => {
+      const current = store.metrics();
+      const rtt = current.transportRttMs;
+      if (rtt !== null && rtt.lastAt !== lastSampleAt) {
+        lastSampleAt = rtt.lastAt;
+        spark = [...spark.slice(-(SPARK_LENGTH - 1)), rtt.last];
+      }
+      // Change-gated: ticks without a new sample (a quiet stream between
+      // probes) must not rerender the whole stream view every second.
+      const next = { ...current, spark };
+      const serialized = JSON.stringify(next);
+      if (serialized === lastSerialized) return;
+      lastSerialized = serialized;
+      setView(next);
     };
-  }, [spark]);
+    tick();
+    const timer = setInterval(tick, METRICS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [store]);
+
+  return view;
 }
 
-export function sparklinePoints(values: readonly number[], width: number, height: number): string {
-  const max = 400;
+export function sparklinePoints(
+  values: readonly number[],
+  width: number,
+  height: number,
+  opts: {
+    /** Shared scale for multi-series graphs; defaults to this series' own max, floored at 100 (RTT jitter shouldn't render as drama). */
+    max?: number;
+  } = {},
+): string {
+  const max = opts.max ?? Math.max(100, ...values);
   const count = values.length;
   if (count === 0) return "";
   return values

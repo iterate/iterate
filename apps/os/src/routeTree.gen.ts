@@ -19,6 +19,7 @@ import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
+import { Route as CollectSecretProjectSlugRouteImport } from './routes/collect-secret.$projectSlug'
 import { Route as ApiMcpRouteImport } from './routes/api.mcp'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
@@ -104,6 +105,12 @@ const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   path: '/posthog-proxy/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CollectSecretProjectSlugRoute =
+  CollectSecretProjectSlugRouteImport.update({
+    id: '/collect-secret/$projectSlug',
+    path: '/collect-secret/$projectSlug',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiMcpRoute = ApiMcpRouteImport.update({
   id: '/api/mcp',
   path: '/api/mcp',
@@ -319,6 +326,7 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -361,6 +369,7 @@ export interface FileRoutesByTo {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -406,6 +415,7 @@ export interface FileRoutesById {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -454,6 +464,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
+    | '/collect-secret/$projectSlug'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -496,6 +507,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
+    | '/collect-secret/$projectSlug'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -540,6 +552,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
+    | '/collect-secret/$projectSlug'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -581,6 +594,7 @@ export interface RootRouteChildren {
   ApiSplatRoute: typeof ApiSplatRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMcpRoute: typeof ApiMcpRoute
+  CollectSecretProjectSlugRoute: typeof CollectSecretProjectSlugRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
@@ -656,6 +670,13 @@ declare module '@tanstack/react-router' {
       path: '/posthog-proxy/$'
       fullPath: '/posthog-proxy/$'
       preLoaderRoute: typeof PosthogProxySplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/collect-secret/$projectSlug': {
+      id: '/collect-secret/$projectSlug'
+      path: '/collect-secret/$projectSlug'
+      fullPath: '/collect-secret/$projectSlug'
+      preLoaderRoute: typeof CollectSecretProjectSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/mcp': {
@@ -1088,6 +1109,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSplatRoute: ApiSplatRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiMcpRoute: ApiMcpRoute,
+  CollectSecretProjectSlugRoute: CollectSecretProjectSlugRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,

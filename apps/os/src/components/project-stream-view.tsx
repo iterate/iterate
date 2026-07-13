@@ -13,7 +13,10 @@ import { parseBrowserCoreProcessorState } from "~/domains/streams/client-librari
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useStreamProcessorStore } from "~/domains/streams/client-libraries/browser/hooks/use-stream-processor-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
+import {
+  asBrowserStreamClient,
+  type StreamBrowserStore,
+} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BROWSER_RAW_EVENTS_TABLES,
@@ -28,15 +31,15 @@ import {
   BrowserFeedProcessor,
   type BrowserFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
-import { AgentTokenUsageStrip } from "~/components/agent-feed.tsx";
+import { AgentTokenUsageStrip, QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import {
-  StreamProcessorsPanel,
+  StreamStatePanel,
   type StreamRuntimeDebugState,
-} from "~/components/stream-processors-panel.tsx";
+} from "~/components/stream-state-panel.tsx";
 import {
   StreamViewComposer,
   type StreamInterrupt,
@@ -49,8 +52,8 @@ import {
   presetsForStream,
 } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { useItx } from "~/itx/itx-react.tsx";
-import { useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
+import { connectItxBrowser, evictItxSocket, evictItxSocketIfCurrent } from "~/itx/itx-react.tsx";
+import { useBrowserStreamMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
   streamViewMode,
@@ -83,6 +86,7 @@ export function ProjectStreamView({
   panel,
   projectId,
   projectSlug,
+  resetStreamSourceTransport,
   showHeader = true,
   streamSource,
   streamPath,
@@ -107,20 +111,71 @@ export function ProjectStreamView({
   panel?: ReactNode;
   projectId: string | null;
   projectSlug?: string;
+  /**
+   * Evict the transport `streamSource` dials through when the stream runtimes
+   * declare it dead (see BrowserStreamConnectionConfig.resetTransport). Pair
+   * it with a custom `streamSource`; the default source wires its own.
+   */
+  resetStreamSourceTransport?: () => void;
   showHeader?: boolean;
   streamSource?: ItxStreamSource;
   streamPath: string;
 }) {
-  const itx = useItx();
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
+  // Dial itx imperatively (never `useItx()`), and PER CALL: the stream view's
+  // shell — header, tabs, composer, panel — must paint before the socket
+  // connects (a hook read here would suspend the whole view into the nearest
+  // route boundary), and the stream runtimes this source feeds outlive the
+  // render — a captured capnweb stub pins whatever transport it was born on,
+  // so after a suspend/resume killed that socket every reconnect would ride
+  // the corpse and the feed would wedge until a reload (the repro in
+  // specs/stream-resume-after-suspend.spec.ts).
   const resolvedStreamSource = useMemo<ItxStreamSource>(
-    () => streamSource ?? ((path) => itx.streams.get(path)),
-    [itx, streamSource],
+    () =>
+      streamSource ??
+      (async (path) =>
+        (await connectItxBrowser(projectId == null ? {} : { projectId })).streams.get(path)),
+    [projectId, streamSource],
   );
-  const streamClientFactory = useMemo(
-    () => async (input: { streamPath: string }) =>
-      asBrowserStreamClient(await resolvedStreamSource(input.streamPath), () => {}),
-    [resolvedStreamSource],
+  const streamClientFactory = useMemo(() => {
+    if (streamSource !== undefined) {
+      // Custom source: we can't see its transport, so no identity-bound
+      // evictor — the runtime falls back to resetStreamSourceTransport.
+      return async (input: { streamPath: string }) => {
+        const stub = await streamSource(input.streamPath);
+        // The stub's REAL dispose, so every reconnect releases its stream
+        // export on the (possibly long-lived, healthy) session instead of
+        // stranding one per reconnect in the cap table on both sides.
+        return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
+      };
+    }
+    const address = projectId == null ? {} : { projectId };
+    return async (input: { streamPath: string }) => {
+      // The connecting promise IS the socket's identity: binding the evictor
+      // to it means a suspicion verdict against THIS connection can only ever
+      // evict THIS socket — never a successor another runtime already dialed.
+      const connection = connectItxBrowser(address);
+      const stub = (await connection).streams.get(input.streamPath);
+      return asBrowserStreamClient(
+        stub,
+        () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
+        () => evictItxSocketIfCurrent(address, connection),
+      );
+    };
+  }, [streamSource, projectId]);
+  // The half-open lane: a suspended page's socket can die without a close
+  // frame, so the socket map keeps handing out the corpse and per-call dialing
+  // alone can't recover. When the runtimes' probes/dials time out they call
+  // this to evict it; the next dial is fresh. Eviction must target the exact
+  // context the source dials, so a custom streamSource brings its own
+  // resetTransport (or none) and only the default source wires the default.
+  const resetTransport = useMemo(
+    () =>
+      resetStreamSourceTransport ??
+      (streamSource === undefined
+        ? () => evictItxSocket(projectId == null ? {} : { projectId })
+        : undefined),
+    [resetStreamSourceTransport, streamSource, projectId],
   );
 
   // Two browser-hosted processors share the stream's per-path SQLite mirror:
@@ -131,6 +186,7 @@ export function ProjectStreamView({
   // presence/busy from — which is why it mounts here, not in the feed body.
   const { store, snapshot } = useStreamProcessorStore<BrowserRawEventsState>({
     createStreamClient: streamClientFactory,
+    ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
     streamPath,
     slug: BrowserRawEventsContract.slug,
@@ -140,6 +196,7 @@ export function ProjectStreamView({
   });
   const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore<BrowserFeedState>({
     createStreamClient: streamClientFactory,
+    ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
     streamPath,
     slug: BrowserFeedContract.slug,
@@ -158,7 +215,9 @@ export function ProjectStreamView({
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const agentUiState = useAgentUiReducedState(feedStore.streamDatabase);
-  const metrics = useSimulatedRttMetrics();
+  // Real, browser-measured: transport RTT from RPCs the store already makes,
+  // plus the hosted processor's self-measured consumption report.
+  const metrics = useBrowserStreamMetrics(store);
 
   const { search } = useStreamViewSearch();
   const panels = useStreamViewPanels();
@@ -202,6 +261,7 @@ export function ProjectStreamView({
 
   const { getProcessorRuntimeState, getStreamRuntimeState } = useProcessorsPanelDebugState({
     resolvedStreamSource,
+    store,
     streamPath,
   });
 
@@ -240,9 +300,6 @@ export function ProjectStreamView({
   // local_index order (raw rows click through to the inspector).
   const modeBody = (
     <StreamFeedView
-      {...(interrupt != null && (agentUiState?.queuedUserMessages ?? []).length > 0
-        ? { onInterruptQueuedMessages: interrupt.run }
-        : {})}
       // Fresh virtualizer state per stream mirror + mode (see StreamFeedView docs).
       key={`${feedStore.streamDatabase.databasePath}:${activeMode}`}
       database={feedStore.streamDatabase}
@@ -256,11 +313,12 @@ export function ProjectStreamView({
       {...(caps.eventInspector ? { onInspectEvent: panels.inspectEvent } : {})}
       {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
       emptyLabel={connectionLabel}
-      isInterruptingQueuedMessages={interrupt?.isInterrupting ?? false}
       projectSlug={projectSlug}
       isPending={agentUiState == null && feedSnapshot.connectionStatus !== "subscribed"}
     />
   );
+
+  const queuedUserMessages = caps.agentFeed ? (agentUiState?.queuedUserMessages ?? []) : [];
 
   // The feed column — mode body with overlays on top, composer below. One JSX
   // value so the split layout and the fullPanel Events sheet render the same
@@ -274,19 +332,30 @@ export function ProjectStreamView({
 
       <div className="shrink-0 px-4 pb-2.5 pt-2.5">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
-          <StreamViewComposer
-            autoFocusMessage={autoFocusMessageComposer}
-            {...(defaultComposerMode == null
-              ? caps.agentFeed
-                ? { defaultMode: "message" as const }
-                : { defaultMode: "raw" as const }
-              : { defaultMode: defaultComposerMode })}
-            interrupt={interrupt}
-            {...(messageComposer == null ? {} : { messageComposer })}
-            onNudgeDeliveries={nudgeDeliveries}
-            presence={presence}
-            store={store}
-          />
+          <div>
+            {/* Queued messages are part of the composer: the panel tucks
+                behind the pill (painted first, overlapped via its negative
+                bottom margin) and grows the composer column, which the feed's
+                stick-to-bottom already follows on viewport resize. */}
+            <QueuedMessagesPanel
+              messages={queuedUserMessages}
+              isInterrupting={interrupt?.isInterrupting ?? false}
+              {...(interrupt == null ? {} : { onInterrupt: interrupt.run })}
+            />
+            <StreamViewComposer
+              autoFocusMessage={autoFocusMessageComposer}
+              {...(defaultComposerMode == null
+                ? caps.agentFeed
+                  ? { defaultMode: "message" as const }
+                  : { defaultMode: "raw" as const }
+                : { defaultMode: defaultComposerMode })}
+              interrupt={interrupt}
+              {...(messageComposer == null ? {} : { messageComposer })}
+              onNudgeDeliveries={nudgeDeliveries}
+              presence={presence}
+              store={store}
+            />
+          </div>
           {caps.agentFeed && agentUiState?.tokenUsage != null ? (
             <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
           ) : null}
@@ -295,8 +364,8 @@ export function ProjectStreamView({
     </div>
   );
 
-  const processorsSheet = (
-    <StreamProcessorsPanel
+  const streamStateSheet = (
+    <StreamStatePanel
       open={panels.processorsPanelOpen}
       onOpenChange={(open) => {
         if (!open) panels.closeProcessorsPanel();
@@ -312,6 +381,7 @@ export function ProjectStreamView({
       onClearClientDatabase={clearClientDatabases}
       getProcessorRuntimeState={getProcessorRuntimeState}
       getStreamRuntimeState={getStreamRuntimeState}
+      streamPath={streamPath}
     />
   );
 
@@ -328,7 +398,7 @@ export function ProjectStreamView({
           streamPath={streamPath}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{panel}</div>
-        {processorsSheet}
+        {streamStateSheet}
         <StreamEventsSheet streamPath={streamPath}>
           {filterRow}
           {feedColumn}
@@ -359,7 +429,7 @@ export function ProjectStreamView({
         )}
         {feedColumn}
       </div>
-      {processorsSheet}
+      {streamStateSheet}
     </section>
   );
 }
@@ -464,9 +534,10 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
  */
 function useProcessorsPanelDebugState(args: {
   resolvedStreamSource: ItxStreamSource;
+  store: StreamBrowserStore;
   streamPath: string;
 }) {
-  const { resolvedStreamSource, streamPath } = args;
+  const { resolvedStreamSource, store, streamPath } = args;
   const getProcessorRuntimeState = useCallback(
     async (subscriptionKey: string) => {
       const stream = await resolvedStreamSource(streamPath);
@@ -484,10 +555,11 @@ function useProcessorsPanelDebugState(args: {
     },
     [resolvedStreamSource, streamPath],
   );
+  // Through the store's leader socket, not a fresh dial: the same call then
+  // doubles as a transport-RTT sample for the header/panel metrics.
   const getStreamRuntimeState = useCallback(
-    async (): Promise<StreamRuntimeDebugState> =>
-      (await resolvedStreamSource(streamPath)).runtimeState(),
-    [resolvedStreamSource, streamPath],
+    (): Promise<StreamRuntimeDebugState> => store.debugRuntimeState(),
+    [store],
   );
   return { getProcessorRuntimeState, getStreamRuntimeState };
 }

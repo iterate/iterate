@@ -29,6 +29,7 @@ import {
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
 import {
+  extractChunkText,
   jsonCompatible,
   normalizeLlmUsage,
   runWorkersAiAttempt,
@@ -82,6 +83,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   readonly #scheduledRequestTimers = new Map<string, { cancel: () => void }>();
   /** llmRequestOffsets with an execution alive in THIS incarnation. */
   readonly #liveLlmExecutions = new Set<number>();
+  /** Streamed assistant text so far by llmRequestOffset — what an interrupt
+   * hands back to the model as its "response so far". Incarnation-local best
+   * effort: an eviction loses it, and the crash-cancel path never had it. */
+  readonly #partialLlmResponseTexts = new Map<number, string>();
 
   #now(): number {
     return (this.deps.now ?? Date.now)();
@@ -152,7 +157,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
         const interruptedRequest = previousState.currentRequest;
         if (interruptedRequest === null) return;
-        blockProcessorWhile(() => append(this.#cancelEventForCurrentRequest(interruptedRequest)));
+        blockProcessorWhile(() =>
+          append(...this.#cancelEventsForCurrentRequest(interruptedRequest)),
+        );
         return;
       }
       case "events.iterate.com/agents/web-message-sent": {
@@ -179,7 +186,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (event.payload.llmRequestPolicy.behaviour !== "interrupt-current-request") return;
         const interrupted = previousState.currentRequest;
         if (interrupted === null) return;
-        blockProcessorWhile(() => append(this.#cancelEventForCurrentRequest(interrupted)));
+        blockProcessorWhile(() => append(...this.#cancelEventsForCurrentRequest(interrupted)));
         return;
       }
       case "events.iterate.com/agent/llm-request-scheduled":
@@ -236,7 +243,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
               idempotencyKey: this.idempotencyKey("malformed-snippet-rejected", event),
               payload: {
                 content:
-                  "Your code block did NOT run: the block's content must START with `async` — a single `async (itx) => { ... }` with no comments or statements before it. Resend it with the function first (move any leading comments inside the function body).",
+                  "Your code block did NOT run. Only a ```js fence whose content STARTS with `async` executes — a single `async (itx) => { ... }`, JavaScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
                 llmRequestPolicy: { behaviour: "after-current-request" },
               },
             });
@@ -393,25 +400,34 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       });
       if (resetsSinceMeasurement.length > 0) return;
 
-      const transcript = state.history
-        .map(
-          (message) =>
-            `${message.role === "user" ? "User" : "Assistant"}:\n${flattenMessageToText(message)}`,
-        )
-        .join("\n\n");
+      // Same transport as normal turns: BYOK carries the per-agent
+      // prompt_cache_key, so this request lands on the shard that already
+      // holds the conversation's prefix (and the cache discount lands on our
+      // bill — the unified lane meters cached tokens at the uncached price).
       const summary = await runWorkersAiAttempt({
         ai,
+        transport: this.deps.cloudflareAiGatewayTransport?.(),
         deadlineMs: DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
-        messages: [
-          { role: "system", content: AGENT_COMPACTION_PROMPT },
-          { role: "user", content: transcript },
-        ],
+        messages: buildAgentCompactionRequestBody(state).messages.map((message) => ({
+          role: message.role,
+          content: flattenMessageToText(message),
+        })),
         model: state.llmConfig.model,
         onChunk: async () => {},
       });
 
       const stateNow = reduceAgentEvents(await this.#readConsumedEvents());
       const carriedForward = stateNow.history.slice(state.history.length);
+      // The summary turn's own usage rides the reason string: compaction has
+      // no llm-request-requested offset, so a token-usage-reported event (its
+      // reducer keys on one, and its processEvent arm is this very trigger)
+      // does not fit — but the cached/input split is the whole evidence that
+      // the prefix-reuse above worked, so it must land in the journal.
+      const usage = normalizeLlmUsage(summary.usage);
+      const usageNote =
+        usage === undefined
+          ? ""
+          : `; summary llm usage: input=${usage.inputTokens} cached=${usage.cachedInputTokens ?? 0} output=${usage.outputTokens}`;
       await this.append({
         type: "events.iterate.com/agent/history-reset",
         idempotencyKey: this.idempotencyKey(`history-reset@${triggerOffset}`),
@@ -424,7 +440,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             },
             ...carriedForward,
           ],
-          reason: `compaction@${triggerOffset}: ~${contextTokens} tokens > ${thresholdTokens}`,
+          reason: `compaction@${triggerOffset}: ~${contextTokens} tokens > ${thresholdTokens}${usageNote}`,
         },
       });
     } catch {
@@ -644,22 +660,32 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     };
   }
 
-  #cancelEventForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
+  /**
+   * The cancel for a user interrupt — plus, when this incarnation streamed
+   * any of the doomed attempt's text, a model-visible input carrying the
+   * response so far. Without it the next turn silently loses everything the
+   * user just watched stream; the model would repeat or contradict itself
+   * with no idea why. dont-trigger-request: the interrupting input is the
+   * trigger. Refold-safe: replays find an empty map and the cancel dedupes.
+   */
+  #cancelEventsForCurrentRequest(request: NonNullable<AgentState["currentRequest"]>) {
     if (request.phase === "scheduled") {
-      return {
-        type: "events.iterate.com/agent/llm-request-cancelled" as const,
-        idempotencyKey: this.idempotencyKey(
-          `llm-request-cancelled@scheduled:${request.scheduledOffset}`,
-        ),
-        payload: {
-          phase: "scheduled" as const,
-          reason: "interrupted-by-user-input" as const,
-          requestId: request.requestId,
+      return [
+        {
+          type: "events.iterate.com/agent/llm-request-cancelled" as const,
+          idempotencyKey: this.idempotencyKey(
+            `llm-request-cancelled@scheduled:${request.scheduledOffset}`,
+          ),
+          payload: {
+            phase: "scheduled" as const,
+            reason: "interrupted-by-user-input" as const,
+            requestId: request.requestId,
+          },
         },
-      };
+      ];
     }
 
-    return {
+    const cancelEvent = {
       type: "events.iterate.com/agent/llm-request-cancelled" as const,
       idempotencyKey: this.idempotencyKey(
         `llm-request-cancelled@requested:${request.llmRequestOffset}`,
@@ -670,6 +696,21 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         llmRequestOffset: request.llmRequestOffset,
       },
     };
+    const partialResponse = this.#partialLlmResponseTexts.get(request.llmRequestOffset);
+    if (partialResponse === undefined || partialResponse.trim() === "") return [cancelEvent];
+    return [
+      cancelEvent,
+      {
+        type: "events.iterate.com/agent/input-added" as const,
+        idempotencyKey: this.idempotencyKey(
+          `render-interrupted-partial@${request.llmRequestOffset}`,
+        ),
+        payload: {
+          content: `Your in-progress response was interrupted by the user input above and cancelled. It never completed, and no code block in it was executed. Your response so far:\n\n${partialResponse}`,
+          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
+        },
+      },
+    ];
   }
 
   /**
@@ -715,6 +756,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         })),
         model,
         onChunk: async (chunk, index) => {
+          // Accumulated text is what an interrupt hands back to the model as
+          // its "response so far" (#cancelEventsForCurrentRequest).
+          this.#partialLlmResponseTexts.set(
+            llmRequestOffset,
+            (this.#partialLlmResponseTexts.get(llmRequestOffset) ?? "") + extractChunkText(chunk),
+          );
           // Ephemeral: the durable truth is the output-added /
           // llm-request-completed pair below.
           await this.append({
@@ -788,6 +835,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           },
         },
       });
+    } finally {
+      // The attempt is settled; a cancel for it can no longer be appended
+      // (the completion or the cancel already cleared currentRequest), so the
+      // accumulated text has no remaining reader.
+      this.#partialLlmResponseTexts.delete(llmRequestOffset);
     }
   }
 
@@ -1176,12 +1228,20 @@ function renderFileHintLine(file: AgentFileAttachment): string {
 // =============================================================================
 
 /**
- * System prompt for the summary turn. The summary becomes the agent's ENTIRE
+ * Instruction for the summary turn. The summary becomes the agent's ENTIRE
  * memory of everything before the reset, so it optimizes for retrieval keys —
  * names, paths, ids, decisions — over narrative flow.
+ *
+ * It rides as the LAST message of the compaction request, behind the
+ * conversation exactly as normal turns send it — never as a fresh system
+ * prompt with the transcript re-rendered behind it. Compaction fires at the
+ * biggest prompt this agent will ever send (~half the context window), and
+ * the tail position means that whole prompt is a prefix the provider already
+ * has cached from the previous turn (90% input discount on gpt-5.5) instead
+ * of a from-scratch prompt sharing no bytes with it.
  */
 const AGENT_COMPACTION_PROMPT = [
-  "You are compacting an AI agent's conversation history because it is close to overflowing the model's context window. Write a summary that will REPLACE the transcript below as the agent's only memory of it.",
+  "You are compacting this AI agent conversation because it is close to overflowing the model's context window. Do not respond to the messages above. Instead, write a summary that will REPLACE everything above as the agent's only memory of it.",
   "",
   "Preserve, with their exact spellings:",
   "- who the user is, what they are trying to achieve, and their standing preferences or instructions",
@@ -1192,6 +1252,27 @@ const AGENT_COMPACTION_PROMPT = [
   "",
   "Write dense prose. No preamble, no headings about the summarization itself — output only the summary.",
 ].join("\n");
+
+/**
+ * The compaction request: the conversation EXACTLY as `buildAgentLlmRequestBody`
+ * sends it — same system prompt, same history messages — with the summarize
+ * instruction appended as the trailing message. Byte-identity with the normal
+ * turn's prefix is the point (guarded by a test): the provider's prompt cache
+ * matches on exact prefixes, so any re-rendering of the transcript would turn
+ * the most expensive request in an agent's life into a full cache miss.
+ */
+export function buildAgentCompactionRequestBody(state: {
+  systemPrompt: AgentState["systemPrompt"];
+  history: AgentState["history"];
+}): { messages: AgentChatMessage[] } {
+  return {
+    messages: [
+      { role: "system" as const, content: state.systemPrompt },
+      ...state.history,
+      { role: "system" as const, content: AGENT_COMPACTION_PROMPT },
+    ],
+  };
+}
 
 // =============================================================================
 // Context windows: model → the window the token-usage-reported payload claims.
@@ -1269,10 +1350,11 @@ type SnippetExtraction =
   // option — the model believes everything it wrote will run — so the caller
   // rejects the whole output with corrective feedback instead.
   | { kind: "multiple"; count: number }
-  // A fenced block exists but its content does not start with `async` —
-  // leading comments or statements before the arrow function. Nothing can
-  // run; the caller sends corrective feedback (models habitually open code
-  // with a comment line, and silence here reads as the platform hanging).
+  // A fenced block exists but nothing runnable came out of it: leading
+  // comments or statements before the arrow function, or a non-JavaScript
+  // language tag the extraction regex refuses. Nothing can run; the caller
+  // sends corrective feedback (models habitually open code with a comment
+  // line, and silence here reads as the platform hanging).
   | { kind: "malformed" }
   | { kind: "none" };
 
@@ -1290,9 +1372,12 @@ function extractAsyncJsSnippet(content: string): SnippetExtraction {
   if (/^async\s*(?:function|\()/.test(code) || /^\(?async\s*\(/.test(code)) {
     return { kind: "script", code };
   }
-  // An unfenced non-script response is a deliberate no-op turn; a fenced one
-  // is a malformed script attempt.
-  return fenced ? { kind: "malformed" } : { kind: "none" };
+  // Any response carrying a line-start fence that did not yield a runnable
+  // script is a malformed attempt — including fences with a non-JS language
+  // tag, which FENCED_SNIPPET_RE refuses to match. Only a fence-free
+  // non-script response is a deliberate no-op turn; the system prompt
+  // promises rejection-with-feedback for everything else.
+  return fenced !== null || /^[ \t]*```/m.test(content) ? { kind: "malformed" } : { kind: "none" };
 }
 
 // The "tool result" half of the codemode loop: a finished script execution

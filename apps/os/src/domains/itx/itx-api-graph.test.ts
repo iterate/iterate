@@ -105,6 +105,15 @@ describe("searchScore", () => {
     expect(searchScore("email gmail gmail", "gmail")).toBe(1);
     expect(searchScore("zebra", "no such word")).toBe(0);
   });
+
+  test('drops noise words — "itx.docs" means "docs", not "everything +1"', () => {
+    // "itx" substring-matches virtually every haystack; scoring it would give
+    // unrelated rows the same score as the row the searcher wants.
+    expect(searchScore("itx.docs", "generate an image with itx.ai.run")).toBe(0);
+    expect(searchScore("itx.docs", "the docs door: search and get")).toBe(1);
+    // An all-noise query still matches noisily instead of returning nothing.
+    expect(searchScore("itx", "call anything on itx")).toBe(1);
+  });
 });
 
 describe("stripComments", () => {

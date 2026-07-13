@@ -101,8 +101,9 @@ function MatchedStreamPath({ path, query }: { path: string; query: string }) {
  * touched while you watch FLASHES as it jumps (a keyed remount replays a
  * one-shot CSS fade) — reordering reads as activity, not as rows teleporting.
  *
- * The dialog takes a FIXED two-thirds of the viewport; the list/tree scrolls
- * inside it, so navigating never resizes or re-centers the dialog.
+ * The dialog takes a FIXED two-thirds of the viewport (near-fullscreen on
+ * phones); the list/tree scrolls inside it, so navigating never resizes or
+ * re-centers the dialog.
  */
 export function StreamSwitcherDialog({
   open,
@@ -222,7 +223,7 @@ export function StreamSwitcherDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[66svh] w-[66vw] flex-col sm:max-w-[66vw]">
+      <DialogContent className="flex h-[calc(100svh-2rem)] w-[calc(100vw-1rem)] max-w-none flex-col sm:h-[66svh] sm:w-[66vw] sm:max-w-[66vw]">
         <DialogHeader className="shrink-0">
           <DialogTitle>Streams</DialogTitle>
           <DialogDescription className="sr-only">Create or open a stream by path</DialogDescription>

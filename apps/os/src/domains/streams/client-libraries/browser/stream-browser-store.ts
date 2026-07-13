@@ -16,7 +16,13 @@
 import type { ProcessorRuntimeState, SubscriptionKey } from "../../rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "../../schemas.ts";
 import type { Stream } from "../../../../itx-api.generated.ts";
-import { announceContract, type AnyHostedProcessor } from "../../stream-processor-host.ts";
+import {
+  announceContract,
+  hostRuntimeCapabilities,
+  type AnyHostedProcessor,
+} from "../../stream-processor-host.ts";
+import { LatencyRing, type LatencyStats } from "../../stream-runtime-metrics.ts";
+import type { SubscriberMetricsReport } from "../../subscriber-metrics.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
 import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
@@ -100,8 +106,19 @@ export type BrowserProcessorConfig = {
 
 type BrowserStreamConnectionConfig = {
   projectId?: string;
-  createStreamClient?: BrowserStreamClientFactory;
+  createStreamClient: BrowserStreamClientFactory;
   streamUrl?: string | URL | ((args: { projectId: string; streamPath: string }) => string | URL);
+  /**
+   * Evict the transport `createStreamClient` dials through, so the NEXT call
+   * dials fresh. The runtime calls this when the transport looks dead in a way
+   * the factory cannot see: a half-open socket (mobile suspend/resume, laptop
+   * sleep — no close frame ever arrives) hangs every RPC forever, and a
+   * factory that memoizes its connection would re-dial through that corpse on
+   * every reconnect. Timeout-shaped failures (probe strikes, dial deadline)
+   * and repeated connect failures trigger it; a factory whose transport is
+   * per-call fresh can omit it.
+   */
+  resetTransport?: () => void;
 };
 
 /**
@@ -113,6 +130,23 @@ export type StreamRuntimeState = {
   coreProcessorState: unknown;
 };
 
+/** The full server runtime debug view (connections, subscriptions, throughput). */
+export type StreamServerRuntimeState = Awaited<ReturnType<Stream["runtimeState"]>>;
+
+/**
+ * This browser's own REAL stream metrics — every value is measured, never
+ * synthesized. `transportRttMs` samples come from timing RPCs the store makes
+ * anyway (liveness probes, nudges, debug polls). `subscriber` is the hosted
+ * processor's self-measured consumption report (append round trip,
+ * consume-own-append loop, ingest stats) — present only on the leader tab,
+ * which is the tab that actually consumes; followers report `undefined` and
+ * UIs render "—".
+ */
+export type BrowserStreamMetrics = {
+  transportRttMs: LatencyStats | null;
+  subscriber: SubscriberMetricsReport | undefined;
+};
+
 /**
  * What `appendBatch`/`runtimeState` return. When the connection is ready this is the genuine
  * capnweb `RpcPromise` (lazy + disposable). When the connection is transiently reconnecting
@@ -121,7 +155,18 @@ export type StreamRuntimeState = {
  */
 export type StreamRpcResult<T> = Promise<T> & Disposable;
 
-export type BrowserStreamClient = Disposable & Stream;
+export type BrowserStreamClient = Disposable &
+  Stream & {
+    /**
+     * Evict the exact transport THIS client rides, bound at creation (see
+     * evictItxSocketIfCurrent) — so a late suspicion verdict against this
+     * connection can never evict a successor socket, and a genuinely-dead
+     * young socket can be evicted without waiting out an age guard. Absent
+     * on clients whose factory can't bind identity; the runtime then falls
+     * back to the config-level resetTransport (age-guarded).
+     */
+    evictTransport?: () => void;
+  };
 
 export type BrowserStreamClientFactory = (args: {
   projectId: string;
@@ -133,10 +178,15 @@ export type BrowserStreamClientFactory = (args: {
   ) => void;
 }) => Promise<BrowserStreamClient>;
 
-export function asBrowserStreamClient(stream: Stream, dispose: () => void): BrowserStreamClient {
+export function asBrowserStreamClient(
+  stream: Stream,
+  dispose: () => void,
+  evictTransport?: () => void,
+): BrowserStreamClient {
   return new Proxy(stream, {
     get(target, property, receiver) {
       if (property === Symbol.dispose) return dispose;
+      if (property === "evictTransport") return evictTransport;
       const value = Reflect.get(target, property, receiver);
       if (typeof value !== "function") return value;
       return (...args: unknown[]) => Reflect.apply(value, target, args);
@@ -148,6 +198,22 @@ export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
   appendBatch(args: { events: StreamEventInput[] }): StreamRpcResult<StreamEvent[]>;
   runtimeState(): StreamRpcResult<StreamRuntimeState>;
+  /**
+   * The full server runtime debug view, RTT-timed: each call also lands one
+   * transport-RTT sample in {@link StreamBrowserStore.metrics}. The processors
+   * panel polls this while open.
+   */
+  debugRuntimeState(): Promise<StreamServerRuntimeState>;
+  /** This browser's own measured metrics (see {@link BrowserStreamMetrics}). Poll-friendly. */
+  metrics(): BrowserStreamMetrics;
+  /**
+   * An append THIS browser initiated through a lane the store doesn't carry
+   * (e.g. `itx.agents.get(path).message(...)`) committed at
+   * `maxCommittedOffset`. Feeds the same consume-own-append loop as
+   * `appendBatch`: the loop closes when this tab's own subscription ingests
+   * past the offset. `t0` is when the caller initiated the append.
+   */
+  noteExternalAppend(args: { maxCommittedOffset: number; t0: number }): void;
   getProcessorRuntimeState(args: {
     subscriptionKey: SubscriptionKey;
   }): StreamRpcResult<ProcessorRuntimeState | null>;
@@ -162,6 +228,23 @@ export type StreamBrowserStore = Disposable & {
   getSnapshot(): StreamBrowserSnapshot;
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
+  /**
+   * True once the runtime tore down (last subscriber gone, idle grace
+   * elapsed). A caller holding a memoized reference to a disposed runtime
+   * must RE-ACQUIRE, not subscribe — see useStreamProcessorStore's self-heal.
+   */
+  isDisposed(): boolean;
+};
+
+/**
+ * How a runtime reaches (and, on suspicion, evicts) the server: the dial and
+ * its evictor travel as ONE value so they can never come from two different
+ * transports (a factory dialing socket A while timeouts evict socket B would
+ * re-arm the wedge this store exists to prevent).
+ */
+type BrowserStreamTransport = {
+  createStreamClient: BrowserStreamClientFactory;
+  resetTransport: (() => void) | undefined;
 };
 
 // --- Registries: one runtime per (path, slug), one DB per path -------------------------
@@ -191,7 +274,14 @@ function acquireDatabase(projectId: string, streamPath: string) {
   };
 }
 
-const runtimeRegistry = new Map<string, StreamBrowserStore>();
+const runtimeRegistry = new Map<
+  string,
+  {
+    runtime: StreamBrowserStore;
+    refreshTransport: (transport: BrowserStreamTransport) => void;
+    retain: () => void;
+  }
+>();
 
 // Console-accessible view of every live runtime's internals
 // (`__streamRuntimeDebug()` in devtools): which runtimes exist, their
@@ -210,14 +300,28 @@ export function acquireStreamRuntime(
   const slug = args.slug;
   const key = `${projectId} ${args.streamPath} ${slug}`;
   const existing = runtimeRegistry.get(key);
-  if (existing !== undefined) return existing;
-  const runtime = createStreamRuntime({
+  if (existing !== undefined) {
+    // The runtime outlives the render that created it; a stale factory here is
+    // a permanent wedge once its captured transport dies. Re-acquires always
+    // hand over the current transport WHOLESALE (dial + evictor are one value;
+    // pairing acquire N's factory with acquire N-1's evictor would point
+    // eviction at a different transport than the one being dialed).
+    existing.refreshTransport({
+      createStreamClient: args.createStreamClient,
+      resetTransport: args.resetTransport,
+    });
+    // A pending idle-dispose must not fire between this acquire and the
+    // commit's subscribe() — see retain()'s docstring.
+    existing.retain();
+    return existing.runtime;
+  }
+  const created = createStreamRuntime({
     ...args,
     projectId,
     onDispose: () => runtimeRegistry.delete(key),
   });
-  runtimeRegistry.set(key, runtime);
-  return runtime;
+  runtimeRegistry.set(key, created);
+  return created.runtime;
 }
 
 function createStreamRuntime(
@@ -227,11 +331,18 @@ function createStreamRuntime(
     onDispose?: () => void;
   } & BrowserProcessorConfig &
     BrowserStreamConnectionConfig,
-): StreamBrowserStore {
-  if (args.createStreamClient === undefined) {
-    throw new Error("acquireStreamRuntime requires createStreamClient.");
-  }
-  const createStreamClient = args.createStreamClient;
+): {
+  runtime: StreamBrowserStore;
+  refreshTransport: (transport: BrowserStreamTransport) => void;
+  retain: () => void;
+} {
+  // Mutable on purpose: re-acquires refresh it (see acquireStreamRuntime), and
+  // connect()/eviction read it per use — a captured-at-creation factory whose
+  // transport died would otherwise be dialed forever.
+  let transport: BrowserStreamTransport = {
+    createStreamClient: args.createStreamClient,
+    resetTransport: args.resetTransport,
+  };
   const { schemaVersion, tables } = args;
   const slug = args.slug;
   const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(
@@ -302,6 +413,41 @@ function createStreamRuntime(
   let totalDeliveredEvents = 0;
   let lastBatchEvents = 0;
   let ingestFailures = 0;
+  // Real transport-RTT samples from RPCs the store makes anyway (probes,
+  // nudges, debug polls). Success-only: a timed-out call is not a sample.
+  const transportRtt = new LatencyRing();
+  // The leader election's live hosted processor. Its StreamProcessor-provided
+  // `subscriberMetrics` is the ONE place this browser's consumption metrics
+  // live: appendBatch feeds committed offsets in, the base class's ingest
+  // closes the consume-own-append loop, and stream-side pings land their
+  // clock-offset estimate here too. Followers host no processor → no
+  // self-measured metrics, honestly.
+  let currentProcessor: BrowserHostedProcessor | undefined;
+
+  /** The one builder for this browser's measured metrics (store API + debug registry). */
+  function readMetrics(): BrowserStreamMetrics {
+    return {
+      transportRttMs: transportRtt.stats(),
+      subscriber: currentProcessor?.subscriberMetrics.report(),
+    };
+  }
+
+  /**
+   * Time one RPC into the transport-RTT ring. Success only — and bounded:
+   * callers race these calls against timeouts, and a call the caller already
+   * abandoned can still resolve much later (a half-open socket healing).
+   * Recording that late duration would poison the ring with a sample the
+   * user never experienced as a success, so anything slower than the
+   * liveness probe's own deadline is treated as a failure, not a sample.
+   */
+  function timed<T>(promise: Promise<T>): Promise<T> {
+    const t0 = Date.now();
+    return promise.then((value) => {
+      const elapsed = Date.now() - t0;
+      if (elapsed <= LIVENESS_PROBE_TIMEOUT_MS) transportRtt.record(elapsed, Date.now());
+      return value;
+    });
+  }
 
   function resolveReadyWaiters() {
     const waiters = readyWaiters;
@@ -334,7 +480,10 @@ function createStreamRuntime(
       };
       const timer = setTimeout(() => {
         readyWaiters = readyWaiters.filter((entry) => entry !== waiter);
-        reject(new Error("timed out waiting for stream connection to reconnect"));
+        // StepTimeoutError so appendBatch's retry classifier treats "the
+        // reconnect didn't land in time" as transient (retry), unlike an
+        // app-level rejection (throw immediately).
+        reject(new StepTimeoutError("timed out waiting for stream connection to reconnect"));
       }, timeoutMs);
       readyWaiters.push(waiter);
     });
@@ -443,6 +592,37 @@ function createStreamRuntime(
       reconnectTimer = undefined;
     }
     connect();
+  }
+
+  // THE one transport-suspicion decision point: every reconnect caused by a
+  // FAILURE routes through here so the "was the transport itself the problem?"
+  // call is made once, not per catch block. A step that TIMED OUT rode a
+  // transport that answers nothing — the post-suspend half-open socket — and
+  // per-call dialing alone can't escape it (the socket map keeps handing out
+  // the cached corpse; it only self-evicts on a close event that never comes).
+  // Evict it so the reconnect dials fresh. A step that REJECTED got an answer
+  // (a broken-session error, a server-side failure): the transport observably
+  // works or already self-evicted — reconnect without collateral damage,
+  // unless the caller accumulated its own suspicion (opts.evictTransport).
+  function reconnectAfterError(
+    step: string,
+    error: unknown,
+    delayMs: number,
+    opts?: { evictTransport?: boolean; suspect?: BrowserStreamClient },
+  ) {
+    if (opts?.evictTransport || error instanceof StepTimeoutError) {
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] evicting suspect transport (${step})`,
+        error,
+      );
+      // Prefer the suspect connection's own identity-bound evictor (it can
+      // only evict the exact socket the suspicion accumulated against); fall
+      // back to the config-level, age-guarded evictor when the factory
+      // couldn't bind identity or the failing step had no connection yet.
+      const evict = opts?.suspect?.evictTransport ?? transport.resetTransport;
+      evict?.();
+    }
+    scheduleReconnect(`${step}: ${errorMessage(error)}`, delayMs);
   }
 
   async function discardLocalMirror() {
@@ -562,8 +742,33 @@ function createStreamRuntime(
     return reconciled;
   }
 
+  // A dial through a half-open transport hangs forever (no close frame ⇒
+  // capnweb never rejects), so every attempt races a deadline. NOTE this
+  // deadline is not redundant with the socket map's own 15s dial timeout in
+  // itx-react: that one only guards a FRESH dial — a cached, already-resolved
+  // corpse resolves instantly and only hangs on the first real round trip,
+  // which is this deadline's job to bound. Consecutive failures escalate: the
+  // transport is declared suspect after the second in a row (or immediately on
+  // a timeout), evicted, and the next attempt dials fresh.
+  const CONNECT_DIAL_TIMEOUT_MS = 15_000;
+  let connectFailuresSinceSuccess = 0;
+  // When the current connect attempt started — onResume uses it to leave a
+  // young in-flight dial alone (pageshow fires on every normal load, right
+  // after start() began the first dial; restarting it wastes the round trip).
+  let connectStartedAt = 0;
+  // The epoch of the connect attempt currently in flight, or undefined. An
+  // attempt "owns" the runtime only while this matches connectionEpoch: a
+  // reconnect path that bumps the epoch (scheduleReconnect) supersedes it,
+  // and connect() must then start a fresh attempt — but a connect() call
+  // while the CURRENT epoch's attempt is still dialing (a direct call, a
+  // resume event) must not abort-and-restart it (each supersede wasted a
+  // stub pull and reset the election).
+  let connectPendingEpoch: number | undefined;
+
   function connect() {
     if (stream !== undefined || disposed) return;
+    if (connectPendingEpoch === connectionEpoch) return;
+    connectStartedAt = Date.now();
     const streamUrl =
       args.streamUrl === undefined
         ? undefined
@@ -579,8 +784,8 @@ function createStreamRuntime(
     // connection compares against this and bails if it no longer matches (B1).
     connectionEpoch += 1;
     const epoch = connectionEpoch;
-
-    void createStreamClient({
+    connectPendingEpoch = epoch;
+    const dial = transport.createStreamClient({
       projectId: args.projectId,
       streamPath: args.streamPath,
       streamUrl,
@@ -600,12 +805,26 @@ function createStreamRuntime(
         };
         emitSnapshot();
       },
-    })
+    });
+    // A dial that lost its deadline (or was superseded) can still settle later:
+    // dispose the orphaned connection, and swallow the late rejection so it
+    // never surfaces as unhandled.
+    void dial.then(
+      (connection) => {
+        if (disposed || epoch !== connectionEpoch) connection[Symbol.dispose]();
+      },
+      () => {},
+    );
+    void raceWithTimeout(
+      dial,
+      CONNECT_DIAL_TIMEOUT_MS,
+      `stream client dial timed out after ${CONNECT_DIAL_TIMEOUT_MS}ms`,
+    )
       .then((connection) => {
-        if (disposed || epoch !== connectionEpoch) {
-          connection[Symbol.dispose]();
-          return;
-        }
+        if (connectPendingEpoch === epoch) connectPendingEpoch = undefined;
+        // The superseded case is disposed by the dial handler above, exactly once.
+        if (disposed || epoch !== connectionEpoch) return;
+        connectFailuresSinceSuccess = 0;
         stream = connection;
         // A follower can still append / read runtimeState, so readiness is "connection
         // open", not "leader/subscribed". Unblock anyone awaiting reconnect (B2).
@@ -613,8 +832,18 @@ function createStreamRuntime(
         startSubscriptionElection({ connection, epoch });
       })
       .catch((error: unknown) => {
+        if (connectPendingEpoch === epoch) connectPendingEpoch = undefined;
         if (disposed || epoch !== connectionEpoch) return;
-        scheduleReconnect(`connect failed: ${errorMessage(error)}`, 1_000);
+        connectFailuresSinceSuccess += 1;
+        const delay = Math.min(30_000, 1_000 * 2 ** Math.min(connectFailuresSinceSuccess - 1, 5));
+        // A REJECTING dial usually rode a transport whose death was observed
+        // (fresh dials recover by themselves), but a factory that hands back
+        // stubs on a dead-but-never-closed session rejects identically forever
+        // — after two consecutive failures stop giving it the benefit of the
+        // doubt. (Timeouts evict on the first hit — reconnectAfterError.)
+        reconnectAfterError("connect failed", error, delay, {
+          evictTransport: connectFailuresSinceSuccess >= 2,
+        });
       });
   }
 
@@ -727,6 +956,16 @@ function createStreamRuntime(
             deliveryArrivals += 1;
             lastBatchEvents = page.length;
             totalDeliveredEvents += page.length;
+            // Deliberately NOT deadlined, unlike the read-only steps above: a
+            // deadline can only ABANDON this promise, not cancel the ingest —
+            // the old processor would keep committing projection rows and its
+            // checkpoint in the db worker while the timeout's fresh election
+            // spun up a second processor over the same tables (browser
+            // projection/checkpoint writes are non-atomic; two interleaved
+            // writers can regress reduced state). A wedged db worker parking
+            // this await is the known "worker death is undetected" latent —
+            // the safe fix is generation-fenced worker shutdown inside
+            // StreamBrowserDatabase, not a deadline here.
             await processor.ingest({ events: page, streamMaxOffset: serverHead });
             if (!ownsRuntime()) return undefined;
             catchUpOffset = page.at(-1)!.offset;
@@ -735,6 +974,7 @@ function createStreamRuntime(
         }
         lastDeliveredOffset = catchUpOffset;
         return {
+          processor,
           replayAfterOffset: catchUpOffset,
           subscriber: {
             description: "browser",
@@ -742,9 +982,18 @@ function createStreamRuntime(
               announcement: announceContract(processor.contract),
             },
           },
-          // The live capability rides as a SIBLING of the serializable
-          // descriptor — the same position the wake handshake gives it.
-          getRuntimeState: () => processor.getRuntimeState(),
+          // The live capabilities ride as SIBLINGS of the serializable
+          // descriptor — the same position the wake handshake gives them,
+          // built by the same shared helper so the two hosts cannot drift.
+          // Half our measured transport RTT is the one-way estimate that
+          // turns observed pings into the clock-offset correction.
+          ...hostRuntimeCapabilities(processor, {
+            now: () => Date.now(),
+            oneWayEstimateMs: () => {
+              const rtt = transportRtt.stats();
+              return rtt === null ? undefined : rtt.p50 / 2;
+            },
+          }),
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
@@ -754,9 +1003,9 @@ function createStreamRuntime(
             ingestWithSelfHeal(processor, batch, election),
         };
       })
-      .then((ready) => {
+      .then(async (ready) => {
         if (ready === undefined || !ownsRuntime()) return undefined;
-        return withDeadline(
+        const handle = await withDeadline(
           "subscribe",
           election.connection.subscribe({
             subscriptionKey,
@@ -764,16 +1013,24 @@ function createStreamRuntime(
             replayAfterOffset: ready.replayAfterOffset,
             subscriber: ready.subscriber,
             getRuntimeState: ready.getRuntimeState,
+            ping: ready.ping,
           }),
         );
+        return { handle, processor: ready.processor };
       })
-      .then((handle) => {
-        if (handle === undefined) return;
+      .then((subscribed) => {
+        if (subscribed === undefined) return;
+        const { handle, processor } = subscribed;
         if (!ownsRuntime()) {
-          handle.unsubscribe();
+          fireAndForgetUnsubscribe(handle);
           return;
         }
         subscriptionHandle = handle;
+        // Assigned only once the subscription is LIVE: an election that bails
+        // mid-chain must not leave metrics/appendBatch attributing samples to
+        // a processor that never subscribed (Bugbot round 2).
+        currentProcessor = processor;
+        nudgeSkipWarned = false;
         snapshot = { ...snapshot, connectionError: undefined, connectionStatus: "subscribed" };
         emitSnapshot();
         startLivenessProbe(election.connection);
@@ -789,7 +1046,12 @@ function createStreamRuntime(
         // landed us elsewhere) must not tear down the healthy current subscription (B1).
         if (disposed || !ownsRuntime()) return;
         console.error(`[stream ${args.streamPath} ${slug}] subscribe failed`, error);
-        scheduleReconnect(`subscribe failed: ${errorMessage(error)}`, 1_000);
+        // Deadline timeouts here MUST evict (reconnectAfterError does): when
+        // the socket went half-open while we were not yet subscribed, the dial
+        // "succeeds" instantly off the cached corpse and THIS chain is the
+        // first place the death manifests — without eviction it would loop
+        // dial → 15s park → reconnect forever, the wedge's residual form.
+        reconnectAfterError("subscribe failed", error, 1_000, { suspect: election.connection });
       });
   }
 
@@ -876,13 +1138,101 @@ function createStreamRuntime(
   }
 
   function stopSubscriptionElection() {
-    subscriptionHandle?.unsubscribe();
+    fireAndForgetUnsubscribe(subscriptionHandle);
     subscriptionHandle = undefined;
     writerRole?.release();
     writerRole = undefined;
+    // In-flight own-append correlations belong to the dying subscription; the
+    // fresh election replays, and a replayed delivery must not close a stale
+    // loop with an inflated sample.
+    currentProcessor?.subscriberMetrics.clearPendingAppends();
+    currentProcessor = undefined;
     snapshot = { ...snapshot, subscriptionStatus: "idle" };
     if (!disposed) emitSnapshot();
   }
+
+  // Teardown runs exactly when the session is likeliest to be dead, and a
+  // dead session's unsubscribe() rejects — un-awaited, that's an
+  // unhandledrejection per teardown. Same wrapper useItxSubscription's
+  // dispose uses.
+  function fireAndForgetUnsubscribe(handle: { unsubscribe(): void } | undefined) {
+    if (handle === undefined) return;
+    void Promise.resolve()
+      .then(() => handle.unsubscribe())
+      .catch(() => {
+        // The server side of a dead subscription is already gone.
+      });
+  }
+
+  // Resume is exactly when transports die (mobile suspend killed the TCP
+  // connection, the radio dropped, the laptop slept) AND when the paced probe
+  // has been frozen for the whole absence — so waiting for its next interval
+  // costs the user 10-35 visible seconds of a stale feed. Check immediately
+  // instead: a pending reconnect fires now, a live subscription gets nudged
+  // (which detects staleness server-side and reconnects with zero delay), and
+  // a FOLLOWER gets a transport check — it has no probe (probes are the
+  // leader's, post-subscribe) and nothing else would ever notice its dead
+  // connection: its feed keeps updating off the leader tab's shared mirror
+  // while its own appends fail, which looks exactly like a healthy page.
+  function onResume() {
+    if (disposed || !started) return;
+    const connection = stream;
+    if (connection === undefined || reconnectTimer !== undefined) {
+      // pageshow fires on every NORMAL load too, right after start() began the
+      // first dial — leave a young in-flight attempt alone instead of bumping
+      // its epoch and re-dialing (one wasted round trip per page load).
+      if (stream === undefined && Date.now() - connectStartedAt < 5_000) return;
+      reconnectNow();
+    } else if (subscriptionHandle !== undefined) {
+      void nudge();
+    } else if (snapshot.subscriptionStatus === "follower") {
+      // Settled followers ONLY — an election in flight ("electing", or
+      // "leader" before subscribe resolves) also has no handle yet, but its
+      // own step deadlines already bound a dead transport, and a resume-time
+      // probe racing a cold DO would tear down that healthy attempt.
+      void (async () => {
+        try {
+          await readCoreStateTwoStrike(connection, "follower resume check");
+        } catch (error) {
+          if (disposed || stream !== connection) return;
+          console.warn(
+            `[stream ${args.streamPath} ${slug}] follower connection failed its resume check; reconnecting`,
+            error,
+          );
+          reconnectAfterError("follower resume check failed", error, 0, { suspect: connection });
+        }
+      })();
+    }
+  }
+
+  // Read the connection's core state under the probe deadline, retrying ONE
+  // timeout — the shared two-strike standard: a single slow runtimeState()
+  // answer is a cold or busy DO, not a dead socket, and a timeout verdict
+  // ultimately evicts the transport the whole page shares. Returns undefined
+  // when ownership was lost mid-check; a second timeout (or any rejection)
+  // throws into the caller's reconnect lane.
+  async function readCoreStateTwoStrike(connection: BrowserStreamClient, step: string) {
+    const read = () =>
+      raceWithTimeout(
+        // Every runtime-state read doubles as a transport-RTT sample (timed
+        // guards against recording abandoned late resolutions itself).
+        timed(Promise.resolve(connection.runtimeState())),
+        LIVENESS_PROBE_TIMEOUT_MS,
+        `${step} timed out`,
+      );
+    let result;
+    try {
+      result = await read();
+    } catch (error) {
+      if (!(error instanceof StepTimeoutError)) throw error;
+      if (disposed || stream !== connection) return undefined;
+      result = await read();
+    }
+    return parseBrowserCoreProcessorState(result.coreProcessorState);
+  }
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "visible") onResume();
+  };
 
   function start() {
     if (started || disposed) return;
@@ -890,6 +1240,11 @@ function createStreamRuntime(
     snapshot = { ...snapshot, connectionStatus: "subscribing" };
     emitSnapshot();
     refreshDatabaseInfo();
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      window.addEventListener("online", onResume);
+      window.addEventListener("pageshow", onResume);
+    }
     connectTimer = setTimeout(() => {
       connectTimer = undefined;
       connect();
@@ -915,9 +1270,13 @@ function createStreamRuntime(
   function startLivenessProbe(connection: NonNullable<typeof stream>) {
     stopLivenessProbe();
     probePreviousArrivals = deliveryArrivals;
-    // A single slow runtimeState() answer (cold DO, busy worker) is not a dead
-    // socket — only consecutive timeouts are. Definitive signals (incarnation
-    // change, stalled deliveries) still reconnect on the first hit.
+    // A single SLOW runtimeState() answer (cold DO, busy worker) is not a dead
+    // socket — only consecutive timeouts are, and two of them mean the
+    // transport itself is swallowing calls (half-open socket): evict it so the
+    // reconnect dials fresh. A REJECTION is definitive on the first hit — the
+    // session is observably broken (e.g. "Peer closed WebSocket"), waiting a
+    // second interval just doubles the user's stuck time. Definitive signals
+    // (incarnation change, stalled deliveries) also reconnect on the first hit.
     let timeoutStrikes = 0;
     livenessTimer = setInterval(() => {
       void (async () => {
@@ -925,13 +1284,17 @@ function createStreamRuntime(
           let rawCoreProcessorState: unknown;
           try {
             ({ coreProcessorState: rawCoreProcessorState } = await raceWithTimeout(
-              Promise.resolve(connection.runtimeState()),
+              timed(Promise.resolve(connection.runtimeState())),
               LIVENESS_PROBE_TIMEOUT_MS,
               "liveness probe timed out",
             ));
           } catch (error) {
-            timeoutStrikes += 1;
-            if (timeoutStrikes < 2) return;
+            // Strike bookkeeping only; the second strike rethrows the
+            // StepTimeoutError and reconnectAfterError below evicts on it.
+            if (error instanceof StepTimeoutError) {
+              timeoutStrikes += 1;
+              if (timeoutStrikes < 2) return;
+            }
             throw error;
           }
           timeoutStrikes = 0;
@@ -961,7 +1324,7 @@ function createStreamRuntime(
             `[stream ${args.streamPath} ${slug}] connection failed its liveness probe; reconnecting`,
             error,
           );
-          scheduleReconnect(`liveness probe failed: ${errorMessage(error)}`, 250);
+          reconnectAfterError("liveness probe failed", error, 250, { suspect: connection });
         }
       })();
     }, LIVENESS_PROBE_INTERVAL_MS);
@@ -982,27 +1345,30 @@ function createStreamRuntime(
   // path that heals that state).
   const NUDGE_GRACE_MS = 2_000;
   let nudgeInFlight = false;
+  // Once-per-state latch for the skipped-nudge warning; reset on subscribe.
+  let nudgeSkipWarned = false;
 
   async function nudge(): Promise<void> {
     const connection = stream;
     if (connection === undefined || subscriptionHandle === undefined) {
       // Not the writer (or not connected): we can't resubscribe, but say so —
-      // a silently inert nudge made follower-side stalls undiagnosable.
-      console.warn(
-        `[stream ${args.streamPath} ${slug}] nudge skipped: ${connection === undefined ? "no connection" : `no subscription (status ${snapshot.subscriptionStatus})`}`,
-      );
+      // a silently inert nudge made follower-side stalls undiagnosable. Once
+      // per state though: a follower tab nudges on EVERY composer submit, and
+      // repeating the same warning per keypress-send is noise, not signal.
+      if (!nudgeSkipWarned) {
+        nudgeSkipWarned = true;
+        console.warn(
+          `[stream ${args.streamPath} ${slug}] nudge skipped: ${connection === undefined ? "no connection" : `no subscription (status ${snapshot.subscriptionStatus})`}`,
+        );
+      }
       return;
     }
     if (nudgeInFlight || disposed) return;
     nudgeInFlight = true;
     try {
       const arrivalsBefore = deliveryArrivals;
-      const { coreProcessorState: rawCoreProcessorState } = await raceWithTimeout(
-        Promise.resolve(connection.runtimeState()),
-        LIVENESS_PROBE_TIMEOUT_MS,
-        "delivery nudge timed out",
-      );
-      const coreProcessorState = parseBrowserCoreProcessorState(rawCoreProcessorState);
+      const coreProcessorState = await readCoreStateTwoStrike(connection, "delivery nudge");
+      if (coreProcessorState === undefined) return; // ownership lost mid-check
       if (disposed || stream !== connection) return;
       if (
         coreProcessorState.createdAt === reconciledIncarnation &&
@@ -1029,13 +1395,18 @@ function createStreamRuntime(
         `[stream ${args.streamPath} ${slug}] delivery nudge failed; reconnecting`,
         error,
       );
-      scheduleReconnect(`delivery nudge failed: ${errorMessage(error)}`, 0);
+      reconnectAfterError("delivery nudge failed", error, 0, { suspect: connection });
     } finally {
       nudgeInFlight = false;
     }
   }
 
   function teardown() {
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("online", onResume);
+      window.removeEventListener("pageshow", onResume);
+    }
     for (const timer of [connectTimer, reconnectTimer, databaseInfoTimer, databaseChangeTimer]) {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -1059,11 +1430,14 @@ function createStreamRuntime(
     lastBatchEvents,
     ingestFailures,
     pendingIngestEvents,
+    connectFailuresSinceSuccess,
     reconciledIncarnation,
     started,
     disposed,
     hasConnection: stream !== undefined,
     hasSubscription: subscriptionHandle !== undefined,
+    hasHostedProcessor: currentProcessor !== undefined,
+    metrics: readMetrics(),
     listeners: listeners.size,
   }));
 
@@ -1081,26 +1455,74 @@ function createStreamRuntime(
     rejectReadyWaiters(new Error("stream runtime is disposed"));
   }
 
-  // Run `call` against the live stream stub. When the connection is ready this returns the
-  // genuine capnweb RpcPromise (lazy + disposable). When it is transiently reconnecting we
-  // kick a reconnect and await readiness instead of throwing — only a disposed runtime (or a
-  // reconnect that never lands within the bound) rejects (B2). The wrapped awaitable carries
-  // a no-op [Symbol.dispose] so callers that dispose un-awaited results keep working.
+  // Direct calls (appends, state reads) can be the FIRST place a dead
+  // connection manifests: a follower has no liveness probe, and nothing else
+  // ever clears its corpse `stream` — before this guard, its appendBatch
+  // retries looped through the same dead stub forever (connect() no-ops while
+  // `stream` is set), which read as "the feed updates but my sends fail". A
+  // deadline bounds the half-open hang; a broken-session rejection (capnweb's
+  // signatures are message-matched of necessity — it throws plain Errors) is
+  // the clean-close shape. Both clear the corpse via the shared reconnect
+  // lane so the CALLER's retry finds a fresh connection; app-level failures
+  // (validation and friends) pass through untouched.
+  const DIRECT_CALL_TIMEOUT_MS = 20_000;
+
+  function isSessionBrokenError(error: unknown) {
+    const message = errorMessage(error).toLowerCase();
+    return message.includes("websocket") || message.includes("rpc session");
+  }
+
+  async function callGuarded<T>(
+    connection: BrowserStreamClient,
+    call: (rpc: BrowserStreamClient) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await raceWithTimeout(
+        Promise.resolve(call(connection)),
+        DIRECT_CALL_TIMEOUT_MS,
+        `stream call timed out after ${DIRECT_CALL_TIMEOUT_MS}ms`,
+      );
+    } catch (error) {
+      if (
+        !disposed &&
+        stream === connection &&
+        (error instanceof StepTimeoutError || isSessionBrokenError(error))
+      ) {
+        reconnectAfterError("stream call failed", error, 0, { suspect: connection });
+      }
+      throw error;
+    }
+  }
+
+  // Run `call` against the live stream stub. When the connection is transiently
+  // reconnecting we kick a reconnect and await readiness instead of throwing —
+  // only a disposed runtime (or a reconnect that never lands within the bound)
+  // rejects (B2). The awaitable carries a no-op [Symbol.dispose] so callers
+  // that dispose un-awaited results keep working.
   function callWhenReady<T>(call: (rpc: BrowserStreamClient) => Promise<T>): StreamRpcResult<T> {
     if (disposed) throw new Error("stream runtime is disposed");
-    reconnectNow();
+    // Kick a reconnect only when nothing is already driving one. The old
+    // unconditional reconnectNow() collapsed armed backoff timers on every
+    // direct call — defeating the escalating connect backoff and the
+    // poison-batch ingest pacing exactly when a user hammers retry — and
+    // superseded a mid-flight dial+election per call.
+    if (stream === undefined && reconnectTimer === undefined && connectTimer === undefined) {
+      connect();
+    }
     const ready = stream;
-    if (ready !== undefined) return call(ready) as StreamRpcResult<T>;
+    if (ready !== undefined) {
+      return Object.assign(callGuarded(ready, call), { [Symbol.dispose]() {} });
+    }
     const promise = (async () => {
       await whenStreamReady();
       const reconnected = stream;
       if (reconnected === undefined) throw new Error("stream runtime is disposed");
-      return await call(reconnected);
+      return await callGuarded(reconnected, call);
     })();
     return Object.assign(promise, { [Symbol.dispose]() {} });
   }
 
-  return {
+  const runtime: StreamBrowserStore = {
     streamDatabase,
     appendBatch(appendArgs) {
       // The itx Stream capability appends variadically; the batch arg shape is
@@ -1118,11 +1540,36 @@ function createStreamRuntime(
           : event,
       );
       const promise = (async () => {
+        // Real consume-own-append measurement: t0 is when the CALLER asked
+        // for the append (retries included — that wait is part of the honest
+        // number); the loop closes when this tab's own subscription ingests
+        // the committed offset (StreamProcessor.noteBatchIngested).
+        const t0 = Date.now();
         for (let attempt = 0; ; attempt++) {
           try {
-            return await callWhenReady((rpc) => rpc.append(...events) as Promise<StreamEvent[]>);
+            const committed = await callWhenReady(
+              (rpc) => rpc.append(...events) as Promise<StreamEvent[]>,
+            );
+            const maxCommittedOffset = committed.reduce(
+              (max, event) => Math.max(max, event.offset),
+              0,
+            );
+            if (maxCommittedOffset > 0) {
+              currentProcessor?.subscriberMetrics.noteAppendCommitted({
+                maxCommittedOffset,
+                t0,
+                atMs: Date.now(),
+              });
+            }
+            return committed;
           } catch (error) {
-            if (disposed || attempt >= APPEND_MAX_RETRIES) throw error;
+            // Retry only transport-shaped failures (timeouts, broken
+            // sessions, a reconnect that didn't land in time). An app-level
+            // rejection — validation and friends — would fail identically 8
+            // times; surface it immediately instead of burning ~23s of
+            // backoff first.
+            const transient = error instanceof StepTimeoutError || isSessionBrokenError(error);
+            if (disposed || !transient || attempt >= APPEND_MAX_RETRIES) throw error;
             await new Promise((resolve) =>
               setTimeout(resolve, Math.min(5_000, 250 * 2 ** attempt)),
             );
@@ -1133,6 +1580,20 @@ function createStreamRuntime(
     },
     runtimeState() {
       return callWhenReady((rpc) => rpc.runtimeState() as Promise<StreamRuntimeState>);
+    },
+    debugRuntimeState() {
+      return callWhenReady((rpc) =>
+        timed(Promise.resolve(rpc.runtimeState() as Promise<StreamServerRuntimeState>)),
+      );
+    },
+    metrics: readMetrics,
+    noteExternalAppend({ maxCommittedOffset, t0 }) {
+      if (!Number.isFinite(maxCommittedOffset) || maxCommittedOffset <= 0) return;
+      currentProcessor?.subscriberMetrics.noteAppendCommitted({
+        maxCommittedOffset,
+        t0,
+        atMs: Date.now(),
+      });
     },
     getProcessorRuntimeState(args) {
       return callWhenReady(
@@ -1147,9 +1608,20 @@ function createStreamRuntime(
       reconnectNow();
     },
     nudge,
+    isDisposed: () => disposed,
     getSnapshot: () => snapshot,
     getServerSnapshot: () => snapshot,
     subscribe(listener) {
+      if (disposed) {
+        // A subscriber landing on a disposed runtime renders a frozen view
+        // that nothing will ever reconnect — never let that be silent. The
+        // registry's acquire-time retain() makes this unreachable in the
+        // known lanes; this is the tripwire for the ones we haven't met.
+        console.error(
+          `[stream ${args.streamPath} ${slug}] subscribe() on a disposed runtime — the view will be frozen until its deps change or the page reloads`,
+        );
+        return () => {};
+      }
       if (disposeTimer !== undefined) {
         clearTimeout(disposeTimer);
         disposeTimer = undefined;
@@ -1158,23 +1630,63 @@ function createStreamRuntime(
       start();
       return () => {
         listeners.delete(listener);
-        if (listeners.size === 0 && !disposed) {
-          disposeTimer = setTimeout(() => {
-            disposeTimer = undefined;
-            if (listeners.size === 0) dispose();
-          }, 0);
-        }
+        if (listeners.size === 0 && !disposed) scheduleIdleDispose();
       };
     },
     [Symbol.dispose]() {
       dispose();
     },
   };
+
+  function scheduleIdleDispose() {
+    if (disposeTimer !== undefined) clearTimeout(disposeTimer);
+    disposeTimer = setTimeout(() => {
+      disposeTimer = undefined;
+      if (listeners.size === 0) dispose();
+    }, IDLE_DISPOSE_GRACE_MS);
+  }
+
+  return {
+    runtime,
+    refreshTransport(next) {
+      transport = next;
+    },
+    // A re-acquire between "last listener unsubscribed" and the idle-dispose
+    // timer firing means a render is about to subscribe: cancel the pending
+    // dispose so the commit can't land on a corpse (React can yield between
+    // the render that acquired and the effect that subscribes — Suspense and
+    // lazy chunks stretch that window to seconds; a runtime disposed inside
+    // it froze the view silently, the same subscribe-after-GC shape
+    // stream-browser-db.ts fixed for query handles). The grace timer is
+    // re-armed, not cancelled outright, so an acquire from a DISCARDED render
+    // that never subscribes still lets the runtime dispose.
+    retain() {
+      if (disposed || listeners.size > 0) return;
+      scheduleIdleDispose();
+    },
+  };
 }
+
+/**
+ * How long an unreferenced runtime lingers before disposing. Long enough to
+ * cover React yielding between a render that acquired the runtime and the
+ * commit that subscribes (concurrent-mode macrotask yields, Suspense/lazy
+ * chunk loads); short enough that a truly abandoned runtime releases its
+ * connection and OPFS handle promptly.
+ */
+const IDLE_DISPOSE_GRACE_MS = 2_000;
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * The deadline lane's own error class, so catch blocks can tell "the far side
+ * answered nothing" (transport suspect — a half-open socket swallows calls
+ * forever) apart from "the far side answered with a failure" (transport fine,
+ * reconnect is enough).
+ */
+class StepTimeoutError extends Error {}
 
 /**
  * Promise.race against a deadline, with the loser's timer cleared when the
@@ -1186,7 +1698,7 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number, message: string): P
   return Promise.race([
     promise,
     new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), ms);
+      timer = setTimeout(() => reject(new StepTimeoutError(message)), ms);
     }),
   ]).finally(() => clearTimeout(timer));
 }

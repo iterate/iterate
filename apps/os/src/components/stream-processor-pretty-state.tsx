@@ -1,0 +1,302 @@
+// Pretty renderers for a processor's reduced state — the panel's drill-in
+// view (stream-state-panel.tsx) delegates here. Split out so the panel
+// stays the orchestration/overview surface and the per-processor render
+// heuristics (which grow one renderer per interesting processor) live in one
+// focused module. Everything reads UNKNOWN state defensively: reduced state
+// crosses the itx boundary untyped, and a shape miss must degrade to the raw
+// code block, never a crash.
+
+import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import { readNumber, readRuntimeRecord } from "~/lib/runtime-record.ts";
+
+export function RuntimeStateStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-muted/40 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
+      <div className="mt-0.5 font-mono text-sm">{value}</div>
+    </div>
+  );
+}
+
+export function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
+      {children}
+    </div>
+  );
+}
+
+export function CorePrettyState({
+  state,
+  runtime,
+}: {
+  state: unknown;
+  runtime: Record<string, unknown> | undefined;
+}) {
+  const core = asCoreState(state);
+  if (core == null) {
+    return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
+  }
+
+  const childPaths = Array.isArray(core.childPaths) ? core.childPaths : [];
+  const configured = readRuntimeRecord(core.configuredSubscribersByKey) ?? {};
+  const connections = readRuntimeRecord(core.connectionsByKey) ?? {};
+  const runtimeSubscriptions = readRuntimeRecord(runtime?.subscriptions) ?? {};
+  const paused = core.paused === true;
+  const circuitBreaker = readRuntimeRecord(core.circuitBreaker);
+  const trippedAtOffset = readNumber(circuitBreaker, "trippedAtOffset");
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <RuntimeStateStat label="head" value={`#${Number(core.maxOffset ?? 0)}`} />
+        <RuntimeStateStat label="events" value={String(core.eventCount ?? 0)} />
+        <RuntimeStateStat label="children" value={String(childPaths.length)} />
+        <RuntimeStateStat label="paused" value={paused ? "yes" : "no"} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <RuntimeStateStat label="configured" value={String(Object.keys(configured).length)} />
+        <RuntimeStateStat label="connected" value={String(Object.keys(connections).length)} />
+        <RuntimeStateStat
+          label="runtime subs"
+          value={String(Object.keys(runtimeSubscriptions).length)}
+        />
+      </div>
+
+      {core.path == null && core.projectId == null ? null : (
+        <div className="rounded-xl bg-muted/40 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Stream</div>
+          <div className="mt-1 break-all font-mono text-xs">
+            {String(core.projectId ?? "global")} {String(core.path ?? "")}
+          </div>
+          {typeof core.createdAt !== "string" ? null : (
+            <div className="mt-1 text-xs text-muted-foreground">{core.createdAt}</div>
+          )}
+        </div>
+      )}
+
+      {paused || trippedAtOffset != null ? (
+        <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+          {paused ? (
+            <div>Paused{typeof core.pauseReason === "string" ? `: ${core.pauseReason}` : ""}</div>
+          ) : null}
+          {trippedAtOffset == null ? null : (
+            <div>Circuit breaker tripped at #{trippedAtOffset}</div>
+          )}
+        </div>
+      ) : null}
+
+      {Object.keys(configured).length === 0 ? null : (
+        <div>
+          <SectionHeading>Configured subscriptions</SectionHeading>
+          <div className="flex flex-col gap-1.5">
+            {Object.entries(configured).map(([key, value]) => {
+              const latest = readRuntimeRecord(readRuntimeRecord(value)?.latestConfiguredEvent);
+              const payload = readRuntimeRecord(latest?.payload);
+              const delivery = readRuntimeRecord(payload?.delivery);
+              const mode = typeof delivery?.mode === "string" ? delivery.mode : "unknown";
+              const runtimeSub = readRuntimeRecord(runtimeSubscriptions[key]);
+              const lag = readNumber(runtimeSub, "lag");
+              return (
+                <div key={key} className="rounded-xl bg-muted/40 px-3 py-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="min-w-0 truncate font-mono text-xs">{key}</div>
+                    <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                      {mode}
+                      {lag == null ? "" : ` · lag ${lag}`}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {childPaths.length === 0 ? null : (
+        <div>
+          <SectionHeading>Child streams</SectionHeading>
+          <div className="flex flex-col gap-1.5">
+            {childPaths.slice(0, 8).map((path) => (
+              <div
+                key={String(path)}
+                className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs"
+              >
+                {String(path)}
+              </div>
+            ))}
+          </div>
+          {childPaths.length <= 8 ? null : (
+            <div className="mt-1 text-xs text-muted-foreground">+{childPaths.length - 8} more</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function asCoreState(state: unknown): Record<string, unknown> | null {
+  if (state == null || typeof state !== "object") return null;
+  const record = state as Record<string, unknown>;
+  if (
+    !("maxOffset" in record) &&
+    !("configuredSubscribersByKey" in record) &&
+    !("connectionsByKey" in record)
+  ) {
+    return null;
+  }
+  return record;
+}
+
+/** Pretty renderer for the agent processor reduced state (status machine). */
+export function AgentPrettyState({ state }: { state: unknown }) {
+  const agent = asAgentState(state);
+  if (agent == null) {
+    return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
+  }
+
+  const currentRequest =
+    agent.currentRequest != null && typeof agent.currentRequest === "object"
+      ? (agent.currentRequest as Record<string, unknown>)
+      : null;
+  const phase =
+    currentRequest == null
+      ? "idle"
+      : currentRequest.phase === "scheduled"
+        ? "scheduled"
+        : "requested";
+  const history = Array.isArray(agent.history) ? agent.history : [];
+  const lastMessage = history.length > 0 ? history[history.length - 1] : null;
+  const lastPreview =
+    lastMessage != null && typeof lastMessage === "object" && lastMessage !== null
+      ? previewChatMessage(lastMessage as Record<string, unknown>)
+      : null;
+  const scripts = Array.isArray(agent.inProgressScriptExecutions)
+    ? agent.inProgressScriptExecutions
+    : [];
+  const systemPrompt = typeof agent.systemPrompt === "string" ? agent.systemPrompt : "";
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <RuntimeStateStat label="phase" value={phase} />
+        <RuntimeStateStat label="provider" value={String(agent.llmProvider ?? "—")} />
+        <RuntimeStateStat
+          label="model"
+          value={String(
+            agent.llmConfig != null &&
+              typeof agent.llmConfig === "object" &&
+              "model" in agent.llmConfig
+              ? (agent.llmConfig as { model?: unknown }).model
+              : "—",
+          )}
+        />
+        <RuntimeStateStat label="failures" value={String(agent.consecutiveLlmFailures ?? 0)} />
+      </div>
+
+      {currentRequest == null ? null : (
+        <div className="rounded-xl bg-muted/40 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+            Current request
+          </div>
+          <div className="mt-1 font-mono text-xs break-all">{JSON.stringify(currentRequest)}</div>
+        </div>
+      )}
+
+      {scripts.length === 0 ? null : (
+        <div>
+          <SectionHeading>In-progress scripts</SectionHeading>
+          <div className="flex flex-col gap-1.5">
+            {scripts.map((script, index) => {
+              const row =
+                script != null && typeof script === "object"
+                  ? (script as Record<string, unknown>)
+                  : {};
+              return (
+                <div
+                  key={String(row.executionId ?? index)}
+                  className="rounded-xl bg-muted/40 px-3 py-2"
+                >
+                  <div className="font-mono text-[10px] text-muted-foreground">
+                    {String(row.executionId ?? "script")}
+                  </div>
+                  <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-foreground/80">
+                    {String(row.code ?? "").slice(0, 400)}
+                  </pre>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-xl bg-muted/40 px-3 py-2">
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+            History
+          </div>
+          <div className="font-mono text-xs text-muted-foreground">{history.length} messages</div>
+        </div>
+        {lastPreview == null ? (
+          <div className="mt-1 text-xs text-muted-foreground">No messages yet.</div>
+        ) : (
+          <div className="mt-1 text-xs text-foreground/80">
+            <span className="font-medium text-muted-foreground">{lastPreview.role}: </span>
+            {lastPreview.text}
+          </div>
+        )}
+        <div className="mt-1 text-[10px] text-muted-foreground/70">
+          Full history is in Raw view (and in the Pretty feed).
+        </div>
+      </div>
+
+      {systemPrompt === "" ? null : (
+        <details className="rounded-xl bg-muted/40 px-3 py-2">
+          <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
+            System prompt
+          </summary>
+          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground/80">
+            {systemPrompt}
+          </pre>
+        </details>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        <RuntimeStateStat label="autonomous turns" value={String(agent.autonomousTurnCount ?? 0)} />
+        <RuntimeStateStat label="request gen" value={String(agent.requestGeneration ?? 0)} />
+      </div>
+    </div>
+  );
+}
+
+function asAgentState(state: unknown): Record<string, unknown> | null {
+  if (state == null || typeof state !== "object") return null;
+  const record = state as Record<string, unknown>;
+  // Heuristic: agent reduced state always has history + llmProvider-ish keys.
+  if (!("history" in record) && !("currentRequest" in record) && !("systemPrompt" in record)) {
+    return null;
+  }
+  return record;
+}
+
+function previewChatMessage(message: Record<string, unknown>): { role: string; text: string } {
+  const role = String(message.role ?? message.kind ?? "message");
+  const content = message.content ?? message.text ?? message;
+  let text = "";
+  if (typeof content === "string") text = content;
+  else if (Array.isArray(content)) {
+    text = content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part != null && typeof part === "object" && "text" in part) {
+          return String((part as { text?: unknown }).text ?? "");
+        }
+        return "";
+      })
+      .join("");
+  } else text = JSON.stringify(content);
+  text = text.replace(/\s+/g, " ").trim();
+  if (text.length > 160) text = `${text.slice(0, 157)}…`;
+  return { role, text: text || "(empty)" };
+}

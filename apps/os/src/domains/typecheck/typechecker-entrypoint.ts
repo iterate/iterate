@@ -9,6 +9,7 @@ import { createCachedFetch } from "@iterate-com/typm/cached-fetch";
 // 10 MiB compressed script limit (upload rejected, error 10027).
 import typescriptWasm from "tswasm/tswasm.wasm";
 import { runTypecheck, type TypecheckResult } from "./run-typecheck.ts";
+import { createCompilerCache } from "./compiler-cache.ts";
 
 /** The whole input is inert data: a virtual file map. The checker holds no
  * bindings and grants no authority; it does make outbound GETs the input
@@ -31,19 +32,12 @@ const typmFetch = createCachedFetch({
     url.startsWith("https://cdn.jsdelivr.net/") && !url.includes("/package/resolve/"),
 });
 
-/** One wasm instantiation per isolate, shared across requests. A failed
- * instantiation is NOT cached: caching the rejection would poison every
- * later check until isolate death, so the next check retries. */
-let compilerPromise: Promise<Compiler> | undefined;
-function compiler(): Promise<Compiler> {
-  const promise = (compilerPromise ??= createCompiler({
-    wasm: typescriptWasm as WebAssembly.Module,
-  }));
-  promise.catch(() => {
-    if (compilerPromise === promise) compilerPromise = undefined;
-  });
-  return promise;
-}
+/** One wasm instantiation per isolate, shared across requests. Drops the
+ * instance on a failed instantiation AND after a mid-compile crash (see
+ * compiler-cache.ts and the reset in `check`). */
+const compilerCache = createCompilerCache<Compiler>(() =>
+  createCompiler({ wasm: typescriptWasm as WebAssembly.Module }),
+);
 
 /**
  * The typechecker worker's entrypoint: a pure function worker (files in,
@@ -59,10 +53,21 @@ export class TypecheckerEntrypoint extends WorkerEntrypoint {
 
   async check(input: { files: Record<string, string> }): Promise<TypecheckResult> {
     const { files } = CheckInput.parse(input);
-    return await runTypecheck({
-      compiler: await compiler(),
+    const compilerPromise = compilerCache.get();
+    const result = await runTypecheck({
+      compiler: await compilerPromise,
       fetchImpl: typmFetch,
       files,
     });
+    // runTypecheck turns a mid-compile crash (the wasm program exiting) into a
+    // code-0 diagnostic. The compiler instance may now be permanently dead, so
+    // drop it: the next check re-instantiates rather than reusing the corpse
+    // and reporting a crash forever (which the gate reads as unchecked → the
+    // gate would silently fail open). Cheap re-instantiation (~40ms) is the
+    // right price to keep the gate honest.
+    if (result.diagnostics.some((diagnostic) => diagnostic.code === 0)) {
+      compilerCache.resetIfCurrent(compilerPromise);
+    }
+    return result;
   }
 }

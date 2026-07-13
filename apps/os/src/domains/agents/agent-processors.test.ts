@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   AgentProcessor,
+  buildAgentCompactionRequestBody,
   buildAgentLlmRequestBody,
   contextWindowTokens,
   flattenMessageToText,
@@ -462,11 +463,28 @@ describe("minimal web-chat agent processors", () => {
       (event) =>
         event.type === "events.iterate.com/agent/input-added" &&
         typeof event.payload?.content === "string" &&
-        event.payload.content.includes("must START with `async`"),
+        event.payload.content.includes("STARTS with `async`"),
     );
     expect(corrective?.payload).toMatchObject({
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
+
+    // A fence with a non-JS language tag is the same mistake in a different
+    // costume — the extraction regex refuses it, and the system prompt
+    // promises rejection-with-feedback, not silence.
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: { content: "```python\nprint('hello')\n```" },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    expect(
+      stream.events.filter(
+        (event) =>
+          event.type === "events.iterate.com/agent/input-added" &&
+          typeof event.payload?.content === "string" &&
+          event.payload.content.includes("STARTS with `async`"),
+      ),
+    ).toHaveLength(2);
 
     // Plain prose with no fence stays a deliberate no-op turn (no feedback).
     await stream.append({
@@ -478,9 +496,9 @@ describe("minimal web-chat agent processors", () => {
       (event) =>
         event.type === "events.iterate.com/agent/input-added" &&
         typeof event.payload?.content === "string" &&
-        event.payload.content.includes("must START with"),
+        event.payload.content.includes("STARTS with"),
     );
-    expect(feedbackEvents).toHaveLength(1);
+    expect(feedbackEvents).toHaveLength(2);
   });
 
   it("treats MCP-origin messages like any other inbound user message", async () => {
@@ -1274,6 +1292,84 @@ describe("interrupt and stray-request hygiene", () => {
     });
   });
 
+  it("an interrupt mid-stream feeds the response so far back as model-visible input", async () => {
+    const encoder = new TextEncoder();
+    let sse!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        sse = controller;
+      },
+    });
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          return body;
+        },
+      },
+    });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append(...agentRequestEvents("tell me a long story"));
+    await deliver(); // reconcile drives the requested obligation; the attempt starts draining
+    sse.enqueue(encoder.encode(`data: ${JSON.stringify({ response: "Once upon a time" })}\n\n`));
+    // The chunk event is the evidence the accumulator has seen the text.
+    await vi.waitFor(() => {
+      expect(
+        stream.events.some((event) => event.type === "events.iterate.com/agent/llm-response-chunk"),
+      ).toBe(true);
+    });
+
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: "stop — different question",
+        llmRequestPolicy: { behaviour: "interrupt-current-request" },
+      },
+    });
+    await deliver(); // appends the cancel + the response-so-far input
+
+    const partialInput = stream.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof event.payload?.content === "string" &&
+        event.payload.content.includes("Once upon a time"),
+    );
+    expect(partialInput?.payload?.content).toContain("Your response so far");
+    expect(partialInput?.payload).toMatchObject({
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    });
+    // The partial folds into history, so the NEXT request's prompt carries it.
+    const state = reduceAgentEvents(stream.events);
+    expect(
+      state.history.some(
+        (item) =>
+          item.role === "user" &&
+          typeof item.content === "string" &&
+          item.content.includes("Once upon a time"),
+      ),
+    ).toBe(true);
+
+    // Let the doomed attempt finish: its completion settles as stale, so no
+    // output-added doubles up with the partial already in history.
+    sse.enqueue(encoder.encode("data: [DONE]\n\n"));
+    sse.close();
+    await vi.waitFor(() => {
+      expect(
+        stream.events.some(
+          (event) => event.type === "events.iterate.com/agent/llm-request-completed",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/agent/output-added"),
+    ).toBe(false);
+  });
+
   it("settles a stray non-current requested obligation without dialing the AI binding", async () => {
     const stream = new MemoryStream();
     let dials = 0;
@@ -1842,7 +1938,10 @@ describe("token usage and history reset", () => {
           async run(model, body) {
             const { messages } = body as { messages: { role: string; content: string }[] };
             aiCalls.push({ model, messages });
-            if (messages[0]!.content.includes("compacting an AI agent's conversation history")) {
+            // The summarize instruction rides as the LAST message, behind the
+            // conversation exactly as normal turns send it (prompt-cache
+            // prefix reuse) — so that is where compaction is recognizable.
+            if (messages.at(-1)!.content.includes("compacting this AI agent conversation")) {
               return { response: "The user likes teal and is building STICKYMEETING." };
             }
             // A turn that ran at over half of gpt-5.5's 272k window.
@@ -1884,13 +1983,27 @@ describe("token usage and history reset", () => {
 
     const compactionCalls = () =>
       aiCalls.filter((call) =>
-        call.messages[0]!.content.includes("compacting an AI agent's conversation history"),
+        call.messages.at(-1)!.content.includes("compacting this AI agent conversation"),
       );
     expect(compactionCalls()).toHaveLength(1);
     // The summary sees the whole conversation and runs on the agent's model.
     expect(compactionCalls()[0]!.model).toBe("openai/gpt-5.5");
-    expect(compactionCalls()[0]!.messages[1]!.content).toContain("User:\nremember: I like teal");
-    expect(compactionCalls()[0]!.messages[1]!.content).toContain("Assistant:\nnoted!");
+    // The compaction request extends the normal turn's request byte for byte
+    // (same system prompt, same history messages) so the provider's prompt
+    // cache — an exact-prefix match — covers the biggest request an agent
+    // ever makes. Divergence only at the tail: the turn's trailing clock
+    // message versus the summarize instruction.
+    const turnRequest = aiCalls[0]!;
+    const compactionRequest = compactionCalls()[0]!;
+    expect(compactionRequest.messages.slice(0, turnRequest.messages.length - 1)).toEqual(
+      turnRequest.messages.slice(0, -1),
+    );
+    expect(compactionRequest.messages).toMatchObject([
+      { role: "system", content: DEFAULT_AGENT_SYSTEM_PROMPT },
+      { role: "user", content: expect.stringContaining("remember: I like teal") },
+      { role: "assistant", content: expect.stringContaining("noted!") },
+      { role: "system", content: expect.stringContaining("output only the summary") },
+    ]);
     expect(reset.payload).toMatchObject({
       systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
       history: [
@@ -1917,6 +2030,127 @@ describe("token usage and history reset", () => {
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agent/history-reset"),
     ).toHaveLength(1);
+  });
+
+  it("buildAgentCompactionRequestBody extends the conversation verbatim with the instruction last", () => {
+    const state = {
+      systemPrompt: "You are terse.",
+      history: [
+        { role: "user" as const, content: "remember: I like teal" },
+        { role: "assistant" as const, content: "noted!" },
+      ],
+    };
+    const body = buildAgentCompactionRequestBody(state);
+    // The cached-prefix property: everything but the trailing instruction is
+    // the conversation exactly as buildAgentLlmRequestBody sends it.
+    expect(body.messages.slice(0, -1)).toEqual([
+      { role: "system", content: "You are terse." },
+      ...state.history,
+    ]);
+    expect(body.messages.at(-1)).toMatchObject({
+      role: "system",
+      content: expect.stringContaining("compacting this AI agent conversation"),
+    });
+  });
+
+  it("compaction rides the BYOK transport with the conversation's prompt cache key and journals the cache split", async () => {
+    const stream = new MemoryStream();
+    const encoder = new TextEncoder();
+    const sse = (frames: unknown[]) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const frame of frames) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+          }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+    const gatewayBodies: { prompt_cache_key?: string; messages: { content: string }[] }[] = [];
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        run: async () => {
+          throw new Error("unified lane must not be dialed when BYOK transport is configured");
+        },
+        gateway: () => ({
+          run: async ({ query }: { query: unknown }) => {
+            const body = query as (typeof gatewayBodies)[number];
+            gatewayBodies.push(body);
+            const isCompaction = body.messages
+              .at(-1)!
+              .content.includes("compacting this AI agent conversation");
+            return new Response(
+              sse(
+                isCompaction
+                  ? [
+                      {
+                        choices: [{ delta: { content: "Summary.", role: "assistant" }, index: 0 }],
+                      },
+                      {
+                        choices: [],
+                        usage: {
+                          prompt_tokens: 141_000,
+                          completion_tokens: 20,
+                          prompt_tokens_details: { cached_tokens: 140_800 },
+                        },
+                      },
+                    ]
+                  : [
+                      { choices: [{ delta: { content: "noted!", role: "assistant" }, index: 0 }] },
+                      { choices: [], usage: { prompt_tokens: 140_000, completion_tokens: 500 } },
+                    ],
+              ),
+            );
+          },
+        }),
+      },
+      cloudflareAiGatewayTransport: () => ({
+        kind: "byok",
+        gatewayId: "default",
+        openaiApiKey: "sk-test",
+        openaiPromptCacheKey: "prj_x:/agents/main",
+      }),
+    });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+
+    await stream.append({
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "remember: I like teal", from: { kind: "user", origin: "web" } },
+    });
+    await deliver();
+    await deliver();
+    await deliver();
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+      timeoutMs: 2_000,
+    });
+    await deliver();
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+    await deliver();
+
+    const reset = stream.events.find(
+      (event) => event.type === "events.iterate.com/agent/history-reset",
+    )!;
+    expect(reset).toBeDefined();
+    // Both the turn and the summary rode the gateway with the SAME cache key,
+    // so the summary lands on the shard already holding the turn's prefix.
+    expect(gatewayBodies).toHaveLength(2);
+    expect(gatewayBodies.map((body) => body.prompt_cache_key)).toEqual([
+      "prj_x:/agents/main",
+      "prj_x:/agents/main",
+    ]);
+    // The journaled reason carries the measured cache split — the live
+    // evidence that prefix reuse worked (or didn't) for every compaction.
+    expect(reset.payload?.reason).toMatch(
+      /; summary llm usage: input=141000 cached=140800 output=20$/,
+    );
   });
 
   it("an under-threshold usage report does not compact", async () => {

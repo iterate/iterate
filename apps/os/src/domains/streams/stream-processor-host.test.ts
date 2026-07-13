@@ -12,6 +12,7 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 import { StreamProcessor, type StreamProcessorConstructorArgs } from "./stream-processor.ts";
 import { PROCESSOR_HOST_REVIVED_EVENT_TYPE } from "./stream-processor-host.ts";
 import { revivalBackoffMs, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
+import type { SubscriberMetricsReport } from "./subscriber-metrics.ts";
 import { createProcessorHostHarness } from "./test-helpers.ts";
 
 const PING = "events.iterate.com/test/ping";
@@ -428,3 +429,46 @@ describe("live-state assembly", () => {
 async function vitestSettle(): Promise<void> {
   for (let i = 0; i < 8; i += 1) await Promise.resolve();
 }
+
+describe("subscriber metrics", () => {
+  it("the wake handshake answers pings and merges self-measured metrics into getRuntimeState", async () => {
+    const h = createProcessorHostHarness({
+      build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
+    });
+    const [ping] = await h.stream.append({ type: PING, payload: {} });
+    const wake = await h.host.wakeStreamSubscriber({
+      stream: { projectId: "prj_test", path: h.stream.path, streamMaxOffset: 1 },
+      subscriptionKey: "wake:recorder-a",
+      processorSlug: "recorder-a",
+    });
+
+    // The mutual ping's responder half: echoes t0, reports receive/reply
+    // times on its own clock (see StreamPingReply in rpc-types.ts).
+    const reply = await wake.ping!({ t0: 123 });
+    expect(reply.t0).toBe(123);
+    expect(reply.t2).toBeGreaterThanOrEqual(reply.t1);
+
+    await wake.sink({
+      projectId: "prj_test",
+      path: h.stream.path,
+      events: [ping!],
+      streamMaxOffset: 1,
+    } as Parameters<typeof wake.sink>[0]);
+    await vi.waitFor(async () => {
+      expect((await h.processors.a.snapshot()).offset).toBe(1);
+    });
+
+    // Metrics are merged into the handshake's getRuntimeState answer (never
+    // fabricated: only genuinely measured stats are non-null).
+    const state = await wake.getRuntimeState!();
+    const metrics = (state.runtime as { metrics: SubscriberMetricsReport }).metrics;
+    expect(metrics.batchesIngested).toBeGreaterThanOrEqual(1);
+    expect(metrics.eventsIngested).toBeGreaterThanOrEqual(1);
+    expect(metrics.ingestMs).not.toBeNull();
+    expect(metrics.deliveryAgeMs).not.toBeNull();
+    expect(metrics.consumeOwnAppendMs).toBeNull(); // no own appends were made
+    // Same clock domain as the stream: the ping answers but deliberately does
+    // NOT record a clock offset (raw t1−t0 would book transport delay as skew).
+    expect(metrics.clockOffsetMs).toBeNull();
+  });
+});

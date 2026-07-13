@@ -384,7 +384,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Docs",
     kind: "interface",
     sourceText:
-      '/**\n * The docs door: search + fetch over everything callable from this scope —\n * the platform\'s example scripts (most are proven: the test suite runs them\n * unattended against a live project on every change; the rest are marked\n * interactive), the public type surface (the Itx Type Graph), and the\n * capabilities mounted in the caller\'s scope chain. One door for "how do I\n * X?": search first, fetch what the hits name, adapt working code.\n *\n * The search mechanism is deliberately dumb (word matching, no embeddings),\n * which is why every docstring here tells callers to pass MANY related words\n * — recall comes from the query, not the engine.\n */\nexport interface Docs {\n  __describe(): Promise<Description>;\n  /**\n   * Find examples, types, and mounted capabilities. Pass MANY related words —\n   * matching is dumb word overlap, so more synonyms means better recall:\n   * `search({ q: "file upload attachment bytes store image" })`, not\n   * `search({ q: "files" })`. Example hits are working scripts — prefer\n   * copying them over writing calls from scratch. Each hit\'s `fetchCall`\n   * field is the literal next call to make.\n   */\n  search(input: { q: string }): Promise<DocsSearchHit[]>;\n  /**\n   * Fetch one entry by the name a search hit gave you. An example name\n   * returns its full script, annotated with its provenance (most examples\n   * run unattended against a live project in the platform\'s test suite; the\n   * rest are marked interactive); a type declaration name returns its\n   * TypeScript source plus as much of its reference closure as fits\n   * `maxTokens` (default 1500), ending with a comment naming anything left\n   * out and how to fetch it; a mounted capability\'s dotted path (say\n   * "tools.weather") returns its instructions and types plus the platform\n   * declarations those types reference, same budget rules.\n   */\n  get(input: { name: string; maxTokens?: number }): Promise<string>;\n  /**\n   * Typecheck an `async (itx) => { … }` script against this scope\'s surface —\n   * the platform types plus every mounted capability\'s types (npm-backed\n   * `import("pkg")` types resolve too) — WITHOUT running it. Advisory: a\n   * clean result does not promise the script works, but a typo like\n   * `itx.streams.gett(...)` comes back as a compiler error with a\n   * did-you-mean instead of costing a failed run.\n   */\n  typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }>;\n}',
+      '/**\n * The docs door: search + fetch over everything callable from this scope —\n * the platform\'s example scripts (most are proven: the test suite runs them\n * unattended against a live project on every change; the rest are marked\n * interactive), the public type surface (the Itx Type Graph), and the\n * capabilities mounted in the caller\'s scope chain. One door for "how do I\n * X?": search first, fetch what the hits name, adapt working code.\n *\n * The search mechanism is deliberately dumb (word matching, no embeddings),\n * which is why every docstring here tells callers to pass MANY related words\n * — recall comes from the query, not the engine.\n */\nexport interface Docs {\n  __describe(): Promise<Description>;\n  /**\n   * Find examples, types, and mounted capabilities. Pass MANY related words —\n   * matching is dumb word overlap, so more synonyms means better recall:\n   * `search({ q: "file upload attachment bytes store image" })`, not\n   * `search({ q: "files" })`. API-name queries work too: "itx" is dropped as\n   * noise and a word matching a row\'s NAME counts double, so `"itx.docs"`,\n   * `"worker"`, or `"agents"` rank their subject first instead of every row\n   * that mentions the word. Example hits are working scripts — prefer copying\n   * them over writing calls from scratch. Each hit\'s `fetchCall` field holds\n   * the ready-made docs.get call that fetches its full doc.\n   */\n  search(input: { q: string }): Promise<DocsSearchHit[]>;\n  /**\n   * Fetch one entry by the name a search hit gave you. An example name\n   * returns its full script, annotated with its provenance (most examples\n   * run unattended against a live project in the platform\'s test suite; the\n   * rest are marked interactive); a type declaration name returns its\n   * TypeScript source plus as much of its reference closure as fits\n   * `maxTokens` (default 1500), ending with a comment naming anything left\n   * out and how to fetch it; a mounted capability\'s dotted path (say\n   * "tools.weather") returns its instructions and types plus the platform\n   * declarations those types reference, same budget rules.\n   */\n  get(input: { name: string; maxTokens?: number }): Promise<string>;\n  /**\n   * Typecheck an `async (itx) => { … }` script against this scope\'s surface —\n   * the platform types plus every mounted capability\'s types (npm-backed\n   * `import("pkg")` types resolve too) — WITHOUT running it. Advisory: a\n   * clean result does not promise the script works, but a typo like\n   * `itx.streams.gett(...)` comes back as a compiler error with a\n   * did-you-mean instead of costing a failed run.\n   */\n  typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }>;\n}',
     summary:
       "The docs door: search + fetch over everything callable from this scope — the platform's example scripts (most are proven: the test suite runs them unattended against a live project on every change; the rest are marked interactive), the public type surface (the Itx Type Graph), and the capabilities mounted in the caller's scope chain.",
     memberSummaries: {
@@ -441,13 +441,21 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "McpClientCollection",
     kind: "interface",
     sourceText:
-      "/**\n * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`\n * returns a client whose dotted calls invoke the server's tools; `exa` is the\n * pre-connected Exa web-search server every project gets.\n */\nexport interface McpClientCollection {\n  __describe(): Promise<Description>;\n  /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */\n  connect(input: McpClientConnectInput): Promise<McpClientRpc>;\n  /**\n   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every\n   * project: web search and page reading as flat tool calls.\n   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;\n   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.\n   */\n  exa: McpClientRpc;\n}",
+      '/**\n * Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`. `connect({ url })`\n * returns a client whose dotted calls invoke the server\'s tools; `exa` is the\n * pre-connected Exa web-search server every project gets.\n */\nexport interface McpClientCollection {\n  __describe(): Promise<Description>;\n  /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */\n  connect(input: McpClientConnectInput): Promise<McpClientRpc>;\n  /**\n   * Begin the OAuth sign-in for an OAuth-protected MCP server (one whose\n   * unauthenticated request answers 401 with a `WWW-Authenticate` challenge —\n   * e.g. Cloudflare\'s mcp.cloudflare.com). Discovers the server\'s OAuth\n   * endpoints, registers a client, and returns a `{ authorizationUrl, path }`:\n   * send `authorizationUrl` to the user ("click here to connect"). When they\n   * sign in, the token is stored write-only at `path` and — if you are an agent\n   * — you are messaged so you can continue. Then connect like any bearer MCP:\n   * `itx.mcp.connect({ url, headers: { authorization: \'Bearer getSecret({ path:\n   * "<path>", field: "accessToken" })\' } })`. For a server that just wants a\n   * bearer token you already hold, use `itx.secrets.collectFromUser` instead.\n   */\n  beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult>;\n  /**\n   * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every\n   * project: web search and page reading as flat tool calls.\n   * `itx.mcp.exa.web_search_exa({ query, numResults })` searches the web;\n   * `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` reads pages as markdown.\n   */\n  exa: McpClientRpc;\n}',
     summary: "Ad-hoc MCP (Model Context Protocol) clients — `itx.mcp`.",
     memberSummaries: {
       connect: "Connect to an MCP server by URL; dotted calls on the client are tool invocations.",
+      beginOAuth:
+        "Begin the OAuth sign-in for an OAuth-protected MCP server (one whose unauthenticated request answers 401 with a `WWW-Authenticate` challenge — e.g.",
       exa: "The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every project: web search and page reading as flat tool calls.",
     },
-    referencedTypeNames: ["Description", "McpClientConnectInput", "McpClientRpc"],
+    referencedTypeNames: [
+      "Description",
+      "McpClientConnectInput",
+      "McpClientRpc",
+      "McpBeginOAuthInput",
+      "McpBeginOAuthResult",
+    ],
   },
   {
     name: "OpenApiCollection",
@@ -551,13 +559,21 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SecretCollection",
     kind: "interface",
     sourceText:
-      "/** Secret catalog within one project. */\nexport interface SecretCollection {\n  __describe(): Promise<Description>;\n  /** The secret at a path. */\n  get(path: string): Secret;\n  /** Known secrets, read from the project processor's reduced state. */\n  list(): Promise<StreamListItem[]>;\n}",
+      '/** Secret catalog within one project. */\nexport interface SecretCollection {\n  __describe(): Promise<Description>;\n  /** The secret at a path. */\n  get(path: string): Secret;\n  /**\n   * Mint a deep link where the USER enters a secret value themselves — the\n   * door for credentials an agent must never see in chat. The page (a\n   * minimal, chrome-free form) shows the description and the egress origins\n   * the value is pinned to; on submit it stores material + egress in one\n   * update, so the secret is born already pinned. When the caller is an\n   * agent scope, the page also messages that agent ("The user submitted the\n   * secret at …"), which starts its next turn — send the URL to the user,\n   * end the turn, and act on the notification. Nothing is created until the\n   * user submits; the link itself is stateless. Works for EXISTING secrets\n   * too — the page warns before replacing — so it is also the way to rotate\n   * a credential (e.g. one the user pasted into chat and should roll).\n   */\n  collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;\n  /** Known secrets, read from the project processor\'s reduced state. */\n  list(): Promise<StreamListItem[]>;\n}',
     summary: "Secret catalog within one project.",
     memberSummaries: {
       get: "The secret at a path.",
+      collectFromUser:
+        "Mint a deep link where the USER enters a secret value themselves — the door for credentials an agent must never see in chat.",
       list: "Known secrets, read from the project processor's reduced state.",
     },
-    referencedTypeNames: ["Description", "Secret", "StreamListItem"],
+    referencedTypeNames: [
+      "Description",
+      "Secret",
+      "CollectSecretInput",
+      "CollectSecretLink",
+      "StreamListItem",
+    ],
   },
   {
     name: "Repo",
@@ -644,7 +660,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Stream",
     kind: "interface",
     sourceText:
-      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`\n   * events too — remember their rows may be evicted if you record the offset.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */\n  runtimeState(): Promise<{\n    coreProcessorState: unknown;\n    runtime: {\n      connections: Record<string, unknown>;\n      subscriptions: Record<\n        string,\n        {\n          mode: "wake" | "push" | "webhook";\n          ackedOffset: number;\n          lag: number;\n          attempt: number;\n          nextAttemptAt: number | null;\n          lastError: string | null;\n          parkedAtOffset: number | null;\n          connected: boolean;\n        }\n      >;\n    };\n  }>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane —\n   * also the only lane that receives `ephemeral: true` events):\n   * `processEventBatch` is called for every committed batch (optionally\n   * replayed from `replayAfterOffset`); returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
+      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Rides the ephemeral (session) lane, so it can match `ephemeral: true`\n   * events too — remember their rows may be evicted if you record the offset.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /**\n   * Live debug view of the stream Durable Object: core processor state, open\n   * connections with real delivery metrics (lag, bytes, commit→settled\n   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the\n   * stream\'s own throughput windows. All runtime metrics are in-memory and\n   * reset on eviction (`metrics.measuredSince` says how long the window has\n   * been collecting); latency stats fields are absent until a real sample\n   * exists — no value is ever synthesized. Calling this also requests a\n   * throttled mutual-ping round over the live connections (observer-driven\n   * sampling), so a polling debug UI sees RTTs populate.\n   */\n  runtimeState(): Promise<{\n    coreProcessorState: unknown;\n    runtime: {\n      connections: Record<string, ConnectionRuntimeState>;\n      subscriptions: Record<string, SubscriptionRuntimeState>;\n      metrics: StreamThroughputMetrics;\n      /** SQLite database size in bytes (event log + spine rows + chunks). */\n      storageSizeBytes: number;\n    };\n  }>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane —\n   * also the only lane that receives `ephemeral: true` events):\n   * `processEventBatch` is called for every committed batch (optionally\n   * replayed from `replayAfterOffset`); returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n    /**\n     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`\n     * in rpc-types.ts), retained for the subscription\'s lifetime. The stream\n     * pings it — throttled, and only while someone is watching runtimeState —\n     * to measure real transport RTT to this subscriber.\n     */\n    ping?: StreamSubscriberPing;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
     summary: "Durable event stream capability.",
     memberSummaries: {
       append: "Commit events; resolves with the same events carrying offsets and timestamps.",
@@ -659,7 +675,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       getProcessorRuntimeState:
         "The reduced-state snapshot (plus runtime debug info) of one configured processor.",
       runtimeState:
-        "Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag.",
+        "Live debug view of the stream Durable Object: core processor state, open connections with real delivery metrics (lag, bytes, commit→settled latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the stream's own throughput windows.",
       kill: "Abort the current Durable Object incarnation; the next request boots it again.",
       subscribe:
         'Session-scoped live event delivery (the "ephemeral" subscription lane — also the only lane that receives `ephemeral: true` events): `processEventBatch` is called for every committed batch (optionally replayed from `replayAfterOffset`); returns an unsubscribe handle.',
@@ -677,8 +693,12 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "StreamEventReadInput",
       "StreamEventPager",
       "ProcessorRuntimeState",
+      "ConnectionRuntimeState",
+      "SubscriptionRuntimeState",
+      "StreamThroughputMetrics",
       "ProcessEventBatch",
       "GetProcessorRuntimeState",
+      "StreamSubscriberPing",
       "StreamSubscriptionHandle",
       "StreamPushEventBatch",
     ],
@@ -935,7 +955,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The project processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape. `created` flips when the\n * bootstrap saga lands; the list fields are what the collection `list()`\n * methods read.\n */\nexport type ProjectProcessorState = {\n  createRequest: { projectId: string; slug: string } | null;\n  created: boolean;\n  onboardingActive: boolean;\n  onboardingCompletedAt: string | null;\n  agents: { createdAt: string; path: string }[];\n  repos: { createdAt: string; path: string }[];\n  secrets: { createdAt: string; path: string }[];\n  streams: { createdAt: string; path: string }[];\n  customDomains: {\n    cloudflareHostnameId: string | null;\n    error: string | null;\n    hostname: string;\n    hostnameStatus: string | null;\n    ownershipVerification: { name: string; value: string } | null;\n    sslStatus: string | null;\n    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";\n    validationRecords: { name: string; status: string | null; value: string }[];\n    wildcard: boolean;\n    createdAt: string;\n    updatedAt: string;\n  }[];\n};',
+      '/**\n * The project processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape. `created` flips when the\n * bootstrap saga lands; the list fields are what the collection `list()`\n * methods read.\n */\nexport type ProjectProcessorState = {\n  createRequest: { projectId: string; slug: string } | null;\n  created: boolean;\n  onboardingActive: boolean;\n  onboardingCompletedAt: string | null;\n  agents: { createdAt: string; path: string }[];\n  repos: { createdAt: string; path: string }[];\n  secrets: { createdAt: string; path: string }[];\n  streams: { createdAt: string; path: string }[];\n  customDomains: {\n    cloudflareHostnameId: string | null;\n    error: string | null;\n    hostname: string;\n    hostnameStatus: string | null;\n    ownershipVerification: { name: string; value: string } | null;\n    sslStatus: string | null;\n    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";\n    validationRecords: { name: string; status: string | null; value: string }[];\n    wildcard: boolean;\n    createdAt: string;\n    updatedAt: string;\n  }[];\n  egressRules: {\n    ruleKey: string;\n    description: string;\n    match: {\n      hosts?: string[] | undefined;\n      methods?: string[] | undefined;\n      pathPrefix?: string | undefined;\n      secretPaths?: string[] | undefined;\n    };\n    verdict: "deny" | "hold";\n    approvalTimeoutMs: number;\n  }[];\n  humanApprovalKeys: {\n    keyId: string;\n    publicKey: string;\n    label: string;\n    addedAt: string;\n    revokedAt: string | null;\n  }[];\n};',
     summary:
       "The project processor's reduced state, inferred from the contract's `stateSchema` — the one definition of the shape.",
     memberSummaries: {},
@@ -1029,10 +1049,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamSubscriberWakeResponse",
     kind: "typeAlias",
     sourceText:
-      "/**\n * What the poked subscriber hands back — the entire handshake in one return\n * value. The stream retains `sink` (ownership of a returned stub transfers to\n * the caller) and streams one-way batches into it from `checkpointOffset + 1`;\n * there is no subscribe-back call and therefore no handshake race to fence.\n */\nexport type StreamSubscriberWakeResponse = {\n  /** The processor's durable checkpoint offset — replay resumes after it. */\n  checkpointOffset: number;\n  /** The live delivery callback the stream retains and invokes per batch. */\n  sink: ProcessEventBatch;\n  /**\n   * Serializable subscriber identity (validated against\n   * `StreamSubscriberDescriptor` by the stream) appended as the\n   * subscriber-connected presence fact; carries the processor's contract\n   * announcement for the stream's `processorsBySlug` registry.\n   */\n  subscriber?: unknown;\n  /** Live runtime-state capability, retained for the connection lifetime. */\n  getRuntimeState?: GetProcessorRuntimeState;\n};",
+      "/**\n * What the poked subscriber hands back — the entire handshake in one return\n * value. The stream retains `sink` (ownership of a returned stub transfers to\n * the caller) and streams one-way batches into it from `checkpointOffset + 1`;\n * there is no subscribe-back call and therefore no handshake race to fence.\n */\nexport type StreamSubscriberWakeResponse = {\n  /** The processor's durable checkpoint offset — replay resumes after it. */\n  checkpointOffset: number;\n  /** The live delivery callback the stream retains and invokes per batch. */\n  sink: ProcessEventBatch;\n  /**\n   * Serializable subscriber identity (validated against\n   * `StreamSubscriberDescriptor` by the stream) appended as the\n   * subscriber-connected presence fact; carries the processor's contract\n   * announcement for the stream's `processorsBySlug` registry.\n   */\n  subscriber?: unknown;\n  /** Live runtime-state capability, retained for the connection lifetime. */\n  getRuntimeState?: GetProcessorRuntimeState;\n  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */\n  ping?: StreamSubscriberPing;\n};",
     summary: "What the poked subscriber hands back — the entire handshake in one return value.",
     memberSummaries: {},
-    referencedTypeNames: ["ProcessEventBatch", "GetProcessorRuntimeState"],
+    referencedTypeNames: ["ProcessEventBatch", "GetProcessorRuntimeState", "StreamSubscriberPing"],
   },
   {
     name: "LiveUpdate",
@@ -1295,6 +1315,26 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "McpBeginOAuthInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to,\n * the secret path to store the resulting token at, and an optional OAuth scope. */\nexport type McpBeginOAuthInput = {\n  /** The MCP server's URL (the same URL you would pass to `connect`). */\n  url: string;\n  /** Where the resulting token is stored write-only, e.g. `/secrets/mcp/cloudflare`. */\n  path: string;\n  /** OAuth scope to request; the server's default is used when omitted. */\n  scope?: string;\n};",
+    summary:
+      "Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to, the secret path to store the resulting token at, and an optional OAuth scope.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "McpBeginOAuthResult",
+    kind: "typeAlias",
+    sourceText:
+      '/** Result of `itx.mcp.beginOAuth`: a link to send the user through, and the\n * secret path the token lands at once they finish. */\nexport type McpBeginOAuthResult = {\n  /** Send this to the user. Signing in there stores the token and (for an agent)\n   * messages you back so you can continue. */\n  authorizationUrl: string;\n  /** The `/secrets/…` path the token is stored at. Connect afterwards with\n   * `headers: { authorization: \'Bearer getSecret({ path: "<path>", field: "accessToken" })\' }`. */\n  path: string;\n};',
+    summary:
+      "Result of `itx.mcp.beginOAuth`: a link to send the user through, and the secret path the token lands at once they finish.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "OpenApiConnectInput",
     kind: "typeAlias",
     sourceText:
@@ -1387,6 +1427,26 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "One Schedule as reduced from the Scheduler stream — the UI list row.",
     memberSummaries: {},
     referencedTypeNames: ["SchedulerAction", "SchedulerRecurrence"],
+  },
+  {
+    name: "CollectSecretInput",
+    kind: "typeAlias",
+    sourceText:
+      '/**\n * Input to `itx.secrets.collectFromUser`: which path the secret should land\n * at, the egress origins its material may ever be substituted into, and an\n * optional human-facing note the collection page shows the user (what the\n * key is for, where to find it).\n */\nexport type CollectSecretInput = {\n  path: string;\n  /** The egress allowlist the secret is born pinned to — the user sees these\n   * origins on the collection page as the promise of where the value can go.\n   * Must be non-empty http(s) URLs; validated at mint so a bad list fails on\n   * the agent that can fix it, not in the user\'s face at submit time. */\n  egress: { urls: string[] };\n  /** Shown to the user on the collection page (e.g. "API key for\n   * api.somewhere.com — found under Settings → API"). */\n  description?: string;\n};',
+    summary:
+      "Input to `itx.secrets.collectFromUser`: which path the secret should land at, the egress origins its material may ever be substituted into, and an optional human-facing note the collection page shows the user (what the key is for, where to find it).",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CollectSecretLink",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * What `itx.secrets.collectFromUser` returns: the normalized secret path and\n * the deep link to the chrome-free collection page. Send the URL to the user;\n * when they submit, the secret is stored (material + egress pin in one update)\n * and — when the caller was an agent scope — that agent receives a message\n * that the secret at this path is ready.\n */\nexport type CollectSecretLink = {\n  path: string;\n  url: string;\n};",
+    summary:
+      "What `itx.secrets.collectFromUser` returns: the normalized secret path and the deep link to the chrome-free collection page.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "CommitRepoFilesInput",
@@ -1529,6 +1589,34 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "ConnectionRuntimeState",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable debug view of one live connection, for `runtimeState()`. */\nexport type ConnectionRuntimeState = {\n  subscriptionType: StreamSubscriptionType;\n  startedAt: string;\n  cursor: number;\n  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */\n  lag: number;\n  batchesSent: number;\n  eventsSent: number;\n  /** Serialized payload bytes delivered into this connection's sink (cumulative). */\n  bytesSent: number;\n  lastDeliveredAt?: string;\n  /**\n   * Commit-to-settled latency, stream clock only: `createdAt` of the newest\n   * event in a batch → the pulled batch result settling (the subscriber's\n   * ingest resolved). Durable (wake) lane only — ephemeral results are\n   * disposed unpulled, so ephemeral consumption is self-reported by the host\n   * through `getRuntimeState` instead. Absent until a sample exists.\n   */\n  settleLatencyMs?: LatencyStats;\n  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */\n  pingRttMs?: LatencyStats;\n  /**\n   * The connect-time identity descriptor. The runtime table is the ONLY home\n   * for ephemeral identity — ephemeral connections don't fold into the\n   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces\n   * read who's connected from here.\n   */\n  subscriber?: StreamSubscriberDescriptor;\n  /**\n   * True while the last batch handed to this connection's sink is unsettled —\n   * exactly the signal idle teardown consults to classify a sink as wedged.\n   */\n  hasPendingDelivery: boolean;\n};",
+    summary: "Serializable debug view of one live connection, for `runtimeState()`.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamSubscriptionType", "LatencyStats", "StreamSubscriberDescriptor"],
+  },
+  {
+    name: "SubscriptionRuntimeState",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */\nexport type SubscriptionRuntimeState = {\n  mode: SubscriptionDelivery[\"mode\"];\n  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */\n  ackedOffset: number;\n  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */\n  lag: number;\n  attempt: number;\n  nextAttemptAt: number | null;\n  lastError: string | null;\n  parkedAtOffset: number | null;\n  /** Whether a live delivery connection currently exists (wake mode). */\n  connected: boolean;\n  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */\n  bytesSent?: number;\n  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */\n  settleLatencyMs?: LatencyStats;\n  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */\n  deliveryDurationMs?: LatencyStats;\n};",
+    summary:
+      "Serializable debug view of one durable subscription's spine row, for `runtimeState()`.",
+    memberSummaries: {},
+    referencedTypeNames: ["SubscriptionDelivery", "LatencyStats"],
+  },
+  {
+    name: "StreamThroughputMetrics",
+    kind: "typeAlias",
+    sourceText:
+      "/** What `runtimeState()` reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
+    summary: "What `runtimeState()` reports for the stream's own throughput.",
+    memberSummaries: {},
+    referencedTypeNames: ["ThroughputReport"],
+  },
+  {
     name: "ProcessEventBatch",
     kind: "typeAlias",
     sourceText:
@@ -1545,6 +1633,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "Optional runtime-state callback exposed by a hosted processor.",
     memberSummaries: {},
     referencedTypeNames: ["ProcessorRuntimeState"],
+  },
+  {
+    name: "StreamSubscriberPing",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * Optional ping capability a subscriber hands the stream (ephemeral\n * `subscribe()` argument or wake-handshake field). Absent on older\n * subscribers — the stream then simply has no RTT samples for them.\n */\nexport type StreamSubscriberPing = (\n  input: StreamPingInput,\n) => StreamPingReply | Promise<StreamPingReply>;",
+    summary:
+      "Optional ping capability a subscriber hands the stream (ephemeral `subscribe()` argument or wake-handshake field).",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamPingInput", "StreamPingReply"],
   },
   {
     name: "StreamSubscriptionHandle",
@@ -1774,6 +1872,55 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "StreamSubscriptionType",
+    kind: "typeAlias",
+    sourceText:
+      '/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */\nexport type StreamSubscriptionType = "configured" | "ephemeral";',
+    summary:
+      "How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "LatencyStats",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */\nexport type LatencyStats = {\n  /** Most recent sample (ms). */\n  last: number;\n  p50: number;\n  p95: number;\n  /** Samples currently in the ring (caps at the ring size). */\n  samples: number;\n  /** Epoch ms of the most recent sample. */\n  lastAt: number;\n};",
+    summary: "Serializable summary of a {@link LatencyRing}; `null` until a sample exists.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamSubscriberDescriptor",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable subscriber identity carried on presence facts and the runtime connection table. */\nexport type StreamSubscriberDescriptor = {\n  description?: string | undefined;\n  processor?:\n    | {\n        announcement: {\n          slug: string;\n          version: string;\n          description: string;\n          consumes: string[];\n          emits: string[];\n          ownedEvents: { type: string; description?: string | undefined }[];\n        };\n      }\n    | undefined;\n};",
+    summary:
+      "Serializable subscriber identity carried on presence facts and the runtime connection table.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "SubscriptionDelivery",
+    kind: "typeAlias",
+    sourceText:
+      '/** A durable subscription\'s delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */\nexport type SubscriptionDelivery =\n  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }\n  | { mode: "push"; expression: ItxExpression }\n  | { mode: "webhook"; url: string };',
+    summary:
+      "A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST).",
+    memberSummaries: {},
+    referencedTypeNames: ["ItxExpression"],
+  },
+  {
+    name: "ThroughputReport",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * One direction's throughput report: a responsive trailing-5s rate (the\n * number UIs show), the full-minute totals, and the raw 1s series for graphs.\n */\nexport type ThroughputReport = {\n  /** Events per second over the trailing 5 seconds. */\n  perSecond5s: number;\n  /** Payload bytes per second over the trailing 5 seconds. */\n  bytesPerSecond5s: number;\n  lastMinute: MinuteWindow;\n  series: ThroughputSeries;\n};",
+    summary:
+      "One direction's throughput report: a responsive trailing-5s rate (the number UIs show), the full-minute totals, and the raw 1s series for graphs.",
+    memberSummaries: {},
+    referencedTypeNames: ["MinuteWindow", "ThroughputSeries"],
+  },
+  {
     name: "StreamEventBatch",
     kind: "typeAlias",
     sourceText:
@@ -1781,6 +1928,26 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "Batch delivered to stream processors and live subscribers.",
     memberSummaries: {},
     referencedTypeNames: ["StreamEvent"],
+  },
+  {
+    name: "StreamPingInput",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * The mutual ping's request half (NTP-style, for real latency measurement\n * between a stream and its subscribers): the requester stamps `t0` on its own\n * clock and observes `t3` when the reply lands.\n */\nexport type StreamPingInput = { t0: number };",
+    summary:
+      "The mutual ping's request half (NTP-style, for real latency measurement between a stream and its subscribers): the requester stamps `t0` on its own clock and observes `t3` when the reply lands.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamPingReply",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * The mutual ping's reply half: the responder echoes `t0` and reports when it\n * received the request (`t1`) and sent the reply (`t2`) on ITS clock.\n * `rtt = (t3 - t0) - (t2 - t1)` excludes responder processing time, and\n * `((t1 - t0) + (t2 - t3)) / 2` estimates the responder−requester clock\n * offset (see stream-runtime-metrics.pingRoundTrip). Purely observational:\n * ping failures drop the sample and never affect delivery or liveness.\n */\nexport type StreamPingReply = { t0: number; t1: number; t2: number };",
+    summary:
+      "The mutual ping's reply half: the responder echoes `t0` and reports when it received the request (`t1`) and sent the reply (`t2`) on ITS clock.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "AgentPolicyEventInput",
@@ -1865,6 +2032,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       "/** One commit returned by `WorkspaceGit.log` (the config repo's main history). */\nexport type WorkspaceGitLogEntry = {\n  author: { email: string; name: string };\n  message: string;\n  oid: string;\n  /** Epoch milliseconds. */\n  timestamp: number;\n};",
     summary: "One commit returned by `WorkspaceGit.log` (the config repo's main history).",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "MinuteWindow",
+    kind: "typeAlias",
+    sourceText:
+      '/** One rolling-minute throughput window. */\nexport type MinuteWindow = {\n  /** Events in the last 60 seconds. */\n  count: number;\n  /** Payload bytes in the last 60 seconds. */\n  bytes: number;\n  /** `count / 60` — the "events/s over the last minute" number. */\n  perSecond: number;\n};',
+    summary: "One rolling-minute throughput window.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ThroughputSeries",
+    kind: "typeAlias",
+    sourceText:
+      "/** Per-second buckets over the trailing minute, oldest→newest, length 60. */\nexport type ThroughputSeries = {\n  counts: number[];\n  bytes: number[];\n};",
+    summary: "Per-second buckets over the trailing minute, oldest→newest, length 60.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

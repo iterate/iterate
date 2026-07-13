@@ -231,7 +231,35 @@ export type StreamSubscriberWakeResponse = {
   subscriber?: unknown;
   /** Live runtime-state capability, retained for the connection lifetime. */
   getRuntimeState?: GetProcessorRuntimeState;
+  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */
+  ping?: StreamSubscriberPing;
 };
+
+/**
+ * The mutual ping's request half (NTP-style, for real latency measurement
+ * between a stream and its subscribers): the requester stamps `t0` on its own
+ * clock and observes `t3` when the reply lands.
+ */
+export type StreamPingInput = { t0: number };
+
+/**
+ * The mutual ping's reply half: the responder echoes `t0` and reports when it
+ * received the request (`t1`) and sent the reply (`t2`) on ITS clock.
+ * `rtt = (t3 - t0) - (t2 - t1)` excludes responder processing time, and
+ * `((t1 - t0) + (t2 - t3)) / 2` estimates the responder−requester clock
+ * offset (see stream-runtime-metrics.pingRoundTrip). Purely observational:
+ * ping failures drop the sample and never affect delivery or liveness.
+ */
+export type StreamPingReply = { t0: number; t1: number; t2: number };
+
+/**
+ * Optional ping capability a subscriber hands the stream (ephemeral
+ * `subscribe()` argument or wake-handshake field). Absent on older
+ * subscribers — the stream then simply has no RTT samples for them.
+ */
+export type StreamSubscriberPing = (
+  input: StreamPingInput,
+) => StreamPingReply | Promise<StreamPingReply>;
 
 /** Serializable snapshot plus optional live runtime debug state for a processor. */
 export type ProcessorRuntimeState<State = unknown> = {

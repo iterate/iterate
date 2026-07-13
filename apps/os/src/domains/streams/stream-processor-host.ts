@@ -58,10 +58,14 @@
 import type { Stream } from "../../itx-api.generated.ts";
 import { LiveState } from "../../lib/live-state/engine.ts";
 import type {
+  GetProcessorRuntimeState,
   StreamEventBatch,
+  StreamPingInput,
+  StreamSubscriberPing,
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "./rpc-types.ts";
+import type { SubscriberMetrics } from "./subscriber-metrics.ts";
 import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "./stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "./core-processor-contract.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
@@ -115,6 +119,16 @@ export type AnyHostedProcessor = {
   currentState: unknown;
   /** Whether `currentState` is the fold and not the schema default (see StreamProcessor.isLoaded). */
   readonly isLoaded: boolean;
+  /**
+   * Self-measured consumption metrics — every hosted processor has one
+   * (StreamProcessor provides it; Pick keeps this structural). Hosts merge
+   * its report into the `getRuntimeState` answer and feed observed pings
+   * into it — see {@link hostRuntimeCapabilities}.
+   */
+  readonly subscriberMetrics: Pick<
+    SubscriberMetrics,
+    "report" | "notePingObserved" | "noteAppendCommitted" | "clearPendingAppends"
+  >;
   /** Host confirmation that the journal is folded through head (the zero-batch catch-up case). */
   markLoaded(): void;
   /** Observe reduced-state changes in-process (a local function, not a retained RPC stub). */
@@ -579,8 +593,49 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
         subscriber: {
           processor: { announcement: announceContract(entry.processor.contract) },
         },
-        getRuntimeState: () => entry.processor.getRuntimeState(),
+        // Same Cloudflare clock domain, so the ping's one-way estimate is
+        // omitted and the clock-offset estimate is ~zero.
+        ...hostRuntimeCapabilities(entry.processor, { now }),
       };
+    },
+  };
+}
+
+/**
+ * The two live capabilities every processor host hands the stream alongside
+ * its sink, built in ONE place so the server host and the browser runtime
+ * cannot drift:
+ *
+ * - `getRuntimeState` merges the processor's self-measured metrics into the
+ *   answer HERE — outside the processor — so a subclass that overrides
+ *   `getRuntimeState` with its own `runtime` bag cannot accidentally drop
+ *   them.
+ * - `ping` answers the mutual ping (see rpc-types.ts) and — only when the
+ *   host measures its transport RTT (`oneWayEstimateMs`, the browser's
+ *   half-RTT) — feeds the observed timestamps into the processor's
+ *   clock-offset estimate. A host that omits it shares the stream's clock
+ *   domain, where the correct offset IS zero: recording the raw `t1 − t0`
+ *   there would book transport delay as clock skew and bias delivery ages.
+ *   A host with no RTT sample yet skips too — an uncorrected offset guess
+ *   is worse than the documented raw-age estimate.
+ */
+export function hostRuntimeCapabilities(
+  processor: AnyHostedProcessor,
+  opts: { now: () => number; oneWayEstimateMs?: () => number | undefined },
+): { getRuntimeState: GetProcessorRuntimeState; ping: StreamSubscriberPing } {
+  return {
+    getRuntimeState: async () => {
+      const state = await processor.getRuntimeState();
+      const metrics = processor.subscriberMetrics.report();
+      return { ...state, runtime: { ...state.runtime, metrics } };
+    },
+    ping: (input: StreamPingInput) => {
+      const t1 = opts.now();
+      const oneWayEstimateMs = opts.oneWayEstimateMs?.();
+      if (oneWayEstimateMs !== undefined) {
+        processor.subscriberMetrics.notePingObserved({ t0: input.t0, t1, oneWayEstimateMs });
+      }
+      return { t0: input.t0, t1, t2: opts.now() };
     },
   };
 }

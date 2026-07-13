@@ -46,6 +46,7 @@ import {
 } from "./project-directory.ts";
 import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
+import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
 import type { Env } from "./env.ts";
@@ -221,7 +222,13 @@ import type {
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
 import type { ItxAuth, ItxAuthCredentials } from "./auth.ts";
-import type { McpClientConnectInput, McpClientRpc } from "./domains/itx/mcp-client.ts";
+import type {
+  McpBeginOAuthInput,
+  McpBeginOAuthResult,
+  McpClientConnectInput,
+  McpClientRpc,
+} from "./domains/itx/mcp-client.ts";
+import { beginMcpOAuth, fetchLikeFromFetcher } from "./domains/itx/mcp-oauth.ts";
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
 import type { ProjectListEntry } from "./project-deployment-status.ts";
 import type {
@@ -232,7 +239,12 @@ import type {
   ProvideCapabilityInput,
   RevokeCapabilityInput,
 } from "./domains/capability-host/types.ts";
-import type { SecretDescription, SecretUpdateInput } from "./domains/secrets/types.ts";
+import type {
+  CollectSecretInput,
+  CollectSecretLink,
+  SecretDescription,
+  SecretUpdateInput,
+} from "./domains/secrets/types.ts";
 import type {
   GetProcessorRuntimeState,
   LiveStateRpc,
@@ -243,12 +255,18 @@ import type {
   ProcessorSnapshot,
   StreamEventReadInput,
   StreamProcessorRpc,
+  StreamSubscriberPing,
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
   StreamSubscriptionHandle,
   WakeableStreamProcessorRpc,
 } from "./domains/streams/rpc-types.ts";
 import { StreamReceiverUnavailableError } from "./domains/streams/rpc-types.ts";
+import type {
+  ConnectionRuntimeState,
+  SubscriptionRuntimeState,
+} from "./domains/streams/stream-subscribers.ts";
+import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-metrics.ts";
 import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
 import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
@@ -481,24 +499,25 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     return this.durableObjectStub.getProcessorRuntimeState(args);
   }
 
-  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
+  /**
+   * Live debug view of the stream Durable Object: core processor state, open
+   * connections with real delivery metrics (lag, bytes, commit→settled
+   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the
+   * stream's own throughput windows. All runtime metrics are in-memory and
+   * reset on eviction (`metrics.measuredSince` says how long the window has
+   * been collecting); latency stats fields are absent until a real sample
+   * exists — no value is ever synthesized. Calling this also requests a
+   * throttled mutual-ping round over the live connections (observer-driven
+   * sampling), so a polling debug UI sees RTTs populate.
+   */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
-      connections: Record<string, unknown>;
-      subscriptions: Record<
-        string,
-        {
-          mode: "wake" | "push" | "webhook";
-          ackedOffset: number;
-          lag: number;
-          attempt: number;
-          nextAttemptAt: number | null;
-          lastError: string | null;
-          parkedAtOffset: number | null;
-          connected: boolean;
-        }
-      >;
+      connections: Record<string, ConnectionRuntimeState>;
+      subscriptions: Record<string, SubscriptionRuntimeState>;
+      metrics: StreamThroughputMetrics;
+      /** SQLite database size in bytes (event log + spine rows + chunks). */
+      storageSizeBytes: number;
     };
   }> {
     return this.durableObjectStub.runtimeState();
@@ -529,6 +548,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     subscriber?: unknown;
     /** Optional live debug hook, retained for the subscription's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
+    /**
+     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`
+     * in rpc-types.ts), retained for the subscription's lifetime. The stream
+     * pings it — throttled, and only while someone is watching runtimeState —
+     * to measure real transport RTT to this subscriber.
+     */
+    ping?: StreamSubscriberPing;
   }): Promise<StreamSubscriptionHandle> {
     // The zero-return-frame wire guarantee, relay leg. The Stream DO retains
     // and invokes the delivery callback over Workers RPC, and Workers RPC
@@ -1667,13 +1693,18 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Secret catalog: get(path) / list(). Secret VALUES never transit this surface — they substitute into egress requests server-side.",
-      children: { get: "The secret at a path.", list: "Known secrets (from project state)." },
+        "Secret catalog: get(path) / list() / collectFromUser(input). Secret VALUES never transit this surface — they substitute into egress requests server-side.",
+      children: {
+        collectFromUser:
+          "Mint a deep link where the user enters a secret value themselves ({ path, egress, description? } → { path, url }); an agent caller is messaged when they submit.",
+        get: "The secret at a path.",
+        list: "Known secrets (from project state).",
+      },
       parent: "a project itx (itx.secrets)",
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(readonly props: { auth: ItxAuth; projectId: string; scopePath: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -1685,6 +1716,78 @@ class SecretCollectionRpcTarget extends IterateRpcTarget<"SecretCollection"> {
       path: normalizeSecretPath(path),
       projectId: this.props.projectId,
     });
+  }
+
+  /**
+   * Mint a deep link where the USER enters a secret value themselves — the
+   * door for credentials an agent must never see in chat. The page (a
+   * minimal, chrome-free form) shows the description and the egress origins
+   * the value is pinned to; on submit it stores material + egress in one
+   * update, so the secret is born already pinned. When the caller is an
+   * agent scope, the page also messages that agent ("The user submitted the
+   * secret at …"), which starts its next turn — send the URL to the user,
+   * end the turn, and act on the notification. Nothing is created until the
+   * user submits; the link itself is stateless. Works for EXISTING secrets
+   * too — the page warns before replacing — so it is also the way to rotate
+   * a credential (e.g. one the user pasted into chat and should roll).
+   */
+  async collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink> {
+    const path = normalizeSecretPath(input.path);
+    if (!path.isWellFormed()) {
+      throw new Error("collectFromUser paths must be well-formed strings (no lone surrogates).");
+    }
+    if (input.egress.urls.length === 0) {
+      throw new Error(
+        "collectFromUser needs at least one egress URL: the user is shown where the value can ever be sent, and a secret pinned to nothing can never be used.",
+      );
+    }
+    // Pin to ORIGINS, not URLs. Enforcement (assertOriginPinned) only ever
+    // compares origins, so a pin of "https://api.acme.com/safe" would in fact
+    // authorize the whole origin — the page must not display a promise
+    // narrower than what is enforced. Normalizing here also dedupes. Userinfo
+    // is rejected: it would ride a plaintext, shareable chat URL while
+    // origin-pinning ignores it anyway. Bad input fails on the caller that can
+    // fix it, not as a raw "Invalid URL" in the user's face at submit time.
+    const egressOrigins = [
+      ...new Set(
+        input.egress.urls.map((url) => {
+          const parsed = URL.canParse(url) ? new URL(url) : null;
+          if (parsed === null || !/^https?:$/.test(parsed.protocol)) {
+            throw new Error(
+              `collectFromUser egress URLs must be absolute http(s) URLs; got ${JSON.stringify(url)}.`,
+            );
+          }
+          if (parsed.username !== "" || parsed.password !== "") {
+            throw new Error(
+              `collectFromUser egress URLs must not carry credentials; got ${JSON.stringify(url)}.`,
+            );
+          }
+          return parsed.origin;
+        }),
+      ),
+    ];
+    const project = await readProjectById(env.PROJECT_DIRECTORY, this.props.projectId);
+    if (!project?.slug) {
+      throw new Error(`Project ${this.props.projectId} has no slug; cannot build a page URL.`);
+    }
+    // Unlike read-only viewer links, this link WRITES a secret — never fall
+    // back to a default host that could belong to a different deployment.
+    const baseUrl = parseConfig(env).baseUrl;
+    if (baseUrl === undefined) {
+      throw new Error("collectFromUser needs APP_CONFIG_BASE_URL to build the page URL.");
+    }
+    const scopePath = this.props.scopePath;
+    const url = buildCollectSecretUrl({
+      baseUrl,
+      projectSlug: project.slug,
+      search: {
+        path,
+        egress: egressOrigins,
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(scopePath.startsWith("/agents/") ? { notify: scopePath } : {}),
+      },
+    });
+    return { path, url };
   }
 
   /** Known secrets, read from the project processor's reduced state. */
@@ -4492,6 +4595,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get mcp(): McpClientCollectionRpcTarget {
     return new McpClientCollectionRpcTarget({
       egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
+      projectId: this.#props.projectId,
+      // Makes beginOAuth links notify the calling agent when the flow completes.
+      scopePath: this.#props.capabilityHost.path,
     });
   }
 
@@ -4553,6 +4659,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new SecretCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
+      // The scope path makes collectFromUser's links notify the calling
+      // agent when the user submits; non-agent scopes mint plain links.
+      scopePath: this.#props.capabilityHost.path,
     });
   }
 
@@ -5232,9 +5341,12 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * Find examples, types, and mounted capabilities. Pass MANY related words —
    * matching is dumb word overlap, so more synonyms means better recall:
    * `search({ q: "file upload attachment bytes store image" })`, not
-   * `search({ q: "files" })`. Example hits are working scripts — prefer
-   * copying them over writing calls from scratch. Each hit's `fetchCall`
-   * field is the literal next call to make.
+   * `search({ q: "files" })`. API-name queries work too: "itx" is dropped as
+   * noise and a word matching a row's NAME counts double, so `"itx.docs"`,
+   * `"worker"`, or `"agents"` rank their subject first instead of every row
+   * that mentions the word. Example hits are working scripts — prefer copying
+   * them over writing calls from scratch. Each hit's `fetchCall` field holds
+   * the ready-made docs.get call that fetches its full doc.
    */
   async search(input: { q: string }): Promise<DocsSearchHit[]> {
     const scored: Array<{ hit: DocsSearchHit; score: number; proven?: boolean }> = [];
@@ -5244,8 +5356,12 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       // capability demo containing "create"/"message" in its script) outrank
       // the example whose TITLE says what the searcher wants. Recall for
       // API-name queries still works — ids/titles/descriptions name their
-      // subjects, and type declarations cover the rest.
-      const score = searchScore(input.q, `${example.id} ${example.title} ${example.description}`);
+      // subjects, and type declarations cover the rest. A word landing in
+      // the row's NAME counts twice: `search({ q: "docs" })` must rank
+      // docs-search-and-get above every row that merely mentions itx.docs.
+      const score =
+        searchScore(input.q, `${example.id} ${example.title} ${example.description}`) +
+        searchScore(input.q, example.id);
       if (score === 0) continue;
       scored.push({
         score,
@@ -5270,11 +5386,12 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       // the examples out of the one screenful of hits. A word landing in the
       // declaration's own name/summary counts fully; a member-only match
       // counts half.
-      const score = weightedDeclarationScore({
-        query: input.q,
-        ownText: `${declaration.name} ${declaration.summary}`,
-        memberText,
-      });
+      const score =
+        weightedDeclarationScore({
+          query: input.q,
+          ownText: `${declaration.name} ${declaration.summary}`,
+          memberText,
+        }) + searchScore(input.q, declaration.name);
       if (score === 0) continue;
       scored.push({
         score,
@@ -5296,7 +5413,9 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
       if (capability.type === "builtin") continue; // builtins are covered by their type declarations
       const dottedPath = capability.path.join(".");
       const instructions = capability.instructions ?? "";
-      const score = searchScore(input.q, `${dottedPath} ${instructions} ${capability.types ?? ""}`);
+      const score =
+        searchScore(input.q, `${dottedPath} ${instructions} ${capability.types ?? ""}`) +
+        searchScore(input.q, dottedPath);
       if (score === 0) continue;
       scored.push({
         score,
@@ -5675,6 +5794,11 @@ function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
 
 type McpClientDeps = { description?: LazyClientDescription; egress: Fetcher };
 
+/** The MCP collection needs the calling project + scope (so beginOAuth can mint
+ * the callback URL, store the token, and notify the calling agent) on top of the
+ * egress every client call uses. */
+type McpClientCollectionDeps = { egress: Fetcher; projectId: string; scopePath: string };
+
 // Exa's hosted MCP server works unauthenticated (rate-limited, and the shared
 // free pool exhausts fast); pre-connecting it gives every project web search
 // with zero setup. When the deployment has a first-party Exa key
@@ -5694,22 +5818,57 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Ad-hoc MCP clients: connect({ url }) returns a client whose dotted calls are tool invocations; exa is the built-in Exa web-search server.",
+        "Ad-hoc MCP clients: connect({ url }) returns a client whose dotted calls are tool invocations; exa is the built-in Exa web-search server. For a server that needs OAuth, beginOAuth({ url }) returns a sign-in link that stores a token you then connect with.",
       children: {
         connect: "Connect to an MCP server by URL.",
+        beginOAuth: "Start the OAuth sign-in for an OAuth-protected MCP server; returns a link.",
         exa: "The public Exa MCP server (web_search_exa, web_fetch_exa).",
       },
       parent: "a project itx (itx.mcp)",
     });
   }
 
-  constructor(readonly props: McpClientDeps) {
+  constructor(readonly props: McpClientCollectionDeps) {
     super();
   }
 
   /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */
   connect(input: McpClientConnectInput): Promise<McpClientRpc> {
     return McpClientRpcTarget.connect(input, this.props);
+  }
+
+  /**
+   * Begin the OAuth sign-in for an OAuth-protected MCP server (one whose
+   * unauthenticated request answers 401 with a `WWW-Authenticate` challenge —
+   * e.g. Cloudflare's mcp.cloudflare.com). Discovers the server's OAuth
+   * endpoints, registers a client, and returns a `{ authorizationUrl, path }`:
+   * send `authorizationUrl` to the user ("click here to connect"). When they
+   * sign in, the token is stored write-only at `path` and — if you are an agent
+   * — you are messaged so you can continue. Then connect like any bearer MCP:
+   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret({ path:
+   * "<path>", field: "accessToken" })' } })`. For a server that just wants a
+   * bearer token you already hold, use `itx.secrets.collectFromUser` instead.
+   */
+  async beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult> {
+    const baseUrl = parseConfig(env).baseUrl;
+    if (!baseUrl) {
+      throw new Error(
+        "This deployment cannot name its own base URL, so it cannot host the OAuth callback.",
+      );
+    }
+    const path = normalizeSecretPath(input.path);
+    const result = await beginMcpOAuth({
+      mcpUrl: input.url,
+      path,
+      redirectUri: `${baseUrl.replace(/\/$/, "")}/api/mcp-oauth/callback`,
+      ...(input.scope ? { scope: input.scope } : {}),
+      // An agent scope gets messaged when the user finishes signing in.
+      ...(this.props.scopePath.startsWith("/agents/") ? { notify: this.props.scopePath } : {}),
+      projectId: this.props.projectId,
+      encryptionKey: env.SECRET_ENCRYPTION_KEY,
+      fetchFn: fetchLikeFromFetcher(this.props.egress),
+    });
+    return { authorizationUrl: result.authorizationUrl, path: result.path };
   }
 
   /**

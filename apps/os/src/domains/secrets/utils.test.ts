@@ -6,6 +6,7 @@ import { describe, expect, test } from "vitest";
 import {
   computeHmacHex,
   computeSignatureBase64Url,
+  normalizeSecretPath,
   secretReferencePathsFromRequest,
   secretReferencesFromHeaders,
   secretReferencesFromRequest,
@@ -15,6 +16,38 @@ import {
   substituteSecretRequest,
   timingSafeStringEqual,
 } from "./utils.ts";
+
+describe("normalizeSecretPath", () => {
+  test("accepts canonical secret paths (bare name and sub-path)", () => {
+    expect(normalizeSecretPath("/secrets/acme")).toBe("/secrets/acme");
+    expect(normalizeSecretPath("secrets/acme")).toBe("/secrets/acme");
+    expect(normalizeSecretPath("/secrets/github/app-1")).toBe("/secrets/github/app-1");
+    expect(normalizeSecretPath("/secrets/oauth.token_v2")).toBe("/secrets/oauth.token_v2");
+  });
+
+  test("rejects paths outside /secrets/", () => {
+    expect(() => normalizeSecretPath("/agents/victim")).toThrow(/must start with/);
+  });
+
+  // The path becomes a Durable Object name reparsed with WHATWG URL, which
+  // collapses dot segments and splits on ?/# — so a path that survives here
+  // but changes under URL parsing would address a different object than the
+  // one displayed. These must all be rejected, not silently rewritten.
+  test.each([
+    "/secrets/../agents/victim",
+    "/secrets/./x",
+    "/secrets/x/../y",
+    "/secrets/a?b",
+    "/secrets/a#f",
+    "/secrets/a%2e%2e/b",
+    "/secrets/a b",
+    "/secrets/a\\b",
+    "/secrets/x/",
+    "/secrets//y",
+  ])("rejects non-canonical path %j", (path) => {
+    expect(() => normalizeSecretPath(path)).toThrow();
+  });
+});
 
 describe("selectSecretField", () => {
   test("no field returns whole material iff it is a string", () => {

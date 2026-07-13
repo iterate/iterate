@@ -8,6 +8,9 @@ type RuntimeConnection = {
   subscriptionType?: "configured" | "ephemeral";
   startedAt?: string;
   hasPendingDelivery?: boolean;
+  subscriber?: {
+    description?: string;
+  };
 };
 
 type ReducedConnection = {
@@ -547,7 +550,7 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
     await waitForCondition(
       async () => {
         const state = asStreamRuntimeState(await observerStream.runtimeState());
-        return state.coreProcessorState.connectionsByKey?.[waitForEventKey] === undefined;
+        return state.runtime.connections[waitForEventKey] === undefined;
       },
       {
         description: "closed Cap'n Web session to remove its waitForEvent subscription",
@@ -623,11 +626,13 @@ async function waitForRuntimeConnection(
 }
 
 async function waitForWaitForEventConnection(stream: Stream): Promise<string> {
+  // Ephemeral connections live only in the runtime connection table — they
+  // don't fold into the reduced `connectionsByKey` roster (core state v14).
   let key: string | undefined;
   await waitForCondition(
     async () => {
       const state = asStreamRuntimeState(await stream.runtimeState());
-      key = Object.entries(state.coreProcessorState.connectionsByKey ?? {}).find(
+      key = Object.entries(state.runtime.connections).find(
         ([, connection]) => connection.subscriber?.description === "waitForEvent",
       )?.[0];
       return key !== undefined;

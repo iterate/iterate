@@ -389,13 +389,16 @@ export function importedPackageNames(text: string): string[] {
 }
 
 /**
- * Score corpus rows against a search query. The mechanism is deliberately
- * dumb — case-insensitive substring matches of query words against each
- * row's haystack — which is why every caller-facing docstring tells agents
- * to pass MANY related words: recall comes from the query, not the engine.
+ * Words that appear in virtually every haystack and therefore carry no
+ * signal: an agent searching `itx.docs` means "docs", not "everything +1".
+ * If dropping them would empty the query (someone searched bare "itx"),
+ * the original words stand — an all-noise query should still match noisily
+ * rather than return nothing.
  */
-export function searchScore(query: string, haystack: string): number {
-  const lowered = haystack.toLowerCase();
+const QUERY_NOISE_WORDS = new Set(["itx", "await"]);
+
+/** Distinct lowercase query words, split on non-alphanumerics, noise dropped. */
+function queryWords(query: string): string[] {
   const words = [
     ...new Set(
       query
@@ -404,8 +407,20 @@ export function searchScore(query: string, haystack: string): number {
         .filter(Boolean),
     ),
   ];
+  const informative = words.filter((word) => !QUERY_NOISE_WORDS.has(word));
+  return informative.length > 0 ? informative : words;
+}
+
+/**
+ * Score corpus rows against a search query. The mechanism is deliberately
+ * dumb — case-insensitive substring matches of query words against each
+ * row's haystack — which is why every caller-facing docstring tells agents
+ * to pass MANY related words: recall comes from the query, not the engine.
+ */
+export function searchScore(query: string, haystack: string): number {
+  const lowered = haystack.toLowerCase();
   let score = 0;
-  for (const word of words) {
+  for (const word of queryWords(query)) {
     if (lowered.includes(word)) score += 1;
   }
   return score;
@@ -424,16 +439,8 @@ export function weightedDeclarationScore(input: {
 }): number {
   const own = input.ownText.toLowerCase();
   const members = input.memberText.toLowerCase();
-  const words = [
-    ...new Set(
-      input.query
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter(Boolean),
-    ),
-  ];
   let score = 0;
-  for (const word of words) {
+  for (const word of queryWords(input.query)) {
     if (own.includes(word)) score += 1;
     else if (members.includes(word)) score += 0.5;
   }

@@ -725,6 +725,60 @@ return {
 `.trim(),
   },
   {
+    id: "secret-collect-from-user",
+    e2eProven: false,
+    title: "Connect to an API that needs a key: collect the secret from the user",
+    description:
+      "The full flow for connecting to an external API (an OpenAPI server, a REST endpoint, anything) that needs a bearer token or API key only the user has. NEVER ask for credentials in chat — chat is not a secret store, and you must never see the value. itx.secrets.collectFromUser mints a deep link to a minimal form; the user enters the value there, it is stored write-only and pinned to the egress hosts you chose, and YOU get a message the moment they submit. Also the rotation path: it works on existing secrets (the page warns before replacing). If the user pastes a key into chat instead, use it — unblocking them comes first — but advise rolling it and collecting the replacement here. Needs a human to click the link — interactive-only.",
+    context: "agent",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Scenario: the user said "connect me to https://api.somewhere.com" (spec at
+// /openapi.json) and the API wants "authorization: Bearer <key>".
+//
+// ---- TURN 1: mint the collection link, send it, END YOUR TURN ----
+const secretPath = vars.secretPath ?? "/secrets/somewhere-api";
+const apiOrigin = vars.apiOrigin ?? "https://api.somewhere.com";
+
+const link = await itx.secrets.collectFromUser({
+  path: secretPath,
+  egress: { urls: [apiOrigin] },
+  description: "API key for " + apiOrigin + " (sent as a Bearer token)",
+});
+
+await itx.chat.sendMessage(
+  "That API needs an API key. [Click here to enter it](" + link.url + ") — " +
+    "it is stored write-only and can only ever be sent to " + apiOrigin + ". " +
+    "I can't see the value; I'll pick up automatically once you've saved it.",
+);
+// End the turn WITHOUT waiting: because you called collectFromUser from your
+// agent scope, the page messages you when the user submits, and that message
+// starts your next turn.
+return;
+
+// ---- TURN 2 (after 'I submitted the secret at "..."' arrives) ----
+// The value never reaches you. Reference it with a getSecret placeholder —
+// substituted server-side at egress, only toward the pinned hosts:
+//
+// const api = await itx.openapi.connect({
+//   specUrl: apiOrigin + "/openapi.json",
+//   headers: { authorization: 'Bearer getSecret({ path: "' + secretPath + '" })' },
+// });
+// return await api.__describe(); // operations list — then call them by operationId
+//
+// The same placeholder works on raw requests: itx.egress.fetch(new Request(
+//   apiOrigin + "/v1/me",
+//   { headers: { authorization: 'Bearer getSecret({ path: "' + secretPath + '" })' } },
+// ));
+//
+// If the user PASTES the key into chat instead of using the link: that is fine —
+// store it and proceed (itx.secrets.get(secretPath).update({ material, egress: { urls: [apiOrigin] } })),
+// unblocking them comes first. But the pasted value sat in the transcript, so advise
+// them to roll the key with the provider and collect the replacement via
+// collectFromUser — the same call updates the existing secret in place.
+`.trim(),
+  },
+  {
     id: "journal-is-the-record",
     title: "The stream IS the record: provide, revoke, read it back",
     description:
@@ -910,6 +964,59 @@ return {
   mountType: mount?.type,
   mountedCalled: Boolean(mountedSearch),
 };
+`.trim(),
+  },
+  {
+    id: "connect-mcp-oauth",
+    e2eProven: false,
+    title: "Connect an OAuth-protected MCP server (the sign-in flow)",
+    description:
+      'The full flow for an MCP server that needs OAuth — one whose unauthenticated request answers 401 with a WWW-Authenticate challenge (Cloudflare\'s mcp.cloudflare.com, the dummy petshop /mcp, most hosted MCP servers). There is no token to paste: the user must sign in at the provider. itx.mcp.beginOAuth({ url }) discovers the server\'s OAuth endpoints, registers a client, and returns { authorizationUrl, path } — send authorizationUrl to the user ("click here to connect"). When they sign in, the token is stored write-only at `path` and, because you called it from your agent scope, you are messaged so you continue. Then connect like any bearer MCP, referencing the token with a getSecret placeholder on field "accessToken". (If a plain bearer token you already hold is enough, use itx.secrets.collectFromUser instead.) Needs a human to sign in — interactive-only.',
+    context: "agent",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Scenario: the user said "connect me to the Cloudflare MCP server". Trying to
+// connect first fails with an auth challenge — that means OAuth, not a token
+// you can ask for.
+//
+// ---- TURN 1: mint the sign-in link, send it, END YOUR TURN ----
+const mcpUrl = vars.mcpUrl ?? "https://mcp.cloudflare.com/mcp";
+
+// You choose where the token lands (like a secret path); pick something memorable.
+const { authorizationUrl, path } = await itx.mcp.beginOAuth({
+  url: mcpUrl,
+  path: vars.path ?? "/secrets/mcp/cloudflare",
+});
+
+await itx.chat.sendMessage(
+  "That server uses OAuth. [Click here to sign in](" + authorizationUrl + ") — " +
+    "you authorize it on the provider's own page; I never see your password or token. " +
+    "I'll continue automatically once you're done.",
+);
+// End the turn WITHOUT waiting: signing in messages you back, which starts your
+// next turn. Remember \`path\` (it is /secrets/mcp/<host> unless you passed one).
+return;
+
+// ---- TURN 2 (after "The OAuth connection to ... is done" arrives) ----
+// The token is stored write-only and auto-refreshes. Connect referencing it
+// with a getSecret placeholder — note field: "accessToken" (the material is a
+// token bundle, not a bare string):
+//
+// const cf = await itx.mcp.connect({
+//   url: mcpUrl,
+//   headers: { authorization: 'Bearer getSecret({ path: "' + path + '", field: "accessToken" })' },
+// });
+// return await cf.__describe(); // the server's tools — then call them by name
+//
+// To make it durable (discoverable + callable as itx.cloudflare.<tool>() by
+// future turns), mount the same recipe:
+// await itx.provideCapability({
+//   expression: ["mcp", ["connect", { url: mcpUrl,
+//     headers: { authorization: 'Bearer getSecret({ path: "' + path + '", field: "accessToken" })' } }]],
+//   instructions: "Cloudflare MCP server (OAuth). Tool names discovered from the server.",
+//   path: ["cloudflare"],
+//   type: "itx-expression",
+// });
 `.trim(),
   },
   {

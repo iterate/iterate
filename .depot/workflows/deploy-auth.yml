@@ -10,12 +10,14 @@ on:
     branches:
       - main
     paths:
+      - .depot/workflows/deploy-auth.yml
       - apps/auth/**
       - envs.ts
       - scripts/lib/**
       - apps/auth-contract/**
       - packages/shared/**
       - packages/ui/**
+      - patches/**
   workflow_dispatch:
     inputs:
       ref:

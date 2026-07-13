@@ -20,7 +20,12 @@ import {
 } from "./agent-defaults.ts";
 
 const CHARS_PER_TOKEN = 4;
-const DEFAULT_PROMPT_TOKEN_CEILING = 3_000;
+// 3,000 until 2026-07; raised once, deliberately, when the prompt gained the
+// OTHER AGENTS and MAKE YOUR OWN TOOLS sections (delegation and custom
+// capabilities were the two key bits the diet had cut too deep to keep).
+// Still an order of magnitude under the 33k it replaced — the next raise
+// should be argued in a PR, not absorbed.
+const DEFAULT_PROMPT_TOKEN_CEILING = 3_500;
 
 const CHANNEL_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,

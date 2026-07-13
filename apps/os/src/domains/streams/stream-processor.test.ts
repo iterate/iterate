@@ -408,6 +408,40 @@ describe("StreamProcessor provenance stamping", () => {
     });
   });
 
+  it("self-measured metrics: home appends open the consume-own-append loop; ingest past the committed offset closes it", async () => {
+    const { stream } = recordingNetwork();
+    const processor = new EchoProcessor({ stream, ...HOME });
+
+    // The trigger makes the processor append its echo (home commits at offset
+    // 1001 in the recording network) plus a sibling copy — only the HOME
+    // append is timed: the sibling never loops back through this subscription.
+    await processor.ingest({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+    let report = processor.subscriberMetrics.report();
+    expect(report.appendRoundTripMs).toMatchObject({ samples: 1 });
+    expect(report.consumeOwnAppendMs).toBeNull(); // echo not delivered back yet
+    expect(report.batchesIngested).toBe(1);
+    expect(report.eventsIngested).toBe(1);
+    expect(report.ingestMs).not.toBeNull();
+
+    // A later (non-consumed) event past the committed echo offset advances the
+    // checkpoint through it — the loop closes on real delivery, not on append.
+    await processor.ingest({
+      events: [
+        {
+          type: "events.iterate.com/test/unrelated",
+          offset: 1_500,
+          createdAt: new Date(1_500).toISOString(),
+          path: HOME.path,
+          payload: {},
+        },
+      ],
+      streamMaxOffset: 1_500,
+    });
+    report = processor.subscriberMetrics.report();
+    expect(report.consumeOwnAppendMs).toMatchObject({ samples: 1 });
+    expect(report.appendRoundTripMs).toMatchObject({ samples: 1 });
+  });
+
   it("appendTo lands on the sibling stream with the same stamp, overwriting claims", async () => {
     const { appends, stream } = recordingNetwork();
     const processor = new EchoProcessor({ stream, ...HOME });

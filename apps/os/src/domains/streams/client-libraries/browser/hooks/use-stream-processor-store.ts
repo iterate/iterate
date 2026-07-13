@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useReducer, useSyncExternalStore } from "react";
 import type { Stream } from "../../../../../itx-api.generated.ts";
 import type { StreamProcessorStateStorage } from "../../../stream-processor.ts";
 import { browserProcessorStateStorage } from "../processor-state-storage.ts";
@@ -39,6 +39,8 @@ type BrowserProcessorConstructorArgs<State> = {
  */
 export function useStreamProcessorStore<State>(input: {
   createStreamClient: BrowserStreamClientFactory;
+  /** See BrowserStreamConnectionConfig.resetTransport — evict a dead-but-never-closed transport. */
+  resetTransport?: () => void;
   projectId: string;
   streamPath: string;
   slug: string;
@@ -52,6 +54,7 @@ export function useStreamProcessorStore<State>(input: {
 }): { store: StreamBrowserStore; snapshot: StreamBrowserSnapshot } {
   const {
     createStreamClient,
+    resetTransport,
     projectId,
     streamPath,
     slug,
@@ -62,17 +65,26 @@ export function useStreamProcessorStore<State>(input: {
   } = input;
   // `tables` is passed as a literal at every callsite; key the memo on its
   // content. (Even a spurious re-run is safe — acquire dedupes by key — this
-  // just keeps the memo honest.)
-  const tablesKey = tables.join(",");
+  // just keeps the memo honest.) JSON, not join(","): a table name containing
+  // a comma must not silently split into two.
+  const tablesKey = JSON.stringify(tables);
+  // Self-heal for the acquire-to-subscribe gap: React can yield between the
+  // render that acquired the runtime and the commit that subscribes (Suspense,
+  // lazy chunks — seconds, longer than any idle grace), and a runtime disposed
+  // inside that window is a corpse the memo would cache forever. Bumping this
+  // epoch re-runs the acquire, which creates a FRESH runtime (the registry
+  // entry is gone by then), and useSyncExternalStore resubscribes to it.
+  const [reacquireEpoch, reacquire] = useReducer((epoch: number) => epoch + 1, 0);
   const store = useMemo(
     () =>
       acquireStreamRuntime({
         createStreamClient,
+        resetTransport,
         projectId,
         streamPath,
         slug,
         schemaVersion,
-        tables: tablesKey === "" ? [] : tablesKey.split(","),
+        tables: JSON.parse(tablesKey) as string[],
         ...(resetOnSchemaVersionChange == null ? {} : { resetOnSchemaVersionChange }),
         createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
           const storage = browserProcessorStateStorage<State>({
@@ -92,6 +104,7 @@ export function useStreamProcessorStore<State>(input: {
       }),
     [
       createStreamClient,
+      resetTransport,
       projectId,
       streamPath,
       slug,
@@ -99,12 +112,19 @@ export function useStreamProcessorStore<State>(input: {
       tablesKey,
       resetOnSchemaVersionChange,
       Processor,
+      reacquireEpoch,
     ],
   );
-  const snapshot = useSyncExternalStore(
-    store.subscribe,
-    store.getSnapshot,
-    store.getServerSnapshot,
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (store.isDisposed()) {
+        reacquire();
+        return () => {};
+      }
+      return store.subscribe(listener);
+    },
+    [store],
   );
+  const snapshot = useSyncExternalStore(subscribe, store.getSnapshot, store.getServerSnapshot);
   return { store, snapshot };
 }

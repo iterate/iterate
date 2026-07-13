@@ -19,7 +19,7 @@ export const Route = createFileRoute("/admin/streams/$projectId/")({
 // the product UI — the panel only carries the project/global switch.
 function AdminStreamProjectPage() {
   const { projectId } = Route.useParams();
-  const { source, streamProjectId } = useAdminStreamSource(projectId);
+  const { source, streamProjectId, resetTransport } = useAdminStreamSource(projectId);
 
   const panel = (
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -66,6 +66,7 @@ function AdminStreamProjectPage() {
       panel={panel}
       projectId={streamProjectId}
       streamSource={source}
+      resetStreamSourceTransport={resetTransport}
       streamPath="/"
       emptyLabel="No events in the root stream yet."
     />

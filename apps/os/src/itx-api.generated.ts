@@ -607,9 +607,12 @@ export interface Docs {
    * Find examples, types, and mounted capabilities. Pass MANY related words —
    * matching is dumb word overlap, so more synonyms means better recall:
    * `search({ q: "file upload attachment bytes store image" })`, not
-   * `search({ q: "files" })`. Example hits are working scripts — prefer
-   * copying them over writing calls from scratch. Each hit's `fetchCall`
-   * field is the literal next call to make.
+   * `search({ q: "files" })`. API-name queries work too: "itx" is dropped as
+   * noise and a word matching a row's NAME counts double, so `"itx.docs"`,
+   * `"worker"`, or `"agents"` rank their subject first instead of every row
+   * that mentions the word. Example hits are working scripts — prefer copying
+   * them over writing calls from scratch. Each hit's `fetchCall` field holds
+   * the ready-made docs.get call that fetches its full doc.
    */
   search(input: { q: string }): Promise<DocsSearchHit[]>;
   /**
@@ -762,6 +765,19 @@ export interface McpClientCollection {
   __describe(): Promise<Description>;
   /** Connect to an MCP server by URL; dotted calls on the client are tool invocations. */
   connect(input: McpClientConnectInput): Promise<McpClientRpc>;
+  /**
+   * Begin the OAuth sign-in for an OAuth-protected MCP server (one whose
+   * unauthenticated request answers 401 with a `WWW-Authenticate` challenge —
+   * e.g. Cloudflare's mcp.cloudflare.com). Discovers the server's OAuth
+   * endpoints, registers a client, and returns a `{ authorizationUrl, path }`:
+   * send `authorizationUrl` to the user ("click here to connect"). When they
+   * sign in, the token is stored write-only at `path` and — if you are an agent
+   * — you are messaged so you can continue. Then connect like any bearer MCP:
+   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret({ path:
+   * "<path>", field: "accessToken" })' } })`. For a server that just wants a
+   * bearer token you already hold, use `itx.secrets.collectFromUser` instead.
+   */
+  beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult>;
   /**
    * The public Exa MCP server (https://mcp.exa.ai/mcp), pre-connected for every
    * project: web search and page reading as flat tool calls.
@@ -925,6 +941,20 @@ export interface SecretCollection {
   __describe(): Promise<Description>;
   /** The secret at a path. */
   get(path: string): Secret;
+  /**
+   * Mint a deep link where the USER enters a secret value themselves — the
+   * door for credentials an agent must never see in chat. The page (a
+   * minimal, chrome-free form) shows the description and the egress origins
+   * the value is pinned to; on submit it stores material + egress in one
+   * update, so the secret is born already pinned. When the caller is an
+   * agent scope, the page also messages that agent ("The user submitted the
+   * secret at …"), which starts its next turn — send the URL to the user,
+   * end the turn, and act on the notification. Nothing is created until the
+   * user submits; the link itself is stateless. Works for EXISTING secrets
+   * too — the page warns before replacing — so it is also the way to rotate
+   * a credential (e.g. one the user pasted into chat and should roll).
+   */
+  collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
   /** Known secrets, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
 }
@@ -1115,24 +1145,25 @@ export interface Stream {
   getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null>;
-  /** Live debug view of the stream Durable Object: core processor state, open connections, and per-subscription delivery cursors/lag. */
+  /**
+   * Live debug view of the stream Durable Object: core processor state, open
+   * connections with real delivery metrics (lag, bytes, commit→settled
+   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the
+   * stream's own throughput windows. All runtime metrics are in-memory and
+   * reset on eviction (`metrics.measuredSince` says how long the window has
+   * been collecting); latency stats fields are absent until a real sample
+   * exists — no value is ever synthesized. Calling this also requests a
+   * throttled mutual-ping round over the live connections (observer-driven
+   * sampling), so a polling debug UI sees RTTs populate.
+   */
   runtimeState(): Promise<{
     coreProcessorState: unknown;
     runtime: {
-      connections: Record<string, unknown>;
-      subscriptions: Record<
-        string,
-        {
-          mode: "wake" | "push" | "webhook";
-          ackedOffset: number;
-          lag: number;
-          attempt: number;
-          nextAttemptAt: number | null;
-          lastError: string | null;
-          parkedAtOffset: number | null;
-          connected: boolean;
-        }
-      >;
+      connections: Record<string, ConnectionRuntimeState>;
+      subscriptions: Record<string, SubscriptionRuntimeState>;
+      metrics: StreamThroughputMetrics;
+      /** SQLite database size in bytes (event log + spine rows + chunks). */
+      storageSizeBytes: number;
     };
   }>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -1157,6 +1188,13 @@ export interface Stream {
     subscriber?: unknown;
     /** Optional live debug hook, retained for the subscription's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
+    /**
+     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`
+     * in rpc-types.ts), retained for the subscription's lifetime. The stream
+     * pings it — throttled, and only while someone is watching runtimeState —
+     * to measure real transport RTT to this subscriber.
+     */
+    ping?: StreamSubscriberPing;
   }): Promise<StreamSubscriptionHandle>;
   /**
    * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
@@ -1553,6 +1591,25 @@ export type ProjectProcessorState = {
     createdAt: string;
     updatedAt: string;
   }[];
+  egressRules: {
+    ruleKey: string;
+    description: string;
+    match: {
+      hosts?: string[] | undefined;
+      methods?: string[] | undefined;
+      pathPrefix?: string | undefined;
+      secretPaths?: string[] | undefined;
+    };
+    verdict: "deny" | "hold";
+    approvalTimeoutMs: number;
+  }[];
+  humanApprovalKeys: {
+    keyId: string;
+    publicKey: string;
+    label: string;
+    addedAt: string;
+    revokedAt: string | null;
+  }[];
 };
 
 /**
@@ -1742,6 +1799,8 @@ export type StreamSubscriberWakeResponse = {
   subscriber?: unknown;
   /** Live runtime-state capability, retained for the connection lifetime. */
   getRuntimeState?: GetProcessorRuntimeState;
+  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */
+  ping?: StreamSubscriberPing;
 };
 
 /**
@@ -2078,6 +2137,28 @@ export type McpClientConnectInput = {
  */
 export type McpClientRpc = object;
 
+/** Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to,
+ * the secret path to store the resulting token at, and an optional OAuth scope. */
+export type McpBeginOAuthInput = {
+  /** The MCP server's URL (the same URL you would pass to `connect`). */
+  url: string;
+  /** Where the resulting token is stored write-only, e.g. `/secrets/mcp/cloudflare`. */
+  path: string;
+  /** OAuth scope to request; the server's default is used when omitted. */
+  scope?: string;
+};
+
+/** Result of `itx.mcp.beginOAuth`: a link to send the user through, and the
+ * secret path the token lands at once they finish. */
+export type McpBeginOAuthResult = {
+  /** Send this to the user. Signing in there stores the token and (for an agent)
+   * messages you back so you can continue. */
+  authorizationUrl: string;
+  /** The `/secrets/…` path the token is stored at. Connect afterwards with
+   * `headers: { authorization: 'Bearer getSecret({ path: "<path>", field: "accessToken" })' }`. */
+  path: string;
+};
+
 /** Input to `itx.openapi.connect`: the OpenAPI spec URL to fetch, an optional
  * `baseUrl` overriding the spec's server, and extra headers (auth) sent with
  * every operation call. */
@@ -2239,6 +2320,36 @@ export type ScheduleView = {
   runCount: number;
   /** When this version of the Schedule was set. */
   setAt: string;
+};
+
+/**
+ * Input to `itx.secrets.collectFromUser`: which path the secret should land
+ * at, the egress origins its material may ever be substituted into, and an
+ * optional human-facing note the collection page shows the user (what the
+ * key is for, where to find it).
+ */
+export type CollectSecretInput = {
+  path: string;
+  /** The egress allowlist the secret is born pinned to — the user sees these
+   * origins on the collection page as the promise of where the value can go.
+   * Must be non-empty http(s) URLs; validated at mint so a bad list fails on
+   * the agent that can fix it, not in the user's face at submit time. */
+  egress: { urls: string[] };
+  /** Shown to the user on the collection page (e.g. "API key for
+   * api.somewhere.com — found under Settings → API"). */
+  description?: string;
+};
+
+/**
+ * What `itx.secrets.collectFromUser` returns: the normalized secret path and
+ * the deep link to the chrome-free collection page. Send the URL to the user;
+ * when they submit, the secret is stored (material + egress pin in one update)
+ * and — when the caller was an agent scope — that agent receives a message
+ * that the secret at this path is ready.
+ */
+export type CollectSecretLink = {
+  path: string;
+  url: string;
 };
 
 /** Command object for committing a batch of repo file mutations. */
@@ -2414,6 +2525,73 @@ export type ProcessorRuntimeState<State = unknown> = {
   runtime?: Record<string, unknown>;
 };
 
+/** Serializable debug view of one live connection, for `runtimeState()`. */
+export type ConnectionRuntimeState = {
+  subscriptionType: StreamSubscriptionType;
+  startedAt: string;
+  cursor: number;
+  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
+  lag: number;
+  batchesSent: number;
+  eventsSent: number;
+  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
+  bytesSent: number;
+  lastDeliveredAt?: string;
+  /**
+   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
+   * event in a batch → the pulled batch result settling (the subscriber's
+   * ingest resolved). Durable (wake) lane only — ephemeral results are
+   * disposed unpulled, so ephemeral consumption is self-reported by the host
+   * through `getRuntimeState` instead. Absent until a sample exists.
+   */
+  settleLatencyMs?: LatencyStats;
+  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
+  pingRttMs?: LatencyStats;
+  /**
+   * The connect-time identity descriptor. The runtime table is the ONLY home
+   * for ephemeral identity — ephemeral connections don't fold into the
+   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
+   * read who's connected from here.
+   */
+  subscriber?: StreamSubscriberDescriptor;
+  /**
+   * True while the last batch handed to this connection's sink is unsettled —
+   * exactly the signal idle teardown consults to classify a sink as wedged.
+   */
+  hasPendingDelivery: boolean;
+};
+
+/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
+export type SubscriptionRuntimeState = {
+  mode: SubscriptionDelivery["mode"];
+  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
+  ackedOffset: number;
+  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
+  lag: number;
+  attempt: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+  parkedAtOffset: number | null;
+  /** Whether a live delivery connection currently exists (wake mode). */
+  connected: boolean;
+  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
+  bytesSent?: number;
+  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
+  settleLatencyMs?: LatencyStats;
+  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
+  deliveryDurationMs?: LatencyStats;
+};
+
+/** What `runtimeState()` reports for the stream's own throughput. */
+export type StreamThroughputMetrics = {
+  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
+  measuredSince: string;
+  /** Appends committed (all producers). */
+  ingress: ThroughputReport;
+  /** Deliveries dispatched (all lanes, all subscribers). */
+  egress: ThroughputReport;
+};
+
 /**
  * Callback invoked by the stream pump for each delivered batch.
  *
@@ -2429,6 +2607,15 @@ export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
  * immediately, while RPC-backed processors may need an async round trip.
  */
 export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<ProcessorRuntimeState>;
+
+/**
+ * Optional ping capability a subscriber hands the stream (ephemeral
+ * `subscribe()` argument or wake-handshake field). Absent on older
+ * subscribers — the stream then simply has no RTT samples for them.
+ */
+export type StreamSubscriberPing = (
+  input: StreamPingInput,
+) => StreamPingReply | Promise<StreamPingReply>;
 
 /**
  * Live subscription handle returned by `Stream.subscribe`.
@@ -2731,6 +2918,57 @@ export type WorkspaceFileInfo = {
   updatedAt: number;
 };
 
+/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
+export type StreamSubscriptionType = "configured" | "ephemeral";
+
+/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
+export type LatencyStats = {
+  /** Most recent sample (ms). */
+  last: number;
+  p50: number;
+  p95: number;
+  /** Samples currently in the ring (caps at the ring size). */
+  samples: number;
+  /** Epoch ms of the most recent sample. */
+  lastAt: number;
+};
+
+/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
+export type StreamSubscriberDescriptor = {
+  description?: string | undefined;
+  processor?:
+    | {
+        announcement: {
+          slug: string;
+          version: string;
+          description: string;
+          consumes: string[];
+          emits: string[];
+          ownedEvents: { type: string; description?: string | undefined }[];
+        };
+      }
+    | undefined;
+};
+
+/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
+export type SubscriptionDelivery =
+  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
+  | { mode: "push"; expression: ItxExpression }
+  | { mode: "webhook"; url: string };
+
+/**
+ * One direction's throughput report: a responsive trailing-5s rate (the
+ * number UIs show), the full-minute totals, and the raw 1s series for graphs.
+ */
+export type ThroughputReport = {
+  /** Events per second over the trailing 5 seconds. */
+  perSecond5s: number;
+  /** Payload bytes per second over the trailing 5 seconds. */
+  bytesPerSecond5s: number;
+  lastMinute: MinuteWindow;
+  series: ThroughputSeries;
+};
+
 /**
  * Batch delivered to stream processors and live subscribers.
  *
@@ -2744,6 +2982,23 @@ export type StreamEventBatch = {
   streamMaxOffset: number;
   state: unknown;
 };
+
+/**
+ * The mutual ping's request half (NTP-style, for real latency measurement
+ * between a stream and its subscribers): the requester stamps `t0` on its own
+ * clock and observes `t3` when the reply lands.
+ */
+export type StreamPingInput = { t0: number };
+
+/**
+ * The mutual ping's reply half: the responder echoes `t0` and reports when it
+ * received the request (`t1`) and sent the reply (`t2`) on ITS clock.
+ * `rtt = (t3 - t0) - (t2 - t1)` excludes responder processing time, and
+ * `((t1 - t0) + (t2 - t3)) / 2` estimates the responder−requester clock
+ * offset (see stream-runtime-metrics.pingRoundTrip). Purely observational:
+ * ping failures drop the sample and never affect delivery or liveness.
+ */
+export type StreamPingReply = { t0: number; t1: number; t2: number };
 
 /** The policy events an agent is born with, as append inputs. Typed
  * structurally (not against the full event catalog) so the SDK projection
@@ -2870,6 +3125,22 @@ export type WorkspaceGitLogEntry = {
   oid: string;
   /** Epoch milliseconds. */
   timestamp: number;
+};
+
+/** One rolling-minute throughput window. */
+export type MinuteWindow = {
+  /** Events in the last 60 seconds. */
+  count: number;
+  /** Payload bytes in the last 60 seconds. */
+  bytes: number;
+  /** `count / 60` — the "events/s over the last minute" number. */
+  perSecond: number;
+};
+
+/** Per-second buckets over the trailing minute, oldest→newest, length 60. */
+export type ThroughputSeries = {
+  counts: number[];
+  bytes: number[];
 };
 
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
