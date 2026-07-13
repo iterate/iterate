@@ -365,7 +365,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // upstream truly returned (or the true upstream error).
     const settle = (payload: { status?: number; error?: string }) =>
       stream
-        .append({
+        .appendAck({
           type: "events.iterate.com/project/human-approval-settled",
           idempotencyKey: `human-approval-settled:${approvalRequestEventOffset}`,
           payload: { approvalRequestEventOffset, ...payload },

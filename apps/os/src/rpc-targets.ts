@@ -2837,8 +2837,10 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       path: scopePath,
     });
     await Promise.all([
-      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append(routeEvent),
-      integrationStreamStub(this.props.projectId, scopePath).append(
+      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).appendAck(
+        routeEvent,
+      ),
+      integrationStreamStub(this.props.projectId, scopePath).appendAck(
         routeEvent,
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName,
@@ -2970,7 +2972,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       contentType: attachment.type,
     }));
     const appendAudit = () =>
-      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
+      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).appendAck({
         type: EMAIL_SENT_EVENT_TYPE,
         idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
         // Recipients + subject for audit; bodies stay out of the stream. The
@@ -3707,24 +3709,22 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     const seedEmailAllowlist = () =>
       creatorEmail === undefined
         ? Promise.resolve()
-        : integrationStreamStub(registered.projectId, EMAIL_INTEGRATION_STREAM_PATH)
-            .append(
-              buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                durableObjectName: streamDurableObjectName({
-                  projectId: registered.projectId,
-                  path: EMAIL_INTEGRATION_STREAM_PATH,
-                }),
-                idempotencyKey: `email-router-subscription:${registered.projectId}`,
-                processor: ["email", "processor"],
-                processorSlug: EmailProcessorContract.slug,
+        : integrationStreamStub(registered.projectId, EMAIL_INTEGRATION_STREAM_PATH).appendAck(
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName: streamDurableObjectName({
+                projectId: registered.projectId,
+                path: EMAIL_INTEGRATION_STREAM_PATH,
               }),
-              {
-                type: "events.iterate.com/email/sender-allowed",
-                idempotencyKey: `email-sender-allowed:${registered.projectId}:${creatorEmail.toLowerCase()}`,
-                payload: { pattern: creatorEmail, reason: "project-owner" },
-              },
-            )
-            .then(() => undefined);
+              idempotencyKey: `email-router-subscription:${registered.projectId}`,
+              processor: ["email", "processor"],
+              processorSlug: EmailProcessorContract.slug,
+            }),
+            {
+              type: "events.iterate.com/email/sender-allowed",
+              idempotencyKey: `email-sender-allowed:${registered.projectId}:${creatorEmail.toLowerCase()}`,
+              payload: { pattern: creatorEmail, reason: "project-owner" },
+            },
+          );
     const [[, createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
       Promise.all([appendRootEvents(), seedEmailAllowlist()]),
     );

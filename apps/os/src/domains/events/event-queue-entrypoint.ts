@@ -196,7 +196,7 @@ function appendToStream(
 ) {
   return env.STREAM.getByName(
     DurableObjectNameCodec.stringify(address, { allowNullProjectId: true }),
-  ).append(event);
+  ).appendAck(event);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

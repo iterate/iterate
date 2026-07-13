@@ -332,7 +332,7 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       }
     },
     appendFact: (event) => {
-      void Promise.resolve(options.stream.append(event)).catch((error: unknown) => {
+      void Promise.resolve(options.stream.appendAck(event)).catch((error: unknown) => {
         console.error("stream processor host evidence append failed", error);
       });
     },

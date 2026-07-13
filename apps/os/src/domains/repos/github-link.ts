@@ -164,7 +164,7 @@ export async function linkRepoToGithub(input: {
     await integrationStreamStub(
       input.projectId,
       integrationConnectionStreamPath("github", previous.connection),
-    ).append({
+    ).appendAck({
       type: "events.iterate.com/stream/subscription-removed",
       payload: { subscriptionKey },
     });
@@ -208,7 +208,7 @@ export async function linkRepoToGithub(input: {
         await integrationStreamStub(
           input.projectId,
           integrationConnectionStreamPath("github", previous.connection),
-        ).append(
+        ).appendAck(
           githubCrossPostSubscriptionEvent({
             owner: previous.owner,
             repo: previous.repo,
@@ -260,7 +260,7 @@ export async function unlinkRepoFromGithub(input: {
   await integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath("github", link.connection),
-  ).append({
+  ).appendAck({
     type: "events.iterate.com/stream/subscription-removed",
     payload: { subscriptionKey: githubCrossPostSubscriptionKey(repoPath) },
   });

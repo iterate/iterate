@@ -149,7 +149,7 @@ export async function routeIntegrationWebhook(input: {
   await integrationStreamStub(
     claim.projectId,
     integrationConnectionStreamPath(input.slug, claim.connection),
-  ).append(input.event);
+  ).appendAck(input.event);
   return { connection: claim.connection, ok: true, projectId: claim.projectId };
 }
 

@@ -668,7 +668,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       return { branch, commitOid: head.oid };
     } catch (error) {
       await this.#host.stream
-        .append({
+        .appendAck({
           type: "events.iterate.com/repo/github-push-failed",
           idempotencyKey: `github-push-failed:${link.owner}/${link.repo}:${commitOid ?? "pre-clone"}:${String(error).slice(0, 80)}`,
           payload: {

@@ -1120,7 +1120,7 @@ async function recordDisconnection(input: {
   await integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath(input.slug, input.connection),
-  ).append(input.disconnectedEvent);
+  ).appendAck(input.disconnectedEvent);
   if (input.unclaimExternalId) {
     await appendConnectionDirectoryEvent({
       claimed: false,
