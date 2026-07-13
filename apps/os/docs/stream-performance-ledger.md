@@ -291,3 +291,13 @@ enclosed each awaited RPC or observed delivery; all workload result assertions
 passed. Raw records are in `/tmp/frame-reader-{candidate,baseline}-{1..5}.log`
 and `/tmp/frame-reader-tail-{candidate,baseline}-{1..4}.log` for the life of
 this workstation.
+
+The harness now also accepts `STREAM_BENCH_APPEND_SAMPLES` for focused
+singleton-append tails. Four 1,000-sample rounds per revision initially put the
+extraction on port 5201 and its parent on port 5202; pooled p50 was 1.6% slower
+and pooled p95 was 19.2% slower. A required same-revision control then ran
+`e6aef40b8` on both ports. Port 5201 was itself 5.0% slower at pooled p50 and
+16.2% slower at pooled p95, accounting for the apparent extraction gap. No
+append regression is attributed to the reader boundary. Raw controls are in
+`/tmp/frame-reader-append-{candidate,baseline}-{1..4}.log` and
+`/tmp/frame-reader-calibration-{port5201,port5202}-{1..4}.log`.

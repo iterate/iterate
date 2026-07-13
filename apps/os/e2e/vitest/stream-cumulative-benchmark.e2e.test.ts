@@ -16,6 +16,7 @@ const SMALL_PAYLOAD = "s".repeat(1_024);
 const MEDIUM_PAYLOAD = "m".repeat(4_096);
 const LARGE_PAYLOAD = "l".repeat(256 * 1_024);
 const TAIL_SAMPLES = Number(process.env.STREAM_BENCH_TAIL_SAMPLES ?? "0");
+const APPEND_SAMPLES = Number(process.env.STREAM_BENCH_APPEND_SAMPLES ?? "0");
 
 type StreamHandle = Stream & Disposable;
 
@@ -139,7 +140,7 @@ test.skipIf(!ENABLED)(
     {
       using stream = project.streams.get(`/bench/${runId}/append-single`);
       const samples = await measure(
-        80,
+        APPEND_SAMPLES || 80,
         async (iteration) => {
           await commitDiscardingResult(
             stream,
@@ -151,7 +152,7 @@ test.skipIf(!ENABLED)(
       metrics.append_single_1k_no_result = summarize(samples);
       expect(
         await stream.getEvents({ afterOffset: 0, eventTypes: [EVENT_TYPE], limit: 500 }),
-      ).toHaveLength(90);
+      ).toHaveLength(Math.min((APPEND_SAMPLES || 80) + 10, 500));
     }
 
     {
