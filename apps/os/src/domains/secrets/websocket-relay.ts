@@ -15,6 +15,11 @@
 /** Internal URL used only for Secret DO fetch → relayWebSocket routing. */
 export const SECRET_WS_RELAY_FETCH_URL = "https://iterate.internal/__secret_ws_relay";
 
+/**
+ * Input to `secret.relayWebSocket`: open a pinned wss, optionally send
+ * IDENTIFY with material held only in the Secret DO, then return a
+ * pair-bridged socket for subsequent app frames.
+ */
 export type SecretWebSocketRelayInput = {
   /** Absolute ws/wss (or http/https, upgraded) URL on the secret's egress pin. */
   url: string;
