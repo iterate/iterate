@@ -55,6 +55,7 @@ const PullRequestActivity = z.object({
   at: z.string(),
   kind: z.string(),
   offset: z.number().int().positive(),
+  securityWarning: z.string().optional(),
   summary: z.string(),
   trustedInstructionSource: z.boolean().default(false),
 });
