@@ -82,7 +82,7 @@ export class GithubAgentProcessor extends StreamProcessor<GithubAgentProcessorCo
             payload: {
               content: [
                 `You are the GitHub agent for pull request #${event.payload.number} of ${event.payload.owner}/${event.payload.repo}.`,
-                `- ${octokit} is the ordinary Octokit from @octokit/rest, with Iterate supplying its installation auth and transport. Its normal .rest property works; see https://octokit.github.io/rest.js/. For example: await ${octokit}.rest.pulls.get({ owner: ${JSON.stringify(event.payload.owner)}, repo: ${JSON.stringify(event.payload.repo)}, pull_number: ${event.payload.number} }).`,
+                `- ${octokit} is the all-in-one Octokit from the octokit package, with Iterate supplying its installation auth and transport. Use its normal .rest.* methods for routine endpoints or .graphql(query, variables) when GraphQL is a better fit; see https://github.com/octokit/octokit.js/. For example: await ${octokit}.rest.pulls.get({ owner: ${JSON.stringify(event.payload.owner)}, repo: ${JSON.stringify(event.payload.repo)}, pull_number: ${event.payload.number} }).`,
                 `- Reply with ${octokit}.rest.issues.createComment(...), or post a review with ${octokit}.rest.pulls.createReview(...).`,
                 `- For code changes, clone the live PR head into a project sandbox and edit/test/commit/push there. Do not use itx.repo or itx.workspace: those write the linked project's default branch.`,
                 `- Raw GitHub deliveries are durable events on ${JSON.stringify(event.payload.streamPath)}; a turn input gives exact offsets and the getEvent(...) call when its bounded rendering omits something.`,

@@ -2326,9 +2326,9 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           connection,
           example: `await itx.integrations.github[${JSON.stringify(connection)}].octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
           grammar: GITHUB_CALL_GRAMMAR,
-          sdk: "the ordinary Octokit exported by @octokit/rest, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://octokit.github.io/rest.js/; `.rest` is Octokit's normal property. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Call paginate(...), not paginate.iterator(), because async iterators cannot cross the ITX RPC boundary",
+          sdk: "the all-in-one Octokit exported by octokit, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work. Prefer REST for routine endpoints and GraphQL when its query shape or API coverage is useful. For pagination, RPC arguments must be serializable: call `.paginate(\"GET /...\", params)`; endpoint-function overloads, map callbacks, and `.paginate.iterator()` cannot cross the boundary. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Octokit's retry and throttling plugins are disabled, so it does not replay 5xx, 429, or 408 responses; the secret transport may refresh credentials and repeat once after a 401. Inspect remote state before manually retrying an ambiguous failed write",
           slug: "github",
-          types: 'export type GithubConnection = { octokit: import("@octokit/rest").Octokit };',
+          types: 'export type GithubConnection = { octokit: import("octokit").Octokit };',
         });
       }
       if (method.length < 2 || method[0] !== "octokit") {
@@ -2468,7 +2468,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "await itx.integrations.list() enumerates every connection (built-in and provided).",
         'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
         'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-        'GitHub: itx.integrations.github["<connection>"].octokit is the ordinary Octokit from @octokit/rest, with Iterate supplying installation auth and transport. Use its package types and https://octokit.github.io/rest.js/; `.rest` is Octokit\'s normal property and the `.octokit` segment is mandatory.',
+        'GitHub: itx.integrations.github["<connection>"].octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying installation auth and transport. Use its package types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work, while pagination uses the RPC-safe `.paginate("GET /...", params)` route-string form. The `.octokit` segment is mandatory.',
         'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
         'Waitrose: await itx.integrations.waitrose["<connection>"].searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
@@ -2486,8 +2486,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "interface GoogleConnection {",
         "  gmail: { request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
         "}",
-        "// Exact package type; Iterate supplies auth and transport. See https://octokit.github.io/rest.js/.",
-        'type GithubConnection = { octokit: import("@octokit/rest").Octokit };',
+        "// Exact package type; Iterate supplies auth and transport. See https://github.com/octokit/octokit.js.",
+        'type GithubConnection = { octokit: import("octokit").Octokit };',
         '// itx.integrations.slack["<connection>"] IS a wrapped Slack WebClient',
         "// (@slack/web-api): any Web API method as a dotted path, ONE body arg.",
         "interface SlackConnection {",
