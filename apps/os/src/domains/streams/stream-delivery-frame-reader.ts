@@ -31,7 +31,6 @@ export type DeliveryFrameProjection = {
   byteLimit: number;
   scannedEventCount: number;
   selectedEventTypesKey?: string;
-  selectedThroughOffset?: number;
   includesEventByteLengths: boolean;
   events: StreamEvent[];
   durableEvents: StreamEvent[];
@@ -148,8 +147,7 @@ export class StreamDeliveryFrameReader {
               (selectedEventTypesKey === undefined
                 ? projection.selectedEventTypesKey === undefined
                 : projection.selectedEventTypesKey === undefined ||
-                  (projection.selectedEventTypesKey === selectedEventTypesKey &&
-                    projection.selectedThroughOffset === throughOffset)) &&
+                  projection.selectedEventTypesKey === selectedEventTypesKey) &&
               (!includeEventByteLengths || projection.includesEventByteLengths),
           );
     if (
@@ -206,7 +204,6 @@ export class StreamDeliveryFrameReader {
         byteLimit,
         scannedEventCount: selected.scannedRawRows,
         selectedEventTypesKey,
-        selectedThroughOffset: throughOffset,
         includesEventByteLengths: true,
         events,
         durableEvents: events,

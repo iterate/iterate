@@ -301,3 +301,24 @@ and pooled p95 was 19.2% slower. A required same-revision control then ran
 append regression is attributed to the reader boundary. Raw controls are in
 `/tmp/frame-reader-append-{candidate,baseline}-{1..4}.log` and
 `/tmp/frame-reader-calibration-{port5201,port5202}-{1..4}.log`.
+
+A follow-up ownership review invalidated the earlier proposal to collapse
+`DeliveryFrameProjection` and `DeliveryFrame`. The projection owns canonical
+arrays retained by caches; the returned frame owns an isolated consumer array.
+Combining them would expose cached arrays to receiver code or add another
+wrapper/copy/property hop on every read. Likewise, helpers for the three
+mutually exclusive result branches would reduce text without reducing executed
+work. Keep the inline result construction and array slices.
+
+One genuinely redundant field was removed: selected SQL projections stored a
+`selectedThroughOffset` equal to their already-checked `throughOffset`, adding
+one property and comparison with no extra fence. A positional-argument reader
+variant also removed the request object, but four 1,000-sample rounds did not
+beat the committed reader consistently: sparse-read pooled p50 improved 3.8%,
+while latest-sparse and live-delivery pooled p50 were 6.0% and 9.0% slower on
+the slower candidate process. The named request contract was restored. Raw
+records are in `/tmp/read-positional-{candidate,baseline}-{1..4}.log`.
+
+The reader boundary is therefore considered complete at a combined `+53`
+production lines. Further structural reduction should come from cursor-store
+locality and repeated transition plumbing, not from weakening frame ownership.
