@@ -334,7 +334,13 @@ export function generateItxApi(): string {
     // zod's JSON helper prints its internal alias; the public name is JsonValue.
     out = out.replaceAll(/\bz\.core\.util\.JSONType\b/g, "JsonValue");
     // Scan code only — docstring prose is full of capitalized words.
-    const codeOnly = stripComments(out);
+    // Inline type imports are already self-resolving package references in a
+    // standalone declaration (`import("octokit").Octokit`). Do not mistake
+    // the qualified export name for a leaked local declaration.
+    const codeOnly = stripComments(out).replaceAll(
+      /import\(["'][^"']+["']\)\.[A-Z][A-Za-z0-9_]*/g,
+      "",
+    );
     for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
       const name = match[0];
       if (exclude?.has(name)) continue;

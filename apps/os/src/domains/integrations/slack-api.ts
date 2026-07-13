@@ -111,7 +111,7 @@ function slackEgressAdapter(input: {
  * egress door — its primary bot token stays in its Secret DO (a
  * `getSecret(...)` placeholder in the Authorization header, substituted
  * downstream). The itx caller surface
- * `itx.integrations.slack["<connection>"]` replays the caller's dotted Web API
+ * `itx.integrations.slack.get("<connection>")` replays the caller's dotted Web API
  * path (chat.postMessage, conversations.list, …) straight onto this instance,
  * so it IS the Slack SDK — no hand-mapped method table.
  */
@@ -131,19 +131,17 @@ export function connectionSlackClient(input: { connection: string; projectId: st
   });
 }
 
-/** How to drive the Slack built-in: a named connection, then a Web API method
+/** How to drive the Slack built-in: get an optional named connection, then a Web API method
  * path replayed onto that connection's WebClient. The single source of truth,
  * shared by the dispatch guard (rpc-targets) and the error normalizer below. */
 export const SLACK_CALL_GRAMMAR =
-  'itx.integrations.slack expected `<connection>.<Web API method>` (e.g. itx.integrations.slack["main-slack"].chat.postMessage({ channel, text })); use itx.integrations.list() to see connections.';
+  "Use itx.integrations.slack.get(connection?).<Web API method>, for example itx.integrations.slack.get().chat.postMessage({ channel, text }). Pass a connection slug only when a specific workspace matters; use itx.integrations.list() to see connections.";
 
 /** Turn a WebClient failure into a caller-facing Error whose message survives
  * the capnweb boundary. A secret-pipeline error (the connection has no usable
  * bot token) is named so the caller can fix it; a path-resolution miss means
- * the caller drove the WebClient with a shape that is not a Web API method —
- * most often they omitted the connection, so a namespace like `chat` was
- * consumed as the connection name — so point them at the grammar; otherwise
- * keep Slack's error. */
+ * the caller drove the WebClient with a shape that is not a Web API method,
+ * so point them at the grammar; otherwise keep Slack's error. */
 export function normalizeSlackError(error: unknown, connection: string): Error {
   const e = error as { data?: { error?: string }; message?: string };
   const slackError = e.data?.error;

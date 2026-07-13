@@ -25,7 +25,7 @@ type TelegramBotApiResult = { description?: string; ok?: boolean; result?: unkno
  * method name (the API is flat — sendMessage, sendPhoto, getMe, …) with one
  * params object. Shared by the dispatch guard (rpc-targets) and __describe. */
 export const TELEGRAM_CALL_GRAMMAR =
-  'itx.integrations.telegram expected `<connection>.<Bot API method>` (e.g. itx.integrations.telegram["my-bot"].sendMessage({ chat_id, text })); use itx.integrations.list() to see connections.';
+  "Use itx.integrations.telegram.get(connection?).<Bot API method>, for example itx.integrations.telegram.get().sendMessage({ chat_id, text }). Pass a connection slug only when a specific bot matters.";
 
 /** The Bot API base for this deployment — https://api.telegram.org unless a
  * test repointed it (config.integrations.telegram.apiBaseUrl). */

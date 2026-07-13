@@ -1,0 +1,101 @@
+{
+  "projectId": "prj_d08f4599397a4e37b6467ce1e2b07bae",
+  "repoPath": "/repos/iterate",
+  "agentPath": "/agents/repos/iterate/pull-requests/1933",
+  "githubLink": {
+    "connection": "install-115079265",
+    "installationId": "115079265",
+    "owner": "iterate",
+    "repo": "iterate"
+  },
+  "legacyTargetEvents": [
+    {
+      "type": "events.iterate.com/github-pr/route-configured",
+      "payload": {
+        "connection": "install-115079265",
+        "installationId": "115079265",
+        "number": 1933,
+        "owner": "iterate",
+        "repo": "iterate",
+        "repoPath": "/repos/iterate",
+        "streamPath": "/agents/repos/iterate/pull-requests/1933"
+      },
+      "idempotencyKey": "repo/pr-route:install-115079265:iterate/iterate:1933",
+      "offset": 4,
+      "createdAt": "2026-07-13T13:42:34.344Z",
+      "path": "/agents/repos/iterate/pull-requests/1933"
+    },
+    {
+      "type": "events.iterate.com/stream/subscription-configured",
+      "payload": {
+        "subscriptionKey": "prj_d08f4599397a4e37b6467ce1e2b07bae.iterate/agents/repos/iterate/pull-requests/1933#github-pr-agent",
+        "delivery": {
+          "mode": "wake",
+          "expression": [
+            "agents",
+            ["get", "/agents/repos/iterate/pull-requests/1933"],
+            "processor",
+            "wakeStreamSubscriber"
+          ],
+          "processorSlug": "github-pr-agent"
+        }
+      },
+      "idempotencyKey": "stream/subscription-configured:prj_d08f4599397a4e37b6467ce1e2b07bae.iterate/agents/repos/iterate/pull-requests/1933#github-pr-agent",
+      "offset": 8,
+      "createdAt": "2026-07-13T13:42:35.216Z",
+      "path": "/agents/repos/iterate/pull-requests/1933"
+    },
+    {
+      "type": "events.iterate.com/stream/subscription-parked",
+      "payload": {
+        "subscriptionKey": "prj_d08f4599397a4e37b6467ce1e2b07bae.iterate/agents/repos/iterate/pull-requests/1933#github-pr-agent",
+        "atOffset": 0,
+        "attempts": 15,
+        "error": "Unknown stream processor \"github-pr-agent\" on this host (registered: agent, slack-agent, telegram-agent, email-agent, github-agent)"
+      },
+      "offset": 232,
+      "createdAt": "2026-07-13T19:16:41.811Z",
+      "path": "/agents/repos/iterate/pull-requests/1933"
+    }
+  ],
+  "sourceWebhook": {
+    "type": "events.iterate.com/github/webhook-received",
+    "payload": {
+      "body": {
+        "action": "created",
+        "issue": {
+          "number": 1933,
+          "title": "Operation-wide logging and distributed tracing for OS2",
+          "pull_request": {
+            "url": "https://api.github.com/repos/iterate/iterate/pulls/1933"
+          }
+        },
+        "comment": {
+          "id": 4962404485,
+          "body": "@iterate can you see this? emoji react if you can\r\n",
+          "html_url": "https://github.com/iterate/iterate/pull/1933#issuecomment-4962404485",
+          "author_association": "MEMBER"
+        },
+        "repository": {
+          "full_name": "iterate/iterate"
+        },
+        "sender": {
+          "login": "jonastemplestein",
+          "type": "User"
+        },
+        "installation": {
+          "id": 115079265
+        }
+      },
+      "headers": {
+        "githubDelivery": "d7782dd0-7ef9-11f1-8a85-129d3bae1702",
+        "githubEvent": "issue_comment"
+      },
+      "installationId": "115079265"
+    },
+    "idempotencyKey": "github-webhook:d7782dd0-7ef9-11f1-8a85-129d3bae1702",
+    "offset": 21402,
+    "createdAt": "2026-07-13T20:31:38.831Z",
+    "path": "/repos/iterate"
+  }
+}

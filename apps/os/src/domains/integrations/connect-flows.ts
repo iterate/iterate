@@ -464,7 +464,7 @@ async function recordSlackConnection(input: {
     },
     processorSubscription: {
       idempotencyKey: `slack-router-subscription:${input.projectId}:${input.connection}`,
-      processor: ["integrations", "slack", input.connection, "processor"],
+      processor: ["integrations", "slack", ["get", input.connection], "processor"],
       processorSlug: SlackProcessorContract.slug,
     },
     directoryClaim: { externalId: input.teamId },
@@ -859,7 +859,7 @@ export async function connectTelegram(input: {
     },
     processorSubscription: {
       idempotencyKey: `telegram-router-subscription:${input.projectId}:${connection}`,
-      processor: ["integrations", "telegram", connection, "processor"],
+      processor: ["integrations", "telegram", ["get", connection], "processor"],
       processorSlug: TelegramProcessorContract.slug,
     },
     directoryClaim: {

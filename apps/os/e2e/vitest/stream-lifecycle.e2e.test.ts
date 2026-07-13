@@ -254,7 +254,7 @@ test("subscription and subscribe inputs are validated at the door", async () => 
 test("wake expressions traverse dynamic dispatch surfaces (the slack router shape)", async () => {
   // Every other wake expression walks real getters (agents.get(p).processor,
   // repos.get(p).processor, ...). The slack router's walks the integrations
-  // collection's DYNAMIC dotted proxy — ["integrations", "slack", <conn>,
+  // collection's DYNAMIC dotted proxy — ["integrations", "slack", ["get", <conn>],
   // "processor", "wakeStreamSubscriber"] — over the loopback RPC: awaited
   // property steps over proxy/function stubs, a different transport mechanic
   // entirely, and it replaced the old typed-target dial with no other running
@@ -278,7 +278,13 @@ test("wake expressions traverse dynamic dispatch surfaces (the slack router shap
       subscriptionKey,
       delivery: {
         mode: "wake",
-        expression: ["integrations", "slack", connection, "processor", "wakeStreamSubscriber"],
+        expression: [
+          "integrations",
+          "slack",
+          ["get", connection],
+          "processor",
+          "wakeStreamSubscriber",
+        ],
         processorSlug: "slack",
       },
     }),
