@@ -90,6 +90,7 @@ import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type { LiveStateRpc } from "../domains/streams/rpc-types.ts";
 import type { Project, Session, UnauthenticatedOs } from "../itx-api.generated.ts";
 import { createLiveStateStore } from "../lib/live-state/store.ts";
+import { createItxClientObservability } from "./itx-call-metadata.ts";
 
 /**
  * The handle type is context-dependent: a project connection holds the project
@@ -198,6 +199,7 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
     const url = new URL("/api", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
+    const observability = createItxClientObservability({ client: "browser", projectId: context });
     entry.ws = ws;
     entry.dialedAt = Date.now();
     let opened = false;
@@ -212,7 +214,9 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
       // on the WebSocket handshake, projects.get narrows to the project context.
       // The session/root stubs live as long as the socket; they are never
       // disposed individually.
-      const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(ws);
+      const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(ws, undefined, {
+        getCallMetadata: observability.getCallMetadata,
+      });
       const root = unauthenticated.authenticate({ type: "from-server-cookie" });
       entry.ping = async () => {
         // Any round trip proves the transport; authenticate rides the session

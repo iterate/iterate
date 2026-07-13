@@ -7,6 +7,7 @@ import {
 import { withOwnedRpcSession } from "./domains/itx/utils.ts";
 import type { ItxAuthCredentials } from "./auth.ts";
 import type { Agent, Project, Session, UnauthenticatedOs } from "./itx-api.generated.ts";
+import { createItxClientObservability } from "./itx/itx-call-metadata.ts";
 
 export type ItxWebSocketMessage = [timestamp: number, direction: "in" | "out", data: unknown];
 
@@ -61,6 +62,7 @@ function connect<T extends CapnRpcCompatible<T>>(
   url: string,
   headers?: Record<string, string>,
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void,
+  projectId?: string,
 ): CapnRpcStub<T> {
   // 15s: cold deployments answer the upgrade only after the worker chain has
   // loaded, but #1601's route-healing + the preview slot warmup mean the first
@@ -80,8 +82,11 @@ function connect<T extends CapnRpcCompatible<T>>(
     socket.on("message", (data) => record("in", data));
   }
 
+  const observability = createItxClientObservability({ client: "node", projectId });
   return newWebSocketRpcSession<T>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+    undefined,
+    { getCallMetadata: observability.getCallMetadata },
   );
 }
 
@@ -109,6 +114,7 @@ export function connectItx(
     websocketUrl("/api", input),
     input.headers,
     input.onWebSocketMessage,
+    "projectId" in input ? input.projectId : undefined,
   );
   if (!("auth" in input)) return session;
 

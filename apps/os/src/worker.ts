@@ -40,6 +40,7 @@ import {
   handleEventQueueBatch,
   isWorkerEventsQueue,
 } from "./domains/events/event-queue-entrypoint.ts";
+import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
 
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
@@ -241,9 +242,13 @@ async function apiFetch(
     requestUrl: request.url,
   });
   if (request.method === "POST") {
-    return newHttpBatchRpcResponse(request, unauthenticated);
+    return newHttpBatchRpcResponse(request, unauthenticated, createItxRpcSessionOptions("http"));
   }
-  return newWorkersWebSocketRpcResponse(request, unauthenticated);
+  return newWorkersWebSocketRpcResponse(
+    request,
+    unauthenticated,
+    createItxRpcSessionOptions("websocket"),
+  );
 }
 
 function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
