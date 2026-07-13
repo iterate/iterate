@@ -1060,18 +1060,18 @@ export interface Stream {
   ): Promise<StreamEvent | undefined>;
   /**
    * Read one bounded page of committed events (default from the stream's
-   * start; filter with `eventTypes`, page forward with `afterOffset`). A full
-   * page (500 events) means MORE remain — page with
-   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
-   * shows you the beginning, not the head.
+   * start; filter with `eventTypes`; set `order: "desc"` for newest-first).
+   * A full page (500 events) means MORE remain — page forward with
+   * `afterOffset: events.at(-1).offset`, or backward with
+   * `beforeOffset: events.at(-1).offset`.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;
   /** The stream identity and highest committed offset, without runtime diagnostics. */
   head(): Promise<StreamHead>;
   /**
-   * A stateful pager over a read window: repeated `next()` calls walk forward
-   * through pages, `[]` means "caught up for now". Dispose it when finished
-   * (`using pager = stream.readEvents(...)`).
+   * A stateful pager over a read window: repeated `next()` calls walk in the
+   * requested offset order, and `[]` means no matching page remains. Dispose
+   * it when finished (`using pager = stream.readEvents(...)`).
    */
   readEvents(args?: StreamEventReadInput): StreamEventPager;
   /**
@@ -1351,7 +1351,7 @@ export interface Workspace {
  * (`using pager = stream.readEvents(...)`).
  */
 export interface StreamEventPager {
-  /** Returns [] when no newer matching page is currently available. */
+  /** Returns [] when no matching page remains in the requested direction. */
   next(): Promise<StreamEvent[]>;
   [Symbol.dispose](): void;
 }
@@ -2443,6 +2443,8 @@ export type StreamEventReadInput = {
   eventTypes?: readonly string[];
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
+  /** Offset order. Defaults to oldest-first (`asc`). */
+  order?: "asc" | "desc";
   /**
    * Include ephemeral events (default false). Ephemeral rows are second-class:
    * excluded from every range read unless explicitly requested, and the stream

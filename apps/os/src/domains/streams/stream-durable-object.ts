@@ -476,6 +476,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       eventTypes?: readonly string[];
       limit?: number;
       includeEphemeral?: boolean;
+      order?: "asc" | "desc";
     } = {},
   ): StreamEvent[] {
     const limit = args.limit;
@@ -485,12 +486,16 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (limit !== undefined && limit > MAX_GET_EVENTS_LIMIT) {
       throw new Error(`getEvents limit must be at most ${MAX_GET_EVENTS_LIMIT}.`);
     }
+    if (args.order !== undefined && args.order !== "asc" && args.order !== "desc") {
+      throw new Error('getEvents order must be "asc" or "desc".');
+    }
     return this.#log.getRange({
       afterOffset: args.afterOffset ?? 0,
       beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
       eventTypes: args.eventTypes,
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
       includeEphemeral: args.includeEphemeral,
+      order: args.order,
     });
   }
 

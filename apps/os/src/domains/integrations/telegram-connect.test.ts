@@ -79,12 +79,23 @@ const network = vi.hoisted(() => {
             return { coreProcessorState: { maxOffset: stored.length } };
           },
           async getEvents(
-            input: { afterOffset?: number; beforeOffset?: number; limit?: number } = {},
+            input: {
+              afterOffset?: number;
+              beforeOffset?: number;
+              eventTypes?: readonly string[];
+              limit?: number;
+              order?: "asc" | "desc";
+            } = {},
           ) {
-            const { afterOffset = 0, beforeOffset = Infinity, limit = 500 } = input;
-            return stored
-              .filter((event) => event.offset > afterOffset && event.offset < beforeOffset)
-              .slice(0, limit);
+            const { afterOffset = 0, beforeOffset = Infinity, eventTypes, limit = 500 } = input;
+            const matches = stored.filter(
+              (event) =>
+                event.offset > afterOffset &&
+                event.offset < beforeOffset &&
+                (eventTypes === undefined || eventTypes.includes(event.type)),
+            );
+            if (input.order === "desc") matches.reverse();
+            return matches.slice(0, limit);
           },
         };
       },

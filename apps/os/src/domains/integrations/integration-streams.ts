@@ -34,32 +34,15 @@ async function readAllStreamEvents(projectId: string | null, path: string): Prom
   }
 }
 
-const TAIL_PAGE_SIZE = 200;
-
-/**
- * A stream's events NEWEST FIRST, paged backwards from the journal head.
- *
- * Integration journals grow forever (one token-refreshed event per Gmail-token
- * expiry, one webhook per Slack message), but lifecycle questions ("is this
- * connection connected? what is its current token?") are answered by the most
- * recent few facts. Folding over this generator makes those reads O(tail) and
- * — because it is ONE iteration, not one fold per page — accumulators in the
- * consuming fold naturally span page boundaries.
- */
-export async function* streamEventsNewestFirst(
+/** The newest matching event in one stream, using one descending SQL range. */
+export async function latestStreamEvent(
   projectId: string | null,
   path: string,
-): AsyncGenerator<StreamEvent> {
+  eventTypes: readonly string[],
+): Promise<StreamEvent | undefined> {
   const stream = integrationStreamStub(projectId, path);
-  let beforeOffset = (await stream.head()).maxOffset + 1;
-  while (beforeOffset > 1) {
-    // getEvents bounds are exclusive on both ends, so consecutive windows
-    // (afterOffset, beforeOffset) tile the offset space with no gap/overlap.
-    const afterOffset = Math.max(0, beforeOffset - 1 - TAIL_PAGE_SIZE);
-    const page = await stream.getEvents({ afterOffset, beforeOffset });
-    for (let index = page.length - 1; index >= 0; index -= 1) yield page[index]!;
-    beforeOffset = afterOffset + 1;
-  }
+  const events = await stream.getEvents({ eventTypes, limit: 1, order: "desc" });
+  return events[0];
 }
 
 /** One project+connection that owns a provider-side external id. */

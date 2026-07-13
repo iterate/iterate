@@ -20,6 +20,8 @@ export type StreamEventReadInput = {
   eventTypes?: readonly string[];
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
+  /** Offset order. Defaults to oldest-first (`asc`). */
+  order?: "asc" | "desc";
   /**
    * Include ephemeral events (default false). Ephemeral rows are second-class:
    * excluded from every range read unless explicitly requested, and the stream

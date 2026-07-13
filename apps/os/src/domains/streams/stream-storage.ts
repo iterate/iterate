@@ -89,6 +89,7 @@ type StreamRangeArgs = {
   beforeOffset: number;
   eventTypes?: readonly string[];
   limit: number;
+  order?: "asc" | "desc";
   /** Include ephemeral rows. Default false — ephemeral is opt-in on every range read. */
   includeEphemeral?: boolean;
 };
@@ -561,6 +562,7 @@ export class StreamEventLog {
     const eventTypeClause =
       eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
     const ephemeralClause = args.includeEphemeral === true ? "" : "and ephemeral = 0";
+    const order = args.order ?? "asc";
     // Common rows carry their JSON directly. Oversized rows carry their offset
     // in the same positional column and are hydrated from bounded chunks below.
     const byteLengthColumn = includeByteLength ? ", length(event_json) as inlineByteLength" : "";
@@ -573,7 +575,7 @@ export class StreamEventLog {
             and offset < ?
             ${ephemeralClause}
             ${eventTypeClause}
-          order by offset asc
+          order by offset ${order}
           limit ?
         `,
         args.afterOffset,

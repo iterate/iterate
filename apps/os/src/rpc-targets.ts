@@ -455,10 +455,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
   /**
    * Read one bounded page of committed events (default from the stream's
-   * start; filter with `eventTypes`, page forward with `afterOffset`). A full
-   * page (500 events) means MORE remain — page with
-   * `afterOffset: events.at(-1).offset`; reading a long stream without paging
-   * shows you the beginning, not the head.
+   * start; filter with `eventTypes`; set `order: "desc"` for newest-first).
+   * A full page (500 events) means MORE remain — page forward with
+   * `afterOffset: events.at(-1).offset`, or backward with
+   * `beforeOffset: events.at(-1).offset`.
    */
   getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
     return this.durableObjectStub.getEvents(args);
@@ -470,9 +470,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /**
-   * A stateful pager over a read window: repeated `next()` calls walk forward
-   * through pages, `[]` means "caught up for now". Dispose it when finished
-   * (`using pager = stream.readEvents(...)`).
+   * A stateful pager over a read window: repeated `next()` calls walk in the
+   * requested offset order, and `[]` means no matching page remains. Dispose
+   * it when finished (`using pager = stream.readEvents(...)`).
    */
   readEvents(args?: StreamEventReadInput): StreamEventPagerRpcTarget {
     return new StreamEventPagerRpcTarget((pageArgs) => this.getEvents(pageArgs), args);
@@ -4740,9 +4740,10 @@ type RevokeCapability = (input: RevokeCapabilityInput) => Promise<void>;
  * (`using pager = stream.readEvents(...)`).
  */
 class StreamEventPagerRpcTarget extends IterateRpcTarget<"StreamEventPager"> {
-  readonly #input: Omit<StreamEventReadInput, "afterOffset">;
+  readonly #input: Omit<StreamEventReadInput, "afterOffset" | "beforeOffset">;
   readonly #readPage: (input?: StreamEventReadInput) => Promise<StreamEvent[]>;
   #afterOffset: number;
+  #beforeOffset: number | null;
   #disposed = false;
 
   constructor(
@@ -4750,21 +4751,26 @@ class StreamEventPagerRpcTarget extends IterateRpcTarget<"StreamEventPager"> {
     input: StreamEventReadInput = {},
   ) {
     super();
-    const { afterOffset = 0, ...pageInput } = input;
+    const { afterOffset = 0, beforeOffset = null, ...pageInput } = input;
     this.#afterOffset = afterOffset;
+    this.#beforeOffset = beforeOffset;
     this.#input = pageInput;
     this.#readPage = readPage;
   }
 
-  /** Returns [] when no newer matching page is currently available. */
+  /** Returns [] when no matching page remains in the requested direction. */
   async next(): Promise<StreamEvent[]> {
     if (this.#disposed) throw new Error("stream event pager is disposed.");
     const page = await this.#readPage({
       ...this.#input,
       afterOffset: this.#afterOffset,
+      beforeOffset: this.#beforeOffset,
     });
     const lastOffset = page.at(-1)?.offset;
-    if (lastOffset !== undefined) this.#afterOffset = lastOffset;
+    if (lastOffset !== undefined) {
+      if (this.#input.order === "desc") this.#beforeOffset = lastOffset;
+      else this.#afterOffset = lastOffset;
+    }
     return page;
   }
 

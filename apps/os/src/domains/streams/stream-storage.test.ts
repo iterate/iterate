@@ -20,7 +20,9 @@ function wrapSqlStorage(
       onExec?.(sql, bindings);
       const isRawRowQuery =
         sql.includes("from events") &&
-        (sql.includes("order by offset asc") || sql.includes("where idempotency_key in"));
+        (sql.includes("order by offset asc") ||
+          sql.includes("order by offset desc") ||
+          sql.includes("where idempotency_key in"));
       const statement = db.prepare(sql);
       const rows = statement
         .all(
@@ -192,6 +194,21 @@ describe("StreamEventLog.getRange", () => {
     expect(
       selectedEvents.every((readEvent) => readEvent.type === "events.iterate.com/test/selected"),
     ).toBe(true);
+  });
+
+  it("reads a filtered range newest first without changing its bounds", () => {
+    const log = createLog();
+
+    expect(
+      offsets(
+        read(log, {
+          afterOffset: 1,
+          eventTypes: ["events.iterate.com/test/selected"],
+          limit: 2,
+          order: "desc",
+        }),
+      ),
+    ).toEqual([5, 3]);
   });
 
   it("handles wildcard and empty event type filters", () => {
@@ -428,6 +445,29 @@ describe("StreamEventLog.getRange", () => {
       .map((row) => String(row.detail));
     expect(plan).toContain("SEARCH events USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)");
     expect(plan.some((detail) => detail.includes("USE TEMP B-TREE"))).toBe(false);
+
+    expect(
+      offsets(
+        read(log, {
+          afterOffset: 2,
+          eventTypes: ["selected"],
+          limit: 4,
+          order: "desc",
+        }),
+      ),
+    ).toEqual([10, 9, 8, 7]);
+    const descendingPlan = db
+      .prepare(`explain query plan ${rangeQuery!.statement}`)
+      .all(
+        ...rangeQuery!.bindings.map((binding) =>
+          binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding,
+        ),
+      )
+      .map((row) => String(row.detail));
+    expect(descendingPlan).toContain(
+      "SEARCH events USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)",
+    );
+    expect(descendingPlan.some((detail) => detail.includes("USE TEMP B-TREE"))).toBe(false);
   });
 
   it("batches inserts within Durable Object SQL's 100-binding limit", () => {
@@ -618,6 +658,14 @@ describe("StreamEventLog.getRange", () => {
       { offset: 3, is_inline: 1 },
     ]);
     expect(log.getRangeSized({ afterOffset: 0, beforeOffset: 4, limit: 3 })).toEqual(inserted);
+    expect(
+      log.getRangeSized({
+        afterOffset: 0,
+        beforeOffset: 4,
+        limit: 3,
+        order: "desc",
+      }),
+    ).toEqual([...inserted].reverse());
     const hits = log.getByIdempotencyKeys(["small-3", "large-2", "small-1"]);
     for (const event of committedEvents) expect(hits.get(event.idempotencyKey)).toEqual(event);
   });

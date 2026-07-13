@@ -13,8 +13,7 @@ import {
 } from "./utils.ts";
 
 // In-memory STREAM namespace behind the mocked itxEnv: each stream is an
-// append-only event list, read newest-first by streamEventsNewestFirst via
-// runtimeState + getEvents.
+// append-only event list with the same bounded newest-first getEvents shape.
 const streamNetwork = vi.hoisted(() => {
   const streams = new Map<string, { offset: number; payload: unknown; type: string }[]>();
   return { streams };
@@ -43,8 +42,27 @@ vi.mock("../../env.ts", () => ({
           async runtimeState() {
             return { coreProcessorState: { maxOffset: events.length } };
           },
-          async getEvents({ afterOffset = 0, beforeOffset = Infinity }) {
-            return events.filter((e) => e.offset > afterOffset && e.offset < beforeOffset);
+          async getEvents({
+            afterOffset = 0,
+            beforeOffset = Infinity,
+            eventTypes,
+            limit = 500,
+            order,
+          }: {
+            afterOffset?: number;
+            beforeOffset?: number;
+            eventTypes?: readonly string[];
+            limit?: number;
+            order?: "asc" | "desc";
+          }) {
+            const matches = events.filter(
+              (event) =>
+                event.offset > afterOffset &&
+                event.offset < beforeOffset &&
+                (eventTypes === undefined || eventTypes.includes(event.type)),
+            );
+            if (order === "desc") matches.reverse();
+            return matches.slice(0, limit);
           },
         };
       },

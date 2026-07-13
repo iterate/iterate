@@ -149,6 +149,25 @@ test("stream getEvents defaults to a bounded page and supports event type filter
   });
   expect(selectedEvents).toHaveLength(253);
   expect(selectedEvents.every((event) => event.type === selectedType)).toBe(true);
+
+  using newestPager = stream.readEvents({
+    afterOffset,
+    beforeOffset,
+    eventTypes: [selectedType],
+    limit: 200,
+    order: "desc",
+  });
+  const newestPage = await newestPager.next();
+  const olderPage = await newestPager.next();
+  expect(newestPage).toHaveLength(200);
+  expect(olderPage).toHaveLength(53);
+  expect([...newestPage, ...olderPage].map((event) => event.offset)).toEqual(
+    appendedEvents
+      .filter((event) => event.type === selectedType)
+      .map((event) => event.offset)
+      .reverse(),
+  );
+  expect(await newestPager.next()).toEqual([]);
   await expect(stream.getEvents({ limit: 501 })).rejects.toThrow("getEvents limit");
 });
 
