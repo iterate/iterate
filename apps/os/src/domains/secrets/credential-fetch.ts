@@ -10,6 +10,7 @@ const REQUEST_BODY_HEADERS = [
   "content-location",
   "content-type",
 ] as const;
+const RESPONSE_URL_HEADERS = ["content-location", "location", "refresh"] as const;
 
 /**
  * Fetch a request that carries credential material without delegating redirect
@@ -35,11 +36,18 @@ export async function fetchWithCredentialRedirects(
     // Preserve an undisturbed copy before fetch consumes the current body. A
     // 307/308 (or non-POST 301/302) may need to replay it on the next hop.
     const redirectSource = current.clone() as unknown as Request;
-    const response = await fetcher(current);
-    if (!REDIRECT_STATUSES.has(response.status)) return response;
+    let response: Response;
+    try {
+      response = await fetcher(current);
+    } catch {
+      // Fetch errors may include the credential-bearing request URL. Never let
+      // that runtime metadata cross back to an untrusted caller.
+      throw new SecretSubstitutionError("secret_fetch_failed");
+    }
+    if (!REDIRECT_STATUSES.has(response.status)) return sanitizeResponse(response);
 
     const location = response.headers.get("location");
-    if (location === null) return response;
+    if (location === null) return sanitizeResponse(response);
 
     try {
       if (redirects >= MAX_CREDENTIAL_REDIRECTS) {
@@ -57,10 +65,27 @@ export async function fetchWithCredentialRedirects(
       current = buildRedirectRequest(redirectSource, nextUrl, response.status);
     } catch (error) {
       await cancelBody(response);
-      throw error;
+      if (error instanceof SecretSubstitutionError) throw error;
+      throw new SecretSubstitutionError("secret_fetch_failed");
     }
     await cancelBody(response);
   }
+}
+
+/**
+ * Detach a terminal response from its credential-bearing fetch provenance.
+ * A freshly constructed Response has an empty `url` and `redirected: false`;
+ * URL-bearing navigation headers are removed while the status and streaming
+ * body remain the provider's response.
+ */
+function sanitizeResponse(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const name of RESPONSE_URL_HEADERS) headers.delete(name);
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
 }
 
 function assertHttpUrl(url: string): void {

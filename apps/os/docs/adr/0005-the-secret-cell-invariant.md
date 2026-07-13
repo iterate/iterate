@@ -18,7 +18,10 @@ replacement material in the same update. Credential-bearing fetches own
 redirect handling: every hop is manual, bounded, and revalidated. Same-origin
 redirects may retain credentials; cross-origin redirects are rejected, even
 when both origins appear in an allowlist, so headers and bodies never acquire
-a new destination implicitly.
+a new destination implicitly. Terminal responses are reconstructed before
+returning to callers: fetch provenance (`url`/`redirected`), URL-bearing
+navigation headers, and credential-bearing runtime errors do not leave the
+cell.
 
 Secret streams remain readable and accept ordinary user events, but
 `events.iterate.com/secret/*` control facts are reserved to an authenticated

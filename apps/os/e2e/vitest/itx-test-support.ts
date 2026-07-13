@@ -194,12 +194,36 @@ export function egressProbeWorker(project: { workers: { get(ref: DynamicWorkerRe
             });
             return await response.json();
           }
+
+          async probeSecretResponse(input) {
+            const project = await this.env.ITX.get();
+            try {
+              const secret = project.secrets.get(input.secretPath);
+              try {
+                const response = await secret.fetch(new Request(input.url));
+                return {
+                  body: await response.json(),
+                  redirected: response.redirected,
+                  url: response.url,
+                };
+              } finally {
+                secret[Symbol.dispose]?.();
+              }
+            } finally {
+              project[Symbol.dispose]?.();
+            }
+          }
         }
       `,
     }),
     type: "stateless",
   }) as unknown as {
     probeFetch(input: { headerValue: string; url: string }): Promise<unknown>;
+    probeSecretResponse(input: { secretPath: string; url: string }): Promise<{
+      body: unknown;
+      redirected: boolean;
+      url: string;
+    }>;
   } & Disposable;
 }
 

@@ -2,6 +2,53 @@ import { describe, expect, test, vi } from "vitest";
 import { fetchWithCredentialRedirects, MAX_CREDENTIAL_REDIRECTS } from "./credential-fetch.ts";
 
 describe("fetchWithCredentialRedirects", () => {
+  test("removes the credential-bearing upstream URL from terminal response metadata", async () => {
+    const upstream = await fetch("data:application/json,%7B%22ok%22%3Atrue%7D");
+    expect(upstream.url).not.toBe("");
+
+    const response = await fetchWithCredentialRedirects(
+      new Request("https://allowed.example/bot-url-secret/getMe"),
+      { fetcher: async () => upstream },
+    );
+
+    expect(response.url).toBe("");
+    expect(response.redirected).toBe(false);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+  });
+
+  test("removes URL-bearing terminal response headers", async () => {
+    const response = await fetchWithCredentialRedirects(
+      new Request("https://allowed.example/bot-secret/getMe"),
+      {
+        fetcher: async () =>
+          new Response("provider body", {
+            headers: {
+              "content-location": "https://allowed.example/bot-secret/getMe",
+              location: "https://allowed.example/bot-secret/next",
+              refresh: "0; url=https://allowed.example/bot-secret/next",
+              "x-provider-header": "preserved",
+            },
+          }),
+      },
+    );
+
+    expect(response.headers.get("content-location")).toBeNull();
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("refresh")).toBeNull();
+    expect(response.headers.get("x-provider-header")).toBe("preserved");
+    await expect(response.text()).resolves.toBe("provider body");
+  });
+
+  test("replaces credential-bearing fetch errors with a stable error code", async () => {
+    await expect(
+      fetchWithCredentialRedirects(new Request("https://allowed.example/bot-secret/getMe"), {
+        fetcher: async (request) => {
+          throw new Error(`failed to fetch ${request.url}`);
+        },
+      }),
+    ).rejects.toMatchObject({ code: "secret_fetch_failed", message: "secret_fetch_failed" });
+  });
+
   test("follows a relative same-origin redirect with manual mode and retained credentials", async () => {
     const requests: Request[] = [];
     const assertUrlAllowed = vi.fn();
@@ -95,7 +142,7 @@ describe("fetchWithCredentialRedirects", () => {
         }),
         { fetcher },
       ),
-    ).rejects.toThrow(`exceeded ${MAX_CREDENTIAL_REDIRECTS} redirects`);
+    ).rejects.toMatchObject({ code: "secret_fetch_failed" });
 
     expect(fetcher).toHaveBeenCalledTimes(MAX_CREDENTIAL_REDIRECTS + 1);
     expect(requests[1]).toMatchObject({ method: "GET" });

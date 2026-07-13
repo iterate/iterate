@@ -321,6 +321,7 @@ export function timingSafeStringEqual(a: string, b: string): boolean {
 }
 
 type SecretErrorCode =
+  | "secret_fetch_failed"
   | "secret_material_not_a_string"
   | "secret_not_allowed_for_origin"
   | "secret_not_found"
@@ -347,6 +348,9 @@ export class SecretSubstitutionError extends Error {
 export function secretErrorResponse(code: SecretErrorCode): Response {
   return Response.json(
     { error: code },
-    { status: code === "secret_not_allowed_for_origin" ? 403 : 400 },
+    {
+      status:
+        code === "secret_fetch_failed" ? 502 : code === "secret_not_allowed_for_origin" ? 403 : 400,
+    },
   );
 }

@@ -130,6 +130,41 @@ describe("itx", () => {
     expect(received).toEqual([]);
   });
 
+  test("URL-path secret material is not returned in Response metadata", async () => {
+    const receivedPaths: string[] = [];
+    await using endpoint = await withTunnel({
+      fetch(request) {
+        receivedPaths.push(new URL(request.url).pathname);
+        return Response.json({ ok: true });
+      },
+    });
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({ slug: `secret-response-url-${crypto.randomUUID()}` });
+    const secretPath = `/secrets/response-url/${crypto.randomUUID()}`;
+    const material = `url-secret-${crypto.randomUUID()}`;
+    using secret = project.secrets.get(secretPath);
+
+    await secret.update({
+      egress: { urls: [endpoint.url] },
+      material,
+    });
+
+    using probe = egressProbeWorker(project);
+    const response = await probe.probeSecretResponse({
+      secretPath,
+      url: `${new URL(endpoint.url).origin}/botgetSecret({ path: "${secretPath}" })/getMe`,
+    });
+
+    expect(response.url).toBe("");
+    expect(response.redirected).toBe(false);
+    expect(response.body).toEqual({ ok: true });
+    expect(receivedPaths).toEqual([`/bot${material}/getMe`]);
+  });
+
   test("Project egress substitutes path-addressed secrets for explicit and project worker fetches", async () => {
     const echo = await startEgressEcho();
     using session = withItxSession();
