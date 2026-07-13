@@ -14,7 +14,7 @@ import {
   assertSandboxPath,
   assertValidSleepAfter,
   githubTokenEnvForConnections,
-  SANDBOX_GITHUB_GIT_AUTH_SHELL,
+  SANDBOX_GIT_CONFIG_SHELL,
 } from "../utils.ts";
 
 /**
@@ -858,26 +858,16 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   /**
-   * Make plain `git` (and therefore `gitCheckout`) authenticate against
-   * github.com with the GH_TOKEN placeholder. `gh` reads GH_TOKEN from the
-   * environment natively, but stock git does not — it needs
-   * `http.extraheader`. GitHub's git smart-HTTP endpoint only accepts Basic
-   * auth (`x-access-token:<token>`), not Bearer (API-style Bearer returns
-   * 401). The shell base64-encodes `x-access-token:$GH_TOKEN` into
-   * `AUTHORIZATION: Basic …`; project egress peels Basic headers so the
-   * placeholder is still substituted at the door (see
-   * {@link SANDBOX_GITHUB_GIT_AUTH_SHELL}). `$GH_TOKEN` expands INSIDE the
-   * container from the just-applied env map; when the project has no GitHub
-   * connection the guard makes this a no-op. Config lands on the ephemeral
-   * disk, hence re-run per container start. Best-effort: a hiccup must not
-   * fail provisioning — `gh`/curl still work via the env var, and the next
-   * start retries.
+   * Plant stock git identity + (when `GH_TOKEN` is set) github.com HTTPS auth.
+   * See {@link SANDBOX_GIT_CONFIG_SHELL}. Identity always; auth only with a
+   * GitHub connection. Ephemeral disk → re-run per container start.
+   * Best-effort: a hiccup must not fail provisioning.
    */
-  async #configureGitAuth(): Promise<void> {
+  async #configureGit(): Promise<void> {
     try {
-      await this.#redialOnInterruptedSessionSetup(() => super.exec(SANDBOX_GITHUB_GIT_AUTH_SHELL));
+      await this.#redialOnInterruptedSessionSetup(() => super.exec(SANDBOX_GIT_CONFIG_SHELL));
     } catch (error) {
-      console.warn("sandbox git auth configuration failed; git-over-https may 401", error);
+      console.warn("sandbox git configuration failed; commits/git-over-https may misbehave", error);
     }
   }
 
@@ -1065,7 +1055,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       // document env persistence across restart), so every guarded command
       // below runs with the configured vars.
       await this.#applyStoredEnvVars();
-      await this.#configureGitAuth();
+      await this.#configureGit();
       // A container restart mid-run reset the state for a NEW, empty disk —
       // everything this run did landed on the old one. Only the still-current
       // run may mark the workspace provisioned: a stale run setting the flag

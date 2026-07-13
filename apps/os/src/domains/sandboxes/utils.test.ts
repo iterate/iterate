@@ -3,8 +3,9 @@ import {
   assertSandboxPath,
   githubTokenEnvForConnections,
   sandboxPathFor,
-  SANDBOX_GITHUB_GIT_AUTH_SHELL,
+  SANDBOX_GIT_CONFIG_SHELL,
 } from "./utils.ts";
+import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 
 describe("sandboxPathFor", () => {
   test("a name mints /sandboxes/<name> — flat, no intermediate folders", () => {
@@ -74,15 +75,25 @@ describe("githubTokenEnvForConnections", () => {
   });
 });
 
-describe("SANDBOX_GITHUB_GIT_AUTH_SHELL", () => {
+describe("SANDBOX_GIT_CONFIG_SHELL", () => {
+  test("plants iterate[bot] identity so GitHub shows the App avatar", () => {
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain(
+      `user.name '${ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name}'`,
+    );
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain(
+      `user.email '${ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email}'`,
+    );
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("users.noreply.github.com");
+  });
+
   test("configures git extraheader as Basic x-access-token + base64 of GH_TOKEN placeholder", () => {
     // GitHub git smart-HTTP rejects Bearer; Basic with username x-access-token
     // is the documented install-token shape. The shell base64-encodes so the
     // placeholder still expands from $GH_TOKEN inside the container.
-    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).toContain('http."https://github.com/".extraheader');
-    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).toContain("AUTHORIZATION: Basic");
-    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).toContain("x-access-token:${GH_TOKEN}");
-    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).toContain("base64");
-    expect(SANDBOX_GITHUB_GIT_AUTH_SHELL).not.toContain("Bearer");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain('http."https://github.com/".extraheader');
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("AUTHORIZATION: Basic");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("x-access-token:${GH_TOKEN}");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("base64");
+    expect(SANDBOX_GIT_CONFIG_SHELL).not.toContain("Bearer");
   });
 });

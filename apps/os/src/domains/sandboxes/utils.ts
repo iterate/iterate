@@ -1,5 +1,8 @@
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { githubAccessTokenPlaceholder } from "../integrations/utils.ts";
+import {
+  githubAccessTokenPlaceholder,
+  ITERATE_GITHUB_BOT_COMMIT_AUTHOR,
+} from "../integrations/utils.ts";
 import type { SandboxInstanceType } from "./instance-types.ts";
 
 /**
@@ -164,16 +167,24 @@ export function githubTokenEnvForConnections(
 }
 
 /**
- * Shell run on every container start when `GH_TOKEN` is set: configure stock
- * `git` so HTTPS to github.com sends Basic auth with username `x-access-token`
- * and password `$GH_TOKEN` (the egress placeholder).
+ * Shell run on every container start: stock git identity + optional GitHub HTTPS
+ * auth. Identity is always planted (local commits need an author even without a
+ * GitHub connection). Auth only runs when `GH_TOKEN` is set.
  *
- * GitHub's git smart-HTTP endpoint rejects `Authorization: Bearer …` (API-style)
- * with 401; it wants Basic. The placeholder is base64-encoded into the header
- * value inside the container — project egress peels Basic Authorization headers
- * before substituting (see `substituteSecretHeaders`), so the secret cell still
- * holds: the container never sees token bytes. `$GH_TOKEN` expands in the
- * container so `setEnvVars({ GH_TOKEN })` overrides still apply.
+ * - **Identity** — {@link ITERATE_GITHUB_BOT_COMMIT_AUTHOR} so commits pushed to
+ *   GitHub attribute to the Iterate App bot (logo in history). Project slug is
+ *   deliberately not in name/email (that would break avatar linking).
+ * - **Auth** — Basic `x-access-token:$GH_TOKEN` extraheader. GitHub git smart-HTTP
+ *   rejects Bearer; the placeholder is base64-encoded and peeled at egress
+ *   (`substituteSecretHeaders`) so token bytes never enter the container.
  */
-export const SANDBOX_GITHUB_GIT_AUTH_SHELL =
-  'if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Basic $(printf %s "x-access-token:${GH_TOKEN}" | base64 | tr -d "\\n")"; fi';
+export const SANDBOX_GIT_CONFIG_SHELL = [
+  `git config --global user.name ${shellSingleQuote(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name)}`,
+  `git config --global user.email ${shellSingleQuote(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email)}`,
+  `if [ -n "$GH_TOKEN" ]; then git config --global http."https://github.com/".extraheader "AUTHORIZATION: Basic $(printf %s "x-access-token:\${GH_TOKEN}" | base64 | tr -d "\\n")"; fi`,
+].join(" && ");
+
+/** Quote a literal for POSIX single-quoted shell (safe for `[bot]` emails). */
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
