@@ -66,6 +66,12 @@ export class GithubAgentProcessor extends StreamProcessor<
       reviewKey: string;
       superseded?: { externalId: string; headSha: string };
     }): Promise<GithubReviewCheckShell>;
+    isRepositoryCollaborator?(input: {
+      connection: string;
+      login: string;
+      owner: string;
+      repo: string;
+    }): Promise<boolean>;
     now?: () => number;
   }
 > {
