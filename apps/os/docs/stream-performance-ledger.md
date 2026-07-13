@@ -354,3 +354,36 @@ cursor-sensitive durable cross-post paths were 9.0% and 9.3% faster at
 median-of-round p50 despite that port placement. This move therefore records no
 new speedup and no reproduced regression. Raw records are in
 `/tmp/cursor-extraction-{candidate,baseline}-{1..3}.log`.
+
+## 2026-07-13: Cursor Reset Helper Not Retained
+
+The cursor extraction exposed five identical in-memory row-reset sequences.
+A zero-allocation `resetCursorRow(row, ackedOffset, epoch)` helper removed 25
+net production lines while preserving assignment order and all 167 focused
+cursor/subscriber tests. A three-round full comparison initially looked
+positive but had large unrelated workload swings, so it was not accepted as
+evidence.
+
+A focused follow-up added `STREAM_BENCH_CROSSPOST_SAMPLES` to the host harness
+and collected four rounds per revision. The direct helper comparison appeared
+8.0% slower at pooled sparse p50 and 10.2% slower at pooled dense p50. That was
+not sufficient to establish causality because the two revisions occupied
+different long-lived local processes and the full comparison had already shown
+large unrelated workload swings.
+
+After deleting the helper, a same-revision control ran exact `88b34adb5`
+production code on both ports in mirrored order, with 1,000 dense and 1,000
+sparse samples per side. Port 5201 was 19.9% slower at pooled dense p50 but 0.5%
+faster at pooled sparse p50; its two dense rounds differed by 49.2% at p50.
+Those contradictory results are larger than the apparent helper effect and
+show that this local comparison was dominated by process and workload drift.
+The helper therefore records neither a speedup nor a proved regression. It is
+not retained because source cleanup alone is outside this performance branch's
+scope; the explicit assignments remain until a lower-noise benchmark shows a
+benefit or a wider cursor redesign removes them. The benchmark sample-count
+control remains for future cursor experiments.
+
+Raw records are in `/tmp/cursor-reset-helper-{candidate,baseline}-{1..3}.log`,
+`/tmp/cursor-reset-crosspost-{candidate,baseline}-{1..4}.log`, and
+`/tmp/cursor-reset-calibration-{candidate,baseline}-{1..2}.log`; the interrupted
+candidate round was overwritten by a complete rerun and is not included.

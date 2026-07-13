@@ -17,6 +17,7 @@ const MEDIUM_PAYLOAD = "m".repeat(4_096);
 const LARGE_PAYLOAD = "l".repeat(256 * 1_024);
 const TAIL_SAMPLES = Number(process.env.STREAM_BENCH_TAIL_SAMPLES ?? "0");
 const APPEND_SAMPLES = Number(process.env.STREAM_BENCH_APPEND_SAMPLES ?? "0");
+const CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_CROSSPOST_SAMPLES ?? "0");
 
 type StreamHandle = Stream & Disposable;
 
@@ -433,7 +434,7 @@ test.skipIf(!ENABLED)(
       );
       await waitFor(() => arrivedAt.has("crosspost-dense-warmup"), "dense cross-post warmup");
       const samples: number[] = [];
-      for (let iteration = 0; iteration < 30; iteration += 1) {
+      for (let iteration = 0; iteration < (CROSSPOST_SAMPLES || 30); iteration += 1) {
         const marker = `crosspost-dense-${iteration}`;
         const startedAt = performance.now();
         await commitDiscardingResult(source, event({ marker, type: SELECTED_TYPE }));
@@ -470,7 +471,7 @@ test.skipIf(!ENABLED)(
       );
       await waitFor(() => arrivedAt.has("crosspost-sparse-warmup"), "sparse cross-post warmup");
       const samples: number[] = [];
-      for (let iteration = 0; iteration < 20; iteration += 1) {
+      for (let iteration = 0; iteration < (CROSSPOST_SAMPLES || 20); iteration += 1) {
         const marker = `crosspost-sparse-${iteration}`;
         const batch = Array.from({ length: 100 }, (_, index) =>
           event({
