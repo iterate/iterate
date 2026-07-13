@@ -7,6 +7,7 @@ import {
   GitCommitVerticalIcon,
   GithubIcon,
   HistoryIcon,
+  ListTodoIcon,
   MinusIcon,
   PlusIcon,
   Undo2Icon,
@@ -26,6 +27,7 @@ import { CommitHistoryPanel } from "./commit-history-panel.tsx";
 import { RepoEditorPane } from "./repo-editor-pane.tsx";
 import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
+import { RepoTasksView } from "./repo-tasks-view.tsx";
 import {
   commitPlan,
   effectiveEntry,
@@ -57,6 +59,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
     file: selectedPath,
     diff,
     preview,
+    tasks,
     scm,
     gh,
     stagedView,
@@ -209,10 +212,10 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row">
-      {/* vscode-style activity strip: Files / Source control / History / GitHub. */}
+      {/* vscode-style activity strip: Files / Tasks / Source control / History / GitHub. */}
       <div className="flex shrink-0 flex-col items-center gap-1 border-r px-1 py-2">
         <Button
-          variant={scm || gh || history ? "ghost" : "secondary"}
+          variant={tasks || scm || gh || history ? "ghost" : "secondary"}
           size="icon"
           title="Files"
           aria-label="Files"
@@ -222,6 +225,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           onClick={() =>
             patchSearch({
               scm: undefined,
+              tasks: undefined,
               gh: undefined,
               staged: undefined,
               history: undefined,
@@ -233,6 +237,28 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           <FilesIcon className="size-4" />
         </Button>
         <Button
+          variant={tasks ? "secondary" : "ghost"}
+          size="icon"
+          title="Tasks"
+          aria-label="Tasks"
+          onClick={() =>
+            patchSearch({
+              tasks: true,
+              scm: undefined,
+              gh: undefined,
+              history: undefined,
+              commit: undefined,
+              file: undefined,
+              diff: undefined,
+              preview: undefined,
+              staged: undefined,
+            })
+          }
+          className="text-muted-foreground"
+        >
+          <ListTodoIcon className="size-4" />
+        </Button>
+        <Button
           variant={scm ? "secondary" : "ghost"}
           size="icon"
           title="Source control"
@@ -240,7 +266,13 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           // accessible name ("1"), beating the title.
           aria-label="Source control"
           onClick={() =>
-            patchSearch({ scm: true, gh: undefined, history: undefined, commit: undefined })
+            patchSearch({
+              scm: true,
+              tasks: undefined,
+              gh: undefined,
+              history: undefined,
+              commit: undefined,
+            })
           }
           className="relative text-muted-foreground"
         >
@@ -256,7 +288,13 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           size="icon"
           title="History"
           onClick={() =>
-            patchSearch({ history: true, scm: undefined, gh: undefined, staged: undefined })
+            patchSearch({
+              history: true,
+              tasks: undefined,
+              scm: undefined,
+              gh: undefined,
+              staged: undefined,
+            })
           }
           className="text-muted-foreground"
         >
@@ -267,7 +305,13 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
           size="icon"
           title="GitHub"
           onClick={() =>
-            patchSearch({ gh: true, scm: undefined, history: undefined, commit: undefined })
+            patchSearch({
+              gh: true,
+              tasks: undefined,
+              scm: undefined,
+              history: undefined,
+              commit: undefined,
+            })
           }
           className="text-muted-foreground"
         >
@@ -275,137 +319,168 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
         </Button>
       </div>
 
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel defaultSize="20%" minSize="10rem" className="min-w-0">
-          {history ? (
-            <Suspense
-              fallback={
-                <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
-                  Loading history…
-                </div>
-              }
+      {tasks ? (
+        <Suspense
+          fallback={
+            <div
+              className="flex flex-1 items-center justify-center text-sm text-muted-foreground"
+              data-spinner="true"
             >
-              <CommitHistoryPanel
-                projectId={projectId}
-                repoPath={repoPath}
-                expandedOid={expandedCommitOid}
-                selectedPath={selectedPath}
-                onExpand={(oid) => patchSearch({ commit: oid })}
-                // selectFile clears diff/preview/staged too, so a lingering
-                // preview=true doesn't spuriously re-open Preview for the file
-                // you pick out of a commit (history/commit stay set — the
-                // commit diff keeps showing until you leave History).
-                onOpenFile={(path) => selectFile(path)}
-              />
-            </Suspense>
-          ) : gh ? (
-            // Own Suspense (like RepoEditorPane's): the panel's first
-            // connections read suspends, and without a local boundary that
-            // would bubble to the route's ItxBoundary and blank the whole IDE.
-            <Suspense
-              fallback={
-                <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
-                  Loading…
-                </div>
-              }
-            >
-              <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
-            </Suspense>
-          ) : scm ? (
-            <GitPanel
-              changes={changes}
-              headPathSet={headPathSet}
-              commitPending={commit.isPending}
-              onCommit={(message, reset) => commit.mutate(message, { onSuccess: reset })}
-              onStage={(path) => store.stage(path)}
-              onUnstage={(path) => store.unstage(path)}
-              onDiscard={(path) => store.discardWorking(path)}
-              onDiscardAll={() => store.discardAll()}
-              onOpen={(path, status) =>
-                patchSearch({
-                  file: path,
-                  diff: status === "modified" ? true : undefined,
-                  preview: undefined,
-                  staged: undefined,
-                })
-              }
-              onOpenStaged={(path) =>
-                patchSearch({ file: path, diff: undefined, preview: undefined, staged: true })
-              }
-            />
-          ) : (
-            <RepoFileTree
-              className="h-full"
-              headPaths={headPaths}
-              changes={changes}
-              selectedPath={selectedPath}
-              onSelect={selectFile}
-              actions={actions}
-            />
-          )}
-        </ResizablePanel>
-        <ResizableHandle />
-        <ResizablePanel className="flex min-w-0 flex-col">
-          {selectedPath === undefined ? (
-            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-              Select a file to view or edit it.
+              Loading tasks…
             </div>
-          ) : (
-            <Suspense
-              fallback={
-                <div
-                  className="flex flex-1 items-center justify-center text-sm text-muted-foreground"
-                  data-spinner="true"
-                >
-                  Loading {selectedPath}…
-                </div>
-              }
-            >
-              {history && expandedCommitOid !== undefined ? (
-                <CommitDiffPane
-                  key={`${selectedPath}:${expandedCommitOid}`}
+          }
+        >
+          <RepoTasksView
+            projectId={projectId}
+            repoPath={repoPath}
+            headCommitOid={files.commitOid}
+            headPaths={headPaths}
+            changes={changes}
+            selectedPath={selectedPath}
+            diffOpen={diff}
+            previewOpen={preview}
+            stagedView={stagedView}
+            onPatchSearch={patchSearch}
+            onSetWorking={(path, entry) => store.setWorking(path, entry)}
+            onSetStaged={(path, entry) => store.setStaged(path, entry)}
+            onStage={(path) => store.stage(path)}
+            onUnstage={(path) => store.unstage(path)}
+            onRestore={dropChange}
+          />
+        </Suspense>
+      ) : (
+        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+          <ResizablePanel defaultSize="20%" minSize="10rem" className="min-w-0">
+            {history ? (
+              <Suspense
+                fallback={
+                  <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
+                    Loading history…
+                  </div>
+                }
+              >
+                <CommitHistoryPanel
                   projectId={projectId}
                   repoPath={repoPath}
-                  path={selectedPath}
-                  commitOid={expandedCommitOid}
+                  expandedOid={expandedCommitOid}
+                  selectedPath={selectedPath}
+                  onExpand={(oid) => patchSearch({ commit: oid })}
+                  // selectFile clears diff/preview/staged too, so a lingering
+                  // preview=true doesn't spuriously re-open Preview for the file
+                  // you pick out of a commit (history/commit stay set — the
+                  // commit diff keeps showing until you leave History).
+                  onOpenFile={(path) => selectFile(path)}
                 />
-              ) : (
-                <RepoEditorPane
-                  key={selectedPath}
-                  projectId={projectId}
-                  repoPath={repoPath}
-                  path={selectedPath}
-                  headCommitOid={files.commitOid}
-                  headHasPath={headPathSet.has(selectedPath)}
-                  change={changes.get(selectedPath)}
-                  diffOpen={diff}
-                  // Diff and preview are mutually exclusive views of the same
-                  // buffer — turning one on turns the other off.
-                  onToggleDiff={(open) =>
-                    patchSearch({ diff: open ? true : undefined, preview: undefined })
-                  }
-                  previewOpen={preview}
-                  onTogglePreview={(open) =>
-                    patchSearch({ preview: open ? true : undefined, diff: undefined })
-                  }
-                  onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
-                  onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
-                  onStageFile={() => store.stage(selectedPath)}
-                  onUnstageFile={() => {
-                    store.unstage(selectedPath);
-                    patchSearch({ staged: undefined });
-                  }}
-                  onOpenWorking={() =>
-                    patchSearch({ staged: undefined, diff: undefined, preview: undefined })
-                  }
-                  stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
-                  onRestore={() => dropChange(selectedPath)}
-                />
-              )}
-            </Suspense>
-          )}
-        </ResizablePanel>
-      </ResizablePanelGroup>
+              </Suspense>
+            ) : gh ? (
+              // Own Suspense (like RepoEditorPane's): the panel's first
+              // connections read suspends, and without a local boundary that
+              // would bubble to the route's ItxBoundary and blank the whole IDE.
+              <Suspense
+                fallback={
+                  <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
+                    Loading…
+                  </div>
+                }
+              >
+                <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
+              </Suspense>
+            ) : scm ? (
+              <GitPanel
+                changes={changes}
+                headPathSet={headPathSet}
+                commitPending={commit.isPending}
+                onCommit={(message, reset) => commit.mutate(message, { onSuccess: reset })}
+                onStage={(path) => store.stage(path)}
+                onUnstage={(path) => store.unstage(path)}
+                onDiscard={(path) => store.discardWorking(path)}
+                onDiscardAll={() => store.discardAll()}
+                onOpen={(path, status) =>
+                  patchSearch({
+                    file: path,
+                    diff: status === "modified" ? true : undefined,
+                    preview: undefined,
+                    staged: undefined,
+                  })
+                }
+                onOpenStaged={(path) =>
+                  patchSearch({ file: path, diff: undefined, preview: undefined, staged: true })
+                }
+              />
+            ) : (
+              <RepoFileTree
+                className="h-full"
+                headPaths={headPaths}
+                changes={changes}
+                selectedPath={selectedPath}
+                onSelect={selectFile}
+                actions={actions}
+              />
+            )}
+          </ResizablePanel>
+          <ResizableHandle />
+          <ResizablePanel className="flex min-w-0 flex-col">
+            {selectedPath === undefined ? (
+              <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+                Select a file to view or edit it.
+              </div>
+            ) : (
+              <Suspense
+                fallback={
+                  <div
+                    className="flex flex-1 items-center justify-center text-sm text-muted-foreground"
+                    data-spinner="true"
+                  >
+                    Loading {selectedPath}…
+                  </div>
+                }
+              >
+                {history && expandedCommitOid !== undefined ? (
+                  <CommitDiffPane
+                    key={`${selectedPath}:${expandedCommitOid}`}
+                    projectId={projectId}
+                    repoPath={repoPath}
+                    path={selectedPath}
+                    commitOid={expandedCommitOid}
+                  />
+                ) : (
+                  <RepoEditorPane
+                    key={selectedPath}
+                    projectId={projectId}
+                    repoPath={repoPath}
+                    path={selectedPath}
+                    headCommitOid={files.commitOid}
+                    headHasPath={headPathSet.has(selectedPath)}
+                    change={changes.get(selectedPath)}
+                    diffOpen={diff}
+                    // Diff and preview are mutually exclusive views of the same
+                    // buffer — turning one on turns the other off.
+                    onToggleDiff={(open) =>
+                      patchSearch({ diff: open ? true : undefined, preview: undefined })
+                    }
+                    previewOpen={preview}
+                    onTogglePreview={(open) =>
+                      patchSearch({ preview: open ? true : undefined, diff: undefined })
+                    }
+                    onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
+                    onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
+                    onStageFile={() => store.stage(selectedPath)}
+                    onUnstageFile={() => {
+                      store.unstage(selectedPath);
+                      patchSearch({ staged: undefined });
+                    }}
+                    onOpenWorking={() =>
+                      patchSearch({ staged: undefined, diff: undefined, preview: undefined })
+                    }
+                    stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
+                    onRestore={() => dropChange(selectedPath)}
+                  />
+                )}
+              </Suspense>
+            )}
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      )}
     </div>
   );
 }
@@ -603,8 +678,8 @@ function GitPanel({
  * IDE view state, URL-owned like every stream view's: `file` is the open
  * path, `diff` whether the HEAD↔staged diff is showing, `preview` whether a
  * markdown/html file shows its rendered preview instead of the editor,
- * `scm`/`gh`/`history` which sidebar shows instead of the file tree (Source
- * Control / GitHub / commit history), `commit` the expanded commit's oid
+ * `tasks`/`scm`/`gh`/`history` which sidebar shows instead of the file tree
+ * (task board / Source Control / GitHub / commit history), `commit` the expanded commit's oid
  * (which also pins the readonly commit diff the open file renders as). The
  * repo detail route validates these (RepoDetailSearch), so loose reads here
  * are safe.
@@ -614,6 +689,7 @@ function useRepoIdeSearch() {
     file?: string;
     diff?: boolean;
     preview?: boolean;
+    tasks?: boolean;
     scm?: boolean;
     gh?: boolean;
     staged?: boolean;
@@ -626,6 +702,7 @@ function useRepoIdeSearch() {
       file?: string | undefined;
       diff?: boolean | undefined;
       preview?: boolean | undefined;
+      tasks?: boolean | undefined;
       scm?: boolean | undefined;
       gh?: boolean | undefined;
       staged?: boolean | undefined;
@@ -646,6 +723,7 @@ function useRepoIdeSearch() {
     file: search.file,
     diff: search.diff === true,
     preview: search.preview === true,
+    tasks: search.tasks === true,
     scm: search.scm === true,
     gh: search.gh === true,
     stagedView: search.staged === true,
