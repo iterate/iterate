@@ -403,6 +403,22 @@ function makeSink() {
   return { sink, batches };
 }
 
+function processorSubscriber(consumes: string[]) {
+  return {
+    description: "test processor",
+    processor: {
+      announcement: {
+        slug: "test-processor",
+        version: "1",
+        description: "test processor",
+        consumes,
+        emits: [],
+        ownedEvents: [],
+      },
+    },
+  };
+}
+
 describe("StreamSubscribers", () => {
   it("does not read the clock when no retry schedule needs comparison", () => {
     const h = makeHarness();
@@ -853,6 +869,91 @@ describe("StreamSubscribers", () => {
     expect(h.pokes).toHaveLength(2);
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(second.batches[0].events.map((event) => event.offset)).toEqual([4]);
+  });
+
+  it("i1. wake selectors coalesce empty replay pages into the next matching batch", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(
+      ...Array.from({ length: DELIVERY_BATCH_LIMIT * 2 + 1 }, (_, index) =>
+        evt(index + 1, index === DELIVERY_BATCH_LIMIT * 2 ? "selected" : "other"),
+      ),
+    );
+    const { sink, batches } = makeSink();
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink,
+      subscriber: processorSubscriber(["selected"]),
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(
+      batches.map((batch) => ({
+        offsets: batch.events.map((event) => event.offset),
+        deliveryThroughOffset: batch.deliveryThroughOffset,
+      })),
+    ).toEqual([
+      { offsets: [], deliveryThroughOffset: DELIVERY_BATCH_LIMIT },
+      {
+        offsets: [DELIVERY_BATCH_LIMIT * 2 + 1],
+        deliveryThroughOffset: DELIVERY_BATCH_LIMIT * 2 + 1,
+      },
+    ]);
+    expect(h.storageReads()).toBe(3);
+  });
+
+  it("i2. wake selectors collapse an all-filtered tail to one final checkpoint batch", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(
+      ...Array.from({ length: DELIVERY_BATCH_LIMIT * 3 - 1 }, (_, index) =>
+        evt(index + 1, "other"),
+      ),
+    );
+    const { sink, batches } = makeSink();
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink,
+      subscriber: processorSubscriber(["selected"]),
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(batches.map((batch) => batch.deliveryThroughOffset)).toEqual([
+      DELIVERY_BATCH_LIMIT,
+      DELIVERY_BATCH_LIMIT * 3 - 1,
+    ]);
+    expect(batches.every((batch) => batch.events.length === 0)).toBe(true);
+    expect(h.storageReads()).toBe(3);
+  });
+
+  it("i3. wake selector coalescing remains bounded across a long filtered replay", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    const eventCount = DELIVERY_BATCH_LIMIT * 17 - 1;
+    h.append(...Array.from({ length: eventCount }, (_, index) => evt(index + 1, "other")));
+    const { sink, batches } = makeSink();
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink,
+      subscriber: processorSubscriber(["selected"]),
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+
+    // The first state batch remains immediate. Later batches absorb at most
+    // eight complete empty pages before advancing the receiver checkpoint.
+    expect(batches.map((batch) => batch.deliveryThroughOffset)).toEqual([
+      DELIVERY_BATCH_LIMIT,
+      DELIVERY_BATCH_LIMIT * 9,
+      eventCount,
+    ]);
+    expect(batches.every((batch) => batch.events.length === 0)).toBe(true);
+    expect(h.storageReads()).toBe(17);
   });
 
   it("j. a poke failure lands in the same backoff rows as push failures", async () => {

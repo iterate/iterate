@@ -90,6 +90,11 @@ import {
   SKIP_CONFIRM_ATTEMPTS,
 } from "./subscriber-math.ts";
 
+// A configured processor can consume a sparse subset of the stream. Collapse
+// checkpoint-only gaps without turning one pump turn into an unbounded scan:
+// each raw page is already capped at 1,000 events and 1 MiB.
+const MAX_CONFIGURED_EMPTY_READ_PAGES = 8;
+
 /** Serializable debug view of one live connection, for `runtimeState()`. */
 export type ConnectionRuntimeState = {
   subscriptionType: StreamSubscriptionType;
@@ -1409,24 +1414,27 @@ export class StreamSubscribers {
           let deliveredBytes = 0;
           if (deliverEvents) {
             const stateMaxOffset = currentState.maxOffset;
-            // Same byte-capped read as the push drain: a batch of near-2MB
-            // events in one live frame would blow the RPC frame limit and turn
-            // into a delivery failure the subscriber can never get past. The
-            // in-memory head avoids an empty SQLite probe once caught up.
-            const read =
-              cursor < stateMaxOffset
-                ? this.#readBatch(
-                    cursor,
-                    DELIVERY_BATCH_LIMIT,
-                    subscriptionType === "configured",
-                    args.selector !== undefined && !args.selector.matchesAll,
-                  )
-                : undefined;
-            if (read?.lastOffset === undefined) {
-              // Caught up; the next append wakes us again. The first drain
-              // still owes the initial state batch.
-              if (!initialBatchPending) return;
-            } else {
+            let emptyReadPages = 0;
+            for (;;) {
+              // Same byte-capped read as the push drain: a batch of near-2MB
+              // events in one live frame would blow the RPC frame limit and turn
+              // into a delivery failure the subscriber can never get past. The
+              // in-memory head avoids an empty SQLite probe once caught up.
+              const read =
+                cursor < stateMaxOffset
+                  ? this.#readBatch(
+                      cursor,
+                      DELIVERY_BATCH_LIMIT,
+                      subscriptionType === "configured",
+                      args.selector !== undefined && !args.selector.matchesAll,
+                    )
+                  : undefined;
+              if (read?.lastOffset === undefined) {
+                // Caught up; the next append wakes us again. The first drain
+                // still owes the initial state batch.
+                if (!initialBatchPending) return;
+                break;
+              }
               cursor = read.lastOffset;
               // Configured (wake) connections are a durable lane: ephemeral
               // events are dropped from delivery (the cursor above already
@@ -1449,13 +1457,19 @@ export class StreamSubscribers {
                 events = selected.matched;
                 deliveredBytes = selected.matchedByteLength ?? missingFilteredByteLength();
               }
+              emptyReadPages += 1;
               if (
-                events.length === 0 &&
-                !initialBatchPending &&
-                subscriptionType !== "configured"
+                events.length > 0 ||
+                initialBatchPending ||
+                subscriptionType !== "configured" ||
+                cursor >= stateMaxOffset ||
+                emptyReadPages >= MAX_CONFIGURED_EMPTY_READ_PAGES
               ) {
-                continue;
+                break;
               }
+            }
+            if (events.length === 0 && !initialBatchPending && subscriptionType !== "configured") {
+              continue;
             }
           } else {
             const stateMaxOffset = currentState.maxOffset;
