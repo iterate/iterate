@@ -159,20 +159,33 @@ export function projectSearchPrefix(projectId: string, source?: string): string 
 }
 
 /**
- * Validate a caller-supplied `source` for query scoping: a platform corpus
- * kind passes as-is, a custom kind is normalized by the same rules `index()`
- * applied when writing it. `docs` gets its own error — it is federated, never
- * stored, so it cannot be a folder scope.
+ * Validate a caller-supplied `source` for query scoping: case-insensitive — a
+ * platform corpus kind passes through normalized, a custom kind is normalized
+ * by the same rules `index()` applied when writing it. `docs` gets its own
+ * error — it is federated, never stored, so it cannot be a folder scope.
  */
 export function normalizeSearchSource(source: string): string {
-  if (source === "docs") {
+  const normalized = source.trim().toLowerCase();
+  if (normalized === "docs") {
     throw new Error(
       'source "docs" cannot be pinned: docs are federated at query time, not stored in the ' +
         "corpus. Query without `source` (docs merge in automatically) or use itx.docs.search.",
     );
   }
-  if ((["streams", "files", "repos"] as const).some((kind) => kind === source)) return source;
-  return normalizeCustomSearchKind(source);
+  if ((["streams", "files", "repos"] as const).some((kind) => kind === normalized)) {
+    return normalized;
+  }
+  return normalizeCustomSearchKind(normalized);
+}
+
+/**
+ * Normalize `exclude` entries the same way kinds are stored (trim/lowercase),
+ * so `["Docs", " Decisions"]` excludes what `docs` and `decisions` would.
+ * No reserved-kind validation: excluding a platform kind is legitimate, and a
+ * nonexistent kind in a `$nin` list just matches nothing.
+ */
+export function normalizeSearchExcludeKinds(kinds: readonly string[]): string[] {
+  return kinds.map((kind) => kind.trim().toLowerCase());
 }
 
 /** Object key for one stream's segment document (segment n covers the n-th SEARCH_SEGMENT_SIZE offsets). */

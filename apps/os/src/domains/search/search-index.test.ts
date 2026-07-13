@@ -8,6 +8,8 @@ import {
   searchMetadata,
   streamEventsRef,
   normalizeCustomSearchKind,
+  normalizeSearchExcludeKinds,
+  normalizeSearchSource,
   projectSearchInstanceConfig,
   projectSearchInstanceId,
   projectSearchPrefix,
@@ -187,6 +189,33 @@ describe("normalizeCustomSearchKind / sanitizeSearchDocumentId", () => {
     expect(normalizeCustomSearchKind("Notes")).toBe("notes");
     expect(sanitizeSearchDocumentId("/2026/07/meeting notes.md")).toBe("2026/07/meeting-notes.md");
     expect(sanitizeSearchDocumentId("")).toBe("untitled");
+  });
+});
+
+describe("normalizeSearchSource / normalizeSearchExcludeKinds", () => {
+  it("accepts platform kinds in any case (a query scope, not an index write)", () => {
+    expect(normalizeSearchSource("streams")).toBe("streams");
+    expect(normalizeSearchSource("Streams")).toBe("streams");
+    expect(normalizeSearchSource(" FILES ")).toBe("files");
+    expect(normalizeSearchSource("repos")).toBe("repos");
+  });
+
+  it("normalizes custom kinds by the same rules index() wrote them under", () => {
+    expect(normalizeSearchSource("Decisions")).toBe("decisions");
+    expect(() => normalizeSearchSource("my notes")).toThrow(/no slashes/);
+  });
+
+  it("rejects docs as a source with a federation pointer, in any case", () => {
+    expect(() => normalizeSearchSource("docs")).toThrow(/federated/);
+    expect(() => normalizeSearchSource("Docs")).toThrow(/federated/);
+  });
+
+  it("normalizes exclude entries so they match stored kinds and the docs gate", () => {
+    expect(normalizeSearchExcludeKinds(["Docs", " Decisions", "STREAMS"])).toEqual([
+      "docs",
+      "decisions",
+      "streams",
+    ]);
   });
 });
 

@@ -209,6 +209,7 @@ import {
 } from "./domains/search/search-index.ts";
 import {
   narrowStreamRefToChunk,
+  normalizeSearchExcludeKinds,
   normalizeSearchSource,
   projectSearchInstanceId,
   searchFilters,
@@ -2053,7 +2054,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
           source: input.source === undefined ? undefined : normalizeSearchSource(input.source),
           // "docs" is federated, never in the R2 corpus, so it can't be an R2
           // filter; drop it here and let #federatedDocs honour the exclusion.
-          excludeKinds: input.exclude?.filter((kind) => kind !== "docs"),
+          excludeKinds:
+            input.exclude === undefined
+              ? undefined
+              : normalizeSearchExcludeKinds(input.exclude).filter((kind) => kind !== "docs"),
         }),
         max_num_results: input.limit,
         match_threshold: input.scoreThreshold,
@@ -2102,7 +2106,12 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     limit?: number;
   }): Promise<SearchResultChunk[]> {
     if (input.source !== undefined) return []; // a corpus source was pinned
-    if (input.exclude?.includes("docs")) return [];
+    if (
+      input.exclude !== undefined &&
+      normalizeSearchExcludeKinds(input.exclude).includes("docs")
+    ) {
+      return [];
+    }
     const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
     const hits = await docs.search({ q: input.query });
     return hits.slice(0, Math.min(input.limit ?? 5, 5)).map((hit, index) => ({
