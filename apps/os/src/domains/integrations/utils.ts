@@ -175,10 +175,13 @@ export const GITHUB_CONNECTION_EGRESS_URLS = [
 
 /**
  * Default git author/committer for commits the platform makes (sandbox `git`,
- * `itx.repo.commitFiles`, workspace publish, seed). Email is the first-party
- * Iterate GitHub App bot's `users.noreply.github.com` address so GitHub links
- * the commit to `iterate[bot]` and shows the app avatar — not a human and not
- * `support@…` (which would render as an unlinked gray identity).
+ * `itx.repo.commitFiles`, workspace publish, seed).
+ *
+ * - **name** is brand-lowercase `iterate` (never "Iterate") — see
+ *   docs/brand-and-tone-of-voice.md.
+ * - **email** is the first-party GitHub App bot noreply address so GitHub
+ *   links the commit to `iterate[bot]` and shows the app avatar (not a human,
+ *   not `support@…` which would render as an unlinked gray identity).
  *
  * Bot user id is public (`GET /users/iterate%5Bbot%5D` → 233973017); the
  * format is `{id}+{app-slug}[bot]@users.noreply.github.com`. Do not put a
@@ -186,7 +189,7 @@ export const GITHUB_CONNECTION_EGRESS_URLS = [
  */
 export const ITERATE_GITHUB_BOT_COMMIT_AUTHOR = {
   email: "233973017+iterate[bot]@users.noreply.github.com",
-  name: "iterate[bot]",
+  name: "iterate",
 } as const;
 
 /** Itx secret Durable Object path holding one Telegram connection's bot token. */

@@ -172,9 +172,9 @@ re-discovered per container start; lexicographically-first connection wins;
 `http.extraheader` for github.com — so `gh`, curl-with-Bearer, and
 git-over-https against github.com work out of the box, and `gitCheckout` is
 the way to get code into a sandbox. Every sandbox also gets stock git
-`user.name` / `user.email` as the first-party **`iterate[bot]`** identity
-(GitHub App noreply address) so commits pushed from the sandbox show the
-Iterate app avatar. Nothing else is planted: there is no baked coding agent
+`user.name` / `user.email` as **`iterate`** + the first-party GitHub App bot
+noreply address so commits pushed from the sandbox show the iterate app
+avatar. Nothing else is planted: there is no baked coding agent
 and no automatic repo checkout — a sandbox starts as the stock image plus
 whatever its snapshots carry.
 

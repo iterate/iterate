@@ -76,7 +76,11 @@ describe("githubTokenEnvForConnections", () => {
 });
 
 describe("SANDBOX_GIT_CONFIG_SHELL", () => {
-  test("plants iterate[bot] identity so GitHub shows the App avatar", () => {
+  test("plants lowercase iterate identity so GitHub shows the app avatar", () => {
+    expect(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name).toBe("iterate");
+    expect(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name).toBe(
+      ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name.toLowerCase(),
+    );
     expect(SANDBOX_GIT_CONFIG_SHELL).toContain(
       `user.name '${ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name}'`,
     );
@@ -84,6 +88,7 @@ describe("SANDBOX_GIT_CONFIG_SHELL", () => {
       `user.email '${ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email}'`,
     );
     expect(SANDBOX_GIT_CONFIG_SHELL).toContain("users.noreply.github.com");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("iterate[bot]");
   });
 
   test("configures git extraheader as Basic x-access-token + base64 of GH_TOKEN placeholder", () => {

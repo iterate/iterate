@@ -172,7 +172,7 @@ export function githubTokenEnvForConnections(
  * GitHub connection). Auth only runs when `GH_TOKEN` is set.
  *
  * - **Identity** — {@link ITERATE_GITHUB_BOT_COMMIT_AUTHOR} so commits pushed to
- *   GitHub attribute to the Iterate App bot (logo in history). Project slug is
+ *   GitHub attribute to the iterate app bot (logo in history). Project slug is
  *   deliberately not in name/email (that would break avatar linking).
  * - **Auth** — Basic `x-access-token:$GH_TOKEN` extraheader. GitHub git smart-HTTP
  *   rejects Bearer; the placeholder is base64-encoded and peeled at egress

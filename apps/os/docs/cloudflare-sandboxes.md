@@ -140,9 +140,9 @@ smart-HTTP endpoint rejects Bearer tokens (API-style) and wants Basic with
 username `x-access-token`. The placeholder rides inside the base64 payload;
 project egress peels Basic Authorization headers before substituting, so plain
 `git` and `gitCheckout` against github.com work without token bytes entering
-the container. Provisioning also sets `user.name` / `user.email` to the
-first-party **`iterate[bot]`** GitHub App identity so commits show the app
-avatar. Discovery runs per container start (a new connection is picked up on
+the container. Provisioning also sets `user.name` / `user.email` to brand-lowercase
+**`iterate`** plus the first-party GitHub App bot noreply address so commits
+show the app avatar. Discovery runs per container start (a new connection is picked up on
 the next start); with several connections the lexicographically first
 connection name wins; `setEnvVars({ GH_TOKEN })` overrides the pick.
 
