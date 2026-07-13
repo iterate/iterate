@@ -61,26 +61,58 @@ async function assertHealthRoute(httpBaseUrl: string) {
 }
 
 /**
- * The `/api/admin-cookie` bridge is the HTTP-visible admin auth gate on the
- * api worker. Probe both sides: an anonymous call is rejected (401), and the
- * baked admin bearer authenticates and mints the capnweb admin cookie (200) —
- * so a regression in admin api auth fails the smoke.
+ * Operator sessions are the HTTP-visible browser auth gate on the api worker.
+ * Probe anonymous rejection, issuance with the matching deployment secret,
+ * same-origin redemption, and the hardened cookie attributes.
  */
 async function assertItxAdminAuth(httpBaseUrl: string) {
-  const cookieUrl = new URL("/api/admin-cookie", httpBaseUrl);
+  const sessionsUrl = new URL("/api/operator-sessions", httpBaseUrl);
 
-  const anonymous = await fetch(cookieUrl, {
+  const anonymous = await fetch(sessionsUrl, {
+    body: JSON.stringify({ kind: "admin", subject: "runtime-smoke" }),
+    headers: { "content-type": "application/json" },
     method: "POST",
     signal: AbortSignal.timeout(3_000),
   });
   expect(anonymous.status).toBe(401);
 
-  const admin = await fetch(cookieUrl, {
-    headers: { authorization: `Bearer ${SMOKE_ADMIN_API_SECRET}` },
+  const admin = await fetch(sessionsUrl, {
+    body: JSON.stringify({ kind: "admin", subject: "runtime-smoke" }),
+    headers: {
+      authorization: `Bearer ${SMOKE_ADMIN_API_SECRET}`,
+      "content-type": "application/json",
+    },
     method: "POST",
     signal: AbortSignal.timeout(3_000),
   });
   expect(admin.status, await admin.clone().text()).toBe(200);
+  const issued = (await admin.json()) as { browserUrl?: unknown; token?: unknown };
+  expect(typeof issued.browserUrl).toBe("string");
+  expect(issued.browserUrl).toContain("/api/operator-sessions/redeem#token=");
+  expect(issued.browserUrl).not.toContain(SMOKE_ADMIN_API_SECRET);
+  expect(typeof issued.token).toBe("string");
+
+  const redeemUrl = new URL("/api/operator-sessions/redeem", httpBaseUrl);
+  const crossOrigin = await fetch(redeemUrl, {
+    body: issued.token as string,
+    headers: { "content-type": "text/plain", origin: "https://attacker.example" },
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+  expect(crossOrigin.status).toBe(403);
+
+  const redeemed = await fetch(redeemUrl, {
+    body: issued.token as string,
+    headers: { "content-type": "text/plain", origin: new URL(httpBaseUrl).origin },
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+  expect(redeemed.status, await redeemed.clone().text()).toBe(200);
+  const cookie = redeemed.headers.get("set-cookie") ?? "";
+  expect(cookie).toContain("iterate-operator-session=");
+  expect(cookie).toContain("HttpOnly");
+  expect(cookie).toContain("SameSite=Strict");
+  expect(cookie).not.toContain(SMOKE_ADMIN_API_SECRET);
 }
 
 async function assertFullStack(httpBaseUrl: string) {

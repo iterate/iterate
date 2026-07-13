@@ -2,7 +2,6 @@ import { createServerFn } from "@tanstack/react-start";
 import { env } from "cloudflare:workers";
 import type { ProjectDeploymentStatus } from "../project-deployment-status.ts";
 import { itxAuthFromPrincipal } from "~/auth.ts";
-import { authenticateCapnwebAdmin } from "~/auth/admin-auth-cookie.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
 import { isOnboardingActive } from "~/lib/onboarding-agent.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
@@ -76,14 +75,15 @@ export const getRootProjectRedirectServerFn: (input?: {
   }))
   .handler(async ({ context, data }) => {
     // The middleware-resolved principal, not the /api cookie door: the root
-    // redirect must follow the signed-in user's claims even when the capnweb
-    // admin cookie rides the same request.
+    // redirect must follow the request's user or scoped operator claims.
     const principal = context.principal;
     if (!principal) return { kind: "projects" };
 
     try {
       const projects = new ProjectCollectionRpcTarget({
-        auth: itxAuthFromPrincipal(context.config, principal),
+        auth: itxAuthFromPrincipal(context.config, principal, {
+          allowDirectoryFallback: context.operatorSession == null,
+        }),
         config: context.config,
         ctx: context.executionCtx,
       });
@@ -160,7 +160,7 @@ export const getProjectBySlugServerFn: (input: {
     }
 
     // Claims miss: consult the directory (KV cache in front of the auth
-    // worker — src/project-directory.ts). Admin sessions (admin cookie
+    // worker — src/project-directory.ts). Admin sessions (operator cookie
     // or admin-role user) may read any project; a signed-in user may read a
     // project whose owning organization they belong to (covers the
     // stale-claims window right after a create on another device).
@@ -189,10 +189,7 @@ export const getProjectBySlugServerFn: (input: {
 /** Admin cookie, admin-role user, or the capnweb admin header. */
 function isAdminContext(context: RequestContext): boolean {
   return (
-    context.principal?.type === "admin" ||
-    getUserPrincipal(context.principal)?.isAdmin === true ||
-    (context.rawRequest != null &&
-      authenticateCapnwebAdmin({ config: context.config, request: context.rawRequest }) !== null)
+    context.principal?.type === "admin" || getUserPrincipal(context.principal)?.isAdmin === true
   );
 }
 

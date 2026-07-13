@@ -33,6 +33,8 @@ type RunOptions = {
   file?: string;
   /** Project id to connect into. Omit for the global admin session. */
   context?: string;
+  /** Impersonate this user within --context; admin-secret-gated. */
+  as?: string;
   /** JSON object passed to the script as `vars`, e.g. '{"note":"hi"}'. */
   vars?: string;
   /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
@@ -47,7 +49,7 @@ export async function run(options: RunOptions) {
   }
 
   const vars = parseVars(options.vars);
-  const connection = adminConnection(options);
+  const connection = operatorConnection(options, options.context);
 
   // The script body becomes an async function body, so `return` works and
   // `await` is available throughout — same wrapping as every other runtime.
@@ -94,13 +96,15 @@ export function formatScriptError(error: unknown): string {
 type ReplOptions = {
   /** Project id to connect into. Omit for the global admin session. */
   context?: string;
+  /** Impersonate this user within --context; admin-secret-gated. */
+  as?: string;
   /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
   baseUrl?: string;
 };
 
 /** Open a Node REPL with a live itx handle (`itx`, plus `RpcTarget`). */
 export async function startRepl(options: ReplOptions) {
-  const connection = adminConnection(options);
+  const connection = operatorConnection(options, options.context);
   const itx = options.context
     ? connectItx({ ...connection, projectId: options.context })
     : connectItx(connection);
@@ -151,7 +155,7 @@ export async function agentSmoke(options: AgentSmokeOptions) {
 
   const startedAt = Date.now();
   using agent = connectItx({
-    ...adminConnection(options),
+    ...operatorConnection(options),
     agentPath,
     projectId: project,
   });
@@ -187,7 +191,7 @@ export async function agentSmoke(options: AgentSmokeOptions) {
   process.exit(0);
 }
 
-function adminConnection(options: { baseUrl?: string }) {
+function operatorConnection(options: { as?: string; baseUrl?: string }, projectId?: string) {
   const baseUrl =
     options.baseUrl ??
     process.env.APP_CONFIG_BASE_URL?.trim() ??
@@ -201,7 +205,16 @@ function adminConnection(options: { baseUrl?: string }) {
   }
   const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "";
   if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
-  return { auth: { type: "admin-secret" as const, secret }, baseUrl };
+  const subject = options.as?.trim();
+  if (subject && !projectId) throw new Error("--as requires --context <project-id>.");
+  const auth = subject
+    ? {
+        type: "impersonate" as const,
+        secret,
+        token: { type: "user" as const, principal: subject, projectScopes: [projectId!] },
+      }
+    : { type: "admin-secret" as const, secret };
+  return { auth, baseUrl };
 }
 
 function parseVars(raw: string | undefined): Record<string, unknown> {

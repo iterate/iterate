@@ -63,43 +63,18 @@ overrides. When wrapping a local override with `doppler run`, pass
 `--preserve-env=APP_CONFIG_BASE_URL` so Doppler does not replace it with the
 configured deployment URL.
 
-## Local Admin Browser Cookie
+## Operator Browser Sessions
 
-The `/admin` UI uses a root itx WebSocket. Browsers cannot add an
-`Authorization` header to WebSocket handshakes, so admin-token access must
-first be converted into the HttpOnly `iterate-admin-auth` cookie by posting the
-admin token to `/api/admin-cookie`.
-
-For local dev, keep the token inside Doppler and use a one-shot localhost
-bridge. The bridge forwards only the `Set-Cookie` header to your browser and
-then redirects back to OS:
+Do not put `APP_CONFIG_ADMIN_API_SECRET` in browser code or paste it into the
+admin UI. Mint a short-lived project impersonation or explicit platform-admin
+session through the Doppler-backed CLI instead:
 
 ```bash
-doppler run --project os --config dev -- node -e '
-const http = require("node:http");
-const { baseUrl } = require("./.dev-server/dev-server.json");
-const target = baseUrl;
-const port = 5199;
-const server = http.createServer(async (_req, res) => {
-  const response = await fetch(`${target}/api/admin-cookie`, {
-    method: "POST",
-    headers: { "content-type": "text/plain" },
-    body: process.env.APP_CONFIG_ADMIN_API_SECRET,
-  });
-  const setCookie = response.headers.get("set-cookie");
-  if (setCookie) res.setHeader("set-cookie", setCookie);
-  res.statusCode = response.ok ? 302 : 502;
-  res.setHeader("location", `${target}/admin/streams/__null__`);
-  res.end(response.ok ? "admin cookie set" : "admin cookie bridge failed");
-  server.close();
-});
-server.listen(port, "127.0.0.1", () => {
-  console.log(`Open http://localhost:${port}/ once in your browser.`);
-});
-setTimeout(() => server.close(), 60000).unref();
-'
+doppler run --config dev -- pnpm cli session create \
+  --project my-project --as support@nustom.com --open
+
+doppler run --config prd -- pnpm cli session create --admin --open
 ```
 
-Adjust `port` and the Doppler config for the environment you are testing. The
-cookie is host-scoped, not port-scoped, so setting it from `localhost:5199`
-also makes it available to `localhost:<dev-port>`.
+The mechanism and threat model are documented in
+[Operator Sessions](./operator-sessions.md).

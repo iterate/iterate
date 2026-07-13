@@ -1462,10 +1462,11 @@ export type Description = {
 /**
  * Credentials accepted by `UnauthenticatedOs.authenticate`.
  *
- * - `from-server-cookie` — the browser lane: the deployment's admin cookie or
- *   the signed-in user's session cookie riding the WebSocket handshake.
+ * - `from-server-cookie` — the browser lane: an operator/session cookie on an
+ *   exact same-origin HTTP request or WebSocket handshake.
  * - `bearer` — an auth access token presented as RPC data.
  * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).
+ * - `operator-session` — a short-lived grant minted with the admin secret.
  * - `impersonate` — admin-secret-gated fake principal, for test suites that
  *   exercise per-project confinement without minting real users.
  */
@@ -1473,6 +1474,7 @@ export type ItxAuthCredentials =
   | { type: "from-server-cookie" }
   | { type: "bearer"; token: string }
   | { type: "admin-secret"; secret: string }
+  | { type: "operator-session"; token: string }
   | { type: "impersonate"; secret: string; token: ItxAuthToken };
 
 /** Principal shape for `impersonate` credentials. */

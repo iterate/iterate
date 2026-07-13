@@ -1,10 +1,9 @@
 // /admin — the platform admin area. Everything under this layout talks to the
 // platform through a ROOT itx handle: a Cap'n Web session on the global
 // context (/api), not oRPC. The handle only has global authority (access
-// "all") when the request carries admin credentials — the admin-cookie bridge
-// (POST /api/admin-cookie with the admin API secret) sets those for the
-// browser, since WebSockets cannot send Authorization headers. Until then the
-// layout shows an unlock form instead of its children.
+// "all") when the request carries a short-lived operator session. Operators
+// mint those sessions from the Doppler-backed CLI; the platform admin secret
+// is never entered into or stored by the browser.
 
 import { Suspense, useEffect, useState, type CSSProperties } from "react";
 import { ClientOnly, createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
@@ -15,15 +14,6 @@ import {
   SquareTerminalIcon,
   WaypointsIcon,
 } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
 import { Separator } from "@iterate-com/ui/components/separator";
 import {
   Sidebar,
@@ -42,7 +32,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { reconnectItx, useItx } from "~/itx/itx-react.tsx";
+import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
@@ -90,21 +80,14 @@ function AdminConnecting() {
   );
 }
 
-type AdminAuthority =
-  | { status: "checking" }
-  // The WebSocket is up but the handle lacks global authority (no admin cookie
-  // yet) — or the probe failed. Either way the fix is the same: unlock with the
-  // admin API secret.
-  | { status: "locked"; reason: string }
-  | { status: "ready" };
+type AdminAuthority = { status: "checking" } | { status: "locked" } | { status: "ready" };
 
 function AdminGate() {
   // The admin handle is the global itx socket — the SAME connection the rest of
   // the tab uses (one browser itx primitive, one /api route; see
-  // ~/itx/itx-react.tsx). Its global authority comes from the admin cookie on the
-  // WebSocket handshake, so unlock re-dials the socket
-  // (reconnectItx) and useItx re-suspends here, re-running the probe — no
-  // epoch, no private socket, no manual connect lifecycle.
+  // ~/itx/itx-react.tsx). Its global authority comes from the operator cookie on
+  // the WebSocket handshake. The CLI redemption flow loads this page only after
+  // installing that cookie, so this component never handles admin material.
   const itx = useItx();
   const [authority, setAuthority] = useState<AdminAuthority>({ status: "checking" });
 
@@ -123,10 +106,8 @@ function AdminGate() {
         },
         (error: unknown) => {
           if (!cancelled) {
-            setAuthority({
-              status: "locked",
-              reason: error instanceof Error ? error.message : String(error),
-            });
+            console.error("admin authority probe failed", error);
+            setAuthority({ status: "locked" });
           }
         },
       );
@@ -136,12 +117,7 @@ function AdminGate() {
   }, [itx]);
 
   if (authority.status === "checking") return <AdminConnecting />;
-  if (authority.status === "locked") {
-    // Unlock set the admin cookie; evict the pooled socket so useItx re-dials a
-    // handshake that carries it (and re-runs this probe). The pool owns the
-    // socket — we never close it here.
-    return <AdminUnlockForm reason={authority.reason} onUnlocked={() => reconnectItx()} />;
-  }
+  if (authority.status === "locked") return <AdminSessionRequired />;
   // Children just call useItx() for the same global pooled handle — no admin
   // context to thread, and they only render here, under the authorized gate.
   // The ⌘K stream switcher mounts here too: its admin tier dials the same
@@ -154,64 +130,11 @@ function AdminGate() {
   );
 }
 
-function AdminUnlockForm({ reason, onUnlocked }: { reason: string; onUnlocked: () => void }) {
-  const [secret, setSecret] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  async function unlock() {
-    setSubmitting(true);
-    setError(null);
-    try {
-      const response = await fetch("/api/admin-cookie", {
-        body: secret.trim(),
-        credentials: "same-origin",
-        headers: { "content-type": "text/plain" },
-        method: "POST",
-      });
-      if (!response.ok) {
-        throw new Error(response.status === 401 ? "Wrong admin API secret." : response.statusText);
-      }
-      onUnlocked();
-    } catch (unlockError) {
-      setError(unlockError instanceof Error ? unlockError.message : String(unlockError));
-      setSubmitting(false);
-    }
-  }
-
+function AdminSessionRequired() {
   return (
-    <div className="mx-auto mt-16 flex w-full max-w-md flex-col gap-5 px-4">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-lg font-semibold">Admin access required</h1>
-        <p className="text-sm text-muted-foreground">
-          Paste the admin API secret for this deployment to set the admin cookie.
-        </p>
-      </div>
-      <form
-        className="flex flex-col gap-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void unlock();
-        }}
-      >
-        <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="admin-api-secret">Admin API secret</FieldLabel>
-            <Input
-              id="admin-api-secret"
-              type="password"
-              placeholder="Secret"
-              value={secret}
-              onChange={(event) => setSecret(event.target.value)}
-            />
-            <FieldDescription>{reason}</FieldDescription>
-          </Field>
-        </FieldGroup>
-        <Button type="submit" disabled={submitting || secret.trim() === ""}>
-          {submitting ? "Unlocking..." : "Unlock"}
-        </Button>
-      </form>
-      <FieldError>{error}</FieldError>
+    <div className="mx-auto mt-16 flex w-full max-w-md flex-col gap-1 px-4">
+      <h1 className="text-lg font-semibold">Admin session required</h1>
+      <p className="text-sm text-muted-foreground">This browser has no active operator session.</p>
     </div>
   );
 }

@@ -101,7 +101,7 @@ export function GlobalCommandPalette() {
 
   const streamNavigator = useMemo<StreamNavigator | null>(() => {
     if (adminStream != null) {
-      // Admin addresses arbitrary projects through the global (admin-cookie)
+      // Admin addresses arbitrary projects through the global operator session
       // session and stays within the admin explorer routes.
       return {
         source: (path) => ({

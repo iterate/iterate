@@ -10,11 +10,12 @@
 // authenticated RPC target carries, and nowhere else.
 //
 // Credential lanes (see resolveItxAuth):
-//   from-server-cookie — the browser lane: the `iterate-admin-auth` admin
+//   from-server-cookie — the browser lane: a short-lived, signed operator
 //     cookie, else the `iterate_session` cookie verified against the auth
-//     worker's JWKS. Project scopes come from the session's project claims.
+//     worker's JWKS. Ambient cookies require an exact same-origin request.
 //   bearer            — an auth-worker access token presented as RPC data.
 //   admin-secret      — APP_CONFIG_ADMIN_API_SECRET; the CLI/e2e/tooling lane.
+//   operator-session  — a short-lived deployment- and origin-bound grant.
 //   impersonate       — admin-secret-gated fake principal (tests): lets suites
 //     exercise user-vs-user confinement against any deployment without minting
 //     real users.
@@ -24,8 +25,12 @@
 // auth worker's directory as the source of truth — one cached membership
 // lookup widens the live context instead of forcing a token refresh.
 
-import { authenticateCapnwebAdmin } from "./auth/admin-auth-cookie.ts";
 import { authenticateAdminBearer } from "./auth/admin.ts";
+import {
+  authenticateOperatorSession,
+  authenticateOperatorToken,
+  isSameOriginBrowserRequest,
+} from "./auth/operator-session.ts";
 import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
 import {
@@ -40,10 +45,11 @@ import type { AppConfig } from "./config.ts";
 /**
  * Credentials accepted by `UnauthenticatedOs.authenticate`.
  *
- * - `from-server-cookie` — the browser lane: the deployment's admin cookie or
- *   the signed-in user's session cookie riding the WebSocket handshake.
+ * - `from-server-cookie` — the browser lane: an operator/session cookie on an
+ *   exact same-origin HTTP request or WebSocket handshake.
  * - `bearer` — an auth access token presented as RPC data.
  * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).
+ * - `operator-session` — a short-lived grant minted with the admin secret.
  * - `impersonate` — admin-secret-gated fake principal, for test suites that
  *   exercise per-project confinement without minting real users.
  */
@@ -51,6 +57,7 @@ export type ItxAuthCredentials =
   | { type: "from-server-cookie" }
   | { type: "bearer"; token: string }
   | { type: "admin-secret"; secret: string }
+  | { type: "operator-session"; token: string }
   | { type: "impersonate"; secret: string; token: ItxAuthToken };
 
 /** Principal shape for `impersonate` credentials. */
@@ -206,6 +213,16 @@ export async function resolveItxAuth(input: {
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }
 
+  if (credentials.type === "operator-session") {
+    const session = await authenticateOperatorToken({
+      config,
+      requestUrl: input.requestUrl,
+      token: credentials.token,
+    });
+    if (!session) throw new Error("missing or invalid auth");
+    return itxAuthFromPrincipal(config, session.principal, { allowDirectoryFallback: false });
+  }
+
   if (credentials.type === "impersonate") {
     assertAdminSecret(config, credentials.secret);
     return contextFromImpersonatedToken(credentials.token);
@@ -221,13 +238,23 @@ export async function resolveItxAuth(input: {
     return itxAuthFromPrincipal(config, principalFromAccessToken(accessToken));
   }
 
-  // from-server-cookie: the admin cookie wins (browser REPL admin + Playwright
-  // bridge), else the iterate_session cookie.
-  const adminPrincipal = authenticateCapnwebAdmin({
+  // Ambient cookies are never authority on a cross-origin browser socket.
+  // Browsers always send Origin on WebSocket handshakes; non-browser clients
+  // normally omit it and authenticate explicitly.
+  const cookieRequest = new Request(input.requestUrl, { headers: input.headers });
+  if (!isSameOriginBrowserRequest(cookieRequest)) throw new Error("missing or invalid auth");
+
+  // A short-lived operator session wins over the ordinary Iterate session so
+  // an operator can open a narrowly-scoped browser without signing out first.
+  const operatorSession = await authenticateOperatorSession({
     config,
-    request: new Request(input.requestUrl, { headers: input.headers }),
+    request: cookieRequest,
   });
-  if (adminPrincipal) return new ItxAuthContext({ isAdmin: true, principal: "admin" });
+  if (operatorSession) {
+    return itxAuthFromPrincipal(config, operatorSession.principal, {
+      allowDirectoryFallback: false,
+    });
+  }
 
   const auth = createOsIterateAuth(config, input.requestUrl);
   if (!auth) throw new Error("iterate auth is not configured");
@@ -248,15 +275,21 @@ function assertAdminSecret(config: AppConfig, secret: string): void {
  * The itx auth context for an already-authenticated principal — the in-process
  * lane. Server-side code that already holds the request middleware's principal
  * (server functions, server routes) builds its session objects through this
- * instead of re-presenting credentials to the `/api` door: same confinement
- * (claims + directory fallback), no loopback HTTP round trip.
+ * instead of re-presenting credentials to the `/api` door. Ordinary sessions
+ * may refresh stale membership through the directory; scoped operator grants
+ * explicitly disable that widening path.
  */
-export function itxAuthFromPrincipal(config: AppConfig, principal: Principal): ItxAuthContext {
+export function itxAuthFromPrincipal(
+  config: AppConfig,
+  principal: Principal,
+  options: { allowDirectoryFallback?: boolean } = {},
+): ItxAuthContext {
   if (principal.type === "admin") {
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }
   return new ItxAuthContext({
-    directory: authWorkerProjectDirectory(config),
+    directory:
+      options.allowDirectoryFallback === false ? undefined : authWorkerProjectDirectory(config),
     isAdmin: principalIsAdmin(principal),
     principal: principal.userId,
     projectIds: principal.projects.map((project) => project.id),

@@ -10,7 +10,7 @@ one hostname/path routing decision (shared logic in `src/ingress.ts`):
 | Lane            | What                                                                       |
 | --------------- | -------------------------------------------------------------------------- |
 | MCP host        | rewritten onto the app's `/api/mcp` mount                                  |
-| api lanes       | capnweb `/api` (+ `/api/admin-cookie`), Slack webhooks, project ingress    |
+| api lanes       | capnweb `/api`, operator sessions, Slack webhooks, project ingress         |
 | everything else | dashboard SSR + server functions; client assets served from Workers Assets |
 
 Durable Object classes (all same-script bindings — declared by class name in
