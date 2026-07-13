@@ -576,3 +576,110 @@ format checks.
 
 Raw records are in `/tmp/quiet-tail-{baseline,candidate}-{1..5}.log` for the
 life of this workstation.
+
+## 2026-07-14: Second Cumulative Main Comparison
+
+### Revisions And Method
+
+- Candidate: `85682fb5157557918b7120069cb24110230b772f`
+- Baseline: `97a6363042818a79ccfdde12e97fa26c23af1a48`
+  (`origin/main`, fetched and merged immediately before collection)
+- Five independent full rounds per revision. Collection alternated in groups
+  of two, two, and one rounds, restarting between revisions so only one Workers
+  stack was active at a time.
+- Collection ended at `2026-07-13T23:34:42Z`. If this optimization run remains
+  active, the next cumulative comparison is due by `2026-07-14T03:34:42Z`.
+
+The branch-hosted harness used the cheapest correct public operation available
+on each revision for the same semantic result: main used `append()` and
+`runtimeState()`, while the candidate used `appendAck()` and `head()`. Every
+timer ran in Node around an awaited RPC or host-observed delivery, and every
+round asserted replay contents, selected tails, subscription delivery,
+cross-post arrival, and reactivation state. The comparison therefore does not
+depend on a Worker isolate clock advancing while Cloudflare has no network I/O
+in flight.
+
+### Results
+
+Each value is the median of the five per-round statistics. Positive change
+means the candidate used less wall time. Changes below 5% remain neutral.
+
+| Workload                                       |  Main p50 | Candidate p50 | P50 change |  Main p95 | Candidate p95 |    P95 change |
+| ---------------------------------------------- | --------: | ------------: | ---------: | --------: | ------------: | ------------: |
+| Append one 1 KiB event, discard result         |  2.651 ms |      2.193 ms |      17.3% |  3.775 ms |      3.262 ms |         13.6% |
+| Append 100 tiny events in one call             |  7.971 ms |      4.910 ms |      38.4% | 12.207 ms |      8.143 ms |         33.3% |
+| Append 32 concurrent singleton calls           | 10.842 ms |      8.910 ms |      17.8% | 15.012 ms |     13.582 ms |          9.5% |
+| Append one 256 KiB event, discard result       | 10.620 ms |      7.951 ms |      25.1% | 16.216 ms |     12.829 ms |         20.9% |
+| Retry one acknowledged 256 KiB event           |  3.516 ms |      2.440 ms |      30.6% |  4.350 ms |      3.710 ms |         14.7% |
+| Read a hot stream head                         |  0.642 ms |      0.538 ms |      16.3% |  1.026 ms |      0.726 ms |         29.3% |
+| Read 500 dense 4 KiB events                    | 14.884 ms |     12.753 ms |      14.3% | 21.588 ms |     21.080 ms |  neutral 2.4% |
+| Read 20 selected events from 2,000             |  0.854 ms |      0.795 ms |       6.9% |  2.247 ms |      2.071 ms |          7.8% |
+| Read latest selected event                     |  0.796 ms |      0.596 ms |      25.2% |  1.053 ms |      0.697 ms |         33.9% |
+| Replay 500 128-byte events into a subscription |  6.987 ms |      5.871 ms |      16.0% | 11.640 ms |     10.943 ms |          6.0% |
+| Append through delivery to one live subscriber |  1.385 ms |      1.087 ms |      21.5% |  3.573 ms |      3.225 ms |          9.8% |
+| Append through delivery to 25 live subscribers |  4.814 ms |      4.422 ms |       8.1% |  6.924 ms |      6.689 ms |  neutral 3.4% |
+| Dense one-event durable cross-post             |  4.232 ms |      3.101 ms |      26.7% |  7.286 ms |      4.969 ms |         31.8% |
+| Sparse durable cross-post, 1 of 100 events     |  6.315 ms |      4.349 ms |      31.1% | 10.281 ms |     10.005 ms |  neutral 2.7% |
+| Head read after forced reactivation            |  2.523 ms |      2.199 ms |      12.8% |  3.649 ms |      3.693 ms | neutral -1.2% |
+
+The equal-workload geometric mean is **21.0% lower p50**, **15.4% lower p95**,
+and **22.8% lower mean latency**. All 15 p50 comparisons improve by at least
+6.9%. Eleven p95 comparisons improve by at least 5%; three are positive but
+neutral, and the only negative p95 is the neutral 1.2% cold-reactivation
+shift.
+
+The direct throughput translations at median p50 are:
+
+- 100-event append capacity rises from 12.5k to 20.4k events/s, **+62.3%**.
+- 32 concurrent singleton calls rise from 3.0k to 3.6k calls/s, **+21.7%**.
+- 500-event replay rises from 71.6k to 85.2k events/s, **+19.0%**.
+- Sparse 1-of-100 cross-post input rises from 15.8k to 23.0k events/s,
+  **+45.2%**.
+
+These are cumulative branch-versus-current-main results, not a sum of the
+percentages from isolated experiments. The absolute local numbers are slower
+than the first comparison after both revisions incorporated current main's
+observability work; the fair relative comparison improved from 13.1% to 21.0%
+at equal-workload p50.
+
+### Current Cost And Collapse Assessment
+
+Before this ledger entry, the current branch-versus-main diff was 99 files.
+Production was `+4,698/-1,386` lines (net `+3,312`), tests and e2e were
+`+6,901/-1,046` (net `+5,855`), and generated APIs were `+150/-44`. This is
+still substantial source complexity. It has not continued to balloon since
+the first cumulative candidate, whose production diff was net `+3,322` lines.
+
+The large stateful files have been split by ownership rather than hidden:
+`stream-storage.ts`, `stream-subscribers.ts`, the delivery frame reader, and
+the cursor store total 3,944 lines now, versus 3,961 lines for storage and
+subscribers at the first comparison. The newer raw cursor store removes sqlfu
+and a duplicate schema authority; derived homogeneous inserts add one bounded
+SQL specialization; deferred quiet-tail acknowledgement removes 11 production
+lines. No newer change adds a queue, service, coordinator, timer, storage
+engine, protocol, or distributed consistency boundary.
+
+Operationally the design can still collapse into one Stream Durable Object,
+one SQLite database, and ordinary Workers RPC. Source-level collapse is not
+yet elegant: exact retry frames, cursor epochs, sparse scans, checkpoint
+scheduling, and compact RPC result forms remain real branches with a large
+test matrix. They are correctness or measured-performance mechanisms, not
+legacy compatibility paths. A later rewrite can erase production data and
+replace their internal organization, but should retain the schema-v7 row
+shape, public semantic projections, frozen-clock-safe benchmark, and
+crash/retry tests as executable constraints.
+
+The incremental correctness cost since the first cumulative comparison is
+bounded. A successful quiet-tail push acknowledgement may replay one stable
+frame with the same delivery ID if the isolate dies before the next claim or
+lifecycle flush. The homogeneous insert specialization has no semantic cost;
+it verifies its narrow preconditions and falls back otherwise. The destructive
+rollout and rollback cost remains unchanged: existing Stream state must be
+erased for schema v7, and rollback after v7 also requires erasing Stream state.
+
+The result is strong enough to advance as a destructive preview candidate.
+Production shipping still needs a preview workload run, failure/retry soak,
+and explicit wipe/rollback sign-off. It does not justify bypassing those gates.
+
+Raw records are in `/tmp/cumulative-20260714-{main,candidate}-{1..5}.log` for
+the life of this workstation.
