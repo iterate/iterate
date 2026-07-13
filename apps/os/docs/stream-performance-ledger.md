@@ -168,3 +168,90 @@ merge solely on this local benchmark: schema-v7 wipe/rollback procedure and a
 preview workload run still need explicit sign-off, and the source-complexity
 consolidation map should be retained even if consolidation happens after the
 performance branch ships.
+
+## 2026-07-13: WebSocket Coalescing Rejected
+
+Source review found one bounded transport experiment not already covered by
+the Stream work: combine Cap'n Web messages emitted synchronously into one
+newline-delimited WebSocket frame, with a 64 KiB cap and a microtask flush. It
+uses no timer, which is important because a timer is both a latency floor and
+unreliable evidence under Workers' frozen-clock behavior.
+
+The prototype replaced Cap'n Web's WebSocket transport symmetrically in the
+Worker, Node client, and browser client. Unit tests proved ordering, frame
+caps, connect-time queuing, and flush-before-abort. Two policies were measured
+against the exact pre-experiment branch commit `906724c25`:
+
+| Policy                          | 32 concurrent appends | Single append |     Hot head | Equal-workload p50 |
+| ------------------------------- | --------------------: | ------------: | -----------: | -----------------: |
+| Delay all messages to microtask |          16.0% faster |  33.3% slower | 12.4% slower |        3.4% faster |
+| Send first, coalesce sync tail  |          11.1% slower |  17.5% slower | 13.4% slower |        7.1% slower |
+
+The first policy demonstrates that fewer frames can help a synthetic burst,
+but it imposes an unacceptable latency floor on the dominant singleton case.
+The leading-edge policy avoids intentionally delaying the first frame, yet
+the custom transport's encoding and scheduling overhead erased the burst win
+and regressed the suite. One-subscriber live delivery stayed neutral in the
+reverse-order comparison (`2.6%` faster), so the rejection is driven by broad
+RPC overhead rather than a delivery correctness failure.
+
+Each row uses the median of five full rounds per revision. Collection order
+was baseline, all-delayed, leading-edge, then baseline again; the leading-edge
+numbers above use the final reverse-order baseline. Host timers enclosed every
+awaited RPC or observed delivery, and all workload correctness assertions
+passed. Raw JSON remains in `/tmp/stream-coalesce-baseline-{2..11}.log`,
+`/tmp/stream-coalesce-candidate-{1..5}.log`, and
+`/tmp/stream-coalesce-leading-{1..5}.log` for the life of this workstation.
+
+The prototype was deleted completely. It adds no production protocol, code,
+or compatibility burden. Do not resume it unless a future Cap'n Web release
+implements coalescing below serialization overhead and a deployed A/B can
+show a burst win without a singleton p95 regression.
+
+## Source Audit And Consolidation Map
+
+The follow-up audit pinned workerd at
+`a51ee4b96980cec92d3628f39f74a86e451d8ad1`, capnweb at
+`ee7ca6f5f15dfc238c8d877e23ad396de67d68ab`, and Cloudflare's documentation at
+`2b08a67a41da1a521aecbcf465893abae1e9a6df`. Its implications are:
+
+- Cap'n Web promise pipelining applies through an unresolved returned
+  capability. It does not merge 32 sibling calls, and an awaited append cannot
+  discard its result before commit/error acknowledgement.
+- SQLite writes made synchronously in one Durable Object turn already collect
+  in the runtime's implicit transaction and remain behind the output gate.
+  Application-level storage batching would add a queueing delay and duplicate
+  runtime semantics.
+- Legacy KV offers no useful manual flush primitive. Moving the event log to
+  it would rebuild ordered scans, indexes, chunking, cursor fencing, garbage
+  collection, and large-value handling around its 128 KiB value limit. Do not
+  pursue that branch.
+- Output gates, cursor epochs, persisted pending frames, failure/backoff state,
+  wake generations, and network-bracketed clock reads are irreducible
+  correctness mechanisms. They should not be abstracted away or deleted.
+
+The accidental complexity is concentrated in delivery-frame construction:
+parallel `ReadBatchProjection`/`ReadBatchResult` shapes, all/durable arrays,
+duplicate byte arrays, two fresh-tail projections, and overlapping raw-range,
+projection, and selector caches. Consolidation should proceed without changing
+the measured data path:
+
+1. Introduce one transport-free `DeliveryFrameReader` with a request object,
+   one `DeliveryFrame` containing all/durable views, and one cache-admission
+   function.
+2. Keep push, wake, ephemeral, and webhook state machines separate, but share
+   a small `DeliveryFence { epoch, configuredOffset }` value.
+3. Move the cursor interface and SQLite implementation into
+   `subscription-cursor-store.ts`; deduplicate in-memory claim/failure reset
+   plumbing while preserving named transitions and specialized statements.
+4. Leave Stream DO append orchestration and singleton/small-batch/chunked
+   insertion specializations in place; these account for measured gains.
+5. Reuse the Agent history-item contract schema for checkpoint chunk parsing,
+   then make reader/cache and corruption tests table-driven without deleting
+   crash, epoch, poison, reentrancy, eviction, or frozen-clock cases.
+
+This structural pass is expected to remove roughly 250-440 production lines
+and 500-900 test lines without a performance trade. The exact-type SQL
+prefilter and sparse-fill branches could remove more, but they have measured
+sparse wins and therefore require isolated deletion benchmarks rather than
+being folded into the structural cleanup.
