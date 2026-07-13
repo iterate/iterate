@@ -40,16 +40,23 @@ buffering — not a blanket intercept limitation.
 
 1. **Secret DO**: removed hard **501** on `Upgrade: websocket`. Upgrades use the
    same substitute-then-`fetch` surface as ordinary secret egress (headers/URL
-   only; no frame-level substitution).
+   only; no frame-level substitution). Secret DO also **pair-bridges** so the
+   socket that crosses Secret→Project is a freshly minted pair client.
 2. **Approval hold**: WebSocket upgrades that match a `hold` rule are **denied**
    with a clear message (hold buffers the body and is incompatible with
    upgrades).
-3. **Explicit pair bridge** (`websocket-bridge.ts`): project `#egress` always
-   pair-bridges accepted upgrades (`WebSocketPair` + half-open pump) so the
-   sandbox client leg is owned after handshake substitution — not a fragile
-   pass-through of `Response.webSocket`.
-4. **`sanitizeResponse`**: preserves `webSocket` (previously reconstructed body
-   only, which silently killed upgrades on the secret path).
+3. **Explicit pair bridge** (`websocket-bridge.ts`): project `#egress` and Secret
+   DO pair-bridge accepted upgrades (`WebSocketPair` + half-open pump).
+4. **`sanitizeResponse`**: preserves `webSocket` via ResponseInit only (the slot
+   that survives DO fetch hops). `defineProperty` fallback is **unit-test only**;
+   production throws rather than returning a silent non-upgrade.
+
+## Known limitations (GA blockers — Claude Fable review)
+
+- **Secret-header WSS e2e not yet landed** (handshake with `getSecret` placeholder).
+- Long-lived bridges pin the Project DO (and Secret DO on secret path) as a
+  non-hibernatable frame pump — no per-project socket cap, no hibernation API.
+- Double-bridge (Secret then Project) is correct but wasteful.
 
 ## How to re-run
 

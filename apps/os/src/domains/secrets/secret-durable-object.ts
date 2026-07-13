@@ -19,6 +19,7 @@ import type { StreamEventInput } from "../streams/schemas.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.ts";
 import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
+import { maybeBridgeWebSocketResponse } from "./websocket-bridge.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
@@ -227,22 +228,30 @@ export class SecretDurableObject extends DurableObject<Env> {
       const response = await fetchWithCredentialRedirects(substituted, {
         assertUrlAllowed: (url) => assertOriginPinned(url, state),
       });
-      if (response.status !== 401 || retry === null) return response;
+      // Pair-bridge inside the Secret DO so the socket that crosses the
+      // Secret→Project fetch hop is a freshly minted pair client (constructor
+      // webSocket slot), not a raw upstream fetch socket. Project egress may
+      // bridge again for the ContainerProxy handoff; double-bridge is correct
+      // if slightly wasteful.
+      if (response.status !== 401 || retry === null) {
+        return maybeBridgeWebSocketResponse(request, response);
+      }
 
       try {
         await this.#refresh(retry);
       } catch {
         // The provider (or config) refused the refresh: the original 401 is
         // the caller's answer, not an opaque exception.
-        return response;
+        return maybeBridgeWebSocketResponse(request, response);
       }
       const retriedState = await this.#snapshot();
       const retried = await this.#substitute(retry.source, retriedState);
       await this.#appendUsed(request.url);
       await this.#assertGithubInstallationUseAuthorized(retriedState.refresh);
-      return await fetchWithCredentialRedirects(retried, {
+      const retriedResponse = await fetchWithCredentialRedirects(retried, {
         assertUrlAllowed: (url) => assertOriginPinned(url, retriedState),
       });
+      return maybeBridgeWebSocketResponse(request, retriedResponse);
     } catch (error) {
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       throw error;

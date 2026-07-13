@@ -3,6 +3,7 @@ import {
   bridgeUpstreamWebSocket,
   isWebSocketUpgrade,
   maybeBridgeWebSocketResponse,
+  normalizeWebSocketClose,
 } from "./websocket-bridge.ts";
 
 function mockSocket() {
@@ -47,6 +48,21 @@ describe("maybeBridgeWebSocketResponse", () => {
     const request = new Request("https://example.com", { headers: { Upgrade: "websocket" } });
     const response = new Response("nope", { status: 400 });
     expect(maybeBridgeWebSocketResponse(request, response)).toBe(response);
+  });
+});
+
+describe("normalizeWebSocketClose", () => {
+  test("forwards normal codes and clamps reserved ones", () => {
+    expect(normalizeWebSocketClose(1000, "bye")).toEqual({ code: 1000, reason: "bye" });
+    expect(normalizeWebSocketClose(1005, "x")).toEqual({ code: 1000, reason: "x" });
+    expect(normalizeWebSocketClose(1006, "")).toEqual({});
+    expect(normalizeWebSocketClose(1015, "tls")).toEqual({ code: 1000, reason: "tls" });
+    expect(normalizeWebSocketClose(1004, "bad")).toEqual({ code: 1000, reason: "bad" });
+  });
+
+  test("truncates long reasons", () => {
+    const long = "a".repeat(200);
+    expect(normalizeWebSocketClose(1000, long).reason?.length).toBe(123);
   });
 });
 

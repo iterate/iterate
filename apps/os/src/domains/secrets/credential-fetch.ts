@@ -79,40 +79,47 @@ export async function fetchWithCredentialRedirects(
  * body remain the provider's response.
  *
  * WebSocket upgrades: reconstructing with only `body` drops `webSocket` and
- * silently turns a successful upgrade into a broken non-upgrade response.
- * Preserve the socket when present (project egress pair-bridges the client leg).
+ * turns a successful upgrade into a broken non-upgrade response. Preserve the
+ * socket via ResponseInit so workerd's **internal** webSocket slot is set —
+ * that is what survives a Durable Object `fetch` hop. A defineProperty
+ * own-property does **not** survive that hop and would fail silently at the
+ * Project DO, so production refuses that path (throws) instead of lying.
  *
- * workerd accepts `webSocket` in ResponseInit (and status 101). Node/undici
- * rejects 101 and ignores `webSocket` in init — fall back to defineProperty so
- * unit tests and any non-workerd path still keep the socket reference.
+ * Node/undici (unit tests): no WebSocketPair, constructor ignores webSocket
+ * and rejects status 101 — defineProperty is allowed only there so tests can
+ * still assert the preservation intent without workerd.
  */
 function sanitizeResponse(response: Response): Response {
   const headers = new Headers(response.headers);
   for (const name of RESPONSE_URL_HEADERS) headers.delete(name);
   const socket = response.webSocket;
   if (socket != null) {
-    let sanitized: Response;
     try {
-      sanitized = new Response(null, {
+      const sanitized = new Response(null, {
         headers,
         status: response.status,
         statusText: response.statusText,
         webSocket: socket,
       });
+      if (sanitized.webSocket != null) return sanitized;
     } catch {
-      sanitized = new Response(null, {
+      // fall through
+    }
+    // Unit-test only: workerd always has WebSocketPair; Node forks pool does not.
+    if (typeof WebSocketPair === "undefined") {
+      const sanitized = new Response(null, {
         headers,
         status: 200,
         statusText: response.statusText,
       });
-    }
-    if (sanitized.webSocket == null) {
       Object.defineProperty(sanitized, "webSocket", {
         configurable: true,
         value: socket,
       });
+      return sanitized;
     }
-    return sanitized;
+    // Production: do not return a Response that looks OK but cannot upgrade.
+    throw new SecretSubstitutionError("secret_fetch_failed");
   }
   return new Response(response.body, {
     headers,

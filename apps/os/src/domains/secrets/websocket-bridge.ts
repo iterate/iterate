@@ -68,7 +68,29 @@ export function bridgeUpstreamWebSocket(upstream: WebSocket, source?: Response):
   });
 }
 
+/** Close codes the WebSocket API forbids setting (throws RangeError). */
+const NON_SETTABLE_CLOSE_CODES = new Set([1004, 1005, 1006, 1015]);
+
+/** Pure helper for tests: clamp close code/reason before `WebSocket.close`. */
+export function normalizeWebSocketClose(
+  code: number,
+  reason: string,
+): { code?: number; reason: string } {
+  const truncated =
+    typeof reason === "string" && reason.length > 0
+      ? // Spec: reason is at most 123 UTF-8 bytes; approximate with JS length.
+        reason.length > 123
+        ? reason.slice(0, 123)
+        : reason
+      : "";
+  if (!Number.isFinite(code) || NON_SETTABLE_CLOSE_CODES.has(code) || code < 1000 || code > 4999) {
+    return truncated === "" ? {} : { code: 1000, reason: truncated };
+  }
+  return truncated === "" ? { code } : { code, reason: truncated };
+}
+
 function pipeWebSocket(from: WebSocket, to: WebSocket): void {
+  // Listeners before any further accept-driven activity (accept already ran).
   from.addEventListener("message", (event: MessageEvent) => {
     try {
       // event.data may be string | ArrayBuffer | Blob depending on binaryType.
@@ -79,11 +101,13 @@ function pipeWebSocket(from: WebSocket, to: WebSocket): void {
   });
   from.addEventListener("close", (event: CloseEvent) => {
     try {
-      // 1005 / 1006 are reserved and must not be forwarded as close codes.
-      if (event.code === 1005 || event.code === 1006) {
+      const normalized = normalizeWebSocketClose(event.code, event.reason);
+      if (normalized.code === undefined) {
         to.close();
+      } else if (normalized.reason === undefined || normalized.reason === "") {
+        to.close(normalized.code);
       } else {
-        to.close(event.code, event.reason);
+        to.close(normalized.code, normalized.reason);
       }
     } catch {
       // already closed
@@ -92,6 +116,11 @@ function pipeWebSocket(from: WebSocket, to: WebSocket): void {
   from.addEventListener("error", () => {
     try {
       to.close(1011, "websocket error");
+    } catch {
+      // already closed
+    }
+    try {
+      from.close(1011, "websocket error");
     } catch {
       // already closed
     }
