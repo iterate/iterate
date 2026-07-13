@@ -17,6 +17,8 @@ const MEDIUM_PAYLOAD = "m".repeat(4_096);
 const LARGE_PAYLOAD = "l".repeat(256 * 1_024);
 const TAIL_SAMPLES = Number(process.env.STREAM_BENCH_TAIL_SAMPLES ?? "0");
 const APPEND_SAMPLES = Number(process.env.STREAM_BENCH_APPEND_SAMPLES ?? "0");
+const BATCH_SAMPLES = Number(process.env.STREAM_BENCH_BATCH_SAMPLES ?? "0");
+const BATCH_SIZE = Number(process.env.STREAM_BENCH_BATCH_SIZE ?? "100");
 const CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_CROSSPOST_SAMPLES ?? "0");
 const COLD_SAMPLES = Number(process.env.STREAM_BENCH_COLD_SAMPLES ?? "0");
 
@@ -159,20 +161,37 @@ test.skipIf(!ENABLED)(
 
     {
       using stream = project.streams.get(`/bench/${runId}/append-batch`);
+      const batchSamples = BATCH_SAMPLES || 20;
       const samples = await measure(
-        20,
+        batchSamples,
         async (iteration) => {
           await commitDiscardingResult(
             stream,
-            ...Array.from({ length: 100 }, (_, index) =>
+            ...Array.from({ length: BATCH_SIZE }, (_, index) =>
               event({ marker: `batch-${iteration}-${index}` }),
             ),
           );
         },
         3,
       );
-      metrics.append_batch_100_tiny = summarize(samples, 100);
-      expect((await readHead(stream)).maxOffset).toBeGreaterThanOrEqual(2_300);
+      metrics[`append_batch_${BATCH_SIZE}_tiny`] = summarize(samples, BATCH_SIZE);
+      const head = await readHead(stream);
+      expect(head.maxOffset).toBeGreaterThanOrEqual((batchSamples + 3) * BATCH_SIZE);
+      const replaySize = Math.min(BATCH_SIZE, 500);
+      expect(
+        (
+          await stream.getEvents({
+            afterOffset: head.maxOffset - replaySize,
+            eventTypes: [EVENT_TYPE],
+            limit: replaySize,
+          })
+        ).map((entry) => markerOf(entry.payload)),
+      ).toEqual(
+        Array.from(
+          { length: replaySize },
+          (_, index) => `batch-${batchSamples - 1}-${BATCH_SIZE - replaySize + index}`,
+        ),
+      );
     }
 
     {

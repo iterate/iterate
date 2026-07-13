@@ -434,3 +434,43 @@ Raw records are in `/tmp/raw-cursor-crosspost-{baseline,candidate}-{1..4}.log`,
 `/tmp/raw-cursor-cold-{baseline,candidate}-{1..4}.log`, and
 `/tmp/raw-cursor-{baseline,candidate}-{1..5}.log` for the life of this
 workstation.
+
+## 2026-07-13: Packed Keyless Batch Insert Rejected
+
+A prototype replaced the bounded multi-row inserts for large keyless durable
+batches with one bound JSON array. SQLite's `json_each()` derived each event's
+offset and type and stored `cast(value as blob)`, reducing a 100-event append
+from four insert statements to one and a 500-event append from sixteen to one.
+The fast path remained synchronous SQLite in the current turn and output gate;
+it did not introduce legacy KV, an application flush queue, or a second
+persistence model.
+
+Unit tests proved byte-exact JSON storage for Unicode and control characters,
+whole-statement rollback on a conflicting offset, bounded fallback above the
+1 MiB packed cap, and one serialization per event. All 360 Stream-domain tests,
+OS typecheck, focused lint, and format checks passed before measurement.
+
+Five host-timed rounds per revision compared exact parent `5da765519` with the
+prototype. Every sample enclosed the awaited append RPC, and every round read
+the final batch back through workerd and asserted all markers. Lower is better:
+
+| Batch width | Samples/side |     Parent p50 / p95 / mean |     Packed p50 / p95 / mean | Packed change p50 / p95 / mean |
+| ----------- | -----------: | --------------------------: | --------------------------: | -----------------------------: |
+| 100 events  |        1,000 |    5.283 / 8.768 / 5.856 ms |    5.456 / 9.231 / 5.973 ms |      3.3% / 5.3% / 2.0% slower |
+| 500 events  |          500 | 15.913 / 24.175 / 17.132 ms | 16.208 / 24.554 / 17.234 ms |      1.9% / 1.6% / 0.6% slower |
+
+Only three of five 100-event rounds and two of five 500-event rounds improved
+by mean. The larger case deliberately amplified statement-count savings, yet
+SQLite's JSON virtual-table parsing and reconstruction still erased them. The
+prototype also required a second insertion representation, byte-cap branch,
+packing buffer, and fallback state, so retaining it would increase source
+complexity for negative throughput.
+
+The production prototype and its implementation-specific tests were deleted.
+The benchmark improvements remain: `STREAM_BENCH_BATCH_SAMPLES` and
+`STREAM_BENCH_BATCH_SIZE` can amplify future ingest experiments, while a
+bounded replay assertion verifies the measured batch instead of checking only
+the stream head. Raw records are in
+`/tmp/packed-batch-{baseline,candidate}-{1..5}.log` and
+`/tmp/packed-batch500-{baseline,candidate}-{1..5}.log` for the life of this
+workstation.
