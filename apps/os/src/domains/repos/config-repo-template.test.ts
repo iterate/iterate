@@ -68,3 +68,14 @@ test("template app links use custom-domain subdomains only for custom host route
     'hostKind === "custom" ? `${slug}.${url.host}` : `${slug}--${url.host}`',
   );
 });
+
+
+test("template does not seed pirate agent instructions", () => {
+  for (const file of PROJECT_REPO_INITIAL_FILES) {
+    expect(file.content).not.toMatch(/pirate/i);
+    expect(file.content).not.toContain(
+      "Additional project instruction: speak like a pirate in all user-facing chat messages.",
+    );
+    expect(file.content).not.toContain("Do not speak like a pirate unless explicitly requested.");
+  }
+});
