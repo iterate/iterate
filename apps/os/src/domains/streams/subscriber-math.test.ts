@@ -26,7 +26,7 @@ describe("tuning constants", () => {
     expect(DELIVERY_BATCH_LIMIT).toBe(1000);
     expect(DELIVERY_BATCH_BYTE_LIMIT).toBe(1024 * 1024);
     expect(PUSH_DELIVERY_BATCH_BYTE_LIMIT).toBe(4 * 1024 * 1024);
-    expect(PUSH_DELIVERY_BATCH_LIMIT).toBe(4000);
+    expect(PUSH_DELIVERY_BATCH_LIMIT).toBe(8000);
   });
 });
 

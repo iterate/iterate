@@ -1639,10 +1639,10 @@ describe("StreamSubscribers", () => {
     await h.settle();
 
     expect(connection.batches.slice(1).map((batch) => batch.events.length)).toEqual([
-      DELIVERY_BATCH_LIMIT,
-      DELIVERY_BATCH_LIMIT,
-      DELIVERY_BATCH_LIMIT,
-      DELIVERY_BATCH_LIMIT,
+      ...Array.from(
+        { length: PUSH_DELIVERY_BATCH_LIMIT / DELIVERY_BATCH_LIMIT },
+        () => DELIVERY_BATCH_LIMIT,
+      ),
       500,
     ]);
     expect(h.pushes.map((batch) => batch.events.length)).toEqual([PUSH_DELIVERY_BATCH_LIMIT, 500]);
