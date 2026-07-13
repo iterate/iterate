@@ -1,11 +1,10 @@
 import { describe, expect, test } from "vitest";
 import type { AppConfig } from "../../config.ts";
 import {
+  applyOpenAiAiGatewayCacheHeaders,
   isOpenAiPublicApiRequest,
   openAiAiGatewayRoutingFromConfig,
-  openAiAiGatewayUrl,
   openAiGatewayBindingEndpoint,
-  rewriteOpenAiRequestToAiGateway,
 } from "./openai-ai-gateway-egress.ts";
 
 describe("isOpenAiPublicApiRequest", () => {
@@ -20,98 +19,35 @@ describe("isOpenAiPublicApiRequest", () => {
   });
 });
 
-describe("openAiAiGatewayUrl", () => {
-  test("maps /v1/<rest> onto the OpenAI provider-native gateway path", () => {
-    expect(
-      openAiAiGatewayUrl({
-        accountId: "acc",
-        gatewayId: "default",
-        openAiUrl: "https://api.openai.com/v1/chat/completions",
-      }),
-    ).toBe("https://gateway.ai.cloudflare.com/v1/acc/default/openai/chat/completions");
-
-    expect(
-      openAiAiGatewayUrl({
-        accountId: "acc",
-        gatewayId: "default",
-        openAiUrl: "https://api.openai.com/v1/responses?foo=1",
-      }),
-    ).toBe("https://gateway.ai.cloudflare.com/v1/acc/default/openai/responses?foo=1");
-  });
-
-  test("handles bare /v1", () => {
-    expect(
-      openAiAiGatewayUrl({
-        accountId: "acc",
-        gatewayId: "gw",
-        openAiUrl: "https://api.openai.com/v1",
-      }),
-    ).toBe("https://gateway.ai.cloudflare.com/v1/acc/gw/openai");
-  });
-});
-
 describe("openAiGatewayBindingEndpoint", () => {
-  test("includes query string", () => {
-    expect(openAiGatewayBindingEndpoint("https://api.openai.com/v1/chat/completions?x=1")).toBe(
-      "chat/completions?x=1",
+  test("includes path after /v1 and query string", () => {
+    expect(openAiGatewayBindingEndpoint("https://api.openai.com/v1/chat/completions")).toBe(
+      "chat/completions",
+    );
+    expect(openAiGatewayBindingEndpoint("https://api.openai.com/v1/responses?foo=1")).toBe(
+      "responses?foo=1",
     );
   });
 });
 
-describe("rewriteOpenAiRequestToAiGateway", () => {
-  test("injects platform key, metadata, and skip-cache; drops host", async () => {
-    const body = JSON.stringify({ model: "gpt-4.1-mini", messages: [] });
-    const request = new Request("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        authorization: 'Bearer getSecret({ path: "/secrets/openai-api-key" })',
-        "content-type": "application/json",
-        host: "api.openai.com",
-      },
-      body,
-    });
-
-    const rewritten = await rewriteOpenAiRequestToAiGateway({
-      request,
-      accountId: "acc-1",
-      gatewayId: "default",
-      openaiApiKey: "sk-platform",
-      metadata: { projectId: "prj_abc", source: "project-egress", caller: "sandbox" },
-      cfAigAuthorization: "cf-token",
-      bodyForCacheKey: { model: "gpt-4.1-mini", messages: [] },
-    });
-
-    expect(rewritten.url).toBe(
-      "https://gateway.ai.cloudflare.com/v1/acc-1/default/openai/chat/completions",
-    );
-    expect(rewritten.headers.get("authorization")).toBe("Bearer sk-platform");
-    expect(rewritten.headers.get("cf-aig-skip-cache")).toBe("true");
-    expect(rewritten.headers.get("cf-aig-authorization")).toBe("Bearer cf-token");
-    expect(rewritten.headers.get("host")).toBeNull();
-    expect(JSON.parse(rewritten.headers.get("cf-aig-metadata")!)).toEqual({
-      projectId: "prj_abc",
-      source: "project-egress",
-      caller: "sandbox",
-    });
-    expect(await rewritten.text()).toBe(body);
+describe("applyOpenAiAiGatewayCacheHeaders", () => {
+  test("sets skip-cache when no TTL", async () => {
+    const headers: Record<string, string> = {};
+    await applyOpenAiAiGatewayCacheHeaders({ headers, body: { model: "x" } });
+    expect(headers["cf-aig-skip-cache"]).toBe("true");
+    expect(headers["cf-aig-cache-ttl"]).toBeUndefined();
   });
 
-  test("sets cache-ttl and cache-key when responseCacheTtlSeconds is set", async () => {
-    const rewritten = await rewriteOpenAiRequestToAiGateway({
-      request: new Request("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        body: "{}",
-      }),
-      accountId: "acc",
-      gatewayId: "default",
-      openaiApiKey: "sk",
-      metadata: { projectId: "prj_x", source: "project-egress" },
+  test("sets cache-ttl and cache-key when TTL is set", async () => {
+    const headers: Record<string, string> = {};
+    await applyOpenAiAiGatewayCacheHeaders({
+      headers,
+      body: { model: "gpt-4.1-mini" },
       responseCacheTtlSeconds: 600,
-      bodyForCacheKey: { model: "gpt-4.1-mini" },
     });
-    expect(rewritten.headers.get("cf-aig-cache-ttl")).toBe("600");
-    expect(rewritten.headers.get("cf-aig-cache-key")).toMatch(/^[0-9a-f]{64}$/);
-    expect(rewritten.headers.get("cf-aig-skip-cache")).toBeNull();
+    expect(headers["cf-aig-cache-ttl"]).toBe("600");
+    expect(headers["cf-aig-cache-key"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(headers["cf-aig-skip-cache"]).toBeUndefined();
   });
 });
 
@@ -125,33 +61,28 @@ describe("openAiAiGatewayRoutingFromConfig", () => {
     expect(openAiAiGatewayRoutingFromConfig(config)).toBeNull();
   });
 
-  test("maps config fields including optional response cache TTL", () => {
-    const base = {
-      openAiApiKey: { exposeSecret: () => "sk-x" },
-      cloudflareAiGateway: { id: "default" },
-      cloudflare: {
-        accountId: "acc",
-        apiToken: { exposeSecret: () => "cfut_x" },
-      },
-    };
-
+  test("maps gateway id, platform key, and optional cache TTL", () => {
     expect(
       openAiAiGatewayRoutingFromConfig({
-        ...base,
+        openAiApiKey: { exposeSecret: () => "sk-x" },
         cloudflareAiGateway: { id: "default" },
+        cloudflare: { accountId: "acc" },
       } as unknown as AppConfig),
     ).toEqual({
-      accountId: "acc",
       gatewayId: "default",
       openaiApiKey: "sk-x",
-      cfAigAuthorization: "cfut_x",
     });
 
     expect(
       openAiAiGatewayRoutingFromConfig({
-        ...base,
+        openAiApiKey: { exposeSecret: () => "sk-x" },
         cloudflareAiGateway: { id: "e2e", responseCacheTtlSeconds: 600 },
+        cloudflare: { accountId: "acc" },
       } as unknown as AppConfig),
-    ).toMatchObject({ gatewayId: "e2e", responseCacheTtlSeconds: 600 });
+    ).toEqual({
+      gatewayId: "e2e",
+      openaiApiKey: "sk-x",
+      responseCacheTtlSeconds: 600,
+    });
   });
 });

@@ -209,15 +209,14 @@ Wiring (three points):
 
 ### OpenAI → Cloudflare AI Gateway
 
-Outbound calls to **`api.openai.com`** are rewritten at project egress onto the
-deployment's Cloudflare AI Gateway OpenAI provider-native base (same BYOK key
-and gateway id the agent Durable Object uses). The platform OpenAI key is
-injected there; sandboxes should plant a placeholder or any dummy
-`OPENAI_API_KEY` — the real key never needs to enter the container. Gateway
-requests carry `cf-aig-metadata` with at least `{ projectId, source:
-"project-egress" }` for log filtering. Implementation:
-`openai-ai-gateway-egress.ts` + `ProjectDurableObject.#egressOpenAiViaAiGateway`
-(Workers AI gateway binding preferred; REST rewrite as fallback).
+JSON **POST/PUT** to **`api.openai.com`** (chat/completions, responses, …) are
+routed at project egress through the Workers AI **gateway binding** — same door
+and platform OpenAI key as agent BYOK. Requests carry `cf-aig-metadata` with at
+least `{ projectId, source: "project-egress" }`. Sandboxes should plant a
+placeholder or dummy `OPENAI_API_KEY`; the real key is injected only in trusted
+egress code. Other methods (e.g. GET `/v1/models`) are **not** rewritten and
+use normal project egress. Implementation: `openai-ai-gateway-egress.ts` +
+`ProjectDurableObject.#egressOpenAiViaAiGateway`.
 
 ## Deployment
 

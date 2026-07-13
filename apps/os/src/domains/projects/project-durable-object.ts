@@ -51,7 +51,6 @@ import {
   isOpenAiPublicApiRequest,
   openAiAiGatewayRoutingFromConfig,
   openAiGatewayBindingEndpoint,
-  rewriteOpenAiRequestToAiGateway,
 } from "./openai-ai-gateway-egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
@@ -604,115 +603,56 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Route `api.openai.com` through Cloudflare AI Gateway with the platform
-   * OpenAI key + project metadata. Prefer the Workers AI gateway binding
-   * (pre-authenticated on this account — works when Authenticated Gateway is
-   * on). Otherwise rewrite to the provider-native REST gateway URL; if that
-   * 401s (missing AI Gateway Run token), fall back to direct OpenAI with the
-   * platform key so sandboxes still work. Returns null when config cannot
-   * route (caller falls through to normal egress).
+   * Route JSON POST/PUT to `api.openai.com` through Cloudflare AI Gateway via
+   * the Workers AI binding only (same door as agent BYOK). Returns null when
+   * the request is not binding-shaped (GET, non-JSON, missing gateway) so
+   * normal egress applies — no REST rewrite and no direct-OpenAI platform-key
+   * ladder.
    */
   async #egressOpenAiViaAiGateway(request: Request): Promise<Response | null> {
+    if (request.method !== "POST" && request.method !== "PUT") return null;
+
     const config = parseConfig(this.env);
     const routing = openAiAiGatewayRoutingFromConfig(config);
     if (routing === null) return null;
 
-    const metadata = {
-      projectId: this.#name.projectId,
-      source: "project-egress" as const,
-      caller:
-        request.headers.get("x-iterate-sandbox") ??
-        request.headers.get("x-iterate-agent") ??
-        undefined,
-    };
-
-    // Parse JSON once so binding + REST share the same cache-key body.
-    let parsedBody: unknown | undefined;
-    if (request.method === "POST" || request.method === "PUT") {
-      try {
-        parsedBody = await request.clone().json();
-      } catch {
-        parsedBody = undefined;
-      }
-    }
-
-    // Binding path: same door agent BYOK uses. Endpoint = path after /v1/ + query.
-    const endpoint = openAiGatewayBindingEndpoint(request.url);
     const gateway = this.env.AI?.gateway?.(routing.gatewayId);
-    if (
-      gateway !== undefined &&
-      parsedBody !== undefined &&
-      endpoint.replace(/\?.*$/, "").length > 0
-    ) {
-      try {
-        const headers: Record<string, string> = {
-          authorization: `Bearer ${routing.openaiApiKey}`,
-          "content-type": "application/json",
-          "cf-aig-metadata": JSON.stringify({
-            projectId: metadata.projectId,
-            source: metadata.source,
-            ...(metadata.caller !== undefined ? { caller: metadata.caller } : {}),
-          }),
-        };
-        await applyOpenAiAiGatewayCacheHeaders({
-          headers,
-          body: parsedBody,
-          responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
-        });
-        const bindingResponse = await gateway.run({
-          provider: "openai",
-          endpoint,
-          headers,
-          query: parsedBody,
-        });
-        // 401 from the binding is treated like REST gateway auth failure so we
-        // still try the REST rewrite / direct OpenAI ladder (parity with GET).
-        if (bindingResponse.status !== 401) return bindingResponse;
-        console.warn("openai AI gateway binding returned 401; trying REST rewrite", {
-          projectId: this.#name.projectId,
-          endpoint,
-        });
-      } catch (error) {
-        console.warn("openai AI gateway binding path failed; trying REST rewrite", {
-          projectId: this.#name.projectId,
-          endpoint,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    if (gateway === undefined) return null;
+
+    const endpoint = openAiGatewayBindingEndpoint(request.url);
+    if (endpoint.replace(/\?.*$/, "").length === 0) return null;
+
+    let body: unknown;
+    try {
+      body = await request.clone().json();
+    } catch {
+      return null;
     }
 
-    // Provider-native REST rewrite (GET /models, non-JSON, binding failure/401).
-    const rewritten = await rewriteOpenAiRequestToAiGateway({
-      request,
-      accountId: routing.accountId,
-      gatewayId: routing.gatewayId,
-      openaiApiKey: routing.openaiApiKey,
-      metadata,
-      cfAigAuthorization: routing.cfAigAuthorization,
-      responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
-      bodyForCacheKey: parsedBody ?? null,
-    });
-    const gatewayResponse = await fetch(rewritten);
-    if (gatewayResponse.status !== 401) return gatewayResponse;
-
-    // Authenticated Gateway without a Run-capable token → last resort: direct
-    // OpenAI with the platform key (still never the container dummy).
-    console.warn("openai AI gateway REST rewrite unauthorized; falling back to direct OpenAI", {
-      projectId: this.#name.projectId,
-    });
-    const headers = new Headers(request.headers);
-    headers.set("Authorization", `Bearer ${routing.openaiApiKey}`);
-    headers.delete("host");
-    const init: RequestInit & { duplex?: "half" } = {
-      method: request.method,
-      headers,
-      redirect: "manual",
+    const caller =
+      request.headers.get("x-iterate-sandbox") ??
+      request.headers.get("x-iterate-agent") ??
+      undefined;
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${routing.openaiApiKey}`,
+      "content-type": "application/json",
+      "cf-aig-metadata": JSON.stringify({
+        projectId: this.#name.projectId,
+        source: "project-egress",
+        ...(caller !== undefined ? { caller } : {}),
+      }),
     };
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      init.body = request.body;
-      if (request.body !== null) init.duplex = "half";
-    }
-    return fetch(new Request(request.url, init));
+    await applyOpenAiAiGatewayCacheHeaders({
+      headers,
+      body,
+      responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
+    });
+    return gateway.run({
+      provider: "openai",
+      endpoint,
+      headers,
+      query: body,
+    });
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
