@@ -1,12 +1,10 @@
 // search-corpus.ts — the pure model of the itx.search corpus: key layout,
 // segment math, document rendering, metadata schema, and query filters.
 //
-// Runtime-neutral by design (no `cloudflare:workers`, no env): Node scripts
-// (scripts/ensure-resources.ts declares SEARCH_METADATA_SCHEMA on the AI
-// Search instance; scripts/deploy.ts imports ensure-resources) and unit tests
-// import from here, while the R2 writers that need the worker env live in
-// search-index.ts — the same split as files/file-url-signing.ts vs
-// files/project-files.ts.
+// Runtime-neutral by design (no `cloudflare:workers`, no env): unit tests and
+// Node scripts import from here, while the R2 writers and instance lifecycle
+// that need the worker env live in search-index.ts — the same split as
+// files/file-url-signing.ts vs files/project-files.ts.
 //
 // Bucket layout — the first key segment is always the owning project, the
 // second is the KIND (which doubles as the `kind` metadata attribute and the
@@ -83,10 +81,10 @@ const MAX_CONTEXT_METADATA_CHARS = 500;
  *   special `context` field is also attached to every chunk and passed to the
  *   generation model, so answers cite where a fact came from.
  *
- * ensure-resources.ts declares this when creating the instance; changing it
+ * projectSearchInstanceConfig declares this at instance creation; changing it
  * forces a full re-index, so it is deliberately minimal.
  */
-export const SEARCH_METADATA_SCHEMA = [
+const SEARCH_METADATA_SCHEMA = [
   { field_name: "kind", data_type: "text" },
   { field_name: "context", data_type: "text" },
 ] as const;
@@ -212,31 +210,72 @@ export function renderStreamSegmentDocument(input: {
 }
 
 /**
- * The AutoRAG metadata filter for a query. Always scopes to the calling
- * project via the documented lexicographic prefix range on the built-in
- * `folder` attribute — the upper bound is the prefix with its trailing `/`
- * bumped to `0` (the next ASCII character), Cloudflare's documented
- * "starts-with" trick — so no query can ever see another project's data.
- * Optionally tightens the prefix to one `source` kind, and/or excludes kinds
- * with `kind != …` — the query-time escape hatch for noisy corpora. All
- * conditions are a flat `and` (the legacy binding's filter grammar is one
- * level deep).
+ * The metadata filter for a query (the new AI Search binding's Mongo-style
+ * grammar; keys are implicit AND). Each project has its OWN instance whose R2
+ * source is glob-scoped to `{projectId}/**`, so tenancy is structural — the
+ * `folder` prefix range here (upper bound = trailing `/` bumped to `0`,
+ * Cloudflare's documented "starts-with" trick) is defense in depth plus the
+ * `source` kind scoping, and `kind: {$nin}` is the query-time escape hatch
+ * for noisy corpora.
  */
 export function searchFilters(input: {
   projectId: string;
   source?: SearchSourceKind;
   excludeKinds?: readonly SearchKind[];
-}): { type: "and"; filters: { type: "gte" | "lt" | "ne"; key: string; value: string }[] } {
+}): Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> {
   const prefix = projectSearchPrefix(input.projectId, input.source);
+  const filters: Record<string, { $gte?: string; $lt?: string; $nin?: string[] }> = {
+    folder: { $gte: prefix, $lt: `${prefix.slice(0, -1)}0` },
+  };
+  if (input.excludeKinds !== undefined && input.excludeKinds.length > 0) {
+    filters.kind = { $nin: [...input.excludeKinds] };
+  }
+  return filters;
+}
+
+/**
+ * The AI Search instance id for one project. Instance ids are capped at 32
+ * chars (`^[a-z0-9_]+(?:-[a-z0-9_]+)*$`), so the `prj_` prefix is dropped:
+ * the remaining 32-hex identity fits exactly and stays collision-free within
+ * the per-deployment namespace.
+ */
+export function projectSearchInstanceId(projectId: string): string {
+  const id = projectId.replace(/^prj_/, "");
+  if (!/^[a-z0-9_]{1,32}$/.test(id)) {
+    throw new Error(
+      `cannot derive a search instance id from project id ${JSON.stringify(projectId)}`,
+    );
+  }
+  return id;
+}
+
+/**
+ * The create-time configuration for one project's search instance: indexes
+ * only the project's slice of the shared corpus bucket (structural tenancy),
+ * hybrid vector+keyword with the trigram tokenizer (code + ids corpus —
+ * dogfooding showed vector-only misses exact tokens), the kind/context
+ * metadata schema, and hourly background sync (writes also trigger jobs on
+ * demand).
+ */
+export function projectSearchInstanceConfig(input: { bucketName: string; projectId: string }): {
+  id: string;
+  type: "r2";
+  source: string;
+  source_params: { include_items: string[] };
+  index_method: { vector: boolean; keyword: boolean };
+  indexing_options: { keyword_tokenizer: "porter" | "trigram" };
+  custom_metadata: { field_name: string; data_type: "text" }[];
+  sync_interval: 3600;
+} {
   return {
-    type: "and",
-    filters: [
-      { type: "gte", key: "folder", value: prefix },
-      { type: "lt", key: "folder", value: `${prefix.slice(0, -1)}0` },
-      ...(input.excludeKinds ?? []).map(
-        (kind) => ({ type: "ne", key: "kind", value: kind }) as const,
-      ),
-    ],
+    id: projectSearchInstanceId(input.projectId),
+    type: "r2",
+    source: input.bucketName,
+    source_params: { include_items: [`${input.projectId}/**`] },
+    index_method: { vector: true, keyword: true },
+    indexing_options: { keyword_tokenizer: "trigram" },
+    custom_metadata: [...SEARCH_METADATA_SCHEMA],
+    sync_interval: 3600,
   };
 }
 

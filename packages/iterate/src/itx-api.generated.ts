@@ -856,17 +856,18 @@ export interface SandboxCollection {
 export interface Search {
   __describe(): Promise<Description>;
   /**
-   * Retrieve scored chunks matching a query, scoped to this project. Merges the
-   * AI Search corpus (streams/files/repos/custom kinds) with federated
-   * itx.docs, each result tagged with its `kind` and `context` so callers can
-   * contextualize a hit. When the corpus is unreachable (instance not created
-   * yet), docs results still return, with `warning` naming the fix.
+   * Retrieve scored chunks matching a query, scoped to this project's own
+   * search instance. Merges the corpus (streams/files/repos/custom kinds)
+   * with federated itx.docs, each result tagged with its `kind` and `context`
+   * so callers can contextualize a hit. On a project whose instance doesn't
+   * exist yet, the instance is created and docs results return with a
+   * `warning` — retry once its first index completes.
    */
   query(input: {
     q: string;
     /** Max chunks to return (1–50). */
     limit?: number;
-    /** Let the instance rewrite the query for retrieval first. */
+    /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
     /** Drop chunks scoring below this threshold (0–1). */
     scoreThreshold?: number;

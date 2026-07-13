@@ -145,6 +145,15 @@ export interface Env {
    */
   SEARCH_BUCKET: R2Bucket;
   /**
+   * The deployment's AI Search namespace (`ai_search_namespaces` binding,
+   * namespace = `${WORKER_SELF}`). itx.search creates ONE INSTANCE PER
+   * PROJECT in it on first use (domains/search/search-index.ts,
+   * ensureProjectSearchInstance) — each instance indexes only that project's
+   * `{projectId}/**` slice of {@link Env.SEARCH_BUCKET}, so search tenancy is
+   * structural. The namespace itself is created by ensure-resources.ts.
+   */
+  SEARCH_INSTANCES: AiSearchNamespace;
+  /**
    * Deploy identity (wrangler `version_metadata` binding). The stream
    * processor hosts' crash-loop breaker keys its backoff budget on the version
    * id so a fresh deploy — the usual antidote to a deterministic crash loop —

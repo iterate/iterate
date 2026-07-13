@@ -3,6 +3,8 @@ import type { StreamEvent } from "../streams/schemas.ts";
 import {
   fileSearchKey,
   normalizeCustomSearchKind,
+  projectSearchInstanceConfig,
+  projectSearchInstanceId,
   projectSearchPrefix,
   renderStreamSegmentDocument,
   repoFileSearchKey,
@@ -73,34 +75,47 @@ describe("index keys", () => {
 });
 
 describe("searchFilters", () => {
-  it("builds the documented lexicographic folder prefix range", () => {
-    const filter = searchFilters({ projectId: "prj_1" });
-    expect(filter.type).toBe("and");
-    const [gte, lt] = filter.filters;
-    expect(gte).toMatchObject({ type: "gte", key: "folder", value: "prj_1/" });
+  it("builds the documented lexicographic folder prefix range (Mongo-style)", () => {
+    const filters = searchFilters({ projectId: "prj_1" });
     // The upper bound bumps the trailing "/" to "0" (Cloudflare's documented
     // starts-with trick), so the range is exactly the prefix match.
-    expect(lt).toMatchObject({ type: "lt", key: "folder", value: "prj_10" });
+    expect(filters.folder).toEqual({ $gte: "prj_1/", $lt: "prj_10" });
     // Every folder under the project sorts inside [gte, lt); other project
     // ids — including ones the prefix is a prefix OF — sort outside it.
-    expect("prj_1/streams/a/" >= String(gte?.value)).toBe(true);
-    expect("prj_1/streams/a/" < String(lt?.value)).toBe(true);
-    expect("prj_2/" < String(lt?.value) && "prj_2/" >= String(gte?.value)).toBe(false);
-    expect("prj_10abc/" < String(lt?.value) && "prj_10abc/" >= String(gte?.value)).toBe(false);
+    expect("prj_1/streams/a/" >= "prj_1/").toBe(true);
+    expect("prj_1/streams/a/" < "prj_10").toBe(true);
+    expect("prj_2/" < "prj_10").toBe(false);
+    expect("prj_10abc/" >= "prj_10").toBe(true);
   });
 
   it("narrows to one source kind via the folder prefix", () => {
-    const filter = searchFilters({ projectId: "prj_1", source: "repos" });
-    expect(filter.filters[0]?.value).toBe("prj_1/repos/");
+    const filters = searchFilters({ projectId: "prj_1", source: "repos" });
+    expect(filters.folder?.$gte).toBe("prj_1/repos/");
   });
 
-  it("adds a `kind != x` condition per excluded kind (flat AND)", () => {
-    const filter = searchFilters({ projectId: "prj_1", excludeKinds: ["streams", "files"] });
-    const ne = filter.filters.filter((f) => f.type === "ne");
-    expect(ne).toEqual([
-      { type: "ne", key: "kind", value: "streams" },
-      { type: "ne", key: "kind", value: "files" },
-    ]);
+  it("excludes kinds with one $nin condition", () => {
+    const filters = searchFilters({ projectId: "prj_1", excludeKinds: ["streams", "files"] });
+    expect(filters.kind).toEqual({ $nin: ["streams", "files"] });
+    expect(searchFilters({ projectId: "prj_1" }).kind).toBeUndefined();
+  });
+});
+
+describe("projectSearchInstanceId / projectSearchInstanceConfig", () => {
+  it("derives a 32-char instance id by dropping the prj_ prefix", () => {
+    expect(projectSearchInstanceId("prj_f2bdefde5fa64623bb1565056de9999b")).toBe(
+      "f2bdefde5fa64623bb1565056de9999b",
+    );
+    expect(() => projectSearchInstanceId("prj_NOT-VALID!chars")).toThrow(/instance id/);
+  });
+
+  it("scopes each instance to its project's slice of the shared bucket", () => {
+    const config = projectSearchInstanceConfig({
+      bucketName: "os-search-index",
+      projectId: "prj_abc123",
+    });
+    expect(config.source_params.include_items).toEqual(["prj_abc123/**"]);
+    expect(config.index_method).toEqual({ vector: true, keyword: true });
+    expect(config.custom_metadata.map((f) => f.field_name)).toEqual(["kind", "context"]);
   });
 });
 

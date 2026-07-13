@@ -21,7 +21,6 @@ import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-he
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 import { emailDomainForDeployment } from "../src/domains/email/utils.ts";
-import { SEARCH_METADATA_SCHEMA } from "../src/domains/search/search-corpus.ts";
 import { ensureWorkerEventQueueResources } from "./event-queue-resources.ts";
 
 /**
@@ -44,57 +43,36 @@ export async function ensureR2Bucket(
 }
 
 /**
- * Create-if-missing for the deployment's AI Search instance over the search
- * corpus bucket (SPIKE — see domains/search/search-index.ts). Uses the AI
- * Search REST API (https://developers.cloudflare.com/api/resources/ai_search/).
- * Best-effort: instance creation requires a service API token the account
- * token may not be able to mint, and the product is in open beta — a failure
- * prints the manual dashboard recipe and lets the rest of the run proceed.
+ * Create-if-missing for the deployment's AI Search NAMESPACE — the container
+ * `itx.search` creates per-project instances in at runtime (via the
+ * SEARCH_INSTANCES worker binding; see domains/search/search-index.ts).
+ * Best-effort: the AI Search management API needs "AI Search Edit" on the
+ * token, and each ACCOUNT additionally needs its dashboard-minted service
+ * token registered once (AI > AI Search > tokens) before instance creation
+ * works — a failure prints the recipe and lets the rest of the run proceed.
  */
-export async function ensureAiSearchInstance(
+export async function ensureAiSearchNamespace(
   cf: <T = unknown>(path: string, init?: RequestInit) => Promise<T>,
-  input: {
-    bucketName: string;
-    instanceName: string;
-    metadataSchema: readonly { field_name: string; data_type: string }[];
-  },
+  input: { namespaceName: string },
 ): Promise<void> {
   try {
-    // Live-observed: an instance created with a name comes back with that
-    // name in `id` and `name: null`, so `id` is the identity to compare.
-    const instances = await cf<{ id: string; name: string | null }[]>(
-      `/ai-search/instances?per_page=100`,
-    );
-    if (instances.some((instance) => (instance.name ?? instance.id) === input.instanceName)) {
-      console.log(`AI Search instance ${input.instanceName} exists`);
+    const namespaces = await cf<{ name: string }[]>(`/ai-search/namespaces?per_page=100`);
+    if (namespaces.some((namespace) => namespace.name === input.namespaceName)) {
+      console.log(`AI Search namespace ${input.namespaceName} exists`);
       return;
     }
-    await cf(`/ai-search/instances`, {
+    await cf(`/ai-search/namespaces`, {
       method: "POST",
-      body: JSON.stringify({
-        id: input.instanceName,
-        name: input.instanceName,
-        data_source: { type: "r2", source: input.bucketName },
-        // Hourly bucket sync; the writers push continuously, so index
-        // freshness is bounded by this interval (a sync job can also be
-        // triggered on demand via the jobs API, min 30s apart).
-        sync_interval: 3600,
-        // Declare the custom metadata schema up front so the `kind`/`context`
-        // attributes every document carries are filterable + returned on hits
-        // (see SEARCH_METADATA_SCHEMA). Changing this later forces a full
-        // re-index, so it is deliberately minimal (≤5 fields allowed).
-        custom_metadata: input.metadataSchema,
-      }),
+      body: JSON.stringify({ name: input.namespaceName }),
     });
-    console.log(`created AI Search instance ${input.instanceName} over ${input.bucketName}`);
+    console.log(`created AI Search namespace ${input.namespaceName}`);
   } catch (error) {
     console.warn(
       [
-        `Could not create AI Search instance ${input.instanceName} via the API: ${String(error)}`,
-        `Create it once in the dashboard instead: AI > AI Search > Create,`,
-        `name "${input.instanceName}", data source = R2 bucket "${input.bucketName}",`,
-        `default models, then leave everything else as is. itx.search works as`,
-        `soon as the first indexing job completes.`,
+        `Could not ensure AI Search namespace ${input.namespaceName}: ${String(error)}`,
+        `Create it once via wrangler: npx wrangler ai-search namespace create ${input.namespaceName}`,
+        `(and register the account's AI Search service token in the dashboard first:`,
+        `AI > AI Search > tokens). itx.search creates per-project instances at runtime.`,
       ].join("\n"),
     );
   }
@@ -170,22 +148,14 @@ export default async function ensureResources(
   });
   console.log(`R2 bucket ${r2BucketName} lifecycle: backups/ expire at 90d`);
 
-  // ---- R2 + AI Search: the itx.search corpus (SPIKE) ----------------------
-  // The worker mirrors stream events / itx.files / repo snapshots into this
-  // bucket (domains/search/search-index.ts); an AI Search instance named
-  // `${osWorkerName}-search` indexes it on a schedule and `itx.search`
-  // queries it through the Workers AI binding with per-project folder
-  // filters. Instance creation is best-effort: the AI Search REST API is in
-  // open beta and creating an instance needs a service API token — when the
-  // call fails, this prints the one-time dashboard recipe instead of failing
-  // the whole run.
-  const searchBucketName = `${env.osWorkerName}-search-index`;
-  await ensureR2Bucket(cf, searchBucketName);
-  await ensureAiSearchInstance(cf, {
-    bucketName: searchBucketName,
-    instanceName: `${env.osWorkerName}-search`,
-    metadataSchema: SEARCH_METADATA_SCHEMA,
-  });
+  // ---- R2 + AI Search: the itx.search corpus ------------------------------
+  // The worker mirrors stream events / itx.files / repo snapshots /
+  // itx.search.index() documents into this bucket
+  // (domains/search/search-index.ts); itx.search creates ONE AI Search
+  // INSTANCE PER PROJECT (structural tenancy) inside the deployment's
+  // namespace, each indexing only that project's `{projectId}/**` slice.
+  await ensureR2Bucket(cf, `${env.osWorkerName}-search-index`);
+  await ensureAiSearchNamespace(cf, { namespaceName: env.osWorkerName });
 
   // ---- Queues: deployment event queue + Cloudflare Artifacts subscriptions -
   // One general-purpose queue per OS worker. Artifacts event subscriptions are

@@ -198,13 +198,14 @@ import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
+  ensureProjectSearchInstance,
   indexDocument,
   indexEntireStream,
   indexStreamEventBatch,
   mirrorFileToSearchIndex,
-  searchInstanceName,
+  triggerProjectSearchSync,
 } from "./domains/search/search-index.ts";
-import { searchFilters } from "./domains/search/search-corpus.ts";
+import { projectSearchInstanceId, searchFilters } from "./domains/search/search-corpus.ts";
 import type {
   SearchAnswerResult,
   SearchKind,
@@ -2002,52 +2003,49 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     });
   }
 
-  get #instance(): AutoRAG {
-    return env.AI.autorag(searchInstanceName());
+  get #instance(): AiSearchInstance {
+    return env.SEARCH_INSTANCES.get(projectSearchInstanceId(this.props.projectId));
   }
 
-  #searchRequest(input: {
-    query: string;
+  #searchOptions(input: {
     limit?: number;
     rewriteQuery?: boolean;
     scoreThreshold?: number;
     source?: SearchSourceKind;
     exclude?: readonly SearchKind[];
-  }): AutoRagSearchRequest {
+  }): AiSearchOptions {
     return {
-      query: input.query,
-      filters: searchFilters({
-        projectId: this.props.projectId,
-        source: input.source,
-        // "docs" is federated, never in the R2 corpus, so it can't be an R2
-        // filter; drop it here and let #federatedDocs honour the exclusion.
-        excludeKinds: input.exclude?.filter((kind) => kind !== "docs"),
-      }),
-      max_num_results: input.limit,
-      ranking_options:
-        input.scoreThreshold === undefined ? undefined : { score_threshold: input.scoreThreshold },
-      rewrite_query: input.rewriteQuery,
+      retrieval: {
+        filters: searchFilters({
+          projectId: this.props.projectId,
+          source: input.source,
+          // "docs" is federated, never in the R2 corpus, so it can't be an R2
+          // filter; drop it here and let #federatedDocs honour the exclusion.
+          excludeKinds: input.exclude?.filter((kind) => kind !== "docs"),
+        }),
+        max_num_results: input.limit,
+        match_threshold: input.scoreThreshold,
+        // OR-mode keyword matching: dogfooding showed the default AND-mode
+        // misses exact-token queries whose terms don't co-occur in one chunk;
+        // hybrid rrf fusion keeps precision.
+        keyword_match_mode: "or",
+        // One neighboring chunk heals JSON payloads split across chunk
+        // boundaries in stream segment documents.
+        context_expansion: 1,
+      },
+      query_rewrite: input.rewriteQuery === undefined ? undefined : { enabled: input.rewriteQuery },
     };
   }
 
-  /** Map one AI Search result item to a provenance-carrying chunk. */
-  #toChunk(item: AutoRagSearchResponse["data"][number]): SearchResultChunk {
-    const attributes = item.attributes ?? {};
-    // Live-verified on the legacy binding: custom metadata comes back NESTED
-    // under `attributes.file` ({ file: { kind, context, … } }), while the new
-    // AI Search API returns it flat — read both so a binding migration can't
-    // silently blank provenance. The workers-types attribute value type
-    // doesn't admit the nested object, hence the cast.
-    const custom = ((attributes as Record<string, unknown>).file ?? attributes) as Record<
-      string,
-      unknown
-    >;
+  /** Map one AI Search chunk to a provenance-carrying result. */
+  #toChunk(chunk: AiSearchSearchResponse["chunks"][number]): SearchResultChunk {
+    const metadata = chunk.item.metadata ?? {};
     return {
-      filename: item.filename,
-      score: item.score,
-      content: item.content.map((chunk) => chunk.text).join("\n"),
-      kind: typeof custom.kind === "string" ? custom.kind : undefined,
-      context: typeof custom.context === "string" ? custom.context : undefined,
+      filename: chunk.item.key,
+      score: chunk.score,
+      content: chunk.text,
+      kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
+      context: typeof metadata.context === "string" ? metadata.context : undefined,
     };
   }
 
@@ -2055,8 +2053,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * Federated `docs` results: itx.docs is a static in-worker keyword index
    * (examples + types + this scope's mounted capabilities), not part of the R2
    * corpus, so query() merges it in unless docs are excluded / a different
-   * source is pinned. Synthetic descending scores preserve docs' own relevance
-   * order when interleaved with the corpus by score.
+   * source is pinned. Docs scores are keyword-overlap counts, not comparable
+   * to the corpus's relevance scores — a descending band from 0.5 keeps
+   * strong corpus hits on top while docs still surface mid-list.
    */
   async #federatedDocs(input: {
     query: string;
@@ -2068,10 +2067,6 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     if (input.exclude?.includes("docs")) return [];
     const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
     const hits = await docs.search({ q: input.query });
-    // Docs scores are keyword-overlap counts, not comparable to the corpus's
-    // vector scores — placing them at 1.0 drowned every real content hit
-    // (live-verified: corpus hits score ~0.4–0.7). A descending band from 0.5
-    // keeps strong corpus hits on top while docs still surface mid-list.
     return hits.slice(0, Math.min(input.limit ?? 5, 5)).map((hit, index) => ({
       filename: hit.fetchCall,
       score: 0.5 - index * 0.02,
@@ -2081,29 +2076,35 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     }));
   }
 
-  // The instance is provisioned out-of-band (ensure-resources.ts); a missing
-  // instance surfaces as an opaque binding error, so name the fix.
-  #instanceHintError(error: unknown): Error {
-    return new Error(
-      `AI Search request failed (instance "${searchInstanceName()}"). ` +
-        "If the instance does not exist yet, create it via ensure-resources or the " +
-        "Cloudflare dashboard (AI > AI Search) over the deployment's search-index bucket.",
-      { cause: error },
-    );
+  /**
+   * A missing instance is the expected first-touch state: create it (its
+   * first sync then indexes the project's existing corpus slice) and tell the
+   * caller the index is warming instead of failing.
+   */
+  async #ensureInstanceAfterMiss(error: unknown): Promise<string> {
+    try {
+      const { created } = await ensureProjectSearchInstance(this.props.projectId);
+      return created
+        ? "Search instance created for this project; the first index is in progress — retry shortly."
+        : `AI Search request failed: ${String(error).slice(0, 200)}`;
+    } catch (provisionError) {
+      return `AI Search instance provisioning failed: ${String(provisionError).slice(0, 200)}`;
+    }
   }
 
   /**
-   * Retrieve scored chunks matching a query, scoped to this project. Merges the
-   * AI Search corpus (streams/files/repos/custom kinds) with federated
-   * itx.docs, each result tagged with its `kind` and `context` so callers can
-   * contextualize a hit. When the corpus is unreachable (instance not created
-   * yet), docs results still return, with `warning` naming the fix.
+   * Retrieve scored chunks matching a query, scoped to this project's own
+   * search instance. Merges the corpus (streams/files/repos/custom kinds)
+   * with federated itx.docs, each result tagged with its `kind` and `context`
+   * so callers can contextualize a hit. On a project whose instance doesn't
+   * exist yet, the instance is created and docs results return with a
+   * `warning` — retry once its first index completes.
    */
   async query(input: {
     q: string;
     /** Max chunks to return (1–50). */
     limit?: number;
-    /** Let the instance rewrite the query for retrieval first. */
+    /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
     /** Drop chunks scoring below this threshold (0–1). */
     scoreThreshold?: number;
@@ -2113,7 +2114,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     exclude?: readonly SearchKind[];
   }): Promise<SearchQueryResult> {
     const [corpus, docs] = await Promise.allSettled([
-      this.#instance.search(this.#searchRequest({ ...input, query: input.q })),
+      this.#instance.search({ query: input.q, ai_search_options: this.#searchOptions(input) }),
       this.#federatedDocs({
         query: input.q,
         source: input.source,
@@ -2125,16 +2126,14 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     // (docs failing) is a real bug worth surfacing, so it still throws.
     if (docs.status === "rejected") throw docs.reason;
     if (corpus.status === "rejected") {
-      if (input.source !== undefined) throw this.#instanceHintError(corpus.reason);
-      return {
-        searchQuery: input.q,
-        results: docs.value,
-        warning: this.#instanceHintError(corpus.reason).message,
-      };
+      const warning = await this.#ensureInstanceAfterMiss(corpus.reason);
+      if (input.source !== undefined) return { searchQuery: input.q, results: [], warning };
+      return { searchQuery: input.q, results: docs.value, warning };
     }
-    const results = [...corpus.value.data.map((item) => this.#toChunk(item)), ...docs.value].sort(
-      (a, b) => b.score - a.score,
-    );
+    const results = [
+      ...corpus.value.chunks.map((chunk) => this.#toChunk(chunk)),
+      ...docs.value,
+    ].sort((a, b) => b.score - a.score);
     return { searchQuery: corpus.value.search_query, results };
   }
 
@@ -2149,19 +2148,24 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult> {
-    let response: AutoRagAiSearchResponse;
+    let response: AiSearchChatCompletionsResponse;
     try {
-      response = await this.#instance.aiSearch({
-        ...this.#searchRequest({ ...input, query: input.q }),
-        system_prompt: input.systemPrompt,
+      response = await this.#instance.chatCompletions({
+        messages: [
+          ...(input.systemPrompt === undefined
+            ? []
+            : [{ role: "system" as const, content: input.systemPrompt }]),
+          { role: "user" as const, content: input.q },
+        ],
+        ai_search_options: this.#searchOptions(input),
       });
     } catch (error) {
-      throw this.#instanceHintError(error);
+      throw new Error(await this.#ensureInstanceAfterMiss(error), { cause: error });
     }
     return {
-      response: response.response,
-      searchQuery: response.search_query,
-      results: response.data.map((item) => this.#toChunk(item)),
+      response: response.choices[0]?.message.content ?? "",
+      searchQuery: input.q,
+      results: response.chunks.map((chunk) => this.#toChunk(chunk)),
     };
   }
 
@@ -2171,14 +2175,19 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * `(project, kind)`, so re-indexing the same id overwrites. `context` is the
    * one-line descriptor shown on every hit and to the answer model.
    */
-  index(input: {
+  async index(input: {
     kind: string;
     id: string;
     text: string;
     title?: string;
     context?: string;
   }): Promise<{ key: string }> {
-    return indexDocument({ ...input, projectId: this.props.projectId });
+    const result = await indexDocument({ ...input, projectId: this.props.projectId });
+    // First index() bootstraps the project's instance; the sync trigger makes
+    // the document searchable in seconds instead of the hourly schedule.
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
   }
 
   /**
@@ -2193,11 +2202,14 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         { allowNullProjectId: true },
       ),
     );
-    return await indexEntireStream({
+    const result = await indexEntireStream({
       projectId: this.props.projectId,
       path: normalizePath(input.path),
       readEvents: (args) => streamStub.getEvents(args),
     });
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
   }
 
   /**
@@ -2206,18 +2218,21 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * incrementally from here on). Runs on the repo Durable Object's own write
    * chain so its stale-key sweep can't race post-commit indexing.
    */
-  indexRepo(input: { path: string }): Promise<{
+  async indexRepo(input: { path: string }): Promise<{
     deleted: number;
     indexed: number;
     skipped: number;
     failed: number;
   }> {
-    return env.REPO.getByName(
+    const result = await env.REPO.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.props.projectId,
         path: normalizePath(input.path),
       }),
     ).reindexSearch();
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
   }
 
   /**
@@ -2235,6 +2250,8 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       });
       counts[outcome] += 1;
     }
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
     return counts;
   }
 }

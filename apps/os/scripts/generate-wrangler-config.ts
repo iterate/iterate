@@ -296,6 +296,11 @@ function workerBindings(input: {
       { binding: "TYPECHECKER", service: typecheckerWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
+    // The itx.search per-project instance namespace (env.SEARCH_INSTANCES,
+    // domains/search/search-index.ts). Namespace name = the worker name;
+    // ensure-resources creates it. Instances are created at runtime, one per
+    // project, over the SEARCH_BUCKET below.
+    ai_search_namespaces: [{ binding: "SEARCH_INSTANCES", namespace: input.workerName }],
     browser: { binding: "BROWSER" },
     images: { binding: "IMAGES" },
     media: { binding: "MEDIA" },

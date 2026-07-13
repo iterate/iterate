@@ -1,18 +1,17 @@
-// search-index.ts — the R2 write side of `itx.search` (SPIKE).
+// search-index.ts — the write side of `itx.search`: R2 corpus writers plus
+// the per-project AI Search instance lifecycle.
 //
 // Everything a project accumulates — stream events, `itx.files` bytes, repo
 // file contents, arbitrary `itx.search.index()` documents — is mirrored into
-// one R2 bucket (`SEARCH_BUCKET`, `${WORKER_SELF}-search-index`) that a
-// Cloudflare AI Search instance (`${WORKER_SELF}-search`) indexes on a
-// schedule. The pure corpus model (key layout, segment math, rendering,
-// filters, metadata schema) lives in search-corpus.ts so Node scripts and
-// unit tests can import it; this module owns everything that touches the
-// bucket binding.
-//
-// Multi-tenancy follows Cloudflare's documented shared-instance pattern:
-// every key starts with the owning project id and queries filter on the
-// built-in `folder` attribute with a lexicographic prefix range
-// (https://developers.cloudflare.com/ai-search/how-to/per-tenant-search/).
+// one R2 bucket per deployment (`SEARCH_BUCKET`). Each PROJECT gets its own
+// AI Search instance (created on first use in the deployment's
+// `SEARCH_INSTANCES` namespace) indexing only that project's `{projectId}/**`
+// slice of the bucket — Cloudflare's documented instance-per-tenant pattern
+// (https://developers.cloudflare.com/ai-search/how-to/per-tenant-search/), so
+// search tenancy is structural rather than a query filter. The pure corpus
+// model (key layout, segment math, rendering, filters, instance config) lives
+// in search-corpus.ts so Node scripts and unit tests can import it; this
+// module owns everything that touches worker bindings.
 //
 // EVERY stream is indexed, including /integrations/** webhooks (duplicative —
 // prd's iterate project holds ~15.5k GitHub webhooks — but full of real
@@ -27,11 +26,11 @@
 // commit). Failures log at warn — the corpus is derived and self-healing
 // (see indexStreamEventBatch), never the system of record.
 //
-// LOCAL DEV runs against the real cloud service, not a local emulation:
-// Workers AI (env.AI, incl. `.autorag()`) has no local simulator, so it
-// always hits the account, and SEARCH_BUCKET is a remote binding in dev
-// exactly like FILES_BUCKET. Deploying is only needed to create the
-// instance; querying works from a dev worker.
+// LOCAL DEV runs against the real cloud service, not a local emulation: the
+// AI Search bindings have no local simulator, so they always hit the account,
+// and SEARCH_BUCKET is a remote binding in dev exactly like FILES_BUCKET.
+// The deployment's namespace must exist (ensure-resources); instances are
+// created per project at runtime.
 
 import { itxEnv } from "../../env.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
@@ -42,6 +41,8 @@ import {
   SEARCH_SEGMENT_SIZE,
   fileSearchKey,
   normalizeCustomSearchKind,
+  projectSearchInstanceConfig,
+  projectSearchInstanceId,
   renderStreamSegmentDocument,
   repoFileSearchKey,
   sanitizeSearchDocumentId,
@@ -52,9 +53,49 @@ import {
   streamSegmentKey,
 } from "./search-corpus.ts";
 
-/** The AI Search instance name for this deployment (one instance per env). */
-export function searchInstanceName(): string {
-  return `${itxEnv.WORKER_SELF}-search`;
+/** The search-index corpus bucket name for this deployment (mirrors wrangler config). */
+function searchBucketName(): string {
+  return `${itxEnv.WORKER_SELF}-search-index`;
+}
+
+/**
+ * The project's AI Search instance, created on first use. Instances live in
+ * the deployment's namespace (the `SEARCH_INSTANCES` binding) and each indexes
+ * only its project's `{projectId}/**` slice of the shared corpus bucket —
+ * tenancy is structural, not a query filter. Creation is idempotent from the
+ * caller's view: an already-exists error resolves to the existing instance.
+ * A freshly created instance is EMPTY until its first sync job finishes;
+ * callers surface that as a warning rather than an error.
+ */
+export async function ensureProjectSearchInstance(
+  projectId: string,
+): Promise<{ created: boolean; instance: AiSearchInstance }> {
+  const id = projectSearchInstanceId(projectId);
+  try {
+    const instance = await itxEnv.SEARCH_INSTANCES.create(
+      projectSearchInstanceConfig({ bucketName: searchBucketName(), projectId }),
+    );
+    return { created: true, instance };
+  } catch (error) {
+    // Already exists → get() it. Anything else is a real provisioning error.
+    if (!/exist|conflict|duplicate/i.test(String(error))) throw error;
+    return { created: false, instance: itxEnv.SEARCH_INSTANCES.get(id) };
+  }
+}
+
+/**
+ * Best-effort on-demand sync of a project's instance — called after explicit
+ * backfill verbs so freshly written corpus objects become searchable in
+ * seconds instead of waiting for the hourly schedule. The API allows one job
+ * per 30s per instance; a rejected trigger (rate limit, instance mid-sync) is
+ * fine — the hourly schedule is the backstop.
+ */
+export async function triggerProjectSearchSync(projectId: string): Promise<void> {
+  try {
+    await itxEnv.SEARCH_INSTANCES.get(projectSearchInstanceId(projectId)).jobs.create();
+  } catch (error) {
+    console.warn("search sync trigger skipped", { projectId, error: String(error).slice(0, 200) });
+  }
 }
 
 /**
