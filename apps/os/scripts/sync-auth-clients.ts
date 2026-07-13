@@ -111,7 +111,6 @@ for (const target of targets) {
     APP_CONFIG_ITERATE_AUTH__ISSUER: authIssuer,
     APP_CONFIG_ITERATE_AUTH__CLIENT_ID: webClient.clientId,
     APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: webClient.clientSecret,
-    APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
   });
 
   upsertSeedOAuthClient(seedOAuthClients, {

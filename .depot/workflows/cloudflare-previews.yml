@@ -9,11 +9,11 @@
 # "Preview / deploy + e2e" as skipped, clobbering the earlier success on every
 # merged PR (GitHub displays the latest check run per name). The two workflows
 # still coordinate through the same concurrency groups (copied verbatim in the
-# cleanup file): closing a PR mid-deploy cancels the in-flight deploy run
-# (cancel-in-progress on the shared workflow-level group) and the job-level
-# lifecycle group serializes whatever remains — the two never race the same
-# preview slot. (When deploy ran on Depot and cleanup on GitHub, a close
-# during a run tore down the slot under the deploy.)
+# cleanup file): closing a PR mid-deploy cancels the in-flight deploy run.
+# During the one-release auth RPC cutover, the job-level group is deliberately
+# fleet-wide and is also held by migrate-os-auth-preview-fleet.yml; this excludes
+# every preview lifecycle operation while the old credential path is revoked.
+# The cleanup PR restores the normal per-PR lifecycle group.
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged. Test
@@ -96,13 +96,26 @@ jobs:
     # tail); nothing can stack past this anymore.
     timeout-minutes: 10
     concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
+      group: cloudflare-preview-fleet-auth-rpc-cutover
       cancel-in-progress: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Permanent breaking-change floor: an old branch would deploy Auth first,
+      # then fail or deploy an OS revision that cannot call the default RPC
+      # entrypoint. Refuse before any app or credential is touched. This is an
+      # epoch assertion, not a compatibility path; rebase is the only remedy.
+      - name: Enforce preview deployment epoch
+        run: |-
+          set -euo pipefail
+          expected="os-auth-rpc-v1"
+          actual="$(cat scripts/preview/deployment-epoch 2>/dev/null || true)"
+          if [ "$actual" != "$expected" ]; then
+            echo "This branch predates preview deployment epoch $expected. Rebase onto main before deploying." >&2
+            exit 1
+          fi
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node
