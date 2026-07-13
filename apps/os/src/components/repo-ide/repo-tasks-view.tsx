@@ -64,6 +64,7 @@ import {
   repoTaskPathForTitle,
   repoTaskPathInDirectory,
   repoTaskWithPath,
+  taskColumnState,
   taskDirectoryForFolder,
   taskStateColumns,
   taskStateLabel,
@@ -239,7 +240,8 @@ export function RepoTasksView({
     folderPath: string,
     labels?: readonly string[],
   ) => {
-    let content = state === task.state ? task.content : updateRepoTaskState(task.content, state);
+    let content =
+      state === taskColumnState(task) ? task.content : updateRepoTaskState(task.content, state);
     if (
       labels !== undefined &&
       (labels.length !== task.labels.length ||
@@ -413,7 +415,7 @@ function TaskBoard({
                   : [row.value]
                 : undefined;
             if (
-              task.state !== target.state ||
+              taskColumnState(task) !== target.state ||
               task.folderPath !== folderPath ||
               labels !== undefined
             )
@@ -666,7 +668,9 @@ function TaskCard({
         </div>
       ) : null}
       <div className="flex items-start gap-2">
-        {visibleProperties.state ? <TaskStateIcon state={task.state} className="mt-0.5" /> : null}
+        {visibleProperties.state ? (
+          <TaskStateIcon state={taskColumnState(task)} className="mt-0.5" />
+        ) : null}
         <span className="min-w-0 flex-1 text-sm font-medium leading-snug">{task.title}</span>
       </div>
       {summary === "" ? null : (
@@ -819,7 +823,10 @@ function TaskEditorSheet({
             />
           </SheetHeader>
           <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
-            <Select value={task.state} onValueChange={(value) => value && onChangeState(value)}>
+            <Select
+              value={taskColumnState(task)}
+              onValueChange={(value) => value && onChangeState(value)}
+            >
               <SelectTrigger aria-label="Task state" size="sm" className="w-32 shrink-0">
                 <SelectValue />
               </SelectTrigger>
