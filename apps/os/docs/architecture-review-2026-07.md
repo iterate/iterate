@@ -304,7 +304,7 @@ and re-fold from offset zero on hot paths:
 | `src/domains/integrations/connect-flows.ts:489-491`                                                | full team-directory fold **per Slack webhook**, on a singleton DO                                                                       | checkpoint the fold                                    |
 | `src/domains/integrations/google-tokens.ts:81-83` (`readGoogleTokenState` → `readAllStreamEvents`) | full token-stream fold **per `gmail.request`**                                                                                          | checkpoint the fold                                    |
 | agent checkpoint write path (fixed)                                                                | formerly duplicated the **whole transcript** into one unchunked KV cell per batch — O(N²) write amplification toward the ~2 MB cell cap | bounded mutable tail plus immutable SQL history chunks |
-| agent prompt rebuild                                                                               | reads the **full journal including chunk spam** (see §3.4)                                                                              | `eventTypes` filter + bounded read                     |
+| agent request attempt path (fixed)                                                                 | formerly transferred and refolded the **whole consumed journal twice per attempt**; ephemeral response chunks were already excluded     | exact request reduction + filtered suffix read         |
 
 The remaining fold-from-zero fixes are small uses of machinery the substrate
 already ships. They are worth fixing soon not only for speed but because each
@@ -326,6 +326,19 @@ row per 128 KiB of history. Stored bytes remain approximately one transcript.
 The implementation is isolated to the Agent host: deleting its two cache tables
 and refolding, or restoring the generic checkpoint adapter, collapses it without
 changing the journal or processor contract.
+
+Agent attempts now build the ordinary prompt from the exact reduction attached
+to `llm-request-requested`, so the prompt stays pinned to that offset without a
+journal read. Restored requested obligations retain the full-refold fallback.
+Before publishing output, the processor scans only later scheduled, completed,
+and cancelled lifecycle facts; malformed rows are skipped through the same
+contract parser as a full fold. Five local-workerd rounds, host-timed around
+awaited RPC, put total prompt-build plus currency-check p50 at 1.737 → 0.857 ms
+for 317 KiB, 2.396 → 0.844 ms for 633 KiB, and 3.599 → 0.844 ms for 1.06 MiB
+histories (51%, 65%, and 77% lower). Median-round p95 improved 64%, 68%, and
+75%. This excludes vendor latency and isolates processor-side journal overhead.
+The change adds no storage schema or public API: reverting the state handoff and
+suffix filter restores the old behavior, while recovery remains unchanged.
 
 ### 3.6 `src/rpc-targets.ts` (2,566 lines): the pattern is load-bearing at the core, over-applied at the leaves
 

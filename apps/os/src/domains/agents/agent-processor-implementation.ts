@@ -71,8 +71,15 @@ type AgentProcessorDeps = {
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
 };
 
-/** Page size for full-journal reads (prompt building, currency checks). */
+/** Page size for journal reads. */
 const CONSUMED_EVENTS_PAGE_SIZE = 500;
+
+/** The only later facts that can move `currentRequest` away from a requested turn. */
+const REQUEST_CURRENCY_EVENT_TYPES = [
+  "events.iterate.com/agent/llm-request-scheduled",
+  "events.iterate.com/agent/llm-request-completed",
+  "events.iterate.com/agent/llm-request-cancelled",
+] as const;
 
 export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
@@ -112,8 +119,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   // ---------------------------------------------------------------------------
   // Lane 1: the fold. The switch lives in `reduceAgentEvent` (module level)
-  // so off-runtime refolds — prompt building, request-currency checks — run
-  // the exact same projection.
+  // so recovery prompt rebuilds and compaction currency checks run the exact
+  // same projection.
   // ---------------------------------------------------------------------------
 
   protected override reduce({
@@ -511,10 +518,27 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           });
           continue;
         }
+        const requestReduction = args.reducedEvents.find(
+          ({ event }) =>
+            event.offset === llmRequestOffset &&
+            event.type === "events.iterate.com/agent/llm-request-requested",
+        );
+        const preparedBody =
+          requestReduction === undefined
+            ? undefined
+            : buildAgentLlmRequestBodyFromState({
+                requestedAt: requestReduction.event.createdAt,
+                state: requestReduction.state,
+              });
         this.#liveLlmExecutions.add(llmRequestOffset);
         args.runInBackground(async () => {
           try {
-            await this.#executeLlmRequest({ llmRequestOffset, model: request.model });
+            await this.#executeLlmRequest({
+              llmRequestOffset,
+              model: request.model,
+              outputEligible: isCurrent,
+              preparedBody,
+            });
           } finally {
             this.#liveLlmExecutions.delete(llmRequestOffset);
           }
@@ -720,8 +744,13 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * failure. Runs as a droppable background attempt; #reconcileLlmObligations
    * recovers the outcome if this incarnation dies mid-flight.
    */
-  async #executeLlmRequest(input: { llmRequestOffset: number; model: string }): Promise<void> {
-    const { llmRequestOffset, model } = input;
+  async #executeLlmRequest(input: {
+    llmRequestOffset: number;
+    model: string;
+    outputEligible: boolean;
+    preparedBody?: AgentLlmRequestBody;
+  }): Promise<void> {
+    const { llmRequestOffset, model, outputEligible, preparedBody } = input;
     const startedAt = this.#now();
     // Started-evidence outside the try: if this append fails the model was
     // never dialed, so no completion may be appended — the obligation stays
@@ -737,10 +766,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       if (ai === undefined) {
         throw new Error("Agent processor has no AI binding configured.");
       }
-      const body = buildAgentLlmRequestBody({
-        events: await this.#readConsumedEvents(),
-        llmRequestOffset,
-      });
+      const body =
+        preparedBody ??
+        buildAgentLlmRequestBody({
+          events: await this.#readConsumedEvents(),
+          llmRequestOffset,
+        });
       const completion = await runWorkersAiAttempt({
         ai,
         transport: this.deps.cloudflareAiGatewayTransport?.(),
@@ -809,7 +840,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
                 },
               },
             ];
-      if (await this.#isRequestStillCurrent({ llmRequestOffset })) {
+      if (await this.#isRequestStillCurrent({ llmRequestOffset, outputEligible })) {
         await this.append(
           {
             type: "events.iterate.com/agent/output-added",
@@ -844,10 +875,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   /**
-   * The whole journal's consumed subset, paged from offset 0 — the one read
-   * behind prompt building and the request-currency check. Filtering to
-   * `consumes` keeps bulk emitted-only types (response chunks) out of the
-   * transfer; paging (rather than one capped read) means long histories are
+   * The whole journal's consumed subset, paged from offset 0. Ordinary new
+   * requests build from their exact live reduction; this is the recovery
+   * fallback when the requested event predates the batch, and the compaction
+   * currency read. Filtering to `consumes` keeps bulk emitted-only types
+   * (response chunks) out of the transfer; paging means long histories are
    * never silently truncated.
    */
   async #readConsumedEvents(): Promise<StreamEvent[]> {
@@ -864,14 +896,40 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
   }
 
-  /** Re-folds committed history right before publishing output: a request the
+  /** Checks committed facts right before publishing output: a request the
    * user has since interrupted must not add its answer to the conversation. */
-  async #isRequestStillCurrent(input: { llmRequestOffset: number }) {
-    const state = reduceAgentEvents(await this.#readConsumedEvents());
-    return (
-      state.currentRequest?.phase === "requested" &&
-      state.currentRequest.llmRequestOffset === input.llmRequestOffset
-    );
+  async #isRequestStillCurrent(input: {
+    llmRequestOffset: number;
+    outputEligible: boolean;
+  }): Promise<boolean> {
+    if (!input.outputEligible) return false;
+    using pager = this.stream.readEvents({
+      afterOffset: input.llmRequestOffset,
+      eventTypes: REQUEST_CURRENCY_EVENT_TYPES,
+      limit: CONSUMED_EVENTS_PAGE_SIZE,
+    });
+    for (;;) {
+      const page = await pager.next();
+      for (const rawEvent of page) {
+        const event = parseAgentConsumedEvent(rawEvent);
+        if (event === undefined) continue;
+        if (event.type === "events.iterate.com/agent/llm-request-scheduled") return false;
+        if (
+          event.type === "events.iterate.com/agent/llm-request-completed" &&
+          event.payload.llmRequestOffset === input.llmRequestOffset
+        ) {
+          return false;
+        }
+        if (
+          event.type === "events.iterate.com/agent/llm-request-cancelled" &&
+          event.payload.phase === "requested" &&
+          event.payload.llmRequestOffset === input.llmRequestOffset
+        ) {
+          return false;
+        }
+      }
+      if (page.length < CONSUMED_EVENTS_PAGE_SIZE) return true;
+    }
   }
 }
 
@@ -1110,28 +1168,33 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
 
 /**
  * Folds a raw journal into agent state outside the processor runtime — the
- * read path behind prompt building and request-currency checks. Non-consumed
- * types and events whose shape fails the contract parse are skipped exactly
- * like the live fold skips them (streams accept raw appends by design; a
- * malformed event is a fact of the log, not an exception). Reducer bugs, by
- * contrast, throw — swallowing them would silently fold wrong state.
+ * recovery prompt and compaction read path. Non-consumed types and events
+ * whose shape fails the contract parse are skipped exactly like the live fold
+ * skips them (streams accept raw appends by design; a malformed event is a
+ * fact of the log, not an exception). Reducer bugs, by contrast, throw —
+ * swallowing them would silently fold wrong state.
  */
 export function reduceAgentEvents(events: readonly StreamEvent[]): AgentState {
   let state = AgentProcessorContract.stateSchema.parse({});
   for (const event of events) {
-    const definition = getConsumedEventDefinition({
-      contract: AgentProcessorContract,
-      eventType: event.type,
-    });
-    if (definition === undefined) continue;
-    const parsed = cachedEventSchema({
-      type: event.type,
-      payloadSchema: definition.payloadSchema,
-    }).safeParse(event);
-    if (!parsed.success) continue;
-    state = reduceAgentEvent({ event: parsed.data as AgentConsumedEvent, state });
+    const parsed = parseAgentConsumedEvent(event);
+    if (parsed === undefined) continue;
+    state = reduceAgentEvent({ event: parsed, state });
   }
   return state;
+}
+
+function parseAgentConsumedEvent(event: StreamEvent): AgentConsumedEvent | undefined {
+  const definition = getConsumedEventDefinition({
+    contract: AgentProcessorContract,
+    eventType: event.type,
+  });
+  if (definition === undefined) return undefined;
+  const parsed = cachedEventSchema({
+    type: event.type,
+    payloadSchema: definition.payloadSchema,
+  }).safeParse(event);
+  return parsed.success ? (parsed.data as AgentConsumedEvent) : undefined;
 }
 
 function agentInputTriggerSource(
@@ -1158,13 +1221,15 @@ type AgentChatMessage = {
   files?: AgentFileAttachment[];
 };
 
+type AgentLlmRequestBody = { messages: AgentChatMessage[] };
+
 /** The chat request is a pure refold of committed history up to the
  * llm-request-requested event's offset, so every retry of the same request
  * sees the same conversation. */
 export function buildAgentLlmRequestBody(input: {
   events: readonly StreamEvent[];
   llmRequestOffset: number;
-}): { messages: AgentChatMessage[] } {
+}): AgentLlmRequestBody {
   const state = reduceAgentEvents(
     input.events.filter((event) => event.offset <= input.llmRequestOffset),
   );
@@ -1182,16 +1247,23 @@ export function buildAgentLlmRequestBody(input: {
       event.offset === input.llmRequestOffset &&
       event.type === "events.iterate.com/agent/llm-request-requested",
   )?.createdAt;
+  return buildAgentLlmRequestBodyFromState({ requestedAt, state });
+}
+
+function buildAgentLlmRequestBodyFromState(input: {
+  requestedAt?: string;
+  state: Pick<AgentState, "history" | "systemPrompt">;
+}): AgentLlmRequestBody {
   return {
     messages: [
-      { role: "system" as const, content: state.systemPrompt },
-      ...state.history,
-      ...(requestedAt === undefined
+      { role: "system" as const, content: input.state.systemPrompt },
+      ...input.state.history,
+      ...(input.requestedAt === undefined
         ? []
         : [
             {
               role: "system" as const,
-              content: `Current date and time (UTC): ${requestedAt}`,
+              content: `Current date and time (UTC): ${input.requestedAt}`,
             },
           ]),
     ],

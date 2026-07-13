@@ -386,6 +386,88 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
+  it("starts a newly reduced request without rereading its prompt and checks currency from its suffix", async () => {
+    const stream = new MemoryStream();
+    const reads: Parameters<MemoryStream["readEvents"]>[0][] = [];
+    const readEvents = stream.readEvents.bind(stream);
+    stream.readEvents = (input = {}) => {
+      reads.push(input);
+      return readEvents(input);
+    };
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          return { response: "done" };
+        },
+      },
+    });
+
+    const events = await stream.append(...agentRequestEvents("hello"));
+    const requested = events.at(-1)!;
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+
+    expect(reads).toEqual([
+      {
+        afterOffset: requested.offset,
+        eventTypes: [
+          "events.iterate.com/agent/llm-request-scheduled",
+          "events.iterate.com/agent/llm-request-completed",
+          "events.iterate.com/agent/llm-request-cancelled",
+        ],
+        limit: 500,
+      },
+    ]);
+  });
+
+  it("rebuilds the exact prompt when a requested obligation comes from a restored checkpoint", async () => {
+    const stream = new MemoryStream();
+    const aiCalls: unknown[] = [];
+    const requestEvents = await stream.append(...agentRequestEvents("recover this prompt"));
+    const requested = requestEvents.at(-1)!;
+    const checkpointState = reduceAgentEvents(stream.events);
+    const [nudge] = await stream.append({
+      type: "events.iterate.com/test/nudge",
+      payload: {},
+    });
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      readState: () => ({ offset: requested.offset, state: checkpointState }),
+      ai: {
+        async run(_model, body) {
+          aiCalls.push(body);
+          return { response: "recovered" };
+        },
+      },
+    });
+
+    await agent.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      timeoutMs: 2_000,
+    });
+
+    expect(aiCalls).toHaveLength(1);
+    expect(aiCalls[0]).toMatchObject({
+      messages: [
+        expect.objectContaining({ role: "system" }),
+        { role: "user", content: "recover this prompt" },
+        {
+          role: "system",
+          content: `Current date and time (UTC): ${requested.createdAt}`,
+        },
+      ],
+    });
+  });
+
   it("extracts the whole script when a string literal embeds a markdown fence", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
@@ -1368,6 +1450,66 @@ describe("interrupt and stray-request hygiene", () => {
     expect(
       stream.events.some((event) => event.type === "events.iterate.com/agent/output-added"),
     ).toBe(false);
+  });
+
+  it("ignores malformed and unrelated lifecycle facts when checking request currency", async () => {
+    let finishAttempt!: () => void;
+    const attemptMayFinish = new Promise<void>((resolve) => {
+      finishAttempt = resolve;
+    });
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      ai: {
+        async run() {
+          await attemptMayFinish;
+          return { response: "still current" };
+        },
+      },
+    });
+
+    await stream.append(...agentRequestEvents("keep going"));
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-started"],
+      timeoutMs: 2_000,
+    });
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        payload: { debounceMs: -1, model: "", requestId: "malformed" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          durationMs: 1,
+          llmRequestOffset: 999,
+          result: { status: "failure", error: { message: "unrelated" } },
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        payload: {
+          phase: "requested",
+          reason: "interrupted-by-user-input",
+          llmRequestOffset: 999,
+        },
+      },
+    );
+    finishAttempt();
+
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-completed"],
+      predicate: (event) =>
+        (event.payload as { llmRequestOffset: number }).llmRequestOffset !== 999,
+      timeoutMs: 2_000,
+    });
+    expect(
+      stream.events.find((event) => event.type === "events.iterate.com/agent/output-added")
+        ?.payload,
+    ).toMatchObject({ content: "still current" });
   });
 
   it("settles a stray non-current requested obligation without dialing the AI binding", async () => {
