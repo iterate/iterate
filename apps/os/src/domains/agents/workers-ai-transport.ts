@@ -156,7 +156,8 @@ async function runByokAttempt(input: {
   };
   const headers: Record<string, string> = {
     authorization: `Bearer ${transport.openaiApiKey}`,
-    "cf-aig-collect-log-payload": "false",
+    "cf-aig-collect-log": "true",
+    "cf-aig-collect-log-payload": "true",
     "content-type": "application/json",
   };
   const ttlSeconds = transport.responseCacheTtlSeconds;

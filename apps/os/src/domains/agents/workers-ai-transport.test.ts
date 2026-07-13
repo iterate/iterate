@@ -186,7 +186,8 @@ describe("the BYOK gateway lane", () => {
     expect(request.provider).toBe("openai");
     expect(request.endpoint).toBe("chat/completions");
     expect(request.headers.authorization).toBe("Bearer sk-test");
-    expect(request.headers["cf-aig-collect-log-payload"]).toBe("false");
+    expect(request.headers["cf-aig-collect-log"]).toBe("true");
+    expect(request.headers["cf-aig-collect-log-payload"]).toBe("true");
     expect(request.headers["cf-aig-cache-ttl"]).toBe("600");
     expect(request.headers["cf-aig-cache-key"]).toMatch(/^[0-9a-f]{64}$/);
     expect(request.query).toMatchObject({
@@ -246,7 +247,8 @@ describe("the BYOK gateway lane", () => {
 
     const request = fake.requests[0]!;
     expect(request.endpoint).toBe("chat/completions");
-    expect(request.headers["cf-aig-collect-log-payload"]).toBe("false");
+    expect(request.headers["cf-aig-collect-log"]).toBe("true");
+    expect(request.headers["cf-aig-collect-log-payload"]).toBe("true");
     expect(request.headers["cf-aig-skip-cache"]).toBe("true");
     expect(request.headers).not.toHaveProperty("cf-aig-cache-ttl");
     expect(request.headers).not.toHaveProperty("cf-aig-cache-key");
