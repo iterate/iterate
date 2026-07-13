@@ -5,13 +5,7 @@ import { markdownFrontmatterRecord, parseMarkdownFrontmatter } from "./markdown-
 const DEFAULT_TASK_STATE = "todo";
 const MAX_TASK_FILENAME_SLUG_LENGTH = 64;
 
-const STANDARD_TASK_STATES = [
-  "backlog",
-  DEFAULT_TASK_STATE,
-  "in-progress",
-  "in-review",
-  "done",
-] as const;
+const STANDARD_TASK_STATES = [DEFAULT_TASK_STATE, "in-progress", "in-review", "done"] as const;
 
 export type RepoTask = {
   path: string;
@@ -77,7 +71,8 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
 
   const frontmatter = parseMarkdownFrontmatter(content);
   const metadata = markdownFrontmatterRecord(frontmatter.document);
-  const state = stringValue(metadata.state) ?? DEFAULT_TASK_STATE;
+  const rawState = stringValue(metadata.state) ?? DEFAULT_TASK_STATE;
+  const state = rawState === "backlog" ? DEFAULT_TASK_STATE : rawState;
   const labels = uniqueStrings(stringArray(metadata.labels));
   const agent = stringValue(metadata.agent);
   const folderPath = `/${taskDirectoryPath.split("/").slice(0, -1).join("/")}`;
