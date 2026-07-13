@@ -119,6 +119,10 @@ export function RepoTasksView({
 }) {
   const [draft, setDraft] = useState<RepoTask | undefined>();
   const [editorPath, setEditorPath] = useState(selectedPath);
+  const draftRef = useRef(draft);
+  const onSetWorkingRef = useRef(onSetWorking);
+  draftRef.current = draft;
+  onSetWorkingRef.current = onSetWorking;
   const renameOrigins = useRef(new Map<string, string>());
   const lastCreationContext = useRef<{
     state: string;
@@ -287,6 +291,19 @@ export function RepoTasksView({
     if (draft !== undefined) persistDraft(task);
     selectTask(undefined);
   };
+
+  useEffect(
+    () => () => {
+      const pendingDraft = draftRef.current;
+      if (pendingDraft === undefined) return;
+      onSetWorkingRef.current(pendingDraft.path, {
+        type: "write",
+        content: pendingDraft.content,
+      });
+    },
+    [],
+  );
+
   useEffect(() => setEditorPath(selectedPath), [selectedPath]);
 
   useEffect(() => {
