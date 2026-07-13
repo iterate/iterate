@@ -67,7 +67,16 @@ describe("itx", () => {
     expect(messages).toContainEqual([
       expect.any(Number),
       "out",
-      ["push", ["pipeline", 1, ["projects", "create"], [{ slug: "alice-project" }]]],
+      [
+        "push",
+        ["pipeline", 1, ["projects", "create"], [{ slug: "alice-project" }]],
+        expect.objectContaining({
+          callId: expect.any(String),
+          client: "node",
+          connectionId: expect.any(String),
+          version: 1,
+        }),
+      ],
     ]);
 
     using stream = project.streams.get("/");
