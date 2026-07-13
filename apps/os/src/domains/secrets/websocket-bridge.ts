@@ -29,7 +29,7 @@ export function maybeBridgeWebSocketResponse(request: Request, response: Respons
   return bridgeUpstreamWebSocket(upstream, response);
 }
 
-export type BridgeUpstreamWebSocketOptions = {
+type BridgeUpstreamWebSocketOptions = {
   /**
    * When true, `upstream` was already `accept()`ed (e.g. after a trusted
    * IDENTIFY handshake in `relayWebSocket`). Workers allow accept only once.

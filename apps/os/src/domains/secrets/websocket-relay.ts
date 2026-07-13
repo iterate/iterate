@@ -73,7 +73,7 @@ export function messageDataToText(data: unknown): string {
  * Attach immediately after `accept()` and before any `await` so server-first
  * frames (hello / ready / dispatch) are never dropped.
  */
-export type UpstreamMessageBuffer = {
+type UpstreamMessageBuffer = {
   readonly frames: Array<string | ArrayBuffer>;
   attach(socket: WebSocket): void;
   /** Stop capturing; remaining frames stay in `frames` for the client flush. */
