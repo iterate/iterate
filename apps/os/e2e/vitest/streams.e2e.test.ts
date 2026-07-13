@@ -159,6 +159,47 @@ test("creates a project and uses project streams through v4 itx", async () => {
   await subscription.unsubscribe();
 });
 
+test("appendAck retries remain exact across cache hits and authoritative fallbacks", async () => {
+  const marker = crypto.randomUUID();
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using stream = itx.streams.get(`/e2e/append-ack-cache/${marker}`);
+  const batch = Array.from({ length: 100 }, (_, index) => ({
+    idempotencyKey: `append-ack-cache:${marker}:${index}`,
+    payload: { index, marker },
+    type: STREAM_EVENT_TYPE,
+  }));
+
+  await stream.appendAck(...batch);
+  const afterBatch = await stream.head();
+  await stream.appendAck(...batch);
+  expect(await stream.head()).toEqual(afterBatch);
+
+  await stream.appendAck(
+    ...Array.from({ length: 29 }, (_, index) => ({
+      idempotencyKey: `append-ack-cache:${marker}:rollover:${index}`,
+      payload: { index, marker },
+      type: STREAM_EVENT_TYPE,
+    })),
+  );
+  const afterRollover = await stream.head();
+  await stream.appendAck(batch[0]!);
+  expect(await stream.head()).toEqual(afterRollover);
+
+  const longKey = `append-ack-cache:${"x".repeat(513)}`;
+  await stream.appendAck({ idempotencyKey: longKey, payload: { marker }, type: STREAM_EVENT_TYPE });
+  const afterLongKey = await stream.head();
+  await stream.appendAck({
+    idempotencyKey: longKey,
+    payload: { duplicate: true },
+    type: STREAM_EVENT_TYPE,
+  });
+  expect(await stream.head()).toEqual(afterLongKey);
+});
+
 test("stream getEvents defaults to a bounded page and supports event type filters", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/os-port/get-events/${marker}`;

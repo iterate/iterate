@@ -3,6 +3,7 @@ import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { AcknowledgedIdempotencyOffsetCache } from "./acknowledged-idempotency-offset-cache.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { parseStreamAppendInput } from "./stream-event-validation.ts";
 import type { ProcessorEvent } from "./processor-contracts.ts";
@@ -138,6 +139,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   });
   #coreProcessorState: CoreProcessorState;
   readonly #coreCheckpointSchedule = new CoreCheckpointSchedule({ nowMs: 0 });
+  #acknowledgedIdempotencyOffsets: AcknowledgedIdempotencyOffsetCache | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -299,13 +301,15 @@ export class StreamDurableObject extends DurableObject<Env> {
         ? undefined
         : materializeIdempotencyHits
           ? this.#log.getByIdempotencyKey(singleInput.idempotencyKey)
-          : this.#log.getOffsetByIdempotencyKey(singleInput.idempotencyKey);
+          : (this.#acknowledgedIdempotencyOffsets?.get(singleInput.idempotencyKey) ??
+            this.#log.getOffsetByIdempotencyKey(singleInput.idempotencyKey));
     const persistedIdempotencyHits =
       idempotencyKeys === undefined
         ? undefined
         : materializeIdempotencyHits
           ? this.#log.getByIdempotencyKeys([...idempotencyKeys])
-          : this.#log.getOffsetsByIdempotencyKeys([...idempotencyKeys]);
+          : (this.#acknowledgedIdempotencyOffsets?.getAll(idempotencyKeys) ??
+            this.#log.getOffsetsByIdempotencyKeys([...idempotencyKeys]));
 
     // 1. Validate inputs, assign offsets, and reduce state.
     const inputCount = singleInput === undefined ? parsedInputs!.length : 1;
@@ -435,6 +439,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     // #checkpointCoreProcessorState) — event rows are the durable truth, and
     // boot catch-up folds past a lagging checkpoint by design.
     const freshTail = this.#log.insert(eventsToInsert, this.ctx.storage);
+    if (
+      !materializeIdempotencyHits &&
+      (singleInput?.idempotencyKey !== undefined || idempotencyKeys !== undefined)
+    ) {
+      for (const event of eventsToInsert) {
+        if (event.idempotencyKey !== undefined && event.ephemeral !== true) {
+          (this.#acknowledgedIdempotencyOffsets ??=
+            new AcknowledgedIdempotencyOffsetCache()).remember(event.idempotencyKey, event.offset);
+        }
+      }
+    }
     this.#coreProcessorState = workingState;
     this.#checkpointCoreProcessorState(eventsToInsert.length, committedAtMs);
     this.#metrics.ingress.bump(
