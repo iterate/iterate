@@ -6,10 +6,9 @@
 // The browser is also a PROVIDER: it can mount live capabilities backed by
 // browser-owned objects (tabs as tool servers).
 //
-// Auth: browser WebSockets cannot set Authorization headers, so the admin
-// cookie is installed through Playwright's context (vitest browser command);
-// the itx from-server-cookie lane accepts the `iterate-admin-auth`
-// cookie riding the handshake.
+// Auth: the Vitest page is deliberately cross-origin from OS. A Playwright
+// command mints a short-lived explicit operator grant server-side, keeping the
+// deployment admin secret out of the browser bundle entirely.
 
 import { describe, expect, it } from "vitest";
 import { commands } from "vitest/browser";
@@ -28,14 +27,14 @@ import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
 import { EXAMPLE_CASES } from "./example-cases.ts";
 
 declare const __ITX_BROWSER_E2E__: {
-  adminApiSecret: string;
   baseUrl: string;
 };
 
-// Cross-origin WebSockets only carry the admin cookie when it can be
-// SameSite=None, which Chromium requires to be Secure — so browser mode needs
-// an https target (a deployed preview/prod), never a plain-http local dev URL.
-const httpsTarget = __ITX_BROWSER_E2E__.baseUrl.startsWith("https:");
+const hasTarget = __ITX_BROWSER_E2E__.baseUrl !== "";
+const targetHostname = hasTarget ? new URL(__ITX_BROWSER_E2E__.baseUrl).hostname : "";
+const localTarget =
+  ["localhost", "127.0.0.1", "::1"].includes(targetHostname) ||
+  targetHostname.endsWith(".localhost");
 
 const BROWSER_EXAMPLES = ITX_EXAMPLES.filter(
   (example) =>
@@ -44,7 +43,7 @@ const BROWSER_EXAMPLES = ITX_EXAMPLES.filter(
     EXAMPLE_CASES[example.id] !== undefined,
 );
 
-describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
+describe.skipIf(!hasTarget)("itx browser execution mode", () => {
   it("runs the default browser REPL snippet against a live session", async () => {
     using session = await connectFromBrowser();
     const result = await evalBrowserReplSessionCode({
@@ -72,20 +71,24 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
 
   for (const example of BROWSER_EXAMPLES) {
     const exampleCase = EXAMPLE_CASES[example.id]!;
-    it(`runs catalogue example "${example.id}" in the REPL pipeline`, async () => {
-      const projectId = await ensureBrowserMatrixProject();
-      using session = await connectFromBrowser();
-      using project = session.projects.get(projectId);
+    it.skipIf(localTarget && example.id === "sandbox-exec")(
+      `runs catalogue example "${example.id}" in the REPL pipeline`,
+      async () => {
+        const projectId = await ensureBrowserMatrixProject();
+        using session = await connectFromBrowser();
+        using project = session.projects.get(projectId);
 
-      const ctx = { attemptSalt: uniqueSuffix(), marker: `browser-${uniqueSuffix()}`, projectId };
-      const vars = exampleCase.vars?.(ctx) ?? {};
-      const result = await evalBrowserReplSessionCode({
-        code: example.code,
-        itx: project,
-        scope: createBrowserReplScope({ projectId, vars }),
-      });
-      exampleCase.assert(result, ctx, expect);
-    }, 120_000);
+        const ctx = { attemptSalt: uniqueSuffix(), marker: `browser-${uniqueSuffix()}`, projectId };
+        const vars = exampleCase.vars?.(ctx) ?? {};
+        const result = await evalBrowserReplSessionCode({
+          code: example.code,
+          itx: project,
+          scope: createBrowserReplScope({ projectId, vars }),
+        });
+        exampleCase.assert(result, ctx, expect);
+      },
+      120_000,
+    );
   }
 
   // The browser-as-provider story (a tab mounting live, browser-owned
@@ -121,38 +124,31 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
 // ---- connection -------------------------------------------------------------
 
 /**
- * An admin Session for this tab. Cookie-authenticated: the admin cookie rides
- * the WebSocket handshake and `authenticate({ type: "from-server-cookie" })`
- * exchanges it for the session catalog, pipelined on the same socket.
+ * A platform-authorized Session for this tab. The short-lived operator grant
+ * is explicit RPC data, so no cross-origin ambient browser credential is
+ * involved.
  */
 async function connectFromBrowser(): Promise<RpcStub<Session & ProjectRpcTarget>> {
-  await installAdminCookie();
+  const token = await operatorSessionToken();
   // The itx capnweb surface is served at /api (mirrors ~/itx/itx-react.tsx).
   const wsUrl = new URL("/api", baseUrl());
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(new WebSocket(wsUrl));
-  return unauthenticated.authenticate({ type: "from-server-cookie" }) as unknown as RpcStub<
+  return unauthenticated.authenticate({ type: "operator-session", token }) as unknown as RpcStub<
     Session & ProjectRpcTarget
   >;
 }
 
-async function installAdminCookie() {
-  // Vitest's browser page runs on Vitest's own origin; Chromium's local HTTP
-  // cookie rules can suppress a cross-origin Set-Cookie, so install the
-  // cookie through Playwright's context instead of POSTing /admin-cookie.
-  const result = await (
+let operatorTokenPromise: Promise<string> | null = null;
+function operatorSessionToken() {
+  operatorTokenPromise ??= (
     commands as unknown as {
-      setItxAdminCookie(input: { secret: string; url: string }): Promise<{
-        cookies?: Array<{ name: string }>;
-      }>;
+      mintItxOperatorToken(input: { url: string }): Promise<{ token: string }>;
     }
-  ).setItxAdminCookie({
-    secret: __ITX_BROWSER_E2E__.adminApiSecret,
-    url: new URL("/api", baseUrl()).toString(),
-  });
-  if (!result.cookies?.some((cookie) => cookie.name === "iterate-admin-auth")) {
-    throw new Error("iterate-admin-auth cookie was not installed.");
-  }
+  )
+    .mintItxOperatorToken({ url: baseUrl() })
+    .then((result) => result.token);
+  return operatorTokenPromise;
 }
 
 function baseUrl() {

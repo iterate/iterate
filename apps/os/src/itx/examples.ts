@@ -1124,7 +1124,7 @@ return {
     e2eProven: false,
     title: "List repositories through the built-in GitHub integration",
     description:
-      'itx.integrations.github["<connection>"] IS a real Octokit (@octokit/rest): rest.<namespace>.<method>(params), the request(route, params) escape hatch, graphql(query, variables), and paginate(route, params) all work. There is NO generic api.request({ method, path }) shape. The connection acts as a GitHub App installation, so repos are enumerated with rest.apps.listReposAccessibleToInstallation() — user-scoped ...ForAuthenticatedUser endpoints answer 403. Resolve the connection name from itx.integrations.list() first. Needs a connected GitHub installation — interactive-only.',
+      'itx.integrations.github["<connection>"].octokit is the ordinary Octokit from @octokit/rest, with Iterate supplying GitHub App installation auth and transport. Use its package types and https://octokit.github.io/rest.js/; `.rest` is Octokit\'s normal property and `.octokit` is mandatory. Resolve the connection with itx.integrations.list() first. Needs a connected GitHub installation — interactive-only.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -1134,7 +1134,7 @@ if (!github) return { error: "No GitHub connection — connect one from the dash
 
 // The connection is a GitHub App installation: this endpoint (not the
 // user-scoped listForAuthenticatedUser, which 403s) enumerates its repos.
-const repos = await itx.integrations.github[github.connection].rest.apps.listReposAccessibleToInstallation({
+const repos = await itx.integrations.github[github.connection].octokit.rest.apps.listReposAccessibleToInstallation({
   per_page: Number(vars.count ?? 5),
 });
 
@@ -1157,7 +1157,7 @@ if (!github) return { error: "No GitHub connection — connect one from the dash
 const owner = vars.owner ?? "octocat";
 const repo = vars.repo ?? "hello-world";
 // README shortcut; use "GET /repos/{owner}/{repo}/contents/{path}" with a path param for any file.
-const readme = await itx.integrations.github[github.connection].request(
+const readme = await itx.integrations.github[github.connection].octokit.request(
   "GET /repos/{owner}/{repo}/readme",
   { owner, repo, headers: { accept: "application/vnd.github.raw+json" } },
 );

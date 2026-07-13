@@ -20,8 +20,8 @@ import {
 import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
-import { PrAgentProcessorContract } from "../repos/pr-agent-processor-contract.ts";
-import { isPrAgentPath } from "../repos/pr-agent-utils.ts";
+import { GithubAgentProcessorContract } from "../repos/github-agent-processor-contract.ts";
+import { isGithubAgentPath } from "../repos/github-agent-utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-domain-processor.ts";
@@ -274,7 +274,7 @@ export class ProjectProcessor extends StreamProcessor<
               ...agentSubscriptionEvents({
                 childPath,
                 email: !isChildAgent && isEmailAgentPath(childPath),
-                githubPr: !isChildAgent && isPrAgentPath(childPath),
+                github: !isChildAgent && isGithubAgentPath(childPath),
                 projectId: this.deps.itx.projectId,
                 slack: isSlack,
                 telegram: isTelegram,
@@ -351,7 +351,7 @@ export class ProjectProcessor extends StreamProcessor<
 function agentSubscriptionEvents(input: {
   childPath: string;
   email?: boolean;
-  githubPr?: boolean;
+  github?: boolean;
   projectId: string;
   slack?: boolean;
   telegram?: boolean;
@@ -377,7 +377,7 @@ function agentSubscriptionEvents(input: {
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug, "agent")] : []),
     ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
-    ...(input.githubPr ? [subscription(PrAgentProcessorContract.slug, "agent")] : []),
+    ...(input.github ? [subscription(GithubAgentProcessorContract.slug, "agent")] : []),
   ];
 }
 

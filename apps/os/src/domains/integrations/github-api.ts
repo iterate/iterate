@@ -5,8 +5,9 @@
 // dispatched through the connection secret's own `fetch()`, whose
 // github-app-installation strategy mints the installation token on first use,
 // re-mints on 401, substitutes the placeholder, and pins the host — all in
-// trusted DO code. The caller (itx.integrations.github["<conn>"]) replays its
-// dotted path straight onto this instance (rpc-targets.ts), so it IS Octokit —
+// trusted DO code. The caller's mandatory `.octokit` namespace
+// (itx.integrations.github["<conn>"].octokit) replays its remaining dotted
+// path straight onto this instance (rpc-targets.ts), so it IS Octokit —
 // `rest.repos.get(...)`, `request("GET /...")`, `graphql(...)` — never a
 // hand-mapped surface. Mirrors the Slack WebClient wrapping in slack-api.ts.
 
@@ -53,7 +54,7 @@ export function connectionOctokit(input: {
  * replayed onto that connection's wrapped Octokit. The single source of truth,
  * shared by the dispatch guard (rpc-targets) and the error normalizer below. */
 export const GITHUB_CALL_GRAMMAR =
-  'itx.integrations.github expected `<connection>.<octokit path>` (e.g. itx.integrations.github["jonas"].rest.apps.listReposAccessibleToInstallation() or .request("GET /installation/repositories")); use itx.integrations.list() to see connections.';
+  'itx.integrations.github expected `<connection>.octokit.<path>` (e.g. itx.integrations.github["jonas"].octokit.rest.apps.listReposAccessibleToInstallation() or .octokit.request("GET /installation/repositories")); use itx.integrations.list() to see connections.';
 
 /**
  * Turn an Octokit failure into a caller-facing Error whose message survives the

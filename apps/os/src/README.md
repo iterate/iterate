@@ -167,17 +167,23 @@ using itx = session.projects.get("prj_…");
 `authenticate()` is the only way in — authority is never forged, only handed
 back by a method that checked you. Credential lanes (`auth.ts`):
 
-- `from-server-cookie` — the browser lane: the signed-in user's session cookie
-  (or the admin cookie) riding the WebSocket handshake.
+- `from-server-cookie` — the same-origin browser lane: a signed-in user's
+  session cookie or a short-lived operator cookie on the WebSocket handshake.
 - `bearer` — an auth-worker OAuth access token as RPC data.
 - `admin-secret` — the deployment admin API secret (CLI, tooling, e2e).
+- `operator-session` — a short-lived deployment- and origin-bound operator
+  grant. A project grant carries one project ID and reconstructs a synthetic
+  operator principal; it never adopts a customer identity. A platform grant is
+  a separate, explicit authority kind.
 - `impersonate` — admin-gated fake principal, so test suites can exercise
   per-project confinement without minting real users.
 
 Project access comes from auth-worker session claims, with a directory
 fallback: on a claims miss, `ensureCanAccessProject` consults the auth worker's
 project directory (through the KV cache) and widens the live context — this is
-how a just-created project is usable before the JWT refreshes.
+how a just-created project is usable before the JWT refreshes. Scoped operator
+grants disable this fallback and remain confined to their one signed project
+ID, including when the operator knows another valid project slug or ID.
 
 `connectItx` overloads are client-side convenience only:
 

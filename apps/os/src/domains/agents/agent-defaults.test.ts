@@ -67,10 +67,45 @@ describe("agentDefaultsForPath", () => {
     expect(config?.payload.systemPrompt).toBe(EMAIL_AGENT_SYSTEM_PROMPT);
   });
 
-  it("gives pull-request agents the GitHub PR prompt (reply door = createComment)", () => {
+  it("gives pull-request agents the GitHub prompt and a complete disabled review policy", () => {
     const prompt = defaultsFor("/agents/repos/root/pull-requests/7").systemPrompt;
     expect(prompt).toContain("attached to one GitHub pull request");
-    expect(prompt).toContain("rest.issues.createComment");
+    expect(prompt).toContain(".octokit.rest.issues.createComment");
+    expect(prompt).toContain("ordinary Octokit");
+
+    const configured = defaultsFor("/agents/repos/root/pull-requests/7").events.find(
+      (event) => event.type === "events.iterate.com/github-agent/configure",
+    );
+    expect(configured?.payload).toEqual({
+      automaticReview: {
+        enabled: false,
+        instructions:
+          "Review the complete pull-request diff for correctness, security, regressions, and missing tests. Report only specific actionable findings supported by the changed code.",
+      },
+    });
+  });
+
+  it("materializes GitHub review overrides into that same complete configured fact", () => {
+    const configured = defaultsFor("/agents/repos/root/pull-requests/7", {
+      githubAgent: {
+        automaticReview: {
+          enabled: true,
+          instructions: "No unchecked casts in production code.",
+        },
+      },
+    }).events.find((event) => event.type === "events.iterate.com/github-agent/configure");
+
+    expect(configured?.payload).toMatchObject({
+      automaticReview: {
+        enabled: true,
+        instructions: "No unchecked casts in production code.",
+      },
+    });
+    expect(
+      defaultsFor("/agents/demo", { githubAgent: { automaticReview: { enabled: true } } }).events,
+    ).not.toContainEqual(
+      expect.objectContaining({ type: "events.iterate.com/github-agent/configure" }),
+    );
   });
 
   it("standardizes every platform agent prompt on TypeScript ts fences", () => {

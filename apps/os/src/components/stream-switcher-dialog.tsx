@@ -120,7 +120,7 @@ export function StreamSwitcherDialog({
   scope: string;
   /**
    * Whether to hold the live streams-index subscription. The admin explorer
-   * turns it off: its lane dials through the global admin session, and the
+   * turns it off: its lane dials through platform-wide operator authority, and the
    * `__null__` deployment namespace has no project DO to subscribe to at all —
    * it browses the tree instead.
    */

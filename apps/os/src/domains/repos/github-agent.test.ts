@@ -1,5 +1,5 @@
-// Unit tests for the pull-request agent lane: the repo processor's PR webhook
-// forward (router) and the github-pr-agent processor (transcriber), plus the
+// Unit tests for the GitHub agent lane: the repo processor's PR webhook
+// forward (router) and the github-agent processor (projection + trigger), plus the
 // path scheme. Same in-memory stream network harness as the email/slack
 // processor tests — no Durable Objects, no network.
 
@@ -8,13 +8,13 @@ import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import { emptyStreamRuntimeState } from "../streams/test-helpers.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
-import { PrAgentProcessor } from "./pr-agent-processor-implementation.ts";
+import { GithubAgentProcessor } from "./github-agent-processor-implementation.ts";
 import {
-  isPrAgentPath,
-  prAgentPath,
-  pullRequestNumberFromWebhookBody,
+  githubAgentPath,
+  isGithubAgentPath,
+  pullRequestNumbersFromWebhookBody,
   repoSlugForAgentPath,
-} from "./pr-agent-utils.ts";
+} from "./github-agent-utils.ts";
 
 /**
  * In-memory network of streams keyed by path, so router tests can observe the
@@ -158,13 +158,28 @@ const GITHUB_LINK = {
 };
 
 /** One captured GitHub webhook delivery, in the connection-stream envelope. */
-function webhookPayload(body: Record<string, unknown>): Record<string, unknown> {
-  return { body, headers: { "content-type": "application/json" }, installationId: "789" };
+function webhookPayload(
+  body: Record<string, unknown>,
+  githubEvent = "pull_request",
+): Record<string, unknown> {
+  return {
+    body,
+    headers: { "content-type": "application/json", githubEvent },
+    installationId: "789",
+  };
 }
 
 function pullRequestBody(input: {
   action?: string;
-  comment?: { body: string; senderLogin?: string; senderType?: string };
+  comment?: {
+    authorAssociation?: string;
+    body: string;
+    senderLogin?: string;
+    senderType?: string;
+  };
+  draft?: boolean;
+  headSha?: string;
+  labels?: string[];
   number?: number;
   title?: string;
 }): Record<string, unknown> {
@@ -177,15 +192,26 @@ function pullRequestBody(input: {
             number,
             title: input.title ?? "Add widgets",
             state: "open",
-            draft: false,
-            head: { ref: "feature" },
-            base: { ref: "main" },
+            draft: input.draft ?? false,
+            head: {
+              ref: "feature",
+              sha: input.headSha ?? "head-abc",
+              repo: { name: "widgets-fork", owner: { login: "author" } },
+            },
+            base: { ref: "main", sha: "base-abc" },
             body: "PR description",
+            labels: (input.labels ?? []).map((name) => ({ name })),
+            html_url: `https://github.com/acme/widgets/pull/${number}`,
+            user: { login: "author" },
           },
         }
       : {
           issue: { number, title: input.title ?? "Add widgets", pull_request: { url: "x" } },
-          comment: { body: input.comment.body, html_url: "https://github.com/x" },
+          comment: {
+            author_association: input.comment.authorAssociation ?? "NONE",
+            body: input.comment.body,
+            html_url: "https://github.com/x",
+          },
         }),
     sender: {
       login: input.comment?.senderLogin ?? "jonas",
@@ -206,43 +232,49 @@ function newRepoProcessor(stream: MemoryStream, path = "/repos/config") {
   });
 }
 
-describe("pr-agent path scheme", () => {
+describe("github-agent path scheme", () => {
   it("derives slugs and paths", () => {
     expect(repoSlugForAgentPath("/repos/config")).toBe("config");
     expect(repoSlugForAgentPath("/repos/foo")).toBe("foo");
     expect(repoSlugForAgentPath("/tools/bar")).toBe("tools-bar");
     expect(() => repoSlugForAgentPath("/")).toThrow(/non-root repo path/);
-    expect(prAgentPath("/repos/config", 7)).toBe("/agents/repos/config/pull-requests/7");
-    expect(prAgentPath("/repos/foo", 12)).toBe("/agents/repos/foo/pull-requests/12");
-    expect(() => prAgentPath("/repos/config", 0)).toThrow(/positive integer/);
+    expect(githubAgentPath("/repos/config", 7)).toBe("/agents/repos/config/pull-requests/7");
+    expect(githubAgentPath("/repos/foo", 12)).toBe("/agents/repos/foo/pull-requests/12");
+    expect(() => githubAgentPath("/repos/config", 0)).toThrow(/positive integer/);
   });
 
   it("recognizes PR agent paths and only those", () => {
-    expect(isPrAgentPath("/agents/repos/config/pull-requests/7")).toBe(true);
-    expect(isPrAgentPath("/agents/repos/foo/pull-requests/12")).toBe(true);
-    expect(isPrAgentPath("/agents/repos/foo/pull-requests/nope")).toBe(false);
-    expect(isPrAgentPath("/agents/repos/pull-requests/7")).toBe(false);
-    expect(isPrAgentPath("/agents/email/t1")).toBe(false);
-    expect(isPrAgentPath("/agents/onboarding")).toBe(false);
+    expect(isGithubAgentPath("/agents/repos/config/pull-requests/7")).toBe(true);
+    expect(isGithubAgentPath("/agents/repos/foo/pull-requests/12")).toBe(true);
+    expect(isGithubAgentPath("/agents/repos/foo/pull-requests/nope")).toBe(false);
+    expect(isGithubAgentPath("/agents/repos/pull-requests/7")).toBe(false);
+    expect(isGithubAgentPath("/agents/email/t1")).toBe(false);
+    expect(isGithubAgentPath("/agents/onboarding")).toBe(false);
   });
 
   it("extracts PR numbers from the webhook shapes that carry them", () => {
-    expect(pullRequestNumberFromWebhookBody(pullRequestBody({ number: 42 }))).toBe(42);
+    expect(pullRequestNumbersFromWebhookBody(pullRequestBody({ number: 42 }))).toEqual([42]);
     expect(
-      pullRequestNumberFromWebhookBody(pullRequestBody({ comment: { body: "hi" }, number: 9 })),
-    ).toBe(9);
+      pullRequestNumbersFromWebhookBody(pullRequestBody({ comment: { body: "hi" }, number: 9 })),
+    ).toEqual([9]);
     // A plain issue comment (no issue.pull_request) is not a PR event.
     expect(
-      pullRequestNumberFromWebhookBody({
+      pullRequestNumbersFromWebhookBody({
         action: "created",
         issue: { number: 3 },
         comment: { body: "hi" },
       }),
-    ).toBeNull();
+    ).toEqual([]);
     // Push webhooks carry neither shape.
-    expect(pullRequestNumberFromWebhookBody({ ref: "refs/heads/main", after: "abc" })).toBeNull();
-    expect(pullRequestNumberFromWebhookBody(null)).toBeNull();
-    expect(pullRequestNumberFromWebhookBody("push")).toBeNull();
+    expect(pullRequestNumbersFromWebhookBody({ ref: "refs/heads/main", after: "abc" })).toEqual([]);
+    expect(pullRequestNumbersFromWebhookBody(null)).toEqual([]);
+    expect(pullRequestNumbersFromWebhookBody("push")).toEqual([]);
+
+    expect(
+      pullRequestNumbersFromWebhookBody({
+        check_run: { pull_requests: [{ number: 7 }, { number: 8 }, { number: 7 }] },
+      }),
+    ).toEqual([7, 8]);
   });
 });
 
@@ -264,7 +296,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
 
     const routed = network.eventsAt("/agents/repos/config/pull-requests/7");
     expect(routed.map((event) => event.type)).toEqual([
-      "events.iterate.com/github-pr/route-configured",
+      "events.iterate.com/github-agent/route-configured",
       "events.iterate.com/github/webhook-received",
     ]);
     expect(routed[0]!.payload).toEqual({
@@ -301,13 +333,13 @@ describe("RepoProcessor PR webhook forward (router)", () => {
 
     const pr7 = network.eventsAt("/agents/repos/config/pull-requests/7");
     expect(pr7.map((event) => event.type)).toEqual([
-      "events.iterate.com/github-pr/route-configured",
+      "events.iterate.com/github-agent/route-configured",
       "events.iterate.com/github/webhook-received",
       "events.iterate.com/github/webhook-received",
     ]);
     const pr8 = network.eventsAt("/agents/repos/config/pull-requests/8");
     expect(pr8.map((event) => event.type)).toEqual([
-      "events.iterate.com/github-pr/route-configured",
+      "events.iterate.com/github-agent/route-configured",
       "events.iterate.com/github/webhook-received",
     ]);
   });
@@ -340,10 +372,43 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     // acme/widgets coordinates; the coordinate-carrying key repoints instead.
     const routeFacts = network
       .eventsAt("/agents/repos/config/pull-requests/7")
-      .filter((event) => event.type === "events.iterate.com/github-pr/route-configured");
+      .filter((event) => event.type === "events.iterate.com/github-agent/route-configured");
     expect(routeFacts).toHaveLength(2);
     expect(routeFacts[0]!.payload).toMatchObject({ repo: "widgets" });
     expect(routeFacts[1]!.payload).toMatchObject({ repo: "gadgets" });
+  });
+
+  it("routes one CI delivery to every associated pull request", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const processor = newRepoProcessor(stream);
+    const cursors = new Map<object, number>();
+    const checkRun = {
+      action: "completed",
+      check_run: {
+        conclusion: "failure",
+        name: "test",
+        pull_requests: [{ number: 7 }, { number: 8 }],
+      },
+    };
+
+    await stream.append(
+      { type: "events.iterate.com/repo/github-link-configured", payload: GITHUB_LINK },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(checkRun, "check_run"),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    for (const number of [7, 8]) {
+      expect(
+        network.eventsAt(`/agents/repos/config/pull-requests/${number}`).map((event) => event.type),
+      ).toEqual([
+        "events.iterate.com/github-agent/route-configured",
+        "events.iterate.com/github/webhook-received",
+      ]);
+    }
   });
 
   it("ignores non-PR webhooks and webhooks on unlinked repos", async () => {
@@ -477,16 +542,16 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
   });
 });
 
-describe("PrAgentProcessor (transcriber)", () => {
+describe("GithubAgentProcessor (projection and trigger policy)", () => {
   const AGENT_PATH = "/agents/repos/config/pull-requests/7";
   const ROUTE_EVENT = {
-    type: "events.iterate.com/github-pr/route-configured" as const,
+    type: "events.iterate.com/github-agent/route-configured" as const,
     payload: { ...GITHUB_LINK, number: 7, repoPath: "/repos/config", streamPath: AGENT_PATH },
   };
 
   function agentInputs(stream: MemoryStream) {
-    // Route context is a plain input; webhook transcriptions are inbound
-    // messages — the tests treat both as "what reached the model".
+    // Route context is a plain input; policy-triggered snapshots are inbound
+    // messages. Silent webhook projections deliberately produce neither.
     return stream.events.filter(
       (event) =>
         event.type === "events.iterate.com/agent/input-added" ||
@@ -494,10 +559,24 @@ describe("PrAgentProcessor (transcriber)", () => {
     );
   }
 
-  it("transcribes the route fact into silent context naming the reply door", async () => {
+  function newGithubAgentProcessor(stream: MemoryStream) {
+    return new GithubAgentProcessor({ stream, path: stream.path, projectId: null });
+  }
+
+  const CONFIGURED = (enabled: boolean) => ({
+    type: "events.iterate.com/github-agent/configure" as const,
+    payload: {
+      automaticReview: {
+        enabled,
+        instructions: "Every exported event needs a reducer test.",
+      },
+    },
+  });
+
+  it("turns the route fact into silent context naming the .octokit reply door", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
-    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newGithubAgentProcessor(stream);
     const cursors = new Map<object, number>();
 
     await stream.append(ROUTE_EVENT);
@@ -507,38 +586,42 @@ describe("PrAgentProcessor (transcriber)", () => {
     expect(inputs).toHaveLength(1);
     const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: object };
     expect(payload.content).toContain("pull request #7 of acme/widgets");
-    expect(payload.content).toContain('itx.integrations.github["install-789"]');
+    expect(payload.content).toContain('itx.integrations.github["install-789"].octokit');
     expect(payload.content).toContain("createComment");
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "dont-trigger-request" });
     expect(processor.state).toMatchObject({ number: 7, owner: "acme", repo: "widgets" });
   });
 
-  it("triggers a turn only for human comments that mention the agent", async () => {
+  it("keeps ordinary webhooks out of model history and queues one bounded human mention", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
-    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newGithubAgentProcessor(stream);
     const cursors = new Map<object, number>();
+    const omittedTail = "not-in-the-bounded-rendering";
 
     await stream.append(
       ROUTE_EVENT,
-      // PR opened: context only.
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload(pullRequestBody({ number: 7, title: "Add widgets" })),
       },
-      // Human comment without a mention: context only.
       {
         type: "events.iterate.com/github/webhook-received",
-        payload: webhookPayload(pullRequestBody({ comment: { body: "lgtm" }, number: 7 })),
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: { body: `lgtm ${"x".repeat(2_000)}${omittedTail}` },
+            number: 7,
+          }),
+          "issue_comment",
+        ),
       },
-      // Human comment mentioning the agent: this one wakes the LLM.
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload(
           pullRequestBody({ comment: { body: "@iterate what does this change?" }, number: 7 }),
+          "issue_comment",
         ),
       },
-      // The agent's own comment boomerangs back with a Bot sender: never a trigger.
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload(
@@ -550,127 +633,156 @@ describe("PrAgentProcessor (transcriber)", () => {
             },
             number: 7,
           }),
+          "issue_comment",
         ),
       },
     );
     await deliverNewEvents({ cursors, processor, stream });
 
     const inputs = agentInputs(stream);
-    // route context + 4 webhooks
-    expect(inputs).toHaveLength(5);
-    const policies = inputs.map(
-      (event) => (event.payload as { llmRequestPolicy?: { behaviour: string } }).llmRequestPolicy,
-    );
-    expect(policies[1]).toEqual({ behaviour: "dont-trigger-request" });
-    expect(policies[2]).toEqual({ behaviour: "dont-trigger-request" });
-    // The mention triggers: the omitted policy materializes as the schema
-    // default, which is the turn-triggering behaviour.
-    expect(policies[3]).toEqual({ behaviour: "after-current-request" });
-    expect(policies[4]).toEqual({ behaviour: "dont-trigger-request" });
-
-    const mentionInput = inputs[3]!.payload as { content: string };
+    expect(inputs).toHaveLength(2); // silent route context + the one human mention
+    const mentionInput = inputs[1]!.payload as {
+      content: string;
+      llmRequestPolicy: { behaviour: string };
+    };
+    expect(mentionInput.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
     expect(mentionInput.content).toContain("@iterate what does this change?");
-    const openedInput = inputs[1]!.payload as { content: string };
-    expect(openedInput.content).toContain("Add widgets");
+    expect(mentionInput.content).toContain("Add widgets");
+    expect(mentionInput.content).toContain("headRepo: widgets-fork");
+    expect(mentionInput.content).toContain("project sandbox");
+    expect(mentionInput.content).toContain("/secrets/integrations/github/install-789");
+    expect(mentionInput.content).toContain("Never use itx.repo, itx.workspace");
+    expect(mentionInput.content).toContain(`getEvent({ offset: 4 })`);
+    expect(mentionInput.content).not.toContain(omittedTail);
+    expect(processor.state.recentActivity).toHaveLength(4);
   });
 
-  it("renders the PR description only on opened — edits announce without the body wall", async () => {
+  it("interrupts for each configured non-draft head and gives the agent precise review tools", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
-    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newGithubAgentProcessor(stream);
     const cursors = new Map<object, number>();
 
     await stream.append(
       ROUTE_EVENT,
+      CONFIGURED(true),
       {
         type: "events.iterate.com/github/webhook-received",
-        payload: webhookPayload(pullRequestBody({ action: "opened" })),
+        payload: webhookPayload(pullRequestBody({ action: "opened", headSha: "head-one" })),
       },
-      // CI bots edit PR bodies constantly (preview tables); a real prd
-      // journal accumulated 53 near-identical multi-KB body walls this way.
       {
         type: "events.iterate.com/github/webhook-received",
-        payload: webhookPayload(pullRequestBody({ action: "edited" })),
+        payload: webhookPayload(pullRequestBody({ action: "synchronize", headSha: "head-two" })),
       },
     );
     await deliverNewEvents({ cursors, processor, stream });
 
-    const inputs = agentInputs(stream).map(
-      (event) => (event.payload as { content: string }).content,
+    const reviews = agentInputs(stream).filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
-    // inputs[0] is route context; opened carries the description, edited does not.
-    expect(inputs[1]).toContain("PR description");
-    expect(inputs[2]).toContain("edited");
-    expect(inputs[2]).not.toContain("PR description");
-    // The edit still announces the PR identity.
-    expect(inputs[2]).toContain("Add widgets");
+    expect(reviews).toHaveLength(2);
+    expect(
+      reviews.map(
+        (event) => (event.payload as { llmRequestPolicy: { behaviour: string } }).llmRequestPolicy,
+      ),
+    ).toEqual([
+      { behaviour: "interrupt-current-request" },
+      { behaviour: "interrupt-current-request" },
+    ]);
+    const latest = (reviews[1]!.payload as { content: string }).content;
+    expect(latest).toContain("Review head head-two");
+    expect(latest).toContain("Every exported event needs a reducer test.");
+    expect(latest).toContain(
+      '.octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files"',
+    );
+    expect(latest).toContain(".octokit.rest.pulls.createReview");
+    expect(latest).toContain("<!-- iterate-review:head-two -->");
   });
 
-  it("gates triggers on action, mention boundary, and PR-description mentions", async () => {
+  it("keeps drafts quiet even when a review label is applied, then reviews when ready", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
-    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newGithubAgentProcessor(stream);
     const cursors = new Map<object, number>();
 
+    const draft = pullRequestBody({ action: "opened", draft: true, headSha: "draft-head" });
     await stream.append(
       ROUTE_EVENT,
-      // Deleting (or editing) a mention comment must not wake the agent —
-      // GitHub sends the full body on both actions.
+      CONFIGURED(true),
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(draft),
+      },
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload({
-          ...pullRequestBody({ comment: { body: "@iterate please review" }, number: 7 }),
-          action: "deleted",
-        }),
-      },
-      // An email address is not a mention.
-      {
-        type: "events.iterate.com/github/webhook-received",
-        payload: webhookPayload(
-          pullRequestBody({ comment: { body: "mail support@iterate.com about this" }, number: 7 }),
-        ),
-      },
-      // A mention in the PR description triggers on open…
-      {
-        type: "events.iterate.com/github/webhook-received",
-        payload: webhookPayload({
-          ...pullRequestBody({ number: 7 }),
+          ...draft,
+          action: "labeled",
+          label: { name: "iterate:review" },
           pull_request: {
-            ...(pullRequestBody({ number: 7 }).pull_request as object),
-            body: "@iterate please review this",
-          },
-        }),
-      },
-      // …but not on later pull_request actions that still carry the body.
-      {
-        type: "events.iterate.com/github/webhook-received",
-        payload: webhookPayload({
-          ...pullRequestBody({ number: 7 }),
-          action: "synchronize",
-          pull_request: {
-            ...(pullRequestBody({ number: 7 }).pull_request as object),
-            body: "@iterate please review this",
+            ...(draft.pull_request as Record<string, unknown>),
+            labels: [{ name: "iterate:review" }],
           },
         }),
       },
     );
     await deliverNewEvents({ cursors, processor, stream });
+    expect(
+      agentInputs(stream).filter(
+        (event) => event.type === "events.iterate.com/agents/message-received",
+      ),
+    ).toHaveLength(0);
 
-    const inputs = agentInputs(stream);
-    expect(inputs).toHaveLength(5);
-    const policies = inputs.map(
-      (event) => (event.payload as { llmRequestPolicy?: { behaviour: string } }).llmRequestPolicy,
+    await stream.append({
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhookPayload(
+        pullRequestBody({ action: "ready_for_review", draft: false, headSha: "draft-head" }),
+      ),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(
+      agentInputs(stream).filter(
+        (event) => event.type === "events.iterate.com/agents/message-received",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("reconciles the birth race when review configuration arrives after the opening webhook", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = newGithubAgentProcessor(stream);
+    const cursors = new Map<object, number>();
+
+    await stream.append(ROUTE_EVENT, {
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhookPayload(pullRequestBody({ action: "opened", headSha: "racy-head" })),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(agentInputs(stream)).toHaveLength(1);
+
+    await stream.append(CONFIGURED(true));
+    await deliverNewEvents({ cursors, processor, stream });
+    const reviews = agentInputs(stream).filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
     );
-    expect(policies[1]).toEqual({ behaviour: "dont-trigger-request" }); // deleted mention
-    expect(policies[2]).toEqual({ behaviour: "dont-trigger-request" }); // email address
-    expect(policies[3]).toEqual({ behaviour: "after-current-request" }); // description mention on open
-    expect(policies[4]).toEqual({ behaviour: "dont-trigger-request" }); // synchronize
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]!.idempotencyKey).toContain("automatic-review:racy-head");
+
+    // Reconfiguration is a complete last-write-wins fact, but must not enqueue
+    // a duplicate review for the same immutable head.
+    await stream.append(CONFIGURED(true));
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(
+      agentInputs(stream).filter(
+        (event) => event.type === "events.iterate.com/agents/message-received",
+      ),
+    ).toHaveLength(1);
   });
 
   it("a relink's fresh route fact produces a fresh, corrected route-context input", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
-    const processor = new PrAgentProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newGithubAgentProcessor(stream);
     const cursors = new Map<object, number>();
 
     await stream.append(ROUTE_EVENT, {
@@ -686,5 +798,175 @@ describe("PrAgentProcessor (transcriber)", () => {
     expect(inputs[0]).toContain("acme/widgets");
     expect(inputs[1]).toContain("acme/gadgets");
     expect(processor.state).toMatchObject({ repo: "gadgets" });
+  });
+
+  it("supports native label overrides and one-off review-now comments", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = newGithubAgentProcessor(stream);
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      ROUTE_EVENT,
+      CONFIGURED(false),
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(pullRequestBody({ action: "opened", headSha: "controlled" })),
+      },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: { body: "@iterate review now", authorAssociation: "CONTRIBUTOR" },
+          }),
+          "issue_comment",
+        ),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const oneOff = agentInputs(stream).at(-1)!;
+    expect(oneOff.idempotencyKey).toContain("webhook-turn");
+    expect((oneOff.payload as { content: string }).content).toContain("Review head controlled");
+
+    const labeled = pullRequestBody({
+      action: "labeled",
+      headSha: "controlled",
+      labels: ["iterate:review"],
+    });
+    await stream.append({
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhookPayload({ ...labeled, label: { name: "iterate:review" } }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    const labelReview = agentInputs(stream).at(-1)!;
+    expect(labelReview.idempotencyKey).toContain("automatic-review:controlled");
+    expect(
+      (labelReview.payload as { llmRequestPolicy: { behaviour: string } }).llmRequestPolicy,
+    ).toEqual({ behaviour: "interrupt-current-request" });
+
+    // The visible skip label wins even if both labels are present. An explicit
+    // `review now` still performs the requested one-off review.
+    const skipped = pullRequestBody({
+      action: "labeled",
+      headSha: "controlled",
+      labels: ["iterate:review", "iterate:skip-review"],
+    });
+    await stream.append(
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload({ ...skipped, label: { name: "iterate:skip-review" } }),
+      },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: { body: "@iterate review now" },
+          }),
+          "issue_comment",
+        ),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+    const now = agentInputs(stream).at(-1)!;
+    expect(now.idempotencyKey).toContain("webhook-turn");
+    expect((now.payload as { content: string }).content).toContain("Review head controlled");
+  });
+
+  it("reviews an already-open PR when its first routed webhook enables the label", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = newGithubAgentProcessor(stream);
+    const cursors = new Map<object, number>();
+    const labeled = pullRequestBody({
+      action: "labeled",
+      headSha: "existing-head",
+      labels: ["iterate:review"],
+    });
+
+    await stream.append(ROUTE_EVENT, CONFIGURED(false), {
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhookPayload({ ...labeled, label: { name: "iterate:review" } }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const reviews = agentInputs(stream).filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
+    );
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]!.idempotencyKey).toContain("automatic-review:existing-head");
+    expect((reviews[0]!.payload as { content: string }).content).toContain(
+      "Review head existing-head",
+    );
+  });
+
+  it("fetches the live head for review-now when no PR snapshot exists yet", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = newGithubAgentProcessor(stream);
+    const cursors = new Map<object, number>();
+
+    await stream.append(ROUTE_EVENT, CONFIGURED(false), {
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhookPayload(
+        pullRequestBody({ comment: { body: "@iterate review now" } }),
+        "issue_comment",
+      ),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const turn = (agentInputs(stream).at(-1)!.payload as { content: string }).content;
+    expect(turn).toContain("use its current head SHA as `reviewHead`");
+    expect(turn).toContain("commit_id: reviewHead");
+    expect(turn).toContain("<!-- iterate-review:${reviewHead} -->");
+    expect(turn).not.toContain("<unknown>");
+  });
+
+  it("projects CI silently and includes it in the next requested turn", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = newGithubAgentProcessor(stream);
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      ROUTE_EVENT,
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(pullRequestBody({ action: "opened", headSha: "ci-head" })),
+      },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          {
+            action: "completed",
+            check_run: {
+              conclusion: "failure",
+              details_url: "https://github.com/acme/widgets/actions/1",
+              head_sha: "ci-head",
+              name: "typecheck",
+              pull_requests: [{ number: 7 }],
+              status: "completed",
+            },
+            sender: { login: "github-actions[bot]", type: "Bot" },
+          },
+          "check_run",
+        ),
+      },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({ comment: { body: "@iterate why is CI red?" } }),
+          "issue_comment",
+        ),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = agentInputs(stream);
+    expect(inputs).toHaveLength(2); // route + mention; the check itself is silent
+    const turn = (inputs[1]!.payload as { content: string }).content;
+    expect(turn).toContain("typecheck");
+    expect(turn).toContain("failure");
+    expect(turn).toContain("github-actions[bot]");
   });
 });

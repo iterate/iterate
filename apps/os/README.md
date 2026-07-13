@@ -73,6 +73,8 @@ doppler run --project os --config preview_2 -- pnpm run deploy
                          # deploy the explicitly selected Doppler config
 doppler run --project os --config prd -- pnpm run deploy
                          # production deploy
+doppler run --config prd -- pnpm cli session create --project <slug-or-id> --open
+                         # open one production project with a confined operator principal
 ```
 
 Use `pnpm run deploy`, not `pnpm deploy`; `deploy` is also a pnpm built-in.
@@ -169,6 +171,8 @@ doppler run --project os --config dev -- sh -lc '
 
 The script pattern is documented in
 [`docs/doppler-backed-scripts.md`](./docs/doppler-backed-scripts.md).
+Project-scoped and platform-wide operator browser sessions are documented in
+[`docs/operator-sessions.md`](./docs/operator-sessions.md).
 
 ## Important Files
 
@@ -198,6 +202,7 @@ test coverage removed without replacement is
 
 - [itx README](./src/README.md)
 - [Integrations](./docs/integrations.md)
+- [GitHub pull-request agents](./docs/github-agents.md)
 - [Worker Topology](./docs/worker-topology.md)
 - [Dynamic Worker Dispatch](./docs/dynamic-worker-dispatch.md) — the capability tree vs the fetch lane; why WebSockets demand the class's own `fetch` handler
 - [Sandboxes](./docs/sandboxes.md) — how OUR sandbox works: identity, persistence, egress, the repo checkout (incl. local dev with OrbStack)
