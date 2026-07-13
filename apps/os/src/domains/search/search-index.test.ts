@@ -4,7 +4,6 @@ import {
   fileSearchKey,
   projectSearchFilter,
   projectSearchPrefix,
-  rankLocalKeywordMatches,
   renderStreamSegmentDocument,
   repoFileSearchKey,
   SEARCH_SEGMENT_SIZE,
@@ -125,51 +124,5 @@ describe("renderStreamSegmentDocument", () => {
     });
     expect(document).toContain("… (truncated)");
     expect(document!.length).toBeLessThan(20_000);
-  });
-});
-
-describe("rankLocalKeywordMatches (local-dev fallback)", () => {
-  const documents = [
-    {
-      key: "prj_1/streams/a/events-00000000.md",
-      text: "the onboarding flow creates an org and a project",
-    },
-    { key: "prj_1/files/notes.md", text: "quarterly report about revenue and growth" },
-    {
-      key: "prj_1/repos/repo/files/readme.md",
-      text: "onboarding onboarding onboarding project setup",
-    },
-  ];
-
-  it("ranks by fraction of distinct query terms present, best first", () => {
-    const results = rankLocalKeywordMatches({ query: "onboarding project", documents });
-    // Both onboarding docs contain both terms (score 1); the report doc has neither.
-    expect(results).toHaveLength(2);
-    expect(results.every((r) => r.score === 1)).toBe(true);
-    expect(results.map((r) => r.filename)).toContain("prj_1/streams/a/events-00000000.md");
-    expect(results.map((r) => r.filename)).not.toContain("prj_1/files/notes.md");
-  });
-
-  it("scores partial term matches below full matches", () => {
-    const results = rankLocalKeywordMatches({ query: "revenue onboarding", documents });
-    const report = results.find((r) => r.filename === "prj_1/files/notes.md");
-    const onboarding = results.find((r) => r.filename.includes("streams"));
-    expect(report?.score).toBeCloseTo(0.5); // only "revenue"
-    expect(onboarding?.score).toBeCloseTo(0.5); // only "onboarding"
-  });
-
-  it("returns no results for an empty query or no matches", () => {
-    expect(rankLocalKeywordMatches({ query: "   ", documents })).toEqual([]);
-    expect(rankLocalKeywordMatches({ query: "nonexistentterm", documents })).toEqual([]);
-  });
-
-  it("honours the limit", () => {
-    const results = rankLocalKeywordMatches({ query: "onboarding", documents, limit: 1 });
-    expect(results).toHaveLength(1);
-  });
-
-  it("includes a content snippet from the matched document", () => {
-    const [top] = rankLocalKeywordMatches({ query: "revenue", documents });
-    expect(top?.content).toContain("revenue");
   });
 });

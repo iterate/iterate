@@ -28,11 +28,6 @@
 // worker's ordered, checkpointed delivery (root `processEventBatch` →
 // `#indexStreamSearch` in rpc-targets.ts), re-reading each touched segment so
 // a transient failure self-heals on the next batch (see indexStreamEventBatch).
-//
-// READ side: deployed envs query the real AI Search instance. Local dev has no
-// instance (AI Search is cloud-only, no miniflare emulation), so query/answer
-// fall back to a keyword scan over the same local R2 corpus — see
-// isLocalDevSearch / localKeywordSearch below.
 
 import { itxEnv } from "../../env.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
@@ -66,17 +61,6 @@ export function searchInstanceName(): string {
   return `${itxEnv.WORKER_SELF}-search`;
 }
 
-/**
- * Whether search runs in fully-local dev, where there is no cloud AI Search
- * instance to query. Local dev names the worker `"os"`; every deployed env is
- * `"os-<env>"` (mirrors cloudflare-containers-dashboard-url.ts). In local dev
- * `query`/`answer` fall back to {@link localKeywordSearch} over the local
- * miniflare R2 corpus so search is usable with zero cloud dependency.
- */
-export function isLocalDevSearch(): boolean {
-  return itxEnv.WORKER_SELF === "os";
-}
-
 /** The source kinds a project's search corpus is folded from. */
 export type SearchSourceKind = "streams" | "files" | "repos";
 
@@ -100,95 +84,6 @@ export type SearchQueryResult = {
 export type SearchAnswerResult = SearchQueryResult & {
   response: string;
 };
-
-/** Bound the local scan so a large corpus can't make a dev query walk forever. */
-const LOCAL_SEARCH_MAX_OBJECTS = 2_000;
-/** Characters of context to show around the first matched term in a local hit. */
-const LOCAL_SEARCH_SNIPPET_RADIUS = 400;
-
-/**
- * Rank local corpus documents against a query by keyword overlap — the pure
- * core of {@link localKeywordSearch}, split out so it unit-tests in node.
- * Scores each document by the fraction of distinct query terms it contains
- * (a crude [0,1] relevance), drops non-matches, sorts, and truncates. No
- * embeddings, no reranking — the local-dev stand-in for cloud AI Search.
- */
-export function rankLocalKeywordMatches(input: {
-  query: string;
-  documents: { key: string; text: string }[];
-  limit?: number;
-}): SearchResultChunk[] {
-  const terms = [...new Set(input.query.toLowerCase().split(/\s+/).filter(Boolean))];
-  if (terms.length === 0) return [];
-
-  const scored: SearchResultChunk[] = [];
-  for (const document of input.documents) {
-    const haystack = document.text.toLowerCase();
-    let hits = 0;
-    let firstMatchAt = -1;
-    for (const term of terms) {
-      const at = haystack.indexOf(term);
-      if (at === -1) continue;
-      hits += 1;
-      if (firstMatchAt === -1 || at < firstMatchAt) firstMatchAt = at;
-    }
-    if (hits === 0) continue;
-    scored.push({
-      filename: document.key,
-      score: hits / terms.length,
-      content: localSnippet(document.text, firstMatchAt),
-    });
-  }
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, input.limit ?? 10);
-}
-
-/** A window of text around the first matched term, for a local search hit. */
-function localSnippet(text: string, matchAt: number): string {
-  if (matchAt < 0) return text.slice(0, LOCAL_SEARCH_SNIPPET_RADIUS * 2);
-  const start = Math.max(0, matchAt - LOCAL_SEARCH_SNIPPET_RADIUS);
-  const end = Math.min(text.length, matchAt + LOCAL_SEARCH_SNIPPET_RADIUS);
-  return `${start > 0 ? "… " : ""}${text.slice(start, end)}${end < text.length ? " …" : ""}`;
-}
-
-/**
- * Local-dev fallback for `query()`: a keyword scan over the R2 corpus.
- *
- * Cloudflare AI Search is cloud-only with no miniflare emulation, so `pnpm dev`
- * cannot run the real semantic query. Instead this lists the project's corpus
- * objects (written to the local miniflare R2 bucket like everything else) up to
- * a bound, reads each one, and ranks by keyword overlap
- * ({@link rankLocalKeywordMatches}) — enough to develop against real indexed
- * content with zero cloud dependency (same spirit as `itx.email` simulating
- * sends in local dev). Deployed envs never call this; they hit the real instance.
- */
-export async function localKeywordSearch(input: {
-  projectId: string;
-  query: string;
-  source?: SearchSourceKind;
-  limit?: number;
-}): Promise<SearchResultChunk[]> {
-  const prefix = projectSearchPrefix(input.projectId, input.source);
-  const documents: { key: string; text: string }[] = [];
-  let cursor: string | undefined;
-  outer: do {
-    const page = await itxEnv.SEARCH_BUCKET.list({ prefix, cursor, limit: 1000 });
-    for (const object of page.objects) {
-      if (documents.length >= LOCAL_SEARCH_MAX_OBJECTS) break outer;
-      const body = await itxEnv.SEARCH_BUCKET.get(object.key);
-      if (body === null) continue;
-      documents.push({ key: object.key, text: await body.text() });
-    }
-    cursor = page.truncated ? page.cursor : undefined;
-  } while (cursor !== undefined);
-
-  return rankLocalKeywordMatches({
-    query: input.query,
-    documents,
-    limit: input.limit,
-  });
-}
 
 /** Root key prefix for one project (the multi-tenancy boundary). */
 export function projectSearchPrefix(projectId: string, source?: SearchSourceKind): string {
