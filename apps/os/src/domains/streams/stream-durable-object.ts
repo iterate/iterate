@@ -134,7 +134,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       recordEgress: (count, bytes, atMs) => this.#metrics.egress.bump(atMs, count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      armAlarm: (atMs) => this.#armAlarmNoLaterThan(atMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
@@ -145,6 +145,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
+    const existingWakeAt = this.#subscriptionCursorStore.minNextAttemptAt();
+    if (existingWakeAt !== null) this.#armAlarmNoLaterThan(existingWakeAt);
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
@@ -191,7 +193,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** The DO alarm: the spine's durable retry timer. */
   alarm(): void {
-    this.#alarmGeneration += 1;
     this.#alarmArmedForMs = null;
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
@@ -202,33 +203,21 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * The earliest alarm time armed this incarnation, tracked in memory so two
-   * concurrent arms can't race each other through the async getAlarm/setAlarm
-   * pair (both observing null and the LATER one winning). Reset when the
-   * alarm fires; a stale-low value merely re-arms an already-set time.
+   * The earliest alarm time armed this incarnation. Activation first restores
+   * the earliest durable row deadline; later subscriber requests can therefore
+   * set directly without overwriting an earlier inherited alarm. A direct
+   * setAlarm avoids a storage read and enters the output gate synchronously
+   * before an outbound push can leave.
    */
   #alarmArmedForMs: number | null = null;
-  /** Fences async cache adoption against the platform consuming an alarm. */
-  #alarmGeneration = 0;
 
   /** Move the DO alarm earlier, never later (many rows share one alarm). */
-  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
+  #armAlarmNoLaterThan(atMs: number): void {
     if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
     this.#alarmArmedForMs = atMs;
-    const generation = this.#alarmGeneration;
-    try {
-      const current = await this.ctx.storage.getAlarm();
-      if (current === null || atMs < current) {
-        await this.ctx.storage.setAlarm(atMs);
-      } else if (generation === this.#alarmGeneration) {
-        // Adopt an earlier alarm inherited from a previous incarnation. If we
-        // kept `atMs`, every newly discovered row between `current` and `atMs`
-        // would repeat this storage read despite being already covered.
-        this.#alarmArmedForMs = Math.min(this.#alarmArmedForMs, current);
-      }
-    } catch (error) {
-      console.error("stream alarm arming failed", error);
-    }
+    void this.ctx.storage
+      .setAlarm(atMs)
+      .catch((error: unknown) => console.error("stream alarm arming failed", error));
   }
 
   // ===========================================================================

@@ -46,6 +46,10 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
           nextAttemptAt: null,
           lastError: null,
           epoch: lastEpoch,
+          pendingThroughOffset: null,
+          pendingStreamMaxOffset: null,
+          pendingAttempt: null,
+          pendingRecoveryAt: null,
         };
         rows.set(k, row);
       }
@@ -59,6 +63,10 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       row.attempt = 0;
       row.nextAttemptAt = null;
       row.lastError = null;
+      row.pendingThroughOffset = null;
+      row.pendingStreamMaxOffset = null;
+      row.pendingAttempt = null;
+      row.pendingRecoveryAt = null;
       return true;
     },
     stageAck: (k, acked, epoch) => {
@@ -68,7 +76,24 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       row.attempt = 0;
       row.nextAttemptAt = null;
       row.lastError = null;
+      row.pendingThroughOffset = null;
+      row.pendingStreamMaxOffset = null;
+      row.pendingAttempt = null;
+      row.pendingRecoveryAt = null;
       return true;
+    },
+    claimPushFrame: (k, throughOffset, streamMaxOffset, recoveryAt, epoch) => {
+      const row = rows.get(k);
+      if (!row || row.epoch !== epoch) return undefined;
+      const activeClaim =
+        row.pendingThroughOffset !== null && row.pendingThroughOffset > row.ackedOffset;
+      const stableStreamMaxOffset = activeClaim ? row.pendingStreamMaxOffset! : streamMaxOffset;
+      const attempt = Math.max(row.pendingAttempt ?? 0, row.attempt) + 1;
+      row.pendingThroughOffset = throughOffset;
+      row.pendingStreamMaxOffset = stableStreamMaxOffset;
+      row.pendingAttempt = attempt;
+      row.pendingRecoveryAt = recoveryAt;
+      return { streamMaxOffset: stableStreamMaxOffset, attempt };
     },
     skip: (k, acked, epoch) => {
       const row = rows.get(k);
@@ -77,6 +102,10 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       row.attempt = 0;
       row.nextAttemptAt = null;
       row.lastError = null;
+      row.pendingThroughOffset = null;
+      row.pendingStreamMaxOffset = null;
+      row.pendingAttempt = null;
+      row.pendingRecoveryAt = null;
     },
     flushPending: () => {},
     advanceWatermark: (k, acked, epoch) => {
@@ -92,6 +121,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         attempt: args.attempt,
         nextAttemptAt: args.nextAttemptAt,
         lastError: args.error,
+        pendingRecoveryAt: null,
       });
     },
     setCursor: (k, acked) => {
@@ -104,6 +134,10 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         nextAttemptAt: null,
         lastError: null,
         epoch: lastEpoch,
+        pendingThroughOffset: null,
+        pendingStreamMaxOffset: null,
+        pendingAttempt: null,
+        pendingRecoveryAt: null,
       });
     },
     setCursors: (cursors) => {
@@ -117,13 +151,17 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
           nextAttemptAt: null,
           lastError: null,
           epoch: lastEpoch,
+          pendingThroughOffset: null,
+          pendingStreamMaxOffset: null,
+          pendingAttempt: null,
+          pendingRecoveryAt: null,
         });
       }
     },
     delete: (k) => void rows.delete(k),
     minNextAttemptAt: () => {
       const pending = [...rows.values()]
-        .map((row) => row.nextAttemptAt)
+        .flatMap((row) => [row.nextAttemptAt, row.pendingRecoveryAt])
         .filter((at): at is number => at !== null);
       return pending.length === 0 ? null : Math.min(...pending);
     },

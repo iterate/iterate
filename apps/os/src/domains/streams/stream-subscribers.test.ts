@@ -59,6 +59,7 @@ class FakeCursorStore implements SubscriptionCursorStore {
   readonly rows = new Map<string, SubscriptionCursorRow>();
   ackCalls = 0;
   stageAckCalls = 0;
+  readonly flushPendingModes: Array<"due" | "all"> = [];
   ensureCalls = 0;
   getCalls = 0;
   setCursorCalls = 0;
@@ -86,6 +87,10 @@ class FakeCursorStore implements SubscriptionCursorStore {
         nextAttemptAt: null,
         lastError: null,
         epoch: this.#lastEpoch,
+        pendingThroughOffset: null,
+        pendingStreamMaxOffset: null,
+        pendingAttempt: null,
+        pendingRecoveryAt: null,
       };
       this.rows.set(subscriptionKey, row);
     }
@@ -101,6 +106,10 @@ class FakeCursorStore implements SubscriptionCursorStore {
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    row.pendingThroughOffset = null;
+    row.pendingStreamMaxOffset = null;
+    row.pendingAttempt = null;
+    row.pendingRecoveryAt = null;
     return true;
   }
 
@@ -112,14 +121,41 @@ class FakeCursorStore implements SubscriptionCursorStore {
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    row.pendingThroughOffset = null;
+    row.pendingStreamMaxOffset = null;
+    row.pendingAttempt = null;
+    row.pendingRecoveryAt = null;
     return true;
+  }
+
+  claimPushFrame(
+    subscriptionKey: string,
+    throughOffset: number,
+    streamMaxOffset: number,
+    recoveryAt: number,
+    epoch: number,
+  ): { streamMaxOffset: number; attempt: number } | undefined {
+    const row = this.rows.get(subscriptionKey);
+    if (row === undefined || row.epoch !== epoch) return undefined;
+    const activeClaim =
+      row.pendingThroughOffset !== null && row.pendingThroughOffset > row.ackedOffset;
+    const sameDelivery = activeClaim && row.pendingThroughOffset === throughOffset;
+    const stableStreamMaxOffset = sameDelivery ? row.pendingStreamMaxOffset! : streamMaxOffset;
+    const attempt = sameDelivery ? Math.max(row.pendingAttempt ?? 0, row.attempt) + 1 : 1;
+    row.pendingThroughOffset = throughOffset;
+    row.pendingStreamMaxOffset = stableStreamMaxOffset;
+    row.pendingAttempt = attempt;
+    row.pendingRecoveryAt = recoveryAt;
+    return { streamMaxOffset: stableStreamMaxOffset, attempt };
   }
 
   skip(subscriptionKey: string, ackedOffset: number, epoch: number): void {
     this.ack(subscriptionKey, ackedOffset, epoch);
   }
 
-  flushPending(): void {}
+  flushPending(mode: "due" | "all" = "due"): void {
+    this.flushPendingModes.push(mode);
+  }
 
   advanceWatermark(subscriptionKey: string, ackedOffset: number, epoch: number): void {
     const row = this.rows.get(subscriptionKey);
@@ -137,6 +173,7 @@ class FakeCursorStore implements SubscriptionCursorStore {
     row.attempt = args.attempt;
     row.nextAttemptAt = args.nextAttemptAt;
     row.lastError = args.error.slice(0, 2_000);
+    row.pendingRecoveryAt = null;
   }
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {
@@ -149,6 +186,10 @@ class FakeCursorStore implements SubscriptionCursorStore {
     row.nextAttemptAt = null;
     row.lastError = null;
     row.epoch = this.#lastEpoch;
+    row.pendingThroughOffset = null;
+    row.pendingStreamMaxOffset = null;
+    row.pendingAttempt = null;
+    row.pendingRecoveryAt = null;
   }
 
   setCursors(cursors: readonly { subscriptionKey: string; ackedOffset: number }[]): void {
@@ -164,6 +205,9 @@ class FakeCursorStore implements SubscriptionCursorStore {
     for (const row of this.rows.values()) {
       if (row.nextAttemptAt !== null && (min === null || row.nextAttemptAt < min)) {
         min = row.nextAttemptAt;
+      }
+      if (row.pendingRecoveryAt !== null && (min === null || row.pendingRecoveryAt < min)) {
+        min = row.pendingRecoveryAt;
       }
     }
     return min;
@@ -570,6 +614,7 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toMatchObject({ ackedOffset: 3, attempt: 0, nextAttemptAt: null });
     expect(h.store.stageAckCalls).toBe(1);
     expect(h.store.ackCalls).toBe(0);
+    expect(h.store.flushPendingModes.filter((mode) => mode === "all")).toHaveLength(1);
 
     h.append(evt(4, "d"), evt(5, "e"));
     h.subscribers.wake();
@@ -579,6 +624,7 @@ describe("StreamSubscribers", () => {
     expect(h.pushes[1].events.map((event) => event.offset)).toEqual([4, 5]);
     expect(h.pushes[1].deliveryId).toBe("k:4-5");
     expect(h.row("k")?.ackedOffset).toBe(5);
+    expect(h.store.flushPendingModes.filter((mode) => mode === "all")).toHaveLength(2);
   });
 
   it("b. selector skip-not-defer: non-matching events advance the cursor without a dial call", async () => {
@@ -690,6 +736,109 @@ describe("StreamSubscribers", () => {
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
+    });
+  });
+
+  it("c1. a retry keeps the failed frame and delivery identity when the stream grows", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+    h.dialImpl.push = async (batch) => {
+      const recoveryAt = h.now() + 60_000;
+      expect(h.row("k")).toMatchObject({
+        pendingThroughOffset: 1,
+        pendingStreamMaxOffset: 1,
+        pendingAttempt: batch.attempt,
+        pendingRecoveryAt: recoveryAt,
+      });
+      expect(h.armedAlarms).toContain(recoveryAt);
+      throw new Error("receiver down");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1]]);
+    expect(h.pushes.map((batch) => batch.deliveryId)).toEqual(["k:1-1"]);
+    expect(h.pushes.map((batch) => batch.streamMaxOffset)).toEqual([1]);
+
+    h.append(evt(2, "b"));
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1], [1]]);
+    expect(h.pushes.map((batch) => batch.deliveryId)).toEqual(["k:1-1", "k:1-1"]);
+    expect(h.pushes.map((batch) => batch.streamMaxOffset)).toEqual([1, 1]);
+
+    h.dialImpl.push = async () => {};
+    h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
+    h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [1],
+      [1],
+      [1],
+      [2],
+    ]);
+    expect(h.pushes.map((batch) => batch.deliveryId)).toEqual(["k:1-1", "k:1-1", "k:1-1", "k:2-2"]);
+    expect(h.pushes.map((batch) => batch.streamMaxOffset)).toEqual([1, 1, 1, 2]);
+    expect(h.pushes.map((batch) => batch.attempt)).toEqual([1, 2, 3, 1]);
+  });
+
+  it("c2. a reloaded frame claim bounds the fresh append tail", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    const first = evt(1, "a");
+    const second = evt(2, "b");
+    h.append(first, second);
+    h.store.ensure("k", 0);
+    Object.assign(h.store.rows.get("k")!, {
+      pendingThroughOffset: 1,
+      pendingStreamMaxOffset: 1,
+      pendingAttempt: 1,
+      pendingRecoveryAt: null,
+    });
+
+    h.subscribers.wake(
+      [first, second].map((event) => ({ event, byteLength: 64 })),
+      128,
+    );
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1], [2]]);
+    expect(h.pushes.map((batch) => batch.deliveryId)).toEqual(["k:1-1", "k:2-2"]);
+    expect(h.pushes.map((batch) => batch.streamMaxOffset)).toEqual([1, 2]);
+    expect(h.pushes.map((batch) => batch.attempt)).toEqual([2, 1]);
+    expect(h.storageReads()).toBe(0);
+  });
+
+  it("c3. a consumed recovery alarm re-arms while the original RPC is still in flight", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+    let resolvePush!: () => void;
+    h.dialImpl.push = () =>
+      new Promise<void>((resolve) => {
+        resolvePush = resolve;
+      });
+
+    h.subscribers.wake();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.armedAlarms).toContain(60_000);
+
+    h.advanceTo(60_001);
+    h.subscribers.onAlarm();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.armedAlarms).toContain(120_001);
+
+    resolvePush();
+    await h.settle();
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 1,
+      pendingAttempt: null,
+      pendingRecoveryAt: null,
     });
   });
 
@@ -816,6 +965,7 @@ describe("StreamSubscribers", () => {
       [2], // confirm attempt 3 (alarm) -> poison verdict, skipped
       [3, 4], // the rest delivers
     ]);
+    expect(h.pushes.map((batch) => batch.attempt)).toEqual([1, 1, 1, 1, 1, 2, 3, 1]);
     expect(
       h.pushes.filter((batch) => batch.events.length === 1 && batch.events[0].offset === 2),
     ).toHaveLength(SKIP_CONFIRM_ATTEMPTS);

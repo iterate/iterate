@@ -1086,7 +1086,7 @@ describe("StreamEventLog.getRange", () => {
     );
     expect(
       db.prepare("select version, evicted_offset_floor as floor from stream_storage_schema").get(),
-    ).toEqual({ version: 6, floor: 0 });
+    ).toEqual({ version: 7, floor: 0 });
     expect(
       db
         .prepare(
@@ -1225,16 +1225,26 @@ function fromNodeSqlValue([key, value]: [string, unknown]) {
 }
 
 describe("reconcileSubscriptionCursorRows", () => {
-  it("drops orphaned rows, keeps progress, clears failure state (version-mismatch rebuild)", () => {
-    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+  it("drops orphans, clears unclaimed failures, and preserves exact retry claims", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
     store.ensure("survivor-clean", 5);
+    const unclaimed = store.ensure("survivor-unclaimed-failure", 4);
+    store.nack("survivor-unclaimed-failure", {
+      attempt: 2,
+      nextAttemptAt: 77_777,
+      error: "obsolete failure",
+      epoch: unclaimed.epoch,
+    });
     const survivor = store.ensure("survivor-backing-off", 3);
+    store.claimPushFrame("survivor-backing-off", 8, 10, 40_000, survivor.epoch);
     store.nack("survivor-backing-off", {
       attempt: 7,
       nextAttemptAt: 99_999,
       error: "old-code bug",
       epoch: survivor.epoch,
     });
+    store.claimPushFrame("survivor-clean", 8, 10, 50_000, store.get("survivor-clean")!.epoch);
     const orphan = store.ensure("orphan", 2);
     store.nack("orphan", {
       attempt: 14,
@@ -1243,20 +1253,42 @@ describe("reconcileSubscriptionCursorRows", () => {
       epoch: orphan.epoch,
     });
 
-    reconcileSubscriptionCursorRows(store, new Set(["survivor-clean", "survivor-backing-off"]));
+    reconcileSubscriptionCursorRows(
+      store,
+      new Set(["survivor-clean", "survivor-unclaimed-failure", "survivor-backing-off"]),
+    );
 
     // The orphan is gone entirely — its next_attempt_at must not arm alarms forever.
     expect(store.get("orphan")).toBeUndefined();
-    expect(store.minNextAttemptAt()).toBeNull();
+    expect(store.minNextAttemptAt()).toBe(50_000);
     // Progress survives (ackedOffset is monotonic truth about the same log)...
     expect(store.get("survivor-clean")?.ackedOffset).toBe(5);
+    expect(store.get("survivor-unclaimed-failure")?.ackedOffset).toBe(4);
     expect(store.get("survivor-backing-off")?.ackedOffset).toBe(3);
-    // ...but backoff state is cleared: the new fold gets an immediate fresh try.
-    expect(store.get("survivor-backing-off")).toMatchObject({
+    // ...and an unclaimed failure gets a fresh try under the rebuilt fold.
+    expect(store.get("survivor-unclaimed-failure")).toMatchObject({
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
     });
+    expect(store.get("survivor-clean")).toMatchObject({
+      pendingThroughOffset: 8,
+      pendingStreamMaxOffset: 10,
+      pendingAttempt: 1,
+      pendingRecoveryAt: 50_000,
+    });
+    expect(store.get("survivor-backing-off")).toMatchObject({
+      attempt: 7,
+      nextAttemptAt: 99_999,
+      lastError: "old-code bug",
+      pendingThroughOffset: 8,
+      pendingStreamMaxOffset: 10,
+      pendingAttempt: 1,
+      pendingRecoveryAt: null,
+    });
+    const reloaded = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    expect(reloaded.get("survivor-clean")).toEqual(store.get("survivor-clean"));
+    expect(reloaded.get("survivor-backing-off")).toEqual(store.get("survivor-backing-off"));
   });
 });
 
@@ -1282,10 +1314,26 @@ describe("SqliteSubscriptionCursorStore schema", () => {
       "next_attempt_at",
       "last_error",
       "epoch",
+      "pending_through_offset",
+      "pending_stream_max_offset",
+      "pending_attempt",
+      "pending_recovery_at",
     ]);
     expect(db.prepare("select version from stream_storage_schema").get()).toEqual({
-      version: 6,
+      version: 7,
     });
+    db.exec("insert into subscriptions (subscription_key, acked_offset, epoch) values ('k', 0, 1)");
+    expect(() =>
+      db.exec("update subscriptions set pending_through_offset = 1 where subscription_key = 'k'"),
+    ).toThrow();
+    expect(() =>
+      db.exec(
+        "update subscriptions set pending_through_offset = 2, pending_stream_max_offset = 1, pending_attempt = 1 where subscription_key = 'k'",
+      ),
+    ).toThrow();
+    expect(() =>
+      db.exec("update subscriptions set pending_recovery_at = 1 where subscription_key = 'k'"),
+    ).toThrow();
   });
 
   it("is idempotent on an already-current table", () => {
@@ -1315,10 +1363,10 @@ describe("SqliteSubscriptionCursorStore schema", () => {
     const db = new DatabaseSync(":memory:");
     const sql = wrapSqlStorage(db);
     new SqliteSubscriptionCursorStore(sql);
-    db.exec("update stream_storage_schema set version = 4 where singleton = 1");
+    db.exec("update stream_storage_schema set version = 6 where singleton = 1");
 
     expect(() => new SqliteSubscriptionCursorStore(wrapSqlStorage(db))).toThrow(
-      "Unsupported stream storage schema version: 4",
+      "Unsupported stream storage schema version: 6",
     );
   });
 });
@@ -1362,6 +1410,8 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
       }),
     );
     for (let index = 0; index < 100; index += 1) store.ensure(`k-${index}`, 0);
+    store.claimPushFrame("k-0", 10, 10, 100, store.get("k-0")!.epoch);
+    store.claimPushFrame("k-99", 10, 10, 100, store.get("k-99")!.epoch);
     const stagedEpoch = store.get("k-50")!.epoch;
     store.stageAck("k-50", 500, stagedEpoch);
 
@@ -1378,6 +1428,8 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(cursorSetBindings).toEqual([99, 99, 99, 3]);
     expect(store.get("k-0")).toMatchObject({ ackedOffset: 999, attempt: 0 });
     expect(store.get("k-50")).toMatchObject({ ackedOffset: 51, attempt: 0 });
+    expect(store.get("k-0")?.pendingThroughOffset).toBeNull();
+    expect(store.get("k-99")?.pendingThroughOffset).toBeNull();
     expect(store.get("k-0")!.epoch).toBeGreaterThan(store.get("k-99")!.epoch);
     expect(store.get("missing")).toBeUndefined();
 
@@ -1393,11 +1445,13 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
       wrapSqlStorage(db, (statement) => statements.push(statement)),
     );
     store.ensure("k", 0);
+    store.claimPushFrame("k", 5, 5, 100, store.get("k")!.epoch);
     statements.length = 0;
 
     store.setCursors([{ subscriptionKey: "k", ackedOffset: 7 }]);
 
     expect(store.get("k")?.ackedOffset).toBe(7);
+    expect(store.get("k")?.pendingThroughOffset).toBeNull();
     expect(statements).toHaveLength(1);
     expect(statements[0]).not.toContain("with cursor_updates");
   });
@@ -1416,6 +1470,134 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     const reloaded = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
     expect(reloaded.get("fenced")!.ackedOffset).toBe(10);
     expect(reloaded.get("unfenced")!.ackedOffset).toBe(10);
+  });
+
+  it("persists an exact push frame and advances its attempt across retries", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    const epoch = store.ensure("k", 0).epoch;
+
+    expect(store.claimPushFrame("k", 5, 9, 50, epoch)).toEqual({
+      streamMaxOffset: 9,
+      attempt: 1,
+    });
+    store.nack("k", {
+      attempt: 1,
+      nextAttemptAt: 100,
+      error: "receiver down",
+      epoch,
+    });
+
+    let claimWrites = 0;
+    const reloaded = new SqliteSubscriptionCursorStore(
+      wrapSqlStorage(db, (statement) => {
+        if (
+          statement.includes("pending_through_offset =") &&
+          !statement.includes("with progress(subscription_key")
+        ) {
+          claimWrites += 1;
+        }
+      }),
+    );
+    expect(reloaded.get("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 1,
+      nextAttemptAt: 100,
+      pendingThroughOffset: 5,
+      pendingStreamMaxOffset: 9,
+      pendingAttempt: 1,
+      pendingRecoveryAt: null,
+    });
+    claimWrites = 0;
+    expect(reloaded.claimPushFrame("k", 5, 20, 200, epoch)).toEqual({
+      streamMaxOffset: 9,
+      attempt: 2,
+    });
+    expect(claimWrites).toBe(1);
+    expect(reloaded.claimPushFrame("k", 2, 20, 300, epoch)).toEqual({
+      streamMaxOffset: 20,
+      attempt: 1,
+    });
+    expect(claimWrites).toBe(2);
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: 1,
+      pendingThroughOffset: 2,
+      pendingStreamMaxOffset: 20,
+      pendingAttempt: 1,
+      pendingRecoveryAt: 300,
+    });
+  });
+
+  it("checkpoints the prior push ack atomically with the next frame claim", () => {
+    const db = new DatabaseSync(":memory:");
+    let claimWrites = 0;
+    let progressWrites = 0;
+    const store = new SqliteSubscriptionCursorStore(
+      wrapSqlStorage(db, (statement) => {
+        if (
+          statement.includes("pending_through_offset =") &&
+          !statement.includes("with progress(subscription_key")
+        ) {
+          claimWrites += 1;
+        }
+        if (statement.includes("with progress(subscription_key")) progressWrites += 1;
+      }),
+    );
+    const epoch = store.ensure("k", 0).epoch;
+
+    store.claimPushFrame("k", 10, 10, 100, epoch);
+    store.stageAck("k", 10, epoch);
+    expect({ claimWrites, progressWrites }).toEqual({ claimWrites: 1, progressWrites: 0 });
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")).toMatchObject({
+      ackedOffset: 0,
+      pendingThroughOffset: 10,
+      pendingStreamMaxOffset: 10,
+      pendingAttempt: 1,
+      pendingRecoveryAt: 100,
+    });
+
+    store.claimPushFrame("k", 20, 20, 200, epoch);
+    expect({ claimWrites, progressWrites }).toEqual({ claimWrites: 2, progressWrites: 0 });
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")).toMatchObject({
+      ackedOffset: 10,
+      pendingThroughOffset: 20,
+      pendingStreamMaxOffset: 20,
+      pendingAttempt: 1,
+      pendingRecoveryAt: 200,
+    });
+
+    store.stageAck("k", 20, epoch);
+    store.flushPending("all");
+    expect({ claimWrites, progressWrites }).toEqual({ claimWrites: 2, progressWrites: 1 });
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")).toMatchObject({
+      ackedOffset: 20,
+      pendingThroughOffset: null,
+      pendingStreamMaxOffset: null,
+      pendingAttempt: null,
+      pendingRecoveryAt: null,
+    });
+  });
+
+  it("fences push claims and clears them on explicit acknowledgement", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
+    const epoch = store.ensure("k", 3).epoch;
+
+    expect(store.claimPushFrame("k", 5, 7, 100, epoch - 1)).toBeUndefined();
+    expect(store.claimPushFrame("k", 5, 7, 100, epoch)).toEqual({
+      streamMaxOffset: 7,
+      attempt: 1,
+    });
+    store.ack("k", 3, epoch);
+
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")).toMatchObject({
+      ackedOffset: 3,
+      pendingThroughOffset: null,
+      pendingStreamMaxOffset: null,
+      pendingAttempt: null,
+      pendingRecoveryAt: null,
+    });
   });
 
   it("elides only acknowledgements that cannot change durable cursor state", () => {
@@ -1653,7 +1835,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(progressWrites).toBe(1);
   });
 
-  it("bounds successful push replay to seven batches across drain tails", () => {
+  it("holds a quiet successful push tail until an explicit lifecycle flush", () => {
     const db = new DatabaseSync(":memory:");
     let progressWrites = 0;
     const store = new SqliteSubscriptionCursorStore(
@@ -1663,25 +1845,17 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     );
     const epoch = store.ensure("k", 0).epoch;
 
-    for (let batch = 1; batch < 8; batch += 1) {
-      store.stageAck("k", batch * 1_000, epoch);
-      // wake() offers this due-only flush after every separate drain.
-      store.flushPending();
-    }
+    store.stageAck("k", 1_000, epoch);
+    // wake() offers this due-only flush after every separate drain; delivered
+    // progress is instead checkpointed by the next claim or recovery alarm.
+    store.flushPending();
     expect(progressWrites).toBe(0);
-    expect(store.get("k")!.ackedOffset).toBe(7_000);
+    expect(store.get("k")!.ackedOffset).toBe(1_000);
     expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(0);
 
-    store.stageAck("k", 8_000, epoch);
-    expect(progressWrites).toBe(1);
-    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(8_000);
-
-    store.stageAck("k", 9_000, epoch);
-    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(8_000);
-
     store.flushPending("all");
-    expect(progressWrites).toBe(2);
-    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(9_000);
+    expect(progressWrites).toBe(1);
+    expect(new SqliteSubscriptionCursorStore(wrapSqlStorage(db)).get("k")!.ackedOffset).toBe(1_000);
   });
 
   it("keeps skip and delivery checkpoint bounds independent in a mixed run", () => {
@@ -1773,6 +1947,7 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     const db = new DatabaseSync(":memory:");
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(db));
     const ensured = store.ensure("k", 0);
+    store.claimPushFrame("k", 1, 1, 100, ensured.epoch);
     store.nack("k", {
       attempt: 2,
       nextAttemptAt: 1,
@@ -1787,6 +1962,10 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,
+      pendingThroughOffset: null,
+      pendingStreamMaxOffset: null,
+      pendingAttempt: null,
+      pendingRecoveryAt: null,
     });
   });
 });

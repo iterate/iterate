@@ -788,6 +788,7 @@ export class StreamSubscribers {
       // Reconciliation invokes this async body synchronously through its first
       // await, so its validated snapshot is exact for iteration one only.
       let initial: PushDrainStart | undefined = start;
+      let hasStagedPushAck = false;
       try {
         for (;;) {
           const snapshot = initial;
@@ -803,7 +804,19 @@ export class StreamSubscribers {
           // The core state is reduced synchronously with every commit, so its
           // head is authoritative for this incarnation. Do not issue a final
           // empty range query after the previous iteration acked the head.
-          if (row.ackedOffset >= state.maxOffset) return;
+          if (row.ackedOffset >= state.maxOffset) {
+            if (hasStagedPushAck) this.#hooks.store.flushPending("all");
+            return;
+          }
+          const hasPendingPushFrame =
+            config.delivery.mode === "push" &&
+            row.pendingThroughOffset !== null &&
+            row.pendingStreamMaxOffset !== null &&
+            row.pendingAttempt !== null &&
+            row.pendingThroughOffset > row.ackedOffset;
+          const frameThroughOffset = hasPendingPushFrame
+            ? row.pendingThroughOffset!
+            : state.maxOffset;
           // Every append/control reconciliation calls wake(). If this value is
           // unchanged after selection or delivery, the observed head is still
           // current and a final state/cursor probe cannot discover more work.
@@ -828,7 +841,7 @@ export class StreamSubscribers {
           const read = this.#readBatch(
             row.ackedOffset,
             limit,
-            state.maxOffset,
+            frameThroughOffset,
             true,
             selector !== undefined && !selector.matchesAll,
             config.delivery.mode === "push"
@@ -872,13 +885,13 @@ export class StreamSubscribers {
             !this.#batchLimits.has(subscriptionKey) &&
             !(read.stoppedByByteLimit && read.projection?.selectedEventTypesKey !== undefined) &&
             scannedEventCount < limit &&
-            lastOffset < state.maxOffset
+            lastOffset < frameThroughOffset
           ) {
             for (let page = 1; page < MAX_SELECTED_PUSH_READ_PAGES; page += 1) {
               const nextRead = this.#readBatch(
                 lastOffset,
                 limit - scannedEventCount,
-                state.maxOffset,
+                frameThroughOffset,
                 true,
                 true,
                 PUSH_DELIVERY_BATCH_BYTE_LIMIT,
@@ -910,7 +923,7 @@ export class StreamSubscribers {
               conditionErrors.push(...selected.conditionErrors);
               if (
                 scannedEventCount >= limit ||
-                lastOffset >= state.maxOffset ||
+                lastOffset >= frameThroughOffset ||
                 matchedByteLength >= PUSH_DELIVERY_BATCH_BYTE_LIMIT ||
                 (nextRead.stoppedByByteLimit &&
                   nextRead.projection?.selectedEventTypesKey !== undefined)
@@ -930,7 +943,10 @@ export class StreamSubscribers {
             // No receiver side effect occurred, so persistence can be batched
             // and boundedly lagged; the in-memory cursor advances immediately.
             this.#hooks.store.skip(subscriptionKey, lastOffset, row.epoch);
-            if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) return;
+            if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) {
+              if (hasStagedPushAck) this.#hooks.store.flushPending("all");
+              return;
+            }
             continue;
           }
 
@@ -943,13 +959,35 @@ export class StreamSubscribers {
             payload: entry.latestConfiguredEvent.payload,
           };
 
+          const dispatchAtMs = this.#hooks.now();
+          let pushStreamMaxOffset = state.maxOffset;
+          let pushAttempt = row.attempt + 1;
+          if (config.delivery.mode === "push") {
+            // Both synchronous DO SQLite and setAlarm writes open the output
+            // gate. The outbound RPC below cannot leave until the exact frame,
+            // monotonic attempt, and crash-recovery wakeup are durable.
+            const claim = this.#hooks.store.claimPushFrame(
+              subscriptionKey,
+              lastOffset,
+              state.maxOffset,
+              dispatchAtMs + DELIVERY_TIMEOUT_MS,
+              row.epoch,
+            );
+            if (claim === undefined) continue;
+            // This confirmed claim atomically checkpointed any staged ack from
+            // the preceding successful batch.
+            hasStagedPushAck = false;
+            pushStreamMaxOffset = claim.streamMaxOffset;
+            pushAttempt = claim.attempt;
+            this.#hooks.armAlarm(dispatchAtMs + DELIVERY_TIMEOUT_MS);
+          }
+
           const deliveredBytes =
             matched.length === durable.length
               ? durableByteLength
               : (matchedByteLength ?? missingFilteredByteLength());
           // Dispatch-time accounting: retries re-send real bytes, so failed
           // attempts count too (the wire carried them either way).
-          const dispatchAtMs = this.#hooks.now();
           this.#hooks.recordEgress(matched.length, deliveredBytes, dispatchAtMs);
           try {
             if (config.delivery.mode === "webhook") {
@@ -972,10 +1010,10 @@ export class StreamSubscribers {
                 projectId: state.projectId,
                 path: state.path,
                 events: matched,
-                streamMaxOffset: state.maxOffset,
+                streamMaxOffset: pushStreamMaxOffset,
                 subscriptionKey,
                 deliveryId: deliveryId(subscriptionKey, matched[0]!.offset, lastOffset),
-                attempt: row.attempt + 1,
+                attempt: pushAttempt,
                 configuredEvent,
               };
               await withDeliveryTimeout(
@@ -996,6 +1034,7 @@ export class StreamSubscribers {
                 config,
                 matched,
                 scannedEventCount,
+                attempt: pushAttempt,
                 error,
               }) === "continue"
             ) {
@@ -1028,13 +1067,17 @@ export class StreamSubscribers {
           let acknowledged: boolean;
           if (config.delivery.mode === "push") {
             acknowledged = this.#hooks.store.stageAck(subscriptionKey, lastOffset, row.epoch);
+            if (acknowledged) hasStagedPushAck = true;
           } else {
             acknowledged = this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
           }
           if (!acknowledged) continue;
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
-          if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) return;
+          if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) {
+            if (hasStagedPushAck) this.#hooks.store.flushPending("all");
+            return;
+          }
         }
       } finally {
         this.#pushDrains.delete(subscriptionKey);
@@ -1191,6 +1234,7 @@ export class StreamSubscribers {
     const count = Math.min(source.length - start, limit);
     for (let index = 0; index < count; index += 1) {
       const entry = source[start + index]!;
+      if (entry.event.offset > throughOffset) break;
       const entryByteLength = entry.byteLength;
       const nextBytes = bytes + entryByteLength;
       if (nextBytes > byteLimit && index > 0) {
@@ -1415,10 +1459,19 @@ export class StreamSubscribers {
     config: SubscriptionConfiguredPayload;
     matched: StreamEvent[];
     scannedEventCount: number;
+    attempt: number;
     error: unknown;
   }): "continue" | "stop" {
-    const { subscriptionKey, configOffset, epoch, config, matched, scannedEventCount, error } =
-      args;
+    const {
+      subscriptionKey,
+      configOffset,
+      epoch,
+      config,
+      matched,
+      scannedEventCount,
+      attempt: dispatchedAttempt,
+      error,
+    } = args;
     const row = this.#currentDeliveryRow(subscriptionKey, configOffset, epoch);
     if (row === undefined) return "continue";
     // A receiver that DECLARED itself unavailable (see
@@ -1431,7 +1484,14 @@ export class StreamSubscribers {
     // tries — a mis-skip needs a poison event racing the recovery boundary,
     // versus today's guaranteed skip of healthy events during the outage.
     if (isStreamReceiverUnavailableError(error)) {
-      this.#onDeliveryFailure({ subscriptionKey, configOffset, epoch, error, row });
+      this.#onDeliveryFailure({
+        subscriptionKey,
+        configOffset,
+        epoch,
+        error,
+        row,
+        attempt: dispatchedAttempt,
+      });
       return "stop";
     }
     if (config.onPoison === "skip") {
@@ -1472,7 +1532,14 @@ export class StreamSubscribers {
       return "continue";
     }
 
-    this.#onDeliveryFailure({ subscriptionKey, configOffset, epoch, error, row });
+    this.#onDeliveryFailure({
+      subscriptionKey,
+      configOffset,
+      epoch,
+      error,
+      row,
+      attempt: dispatchedAttempt,
+    });
     return "stop";
   }
 
@@ -1494,11 +1561,12 @@ export class StreamSubscribers {
     epoch: number;
     error: unknown;
     row?: SubscriptionCursorRow;
+    attempt?: number;
   }): boolean {
     const { subscriptionKey, configOffset, epoch, error } = args;
     const row = args.row ?? this.#currentDeliveryRow(subscriptionKey, configOffset, epoch);
     if (row === undefined) return false;
-    const attempt = row.attempt + 1;
+    const attempt = args.attempt ?? row.attempt + 1;
     if (attempt >= MAX_DELIVERY_ATTEMPTS) {
       this.#park(subscriptionKey, configOffset, epoch, row, attempt, error);
       return true;
@@ -1515,6 +1583,9 @@ export class StreamSubscribers {
       error: errorMessage(error),
       epoch,
     });
+    // Activation already primed the incarnation's earliest durable deadline;
+    // moving this known backoff earlier is O(1). Full-row scans belong on the
+    // alarm path, not once per failure (which becomes O(S^2) under fan-out).
     this.#hooks.armAlarm(nextAttemptAt);
   }
 
@@ -1563,19 +1634,30 @@ export class StreamSubscribers {
     this.#batchLimits.delete(subscriptionKey);
   }
 
-  #armAlarmFromStore(): void {
+  #armAlarmFromStore(settledKey?: string): void {
     // Not a bare MIN over the rows: parked rows keep their cursor but must
-    // not drive the alarm, and a row whose retry is IN FLIGHT this very turn
-    // still carries its (past) due time until the attempt settles — re-arming
-    // from either spins the alarm at zero delay.
+    // not drive the alarm. An in-flight row's consumed backoff is ignored, but
+    // its separately persisted recovery deadline must remain armed until the
+    // RPC settles so a crash cannot strand a quiet stream.
     const state = this.#hooks.coreState();
     let next: number | null = null;
+    let now: number | undefined;
     for (const row of this.#hooks.store.list()) {
-      if (row.nextAttemptAt === null) continue;
       const key = row.subscriptionKey;
       if (state.configuredSubscribersByKey[key]?.parkedAtOffset !== undefined) continue;
-      if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
-      if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
+      const inFlight =
+        key !== settledKey && (this.#pushDrains.has(key) || this.#pokesInFlight.has(key));
+      if (row.nextAttemptAt !== null && !inFlight && (next === null || row.nextAttemptAt < next)) {
+        next = row.nextAttemptAt;
+      }
+      if (row.pendingRecoveryAt !== null) {
+        let recoveryAt = row.pendingRecoveryAt;
+        if (inFlight) {
+          now ??= this.#hooks.now();
+          if (recoveryAt <= now) recoveryAt = now + DELIVERY_TIMEOUT_MS;
+        }
+        if (next === null || recoveryAt < next) next = recoveryAt;
+      }
     }
     if (next !== null) this.#hooks.armAlarm(next);
   }

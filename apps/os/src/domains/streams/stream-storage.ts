@@ -27,7 +27,7 @@ import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import type { StreamEvent } from "./schemas.ts";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
-const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 6;
+const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 7;
 // Durable Object SQL currently permits at most 100 bound parameters per query.
 // Keep generated multi-row inserts at that ceiling and bound pending BLOB
 // memory independently: small events fill the row budget, large events flush
@@ -51,7 +51,6 @@ const MAX_CURSOR_PROGRESS_ROWS = Math.floor(MAX_SQL_BINDINGS / CURSOR_PROGRESS_R
 const CURSOR_SET_ROW_WIDTH = 3;
 const MAX_CURSOR_SET_ROWS = Math.floor(MAX_SQL_BINDINGS / CURSOR_SET_ROW_WIDTH);
 const MAX_UNPERSISTED_SKIP_OFFSETS = 64;
-const MAX_UNPERSISTED_DELIVERY_BATCHES = 8;
 const EVENT_INSERT_STATEMENTS = createInsertStatements(
   "insert into events (offset, type, idempotency_key, ephemeral, event_json) values",
   EVENT_INSERT_ROW_WIDTH,
@@ -77,14 +76,10 @@ type PendingSubscriptionProgress = {
   ackedOffset: number;
   epoch: number;
   skippedOffsets: number;
-  deliveredBatches: number;
 };
 
 function isSubscriptionProgressDue(progress: PendingSubscriptionProgress): boolean {
-  return (
-    progress.deliveredBatches >= MAX_UNPERSISTED_DELIVERY_BATCHES ||
-    progress.skippedOffsets >= MAX_UNPERSISTED_SKIP_OFFSETS
-  );
+  return progress.skippedOffsets >= MAX_UNPERSISTED_SKIP_OFFSETS;
 }
 
 /**
@@ -191,7 +186,16 @@ function initializeStreamStorage(sqlStorage: SqlStorage): StreamOffsetBounds | u
       attempt integer not null default 0,
       next_attempt_at integer,
       last_error text,
-      epoch integer not null default 0
+      epoch integer not null default 0,
+      pending_through_offset integer,
+      pending_stream_max_offset integer,
+      pending_attempt integer,
+      pending_recovery_at integer,
+      check ((pending_through_offset is null) = (pending_stream_max_offset is null)),
+      check ((pending_through_offset is null) = (pending_attempt is null)),
+      check (pending_through_offset is null or pending_stream_max_offset >= pending_through_offset),
+      check (pending_attempt is null or pending_attempt >= 1),
+      check (pending_recovery_at is null or pending_attempt is not null)
     )
   `);
   sqlStorage.exec(`
@@ -922,7 +926,8 @@ export class StreamEventLog {
  * One durable subscription's delivery cursor row. `ackedOffset` is exclusive
  * (delivery resumes at +1). For push subscriptions it is the AUTHORITATIVE
  * cursor: delivery offsets advance only when the receiver's awaited call
- * resolved; a crash can replay at most seven successful RPC batches. Pure
+ * resolved; the next claim checkpoints the prior ack, so a crash can replay
+ * at most one successful RPC batch. Pure
  * no-side-effect skips checkpoint in 64-offset chunks at reconciliation
  * boundaries. For wake subscriptions it is an OBSERVATIONAL watermark: the checkpoint the
  * subscriber reported on the last successful poke, used only for poke
@@ -945,6 +950,14 @@ export type SubscriptionCursorRow = {
    * in flight — `ack`'s monotonic max alone would silently swallow the seek.
    */
   epoch: number;
+  /** Exact raw frame boundary durably claimed before an outbound push. */
+  pendingThroughOffset: number | null;
+  /** Stream head captured with the claimed frame; stable receiver freshness input on retry. */
+  pendingStreamMaxOffset: number | null;
+  /** 1-based dispatch attempt persisted before this frame's outbound RPC. */
+  pendingAttempt: number | null;
+  /** Crash-recovery deadline for the currently in-flight RPC; null while backing off. */
+  pendingRecoveryAt: number | null;
 };
 
 export type SubscriptionCursorSet = {
@@ -971,12 +984,23 @@ export type SubscriptionCursorStore = {
   ack(subscriptionKey: string, ackedOffset: number, epoch?: number): boolean;
   /**
    * Successful internal RPC push delivery. Advance immediately, but permit a
-   * bounded durable lag so consecutive remote calls do not each wait behind a
-   * SQLite output-gate commit. Progress survives drain completion and flushes
-   * on the eighth successful batch or an explicit lifecycle/failure boundary.
-   * Webhooks use {@link ack} instead.
+   * one-batch durable lag: the next frame claim atomically checkpoints this
+   * ack, while a quiet tail flushes on its recovery alarm or an explicit
+   * lifecycle/failure boundary. Webhooks use {@link ack} instead.
    */
   stageAck(subscriptionKey: string, ackedOffset: number, epoch: number): boolean;
+  /**
+   * Durably claim the exact push frame and dispatch attempt before its
+   * outbound RPC. Returns the stable envelope, or undefined when the epoch is
+   * stale.
+   */
+  claimPushFrame(
+    subscriptionKey: string,
+    throughOffset: number,
+    streamMaxOffset: number,
+    recoveryAt: number,
+    epoch: number,
+  ): { streamMaxOffset: number; attempt: number } | undefined;
   /**
    * Advance across a batch that produced no receiver side effect (selector
    * miss / ephemeral-only). The in-memory cursor moves immediately; durable
@@ -1004,7 +1028,7 @@ export type SubscriptionCursorStore = {
   /** Apply a contiguous run of explicit seeks with bounded multi-row SQL updates. */
   setCursors(cursors: readonly SubscriptionCursorSet[]): void;
   delete(subscriptionKey: string): void;
-  /** Earliest pending retry across all rows, for arming the DO alarm. */
+  /** Earliest backoff or in-flight recovery deadline, for arming the DO alarm. */
   minNextAttemptAt(): number | null;
 };
 
@@ -1019,7 +1043,16 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         attempt integer not null default 0,
         next_attempt_at integer,
         last_error text,
-        epoch integer not null default 0
+        epoch integer not null default 0,
+        pending_through_offset integer,
+        pending_stream_max_offset integer,
+        pending_attempt integer,
+        pending_recovery_at integer,
+        check ((pending_through_offset is null) = (pending_stream_max_offset is null)),
+        check ((pending_through_offset is null) = (pending_attempt is null)),
+        check (pending_through_offset is null or pending_stream_max_offset >= pending_through_offset),
+        check (pending_attempt is null or pending_attempt >= 1),
+        check (pending_recovery_at is null or pending_attempt is not null)
       );
     `,
     queries: {
@@ -1027,12 +1060,16 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: { subscriptionKey: string };
         result: SubscriptionCursorRowRecord;
       }>`
-        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch
+        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch,
+               pending_through_offset, pending_stream_max_offset, pending_attempt,
+               pending_recovery_at
         from subscriptions
         where subscription_key = :subscriptionKey
       `,
       list: sql.many<{ result: SubscriptionCursorRowRecord }>`
-        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch
+        select subscription_key, acked_offset, attempt, next_attempt_at, last_error, epoch,
+               pending_through_offset, pending_stream_max_offset, pending_attempt,
+               pending_recovery_at
         from subscriptions
       `,
       ensure: sql.run<{
@@ -1050,7 +1087,9 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         parameters: { subscriptionKey: string; ackedOffset: number };
       }>`
         update subscriptions
-        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null
+        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null,
+            pending_through_offset = null, pending_stream_max_offset = null,
+            pending_attempt = null, pending_recovery_at = null
         where subscription_key = :subscriptionKey
       `,
       ackFenced: sql.run<{
@@ -1061,7 +1100,28 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscriptions
-        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null
+        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null,
+            pending_through_offset = null, pending_stream_max_offset = null,
+            pending_attempt = null, pending_recovery_at = null
+        where subscription_key = :subscriptionKey and epoch = :epoch
+      `,
+      claimPushFrame: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          ackedOffset: number;
+          throughOffset: number;
+          streamMaxOffset: number;
+          attempt: number;
+          recoveryAt: number;
+          epoch: number;
+        };
+      }>`
+        update subscriptions
+        set acked_offset = :ackedOffset,
+            pending_through_offset = :throughOffset,
+            pending_stream_max_offset = :streamMaxOffset,
+            pending_attempt = :attempt,
+            pending_recovery_at = :recoveryAt
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       advanceWatermark: sql.run<{
@@ -1081,7 +1141,8 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscriptions
-        set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error
+        set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error,
+            pending_recovery_at = null
         where subscription_key = :subscriptionKey and epoch = :epoch
       `,
       setCursor: sql.run<{
@@ -1092,7 +1153,9 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         };
       }>`
         update subscriptions
-        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null, epoch = :epoch
+        set acked_offset = :ackedOffset, attempt = 0, next_attempt_at = null, last_error = null,
+            epoch = :epoch, pending_through_offset = null, pending_stream_max_offset = null,
+            pending_attempt = null, pending_recovery_at = null
         where subscription_key = :subscriptionKey
       `,
       delete: sql.run<{ parameters: { subscriptionKey: string } }>`
@@ -1186,6 +1249,10 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       nextAttemptAt: null,
       lastError: null,
       epoch,
+      pendingThroughOffset: null,
+      pendingStreamMaxOffset: null,
+      pendingAttempt: null,
+      pendingRecoveryAt: null,
     };
     rows.set(subscriptionKey, row);
     return { ...row };
@@ -1202,7 +1269,8 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       nextOffset === row.ackedOffset &&
       row.attempt === 0 &&
       row.nextAttemptAt === null &&
-      row.lastError === null
+      row.lastError === null &&
+      row.pendingThroughOffset === null
     ) {
       return true;
     }
@@ -1220,6 +1288,10 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    row.pendingThroughOffset = null;
+    row.pendingStreamMaxOffset = null;
+    row.pendingAttempt = null;
+    row.pendingRecoveryAt = null;
     return true;
   }
 
@@ -1234,16 +1306,50 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       ackedOffset: nextOffset,
       epoch,
       skippedOffsets: pending?.skippedOffsets ?? 0,
-      deliveredBatches: (pending?.deliveredBatches ?? 0) + 1,
     });
     row.ackedOffset = nextOffset;
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    row.pendingThroughOffset = null;
+    row.pendingStreamMaxOffset = null;
+    row.pendingAttempt = null;
+    row.pendingRecoveryAt = null;
     // Deliberately count across drain lifetimes: trickle traffic otherwise
     // turns every one-batch drain tail back into an output-gated cursor write.
     this.flushPending(clearsFailure ? "all" : "due");
     return true;
+  }
+
+  claimPushFrame(
+    subscriptionKey: string,
+    throughOffset: number,
+    streamMaxOffset: number,
+    recoveryAt: number,
+    epoch: number,
+  ): { streamMaxOffset: number; attempt: number } | undefined {
+    const row = this.#rows().get(subscriptionKey);
+    if (row === undefined || row.epoch !== epoch) return undefined;
+    const activeClaim =
+      row.pendingThroughOffset !== null && row.pendingThroughOffset > row.ackedOffset;
+    const sameDelivery = activeClaim && row.pendingThroughOffset === throughOffset;
+    const stableStreamMaxOffset = sameDelivery ? row.pendingStreamMaxOffset! : streamMaxOffset;
+    const attempt = sameDelivery ? Math.max(row.pendingAttempt ?? 0, row.attempt) + 1 : 1;
+    this.#db.claimPushFrame({
+      subscriptionKey,
+      ackedOffset: row.ackedOffset,
+      throughOffset,
+      streamMaxOffset: stableStreamMaxOffset,
+      attempt,
+      recoveryAt,
+      epoch,
+    });
+    this.#deletePendingProgress(subscriptionKey);
+    row.pendingThroughOffset = throughOffset;
+    row.pendingStreamMaxOffset = stableStreamMaxOffset;
+    row.pendingAttempt = attempt;
+    row.pendingRecoveryAt = recoveryAt;
+    return { streamMaxOffset: stableStreamMaxOffset, attempt };
   }
 
   skip(subscriptionKey: string, ackedOffset: number, epoch: number): void {
@@ -1255,12 +1361,15 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       ackedOffset,
       epoch,
       skippedOffsets: (pending?.skippedOffsets ?? 0) + ackedOffset - row.ackedOffset,
-      deliveredBatches: pending?.deliveredBatches ?? 0,
     });
     row.ackedOffset = ackedOffset;
     row.attempt = 0;
     row.nextAttemptAt = null;
     row.lastError = null;
+    row.pendingThroughOffset = null;
+    row.pendingStreamMaxOffset = null;
+    row.pendingAttempt = null;
+    row.pendingRecoveryAt = null;
     // A due retry that found only skips consumed the persisted backoff. Do not
     // leave its old alarm state behind on a quiet stream.
     if (clearsFailure) this.flushPending("all");
@@ -1321,6 +1430,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     row.attempt = args.attempt;
     row.nextAttemptAt = args.nextAttemptAt;
     row.lastError = error;
+    row.pendingRecoveryAt = null;
   }
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {
@@ -1338,6 +1448,10 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     row.nextAttemptAt = null;
     row.lastError = null;
     row.epoch = epoch;
+    row.pendingThroughOffset = null;
+    row.pendingStreamMaxOffset = null;
+    row.pendingAttempt = null;
+    row.pendingRecoveryAt = null;
   }
 
   setCursors(cursors: readonly SubscriptionCursorSet[]): void {
@@ -1383,6 +1497,10 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         update.row.nextAttemptAt = null;
         update.row.lastError = null;
         update.row.epoch = update.epoch;
+        update.row.pendingThroughOffset = null;
+        update.row.pendingStreamMaxOffset = null;
+        update.row.pendingAttempt = null;
+        update.row.pendingRecoveryAt = null;
       }
     }
   }
@@ -1401,6 +1519,9 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       if (row.nextAttemptAt !== null && (next === null || row.nextAttemptAt < next)) {
         next = row.nextAttemptAt;
       }
+      if (row.pendingRecoveryAt !== null && (next === null || row.pendingRecoveryAt < next)) {
+        next = row.pendingRecoveryAt;
+      }
     }
     return next;
   }
@@ -1414,7 +1535,8 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
  * `next_attempt_at` would arm alarms forever), and a surviving row's backoff
  * may blame code the new version replaced. Progress is kept — `ackedOffset`
  * is monotonic truth about the same immutable log — while failure state is
- * cleared so every survivor gets an immediate fresh try under the new fold.
+ * cleared for unclaimed rows. Exact push claims retain their envelope and
+ * retry schedule: clearing either can change receiver-visible redelivery.
  */
 export function reconcileSubscriptionCursorRows(
   store: SubscriptionCursorStore,
@@ -1423,7 +1545,10 @@ export function reconcileSubscriptionCursorRows(
   for (const row of store.list()) {
     if (!configuredKeys.has(row.subscriptionKey)) {
       store.delete(row.subscriptionKey);
-    } else if (row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null) {
+    } else if (
+      row.pendingThroughOffset === null &&
+      (row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null)
+    ) {
       // ack at the row's own offset: keeps the cursor, clears attempt/backoff.
       store.ack(row.subscriptionKey, row.ackedOffset);
     }
@@ -1437,6 +1562,10 @@ type SubscriptionCursorRowRecord = {
   next_attempt_at: number | null;
   last_error: string | null;
   epoch: number;
+  pending_through_offset: number | null;
+  pending_stream_max_offset: number | null;
+  pending_attempt: number | null;
+  pending_recovery_at: number | null;
 };
 
 function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorRow {
@@ -1447,6 +1576,10 @@ function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorR
     nextAttemptAt: record.next_attempt_at,
     lastError: record.last_error,
     epoch: record.epoch,
+    pendingThroughOffset: record.pending_through_offset,
+    pendingStreamMaxOffset: record.pending_stream_max_offset,
+    pendingAttempt: record.pending_attempt,
+    pendingRecoveryAt: record.pending_recovery_at,
   };
 }
 
@@ -1467,7 +1600,11 @@ function createCursorProgressStatements(maxRows: number): string[] {
       set acked_offset = max(current.acked_offset, progress.acked_offset),
           attempt = 0,
           next_attempt_at = null,
-          last_error = null
+          last_error = null,
+          pending_through_offset = null,
+          pending_stream_max_offset = null,
+          pending_attempt = null,
+          pending_recovery_at = null
       from progress
       where current.subscription_key = progress.subscription_key
         and current.epoch = progress.epoch
@@ -1487,7 +1624,11 @@ function createCursorSetStatements(maxRows: number): string[] {
           attempt = 0,
           next_attempt_at = null,
           last_error = null,
-          epoch = cursor_updates.epoch
+          epoch = cursor_updates.epoch,
+          pending_through_offset = null,
+          pending_stream_max_offset = null,
+          pending_attempt = null,
+          pending_recovery_at = null
       from cursor_updates
       where current.subscription_key = cursor_updates.subscription_key
     `;

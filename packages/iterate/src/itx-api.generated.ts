@@ -1659,6 +1659,7 @@ export type StreamPushEventBatch = {
   projectId: string | null;
   path: string;
   events: StreamEvent[];
+  /** Stream head captured when this delivery ID was first claimed; stable across its retries. */
   streamMaxOffset: number;
   subscriptionKey: SubscriptionKey;
   /**
@@ -1667,7 +1668,7 @@ export type StreamPushEventBatch = {
    * (`${event.path}@${event.offset}` remains the per-event idempotency idiom.)
    */
   deliveryId: string;
-  /** 1-based consecutive attempt count for this batch. */
+  /** 1-based consecutive dispatch attempt for this delivery ID, including crash redeliveries. */
   attempt: number;
   /**
    * The committed `subscription-configured` event this delivery serves — so a
