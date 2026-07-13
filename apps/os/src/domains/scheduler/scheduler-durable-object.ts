@@ -1,4 +1,4 @@
-import { DurableObject, tracing } from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
@@ -81,27 +81,19 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     // scheduler's, or both — run both handlers; each is idempotent and
     // re-derives its own next fire time.
     await this.#processorHost.handleAlarm(alarmInfo);
-    await tracing.enterSpan("alarm scheduler trigger due", async (span) => {
-      span.setAttribute("iterate.alarm.kind", "scheduler_trigger_due");
-      if (alarmInfo !== undefined) {
-        span.setAttribute("iterate.alarm.is_retry", alarmInfo.isRetry);
-        span.setAttribute("iterate.alarm.retry_count", alarmInfo.retryCount);
-      }
-      try {
-        await this.#processorHost.catchUp(PROCESSOR_SLUG);
-        const { requested } = await this.#schedulerProcessor.triggerDue();
-        span.setAttribute("iterate.scheduler.requested", requested);
-        await this.#processorHost.catchUp(PROCESSOR_SLUG);
-      } catch (error) {
-        // Cloudflare retries a throwing alarm handler only a bounded number of
-        // times; a prolonged Stream DO outage must not end with due schedules
-        // and no armed alarm. Arm a coarse fallback — AWAITED, so the alarm is
-        // durably armed before the rethrow surrenders to the platform's bounded
-        // retry/observability.
-        await this.#processorHost.setAlarmSlice("scheduler", Date.now() + 60_000);
-        throw error;
-      }
-    });
+    try {
+      await this.#processorHost.catchUp(PROCESSOR_SLUG);
+      await this.#schedulerProcessor.triggerDue();
+      await this.#processorHost.catchUp(PROCESSOR_SLUG);
+    } catch (error) {
+      // Cloudflare retries a throwing alarm handler only a bounded number of
+      // times; a prolonged Stream DO outage must not end with due schedules
+      // and no armed alarm. Arm a coarse fallback — AWAITED, so the alarm is
+      // durably armed before the rethrow surrenders to the platform's bounded
+      // retry/observability.
+      await this.#processorHost.setAlarmSlice("scheduler", Date.now() + 60_000);
+      throw error;
+    }
   }
 
   async setSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {

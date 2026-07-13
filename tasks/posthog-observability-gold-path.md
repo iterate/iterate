@@ -131,6 +131,20 @@ idea is stack continuity: prove one deliberate Worker-to-DO failure in preview,
 then add an error-only boundary helper only if the caller-facing stack is
 materially inadequate. Successful calls must stay on native RPC.
 
+The production grill after #1933 supplied that proof. A deliberate missing
+Scheduler trigger preserved the semantic `itx Scheduler.trigger` span, native
+Durable Object subrequest, error outcome attribute, and error-level wide log,
+but the CLI received only Cap'n Web's generic local evaluator stack. The narrow
+follow-on is correlation rather than stack export: normalize a thrown target
+value to a fresh RPC-safe Error carrying the existing ITX call/log ID as an
+authoritative enumerable property. Cap'n Web already transports Error
+properties, so the caller can find the exact log and trace without a
+successful-call proxy, a generic `callMethod`, or arbitrary server stack
+disclosure. The fresh boundary also prevents frozen or pre-tagged errors from
+omitting or spoofing the correlation ID; no compatibility contract requires
+arbitrary throwable properties to survive. PostHog remains the intended owner
+of grouped, source-mapped exception stacks.
+
 ## Cloudflare log contract
 
 The target is one structured object per completed operation:
@@ -270,12 +284,34 @@ alarm actions. Possible later operation adapters are:
 - stream-processor wake/catch-up operations;
 - outbox/reconciler work.
 
+## Production grill follow-ups (2026-07-13)
+
+- The current Workers Observability API returns custom spans from `otel` and
+  structured console events from `cloudflare-workers`; agents must search all
+  datasets before declaring either side missing.
+- Forty-six of 52 `alarm scheduler trigger due` spans in a roughly 21-minute
+  sample requested no schedules. That wrapper also captured asynchronously
+  launched work inconsistently, so the follow-on deletes it and lets the native
+  alarm be the origin.
+- `scheduler action invocation` now means exactly the dynamic-worker call and
+  records execution ID plus `succeeded` / `failed`. Completion-event append is
+  deliberately outside that span; a failed append still needs an execution-ID
+  operation log before it becomes an easy production diagnosis.
+- `alarm processor keepalive` still emits a zero-duration `not_due` span on a
+  shared scheduler alarm. Consider suppressing that no-op only if a controlled
+  trace proves the meaningful revival path remains obvious.
+- A ten-minute production window contained 151 failed
+  `UnauthenticatedOs.authenticate` spans. Establish whether these are expected
+  credential denials; if so, classify them as an expected outcome rather than
+  an operational error before building alerts or dashboards.
+
 ## Acceptance criteria
 
 - [ ] Every OS fetch lane emits one bounded Cloudflare wide log; no sampling.
 - [ ] N calls over one WebSocket emit N bounded semantic call logs/spans.
 - [ ] Child logs contain parent IDs, never cloned parent payloads.
-- [ ] A thrown Worker/ITX error is rethrown unchanged and captured once.
+- [ ] A thrown ITX target value becomes one RPC-safe Error with an authoritative
+      `itxCallId`; telemetry captures it once without arguments or server stack.
 - [ ] A minified browser error is symbolicated and linked to identity, project,
       release, and replay.
 - [ ] A server error observed in the browser retains replay without creating a
