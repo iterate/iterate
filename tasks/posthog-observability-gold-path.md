@@ -8,7 +8,7 @@ size: large
 
 Research and implementation notes from 2026-07-13. This task is the durable
 home for the PostHog design while the first proof lands through Cloudflare
-Workers Observability and the Cap'n Web fork.
+Workers Observability and the existing local Cap'n Web package patch.
 
 ## Important correction: revive Misha's logger, not evlog
 
@@ -50,13 +50,13 @@ Do not wholesale cherry-pick #1206. Improve these details while porting it:
 
 ## Current proof status
 
-- Draft `iterate/iterate#1933` is the single OS proof. It revives Misha's
+- `iterate/iterate#1933` is the single OS proof. It revives Misha's
   operation logger, adds one bounded log and semantic custom span per logical
   ITX call, and includes the alarm and dynamic-worker tracing proofs that were
   previously split across drafts #1914, #1926, and #1928.
-- Draft `iterate/capnweb#3` is the only separate dependency PR. Its one
-  server-side `onCall(info, invoke)` hook survives promise pipelining, while the
-  client API and wire protocol remain unchanged.
+- The existing `patches/capnweb@0.8.0.patch` carries the small server-side
+  `onCall(info, invoke)` hook. It survives promise pipelining while the client
+  API and wire protocol remain unchanged, so the proof has no separate fork PR.
 - Closed draft `iterate/iterate#1930` used the current evlog wrapper. It is
   superseded by the #1206 correction and is not the logging foundation.
 - The outer OS `worker.fetch` operation covers dashboard, API, webhook,
@@ -89,10 +89,11 @@ name, for example `itx project.files.read`; never put arguments or results in a
 span name. Multiple calls over one socket produce N small call events, not one
 large session event.
 
-The Cap'n Web fork is deliberately minimal. The server-side
-`onCall(info, invoke)` hook and promise-pipeline propagation wrap every local
-application invocation. It sends no client metadata and changes no wire tuple;
-OS mints the session ID and uses the wide-log operation ID as the call ID.
+The Cap'n Web package patch is deliberately minimal. The server-side
+`onCall(info, invoke)` hook and promise-pipeline propagation touch only the
+Workers runtime and public types needed by OS. It sends no client metadata and
+changes no wire tuple; OS mints the session ID and uses the wide-log operation
+ID as the call ID.
 Browser/PostHog identity may eventually justify a separate, narrow correlation
 protocol if a socket can outlive the current PostHog session. That decision
 must not be conflated with Cloudflare trace IDs.
@@ -246,7 +247,7 @@ After HTTP and ITX calls, use the same primitive for:
 
 - Misha's PR #1206: https://github.com/iterate/iterate/pull/1206
 - Consolidated OS proof: https://github.com/iterate/iterate/pull/1933
-- Minimal Cap'n Web fork: https://github.com/iterate/capnweb/pull/3
+- Minimal Cap'n Web package patch: `patches/capnweb@0.8.0.patch`
 - PostHog exception capture: https://posthog.com/docs/error-tracking/capture
 - PostHog React tracking: https://posthog.com/docs/error-tracking/installation/react
 - PostHog Node/Worker tracking: https://posthog.com/docs/error-tracking/installation/node

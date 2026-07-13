@@ -1,26 +1,84 @@
 diff --git a/dist/index-workers.d.cts b/dist/index-workers.d.cts
-index e69de29..e69de29 100644
+index 1908f87..80f5544 100644
 --- a/dist/index-workers.d.cts
 +++ b/dist/index-workers.d.cts
-@@ -102,7 +102,7 @@ type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>
- };
- type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>]: MethodOrProperty<T[K]> } & ArrayProvider<T[number]>; // Base type for all other types providing RPC-like interfaces.
- // Rewrites all methods/properties to be `MethodOrProperty`s, while preserving callable types.
+@@ -105 +105 @@ type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>
 -type Provider<T> = MaybeCallableProvider<T> & (T extends ReadonlyArray<unknown> ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T> : { [K in Exclude<keyof T, symbol | keyof StubBase<never>>]: MethodOrProperty<T[K]> } & {
 +type Provider<T> = MaybeCallableProvider<T> & (T extends ReadonlyArray<unknown> ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T> : Pick<{ [K in keyof T]: MethodOrProperty<T[K]> }, Exclude<keyof T, symbol | keyof StubBase<never>>> & {
-   map<V>(callback: (value: MapCallbackValue<NonNullable<T>>) => MapCallbackReturn<V>): Result<Array<V>>;
- });
- //#endregion
 diff --git a/dist/index-workers.d.ts b/dist/index-workers.d.ts
-index e69de29..e69de29 100644
+index 20e2375..8d94bf3 100644
 --- a/dist/index-workers.d.ts
 +++ b/dist/index-workers.d.ts
-@@ -102,7 +102,7 @@ type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>
- };
- type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>]: MethodOrProperty<T[K]> } & ArrayProvider<T[number]>; // Base type for all other types providing RPC-like interfaces.
- // Rewrites all methods/properties to be `MethodOrProperty`s, while preserving callable types.
+@@ -105 +105 @@ type TupleProvider<T extends ReadonlyArray<unknown>> = { [K in TupleIndexKeys<T>
 -type Provider<T> = MaybeCallableProvider<T> & (T extends ReadonlyArray<unknown> ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T> : { [K in Exclude<keyof T, symbol | keyof StubBase<never>>]: MethodOrProperty<T[K]> } & {
 +type Provider<T> = MaybeCallableProvider<T> & (T extends ReadonlyArray<unknown> ? number extends T["length"] ? ArrayProvider<T[number]> : TupleProvider<T> : Pick<{ [K in keyof T]: MethodOrProperty<T[K]> }, Exclude<keyof T, symbol | keyof StubBase<never>>> & {
-   map<V>(callback: (value: MapCallbackValue<NonNullable<T>>) => MapCallbackReturn<V>): Result<Array<V>>;
- });
- //#endregion
+diff --git a/dist/index-workers.js b/dist/index-workers.js
+index 5faf874..9100661 100644
+--- a/dist/index-workers.js
++++ b/dist/index-workers.js
+@@ -302,2 +302,2 @@ var RpcPayload = class RpcPayload {
+-	static forEvaluate(hooks, promises) {
+-		return new RpcPayload(null, "owned", hooks, promises);
++	static forEvaluate(hooks, promises, callHandler) {
++		return new RpcPayload(null, "owned", hooks, promises, callHandler);
+@@ -310 +310 @@ var RpcPayload = class RpcPayload {
+-	constructor(value, source, hooks, promises) {
++	constructor(value, source, hooks, promises, callHandler) {
+@@ -314,0 +315 @@ var RpcPayload = class RpcPayload {
++		this.callHandler = callHandler;
+@@ -765 +766,6 @@ var ValueStubHook = class extends StubHook {
+-			return new PromiseStubHook(args.deliverCall(followResult.value, followResult.parent).then((payload) => {
++			const func = followResult.value;
++			const invoke = () => args.deliverCall(func, followResult.parent);
++			return new PromiseStubHook((args.callHandler ? args.callHandler({
++				path: [...path],
++				target: followResult.parent ?? followResult.value
++			}, invoke) : invoke()).then((payload) => {
+@@ -1534 +1540,2 @@ var Evaluator = class Evaluator {
+-	constructor(importer) {
++	callHandler;
++	constructor(importer, callHandler) {
+@@ -1535,0 +1543 @@ var Evaluator = class Evaluator {
++		this.callHandler = callHandler;
+@@ -1540 +1548 @@ var Evaluator = class Evaluator {
+-		let payload = RpcPayload.forEvaluate(this.hooks, this.promises);
++		let payload = RpcPayload.forEvaluate(this.hooks, this.promises, this.callHandler);
+@@ -1695 +1703 @@ var Evaluator = class Evaluator {
+-					args = new Evaluator(this.importer).evaluate([args]);
++					args = new Evaluator(this.importer, this.callHandler).evaluate([args]);
+@@ -2228 +2236 @@ var RpcSessionImpl = class {
+-						let hook = new PayloadStubHook(new Evaluator(this).evaluate(msg[1]));
++						let hook = new PayloadStubHook(new Evaluator(this, this.options.onCall).evaluate(msg[1]));
+@@ -2239 +2247 @@ var RpcSessionImpl = class {
+-						let hook = new PayloadStubHook(new Evaluator(this).evaluate(msg[1]));
++						let hook = new PayloadStubHook(new Evaluator(this, this.options.onCall).evaluate(msg[1]));
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index c242acc..734ec07 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -108,0 +109,15 @@ type Provider<T> = MaybeCallableProvider<T> & (T extends ReadonlyArray<unknown>
++//#region src/core.d.ts
++type PropertyPath = (string | number)[];
++/** Information about one application function invocation received over RPC. */
++type RpcCallInfo = {
++  /** The property path used to reach the function from the referenced capability. */
++  path: PropertyPath;
++  /** The object that owns the function, or the function itself for a callable capability. */
++  target: unknown;
++};
++/**
++ * Wraps one local application invocation. `invoke()` must be called synchronously so Cap'n Web's
++ * e-order guarantees are preserved, but the returned promise remains pending for the full call.
++ */
++type RpcCallHandler = <T>(info: RpcCallInfo, invoke: () => Promise<T>) => Promise<T>;
++//#endregion
+@@ -164,0 +180,6 @@ type RpcSessionOptions = {
++  /**
++   * Wrap every local application function invoked by the peer. The handler must invoke
++   * `invoke()` synchronously to preserve e-order, and should return its promise so the wrapper
++   * spans the full asynchronous call. The hook is propagated through promise pipelining.
++   */
++  onCall?: RpcCallHandler;
+@@ -302 +323 @@ declare function newWorkersRpcResponse(request: Request, localMain: any): Promise
+-export { type RpcCompatible, RpcPromise, RpcSession, type RpcSessionOptions, RpcStub, RpcTarget, type RpcTransport, deserialize, newHttpBatchRpcResponse, newHttpBatchRpcSession, newMessagePortRpcSession, newWebSocketRpcSession, newWorkersRpcResponse, newWorkersWebSocketRpcResponse, nodeHttpBatchRpcResponse, serialize };
++export { type RpcCallInfo, type RpcCompatible, RpcPromise, RpcSession, type RpcSessionOptions, RpcStub, RpcTarget, type RpcTransport, deserialize, newHttpBatchRpcResponse, newHttpBatchRpcSession, newMessagePortRpcSession, newWebSocketRpcSession, newWorkersRpcResponse, newWorkersWebSocketRpcResponse, nodeHttpBatchRpcResponse, serialize };
