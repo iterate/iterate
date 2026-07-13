@@ -569,6 +569,7 @@ describe("SlackProcessor (webhook router)", () => {
 
 describe("SlackAgentProcessor", () => {
   function setup(deps?: {
+    statusClearDebounceMs?: number;
     storeSlackFiles?: ConstructorParameters<typeof SlackAgentProcessor>[0]["storeSlackFiles"];
   }) {
     const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
@@ -583,6 +584,7 @@ describe("SlackAgentProcessor", () => {
         slackCalls.push({ body, method });
       },
       now: () => clock.now,
+      statusClearDebounceMs: deps?.statusClearDebounceMs ?? 0,
       ...(deps?.storeSlackFiles === undefined ? {} : { storeSlackFiles: deps.storeSlackFiles }),
     });
     const cursors = new Map<object, number>();
@@ -858,6 +860,114 @@ describe("SlackAgentProcessor", () => {
       {
         method: "reactions.remove",
         body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
+  it("keeps the tools status on while a script is running after its LLM completes", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "gpt-test", requestId: "llm-request:1" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-execution-requested",
+        payload: { code: "async () => {}", executionId: "script-1" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          durationMs: 10,
+          llmRequestOffset: 2,
+          result: { status: "success" },
+        },
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is using tools...",
+          loading_messages: ["Using tools..."],
+        },
+      },
+    ]);
+
+    slackCalls.length = 0;
+    await stream.append({
+      type: "events.iterate.com/capability-host/script-execution-completed",
+      payload: { executionId: "script-1", result: null },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+      },
+      {
+        method: "reactions.remove",
+        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
+  it("debounces idle clears and cancels them when the next LLM starts", async () => {
+    const { cursors, processor, slackCalls, stream } = setup({ statusClearDebounceMs: 30 });
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: "gpt-test", requestId: "llm-request:1" },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    await stream.append({
+      type: "events.iterate.com/agent/llm-request-completed",
+      payload: {
+        durationMs: 10,
+        llmRequestOffset: 2,
+        result: { status: "success" },
+      },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls).toEqual([]);
+
+    await stream.append({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: { model: "gpt-test", requestId: "llm-request:2" },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is thinking...",
+          loading_messages: ["Thinking..."],
+        },
       },
     ]);
   });

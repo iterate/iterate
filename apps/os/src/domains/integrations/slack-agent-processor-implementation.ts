@@ -47,6 +47,8 @@ export class SlackAgentProcessor extends StreamProcessor<
     callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
     /** Injectable clock for the acknowledgement freshness gates. */
     now?: () => number;
+    /** Trailing delay before clearing an idle assistant status. */
+    statusClearDebounceMs?: number;
     /** Downloads Slack-shared files into project file storage (see
      * storeSlackFilesForAgent in slack-api.ts). `storageKey` is stable per
      * webhook event so replays overwrite instead of duplicating. */
@@ -65,6 +67,32 @@ export class SlackAgentProcessor extends StreamProcessor<
     StreamProcessor<SlackAgentProcessorContract>["reduce"]
   >[0]): SlackAgentProcessorState {
     switch (event.type) {
+      case "events.iterate.com/agent/llm-request-requested":
+        return {
+          ...state,
+          activeLlmRequestOffsets: [...state.activeLlmRequestOffsets, event.offset],
+        };
+      case "events.iterate.com/agent/llm-request-completed":
+        // The agent runs at most one LLM request at a time. Clearing the fold
+        // outright also tolerates old/off-shape journals whose completion did
+        // not preserve the request event's offset.
+        return { ...state, activeLlmRequestOffsets: [] };
+      case "events.iterate.com/capability-host/script-execution-requested":
+        return {
+          ...state,
+          activeScriptExecutionIds: state.activeScriptExecutionIds.includes(
+            event.payload.executionId,
+          )
+            ? state.activeScriptExecutionIds
+            : [...state.activeScriptExecutionIds, event.payload.executionId],
+        };
+      case "events.iterate.com/capability-host/script-execution-completed":
+        return {
+          ...state,
+          activeScriptExecutionIds: state.activeScriptExecutionIds.filter(
+            (executionId) => executionId !== event.payload.executionId,
+          ),
+        };
       case "events.iterate.com/slack/thread-route-configured":
         return {
           ...state,
@@ -221,31 +249,15 @@ export class SlackAgentProcessor extends StreamProcessor<
     }
   }
 
-  /**
-   * The latest status-relevant lifecycle fact this incarnation has seen but
-   * not yet painted. Behind-the-head batches defer painting to the at-head
-   * pass, but that pass's own batch may contain no lifecycle facts — a
-   * wake-lane batch stamped behind the head is followed by a trailing
-   * unfiltered catch-up that is often renders and inputs only, and a
-   * multi-page catch-up may fold the facts pages before the final one. The
-   * carry hands the deferred fact to whichever batch finally reaches head.
-   * In-memory on purpose: the status is a cosmetic lane, and a carry lost to
-   * an eviction is repaired by the next lifecycle fact (a revival's orphan
-   * settle IS a fresh `llm-request-completed`).
-   */
+  /** Latest lifecycle fact deferred until an at-head repaint. */
   #unpaintedLifecycleFact: { createdAt: string; type: string } | undefined;
+  #statusClearTimer: ReturnType<typeof setTimeout> | undefined;
+  #statusClearGeneration = 0;
 
   /**
-   * The Slack assistant status is a REPAINT of current truth, not a per-event
-   * effect: the latest lifecycle fact wins and one setStatus paints it. Three
-   * gates make the lane refold-safe (and un-race per-event
-   * `blockProcessorWhile` closures, which run concurrently within a batch):
-   * only an at-head pass paints (a behind batch defers via the carry above),
-   * only a fresh fact paints (a refold's historical lifecycle facts must not
-   * touch months-old threads), and it paints at most once per batch. Unlike
-   * the repo reconciler this lane reads batch facts, not the fold — folding a
-   * cosmetic status into state isn't worth a schema change — which is exactly
-   * why behind batches need the carry where fold-based reconcilers don't.
+   * Repaint from folded active work, matching the web UI. An LLM completion
+   * must not clear Slack while a script is running, and idle clears trail
+   * briefly so LLM → script → LLM hand-offs do not flicker.
    */
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEventBatch"]>[0],
@@ -260,23 +272,71 @@ export class SlackAgentProcessor extends StreamProcessor<
     }
     this.#unpaintedLifecycleFact = undefined;
     if (latest == null || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
-    const update = slackAgentStatusForEvent(latest)!;
+
     const { channel, latestMessageTs, threadTs } = args.state;
     if (channel == null || threadTs == null) return;
-    args.blockProcessorWhile(async () => {
-      await this.#callSlackApi("assistant.threads.setStatus", {
-        channel_id: channel,
-        thread_ts: threadTs,
-        ...update.status,
+    const hasScripts = args.state.activeScriptExecutionIds.length > 0;
+    const hasLlm = args.state.activeLlmRequestOffsets.length > 0;
+
+    if (hasScripts || hasLlm) {
+      this.#cancelStatusClear();
+      const status = hasScripts
+        ? { status: "is using tools...", loading_messages: ["Using tools..."] }
+        : { status: "is thinking...", loading_messages: ["Thinking..."] };
+      args.blockProcessorWhile(() =>
+        this.#callSlackApi("assistant.threads.setStatus", {
+          channel_id: channel,
+          thread_ts: threadTs,
+          ...status,
+        }),
+      );
+      return;
+    }
+
+    const target = { channel, latestMessageTs, threadTs };
+    const delay = this.deps.statusClearDebounceMs ?? 1_000;
+    if (delay === 0) {
+      this.#cancelStatusClear();
+      args.blockProcessorWhile(() => this.#clearStatus(target));
+      return;
+    }
+    this.#scheduleStatusClear(target, delay);
+  }
+
+  #cancelStatusClear() {
+    this.#statusClearGeneration += 1;
+    if (this.#statusClearTimer !== undefined) clearTimeout(this.#statusClearTimer);
+    this.#statusClearTimer = undefined;
+  }
+
+  #scheduleStatusClear(
+    target: { channel: string; latestMessageTs?: string; threadTs: string },
+    delay: number,
+  ) {
+    this.#cancelStatusClear();
+    const generation = this.#statusClearGeneration;
+    this.#statusClearTimer = setTimeout(() => {
+      if (generation !== this.#statusClearGeneration) return;
+      this.#statusClearTimer = undefined;
+      void this.#clearStatus(target).catch((error) => {
+        console.error("[slack-agent] debounced status clear failed", { error });
       });
-      if (update.clear && latestMessageTs != null) {
-        await this.#callSlackApi("reactions.remove", {
-          channel,
-          name: "eyes",
-          timestamp: latestMessageTs,
-        });
-      }
+    }, delay);
+  }
+
+  async #clearStatus(target: { channel: string; latestMessageTs?: string; threadTs: string }) {
+    await this.#callSlackApi("assistant.threads.setStatus", {
+      channel_id: target.channel,
+      thread_ts: target.threadTs,
+      status: "",
     });
+    if (target.latestMessageTs != null) {
+      await this.#callSlackApi("reactions.remove", {
+        channel: target.channel,
+        name: "eyes",
+        timestamp: target.latestMessageTs,
+      });
+    }
   }
 
   /** The 👀 ack means "your message was just picked up" — only fresh webhooks

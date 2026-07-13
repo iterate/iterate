@@ -23,9 +23,11 @@ import { SlackProcessorContract } from "./slack-processor-contract.ts";
  */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",
-  version: "0.2.0",
+  version: "0.3.0",
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
+    activeLlmRequestOffsets: z.array(z.number().int().nonnegative()).default([]),
+    activeScriptExecutionIds: z.array(z.string()).default([]),
     botBotId: z.string().optional(),
     botUserId: z.string().optional(),
     channel: z.string().optional(),
