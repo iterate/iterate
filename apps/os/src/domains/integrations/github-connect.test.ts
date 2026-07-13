@@ -44,10 +44,14 @@ const network = vi.hoisted(() => {
           streams.set(name, events);
         }
         const stored = events;
+        async function append(...inputs: Array<{ payload: unknown; type: string }>) {
+          stored.push(...inputs);
+          return inputs.map((input, index) => ({ ...input, offset: stored.length + index }));
+        }
         return {
-          async append(...inputs: Array<{ payload: unknown; type: string }>) {
-            stored.push(...inputs);
-            return inputs.map((input, index) => ({ ...input, offset: stored.length + index }));
+          append,
+          async appendAck(...inputs: Array<{ payload: unknown; type: string }>) {
+            await append(...inputs);
           },
         };
       },

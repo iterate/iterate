@@ -186,7 +186,7 @@ export async function appendConnectionDirectoryEvents(
     slug: string;
   }[],
 ): Promise<void> {
-  await integrationStreamStub(null, INTEGRATION_DIRECTORY_STREAM_PATH).append(
+  await integrationStreamStub(null, INTEGRATION_DIRECTORY_STREAM_PATH).appendAck(
     ...inputs.map((input) => ({
       type: input.claimed ? CONNECTION_CLAIMED_EVENT_TYPE : CONNECTION_UNCLAIMED_EVENT_TYPE,
       payload: {

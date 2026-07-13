@@ -569,7 +569,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   /** Record the GitHub link durably and journal the fact on the repo stream. */
   async configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink> {
-    await this.#host.stream.append({
+    await this.#host.stream.appendAck({
       type: "events.iterate.com/repo/github-link-configured",
       payload: { ...link },
     });
@@ -581,7 +581,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   async removeGithubLink(): Promise<GithubRepoLink | null> {
     const link = this.getGithubLink();
     if (link === null) return null;
-    await this.#host.stream.append({
+    await this.#host.stream.appendAck({
       type: "events.iterate.com/repo/github-unlinked",
       payload: { connection: link.connection, owner: link.owner, repo: link.repo },
     });
@@ -660,7 +660,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         );
       }
 
-      await this.#host.stream.append({
+      await this.#host.stream.appendAck({
         type: "events.iterate.com/repo/github-push-completed",
         idempotencyKey: `github-push-completed:${link.owner}/${link.repo}:${head.oid}`,
         payload: { branch, commitOid: head.oid, owner: link.owner, repo: link.repo },
@@ -765,7 +765,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     await this.getHead({ branch });
 
-    await this.#host.stream.append({
+    await this.#host.stream.appendAck({
       type: "events.iterate.com/repo/github-synced",
       idempotencyKey: `github-synced:${link.owner}/${link.repo}:${headOid}`,
       payload: {

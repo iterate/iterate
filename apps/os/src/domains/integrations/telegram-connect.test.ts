@@ -50,21 +50,27 @@ const network = vi.hoisted(() => {
           streams.set(name, events);
         }
         const stored = events;
+        async function append(
+          ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
+        ) {
+          appendBatches.push({ name, types: inputs.map((input) => input.type) });
+          return inputs.map((input) => {
+            const existing =
+              input.idempotencyKey === undefined
+                ? undefined
+                : stored.find((event) => event.idempotencyKey === input.idempotencyKey);
+            if (existing) return existing;
+            const event = { ...input, offset: stored.length + 1 };
+            stored.push(event);
+            return event;
+          });
+        }
         return {
-          async append(
+          append,
+          async appendAck(
             ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
           ) {
-            appendBatches.push({ name, types: inputs.map((input) => input.type) });
-            return inputs.map((input) => {
-              const existing =
-                input.idempotencyKey === undefined
-                  ? undefined
-                  : stored.find((event) => event.idempotencyKey === input.idempotencyKey);
-              if (existing) return existing;
-              const event = { ...input, offset: stored.length + 1 };
-              stored.push(event);
-              return event;
-            });
+            await append(...inputs);
           },
           async head() {
             return { maxOffset: stored.length };

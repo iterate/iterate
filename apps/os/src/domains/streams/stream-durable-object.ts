@@ -442,6 +442,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     return events;
   }
 
+  /** Commit events without serializing their committed envelopes back to the caller. */
+  appendAck(...eventInputs: StreamEventInput[]): void {
+    this.append(...eventInputs);
+  }
+
   /**
    * Synchronous committed-event read used by the append transaction and
    * delivery catch-up. Keep await-free; callers that cross an RPC seam get the

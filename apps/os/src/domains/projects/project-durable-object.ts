@@ -330,7 +330,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
 
     if (resolution === "expired") {
-      await stream.append({
+      await stream.appendAck({
         type: "events.iterate.com/project/human-approval-rejected",
         idempotencyKey: `human-approval-expired:${approvalRequestEventOffset}`,
         payload: { approvalRequestEventOffset, reason: "expired" },

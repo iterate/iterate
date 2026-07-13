@@ -6,12 +6,12 @@ export async function ensureMcpSessionAgentReady(input: {
   agentPath: string;
   projectItx: {
     streams: {
-      get(path: string): Pick<Stream, "append" | "waitForEvent">;
+      get(path: string): Pick<Stream, "appendAck" | "waitForEvent">;
     };
   };
 }): Promise<void> {
   const stream = input.projectItx.streams.get(input.agentPath);
-  await stream.append({
+  await stream.appendAck({
     type: "events.iterate.com/mcp/session-agent-warmup",
     idempotencyKey: `mcp/session-agent-warmup:${input.agentPath}`,
     payload: { agentPath: input.agentPath },

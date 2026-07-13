@@ -1048,6 +1048,8 @@ export interface Stream {
   __describe(): Promise<Description>;
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  /** Commit events and wait for durability without returning their committed envelopes. */
+  appendAck(...events: StreamEventInput[]): Promise<void>;
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
   /** One event by offset or idempotencyKey; undefined when it does not exist.

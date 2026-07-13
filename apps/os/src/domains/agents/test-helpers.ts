@@ -39,6 +39,10 @@ export class MemoryStream implements Stream {
     return appended;
   }
 
+  async appendAck(...inputs: StreamEventInput[]): Promise<void> {
+    await this.append(...inputs);
+  }
+
   at(): Stream {
     return this;
   }

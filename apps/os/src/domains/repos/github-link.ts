@@ -182,7 +182,7 @@ export async function linkRepoToGithub(input: {
     integrationConnectionStreamPath("github", input.connection),
   );
   try {
-    await connectionStream.append(
+    await connectionStream.appendAck(
       githubCrossPostSubscriptionEvent({ owner, repo, repoPath, subscriptionKey }),
     );
     await repoStub.configureGithubLink(link);
@@ -194,7 +194,7 @@ export async function linkRepoToGithub(input: {
     // compensation failures are named in the surfaced error, and a re-run of
     // linkGithub repairs everything (subscriptions replace by key).
     try {
-      await connectionStream.append({
+      await connectionStream.appendAck({
         type: "events.iterate.com/stream/subscription-removed",
         payload: { subscriptionKey },
       });

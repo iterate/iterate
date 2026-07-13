@@ -68,6 +68,10 @@ class MemoryStream implements Stream {
     });
   }
 
+  async appendAck(...inputs: StreamEventInput[]): Promise<void> {
+    await this.append(...inputs);
+  }
+
   at(path: string): Stream {
     return this.network.get(path);
   }

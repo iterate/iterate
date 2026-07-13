@@ -23,14 +23,8 @@ describe("ensureMcpSessionAgentReady", () => {
           get(path) {
             requestedPath = path;
             return {
-              async append(...events) {
+              async appendAck(...events: StreamEventInput[]) {
                 appended.push(...events);
-                return events.map((event, index) => ({
-                  ...event,
-                  createdAt: new Date(index + 1).toISOString(),
-                  offset: index + 1,
-                  path,
-                }));
               },
               async waitForEvent(args) {
                 waitCalls.push(args);

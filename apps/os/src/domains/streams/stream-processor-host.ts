@@ -315,7 +315,7 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       // consumes list — so the fact reaches every processor's batch and the
       // end-of-batch reconciliations run even for processors that do not
       // consume it. Failures throw: the keepalive's breaker owns retries.
-      await options.stream.append({
+      await options.stream.appendAck({
         type: PROCESSOR_HOST_REVIVED_EVENT_TYPE,
         // Keyed per attempt: a platform retry of a throwing alarm handler
         // re-runs the pass without journaling a duplicate fact; distinct

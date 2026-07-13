@@ -382,9 +382,10 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), head(), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), appendAck(events), head(), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
+        appendAck: "Commit events without returning their committed envelopes.",
         at: "The stream at a sub-path.",
         crossPostTo:
           "Copy matching events onto another stream (optionally JSONata-transformed). Rides durable delivery, so ephemeral events are never cross-posted; a selector matching only ephemeral types delivers nothing.",
@@ -427,6 +428,11 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     return this.durableObjectStub.append(...events);
+  }
+
+  /** Commit events and wait for durability without returning their committed envelopes. */
+  appendAck(...events: StreamEventInput[]): Promise<void> {
+    return this.durableObjectStub.appendAck(...events);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -3296,7 +3302,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         payload: { model: defaults.model },
       });
     }
-    await this.stream.append(...events);
+    await this.stream.appendAck(...events);
   }
 
   /**

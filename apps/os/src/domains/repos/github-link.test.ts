@@ -62,22 +62,28 @@ const network = vi.hoisted(() => {
     STREAM: {
       getByName(name: string) {
         const stored = streamEvents(name);
-        return {
-          async append(...inputs: Array<{ payload: Record<string, unknown>; type: string }>) {
-            for (const input of inputs) {
-              if (
-                network.state.subscriptionRemoveAppendShouldFail &&
-                input.type === "events.iterate.com/stream/subscription-removed"
-              ) {
-                throw new Error("subscription-removed append exploded");
-              }
-              stored.push({
-                ...input,
-                createdAt: new Date().toISOString(),
-                offset: stored.length + 1,
-              });
+        async function append(
+          ...inputs: Array<{ payload: Record<string, unknown>; type: string }>
+        ) {
+          for (const input of inputs) {
+            if (
+              network.state.subscriptionRemoveAppendShouldFail &&
+              input.type === "events.iterate.com/stream/subscription-removed"
+            ) {
+              throw new Error("subscription-removed append exploded");
             }
-            return inputs;
+            stored.push({
+              ...input,
+              createdAt: new Date().toISOString(),
+              offset: stored.length + 1,
+            });
+          }
+          return inputs;
+        }
+        return {
+          append,
+          async appendAck(...inputs: Array<{ payload: Record<string, unknown>; type: string }>) {
+            await append(...inputs);
           },
           async getEvents(args: { afterOffset?: number; beforeOffset?: number }) {
             const after = args.afterOffset ?? 0;

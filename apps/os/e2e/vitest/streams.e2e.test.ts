@@ -60,12 +60,27 @@ test("creates a project and uses project streams through v4 ITX", async () => {
     maxOffset: appended!.offset,
   });
 
+  const ackMarker = crypto.randomUUID();
+  expect(
+    await stream.appendAck({
+      type: STREAM_EVENT_TYPE,
+      payload: { marker: ackMarker },
+    }),
+  ).toBeUndefined();
+  const headAfterAck = await stream.head();
+  expect(headAfterAck.maxOffset).toBe(appended!.offset + 1);
+
   const read = await stream.getEvents({ afterOffset: 0 });
   expect(read).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         offset: appended!.offset,
         payload: { marker },
+        type: STREAM_EVENT_TYPE,
+      }),
+      expect.objectContaining({
+        offset: headAfterAck.maxOffset,
+        payload: { marker: ackMarker },
         type: STREAM_EVENT_TYPE,
       }),
     ]),

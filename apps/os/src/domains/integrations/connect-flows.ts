@@ -321,7 +321,7 @@ async function recordConnection(input: {
       ...(secret.refresh ? { refresh: secret.refresh } : {}),
     });
   }
-  await integrationStreamStub(input.projectId, streamPath).append(
+  await integrationStreamStub(input.projectId, streamPath).appendAck(
     ...(input.processorSubscription
       ? [
           buildDurableObjectProcessorSubscriptionConfiguredEvent({
