@@ -167,7 +167,7 @@ export function RepoTasksView({
   };
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="flex min-h-0 min-w-0 flex-1">
       <TaskBoard
         tasks={tasks}
         columns={columns}
@@ -215,6 +215,7 @@ function TaskBoard({
   const [groupMode, setGroupMode] = useState<GroupMode>("state");
   const [filter, setFilter] = useState("");
   const draggedPathRef = useRef<string | undefined>(undefined);
+  const boardScrollRef = useRef<HTMLDivElement>(null);
   const filteredTasks = useMemo(() => {
     const query = filter.trim().toLocaleLowerCase();
     if (query === "") return tasks;
@@ -234,6 +235,9 @@ function TaskBoard({
     });
   }, [tasks]);
   const groups = groupMode === "state" ? columns : folderPaths;
+  useEffect(() => {
+    boardScrollRef.current?.scrollTo({ left: 0 });
+  }, [groupMode]);
 
   return (
     <DragDropProvider
@@ -294,7 +298,10 @@ function TaskBoard({
             {filteredTasks.length} {filteredTasks.length === 1 ? "task" : "tasks"}
           </span>
         </div>
-        <div className="flex min-h-0 min-w-0 flex-1 snap-x snap-mandatory gap-2 overflow-x-auto p-2 sm:snap-none">
+        <div
+          ref={boardScrollRef}
+          className="flex min-h-0 min-w-0 flex-1 snap-x snap-mandatory gap-2 overflow-x-auto p-2 sm:snap-none"
+        >
           {groups.map((group) => (
             <TaskColumn
               key={`${groupMode}:${group}`}
@@ -346,7 +353,7 @@ function TaskColumn({
       ref={ref}
       data-task-group={dropId}
       className={cn(
-        "flex min-h-full min-w-[calc(100vw-1rem)] flex-1 basis-72 snap-start flex-col rounded-lg bg-background/70 transition-colors sm:min-w-72",
+        "flex min-h-full min-w-full flex-1 basis-72 snap-start flex-col rounded-lg bg-background/70 transition-colors sm:min-w-72",
         isDropTarget && "bg-accent/40",
       )}
     >
