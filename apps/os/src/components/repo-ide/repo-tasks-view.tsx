@@ -326,14 +326,16 @@ function TaskBoard({
               className="h-8 bg-background pl-8"
             />
           </div>
-          <BoardDisplaySettings rowField={rowField} onChangeRowField={setRowField} />
-          <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground sm:inline">
-            {board.taskCount} {board.taskCount === 1 ? "task" : "tasks"}
-          </span>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
+              {board.taskCount} {board.taskCount === 1 ? "task" : "tasks"}
+            </span>
+            <BoardDisplaySettings rowField={rowField} onChangeRowField={setRowField} />
+          </div>
         </div>
         <div ref={boardScrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto p-2">
           <div className="flex min-h-full w-max min-w-full flex-col gap-4">
-            {board.rows.map((row) => (
+            {board.rows.map((row, rowIndex) => (
               <section
                 key={row.key}
                 data-task-row={row.key}
@@ -350,9 +352,6 @@ function TaskBoard({
                       <TagIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
                     )}
                     <span className="truncate">{row.label}</span>
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {row.tasks.length}
-                    </span>
                   </header>
                 )}
                 <div className="flex min-h-0 min-w-full flex-1 snap-x snap-mandatory gap-2 sm:snap-none">
@@ -364,6 +363,7 @@ function TaskBoard({
                       rowLabel={row.label}
                       tasks={cell.tasks}
                       visibleProperties={board.visibleProperties}
+                      showHeader={rowIndex === 0}
                       onOpen={(task) => {
                         if (draggedPathRef.current !== task.path) onOpen(task);
                       }}
@@ -443,6 +443,7 @@ function TaskColumn({
   rowLabel,
   tasks,
   visibleProperties,
+  showHeader,
   onOpen,
   onCreate,
 }: {
@@ -451,6 +452,7 @@ function TaskColumn({
   rowLabel: string | null;
   tasks: readonly RepoTask[];
   visibleProperties: RepoTaskBoardProjection["visibleProperties"];
+  showHeader: boolean;
   onOpen: (task: RepoTask) => void;
   onCreate: () => void;
 }) {
@@ -468,14 +470,16 @@ function TaskColumn({
         isDropTarget && "bg-accent/40",
       )}
     >
-      <header className="flex h-12 shrink-0 items-center px-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <TaskStateIcon state={state} />
-          <h2 className="truncate text-sm font-medium">{label}</h2>
-          <span className="text-xs tabular-nums text-muted-foreground">{tasks.length}</span>
-        </div>
-      </header>
-      <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
+      {showHeader ? (
+        <header className="flex h-12 shrink-0 items-center px-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <TaskStateIcon state={state} />
+            <h2 className="truncate text-sm font-medium">{label}</h2>
+            <span className="text-xs tabular-nums text-muted-foreground">{tasks.length}</span>
+          </div>
+        </header>
+      ) : null}
+      <div className="flex min-h-0 flex-1 flex-col px-2 pb-1">
         <div className="flex flex-col gap-2">
           {tasks.map((task) => (
             <TaskCard
@@ -487,15 +491,17 @@ function TaskColumn({
             />
           ))}
         </div>
-        <Button
-          variant="ghost"
-          className="mt-2 h-10 w-full text-muted-foreground/50 hover:bg-muted/70 hover:text-muted-foreground"
-          title={`Add task to ${creationLabel}`}
-          aria-label={`Add task to ${creationLabel}`}
-          onClick={onCreate}
-        >
-          <PlusIcon className="size-5" data-icon="inline-start" />
-        </Button>
+        <div className="group/task-footer mt-auto min-h-16 pt-3 pb-2">
+          <Button
+            variant="ghost"
+            className="h-10 w-full border border-dashed border-border/70 text-muted-foreground/60 opacity-100 transition-[opacity,background-color,color] pointer-fine:opacity-0 group-hover/task-footer:opacity-100 focus-visible:opacity-100 hover:bg-muted/70 hover:text-muted-foreground"
+            title={`Add task to ${creationLabel}`}
+            aria-label={`Add task to ${creationLabel}`}
+            onClick={onCreate}
+          >
+            <PlusIcon className="size-5" data-icon="inline-start" />
+          </Button>
+        </div>
       </div>
     </section>
   );
