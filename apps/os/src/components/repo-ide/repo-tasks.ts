@@ -1,4 +1,5 @@
-import { parseDocument, type Document } from "yaml";
+import type { Document } from "yaml";
+import { markdownFrontmatterRecord, parseMarkdownFrontmatter } from "./markdown-frontmatter.ts";
 
 const DEFAULT_TASK_STATE = "todo";
 
@@ -35,6 +36,11 @@ export type RepoTaskBoardProjection = {
   states: string[];
   rows: RepoTaskBoardRow[];
   taskCount: number;
+  visibleProperties: {
+    folder: boolean;
+    state: boolean;
+    labels: boolean;
+  };
 };
 
 /** Markdown files below any directory segment named `tasks` are repo tasks. */
@@ -55,8 +61,8 @@ export function parseRepoTask(path: string, content: string): RepoTask | null {
   const taskDirectoryPath = taskDirectoryForPath(path);
   if (taskDirectoryPath === null) return null;
 
-  const frontmatter = readFrontmatter(content);
-  const metadata = documentRecord(frontmatter.document);
+  const frontmatter = parseMarkdownFrontmatter(content);
+  const metadata = markdownFrontmatterRecord(frontmatter.document);
   const state = stringValue(metadata.state) ?? stringValue(metadata.status) ?? DEFAULT_TASK_STATE;
   const labels = uniqueStrings([...stringArray(metadata.labels), ...stringArray(metadata.tags)]);
   const folderPath = `/${taskDirectoryPath.split("/").slice(0, -1).join("/")}`;
@@ -198,6 +204,11 @@ export function queryRepoTaskBoard(
       })),
     })),
     taskCount: matchingTasks.length,
+    visibleProperties: {
+      folder: query.rows !== "folder",
+      state: query.columns !== "state",
+      labels: query.rows !== "label",
+    },
   };
 }
 
@@ -269,37 +280,12 @@ function firstHeading(body: string): { start: number; end: number; title: string
   return { start: match.index, end, title: match[1]!.trim() };
 }
 
-function readFrontmatter(content: string): {
-  body: string;
-  document: Document;
-  exists: boolean;
-} {
-  const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(content);
-  if (match === null) return { body: content, document: parseDocument(""), exists: false };
-  return {
-    body: content.slice(match[0].length),
-    document: parseDocument(match[1] ?? ""),
-    exists: true,
-  };
-}
-
-function documentRecord(document: Document): Record<string, unknown> {
-  try {
-    const value: unknown = document.toJS();
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
 function updateFrontmatter(
   content: string,
   update: (document: Document, metadata: Record<string, unknown>) => void,
 ): string {
-  const frontmatter = readFrontmatter(content);
-  update(frontmatter.document, documentRecord(frontmatter.document));
+  const frontmatter = parseMarkdownFrontmatter(content);
+  update(frontmatter.document, markdownFrontmatterRecord(frontmatter.document));
   const yaml = frontmatter.document.toString().trimEnd();
   if (yaml === "" || yaml === "{}") return frontmatter.body;
   const body = frontmatter.exists ? frontmatter.body : `\n${content}`;

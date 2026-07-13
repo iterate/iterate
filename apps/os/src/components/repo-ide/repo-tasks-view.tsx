@@ -363,6 +363,7 @@ function TaskBoard({
                       rowKey={row.key}
                       rowLabel={row.label}
                       tasks={cell.tasks}
+                      visibleProperties={board.visibleProperties}
                       onOpen={(task) => {
                         if (draggedPathRef.current !== task.path) onOpen(task);
                       }}
@@ -441,6 +442,7 @@ function TaskColumn({
   rowKey,
   rowLabel,
   tasks,
+  visibleProperties,
   onOpen,
   onCreate,
 }: {
@@ -448,6 +450,7 @@ function TaskColumn({
   rowKey: string;
   rowLabel: string | null;
   tasks: readonly RepoTask[];
+  visibleProperties: RepoTaskBoardProjection["visibleProperties"];
   onOpen: (task: RepoTask) => void;
   onCreate: () => void;
 }) {
@@ -479,6 +482,7 @@ function TaskColumn({
               key={task.path}
               task={task}
               dragId={`${TASK_CARD_PREFIX}${encodeURIComponent(task.path)}:${encodeURIComponent(rowKey)}`}
+              visibleProperties={visibleProperties}
               onOpen={onOpen}
             />
           ))}
@@ -514,10 +518,12 @@ function taskCellFromDropId(id: string): { rowKey: string; state: string } | und
 function TaskCard({
   task,
   dragId,
+  visibleProperties,
   onOpen,
 }: {
   task: RepoTask;
   dragId: string;
+  visibleProperties: RepoTaskBoardProjection["visibleProperties"];
   onOpen: (task: RepoTask) => void;
 }) {
   const { ref, isDragging } = useDraggable({ id: dragId, type: "repo-task" });
@@ -534,18 +540,20 @@ function TaskCard({
         isDragging && "opacity-40 shadow-none",
       )}
     >
-      <div className="mb-2 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-        <FolderIcon aria-hidden className="size-3 shrink-0" />
-        <span className="truncate font-mono">{task.folderPath}</span>
-      </div>
+      {visibleProperties.folder ? (
+        <div className="mb-2 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+          <FolderIcon aria-hidden className="size-3 shrink-0" />
+          <span className="truncate font-mono">{task.folderPath}</span>
+        </div>
+      ) : null}
       <div className="flex items-start gap-2">
-        <TaskStateIcon state={task.state} className="mt-0.5" />
+        {visibleProperties.state ? <TaskStateIcon state={task.state} className="mt-0.5" /> : null}
         <span className="min-w-0 flex-1 text-sm font-medium leading-snug">{task.title}</span>
       </div>
       {summary === "" ? null : (
         <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{summary}</p>
       )}
-      {task.labels.length === 0 ? null : (
+      {!visibleProperties.labels || task.labels.length === 0 ? null : (
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
           {task.labels.map((label) => (
             <Badge key={label} variant="secondary">

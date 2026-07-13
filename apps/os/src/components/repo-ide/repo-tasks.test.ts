@@ -149,6 +149,7 @@ test("queries a status board with folders as an independent row dimension", () =
   const board = queryRepoTaskBoard(tasks, { filter: "", columns: "state", rows: "folder" });
 
   expect(board.states).toEqual(["backlog", "todo", "in-progress", "done"]);
+  expect(board.visibleProperties).toEqual({ folder: false, state: false, labels: true });
   expect(board.rows.map((row) => row.label)).toEqual(["/", "/apps/os"]);
   expect(board.rows[1]?.cells.find((cell) => cell.state === "todo")?.tasks[0]?.title).toBe(
     "Test OS",
@@ -166,6 +167,7 @@ test("filters the board projection and can group multi-label tasks", () => {
   const byLabel = queryRepoTaskBoard([task], { filter: "card", columns: "state", rows: "label" });
 
   expect(byLabel.taskCount).toBe(1);
+  expect(byLabel.visibleProperties).toEqual({ folder: true, state: false, labels: false });
   expect(byLabel.rows.map((row) => row.label)).toEqual(["frontend", "polish"]);
   expect(
     queryRepoTaskBoard([task], { filter: "missing", columns: "state", rows: null }).taskCount,
