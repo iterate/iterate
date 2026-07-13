@@ -25,7 +25,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
     const { path, projectId } = scopeFromItxEntrypointProps(this.ctx.props);
     const scopeName = path.replace(/[^a-zA-Z0-9_./:$-]+/g, "_").slice(0, 120);
-    return tracing.enterSpan(`itx binding.get ${scopeName}`, (span) => {
+    return tracing.enterSpan(`itx binding.get ${scopeName}`, async (span) => {
       span.setAttribute("iterate.scope.path", path);
       span.setAttribute("iterate.scope.type", projectId === null ? "global" : "project");
       if (projectId === null) {
