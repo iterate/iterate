@@ -2,13 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
   fileSearchKey,
-  projectSearchFilter,
   projectSearchPrefix,
   renderStreamSegmentDocument,
   repoFileSearchKey,
+  searchFilters,
   SEARCH_SEGMENT_SIZE,
   segmentForOffset,
   segmentOffsetRange,
+  shouldIndexStreamPath,
+  streamSegmentContext,
   streamSegmentKey,
 } from "./search-index.ts";
 
@@ -69,9 +71,9 @@ describe("index keys", () => {
   });
 });
 
-describe("projectSearchFilter", () => {
+describe("searchFilters", () => {
   it("builds the documented lexicographic folder prefix range", () => {
-    const filter = projectSearchFilter({ projectId: "prj_1" });
+    const filter = searchFilters({ projectId: "prj_1" });
     expect(filter.type).toBe("and");
     const [gte, lt] = filter.filters;
     expect(gte).toMatchObject({ type: "gte", key: "folder", value: "prj_1/" });
@@ -83,9 +85,43 @@ describe("projectSearchFilter", () => {
     expect("prj_2/" < String(lt?.value) && "prj_2/" >= String(gte?.value)).toBe(false);
   });
 
-  it("narrows to one source kind", () => {
-    const filter = projectSearchFilter({ projectId: "prj_1", source: "repos" });
+  it("narrows to one source kind via the folder prefix", () => {
+    const filter = searchFilters({ projectId: "prj_1", source: "repos" });
     expect(filter.filters[0]?.value).toBe("prj_1/repos");
+  });
+
+  it("adds a `kind != x` condition per excluded kind (flat AND)", () => {
+    const filter = searchFilters({ projectId: "prj_1", excludeKinds: ["streams", "files"] });
+    const ne = filter.filters.filter((f) => f.type === "ne");
+    expect(ne).toEqual([
+      { type: "ne", key: "kind", value: "streams" },
+      { type: "ne", key: "kind", value: "files" },
+    ]);
+  });
+});
+
+describe("shouldIndexStreamPath (index-time selectivity)", () => {
+  it("never indexes secrets or the integration webhook firehoses", () => {
+    expect(shouldIndexStreamPath("/secrets/integrations/github/install-1/token")).toBe(false);
+    expect(shouldIndexStreamPath("/secrets")).toBe(false);
+    expect(shouldIndexStreamPath("/integrations/github/install-115079265")).toBe(false);
+    expect(shouldIndexStreamPath("/integrations")).toBe(false);
+  });
+
+  it("indexes ordinary content streams (agents, repos)", () => {
+    expect(shouldIndexStreamPath("/agents/slack/T1/thr-9")).toBe(true);
+    expect(shouldIndexStreamPath("/repos/config")).toBe(true);
+    expect(shouldIndexStreamPath("/")).toBe(true);
+    // A path that merely CONTAINS the word is fine — only the prefix matters.
+    expect(shouldIndexStreamPath("/agents/secrets-helper")).toBe(true);
+  });
+});
+
+describe("streamSegmentContext", () => {
+  it("describes the segment's stream and offset window for result provenance", () => {
+    expect(streamSegmentContext({ streamPath: "/agents/slack/T1", segment: 1 })).toBe(
+      "Stream /agents/slack/T1 — events 101–200",
+    );
   });
 });
 

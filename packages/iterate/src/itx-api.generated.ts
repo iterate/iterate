@@ -854,28 +854,48 @@ export interface SandboxCollection {
  */
 export interface Search {
   __describe(): Promise<Description>;
-  /** Retrieve scored chunks matching a query, scoped to this project. */
+  /**
+   * Retrieve scored chunks matching a query, scoped to this project. Merges the
+   * AI Search corpus (streams/files/repos) with federated itx.docs, each result
+   * tagged with its `kind` and `context` so callers can contextualize a hit.
+   */
   query(input: {
-    query: string;
+    q: string;
     /** Max chunks to return (1–50). */
     limit?: number;
     /** Let the instance rewrite the query for retrieval first. */
     rewriteQuery?: boolean;
     /** Drop chunks scoring below this threshold (0–1). */
     scoreThreshold?: number;
-    /** Restrict to one corpus kind; omit to search everything. */
+    /** Restrict to ONE corpus kind (skips docs federation). */
     source?: SearchSourceKind;
+    /** Exclude kinds from results, e.g. `["streams"]` to skip the event log. */
+    exclude?: SearchKind[];
   }): Promise<SearchQueryResult>;
   /** Retrieve matching chunks AND generate an answer from them (RAG). */
   answer(input: {
-    query: string;
+    q: string;
     limit?: number;
     rewriteQuery?: boolean;
     scoreThreshold?: number;
     source?: SearchSourceKind;
+    exclude?: SearchKind[];
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult>;
+  /**
+   * Add (or replace) one arbitrary document in the search corpus — the general
+   * mechanism to make any content findable via `query`. `id` is stable within
+   * `(project, kind)`, so re-indexing the same id overwrites. `context` is the
+   * one-line descriptor shown on every hit and to the answer model.
+   */
+  index(input: {
+    kind: string;
+    id: string;
+    text: string;
+    title?: string;
+    context?: string;
+  }): Promise<{ key: string }>;
   /**
    * Re-index one stream from the beginning — the repair verb for streams that
    * predate search indexing, or the rare tail gap a failed per-batch write can
@@ -2240,8 +2260,16 @@ export type CloudflareSandbox = object & {
   kill(): Promise<void>;
 };
 
-/** The source kinds a project's search corpus is folded from. */
+/**
+ * The kinds a project's search corpus is folded from. The first segment of
+ * every R2 key IS the kind (`{projectId}/{kind}/…`), so it doubles as the
+ * folder-scoping token AND the `kind` metadata attribute. `docs` is federated
+ * from the in-worker itx.docs index rather than stored in R2 (see query()),
+ * but shares the vocabulary so callers filter uniformly.
+ */
 export type SearchSourceKind = "streams" | "files" | "repos";
+
+export type SearchKind = SearchSourceKind | "docs";
 
 /** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */
 export type SearchQueryResult = {
@@ -2718,14 +2746,18 @@ export type ProjectFileMetadata = {
   size: number;
 };
 
-/** One retrieved chunk: the matched index document plus its scored text. */
+/** One retrieved chunk: the matched index document plus its scored text and provenance. */
 export type SearchResultChunk = {
   /** The index object key, e.g. `prj_x/streams/agents/…/events-00000001.md`. */
   filename: string;
   /** Relevance score in [0, 1]. */
   score: number;
-  /** The matched text content. */
+  /** The matched text content (the specific matching chunk). */
   content: string;
+  /** Which corpus this came from (`streams` | `files` | `repos` | `docs`). */
+  kind?: string;
+  /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
+  context?: string;
 };
 
 /**

@@ -502,12 +502,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Search",
     kind: "interface",
     sourceText:
-      "/**\n * SPIKE: project search over everything the project accumulates — stream\n * events, itx.files, repo files — indexed in a Cloudflare AI Search instance\n * over the deployment's search-index bucket (domains/search/search-index.ts).\n * One instance per deployment; every query is scoped to this project via a\n * folder-prefix metadata filter, so no query can see another project's data.\n */\nexport interface Search {\n  __describe(): Promise<Description>;\n  /** Retrieve scored chunks matching a query, scoped to this project. */\n  query(input: {\n    query: string;\n    /** Max chunks to return (1–50). */\n    limit?: number;\n    /** Let the instance rewrite the query for retrieval first. */\n    rewriteQuery?: boolean;\n    /** Drop chunks scoring below this threshold (0–1). */\n    scoreThreshold?: number;\n    /** Restrict to one corpus kind; omit to search everything. */\n    source?: SearchSourceKind;\n  }): Promise<SearchQueryResult>;\n  /** Retrieve matching chunks AND generate an answer from them (RAG). */\n  answer(input: {\n    query: string;\n    limit?: number;\n    rewriteQuery?: boolean;\n    scoreThreshold?: number;\n    source?: SearchSourceKind;\n    /** Optional system prompt for the answer generation. */\n    systemPrompt?: string;\n  }): Promise<SearchAnswerResult>;\n  /**\n   * Re-index one stream from the beginning — the repair verb for streams that\n   * predate search indexing, or the rare tail gap a failed per-batch write can\n   * leave (`path` is the stream path, e.g. \"/agents/slack/T1/thr-9\").\n   */\n  indexStream(input: { path: string }): Promise<{ segments: number }>;\n  /**\n   * Snapshot one repo's default-branch HEAD into the search corpus now — the\n   * backfill verb for repos that predate search indexing (writes index\n   * incrementally from here on). Runs on the repo Durable Object's own write\n   * chain so its stale-key sweep can't race post-commit indexing.\n   */\n  indexRepo(input: { path: string }): Promise<{\n    deleted: number;\n    indexed: number;\n    skipped: number;\n  }>;\n  /**\n   * Re-mirror every existing itx.files object into the search corpus — the\n   * backfill verb for files that predate search indexing (puts mirror\n   * incrementally from here on). Counts reflect the actual mirror outcome:\n   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.\n   */\n  backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;\n}",
+      "/**\n * SPIKE: project search over everything the project accumulates — stream\n * events, itx.files, repo files — indexed in a Cloudflare AI Search instance\n * over the deployment's search-index bucket (domains/search/search-index.ts).\n * One instance per deployment; every query is scoped to this project via a\n * folder-prefix metadata filter, so no query can see another project's data.\n */\nexport interface Search {\n  __describe(): Promise<Description>;\n  /**\n   * Retrieve scored chunks matching a query, scoped to this project. Merges the\n   * AI Search corpus (streams/files/repos) with federated itx.docs, each result\n   * tagged with its `kind` and `context` so callers can contextualize a hit.\n   */\n  query(input: {\n    q: string;\n    /** Max chunks to return (1–50). */\n    limit?: number;\n    /** Let the instance rewrite the query for retrieval first. */\n    rewriteQuery?: boolean;\n    /** Drop chunks scoring below this threshold (0–1). */\n    scoreThreshold?: number;\n    /** Restrict to ONE corpus kind (skips docs federation). */\n    source?: SearchSourceKind;\n    /** Exclude kinds from results, e.g. `[\"streams\"]` to skip the event log. */\n    exclude?: SearchKind[];\n  }): Promise<SearchQueryResult>;\n  /** Retrieve matching chunks AND generate an answer from them (RAG). */\n  answer(input: {\n    q: string;\n    limit?: number;\n    rewriteQuery?: boolean;\n    scoreThreshold?: number;\n    source?: SearchSourceKind;\n    exclude?: SearchKind[];\n    /** Optional system prompt for the answer generation. */\n    systemPrompt?: string;\n  }): Promise<SearchAnswerResult>;\n  /**\n   * Add (or replace) one arbitrary document in the search corpus — the general\n   * mechanism to make any content findable via `query`. `id` is stable within\n   * `(project, kind)`, so re-indexing the same id overwrites. `context` is the\n   * one-line descriptor shown on every hit and to the answer model.\n   */\n  index(input: {\n    kind: string;\n    id: string;\n    text: string;\n    title?: string;\n    context?: string;\n  }): Promise<{ key: string }>;\n  /**\n   * Re-index one stream from the beginning — the repair verb for streams that\n   * predate search indexing, or the rare tail gap a failed per-batch write can\n   * leave (`path` is the stream path, e.g. \"/agents/slack/T1/thr-9\").\n   */\n  indexStream(input: { path: string }): Promise<{ segments: number }>;\n  /**\n   * Snapshot one repo's default-branch HEAD into the search corpus now — the\n   * backfill verb for repos that predate search indexing (writes index\n   * incrementally from here on). Runs on the repo Durable Object's own write\n   * chain so its stale-key sweep can't race post-commit indexing.\n   */\n  indexRepo(input: { path: string }): Promise<{\n    deleted: number;\n    indexed: number;\n    skipped: number;\n  }>;\n  /**\n   * Re-mirror every existing itx.files object into the search corpus — the\n   * backfill verb for files that predate search indexing (puts mirror\n   * incrementally from here on). Counts reflect the actual mirror outcome:\n   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.\n   */\n  backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;\n}",
     summary:
       "SPIKE: project search over everything the project accumulates — stream events, itx.files, repo files — indexed in a Cloudflare AI Search instance over the deployment's search-index bucket (domains/search/search-index.ts).",
     memberSummaries: {
       query: "Retrieve scored chunks matching a query, scoped to this project.",
       answer: "Retrieve matching chunks AND generate an answer from them (RAG).",
+      index:
+        "Add (or replace) one arbitrary document in the search corpus — the general mechanism to make any content findable via `query`.",
       indexStream:
         "Re-index one stream from the beginning — the repair verb for streams that predate search indexing, or the rare tail gap a failed per-batch write can leave (`path` is the stream path, e.g.",
       indexRepo:
@@ -518,6 +520,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [
       "Description",
       "SearchSourceKind",
+      "SearchKind",
       "SearchQueryResult",
       "SearchAnswerResult",
     ],
@@ -1378,10 +1381,18 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SearchSourceKind",
     kind: "typeAlias",
     sourceText:
-      '/** The source kinds a project\'s search corpus is folded from. */\nexport type SearchSourceKind = "streams" | "files" | "repos";',
-    summary: "The source kinds a project's search corpus is folded from.",
+      '/**\n * The kinds a project\'s search corpus is folded from. The first segment of\n * every R2 key IS the kind (`{projectId}/{kind}/…`), so it doubles as the\n * folder-scoping token AND the `kind` metadata attribute. `docs` is federated\n * from the in-worker itx.docs index rather than stored in R2 (see query()),\n * but shares the vocabulary so callers filter uniformly.\n */\nexport type SearchSourceKind = "streams" | "files" | "repos";',
+    summary: "The kinds a project's search corpus is folded from.",
     memberSummaries: {},
     referencedTypeNames: [],
+  },
+  {
+    name: "SearchKind",
+    kind: "typeAlias",
+    sourceText: 'export type SearchKind = SearchSourceKind | "docs";',
+    summary: "",
+    memberSummaries: {},
+    referencedTypeNames: ["SearchSourceKind"],
   },
   {
     name: "SearchQueryResult",
@@ -1745,8 +1756,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SearchResultChunk",
     kind: "typeAlias",
     sourceText:
-      "/** One retrieved chunk: the matched index document plus its scored text. */\nexport type SearchResultChunk = {\n  /** The index object key, e.g. `prj_x/streams/agents/…/events-00000001.md`. */\n  filename: string;\n  /** Relevance score in [0, 1]. */\n  score: number;\n  /** The matched text content. */\n  content: string;\n};",
-    summary: "One retrieved chunk: the matched index document plus its scored text.",
+      '/** One retrieved chunk: the matched index document plus its scored text and provenance. */\nexport type SearchResultChunk = {\n  /** The index object key, e.g. `prj_x/streams/agents/…/events-00000001.md`. */\n  filename: string;\n  /** Relevance score in [0, 1]. */\n  score: number;\n  /** The matched text content (the specific matching chunk). */\n  content: string;\n  /** Which corpus this came from (`streams` | `files` | `repos` | `docs`). */\n  kind?: string;\n  /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */\n  context?: string;\n};',
+    summary: "One retrieved chunk: the matched index document plus its scored text and provenance.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

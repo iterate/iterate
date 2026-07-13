@@ -197,15 +197,19 @@ import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
+  indexDocument,
   indexEntireStream,
   indexStreamEventBatch,
   mirrorFileToSearchIndex,
-  projectSearchFilter,
+  searchFilters,
   searchInstanceName,
+  shouldIndexStreamPath,
 } from "./domains/search/search-index.ts";
 import type {
   SearchAnswerResult,
+  SearchKind,
   SearchQueryResult,
+  SearchResultChunk,
   SearchSourceKind,
 } from "./domains/search/search-index.ts";
 import type { AgentFileAttachment } from "./domains/agents/agent-processor-contract.ts";
@@ -1961,7 +1965,9 @@ class FilesRpcTarget extends IterateRpcTarget<"Files"> {
  * folder-prefix metadata filter, so no query can see another project's data.
  */
 class SearchRpcTarget extends IterateRpcTarget<"Search"> {
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+  constructor(
+    readonly props: { auth: ItxAuth; projectId: string; capabilityHost: CapabilityHostRpcTarget },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -1969,18 +1975,23 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Semantic + keyword search over this project's streams, files, and repos " +
-        "(Cloudflare AI Search over the deployment's search-index bucket, indexed on a " +
-        "schedule — expect minutes of lag behind writes). query({ query }) returns scored " +
-        "chunks; answer({ query }) additionally generates an answer from them. Scope with " +
-        'source: "streams" | "files" | "repos". indexStream({ path }), indexRepo({ path }), ' +
-        "and backfillFiles() force-reindex content written before this deployment started mirroring.",
+        "One search over everything this project accumulates — stream events, itx.files, repo " +
+        "files, and itx.docs — via Cloudflare AI Search (indexed on a schedule; expect minutes " +
+        "of lag behind writes). query({ q }) returns scored chunks, each tagged with its `kind` " +
+        'and a human-readable `context` ("Stream /agents/… events 101–200", "Repo /repos/config · ' +
+        'src/worker.ts", …). answer({ q }) additionally generates a cited answer. Narrow with ' +
+        'source ("streams" | "files" | "repos") or exclude noisy kinds (exclude: ["streams"]). ' +
+        "index({ kind, id, text }) adds an arbitrary document. indexStream/indexRepo/backfillFiles " +
+        "backfill content written before indexing. NOT indexed: /secrets/** and the /integrations/** " +
+        "webhook firehoses (a repo sync indexes the repo's files instead).",
       children: {
-        answer: "RAG answer: retrieve matching chunks and generate a response from them.",
+        answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
+        index: "Add/replace one arbitrary document ({ kind, id, text, title?, context? }).",
         indexRepo: "Snapshot one repo's default-branch HEAD into the search corpus now.",
         indexStream: "Re-index one stream from the beginning (backfill/repair).",
-        query: "Retrieve scored chunks matching a query.",
+        query:
+          "Retrieve scored, kind-tagged chunks matching a query (with source/exclude filters).",
       },
       parent: "a project itx (itx.search)",
     });
@@ -1996,15 +2007,65 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     rewriteQuery?: boolean;
     scoreThreshold?: number;
     source?: SearchSourceKind;
+    exclude?: readonly SearchKind[];
   }): AutoRagSearchRequest {
     return {
       query: input.query,
-      filters: projectSearchFilter({ projectId: this.props.projectId, source: input.source }),
+      filters: searchFilters({
+        projectId: this.props.projectId,
+        source: input.source,
+        // "docs" is federated, never in the R2 corpus, so it can't be an R2
+        // filter; drop it here and let #federatedDocs honour the exclusion.
+        excludeKinds: input.exclude?.filter((kind) => kind !== "docs"),
+      }),
       max_num_results: input.limit,
       ranking_options:
         input.scoreThreshold === undefined ? undefined : { score_threshold: input.scoreThreshold },
       rewrite_query: input.rewriteQuery,
     };
+  }
+
+  /** Map one AI Search result item to a provenance-carrying chunk. */
+  #toChunk(item: {
+    filename: string;
+    score: number;
+    content: { text: string }[];
+    attributes?: Record<string, string | number | boolean | null>;
+  }): SearchResultChunk {
+    const attributes = item.attributes ?? {};
+    return {
+      filename: item.filename,
+      score: item.score,
+      content: item.content.map((chunk) => chunk.text).join("\n"),
+      kind: typeof attributes.kind === "string" ? attributes.kind : undefined,
+      context: typeof attributes.context === "string" ? attributes.context : undefined,
+    };
+  }
+
+  /**
+   * Federated `docs` results: itx.docs is a static in-worker keyword index
+   * (examples + types + this scope's mounted capabilities), not part of the R2
+   * corpus, so query() merges it in unless docs are excluded / a different
+   * source is pinned. Synthetic descending scores preserve docs' own relevance
+   * order when interleaved with the corpus by score.
+   */
+  async #federatedDocs(input: {
+    query: string;
+    source?: SearchSourceKind;
+    exclude?: readonly SearchKind[];
+    limit?: number;
+  }): Promise<SearchResultChunk[]> {
+    if (input.source !== undefined) return []; // a corpus source was pinned
+    if (input.exclude?.includes("docs")) return [];
+    const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
+    const hits = await docs.search({ q: input.query });
+    return hits.slice(0, input.limit ?? 10).map((hit, index) => ({
+      filename: hit.fetchCall,
+      score: 1 - index * 0.01,
+      content: hit.summary,
+      kind: "docs",
+      context: `${hit.kind}: ${hit.name} — fetch with ${hit.fetchCall}`,
+    }));
   }
 
   // The instance is provisioned out-of-band (ensure-resources.ts); a missing
@@ -2021,56 +2082,79 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     }
   }
 
-  /** Retrieve scored chunks matching a query, scoped to this project. */
+  /**
+   * Retrieve scored chunks matching a query, scoped to this project. Merges the
+   * AI Search corpus (streams/files/repos) with federated itx.docs, each result
+   * tagged with its `kind` and `context` so callers can contextualize a hit.
+   */
   query(input: {
-    query: string;
+    q: string;
     /** Max chunks to return (1–50). */
     limit?: number;
     /** Let the instance rewrite the query for retrieval first. */
     rewriteQuery?: boolean;
     /** Drop chunks scoring below this threshold (0–1). */
     scoreThreshold?: number;
-    /** Restrict to one corpus kind; omit to search everything. */
+    /** Restrict to ONE corpus kind (skips docs federation). */
     source?: SearchSourceKind;
+    /** Exclude kinds from results, e.g. `["streams"]` to skip the event log. */
+    exclude?: SearchKind[];
   }): Promise<SearchQueryResult> {
     return this.#withInstanceHint(async () => {
-      const response = await this.#instance().search(this.#searchRequest(input));
-      return {
-        searchQuery: response.search_query,
-        results: response.data.map((item) => ({
-          filename: item.filename,
-          score: item.score,
-          content: item.content.map((chunk) => chunk.text).join("\n"),
-        })),
-      };
+      const [response, docs] = await Promise.all([
+        this.#instance().search(this.#searchRequest({ ...input, query: input.q })),
+        this.#federatedDocs({
+          query: input.q,
+          source: input.source,
+          exclude: input.exclude,
+          limit: input.limit,
+        }),
+      ]);
+      const results = [...response.data.map((item) => this.#toChunk(item)), ...docs].sort(
+        (a, b) => b.score - a.score,
+      );
+      return { searchQuery: response.search_query, results };
     });
   }
 
   /** Retrieve matching chunks AND generate an answer from them (RAG). */
   answer(input: {
-    query: string;
+    q: string;
     limit?: number;
     rewriteQuery?: boolean;
     scoreThreshold?: number;
     source?: SearchSourceKind;
+    exclude?: SearchKind[];
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult> {
     return this.#withInstanceHint(async () => {
       const response = await this.#instance().aiSearch({
-        ...this.#searchRequest(input),
+        ...this.#searchRequest({ ...input, query: input.q }),
         system_prompt: input.systemPrompt,
       });
       return {
         response: response.response,
         searchQuery: response.search_query,
-        results: response.data.map((item) => ({
-          filename: item.filename,
-          score: item.score,
-          content: item.content.map((chunk) => chunk.text).join("\n"),
-        })),
+        results: response.data.map((item) => this.#toChunk(item)),
       };
     });
+  }
+
+  /**
+   * Add (or replace) one arbitrary document in the search corpus — the general
+   * mechanism to make any content findable via `query`. `id` is stable within
+   * `(project, kind)`, so re-indexing the same id overwrites. `context` is the
+   * one-line descriptor shown on every hit and to the answer model.
+   */
+  index(input: {
+    kind: string;
+    id: string;
+    text: string;
+    title?: string;
+    context?: string;
+  }): Promise<{ key: string }> {
+    return indexDocument({ ...input, projectId: this.props.projectId });
   }
 
   /**
@@ -4638,6 +4722,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new SearchRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
+      capabilityHost: this.#props.capabilityHost,
     });
   }
 
@@ -4764,6 +4849,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    */
   #indexStreamSearch(batch: StreamPushEventBatch): void {
     if (batch.projectId === null) return;
+    // Skip non-indexable streams (/secrets/**, /integrations/** firehoses)
+    // before spending an RPC — indexStreamEventBatch re-checks as the boundary.
+    if (!shouldIndexStreamPath(batch.path)) return;
     const streamStub = env.STREAM.getByName(
       DurableObjectNameCodec.stringify(
         { projectId: batch.projectId, path: batch.path },

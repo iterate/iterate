@@ -21,6 +21,7 @@ import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-he
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 import { emailDomainForDeployment } from "../src/domains/email/utils.ts";
+import { SEARCH_METADATA_SCHEMA } from "../src/domains/search/search-index.ts";
 import { ensureWorkerEventQueueResources } from "./event-queue-resources.ts";
 
 /**
@@ -52,7 +53,11 @@ export async function ensureR2Bucket(
  */
 export async function ensureAiSearchInstance(
   cf: <T = unknown>(path: string, init?: RequestInit) => Promise<T>,
-  input: { bucketName: string; instanceName: string },
+  input: {
+    bucketName: string;
+    instanceName: string;
+    metadataSchema: readonly { field_name: string; data_type: string }[];
+  },
 ): Promise<void> {
   try {
     const existing = await cf<{ id?: string; name?: string }[] | null>(
@@ -72,6 +77,11 @@ export async function ensureAiSearchInstance(
         // Poll the bucket as often as the product allows; the writers push
         // continuously, so index freshness is bounded by this interval.
         sync_interval: 3600,
+        // Declare the custom metadata schema up front so the `kind`/`context`
+        // attributes every document carries are filterable + returned on hits
+        // (see SEARCH_METADATA_SCHEMA). Changing this later forces a full
+        // re-index, so it is deliberately minimal (≤5 fields allowed).
+        custom_metadata: input.metadataSchema,
       }),
     });
     console.log(`created AI Search instance ${input.instanceName} over ${input.bucketName}`);
@@ -172,6 +182,7 @@ export default async function ensureResources(
   await ensureAiSearchInstance(cf, {
     bucketName: searchBucketName,
     instanceName: `${env.osWorkerName}-search`,
+    metadataSchema: SEARCH_METADATA_SCHEMA,
   });
 
   // ---- Queues: deployment event queue + Cloudflare Artifacts subscriptions -
