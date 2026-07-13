@@ -79,7 +79,7 @@ async function replayProviderPath({
 
 function assertObjectLike(value: unknown, segment: string): asserts value is object | Function {
   if (!isObjectLike(value)) {
-    throw new Error(`ITX expression segment "${segment}" hit ${String(value)}`);
+    throw new Error(`itx expression segment "${segment}" hit ${String(value)}`);
   }
 }
 

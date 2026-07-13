@@ -1465,7 +1465,7 @@ return {
     runtimes: ["browser", "node", "cli"],
     code: `
 const response = await itx.ai.run("xai/grok-tts", {
-  text: "Hello from ITX. This audio was generated with a Cloudflare Workers AI speech model.",
+  text: "Hello from itx. This audio was generated with a Cloudflare Workers AI speech model.",
   voice_id: "ara",
   language: "en",
   output_format: { codec: "mp3", sample_rate: 44100, bit_rate: 192000 },

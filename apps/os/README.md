@@ -152,7 +152,7 @@ doppler run --project os --config dev -- sh -lc '
 '
 ```
 
-Then call `exec_js` with a real project slug:
+Then call `exec_typescript` with a real project slug:
 
 ```bash
 doppler run --project os --config dev -- sh -lc '
@@ -160,7 +160,7 @@ doppler run --project os --config dev -- sh -lc '
   npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
     --transport http \
     --method tools/call \
-    --tool-name exec_js \
+    --tool-name exec_typescript \
     --tool-arg project=<project-slug> \
     --tool-arg "code=async (itx) => { return await itx.__describe(); }" \
     --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"

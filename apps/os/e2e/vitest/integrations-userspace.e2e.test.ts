@@ -103,7 +103,7 @@ describe("provided integrations", () => {
           type: "live",
           capability: {},
         }),
-      ).rejects.toThrow(/already on the ITX surface/);
+      ).rejects.toThrow(/already on the itx surface/);
 
       // …but not under the names the collection's own dispatch claims: a mount
       // there would be durable, journaled, and silently unreachable, so it is

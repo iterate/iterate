@@ -37,7 +37,7 @@ type StatefulWorkerRpc = {
 
 /**
  * Small internal executor for DynamicWorkerRefs — the authority boundary
- * where a dynamic isolate gets its env: a scoped ITX loopback binding
+ * where a dynamic isolate gets its env: a scoped itx loopback binding
  * (capability-tree access as the hosting scope) and the project egress
  * fetcher as globalOutbound (all network the isolate does flows through it —
  * secret substitution, egress control). This is intentionally not an
@@ -247,7 +247,7 @@ export class DynamicWorkerRunner {
 /**
  * Durable identity for a stateful worker.
  *
- * The path is the event stream / ITX scope path. The worker-specific durable key
+ * The path is the event stream / itx scope path. The worker-specific durable key
  * is a query prop so a DO name remains fetchable at the stream path in the
  * future while still allowing multiple durable workers under that path.
  */

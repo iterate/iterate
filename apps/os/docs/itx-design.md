@@ -434,7 +434,7 @@ The plan:
   want call-level audit later it's one hook in `ContextRegistry.invoke` —
   the single supervisor dispatch — covering every cap uniformly.
 - The inbound MCP route is stateless: authenticate each request, select a
-  project, run `exec_js` against the project context, and format the result.
+  project, run `exec_typescript` against the project context, and format the result.
 - Needed along the way: explicit execution handles if MCP tools need durable
   state beyond the project context. Do not hide application state in MCP
   transport sessions.

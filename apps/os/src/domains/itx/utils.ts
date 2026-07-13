@@ -4,7 +4,7 @@ import { BUILTIN_INTEGRATION_SLUGS } from "../integrations/utils.ts";
 /**
  * Minimal ExecutionContext shape the RPC adapter layer needs.
  *
- * Server-side plumbing, not part of the client-facing ITX contract. It is
+ * Server-side plumbing, not part of the client-facing itx contract. It is
  * exported only so domain hosts can inject project/agent capability targets
  * without importing the full worker module.
  */
@@ -70,7 +70,7 @@ export type ItxEntrypointProps = ItxEntrypointScope;
  * Worker Loader cache keys, stateful worker Durable Object names, and
  * `env.ITX.get()` must all agree on the same project/path scope. Keeping this
  * normalization in one small helper prevents one call site from caching under
- * `"agents/demo"` while another resolves the runtime ITX target as
+ * `"agents/demo"` while another resolves the runtime itx target as
  * `"/agents/demo"`.
  */
 export function itxEntrypointProps(input: ItxEntrypointScope): ItxEntrypointProps {
@@ -81,7 +81,7 @@ export function itxEntrypointProps(input: ItxEntrypointScope): ItxEntrypointProp
 }
 
 /**
- * Validates the host-minted binding props before giving worker code an ITX
+ * Validates the host-minted binding props before giving worker code an itx
  * capability. This is the trust boundary for dynamic workers: callers do not
  * choose their own scope, the hosting object mints it.
  */
@@ -89,7 +89,7 @@ export function scopeFromItxEntrypointProps(
   props: ItxEntrypointProps | undefined,
 ): ItxEntrypointScope {
   if (props === undefined) {
-    throw new Error("env.ITX.get() requires ITX binding props with projectId and path");
+    throw new Error("env.ITX.get() requires itx binding props with projectId and path");
   }
   if (props.projectId !== null && props.projectId.trim() === "") {
     throw new Error("env.ITX.get() requires a non-empty projectId (or null for the global scope)");
@@ -209,7 +209,7 @@ export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path
   const root = path[0];
   if (!root) return;
   if (isReservedDynamicPathSegment(root)) {
-    throw new Error(`cannot provide capability "${root}": it is a reserved ITX path segment`);
+    throw new Error(`cannot provide capability "${root}": it is a reserved itx path segment`);
   }
   if (surfaceMembers.has(root)) {
     const reservedChildren = NAMESPACE_BUILTIN_ROOTS.get(root);
@@ -222,12 +222,12 @@ export function rejectBuiltinCollision(surfaceMembers: ReadonlySet<string>, path
       }
       return;
     }
-    throw new Error(`cannot provide capability "${root}": it is already on the ITX surface`);
+    throw new Error(`cannot provide capability "${root}": it is already on the itx surface`);
   }
 }
 
 /**
- * Builds the dotted-path fallback used by dynamic ITX capabilities.
+ * Builds the dotted-path fallback used by dynamic itx capabilities.
  *
  * Dynamic dotted fallback uses a function-backed proxy instead of a RpcTarget
  * instance: each missing property extends the path, and applying the function
@@ -308,8 +308,8 @@ export function createInvokeCapabilityPathProxy(
  * as `project.slack.chat.postMessage(...)`.
  *
  * KEY DESIGN IDEA: the RpcTarget with its known members sits *in front of*
- * the ITX Durable Object. Built-ins resolve here in the isolate; only
- * unknown roots fall through to `invokeCapability` (the ITX DO's dynamic
+ * the itx Durable Object. Built-ins resolve here in the isolate; only
+ * unknown roots fall through to `invokeCapability` (the itx DO's dynamic
  * table). So `itx.streams.get(...)` never makes a round trip to the DO just
  * to check whether `streams` was shadowed. The deliberate trade-off: a
  * dynamic capability can never shadow a built-in name — the built-in always

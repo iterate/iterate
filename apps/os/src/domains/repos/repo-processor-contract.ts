@@ -17,7 +17,7 @@ const GithubLinkPayload = z.object({
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
   version: "0.1.0",
-  description: "Tiny fake repo projection for the ITX reference implementation.",
+  description: "Tiny fake repo projection for the itx reference implementation.",
   stateSchema: z.object({
     artifactName: z.string().nullable().default(null),
     /** An open creation OBLIGATION: `create-requested` folded, `created` not

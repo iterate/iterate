@@ -48,7 +48,7 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  *   instead of crashing at construction.
  * - `writeWorkspaceFile` writes one file into THIS agent's own workspace (the
  *   same checkout `itx.workspace` resolves to) so oversized script results can
- *   spill to a file the model pages through with plain JavaScript. Optional:
+ *   spill to a file the model pages through with plain TypeScript. Optional:
  *   without it (bare test hosts), oversized results fall back to inline
  *   truncation.
  * - `now` is the injected clock (expiry stamps, durations, backstop deadline);
@@ -233,7 +233,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         return;
       case "events.iterate.com/agent/output-added":
         blockProcessorWhile(async () => {
-          const extraction = extractAsyncJsSnippet(event.payload.content);
+          const extraction = extractAsyncTypescriptSnippet(event.payload.content);
           if (extraction.kind === "none") return;
           if (extraction.kind === "malformed") {
             // Same corrective lane as multi-block: the model believes its
@@ -243,7 +243,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
               idempotencyKey: this.idempotencyKey("malformed-snippet-rejected", event),
               payload: {
                 content:
-                  "Your code block did NOT run. Only a ```js fence whose content STARTS with `async` executes — a single `async (itx) => { ... }`, JavaScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
+                  "Your code block did NOT run. Use a ```ts fence whose content STARTS with `async` — a single `async (itx) => { ... }`, TypeScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
                 llmRequestPolicy: { behaviour: "after-current-request" },
               },
             });
@@ -257,7 +257,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
               type: "events.iterate.com/agent/input-added",
               idempotencyKey: this.idempotencyKey("multi-snippet-rejected", event),
               payload: {
-                content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`js block.`,
+                content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`ts block.`,
                 llmRequestPolicy: { behaviour: "after-current-request" },
               },
             });
@@ -1342,8 +1342,8 @@ function isRateLimitErrorMessage(message: string): boolean {
   return /\b3021\b|rate.?limit/i.test(message);
 }
 
-const FENCED_SNIPPET_RE =
-  /^[ \t]*```(?:js|javascript|ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im;
+const FENCED_SNIPPET_RE = /^[ \t]*```(?:ts|typescript)?[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/im;
+const ANY_FENCED_BLOCK_RE = /^[ \t]*```[^\n]*\n[\s\S]*?\n[ \t]*```[ \t]*$/gim;
 
 type SnippetExtraction =
   | { kind: "script"; code: string }
@@ -1353,21 +1353,25 @@ type SnippetExtraction =
   // rejects the whole output with corrective feedback instead.
   | { kind: "multiple"; count: number }
   // A fenced block exists but nothing runnable came out of it: leading
-  // comments or statements before the arrow function, or a non-JavaScript
+  // comments or statements before the arrow function, or a non-TypeScript
   // language tag the extraction regex refuses. Nothing can run; the caller
   // sends corrective feedback (models habitually open code with a comment
   // line, and silence here reads as the platform hanging).
   | { kind: "malformed" }
   | { kind: "none" };
 
-function extractAsyncJsSnippet(content: string): SnippetExtraction {
+function extractAsyncTypescriptSnippet(content: string): SnippetExtraction {
   // Fences count only at line starts: scripts legitimately carry ``` inside
-  // string literals (chat messages formatted as markdown), and in valid JS
+  // string literals (chat messages formatted as markdown), and in valid TypeScript
   // those always sit mid-line — a raw newline cannot appear in a string
   // literal, and an unescaped ``` would terminate a template literal. A fence
   // match anywhere used to cut the script at the first embedded ``` and
   // execute an unparseable prefix (unclosed string literal).
-  const blocks = content.match(new RegExp(FENCED_SNIPPET_RE, "gim")) ?? [];
+  // Count every fenced block before validating its language tag. A mixed
+  // response (one runnable TypeScript block plus another fenced block) must
+  // reject the whole output instead of executing the first and silently
+  // dropping the rest.
+  const blocks = content.match(ANY_FENCED_BLOCK_RE) ?? [];
   if (blocks.length > 1) return { kind: "multiple", count: blocks.length };
   const fenced = content.match(FENCED_SNIPPET_RE);
   const code = (fenced?.[1] ?? content).trim();
@@ -1375,7 +1379,7 @@ function extractAsyncJsSnippet(content: string): SnippetExtraction {
     return { kind: "script", code };
   }
   // Any response carrying a line-start fence that did not yield a runnable
-  // script is a malformed attempt — including fences with a non-JS language
+  // script is a malformed attempt — including fences with a non-TypeScript language
   // tag, which FENCED_SNIPPET_RE refuses to match. Only a fence-free
   // non-script response is a deliberate no-op turn; the system prompt
   // promises rejection-with-feedback for everything else.
@@ -1491,7 +1495,7 @@ async function spillScriptResult(input: {
 /**
  * The model-facing text after a truncated preview: where the full result
  * lives and a concrete next-script recipe for paging it, so the model reads
- * the file with plain JavaScript instead of re-running the expensive fetch.
+ * the file with plain TypeScript instead of re-running the expensive fetch.
  */
 function spillNotice(input: { isRawText: boolean; path: string; totalChars: number }): string {
   const readRecipe = input.isRawText
@@ -1504,8 +1508,8 @@ function spillNotice(input: { isRawText: boolean; path: string; totalChars: numb
         "  return Object.keys(data); // then slice/filter/regex to return only what you need",
       ];
   return [
-    `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain JavaScript in your next script, e.g.:`,
-    "```js",
+    `…truncated: showing the first ${SCRIPT_RESULT_HISTORY_LIMIT.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
+    "```ts",
     "async (itx) => {",
     ...readRecipe,
     "}",

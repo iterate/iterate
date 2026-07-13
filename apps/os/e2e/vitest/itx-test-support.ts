@@ -16,7 +16,7 @@ const ProjectWorkerForwardingProbeContract = defineProcessorContract({
   slug: "minimal-itx-v4.project-worker-forwarding-probe",
   version: "0.1.0",
   description:
-    "Records project worker processEventBatch deliveries observed through an ITX stream.",
+    "Records project worker processEventBatch deliveries observed through an itx stream.",
   stateSchema: z.object({
     childPaths: z.array(z.string()).default([]),
     markers: z.array(z.string()).default([]),
@@ -204,5 +204,5 @@ export function egressProbeWorker(project: { workers: { get(ref: DynamicWorkerRe
 }
 
 export function fencedAgentScript(code: string): string {
-  return ["The faux LLM produced this codemode block.", "```js", code.trim(), "```"].join("\n");
+  return ["The faux LLM produced this codemode block.", "```ts", code.trim(), "```"].join("\n");
 }

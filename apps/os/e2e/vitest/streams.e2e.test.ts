@@ -1,6 +1,6 @@
 // OS stream e2e migration guards, ported to the v4 stream contract.
 //
-// These deliberately cover only deployment-style ITX/WebSocket behavior: project
+// These deliberately cover only deployment-style itx/WebSocket behavior: project
 // stream access, append/read, replay/live subscriptions, unsubscribe,
 // state-only subscription pushes, and cross-posting (durable push subscriptions
 // targeting another stream's acceptCrossPost sink, via the crossPostTo sugar). Unit and
@@ -23,7 +23,7 @@ type CoreStreamState = {
   projectId: string | null;
 };
 
-test("creates a project and uses project streams through v4 ITX", async () => {
+test("creates a project and uses project streams through v4 itx", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/os-port/admin-project/${marker}`;
 

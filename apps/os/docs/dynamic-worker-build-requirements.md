@@ -26,14 +26,14 @@ This is not only for the default project worker. The same build model should
 make worker-backed provided capabilities easy: a caller can provide a short
 TypeScript entry file, a `package.json`, supporting files, and Cloudflare
 bundler options, then mount the resulting WorkerEntrypoint or Durable Object as
-an ITX capability.
+an itx capability.
 
 ## Current Shape
 
 Dynamic workers are currently recipes passed to `project.workers.get(ref)` or
 stored indirectly in durable stream facts:
 
-- ITX capability mounts store `itx-expression` records that can call
+- itx capability mounts store `itx-expression` records that can call
   `workers.get(workerRef)`.
 - Stream subscriptions may store `{ type: "worker", workerRef }` as a configured
   subscriber.
@@ -206,12 +206,12 @@ Out-of-sync generated seed code should be a fixable lint error.
 
 ## Open Questions
 
-Resolved: worker build events live on the ITX scope stream named by
+Resolved: worker build events live on the itx scope stream named by
 `DynamicWorkerRef.path`. The repo path is only a file source, not the build event
 owner.
 
-Resolved: the worker build processor is installed alongside the ITX processor
-for every ITX scope, rather than lazily per first build.
+Resolved: the worker build processor is installed alongside the itx processor
+for every itx scope, rather than lazily per first build.
 
 Resolved: the target `DynamicWorkerRef.source` shape should be the orthogonal
 file-source plus build-options model. The current `inline | repo` union is

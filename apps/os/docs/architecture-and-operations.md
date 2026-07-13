@@ -77,7 +77,7 @@ in the auth worker.
 The browser talks to itx over `/api`: one Cap'n Web WebSocket per
 context, managed by `src/itx/itx-react.tsx` (`useItx`/`useItxQuery`/
 `useItxEffect`). `POST /api` serves one-shot HTTP batch sessions (used by
-the project-create server function and MCP `exec_js`).
+the project-create server function and MCP `exec_typescript`).
 `/api/admin-cookie` is the browser admin-auth bridge (WebSockets cannot
 set headers). The dashboard's Start routes keep only `/api/mcp` and `/api/health`; the
 catch-all `src/routes/api.$.ts` returns 404 (integration callbacks return
@@ -106,13 +106,13 @@ OS has two MCP flows:
   hostname (for example `https://mcp.iterate.com`), which ingress rewrites to
   the same route. The OS app-host `/api/mcp` route is also valid. The handler
   authenticates each request, creates a fresh in-memory MCP server, and
-  exposes `exec_js`, which runs the code through itx over a one-shot
+  exposes `exec_typescript`, which runs the code through itx over a one-shot
   capnweb batch.
 - Outbound MCP: `itx.mcp.connect(...)` connects to an external MCP server and
   exposes that remote server's tools as capability methods.
 
 Keep these separate in naming and code. Inbound MCP may execute itx scripts
-through `exec_js`, but it is not itself an outbound MCP capability.
+through `exec_typescript`, but it is not itself an outbound MCP capability.
 
 Inbound MCP requests authenticate two ways, tried in order:
 
@@ -128,9 +128,9 @@ the authorization server.
 
 ## itx Scripts
 
-itx executes JavaScript in isolated dynamic Worker sandboxes through
+itx executes TypeScript in isolated dynamic Worker sandboxes through
 `itx.capabilityHost.runScript(...)` — reached from the browser REPL, agents, the CLI
-(`pnpm cli itx run`), and MCP `exec_js`. Every runtime accepts the same
+(`pnpm cli itx run`), and MCP `exec_typescript`. Every runtime accepts the same
 script shape: a body that runs with `itx` (and `vars`) in scope and ends with
 an explicit `return` (see `src/itx/examples.ts`, the catalogue that doubles
 as the REPL Examples panel and the cross-runtime e2e matrix).

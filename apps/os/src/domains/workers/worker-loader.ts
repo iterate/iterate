@@ -30,7 +30,7 @@ export function isWorkerBuildInProgressError(error: unknown): boolean {
  * Fully materialized Worker Loader input plus a cache key for the built bytes.
  * The cache key is build identity only; runtime scope and exported symbol are
  * added by `loadResolvedWorker` so the same artifact can be used in multiple
- * ITX paths without leaking bindings or entrypoint props across scopes.
+ * itx paths without leaking bindings or entrypoint props across scopes.
  */
 export type ResolvedWorkerSource = {
   cacheKey: string;
