@@ -35,6 +35,7 @@ import {
   createRepoTask,
   isRepoTaskPath,
   parseRepoTask,
+  repoTaskCreationPaths,
   taskStateColumns,
   taskStateLabel,
   updateRepoTaskLabels,
@@ -117,13 +118,10 @@ export function RepoTasksView({
   }, [changes, headContents]);
 
   const effectivePaths = useMemo(() => {
-    const paths = new Set(headPaths);
-    for (const [path, change] of changes) {
-      const entry = effectiveEntry(change);
-      if (entry?.type === "delete") paths.delete(path);
-      else if (entry !== undefined) paths.add(path);
-    }
-    return paths;
+    return repoTaskCreationPaths(
+      headPaths,
+      [...changes].map(([path, change]) => [path, effectiveEntry(change)?.type] as const),
+    );
   }, [changes, headPaths]);
 
   const columns = taskStateColumns(tasks);

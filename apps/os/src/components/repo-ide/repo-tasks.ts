@@ -1,6 +1,6 @@
 import { parseDocument, type Document } from "yaml";
 
-export const DEFAULT_TASK_STATE = "todo";
+const DEFAULT_TASK_STATE = "todo";
 
 const STANDARD_TASK_STATES = ["backlog", DEFAULT_TASK_STATE, "in-progress", "done"] as const;
 
@@ -75,9 +75,16 @@ export function updateRepoTaskState(content: string, state: string): string {
 export function updateRepoTaskLabels(content: string, labels: readonly string[]): string {
   const normalized = uniqueStrings(labels);
   return updateFrontmatter(content, (document, metadata) => {
-    const key = metadata.labels === undefined && metadata.tags !== undefined ? "tags" : "labels";
-    if (normalized.length === 0) document.delete(key);
-    else document.set(key, normalized);
+    const usesLegacyTags = metadata.labels === undefined && metadata.tags !== undefined;
+    if (normalized.length === 0) {
+      document.delete("labels");
+      document.delete("tags");
+    } else if (usesLegacyTags) {
+      document.set("tags", normalized);
+    } else {
+      document.set("labels", normalized);
+      document.delete("tags");
+    }
   });
 }
 
@@ -96,6 +103,17 @@ export function createRepoTask(
     path = `tasks/${base}-${suffix}.md`;
   }
   return { path, content: `# ${normalizedTitle}\n` };
+}
+
+export function repoTaskCreationPaths(
+  headPaths: readonly string[],
+  changes: Iterable<readonly [path: string, type: "write" | "write-base64" | "delete" | undefined]>,
+): Set<string> {
+  const paths = new Set(headPaths);
+  for (const [path, type] of changes) {
+    if (type === "write" || type === "write-base64") paths.add(path);
+  }
+  return paths;
 }
 
 export function taskStateColumns(tasks: readonly RepoTask[]): string[] {

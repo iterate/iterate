@@ -3,6 +3,7 @@ import {
   createRepoTask,
   isRepoTaskPath,
   parseRepoTask,
+  repoTaskCreationPaths,
   taskDirectoryForPath,
   taskStateColumns,
   updateRepoTaskLabels,
@@ -82,6 +83,14 @@ test("updates explicit labels without serializing the inferred folder label", ()
   expect(removed).toBe("\n# Labels\n");
 });
 
+test("replaces mixed canonical and legacy labels without leaving stale tags", () => {
+  const content = "---\nlabels: [ui, polish]\ntags: [v1, polish]\n---\n# Mixed labels\n";
+  const updated = updateRepoTaskLabels(content, ["ui"]);
+
+  expect(parseRepoTask("tasks/mixed-labels.md", updated)?.explicitLabels).toEqual(["ui"]);
+  expect(updated).not.toContain("tags:");
+});
+
 test("creates a bare task with a stable collision-free path", () => {
   const paths = new Set(["tasks/ship-the-board.md", "tasks/ship-the-board-2.md"]);
   expect(createRepoTask("  Ship the board!  ", paths)).toEqual({
@@ -89,6 +98,12 @@ test("creates a bare task with a stable collision-free path", () => {
     content: "# Ship the board!\n",
   });
   expect(createRepoTask("   ", paths)).toBeNull();
+});
+
+test("reserves a task path that exists at HEAD while its deletion is pending", () => {
+  const paths = repoTaskCreationPaths(["tasks/reuse-me.md"], [["tasks/reuse-me.md", "delete"]]);
+
+  expect(createRepoTask("Reuse me", paths)?.path).toBe("tasks/reuse-me-2.md");
 });
 
 test("keeps the core columns and appends states found in the repo", () => {
