@@ -172,6 +172,8 @@ export function RepoTasksView({
   const columns = taskStateColumns(tasks);
   const selectedTask = tasks.find((task) => task.path === editorPath);
   const editorTask = draft ?? selectedTask;
+  const editorTaskRef = useRef(editorTask);
+  editorTaskRef.current = editorTask;
   const writeTask = (task: RepoTask, content: string) => {
     const baseline = textContentForEntry(changes.get(task.path)?.staged) ?? headContents[task.path];
     onSetWorking(task.path, content === baseline ? undefined : { type: "write", content });
@@ -312,7 +314,7 @@ export function RepoTasksView({
         event.metaKey ||
         event.ctrlKey ||
         event.altKey ||
-        editorTask !== undefined ||
+        editorTaskRef.current !== undefined ||
         (target instanceof HTMLElement &&
           (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)))
       )
