@@ -42,6 +42,7 @@ import {
 import { runHttpWideLog } from "./observability/operation.ts";
 import { cloudflareWideLogSink } from "./observability/sinks.ts";
 import { wideLogger } from "./observability/wide-log.ts";
+import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
 
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
@@ -257,10 +258,21 @@ async function apiFetch(
     headers: request.headers,
     requestUrl: request.url,
   });
+  const itxObservability = (transport: "http" | "websocket") => {
+    const sessionId = `itx_session_${crypto.randomUUID().replaceAll("-", "")}`;
+    wideLogger.set({ itx: { sessionId } });
+    return createItxRpcSessionOptions({
+      transport,
+      sessionId,
+      parentLogId: wideLogger.get().log.id,
+      sinks: [cloudflareWideLogSink],
+      waitUntil: (promise) => ctx.waitUntil(promise),
+    });
+  };
   if (request.method === "POST") {
-    return newHttpBatchRpcResponse(request, unauthenticated);
+    return newHttpBatchRpcResponse(request, unauthenticated, itxObservability("http"));
   }
-  return newWorkersWebSocketRpcResponse(request, unauthenticated);
+  return newWorkersWebSocketRpcResponse(request, unauthenticated, itxObservability("websocket"));
 }
 
 function ingressLogFields(request: Request, route: Awaited<ReturnType<typeof decideIngressRoute>>) {
