@@ -135,20 +135,27 @@ your env or Doppler branch config.
 
 ## Acting as users and admins
 
-For product administration and support impersonation, prefer the OS operator
-session mechanism. It needs only the selected environment's admin secret and
-can mint a browser session confined to one resolved project:
+For product administration and support, prefer the OS operator-session
+mechanism. It needs only the selected environment's admin secret and opens a
+browser with a synthetic operator principal confined to one resolved project.
+It does not impersonate a customer or inherit that customer's other projects:
 
 ```bash
 cd apps/os
 doppler run --config preview_3 -- pnpm cli session create \
-  --project my-project --as support@nustom.com --open
+  --project my-project --open
+doppler run --config prd -- pnpm cli session create \
+  --project customer-project --open
 doppler run --config prd -- pnpm cli session create --admin --open
 ```
 
-See [Operator Sessions](../apps/os/docs/operator-sessions.md). The forge-key
-flow below remains useful when testing the real OAuth-session shape, arbitrary
-organization claims, or auth UI behavior.
+The first two commands can access only their selected project; `--admin` is a
+separate platform-wide mode. See
+[Operator Sessions](../apps/os/docs/operator-sessions.md) for the E2E-created
+preview project workflow, production support workflow, API contract, and
+security model. The forge-key flow below remains useful in non-production when
+testing the real OAuth-session shape, arbitrary organization claims, or auth UI
+behavior.
 
 OS trusts JWTs signed by any key in its baked JWKS. Deploys merge the **forge**
 public key into that baked JWKS; local dev derives the same public key from the

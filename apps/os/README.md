@@ -73,8 +73,8 @@ doppler run --project os --config preview_2 -- pnpm run deploy
                          # deploy the explicitly selected Doppler config
 doppler run --project os --config prd -- pnpm run deploy
                          # production deploy
-doppler run --config prd -- pnpm cli session create --project <slug> --as <email> --open
-                         # short-lived, single-project browser impersonation
+doppler run --config prd -- pnpm cli session create --project <slug-or-id> --open
+                         # open one production project with a confined operator principal
 ```
 
 Use `pnpm run deploy`, not `pnpm deploy`; `deploy` is also a pnpm built-in.
@@ -171,7 +171,7 @@ doppler run --project os --config dev -- sh -lc '
 
 The script pattern is documented in
 [`docs/doppler-backed-scripts.md`](./docs/doppler-backed-scripts.md).
-Operator impersonation and admin browser sessions are documented in
+Project-scoped and platform-wide operator browser sessions are documented in
 [`docs/operator-sessions.md`](./docs/operator-sessions.md).
 
 ## Important Files

@@ -1467,6 +1467,9 @@ export type Description = {
  * - `bearer` — an auth access token presented as RPC data.
  * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).
  * - `operator-session` — a short-lived grant minted with the admin secret.
+ *   Project grants create a synthetic operator principal authorized for one
+ *   resolved project only; they do not impersonate a customer. Platform-wide
+ *   grants are a separate, explicit kind.
  * - `impersonate` — admin-secret-gated fake principal, for test suites that
  *   exercise per-project confinement without minting real users.
  */

@@ -133,8 +133,10 @@ function AdminGate() {
 function AdminSessionRequired() {
   return (
     <div className="mx-auto mt-16 flex w-full max-w-md flex-col gap-1 px-4">
-      <h1 className="text-lg font-semibold">Admin session required</h1>
-      <p className="text-sm text-muted-foreground">This browser has no active operator session.</p>
+      <h1 className="text-lg font-semibold">Platform operator access required</h1>
+      <p className="text-sm text-muted-foreground">
+        This browser has no active platform-wide operator session.
+      </p>
     </div>
   );
 }

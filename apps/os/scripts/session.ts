@@ -3,21 +3,19 @@ import process from "node:process";
 import { readDevServerInfo } from "./lib/dev-server-info.ts";
 
 export type CreateOptions = {
-  /** Project slug or prj_ id. Mutually exclusive with --admin. */
+  /** Project slug or prj_ ID to open. The resulting browser principal can access this project only. Mutually exclusive with --admin. */
   project?: string;
-  /** Mint a platform-wide admin session. Mutually exclusive with --project. */
+  /** Create a platform-wide operator session for /admin. Prefer --project for support and debugging. Mutually exclusive with --project. */
   admin?: boolean;
-  /** Audited principal to impersonate, such as an email or usr_ id. Required for project sessions. */
-  as?: string;
-  /** Display email when --as is a non-email user id. */
-  email?: string;
+  /** Operator identity written to issuance and redemption audit events. This is attribution, not a customer identity. Defaults to OPERATOR_IDENTITY, GITHUB_ACTOR, USER, then "operator". */
+  operator?: string;
   /** Session lifetime in seconds, from 60 through 3600 (default 900). */
   ttlSeconds?: number;
   /** Same-origin path opened after browser redemption. */
   returnTo?: string;
   /** OS base URL. Defaults to APP_CONFIG_BASE_URL or the live local dev server. */
   baseUrl?: string;
-  /** Open the one-shot browser URL instead of printing it. */
+  /** Open the one-shot redemption URL in this machine's default browser. */
   open?: boolean;
 };
 
@@ -29,21 +27,18 @@ type CreatedOperatorSession = {
   token: string;
 };
 
-/** Mint a short-lived project impersonation or platform-admin browser session. */
+/**
+ * Create a short-lived browser session for one project, or an explicit
+ * platform-wide operator session. The admin secret stays in this Node process;
+ * the browser receives only the signed, expiring grant returned by OS.
+ */
 export async function create(options: CreateOptions = {}) {
   const isAdmin = options.admin === true;
   const project = options.project?.trim();
   if (isAdmin === Boolean(project)) {
     throw new Error("Pass exactly one of --project <slug-or-id> or --admin.");
   }
-  const subject =
-    options.as?.trim() ||
-    (isAdmin
-      ? process.env.USER?.trim()
-        ? `operator:${process.env.USER.trim()}`
-        : "operator"
-      : "");
-  if (!subject) throw new Error("Project sessions require --as <email-or-user-id>.");
+  const operatorId = resolveOperatorId(options.operator);
 
   const baseUrl = resolveBaseUrl(options.baseUrl);
   const adminSecret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
@@ -52,15 +47,14 @@ export async function create(options: CreateOptions = {}) {
   const body = isAdmin
     ? {
         kind: "admin" as const,
-        subject,
+        operatorId,
         ...(options.returnTo ? { returnTo: options.returnTo } : {}),
         ...(options.ttlSeconds ? { ttlSeconds: options.ttlSeconds } : {}),
       }
     : {
         kind: "project" as const,
+        operatorId,
         project: project!,
-        subject,
-        ...(options.email ? { email: options.email } : {}),
         ...(options.returnTo ? { returnTo: options.returnTo } : {}),
         ...(options.ttlSeconds ? { ttlSeconds: options.ttlSeconds } : {}),
       };
@@ -84,13 +78,24 @@ export async function create(options: CreateOptions = {}) {
     const { args, command } = openInvocation(created.browserUrl);
     const result = spawnSync(command, args, { stdio: "inherit" });
     if (result.status !== 0) throw new Error("Could not open the operator session URL.");
-    console.info(`Opened ${created.kind} operator session; expires ${created.expiresAt}.`);
+    const scope = created.kind === "project" ? `project ${created.project?.slug}` : "platform";
+    console.info(`Opened ${scope} operator session; expires ${created.expiresAt}.`);
     return;
   }
 
   // URL only: easy to paste into a browser or consume from browser automation.
   // The signed grant lives after #, so it never reaches edge/request logs.
   console.info(created.browserUrl);
+}
+
+function resolveOperatorId(explicit: string | undefined) {
+  return (
+    explicit?.trim() ||
+    process.env.OPERATOR_IDENTITY?.trim() ||
+    process.env.GITHUB_ACTOR?.trim() ||
+    process.env.USER?.trim() ||
+    "operator"
+  );
 }
 
 function resolveBaseUrl(explicit: string | undefined) {

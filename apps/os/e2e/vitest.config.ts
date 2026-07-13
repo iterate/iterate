@@ -189,7 +189,7 @@ export default defineConfig({
                 const response = await fetch(new URL("/api/operator-sessions", input.url), {
                   body: JSON.stringify({
                     kind: "admin",
-                    subject: "itx-browser-e2e",
+                    operatorId: "itx-browser-e2e",
                     ttlSeconds: 900,
                   }),
                   headers: {

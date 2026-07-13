@@ -78,9 +78,11 @@ The browser talks to itx over `/api`: one Cap'n Web WebSocket per
 context, managed by `src/itx/itx-react.tsx` (`useItx`/`useItxQuery`/
 `useItxEffect`). `POST /api` serves one-shot HTTP batch sessions (used by
 the project-create server function and MCP `exec_typescript`).
-`/api/operator-sessions` mints short-lived, origin-bound project
-impersonation or explicit platform-admin grants. Browser redemption installs
-an HttpOnly `SameSite=Strict` cookie; see
+`/api/operator-sessions` mints short-lived, origin-bound grants for either one
+resolved project or explicit platform-wide operation. Project grants create a
+synthetic operator principal; they do not impersonate a customer, inherit the
+customer's other memberships, or widen through the project directory. Browser
+redemption installs an HttpOnly `SameSite=Strict` cookie; see
 [Operator Sessions](./operator-sessions.md). The dashboard's Start routes keep
 only `/api/mcp` and `/api/health`; the catch-all `src/routes/api.$.ts` returns
 404 (integration callbacks return with the integrations domain).

@@ -69,7 +69,7 @@ async function assertItxAdminAuth(httpBaseUrl: string) {
   const sessionsUrl = new URL("/api/operator-sessions", httpBaseUrl);
 
   const anonymous = await fetch(sessionsUrl, {
-    body: JSON.stringify({ kind: "admin", subject: "runtime-smoke" }),
+    body: JSON.stringify({ kind: "admin", operatorId: "runtime-smoke" }),
     headers: { "content-type": "application/json" },
     method: "POST",
     signal: AbortSignal.timeout(3_000),
@@ -77,7 +77,7 @@ async function assertItxAdminAuth(httpBaseUrl: string) {
   expect(anonymous.status).toBe(401);
 
   const admin = await fetch(sessionsUrl, {
-    body: JSON.stringify({ kind: "admin", subject: "runtime-smoke" }),
+    body: JSON.stringify({ kind: "admin", operatorId: "runtime-smoke" }),
     headers: {
       authorization: `Bearer ${SMOKE_ADMIN_API_SECRET}`,
       "content-type": "application/json",

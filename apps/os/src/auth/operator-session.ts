@@ -32,7 +32,7 @@ const ProjectGrant = z
     }),
     returnTo: z.string(),
     sessionId: z.string(),
-    subject: z.string(),
+    operatorId: z.string(),
     version: z.literal(TOKEN_VERSION),
   })
   .strict();
@@ -45,7 +45,7 @@ const AdminGrant = z
     kind: z.literal("admin"),
     returnTo: z.string(),
     sessionId: z.string(),
-    subject: z.string(),
+    operatorId: z.string(),
     version: z.literal(TOKEN_VERSION),
   })
   .strict();
@@ -62,19 +62,18 @@ export type AuthenticatedOperatorSession = {
 const CreateOperatorSessionRequest = z.discriminatedUnion("kind", [
   z
     .object({
-      email: z.string().trim().min(1).max(320).optional(),
       kind: z.literal("project"),
+      operatorId: z.string().trim().min(1).max(256),
       project: z.string().trim().min(1).max(256),
       returnTo: z.string().max(2048).optional(),
-      subject: z.string().trim().min(1).max(256),
       ttlSeconds: z.number().int().min(60).max(MAX_TTL_SECONDS).optional(),
     })
     .strict(),
   z
     .object({
       kind: z.literal("admin"),
+      operatorId: z.string().trim().min(1).max(256),
       returnTo: z.string().max(2048).optional(),
-      subject: z.string().trim().min(1).max(256),
       ttlSeconds: z.number().int().min(60).max(MAX_TTL_SECONDS).optional(),
     })
     .strict(),
@@ -92,6 +91,8 @@ type OperatorSessionHandlerInput = {
  * POST /api/operator-sessions
  *   Requires the deployment admin API secret as a bearer token. It resolves
  *   the requested project before signing a short-lived, origin-bound grant.
+ *   A project grant creates a synthetic operator principal with authority over
+ *   exactly that project; it does not adopt or copy a customer identity.
  *
  * GET + POST /api/operator-sessions/redeem
  *   The GET page reads the grant from the URL fragment (never the request URL)
@@ -158,7 +159,7 @@ async function createOperatorSessionResponse(input: OperatorSessionHandlerInput)
     issuedAt: now,
     returnTo: "",
     sessionId: crypto.randomUUID(),
-    subject: parsed.data.subject,
+    operatorId: parsed.data.operatorId,
     version: 1 as const,
   };
 
@@ -182,11 +183,11 @@ async function createOperatorSessionResponse(input: OperatorSessionHandlerInput)
       const organizationId = project.organizationId ?? `operator:${project.id}`;
       grant = {
         ...common,
-        email: parsed.data.email ?? emailForSubject(parsed.data.subject),
+        email: emailForOperatorId(parsed.data.operatorId),
         kind: "project",
         organization: {
           id: organizationId,
-          name: "Operator session",
+          name: "Project operator access",
           slug: `operator-${project.id.replace(/^prj_/, "").slice(0, 24)}`,
         },
         project: { id: project.id, organizationId, slug: project.slug },
@@ -225,7 +226,7 @@ async function createOperatorSessionResponse(input: OperatorSessionHandlerInput)
       kind: grant.kind,
       projectId: project?.id ?? null,
       sessionId: grant.sessionId,
-      subject: grant.subject,
+      operatorId: grant.operatorId,
     }),
   );
 
@@ -269,7 +270,7 @@ async function redeemOperatorSessionResponse(input: OperatorSessionHandlerInput)
       kind: session.grant.kind,
       projectId: session.grant.kind === "project" ? session.grant.project.id : null,
       sessionId: session.grant.sessionId,
-      subject: session.grant.subject,
+      operatorId: session.grant.operatorId,
     }),
   );
   return Response.json({ ok: true, returnTo: session.grant.returnTo }, { headers });
@@ -313,10 +314,10 @@ export function publicSessionForOperator(
     return {
       authenticated: true,
       user: {
-        email: emailForSubject(grant.subject),
-        id: grant.subject,
+        email: emailForOperatorId(grant.operatorId),
+        id: grant.operatorId,
         isAdmin: true,
-        name: grant.subject,
+        name: grant.operatorId,
         role: "admin",
       },
       session: {
@@ -333,9 +334,9 @@ export function publicSessionForOperator(
     authenticated: true,
     user: {
       email: grant.email,
-      id: grant.subject,
+      id: grant.operatorId,
       isAdmin: false,
-      name: grant.subject,
+      name: grant.operatorId,
       role: "member",
     },
     session: {
@@ -356,7 +357,7 @@ function principalForGrant(grant: OperatorGrant): Principal {
     organizations: [{ ...grant.organization, role: "admin" }],
     projects: [grant.project],
     sessionId: grant.sessionId,
-    userId: grant.subject,
+    userId: grant.operatorId,
   });
 }
 
@@ -424,10 +425,10 @@ function normalizeReturnTo(value: string, audience: string): string {
   return `${resolved.pathname}${resolved.search}${resolved.hash}`;
 }
 
-function emailForSubject(subject: string) {
-  return subject.includes("@")
-    ? subject
-    : `${subject.replace(/[^a-zA-Z0-9._+-]/gu, "-")}@operator.invalid`;
+function emailForOperatorId(operatorId: string) {
+  return operatorId.includes("@")
+    ? operatorId
+    : `${operatorId.replace(/[^a-zA-Z0-9._+-]/gu, "-")}@operator.invalid`;
 }
 
 async function hmacKey(secret: string, usages: KeyUsage[]) {

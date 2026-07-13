@@ -66,15 +66,21 @@ configured deployment URL.
 ## Operator Browser Sessions
 
 Do not put `APP_CONFIG_ADMIN_API_SECRET` in browser code or paste it into the
-admin UI. Mint a short-lived project impersonation or explicit platform-admin
-session through the Doppler-backed CLI instead:
+admin UI. Use the Doppler-backed CLI to open one project with a confined,
+synthetic operator principal. The operator does not become a customer user:
 
 ```bash
 doppler run --config dev -- pnpm cli session create \
-  --project my-project --as support@nustom.com --open
+  --project my-project --open
+
+doppler run --config preview_8 -- pnpm cli session create \
+  --project an-e2e-created-project --open
 
 doppler run --config prd -- pnpm cli session create --admin --open
 ```
 
-The mechanism and threat model are documented in
+The first two commands can reach only the selected project. The last command
+is an explicit platform-wide operator session for `/admin`; use it only for
+deployment-level work. Invocation details, API examples, common support and
+E2E workflows, and the threat model are documented in
 [Operator Sessions](./operator-sessions.md).

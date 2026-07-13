@@ -160,8 +160,8 @@ export const getProjectBySlugServerFn: (input: {
     }
 
     // Claims miss: consult the directory (KV cache in front of the auth
-    // worker — src/project-directory.ts). Admin sessions (operator cookie
-    // or admin-role user) may read any project; a signed-in user may read a
+    // worker — src/project-directory.ts). A platform operator grant or
+    // admin-role user may read any project; a signed-in user may read a
     // project whose owning organization they belong to (covers the
     // stale-claims window right after a create on another device).
     const record = await readProjectBySlug(context.config, env.PROJECT_DIRECTORY, data.slug);

@@ -56,12 +56,12 @@ async function issue(
 }
 
 describe("operator sessions", () => {
-  it("issues an origin-bound, project-scoped impersonation without exposing the admin secret", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
+  it("issues origin-bound project access without impersonating a customer or exposing the admin secret", async () => {
+    const auditLog = vi.spyOn(console, "info").mockImplementation(() => {});
     const response = await issue({
       kind: "project",
+      operatorId: "support-engineer",
       project: project.slug,
-      subject: "alice@example.test",
     });
 
     expect(response.status).toBe(200);
@@ -77,6 +77,10 @@ describe("operator sessions", () => {
       `${ORIGIN}/api/operator-sessions/redeem#token=${encodeURIComponent(created.token)}`,
     );
     expect(JSON.stringify(created)).not.toContain(ADMIN_SECRET);
+    expect(auditLog).toHaveBeenCalledOnce();
+    expect(auditLog.mock.calls[0]?.[0]).toContain('"operatorId":"support-engineer"');
+    expect(auditLog.mock.calls[0]?.[0]).not.toContain(ADMIN_SECRET);
+    expect(auditLog.mock.calls[0]?.[0]).not.toContain(created.token);
 
     const authenticated = await authenticateOperatorSession({
       config: config(),
@@ -86,13 +90,17 @@ describe("operator sessions", () => {
     });
     expect(authenticated?.principal).toMatchObject({
       type: "user",
-      userId: "alice@example.test",
+      userId: "support-engineer",
       projects: [{ id: project.id, slug: project.slug }],
     });
     expect(publicSessionForOperator(authenticated)).toMatchObject({
       authenticated: true,
       session: { projects: [{ id: project.id, slug: project.slug }] },
-      user: { email: "alice@example.test", id: "alice@example.test", isAdmin: false },
+      user: {
+        email: "support-engineer@operator.invalid",
+        id: "support-engineer",
+        isAdmin: false,
+      },
     });
   });
 
@@ -100,7 +108,7 @@ describe("operator sessions", () => {
     expect(
       (
         await issue(
-          { kind: "project", project: project.slug, subject: "alice@example.test" },
+          { kind: "project", operatorId: "support-engineer", project: project.slug },
           { authorization: "Bearer wrong" },
         )
       ).status,
@@ -109,18 +117,30 @@ describe("operator sessions", () => {
       (
         await issue({
           kind: "project",
+          operatorId: "support-engineer",
           project: "missing",
-          subject: "alice@example.test",
         })
       ).status,
     ).toBe(404);
+  });
+
+  it("rejects the former impersonation request shape instead of accepting it for compatibility", async () => {
+    expect(
+      (
+        await issue({
+          kind: "project",
+          project: project.slug,
+          subject: "customer@example.test",
+        })
+      ).status,
+    ).toBe(400);
   });
 
   it("rejects cross-origin browser issuance and redemption", async () => {
     expect(
       (
         await issue(
-          { kind: "admin", subject: "operator:alice" },
+          { kind: "admin", operatorId: "operator:alice" },
           { origin: "https://attacker.example" },
         )
       ).status,
@@ -139,9 +159,9 @@ describe("operator sessions", () => {
 
   it("redeems a valid grant into a strict HttpOnly cookie and retires the legacy cookie", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
-    const issued = (await (await issue({ kind: "admin", subject: "operator:alice" })).json()) as {
-      token: string;
-    };
+    const issued = (await (
+      await issue({ kind: "admin", operatorId: "operator:alice" })
+    ).json()) as { token: string };
     const response = await handleOperatorSessionRequest({
       config: config(),
       request: new Request(`${ORIGIN}/api/operator-sessions/redeem`, {
@@ -162,10 +182,36 @@ describe("operator sessions", () => {
     expect(cookies).not.toContain(ADMIN_SECRET);
   });
 
+  it("ends an operator browser session with a same-origin cookie deletion", async () => {
+    const response = await handleOperatorSessionRequest({
+      config: config(),
+      request: new Request(`${ORIGIN}/api/operator-sessions/current`, {
+        headers: { origin: ORIGIN },
+        method: "DELETE",
+      }),
+      resolveProject: async () => null,
+    });
+
+    expect(response.status).toBe(200);
+    const cookies = response.headers.get("set-cookie") ?? "";
+    expect(cookies).toContain(`${OPERATOR_SESSION_COOKIE}=; Path=/`);
+    expect(cookies).toContain("Max-Age=0");
+
+    const crossOrigin = await handleOperatorSessionRequest({
+      config: config(),
+      request: new Request(`${ORIGIN}/api/operator-sessions/current`, {
+        headers: { origin: "https://attacker.example" },
+        method: "DELETE",
+      }),
+      resolveProject: async () => null,
+    });
+    expect(crossOrigin.status).toBe(403);
+  });
+
   it("binds grants to origin, expiry, signature, and the current admin secret", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     const issued = (await (
-      await issue({ kind: "admin", subject: "operator:alice", ttlSeconds: 60 })
+      await issue({ kind: "admin", operatorId: "operator:alice", ttlSeconds: 60 })
     ).json()) as { token: string };
     const valid = await verifyOperatorGrant({
       audience: ORIGIN,
@@ -202,9 +248,9 @@ describe("operator sessions", () => {
 
   it("denies ambient-cookie RPC auth from a cross-site browser", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
-    const issued = (await (await issue({ kind: "admin", subject: "operator:alice" })).json()) as {
-      token: string;
-    };
+    const issued = (await (
+      await issue({ kind: "admin", operatorId: "operator:alice" })
+    ).json()) as { token: string };
 
     await expect(
       resolveItxAuth({
@@ -233,7 +279,7 @@ describe("operator sessions", () => {
   it("accepts the same signed grant as an explicit CLI/browser RPC credential", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     const issued = (await (
-      await issue({ kind: "project", project: project.id, subject: "usr_support" })
+      await issue({ kind: "project", operatorId: "support-engineer", project: project.id })
     ).json()) as { token: string };
     const auth = await resolveItxAuth({
       config: config(),

@@ -15,7 +15,9 @@
 //     worker's JWKS. Ambient cookies require an exact same-origin request.
 //   bearer            — an auth-worker access token presented as RPC data.
 //   admin-secret      — APP_CONFIG_ADMIN_API_SECRET; the CLI/e2e/tooling lane.
-//   operator-session  — a short-lived deployment- and origin-bound grant.
+//   operator-session  — a short-lived deployment- and origin-bound operator
+//     grant. Project grants reconstruct a synthetic principal with exactly one
+//     project; they never impersonate a customer or widen from the directory.
 //   impersonate       — admin-secret-gated fake principal (tests): lets suites
 //     exercise user-vs-user confinement against any deployment without minting
 //     real users.
@@ -50,6 +52,9 @@ import type { AppConfig } from "./config.ts";
  * - `bearer` — an auth access token presented as RPC data.
  * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).
  * - `operator-session` — a short-lived grant minted with the admin secret.
+ *   Project grants create a synthetic operator principal authorized for one
+ *   resolved project only; they do not impersonate a customer. Platform-wide
+ *   grants are a separate, explicit kind.
  * - `impersonate` — admin-secret-gated fake principal, for test suites that
  *   exercise per-project confinement without minting real users.
  */

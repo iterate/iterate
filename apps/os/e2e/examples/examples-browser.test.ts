@@ -124,8 +124,9 @@ describe.skipIf(!hasTarget)("itx browser execution mode", () => {
 // ---- connection -------------------------------------------------------------
 
 /**
- * An admin Session for this tab. The short-lived operator grant is explicit
- * RPC data, so no cross-origin ambient browser credential is involved.
+ * A platform-authorized Session for this tab. The short-lived operator grant
+ * is explicit RPC data, so no cross-origin ambient browser credential is
+ * involved.
  */
 async function connectFromBrowser(): Promise<RpcStub<Session & ProjectRpcTarget>> {
   const token = await operatorSessionToken();
