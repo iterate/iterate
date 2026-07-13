@@ -7,12 +7,12 @@ type ItxTransport = "http" | "websocket";
 function targetName(target: unknown): string {
   if (typeof target !== "object" || target === null) return "Callable";
   const name = target.constructor?.name;
-  return typeof name === "string" && name.length > 0 ? name : "RpcTarget";
+  return typeof name === "string" && name.length > 0 ? name.replace(/RpcTarget$/, "") : "Rpc";
 }
 
 function rpcMethod(info: RpcCallInfo): string {
   const path = info.path.map(String).join(".") || "call";
-  return `${targetName(info.target)}.${path}`.slice(0, 256);
+  return (info.path.length > 1 ? path : `${targetName(info.target)}.${path}`).slice(0, 256);
 }
 
 function errorType(error: unknown): string {
@@ -61,7 +61,7 @@ export function createItxRpcSessionOptions(transport: ItxTransport): RpcSessionO
       const method = rpcMethod(info);
       const startedAt = performance.now();
 
-      return tracing.enterSpan("itx.rpc", async (span) => {
+      return tracing.enterSpan(`itx ${method}`.slice(0, 256), async (span) => {
         span.setAttribute("rpc.system", "capnweb");
         span.setAttribute("rpc.method", method);
         span.setAttribute("itx.transport", transport);
