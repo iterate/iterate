@@ -103,28 +103,49 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
   using project = itx.projects.create({ slug: `live-index-${RUN_SUFFIX}-${marker}` });
   await project.__describe();
 
-  const track = trackLiveState<ProjectLiveState>();
-  using subscription = await project.liveState.subscribe(track.onUpdate);
-  await waitForCondition(() => track.state() !== undefined, {
-    description: "the initial snapshot",
-  });
-
-  // Appending to a new stream flows through processEventBatch → the streams
-  // index (a peer slice of itx.liveState, nothing to do with the processor fold).
+  // A dormant index mutates its in-memory projection in place. get() must
+  // still assemble the committed row before exposing the first snapshot.
   const streamPath = `/e2e/live-index/${marker}`;
   await project.streams.get(streamPath).append({
     type: "events.iterate.test/live-index",
-    payload: { marker },
+    payload: { marker, phase: "dormant" },
   });
-  await waitForCondition(() => track.state()?.streamsIndex?.[streamPath] !== undefined, {
-    description: () =>
-      `the new stream in the index (have ${Object.keys(track.state()?.streamsIndex ?? {}).length})`,
-    timeoutMs: 30_000,
+  let dormantState: ProjectLiveState | undefined;
+  await waitForCondition(
+    async () => {
+      dormantState = await project.liveState.get();
+      return dormantState.streamsIndex[streamPath] !== undefined;
+    },
+    { description: "the dormant stream-index row", timeoutMs: 30_000 },
+  );
+  const dormantCount = dormantState!.streamsIndex[streamPath]!.eventCount;
+
+  const track = trackLiveState<ProjectLiveState>();
+  using subscription = await project.liveState.subscribe(track.onUpdate);
+  await waitForCondition(() => track.state()?.streamsIndex[streamPath] !== undefined, {
+    description: "the initial snapshot with dormant activity",
   });
+  const observedCount = track.state()!.streamsIndex[streamPath]!.eventCount;
+  expect(observedCount).toBeGreaterThanOrEqual(dormantCount);
+
+  // With an observer, the next touch uses copy-on-write and arrives as a patch.
+  await project.streams.get(streamPath).append({
+    type: "events.iterate.test/live-index",
+    payload: { marker, phase: "observed" },
+  });
+  await waitForCondition(
+    () => (track.state()?.streamsIndex[streamPath]?.eventCount ?? 0) > observedCount,
+    {
+      description: "the observed stream-index patch",
+      timeoutMs: 30_000,
+    },
+  );
+  expect(track.patchCount()).toBeGreaterThan(0);
   expect(track.state()!.streamsIndex[streamPath]).toMatchObject({
     path: streamPath,
     eventCount: expect.any(Number),
     lastActivityAt: expect.any(String),
   });
+  expect(track.state()!.streamsIndex[streamPath]!.eventCount).toBeGreaterThan(observedCount);
   expect(await subscription.ping()).toBe(true);
 });

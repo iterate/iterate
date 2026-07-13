@@ -54,11 +54,27 @@ describe("StreamDatabase", () => {
 
   it("a touch that advances nothing is a pure no-op (projection identity kept)", () => {
     const db = new StreamDatabase(sqlStorage());
-    db.touch({ path: "/a", at: "2026-01-02T00:00:00.000Z", type: "x", maxOffset: 5 });
+    expect(db.touch({ path: "/a", at: "2026-01-02T00:00:00.000Z", type: "x", maxOffset: 5 })).toBe(
+      true,
+    );
     const before = db.all();
     // Exact redelivery: same maxOffset, no newer activity → no write, same map.
-    db.touch({ path: "/a", at: "2026-01-02T00:00:00.000Z", type: "x", maxOffset: 5 });
+    expect(db.touch({ path: "/a", at: "2026-01-02T00:00:00.000Z", type: "x", maxOffset: 5 })).toBe(
+      false,
+    );
     expect(db.all()).toBe(before);
+  });
+
+  it("can update a dormant projection in place", () => {
+    const db = new StreamDatabase(sqlStorage());
+    db.touch({ path: "/a", at: "2026-01-01T00:00:00.000Z", type: "x", maxOffset: 1 });
+    const before = db.all();
+    db.touch(
+      { path: "/a", at: "2026-01-02T00:00:00.000Z", type: "y", maxOffset: 2 },
+      { copyOnWrite: false },
+    );
+    expect(db.all()).toBe(before);
+    expect(db.all()["/a"]).toMatchObject({ eventCount: 2, lastType: "y" });
   });
 
   it("survives reconstruction from SQLite", () => {

@@ -214,8 +214,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * advances recency — so a redelivered batch is harmless.
    */
   touchStreamActivity(input: TouchInput): void {
-    this.#streamDatabase.touch(input);
-    this.#processorHost.refreshLive();
+    // A live reader needs immutable roots for structural diffing. While
+    // dormant, get()/subscribe() force a fresh assembly before exposing state,
+    // so retain the projection root and avoid O(stream-count) copying.
+    const observed = this.#processorHost.live.hasSubscribers();
+    const changed = this.#streamDatabase.touch(input, { copyOnWrite: observed });
+    if (changed && observed) this.#processorHost.refreshLive();
   }
 
   async fetch(request: Request): Promise<Response> {

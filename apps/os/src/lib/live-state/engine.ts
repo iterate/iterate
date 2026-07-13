@@ -55,6 +55,11 @@ export class LiveState<State extends object> {
     return this.#current;
   }
 
+  /** Whether an immutable update is currently observable and needs broadcasting. */
+  hasSubscribers(): boolean {
+    return this.#subscribers.size > 0;
+  }
+
   /** Replace the state. Build a NEW value (don't mutate) so the diff stays cheap. */
   setState(next: State | ((prev: State) => State)): void {
     this.#current = typeof next === "function" ? next(this.#current) : next;

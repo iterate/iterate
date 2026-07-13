@@ -74,8 +74,10 @@ describe("LiveState", () => {
   it("stops delivering after unsubscribe", () => {
     const engine = new LiveState({ n: 1 }, { debounceMs: 100 });
     const { updates, handle } = collect(engine);
+    expect(engine.hasSubscribers()).toBe(true);
     handle.unsubscribe();
     expect(handle.ping()).toBe(false);
+    expect(engine.hasSubscribers()).toBe(false);
     engine.setState({ n: 2 });
     vi.advanceTimersByTime(100);
     expect(updates).toHaveLength(1); // only the initial snapshot

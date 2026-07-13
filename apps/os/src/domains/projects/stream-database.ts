@@ -29,11 +29,12 @@ export type StreamIndexRow = {
  * recorded from the `processEventBatch` fan-in, and the folded catalog only
  * seeds streams that predate the index.
  *
- * SQLite is the durable truth; an in-memory immutable `{ [path]: row }`
- * projection mirrors it and is what feeds `itx.liveState`. Updates are
- * COPY-ON-WRITE — a touch swaps exactly one row's reference — so the live-state
- * diff stays O(changed): one active stream yields one row-patch, every other
- * row keeps its identity (and the ⌘K list doesn't re-render).
+ * SQLite is the durable truth; an in-memory `{ [path]: row }` projection mirrors
+ * it and feeds `itx.liveState`. Observed updates are COPY-ON-WRITE — a touch
+ * swaps exactly one row's reference — so the live-state diff emits one row
+ * patch and every other row keeps its identity. Dormant updates may mutate the
+ * projection in place because the next `get` or `subscribe` reassembles a fresh
+ * snapshot before exposing it.
  *
  * ONE merge, in JS: the DO is single-threaded and the projection is loaded from
  * SQLite at construction, so between writes the projection IS the current row
@@ -59,7 +60,7 @@ export class StreamDatabase {
     this.#projection = this.#load();
   }
 
-  /** The index keyed by path — a STABLE reference between writes, so the diff bails out. */
+  /** The index keyed by path. Observed writes replace it; dormant writes may retain it. */
   all(): Record<string, StreamIndexRow> {
     return this.#projection;
   }
@@ -71,13 +72,18 @@ export class StreamDatabase {
    * advances neither is a pure no-op — no write, same projection identity. So a
    * redelivered or retried batch can neither move recency backwards, clobber
    * `lastType` with an older event's type, nor inflate the count. (Offsets are
-   * sequential, so the max offset IS the event count.)
+   * sequential, so the max offset IS the event count.) Returns whether the row
+   * advanced. `copyOnWrite: false` is valid only while the projection has no
+   * observer that could retain its previous value.
    */
-  touch({ path, at, type, maxOffset }: TouchInput): void {
+  touch(
+    { path, at, type, maxOffset }: TouchInput,
+    { copyOnWrite = true }: { copyOnWrite?: boolean } = {},
+  ): boolean {
     const prev = this.#projection[path];
     const advancesRecency = prev === undefined || at > prev.lastActivityAt;
     const eventCount = Math.max(prev?.eventCount ?? 0, maxOffset);
-    if (prev !== undefined && !advancesRecency && eventCount === prev.eventCount) return;
+    if (prev !== undefined && !advancesRecency && eventCount === prev.eventCount) return false;
     const row: StreamIndexRow = {
       path,
       createdAt: prev?.createdAt ?? at,
@@ -86,7 +92,9 @@ export class StreamDatabase {
       eventCount,
     };
     this.#store(row);
-    this.#projection = { ...this.#projection, [path]: row };
+    if (copyOnWrite) this.#projection = { ...this.#projection, [path]: row };
+    else this.#projection[path] = row;
+    return true;
   }
 
   /**
