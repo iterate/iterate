@@ -255,3 +255,39 @@ and 500-900 test lines without a performance trade. The exact-type SQL
 prefilter and sparse-fill branches could remove more, but they have measured
 sparse wins and therefore require isolated deletion benchmarks rather than
 being folded into the structural cleanup.
+
+## 2026-07-13: Delivery Frame Reader Boundary
+
+The first consolidation slice introduces a typed request and a transport-free
+`StreamDeliveryFrameReader`. It owns the fresh committed tail, adaptive storage
+read limits, raw SQLite range caches, and complete frame projections.
+`StreamSubscribers` retains lane state, selector evaluation, cursor movement,
+and delivery fencing. Selector-result memoization moved from a mutable property
+on the reader projection to a subscriber-owned `WeakMap`, so the reader no
+longer depends on compiled selectors.
+
+This is an ownership improvement, not yet a line-count reduction:
+`stream-subscribers.ts` falls from 2,287 to 1,962 lines, while the new focused
+module is 381 lines, for a combined 2,343 (`+56`). The next structural slice
+must unify the still-parallel frame/projection views and cache admission before
+the consolidation can claim a source-size win.
+
+All 358 Stream-domain tests pass. Five alternating full benchmark rounds per
+revision compared the working tree with exact pre-refactor commit `002f266b6`.
+Their equal-workload p50 geometric mean was 2.4% slower, but unrelated append
+paths varied by up to 27%, making that run too noisy to attribute. Four
+additional alternating rounds used 1,000 host-timed samples per reader-sensitive
+path (4,000 samples per side):
+
+| Path                        | Median-of-round p50 |   Pooled p95 |
+| --------------------------- | ------------------: | -----------: |
+| Sparse read, 20 of 2,000    |         0.1% slower |  8.9% faster |
+| Latest sparse match         |         2.8% faster | 15.1% faster |
+| Live delivery, 1 subscriber |         6.9% faster |  6.5% faster |
+
+The result is neutral-to-positive on the directly affected paths, so the
+boundary is retained without claiming a new cumulative speedup. Host timers
+enclosed each awaited RPC or observed delivery; all workload result assertions
+passed. Raw records are in `/tmp/frame-reader-{candidate,baseline}-{1..5}.log`
+and `/tmp/frame-reader-tail-{candidate,baseline}-{1..4}.log` for the life of
+this workstation.
