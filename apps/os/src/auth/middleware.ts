@@ -175,7 +175,6 @@ async function authenticateSession(input: {
     logAuthSessionVerificationFailure({
       context: input.context,
       error: authError,
-      request: input.request,
     });
   }
 
@@ -200,7 +199,6 @@ async function authenticateBearerPrincipal(input: {
 function logAuthSessionVerificationFailure(input: {
   context: Pick<RequestContext, "config" | "log">;
   error: AuthenticateErrorEvent;
-  request: Request;
 }) {
   const details = {
     reason: diagnosticIdentifier(input.error.reason) ?? "unknown",
@@ -213,7 +211,6 @@ function logAuthSessionVerificationFailure(input: {
       ?.map((key) => diagnosticIdentifier(key.kid))
       .filter((kid) => kid !== undefined)
       .slice(0, 20),
-    sessionCookie: summarizeSessionCookie(input.request.headers),
   };
 
   input.context.log.warn("os.auth.session_verification_failed", {
@@ -224,50 +221,4 @@ function logAuthSessionVerificationFailure(input: {
 function diagnosticIdentifier(value: unknown) {
   if (typeof value !== "string") return undefined;
   return /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/u.test(value) ? value : undefined;
-}
-
-function summarizeSessionCookie(headers: Headers) {
-  const cookieValue = extractCookie(headers.get("cookie") ?? "", "iterate_session");
-  if (!cookieValue) return { present: false };
-
-  try {
-    const tokenSet = JSON.parse(decodeURIComponent(cookieValue)) as {
-      accessToken?: unknown;
-      idToken?: unknown;
-    };
-    return {
-      present: true,
-      parseable: true,
-      accessTokenKid: diagnosticIdentifier(jwtHeaderKid(tokenSet.accessToken)),
-      idTokenKid: diagnosticIdentifier(jwtHeaderKid(tokenSet.idToken)),
-    };
-  } catch {
-    return { present: true, parseable: false };
-  }
-}
-
-function extractCookie(cookieHeader: string, name: string) {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const match = new RegExp(`(?:^|;\\s*)${escapedName}=([^;]*)`, "u").exec(cookieHeader);
-  return match?.[1] ?? null;
-}
-
-function jwtHeaderKid(token: unknown) {
-  if (typeof token !== "string") return null;
-  const encodedHeader = token.split(".", 1)[0];
-  if (!encodedHeader) return null;
-
-  try {
-    const header = JSON.parse(base64UrlDecode(encodedHeader)) as { kid?: unknown };
-    return typeof header.kid === "string" ? header.kid : null;
-  } catch {
-    return null;
-  }
-}
-
-function base64UrlDecode(value: string) {
-  const padded = `${value.replace(/-/gu, "+").replace(/_/gu, "/")}${"=".repeat(
-    (4 - (value.length % 4)) % 4,
-  )}`;
-  return atob(padded);
 }

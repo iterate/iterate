@@ -17,8 +17,8 @@ Traffic is dispatched on hostname and path:
 2. The MCP hostname (`mcp.iterate.com`) rewrites to the app's `/api/mcp`
    route.
 3. Everything else on the OS host lands on the TanStack Start dashboard
-   (SSR, server functions, assets) wrapped in one evlog "wide event" per
-   request.
+   (SSR, server functions, assets) wrapped in one typed operation-wide event
+   per request.
 
 The routing decision is one shared function (`src/ingress.ts`). Runtime
 config is parsed from `env` per request, never at module scope — isolates
@@ -162,7 +162,6 @@ APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET=...
 APP_CONFIG_ADMIN_API_SECRET=...
 APP_CONFIG_OPEN_AI_API_KEY=...
 APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate.app"]
-APP_CONFIG_LOGS__STDOUT_FORMAT=pretty
 ```
 
 Fields marked `redacted(...)` in the schema parse into `Redacted` wrappers

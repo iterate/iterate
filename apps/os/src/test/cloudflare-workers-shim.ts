@@ -10,10 +10,30 @@ export class RpcStub {}
 export class RpcPromise {}
 export class RpcProperty {}
 export class ServiceStub {}
+export const env = {};
+
+export type RecordedSpan = {
+  attributes: Record<string, unknown>;
+  name: string;
+};
+
+export const recordedSpans: RecordedSpan[] = [];
+
+export function resetRecordedSpans() {
+  recordedSpans.length = 0;
+}
 
 export const tracing = {
   enterSpan: <T>(
-    _name: string,
+    name: string,
     callback: (span: { setAttribute(name: string, value: unknown): void }) => T,
-  ): T => callback({ setAttribute: () => undefined }),
+  ): T => {
+    const record: RecordedSpan = { attributes: {}, name };
+    recordedSpans.push(record);
+    return callback({
+      setAttribute: (attribute, value) => {
+        record.attributes[attribute] = value;
+      },
+    });
+  },
 };

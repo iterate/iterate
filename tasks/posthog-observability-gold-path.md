@@ -111,6 +111,26 @@ Do not invent fake IDs. Emitting the structured event while the custom span is
 active gives Cloudflare the native association; shared application IDs provide
 cross-product search.
 
+### Historical `stubStub` assessment
+
+Misha's late-2025 `stubStub` work ([#465](https://github.com/iterate/iterate/pull/465),
+[#475](https://github.com/iterate/iterate/pull/475),
+[#602](https://github.com/iterate/iterate/pull/602), and
+[#603](https://github.com/iterate/iterate/pull/603); later extracted as
+[`mmkal/workert#1`](https://github.com/mmkal/workert/pull/1)) proxied Worker RPC
+through a generic `callMethod` operation. It carried logger tags across the
+boundary and later combined remote and caller stacks. Its apparent accumulated
+log replay was test-only, not the production design.
+
+Do not restore that wrapper. Current Cloudflare tracing propagates across
+Workers RPC and Durable Objects, while the Cap'n Web `onCall` hook supplies the
+missing logical boundary for ITX. `stubStub` would hide the native RPC method,
+turn remote throws into successful result envelopes, add reflective dispatch,
+and require both ends to keep using its private protocol. The remaining useful
+idea is stack continuity: prove one deliberate Worker-to-DO failure in preview,
+then add an error-only boundary helper only if the caller-facing stack is
+materially inadequate. Successful calls must stay on native RPC.
+
 ## Cloudflare log contract
 
 The target is one structured object per completed operation:
@@ -174,6 +194,11 @@ For an unexpected browser or Worker failure an operator should be able to:
   edge timeout. PostHog failure cannot fail the request/RPC.
 - Expected 4xx, validation, cancellation, deliberate WebSocket close, and normal
   reconnect are outcomes rather than exceptions.
+- Generic thrown values remain unexpected errors. Treating a failure as
+  expected requires a trusted typed domain classification at the operation
+  boundary; never infer it from attacker-controlled messages, names, or status
+  text. That classifier is follow-on work rather than a compatibility shim in
+  the logger.
 - Use automatic grouping first. Add a fingerprint only for a demonstrated
   grouping defect; never include request/user/project/call IDs in one.
 

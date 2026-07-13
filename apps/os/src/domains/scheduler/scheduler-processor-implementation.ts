@@ -359,6 +359,7 @@ export class SchedulerProcessor extends StreamProcessor<
           ],
           path: ["run"],
           ref: scheduleActionWorkerRef(entry.action.script),
+          traceRole: "scheduler_action",
         });
         outcome = {
           definedAtOffset: entry.definedAtOffset,

@@ -94,6 +94,43 @@ describe("wide logs", () => {
   it("rejects logging outside an operation", () => {
     expect(() => wideLogger.info("orphan")).toThrow("outside runWideLog");
   });
+
+  it("deterministically ignores ambient mutations after finalization", async () => {
+    const events = captureLogs();
+    let releaseLateLog!: () => void;
+    const lateLog = new Promise<void>((resolve) => {
+      releaseLateLog = resolve;
+    });
+    let background!: Promise<void>;
+
+    await runWideLog({ kind: "test" }, async () => {
+      background = lateLog.then(() => wideLogger.info("late"));
+    });
+
+    releaseLateLog();
+    await expect(background).resolves.toBeUndefined();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.messages).toBeUndefined();
+  });
+
+  it("lets late background work open an explicit child of the finalized operation", async () => {
+    const events = captureLogs();
+    let releaseChild!: () => void;
+    const startChild = new Promise<void>((resolve) => {
+      releaseChild = resolve;
+    });
+    let background!: Promise<void>;
+
+    await runWideLog({ kind: "parent" }, async () => {
+      background = startChild.then(() => runWideLog({ kind: "background_child" }, async () => {}));
+    });
+
+    releaseChild();
+    await background;
+    const parent = events.find((event) => event.log.kind === "parent")!;
+    const child = events.find((event) => event.log.kind === "background_child")!;
+    expect(child.log.parentId).toBe(parent.log.id);
+  });
 });
 
 describe("HTTP operation logs", () => {

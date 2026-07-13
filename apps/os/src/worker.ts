@@ -214,6 +214,7 @@ async function apiFetch(
         buildBudgetMs: PROJECT_HOST_BUILD_BUDGET_MS,
         ref,
         request: new Request(route.fetch.url, init),
+        traceRole: "project_config",
       });
     } catch (error) {
       // A cold build (first use after a commit) shows a refreshing "building"

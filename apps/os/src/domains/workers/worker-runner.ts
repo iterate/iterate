@@ -21,6 +21,8 @@ import {
   type WorkerBindings,
 } from "./worker-loader.ts";
 
+export type DynamicWorkerTraceRole = "project_config" | "run_script" | "scheduler_action";
+
 // Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
 // of the DO's own type: the DO imports this module (cycle), and a typed
 // DurableObjectStub of it deep-instantiates the stub's self-referential type
@@ -138,13 +140,15 @@ export class DynamicWorkerRunner {
     buildBudgetMs,
     ref,
     request,
+    traceRole,
   }: {
     /** Give up on a cold build after this long (see resolveWorkerSource). */
     buildBudgetMs?: number;
     ref: DynamicWorkerRef;
     request: Request;
+    traceRole?: DynamicWorkerTraceRole;
   }): Promise<Response> {
-    return this.#trace(ref, "fetch", async (span) => {
+    return this.#trace(ref, "fetch", traceRole, async (span) => {
       const response =
         ref.type === "stateful"
           ? await (
@@ -164,6 +168,7 @@ export class DynamicWorkerRunner {
     flattenNestedPath = false,
     path,
     ref,
+    traceRole,
   }: {
     args?: unknown[];
     /** Give up on a cold build after this long (see resolveWorkerSource). */
@@ -171,6 +176,7 @@ export class DynamicWorkerRunner {
     flattenNestedPath?: boolean;
     path: string[];
     ref: DynamicWorkerRef;
+    traceRole?: DynamicWorkerTraceRole;
   }): Promise<unknown> {
     // Capability dispatch is method calls; no name is protocol-special here,
     // `fetch` included (see docs/dynamic-worker-dispatch.md). A WebSocket
@@ -189,7 +195,7 @@ export class DynamicWorkerRunner {
       );
     }
 
-    return this.#trace(ref, "call", async () => {
+    return this.#trace(ref, "call", traceRole, async () => {
       if (ref.type === "stateful") {
         // Method replay must happen inside StatefulWorkerDurableObject. Returning
         // a dynamic facet stub through one DO and then invoking it from another RPC
@@ -253,11 +259,14 @@ export class DynamicWorkerRunner {
   #trace<T>(
     ref: DynamicWorkerRef,
     operation: "call" | "fetch",
+    traceRole: DynamicWorkerTraceRole | undefined,
     callback: (span: {
       setAttribute(name: string, value: boolean | number | string): void;
     }) => Promise<T>,
   ): Promise<T> {
-    return tracing.enterSpan(`dynamic_worker.${operation}`, async (span) => {
+    const kind = traceRole ?? (ref.type === "stateful" ? "stateful" : ref.source.files.type);
+    return tracing.enterSpan(`dynamic_worker.${kind}.${operation}`, async (span) => {
+      span.setAttribute("iterate.worker.kind", kind);
       span.setAttribute("iterate.worker.operation", operation);
       span.setAttribute("iterate.worker.source", ref.source.files.type);
       span.setAttribute("iterate.worker.type", ref.type);

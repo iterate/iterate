@@ -12,13 +12,6 @@ const semanticValue = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/;
  */
 export const MAX_WIDE_LOG_BYTES = 4 * 1_024;
 
-type SessionCookieLog = {
-  present: boolean;
-  parseable?: boolean;
-  accessTokenKid?: string;
-  idTokenKid?: string;
-};
-
 export type WideLogFields = {
   auth?: {
     sessionVerificationFailure: {
@@ -27,7 +20,6 @@ export type WideLogFields = {
       issuerHost?: string;
       clientId?: string;
       jwksKeyIds?: string[];
-      sessionCookie: SessionCookieLog;
     };
   };
   ingress?: {
@@ -68,6 +60,7 @@ export type WideLogEvent = WideLogFields & {
 
 type WideLogStore = {
   event: WideLogEvent;
+  finalized: boolean;
   startedAt: number;
 };
 
@@ -87,6 +80,13 @@ function currentStore(action: string): WideLogStore {
   return store;
 }
 
+function mutableStore(action: string): WideLogStore | undefined {
+  const store = currentStore(action);
+  // Async resources retain ALS context after the operation ends. A completed
+  // event is immutable; background work must open its own runWideLog child.
+  return store.finalized ? undefined : store;
+}
+
 function safeSemanticValue(value: string, fallback: string) {
   return semanticValue.test(value) ? value : fallback;
 }
@@ -101,12 +101,14 @@ function serializeError(error: unknown, depth = 0, seen = new Set<Error>()): Wid
 }
 
 function setFields(fields: WideLogFields) {
-  Object.assign(currentStore("set").event, fields);
+  const store = mutableStore("set");
+  if (store) Object.assign(store.event, fields);
 }
 
 function appendMessage(level: "info" | "warn", message: string, fields?: WideLogFields) {
-  const store = currentStore(level);
-  if (fields) setFields(fields);
+  const store = mutableStore(level);
+  if (!store) return;
+  if (fields) Object.assign(store.event, fields);
   const messages = store.event.messages ?? [];
   if (messages.length >= MAX_MESSAGES) {
     store.event.dropped = {
@@ -127,7 +129,8 @@ export const wideLogger: WideLogger = {
   id: () => currentStore("id").event.log.id,
   set: setFields,
   setOutcome: (outcome) => {
-    currentStore("setOutcome").event.outcome = safeSemanticValue(outcome, "unknown");
+    const store = mutableStore("setOutcome");
+    if (store) store.event.outcome = safeSemanticValue(outcome, "unknown");
   },
   info: (message, fields) => appendMessage("info", message, fields),
   warn: (message, fields) => appendMessage("warn", message, fields),
@@ -187,6 +190,7 @@ export async function runWideLog<T>(
       outcome: "unknown",
       ...options.fields,
     },
+    finalized: false,
     startedAt,
   };
 
@@ -203,6 +207,7 @@ export async function runWideLog<T>(
       const endedAt = Date.now();
       store.event.log.end = new Date(endedAt).toISOString();
       store.event.log.durationMs = Math.max(0, endedAt - startedAt);
+      store.finalized = true;
       emit(store);
     }
   });

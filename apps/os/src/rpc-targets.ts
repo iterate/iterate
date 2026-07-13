@@ -295,7 +295,10 @@ import type {
   WorkspaceGitLogEntry,
   WorkspacePublishResult,
 } from "./domains/workspaces/types.ts";
-import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
+import {
+  DynamicWorkerRunner,
+  type DynamicWorkerTraceRole,
+} from "./domains/workers/worker-runner.ts";
 import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
 import {
   buildProjectEmailMessage,
@@ -3850,6 +3853,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   readonly #flattenNestedPaths: boolean;
   readonly #props: { ctx: CfExecutionContext; projectId: string };
   readonly #ref: DynamicWorkerRef;
+  readonly #traceRole: DynamicWorkerTraceRole | undefined;
   #lazyRunner: DynamicWorkerRunner | undefined;
 
   constructor(props: {
@@ -3858,12 +3862,14 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
+    traceRole?: DynamicWorkerTraceRole;
   }) {
     super();
     this.#buildBudgetMs = props.buildBudgetMs;
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
+    this.#traceRole = props.traceRole;
   }
 
   // Lazy: __describe answers from the ref alone and must not mint loopback
@@ -3946,6 +3952,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       flattenNestedPath,
       path,
       ref: this.#ref,
+      traceRole: this.#traceRole,
     });
   }
 
@@ -4982,9 +4989,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.
    */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
-    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
+    return new DynamicWorkerRpcTarget({
+      ctx: this.#props.ctx,
       flattenNestedPaths: true,
-    });
+      projectId: this.#props.projectId,
+      ref: defaultProjectWorkerRef(),
+      traceRole: "project_config",
+    }) as unknown as DynamicWorkerCapability<ProjectWorker>;
   }
 }
 

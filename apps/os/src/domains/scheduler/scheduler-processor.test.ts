@@ -364,6 +364,7 @@ describe("triggering", () => {
     expect(invokeCapability).toHaveBeenCalledTimes(1);
     const call = vi.mocked(invokeCapability).mock.calls[0]![0];
     expect(call.path).toEqual(["run"]);
+    expect(call.traceRole).toBe("scheduler_action");
     expect(
       (call.ref as { source: { files: { files: Record<string, string> } } }).source.files.files[
         "main.js"

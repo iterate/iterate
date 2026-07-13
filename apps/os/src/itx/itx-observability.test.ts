@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { newMessagePortRpcSession, RpcTarget } from "capnweb";
 import type { WideLogEvent } from "../observability/wide-log.ts";
+import { recordedSpans, resetRecordedSpans } from "../test/cloudflare-workers-shim.ts";
 import { createItxRpcSessionOptions, itxRpcMethod } from "./itx-observability.ts";
 
 afterEach(() => {
+  resetRecordedSpans();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -63,6 +65,19 @@ describe("ITX observability", () => {
       },
     });
     expect(Reflect.get(events[0]!.itx as object, "callId")).toBe(events[0]!.log.id);
+    expect(recordedSpans).toEqual([
+      {
+        name: "itx Projects.get",
+        attributes: {
+          "itx.call.id": events[0]!.log.id,
+          "itx.outcome": "ok",
+          "itx.session.id": "itx_session_test",
+          "itx.transport": "websocket",
+          "rpc.method": "Projects.get",
+          "rpc.system": "capnweb",
+        },
+      },
+    ]);
   });
 
   it("records and rethrows the original RPC error without serializing its message", async () => {
@@ -89,6 +104,10 @@ describe("ITX observability", () => {
       error: { name: "Error" },
     });
     expect(JSON.stringify(events[0])).not.toContain("private customer prompt");
+    expect(recordedSpans[0]).toMatchObject({
+      name: "itx Object.call",
+      attributes: { "itx.outcome": "error" },
+    });
   });
 
   it("wraps direct and promise-pipelined calls once through a real message transport", async () => {

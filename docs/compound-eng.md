@@ -6,11 +6,15 @@ It should be able to suggest improvements, fix errors, improve performance etc. 
 
 # Logging
 
-Every log should use https://www.evlog.dev/
+Every operation should emit one typed, bounded structured event with exactly
+the information needed. The implementation is app-local: OS uses its
+operation-wide logger, while apps that still use evlog follow the same event
+contract.
 
-This means: each request should emit ONE log line with exactly the information needed.
-
-Lines should include at least, fine & coarse timings, any errors or warnings, and if http, the status, method and path.
+Cloudflare's native request event owns HTTP method, URL, and status. Application
+events should add only safe domain facts, fine and coarse timings, warnings,
+errors, and a derived outcome; they should not duplicate a potentially
+sensitive URL or query string.
 
 We should avoid doing the spread operator when doing logs so we don't accidentally log too much (secrets, confidential info etc.).
 
@@ -54,7 +58,9 @@ Task flow:
 
 Its job is to ensure the long-term health of the codebase. It should be methodical and correct. It is okay if it is slow. It should put more focus on more recent changes but consider the whole codebase.
 
-Its first priority is always observability — making sure logs exist, follow evlog, and contain enough information to diagnose problems. You cannot fix what you cannot see.
+Its first priority is always observability — making sure operation events exist,
+are bounded and safe, and contain enough information to diagnose problems. You
+cannot fix what you cannot see.
 
 Task updates should happen alongside this, not instead of it.
 
