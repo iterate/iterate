@@ -182,7 +182,7 @@ the OS binding and intentionally perform no second user authorization step.
   `src/server/platform-admin.ts`.
 - **Organizations & projects** live in auth's D1 and are the durable source of
   truth. OS keeps per-environment rows and re-adopts from auth after a reset;
-  `src/server/project-slugs.ts` documents the adoption/conflict rules (same
+  `src/server/project-directory.ts` implements the adoption/conflict rules (same
   slug + same org = adopt; same slug + other org = conflict; slugs never get
   random suffixes so OS can recreate the exact slug).
 - **Tokens** carry Iterate's custom claims (orgs, projects, admin flag),
