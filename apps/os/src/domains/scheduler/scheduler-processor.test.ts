@@ -286,7 +286,7 @@ describe("SchedulerProcessor reduce", () => {
 });
 
 describe("triggering", () => {
-  it("traces the complete background Schedule Action without blocking delivery", async () => {
+  it("traces the action invocation without blocking delivery", async () => {
     resetRecordedSpans();
     let finishAction!: () => void;
     const actionFinished = new Promise<void>((resolve) => {
@@ -294,7 +294,7 @@ describe("triggering", () => {
     });
     const harness = makeHarness({
       invokeCapability: async () => {
-        expect([...activeSpans].map((span) => span.name)).toContain("scheduler action attempt");
+        expect([...activeSpans].map((span) => span.name)).toContain("scheduler action invocation");
         await actionFinished;
       },
     });
@@ -306,18 +306,21 @@ describe("triggering", () => {
     await processor.triggerDue();
     await deliver();
 
-    const attempt = recordedSpans.find((span) => span.name === "scheduler action attempt");
-    expect(attempt).toMatchObject({
+    const invocation = recordedSpans.find((span) => span.name === "scheduler action invocation");
+    expect(invocation).toMatchObject({
       attributes: { "iterate.scheduler.execution_id": expect.any(String) },
     });
-    expect(activeSpans.has(attempt!)).toBe(true);
+    expect(activeSpans.has(invocation!)).toBe(true);
     await expect(processor.getRuntimeState()).resolves.toMatchObject({
       runtime: { inflightExecutions: [expect.any(String)] },
     });
 
     finishAction();
     await waitForCompletion(harness);
-    expect(activeSpans.has(attempt!)).toBe(false);
+    expect(activeSpans.has(invocation!)).toBe(false);
+    expect(invocation).toMatchObject({
+      attributes: { "iterate.scheduler.action_outcome": "succeeded" },
+    });
   });
 
   it("requests due schedules with incarnation-scoped idempotency keys and advances the clock", async () => {
@@ -472,6 +475,7 @@ describe("triggering", () => {
   });
 
   it("records a throwing script as outcome=failed and keeps the recurrence alive", async () => {
+    resetRecordedSpans();
     const harness = makeHarness({
       invokeCapability: async () => {
         throw new Error("script exploded");
@@ -489,6 +493,9 @@ describe("triggering", () => {
       error: "script exploded",
       outcome: "failed",
     });
+    expect(recordedSpans.find((span) => span.name === "scheduler action invocation")).toMatchObject(
+      { attributes: { "iterate.scheduler.action_outcome": "failed" } },
+    );
     // Failure does not retry and does not kill the schedule: next occurrence stands.
     expect(processor.state.schedules["report"]!.nextTriggerAt).toBe(clock.now + 60_000);
   });
@@ -508,6 +515,11 @@ describe("triggering", () => {
     await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledTimes(1));
     expect(stream.events.filter((e) => e.type === COMPLETED_TYPE)).toHaveLength(0);
     await vi.waitFor(() => expect(Object.keys(processor.state.pendingTriggers)).toHaveLength(1));
+    await vi.waitFor(async () => {
+      await expect(processor.getRuntimeState()).resolves.toMatchObject({
+        runtime: { inflightExecutions: [] },
+      });
+    });
 
     // Next wake: the sweep re-launches (at-least-once) and the append heals.
     stream.failAppendsOfType = undefined;
@@ -735,9 +747,11 @@ describe("recovery and alarm derivation", () => {
     await processor.triggerDue();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(invocations).toBe(1);
-    const attempts = recordedSpans.filter((span) => span.name === "scheduler action attempt");
-    expect(attempts).toHaveLength(1);
-    expect(activeSpans.has(attempts[0]!)).toBe(true);
+    const invocationSpans = recordedSpans.filter(
+      (span) => span.name === "scheduler action invocation",
+    );
+    expect(invocationSpans).toHaveLength(1);
+    expect(activeSpans.has(invocationSpans[0]!)).toBe(true);
   });
 
   it("barren wakes back off exponentially instead of hot-looping at the minimum delay", async () => {

@@ -1,10 +1,11 @@
 # Integrations
 
 The unit is a **connection** at a fully qualified path:
-`/integrations/<slug>/<connection>` — `/integrations/slack/main-slack`,
-`/integrations/google/jonas`. One integration can hold many connections; there
-is no implicit or default connection — addressing something means naming it.
-The path is simultaneously the itx address, the journal home for that
+`/integrations/<provider>/<connection>` — `/integrations/slack/main-slack`,
+`/integrations/google/jonas`. One integration can hold many connections.
+Call the family's `get()` with no argument for the first connected account,
+which is the normal case; pass a connection slug when account identity matters.
+The path is simultaneously the durable address, the journal home for that
 connection's facts and routed events, and the convention root for its secrets
 (`/secrets/integrations/slack/main-slack/bot-token`). This is the platform's
 "an address is a stream coordinate" rule applied without exceptions.
@@ -14,22 +15,26 @@ connection's facts and routed events, and the convention root for its secrets
 `itx.integrations` is a collection, like `itx.secrets` and `itx.streams`:
 
 ```ts
-await itx.integrations.slack["main-slack"].chat.postMessage({ channel, thread_ts, text });
-await itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" });
-await itx.integrations.github["install-123"].octokit.rest.repos.get({ owner, repo });
+await itx.integrations.slack.get().chat.postMessage({ channel, thread_ts, text });
+await itx.integrations.gmail.get().request({ path: "/users/me/messages" });
+await itx.integrations.github.get().octokit.rest.repos.get({ owner, repo });
+await itx.integrations.github.get("install-123").octokit.graphql(query, variables);
 await itx.integrations.list(); // every connection, built-in and provided
 ```
 
-Two kinds of member, one address space — every dotted call is
-`{slug}.{connection}.{...method}`:
+Two kinds of member, one address space — every connection call is
+`{slug}.get(connection?).{...method}`:
 
-- **Built-in slugs are dispatch branches** (`slack`, `google`, `github`,
-  `telegram`) in the
+- **Built-in public families are dispatch branches** (`slack`, `gmail`,
+  `github`, `telegram`, `waitrose`) in the
   collection's `invokeCapability` — plain imperative branches whose code ships
-  with the OS deployment. Not classes: their only callers are untyped dotted
-  scripts, so a typed per-provider class ladder bought nothing (an earlier cut
-  had one; it was deleted). `BUILTIN_INTEGRATION_SLUGS` is the single constant
-  the dispatch, `list()`'s labeling, and the mount collision guard all share.
+  with the OS deployment. Gmail's public name maps to the `google` OAuth
+  provider and durable connection path. Data calls and `list()` use `gmail`;
+  connection-management verbs such as `startOAuthFlow` intentionally still
+  take `provider: "google"`. `list()` reports `integration: "gmail"`
+  while retaining the internal `/integrations/google/...` journal path.
+  `BUILTIN_INTEGRATION_SLUGS` names internal providers for lifecycle and
+  mount-collision checks.
 - **Everything else resolves through the ordinary itx capability table** under
   the `integrations` prefix. A project adds its own integration with
   `provideCapability({ path: ["integrations", ...] })` — **data, not
@@ -39,8 +44,8 @@ Two kinds of member, one address space — every dotted call is
   at provide time — the dispatch would shadow it, making the mount durable,
   journaled, and silently unreachable.
 
-The old `itx.slack` / `itx.gmail` builtins are deleted; they were the
-un-nameable single-connection special case this model removes.
+The old top-level `itx.slack` / `itx.gmail` builtins are deleted; connection
+families now live under `itx.integrations`.
 
 ## Three dimensions, three properties
 
@@ -62,7 +67,7 @@ things — none of them needs a framework:
    split above. Promotion path for a provided integration: reimplement it as a
    named getter (a PR to OS); its addresses don't change.
 
-## Built-in connections (slack, google)
+## Built-in connections (Slack and Gmail/Google)
 
 A Slack connection is born at OAuth completion: the callback derives the
 connection name from the workspace domain (deterministic — reconnecting the
@@ -96,14 +101,16 @@ per-provider mechanism: `getConnection` pages backwards from the journal head
 (connected/disconnected). Nothing snapshots a processor: the slack router's
 whole state is its `channel:thread_ts → streamPath` routing table.
 
-**`list()` = journals ∪ mounts, deduped by path.** Every
+**`list()` = journals ∪ credential-defined connections ∪ mounts, deduped by path.** Every
 `/integrations/<slug>/<connection>` stream in the project's catalogue is one
-entry (`source: "builtin"` for slack/google, `"provided"` otherwise — the path
-shape is the truth, deliberately not filtered), plus every capability-table
+entry (`source: "builtin"` for Slack/Gmail, `"provided"` otherwise; Gmail is
+reported by its public name even though its path contains `google`), plus every capability-table
 mount under `integrations` (`connection: null` for an integration-level
-mount). A provided integration whose webhooks journal at the same path as its
-mount is one entry. Journals persist after disconnect, so entries carry a
-status, not existence: the dashboard counts `status.connected`.
+mount). Waitrose session-secret paths contribute its credential-defined
+connections because it intentionally has no lifecycle journal. A provided
+integration whose webhooks journal at the same path as its mount is one entry.
+Journals persist after disconnect, so entries carry a status, not existence:
+the dashboard counts `status.connected`.
 
 Management verbs live on the collection: `getConnection` and `disconnect`
 are connection-scoped; `startOAuthFlow({ provider, userId })` and the
@@ -119,7 +126,7 @@ exactly one confined home, never onto journals.
 ## Waitrose: the credentials-not-OAuth builtin
 
 Waitrose is a built-in like the others —
-`itx.integrations.waitrose["<connection>"].<method>(...)` dispatches in
+`itx.integrations.waitrose.get().<method>(...)` dispatches in
 deployment code over the vendored client
 (`domains/integrations/waitrose-api.ts`: the reverse-engineered Android app's
 operations — its GraphQL gateway rejects hand-slimmed selections, so the
@@ -138,8 +145,8 @@ await itx.secrets.get("/secrets/integrations/waitrose/mum/session").update({
 ```
 
 ```ts
-await itx.integrations.waitrose.mum.shoppingContext();
-await itx.integrations.waitrose.mum.searchProducts("milk", { size: 5 });
+await itx.integrations.waitrose.get("mum").shoppingContext();
+await itx.integrations.waitrose.get("mum").searchProducts("milk", { size: 5 });
 ```
 
 The connection secret holds only `{ username, password }` plus the
@@ -169,7 +176,7 @@ repo — no platform change needed. Two shapes:
   project's repo first, then calls the new surface.
 
 - **A collection mount.** For providers a project wants addressed like a
-  built-in — `itx.integrations.<slug>.<connection>.<method>()` —
+  built-in — `itx.integrations.<slug>.get(<connection>).<method>()` —
   `provideCapability({ path: ["integrations", "<slug>"], type:
 "itx-expression", flattenNestedPaths: true })` mounts any expression (a
   standalone dynamic worker, an MCP connection, …) into the collection; the
@@ -202,7 +209,7 @@ GitHub connects as a **GitHub App installation** (deep-link to
   `APP_CONFIG_INTEGRATIONS__GITHUB` at mint time), `github/connected` on the
   journal, `installation_id` claimed in the directory. One exchange half +
   one `recordConnection` call — the shape every provider pays.
-- **API calls**: `itx.integrations.github["<connection>"].octokit` is a real
+- **API calls**: `itx.integrations.github.get().octokit` is a real
   wrapped Octokit (`rest.*`, `request(...)`, `graphql(...)`, `paginate(...)`).
   The `.octokit` namespace is mandatory: it makes the SDK boundary explicit
   and a direct `.rest` on the connection is rejected. Its transport carries a
@@ -249,7 +256,7 @@ the redirect machinery:
   `recordConnection` does the rest: token in the connection secret (egress
   pinned to `https://api.telegram.org`), `telegram/connected` on the journal,
   router armed, bot id claimed. Connection named from the bot username.
-- **API calls**: `itx.integrations.telegram["<connection>"].<method>(params)`
+- **API calls**: `itx.integrations.telegram.get().<method>(params)`
   — the Bot API is flat, so exactly one method segment with one params object
   (`sendMessage`, `sendPhoto`, `getMe`, …). The Bot API authenticates in the
   **URL path** (`/bot<token>/<method>`), which is why secret substitution
@@ -287,8 +294,9 @@ the redirect machinery:
   would be a second un-shreddable durable home, and an interactive OAuth
   callback must not block on a cold cross-DO wake chain. The invariance lives
   in `recordConnection(...)`, a plain function.
-- **Implicit/default connections.** `itx.integrations.slack.chat.postMessage`
-  is an error that tells you to name a connection, not a guess.
+- **Property-name connection selection.** `itx.integrations.slack.main` and
+  `itx.integrations.slack["main"]` are errors. `get()` is the only selector:
+  no argument chooses the first connected account; a slug chooses an exact one.
 - **Webhook signature verification in project workers** — worker code cannot
   hold the HMAC secret (substitution is egress-headers/path-only); capability-URL
   tokens are the workaround. The userspace verification story returns with the

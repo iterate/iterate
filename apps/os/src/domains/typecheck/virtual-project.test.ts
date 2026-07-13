@@ -2,9 +2,11 @@
 // sidecar ships) against the assembled virtual project, so "the platform
 // surface compiles clean under the sidecar's lib + shims" is a tested
 // invariant, not a hope. Network is stubbed: acquisitions serve from an
-// in-memory fake registry, and checks that mention no npm package must not
-// fetch at all (the platform surface's own docstrings mention npm imports —
-// only CODE may trigger acquisition).
+// in-memory fake registry. The published surface deliberately imports the
+// exact Octokit type, while the resource-bounded Worker sidecar substitutes
+// its structural RPC-safe entry points so unrelated scripts do not eagerly
+// load that large package graph. Explicit user imports still acquire the
+// pinned package; names that appear only in comments still must not fetch.
 import { createCompiler } from "tswasm";
 import { beforeAll, expect, test } from "vitest";
 import type { CapabilityDescription } from "../itx/describe.ts";
@@ -34,10 +36,55 @@ beforeAll(async () => {
   };
 });
 
-/** A tiny in-memory jsdelivr: exactly one package, `fake-pets`, with one
- * exported type — enough to prove acquisition end to end without network. */
+/** A tiny in-memory jsdelivr: the platform's Octokit declaration plus the
+ * `fake-pets` fixture used by npm-backed mount tests. */
 async function fakeRegistryFetch(url: string): Promise<Response> {
   fetchedUrls.push(url);
+  if (url.includes("/package/resolve/npm/@types/node")) {
+    return Response.json({ version: "22.19.13" });
+  }
+  if (url.includes("/package/npm/@types/node@22.19.13/flat")) {
+    return Response.json({
+      default: "/index.d.ts",
+      files: [
+        { name: "/package.json", size: 1 },
+        { name: "/index.d.ts", size: 1 },
+      ],
+    });
+  }
+  if (url.endsWith("@types/node@22.19.13/package.json")) {
+    return new Response(JSON.stringify({ name: "@types/node", types: "index.d.ts" }));
+  }
+  if (url.endsWith("@types/node@22.19.13/index.d.ts")) {
+    return new Response('declare module "node:stream" { export class Readable {} }');
+  }
+  if (url.includes("/package/resolve/npm/octokit")) {
+    return Response.json({ version: "5.0.5" });
+  }
+  if (url.includes("/package/npm/octokit@5.0.5/flat")) {
+    return Response.json({
+      default: "/index.d.ts",
+      files: [
+        { name: "/package.json", size: 1 },
+        { name: "/index.d.ts", size: 1 },
+      ],
+    });
+  }
+  if (url.endsWith("octokit@5.0.5/package.json")) {
+    return new Response(JSON.stringify({ name: "octokit", types: "index.d.ts" }));
+  }
+  if (url.endsWith("octokit@5.0.5/index.d.ts")) {
+    return new Response(
+      [
+        "export declare class Octokit {",
+        "  rest: Record<string, Record<string, (...args: any[]) => Promise<any>>>;",
+        "  graphql<T = unknown>(query: string, variables?: Record<string, unknown>): Promise<T>;",
+        "  request(route: string, parameters?: Record<string, unknown>): Promise<any>;",
+        "  paginate(route: string, parameters?: Record<string, unknown>): Promise<any[]>;",
+        "}",
+      ].join("\n"),
+    );
+  }
   if (url.includes("/package/resolve/npm/fake-pets")) {
     return Response.json({ version: "1.0.0" });
   }
@@ -79,17 +126,33 @@ const WEATHER_MOUNT: CapabilityDescription = {
   types: "export type Forecast = { forecast(input: { city: string }): Promise<string> };",
 };
 
-test("the platform surface compiles clean under the sidecar's lib and shims, fetching nothing", async () => {
+test("the platform surface compiles clean without eagerly loading Octokit's package graph", async () => {
   fetchedUrls = [];
   const problems = await checkItxScript({
     capabilities: [],
-    code: "async (itx) => {}",
+    code: `async (itx) => {
+      const octokit = itx.integrations.github.get().octokit;
+      const [pr, viewer] = await Promise.all([
+        octokit.rest.pulls.get({ owner: "acme", repo: "widgets", pull_number: 7 }),
+        octokit.graphql<{ viewer: { login: string } }>("query { viewer { login } }")
+      ]);
+      return { pr, viewer };
+    }`,
     typechecker,
   });
   expect(problems).toEqual([]);
-  // The surface's own docstrings mention import("@slack/web-api") as an
-  // example; a fetch here would mean the npm scan reads comments.
-  expect(fetchedUrls).toEqual([]);
+  expect(fetchedUrls.some((url) => url.includes("octokit"))).toBe(false);
+  expect(fetchedUrls.some((url) => url.includes("@slack/web-api"))).toBe(false);
+});
+
+test("an explicit Octokit import still acquires the pinned upstream package", async () => {
+  fetchedUrls = [];
+  const problems = await checkCapabilityTypes({
+    typechecker,
+    types: 'export type GithubClient = import("octokit").Octokit;',
+  });
+  expect(problems).toEqual([]);
+  expect(fetchedUrls.some((url) => url.includes("octokit"))).toBe(true);
 });
 
 test("a wrong call into the typed surface is a compiler error with a did-you-mean", async () => {

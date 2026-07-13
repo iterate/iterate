@@ -142,6 +142,8 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Task system](docs/task-system.md)
 - [Task grooming](docs/tasks-grooming.md)
 - [Writing agent docs](docs/writing-agent-docs.md)
+- [Cloudflare trace queries](.agents/skills/cloudflare-traces/SKILL.md) — MCP dataset selection, correlation, and span-tree audits
+- [Debugging the OS worker](.agents/skills/debug-os-worker/SKILL.md) — ITX, agents, scheduler alarms, dynamic workers, and error lookup
 
 ### App-specific
 

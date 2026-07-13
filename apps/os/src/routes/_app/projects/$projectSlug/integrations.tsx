@@ -177,7 +177,7 @@ function ProjectIntegrationsContent() {
             entry.source === "builtin"
               ? await itx.integrations.getConnection({
                   connection: entry.connection,
-                  provider: entry.integration,
+                  provider: entry.integration === "gmail" ? "google" : entry.integration,
                 })
               : null,
         })),
@@ -191,7 +191,7 @@ function ProjectIntegrationsContent() {
       entry.source === "builtin",
   );
   const slackConnections = builtinConnections.filter((entry) => entry.integration === "slack");
-  const googleConnections = builtinConnections.filter((entry) => entry.integration === "google");
+  const googleConnections = builtinConnections.filter((entry) => entry.integration === "gmail");
   const githubConnections = builtinConnections.filter((entry) => entry.integration === "github");
   const telegramConnections = builtinConnections.filter(
     (entry) => entry.integration === "telegram",

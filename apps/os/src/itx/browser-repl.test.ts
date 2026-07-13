@@ -90,12 +90,12 @@ describe("browser Cap'n Web REPL", () => {
   test("REPL supports SDK-shaped calls through a server-side path target", async () => {
     const call = vi.fn(async (input: { args: unknown[]; path: string[] }) => input);
     const itx = {
-      integrations: { slack: new BrowserPathTarget(call) },
+      integrations: { slack: { get: () => new BrowserPathTarget(call) } },
     };
 
     await expect(
       evalBrowserReplCode({
-        code: `await itx.integrations.slack.chat.postMessage({ channel: "C123", text: "hi" })`,
+        code: `await itx.integrations.slack.get().chat.postMessage({ channel: "C123", text: "hi" })`,
         itx,
       }),
     ).resolves.toEqual({

@@ -189,9 +189,15 @@ import type {
   BuiltinIntegrationSlug,
   CompleteConnectResult,
   GmailRequestInput,
+  GithubConnection,
+  GmailConnection,
+  IntegrationFamily,
   IntegrationConnectionStatus,
   IntegrationConnectionListEntry,
   OAuthProviderSlug,
+  SlackConnection,
+  TelegramConnection,
+  WaitroseConnection,
 } from "./domains/integrations/types.ts";
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
@@ -208,6 +214,7 @@ import {
 } from "./domains/search/search-index.ts";
 import {
   narrowStreamRefToChunk,
+  normalizeSearchExcludeKinds,
   normalizeSearchSource,
   projectSearchInstanceId,
   searchFilters,
@@ -2018,6 +2025,8 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       children: {
         answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
+        ensureIndex:
+          "Ensure this project's search instance exists (idempotent; created at project birth).",
         index:
           "Add/replace one standalone document ({ kind, id, text, ref, title?, context? }) — " +
           "ref (itx expression) is required.",
@@ -2055,10 +2064,18 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
           source: input.source === undefined ? undefined : normalizeSearchSource(input.source),
           // "docs" is federated, never in the R2 corpus, so it can't be an R2
           // filter; drop it here and let #federatedDocs honour the exclusion.
-          excludeKinds: input.exclude?.filter((kind) => kind !== "docs"),
+          excludeKinds:
+            input.exclude === undefined
+              ? undefined
+              : normalizeSearchExcludeKinds(input.exclude).filter((kind) => kind !== "docs"),
         }),
-        max_num_results: input.limit,
-        match_threshold: input.scoreThreshold,
+        // Tuned for GENEROUS INCLUSION (Jonas, 2026-07-13): recall over
+        // precision — a downstream fast-LLM pass can always filter the result
+        // set in conversation context, but a hit that never surfaces is gone.
+        // Defaults beat the instance's (10 results, 0.4 threshold); explicit
+        // caller values still win.
+        max_num_results: input.limit ?? 20,
+        match_threshold: input.scoreThreshold ?? 0.2,
         // OR-mode keyword matching: dogfooding showed the default AND-mode
         // misses exact-token queries whose terms don't co-occur in one chunk;
         // hybrid rrf fusion keeps precision.
@@ -2104,7 +2121,12 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     limit?: number;
   }): Promise<SearchResultChunk[]> {
     if (input.source !== undefined) return []; // a corpus source was pinned
-    if (input.exclude?.includes("docs")) return [];
+    if (
+      input.exclude !== undefined &&
+      normalizeSearchExcludeKinds(input.exclude).includes("docs")
+    ) {
+      return [];
+    }
     const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
     const hits = await docs.search({ q: input.query });
     return hits.slice(0, Math.min(input.limit ?? 5, 5)).map((hit, index) => ({
@@ -2134,6 +2156,17 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   }
 
   /**
+   * Ensure this project's search instance exists (idempotent). The project
+   * CREATE SAGA calls this so search is warm from birth; the lazy
+   * query/index paths remain as self-heal for projects that predate it.
+   * Safe to call any time — an existing instance is a no-op.
+   */
+  async ensureIndex(): Promise<{ created: boolean }> {
+    const { created } = await ensureProjectSearchInstance(this.props.projectId);
+    return { created };
+  }
+
+  /**
    * Retrieve scored chunks matching a query, scoped to this project's own
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
@@ -2147,11 +2180,11 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    */
   async query(input: {
     q: string;
-    /** Max chunks to return (1–50). */
+    /** Max chunks to return (1–50, default 20 — tuned for recall). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1). */
+    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
     scoreThreshold?: number;
     /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
     source?: string;
@@ -2617,7 +2650,7 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
 
 /**
  * The `__describe()` answer for one built-in connection node
- * (`itx.integrations.<slug>["<connection>"]`). The SDK proxies replay dotted
+ * (`itx.integrations.<slug>.get("<connection>")`). The SDK proxies replay dotted
  * paths onto a real vendor SDK, so there is no member map to reflect — the
  * description states what the node IS, one working example, and the calling
  * grammar: exactly what a scripting agent needs to shape its next call.
@@ -2632,7 +2665,7 @@ function describeConnectionSdk(input: {
 }) {
   return describeNode({
     instructions: [
-      `itx.integrations.${input.slug}[${JSON.stringify(input.connection)}] is ${input.sdk}.`,
+      `itx.integrations.${input.slug}.get(${JSON.stringify(input.connection)}) is ${input.sdk}.`,
       `Example: ${input.example}`,
       input.grammar,
     ].join("\n"),
@@ -2641,15 +2674,74 @@ function describeConnectionSdk(input: {
   });
 }
 
+/** A genuine RpcTarget for one selected connection. Keeping this as a real
+ * target (instead of returning a function Proxy) makes
+ * `integrations.github.get().octokit...` pipelinable through Cap'n Web. The
+ * connection lookup is deferred until the first SDK call, so `get()` itself
+ * stays synchronous even when it must discover the first connected account. */
+class IntegrationConnectionRpcTarget extends RpcTarget {
+  #resolvedConnection: Promise<string | null> | undefined;
+
+  constructor(
+    readonly props: {
+      connection?: string;
+      invoke(input: {
+        args: unknown[];
+        connection: string | null;
+        method: string[];
+        slug: string;
+      }): Promise<unknown>;
+      resolve(connection: string | undefined, slug: string): Promise<string | null>;
+      slug: string;
+    },
+  ) {
+    super();
+  }
+
+  async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    this.#resolvedConnection ??= this.props.resolve(this.props.connection, this.props.slug);
+    return await this.props.invoke({
+      args: call.args ?? [],
+      connection: await this.#resolvedConnection,
+      method: call.path,
+      slug: this.props.slug,
+    });
+  }
+}
+
+/** One integration family. `get(connection?)` is the only connection selector;
+ * old bracket/property connection names intentionally are not supported. */
+class IntegrationFamilyRpcTarget extends RpcTarget {
+  constructor(readonly props: ConstructorParameters<typeof IntegrationConnectionRpcTarget>[0]) {
+    super();
+  }
+
+  get(connection?: string): IntegrationConnectionRpcTarget {
+    if (connection !== undefined && connection.trim() === "") {
+      throw new Error(
+        `itx.integrations.${this.props.slug}.get(connection) requires a non-empty slug.`,
+      );
+    }
+    return new IntegrationConnectionRpcTarget({ ...this.props, connection });
+  }
+
+  async __describe(): Promise<unknown> {
+    return describeNode({
+      instructions: `Use itx.integrations.${this.props.slug}.get() for the first connected account, or .get("<connection-slug>") when a specific account matters. The returned connection is a pipelinable RPC capability.`,
+      parent: "the integrations collection (itx.integrations)",
+    });
+  }
+}
+
 /**
  * The `itx.integrations` collection.
  *
- * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.
- * Built-in slugs (`slack`, `google`, `github`, `telegram`, `waitrose`)
+ * Connection-yielding calls are `{slug}.get(connection?).{...method}`.
+ * Public built-in families (`slack`, `gmail`, `github`, `telegram`, `waitrose`)
  * dispatch to deployment code —
- * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
- * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
- * the Gmail REST proxy, and `itx.integrations.github["jonas"].octokit` is a
+ * `itx.integrations.slack.get().chat.postMessage({...})` reaches any Slack Web
+ * API method (a real WebClient), `itx.integrations.gmail.get().request({...})`
+ * the Gmail REST proxy, and `itx.integrations.github.get().octokit` is a
  * real Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
  * `.request("GET /repos/{owner}/{repo}")` escape hatch, `.graphql(...)`;
  * there is NO generic `.api.request({ method, path })` shape, and the
@@ -2657,13 +2749,13 @@ function describeConnectionSdk(input: {
  * `...ForAuthenticatedUser` endpoints answer 403 — and every other slug
  * resolves through the itx capability table under the `integrations` prefix.
  * The exception is `itx.integrations.parallel`: a first-party API-key RPC
- * target, not a connection and not returned by `list()`. There is no implicit
- * connection: a built-in call without a connection name is an error.
+ * target, not a connection and not returned by `list()`. With no argument,
+ * `get()` selects the first currently connected account in `list()` order.
  *
- * Built-in integrations are plain imperative dispatch branches, not classes,
- * because their only callers are untyped dotted scripts; a project extends
- * the collection with ordinary `provideCapability({ path: ["integrations", ...] })`
- * — data, not deployment. `completeConnect` is called by the app worker's
+ * The SDK connection targets are thin dispatchers over the normal vendor
+ * clients. A project extends the collection with ordinary
+ * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
+ * `completeConnect` is called by the app worker's
  * OAuth callback routes (/api/integrations/<provider>/callback); its
  * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
  * verified itx-side.
@@ -2682,6 +2774,39 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     );
   }
 
+  #family(slug: string): IntegrationFamilyRpcTarget {
+    return new IntegrationFamilyRpcTarget({
+      invoke: (input) => this.#invokeConnectionCapability(input),
+      resolve: (connection, familySlug) => this.#resolveConnection(familySlug, connection),
+      slug,
+    });
+  }
+
+  /** Slack WebClient connections. `get()` selects the first connected workspace. */
+  get slack(): IntegrationFamily<SlackConnection> {
+    return this.#family("slack") as unknown as IntegrationFamily<SlackConnection>;
+  }
+
+  /** Connected Google accounts, exposed as Gmail. `get()` selects the first. */
+  get gmail(): IntegrationFamily<GmailConnection> {
+    return this.#family("gmail") as unknown as IntegrationFamily<GmailConnection>;
+  }
+
+  /** GitHub App installations with the normal all-in-one Octokit package. */
+  get github(): IntegrationFamily<GithubConnection> {
+    return this.#family("github") as unknown as IntegrationFamily<GithubConnection>;
+  }
+
+  /** Telegram Bot API connections. `get()` selects the first connected bot. */
+  get telegram(): IntegrationFamily<TelegramConnection> {
+    return this.#family("telegram") as unknown as IntegrationFamily<TelegramConnection>;
+  }
+
+  /** Waitrose account connections. */
+  get waitrose(): IntegrationFamily<WaitroseConnection> {
+    return this.#family("waitrose") as unknown as IntegrationFamily<WaitroseConnection>;
+  }
+
   /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
@@ -2697,13 +2822,68 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     return new CloudflareIntegrationsRpcTarget();
   }
 
-  /** The dotted-call surface: built-in slugs dispatch here; unknown slugs
-   * resolve through the project capability table (the provided lane). Slack
-   * methods are unary — one body object:
-   * `itx.integrations.slack["<connection>"].chat.postMessage({ ... })`. */
+  /** Dynamic provided-integration dispatch. The only selector is
+   * `<slug>.get(connection?)`; built-in families are concrete typed getters. */
   async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
     const { args = [], path } = call;
-    const [slug, connection, ...method] = path;
+    const [slug, selector, ...rest] = path;
+    if (slug && selector === "__describe" && rest.length === 0 && args.length === 0) {
+      return await this.#capabilityHost.invokeCapability({
+        path: ["integrations", slug, "__describe"],
+      });
+    }
+    if (!slug || selector !== "get" || rest.length !== 0 || args.length > 1) {
+      throw new Error(
+        'Integration connections use `.get(connection?)`, for example `itx.integrations.github.get().octokit.rest.repos.get(...)` or `itx.integrations.github.get("work").octokit...`.',
+      );
+    }
+    const connection = args[0];
+    if (connection !== undefined && typeof connection !== "string") {
+      throw new Error(`itx.integrations.${slug}.get(connection) expects a string connection slug.`);
+    }
+    return this.#family(slug).get(connection);
+  }
+
+  async #resolveConnection(slug: string, requested: string | undefined): Promise<string | null> {
+    if (requested !== undefined) return requested;
+
+    const providerSlug = slug === "gmail" ? "google" : slug;
+    const candidates = (await this.list()).filter((entry) => entry.integration === slug);
+    if (isBuiltinIntegrationSlug(providerSlug)) {
+      // A Waitrose connection is its session secret, not a lifecycle journal;
+      // appearing in list() is therefore the connected-state proof.
+      if (providerSlug === "waitrose") {
+        const first = candidates.find((entry) => entry.connection !== null);
+        if (first) return first.connection;
+      }
+      for (const entry of candidates) {
+        if (entry.connection === null) continue;
+        const status = await getConnectionStatus({
+          connection: entry.connection,
+          projectId: this.props.projectId,
+          provider: providerSlug,
+        });
+        if (status.connected) return entry.connection;
+      }
+      throw new Error(
+        `No connected ${slug} account is available. Connect one or pass an exact slug to itx.integrations.${slug}.get("<connection-slug>").`,
+      );
+    }
+
+    const first = candidates.find((entry) => entry.connection !== null);
+    if (first) return first.connection;
+    throw new Error(
+      `No concrete ${slug} integration connection is available. Mount one under ["integrations", "${slug}", "<connection-slug>"] or pass an exact slug to .get("<connection-slug>").`,
+    );
+  }
+
+  async #invokeConnectionCapability(input: {
+    args: unknown[];
+    connection: string | null;
+    method: string[];
+    slug: string;
+  }): Promise<unknown> {
+    const { args, connection, method, slug } = input;
 
     if (slug === "slack") {
       if (!connection || method.length === 0) {
@@ -2715,7 +2895,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.slack[${JSON.stringify(connection)}].chat.postMessage({ channel, text })`,
+          example: `await itx.integrations.slack.get(${JSON.stringify(connection)}).chat.postMessage({ channel, text })`,
           grammar: SLACK_CALL_GRAMMAR,
           sdk: "a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object argument",
           slug: "slack",
@@ -2724,8 +2904,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // The connection's router processor: the project-class host Durable
       // Object at this connection's stream path. `processor` is a claimed
       // child, not a Web API replay — it is what the connect flow's wake
-      // subscription persists (["integrations", "slack", <connection>,
-      // "processor", "wakeStreamSubscriber"]).
+      // subscription persists (["integrations", "slack",
+      // ["get", <connection>], "processor", "wakeStreamSubscriber"]).
       if (method[0] === "processor") {
         const relay = new ProcessorRelayRpcTarget({
           auth: this.props.auth,
@@ -2752,27 +2932,27 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       }
     }
 
-    if (slug === "google") {
+    if (slug === "gmail") {
       if (connection && method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.google[${JSON.stringify(connection)}].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`,
+          example: `await itx.integrations.gmail.get(${JSON.stringify(connection)}).request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`,
           grammar:
-            "itx.integrations.google expected `<connection>.gmail.request({...})`; paths are relative to https://gmail.googleapis.com/gmail/v1.",
+            "itx.integrations.gmail.get(connection?).request({...}); paths are relative to https://gmail.googleapis.com/gmail/v1.",
           sdk: "the Gmail REST API behind gmail.request({ path, query, method, headers, body })",
-          slug: "google",
+          slug: "gmail",
         });
       }
       // gmail.request is two segments; fewer after the connection means the
       // caller skipped the connection (the pre-connections itx.gmail shape).
-      if (!connection || method.length < 2) {
+      if (!connection || method.length !== 1) {
         throw new Error(
-          'itx.integrations.google expected `<connection>.gmail.request({...})` (e.g. itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" })); use itx.integrations.list() to see connections.',
+          'itx.integrations.gmail.get(connection?).request({...}) is the Gmail surface (e.g. itx.integrations.gmail.get().request({ path: "/users/me/messages" })).',
         );
       }
-      if (method[0] !== "gmail" || method[1] !== "request" || method.length !== 2) {
+      if (method[0] !== "request") {
         throw new Error(
-          `itx.integrations.google["${connection}"] exposes gmail.request(...); got "${method.join(".")}".`,
+          `itx.integrations.gmail.get(${JSON.stringify(connection)}) exposes request(...); got "${method.join(".")}".`,
         );
       }
       // No in-process token fetch — the Gmail call goes through the connection
@@ -2800,7 +2980,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.github[${JSON.stringify(connection)}].octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
+          example: `await itx.integrations.github.get(${JSON.stringify(connection)}).octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
           grammar: GITHUB_CALL_GRAMMAR,
           sdk: "the all-in-one Octokit exported by octokit, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work. Prefer REST for routine endpoints and GraphQL when its query shape or API coverage is useful. For pagination, RPC arguments must be serializable: call `.paginate(\"GET /...\", params)`; endpoint-function overloads, map callbacks, and `.paginate.iterator()` cannot cross the boundary. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Octokit's retry and throttling plugins are disabled, so it does not replay 5xx, 429, or 408 responses; the secret transport may refresh credentials and repeat once after a 401. Inspect remote state before manually retrying an ambiguous failed write",
           slug: "github",
@@ -2828,7 +3008,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.telegram[${JSON.stringify(connection)}].sendMessage({ chat_id, text })`,
+          example: `await itx.integrations.telegram.get(${JSON.stringify(connection)}).sendMessage({ chat_id, text })`,
           grammar: TELEGRAM_CALL_GRAMMAR,
           sdk: "the Telegram Bot API (https://core.telegram.org/bots/api): any method name as ONE dotted segment (sendMessage, sendPhoto, getMe, …) with ONE params object; the bot token is substituted at the egress door",
           slug: "telegram",
@@ -2837,7 +3017,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // The connection's router processor: the project-class host Durable
       // Object at this connection's stream path — same relay shape as Slack's.
       // It is what the connect flow's wake subscription persists
-      // (["integrations", "telegram", <connection>, "processor", ...]).
+      // (["integrations", "telegram", ["get", <connection>], "processor", ...]).
       if (method[0] === "processor") {
         const relay = new ProcessorRelayRpcTarget({
           auth: this.props.auth,
@@ -2853,7 +3033,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         return await replayPathCall(relay, { args, path: method.slice(1) });
       }
       // The Bot API is flat — a deeper path means the caller invented a
-      // namespace (telegram["bot"].chat.sendMessage): answer with the grammar.
+      // namespace (telegram.get("bot").chat.sendMessage): answer with the grammar.
       if (method.length !== 1) throw new Error(TELEGRAM_CALL_GRAMMAR);
       return await callProjectTelegramBotApi({
         body: (args[0] ?? {}) as Record<string, unknown>,
@@ -2870,7 +3050,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.waitrose[${JSON.stringify(connection)}].searchProducts("oat milk", { size: 5 })`,
+          example: `await itx.integrations.waitrose.get(${JSON.stringify(connection)}).searchProducts("oat milk", { size: 5 })`,
           grammar: WAITROSE_CALL_GRAMMAR,
           sdk: 'the vendored Waitrose client (waitrose-api.ts): shoppingContext(), searchProducts(term, { size, sortBy, start }), trolley(orderId?), addToTrolley(lineNumber, quantity), removeFromTrolley(lineNumber), updateTrolleyItems(items, orderId?). Connect by writing the connection secret: await itx.secrets.get("/secrets/integrations/waitrose/<connection>/session").update({ egress: { urls: ["https://www.waitrose.com"] }, material: { username, password }, refresh: { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql-prod/graph/live" } }) — the Secret DO logs in on first use and re-logins on 401',
           slug: "waitrose",
@@ -2888,36 +3068,51 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       return await replayPathCall(waitrose, { args, path: method });
     }
 
-    if (slug === "parallel") {
-      const [, ...operationPath] = path;
-      return await (
-        this.parallel as unknown as {
-          invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-        }
-      ).invokeCapability({ args, path: operationPath });
-    }
-
-    if (BUILTIN_INTEGRATION_SLUGS.has(slug)) {
+    if (slug === "gmail" || BUILTIN_INTEGRATION_SLUGS.has(slug)) {
       throw new Error(
         `builtin integration "${slug}" has no dispatch branch — add one in ProjectIntegrationsRpcTarget.invokeCapability`,
       );
     }
-    return await this.#capabilityHost.invokeCapability({ args, path: ["integrations", ...path] });
+    return await this.#capabilityHost.invokeCapability({
+      args,
+      path: ["integrations", slug, ...(connection === null ? [] : [connection]), ...method],
+    });
   }
 
-  /** Every connection the project holds: `/integrations/<slug>/<connection>`
-   * journals plus provided mounts from the capability table (deduped by path;
-   * a mount over its own webhook journal is one entry). */
+  /** Every connection the project holds: integration journals,
+   * credential-defined Waitrose accounts, plus provided mounts from the
+   * capability table (deduped by path). */
   async list(): Promise<IntegrationConnectionListEntry[]> {
-    const [journalConnections, mounted] = await Promise.all([
+    const [journalConnections, mounted, projectState] = await Promise.all([
       listIntegrationConnections(this.props.projectId),
       this.#capabilityHost.describeCapabilities(),
+      projectProcessorState(this.props.projectId),
     ]);
+    // Waitrose deliberately has no connect flow or lifecycle journal: its
+    // session secret is the connection. Surface those secret paths in the
+    // same collection so list() and no-argument get() retain one meaning.
+    const waitroseConnections = projectState.secrets.flatMap((secret) => {
+      const match = /^\/secrets\/integrations\/waitrose\/([^/]+)\/session$/.exec(secret.path);
+      return match?.[1] === undefined
+        ? []
+        : [
+            {
+              connection: match[1],
+              integration: "waitrose" as const,
+              path: `/integrations/waitrose/${match[1]}`,
+              source: "builtin" as const,
+            },
+          ];
+    });
     const entries: IntegrationConnectionListEntry[] = [
       ...journalConnections.map((entry): IntegrationConnectionListEntry => {
         const { integration } = entry;
         return isBuiltinIntegrationSlug(integration)
-          ? { ...entry, integration, source: "builtin" }
+          ? {
+              ...entry,
+              integration: integration === "google" ? "gmail" : integration,
+              source: "builtin",
+            }
           : { ...entry, source: "provided" };
       }),
       ...mounted
@@ -2930,6 +3125,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           path: `/${capability.path.join("/")}`,
           source: "provided" as const,
         })),
+      ...waitroseConnections,
     ];
     // A provided integration can have both a mount and journals at the same
     // path (e.g. webhooks landing on /integrations/github/main); one entry.
@@ -2942,11 +3138,12 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       instructions: [
         "The project's integration connections, each at a fully qualified path /integrations/<slug>/<connection>.",
         "await itx.integrations.list() enumerates every connection (built-in and provided).",
-        'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
-        'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-        'GitHub: itx.integrations.github["<connection>"].octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying installation auth and transport. Use its package types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work, while pagination uses the RPC-safe `.paginate("GET /...", params)` route-string form. The `.octokit` segment is mandatory.',
-        'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
-        'Waitrose: await itx.integrations.waitrose["<connection>"].searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
+        'For every connection family, get() selects the first connected account; pass get("<connection>") only when a specific account matters.',
+        "Slack: await itx.integrations.slack.get().chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.",
+        'Gmail: await itx.integrations.gmail.get().request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
+        'GitHub: itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying installation auth and transport. Use its package types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work, while pagination uses the RPC-safe `.paginate("GET /...", params)` route-string form. The `.octokit` segment is mandatory.',
+        "Telegram: await itx.integrations.telegram.get().sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).",
+        'Waitrose: await itx.integrations.waitrose.get().searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
         'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.docs.get({ name: "github-mcp-connect" }).',
       ].join("\n"),
@@ -2958,19 +3155,19 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "  path: string;",
         "  query?: Record<string, boolean | number | string | null | undefined>;",
         "};",
-        '// itx.integrations.google["<connection>"] exposes:',
-        "interface GoogleConnection {",
-        "  gmail: { request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
+        "// itx.integrations.gmail.get() exposes:",
+        "interface GmailConnection {",
+        "  request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }>;",
         "}",
         "// Exact package type; Iterate supplies auth and transport. See https://github.com/octokit/octokit.js.",
         'type GithubConnection = { octokit: import("octokit").Octokit };',
-        '// itx.integrations.slack["<connection>"] IS a wrapped Slack WebClient',
+        "// itx.integrations.slack.get() IS a wrapped Slack WebClient",
         "// (@slack/web-api): any Web API method as a dotted path, ONE body arg.",
         "interface SlackConnection {",
         "  chat: { postMessage(body: Record<string, unknown>): Promise<Record<string, unknown>> };",
         "  // ...every other Web API method, same dotted shape",
         "}",
-        '// itx.integrations.telegram["<connection>"] is the Telegram Bot API:',
+        "// itx.integrations.telegram.get() is the Telegram Bot API:",
         "// flat method names (ONE segment), one params object, JSON result.",
         "interface TelegramConnection {",
         "  sendMessage(params: { chat_id: number | string; text: string } & Record<string, unknown>): Promise<Record<string, unknown>>;",
@@ -2988,16 +3185,18 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         disconnect: "Disconnect one connection: { provider, connection }.",
         getConnection: "Connection status for { provider, connection }.",
         github:
-          'Per-connection wrapped Octokit (a GitHub App installation): github["<connection>"].octokit.rest.apps.listReposAccessibleToInstallation(), .octokit.request("GET /..."), .octokit.graphql(...).',
-        google:
-          'Per-connection Gmail: google["<connection>"].gmail.request({ path: "/users/me/messages", query }).',
+          'GitHub App installations: github.get().octokit selects the first; github.get("<connection>").octokit selects an exact installation. Full Octokit REST, GraphQL, request, and route-string pagination are available.',
+        gmail:
+          'Connected Google accounts: gmail.get().request({ path: "/users/me/messages", query }); pass a slug only for an exact account.',
         list: "Every connection the project holds (built-in journals plus provided mounts).",
         parallel: "Parallel API RPC target using Iterate's platform API key.",
         slack:
-          'Per-connection wrapped Slack WebClient: slack["<connection>"].chat.postMessage({ channel, text }) — any Web API method, one body object.',
+          "Wrapped Slack WebClient: slack.get().chat.postMessage({ channel, text }); pass a slug only for an exact workspace.",
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
         telegram:
-          'Per-connection Telegram Bot API: telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method, one params object.',
+          "Telegram Bot API: telegram.get().sendMessage({ chat_id, text }); pass a slug only for an exact bot.",
+        waitrose:
+          'Vendored Waitrose client: waitrose.get("<connection>").searchProducts(...); the account is defined by its connection secret.',
       },
       parent: "a project itx (itx.integrations)",
     });
@@ -4545,7 +4744,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
-    'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].octokit.rest.repos.get({ owner, repo }) (a wrapped Octokit); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
+    'Integration connection families: get() selects the first connected account and get("<connection>") selects an exact one; e.g. itx.integrations.slack.get().chat.postMessage(...), gmail.get().request(...), github.get().octokit.rest.repos.get(...). list() enumerates all connections; other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
   kill: "Restart the project's server-side object; the next request boots it fresh.",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
@@ -4856,10 +5055,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** The integrations collection: built-in integrations as dispatch branches
-   * on the dotted-call surface (`itx.integrations.slack["main-slack"].chat
-   * .postMessage(...)`), provided integrations through the capability table,
-   * management verbs, `list()`. */
+  /** The integrations collection: built-in connection families selected with
+   * `.get()` (first connected) or `.get("slug")` (exact), provided
+   * integrations through the capability table, management verbs, `list()`. */
   get integrations(): ProjectIntegrationsRpcTarget {
     return new ProjectIntegrationsRpcTarget({
       auth: this.#props.auth,
@@ -6520,8 +6718,11 @@ installPrototypeInvokeCapabilityFallback(ProjectRpcTarget, {
 // "bar"], args: [x] })`.
 installPrototypeInvokeCapabilityFallback(CapabilityHostRpcTarget);
 // `itx.integrations`: userspace connections mount under provider slugs
-// (`itx.integrations.waitrose.mum.search(...)`).
+// (`itx.integrations.ocado.get("family").search(...)`).
 installPrototypeInvokeCapabilityFallback(ProjectIntegrationsRpcTarget);
+// `itx.integrations.<slug>.get(connection?)`: a genuine connection RpcTarget
+// whose unknown SDK members flatten into its selected integration dispatcher.
+installPrototypeInvokeCapabilityFallback(IntegrationConnectionRpcTarget);
 // `workers.get(ref)`: dotted paths flatten into one invokeCapability against
 // the dynamic worker (the userspace `invokeCapability` walk).
 installPrototypeInvokeCapabilityFallback(DynamicWorkerRpcTarget);
