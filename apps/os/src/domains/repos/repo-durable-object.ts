@@ -19,6 +19,7 @@ import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
+import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import { ROOT_WORKSPACE_PATH } from "../workspaces/utils.ts";
 import type {
   CommitRepoFilesInput,
@@ -1085,7 +1086,10 @@ async function seedArtifactRepo(input: {
 
   try {
     await git.commit({
-      author: { email: "support@iterate.com", name: "Iterate" },
+      author: {
+        email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+        name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+      },
       message: "Seed minimal itx project worker",
     });
     await ensureBranchRef({ branch: input.branch, git });
@@ -1234,7 +1238,10 @@ async function mutateArtifactRepo<Extra extends Record<string, unknown>>(input: 
   }
 
   const commit = await git.commit({
-    author: input.author ?? { email: "support@iterate.com", name: "Iterate" },
+    author: input.author ?? {
+      email: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+      name: ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+    },
     message: input.message,
   });
   // No force: writes are serialized by the DO's #writeChain, so a fresh

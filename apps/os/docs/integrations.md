@@ -214,10 +214,11 @@ GitHub connects as a **GitHub App installation** (deep-link to
   connection secret's `accessToken` as a `getSecret` placeholder;
   lexicographically first connection when several exist), and `gh` reads it
   from the env natively. `git` gets a
-  `git http."https://github.com/".extraheader` with a raw Bearer placeholder
-  (set by the warm-up script) — deliberately not a credential helper or
-  `gh auth setup-git`, which send Basic auth (base64) and would hide the
-  placeholder from header substitution.
+  `git http."https://github.com/".extraheader` with Basic auth
+  (`x-access-token` + base64 of the placeholder — GitHub's git smart-HTTP
+  rejects Bearer). Project egress peels Basic Authorization headers before
+  substituting so the placeholder stays findable without putting token bytes
+  in the container.
 
 The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 (GitHub's MCP server mounted under the `github-mcp` slug — built-in slugs

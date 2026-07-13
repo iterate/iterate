@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { assertSandboxPath, githubTokenEnvForConnections, sandboxPathFor } from "./utils.ts";
+import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
+import {
+  assertSandboxPath,
+  githubTokenEnvForConnections,
+  sandboxPathFor,
+  SANDBOX_GIT_CONFIG_SHELL,
+} from "./utils.ts";
 
 describe("sandboxPathFor", () => {
   test("a name mints /sandboxes/<name> — flat, no intermediate folders", () => {
@@ -66,5 +72,34 @@ describe("githubTokenEnvForConnections", () => {
       { connection: "install-10", integration: "github" },
     ]);
     expect(placeholder).toContain("/secrets/integrations/github/install-10");
+  });
+});
+
+describe("SANDBOX_GIT_CONFIG_SHELL", () => {
+  test("plants lowercase iterate identity so GitHub shows the app avatar", () => {
+    expect(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name).toBe("iterate");
+    expect(ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name).toBe(
+      ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name.toLowerCase(),
+    );
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain(
+      `user.name '${ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name}'`,
+    );
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain(
+      `user.email '${ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email}'`,
+    );
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("users.noreply.github.com");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("iterate[bot]");
+  });
+
+  test("configures git extraheader as Basic x-access-token + unwrapped base64 of GH_TOKEN", () => {
+    // GitHub git smart-HTTP rejects Bearer; Basic with username x-access-token
+    // is the documented install-token shape. base64 -w0 keeps the placeholder
+    // on one line so egress can peel/substitute it.
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain('http."https://github.com/".extraheader');
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("AUTHORIZATION: Basic");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("x-access-token:${GH_TOKEN}");
+    expect(SANDBOX_GIT_CONFIG_SHELL).toContain("base64 -w0");
+    expect(SANDBOX_GIT_CONFIG_SHELL).not.toMatch(/tr -d/);
+    expect(SANDBOX_GIT_CONFIG_SHELL).not.toContain("Bearer");
   });
 });

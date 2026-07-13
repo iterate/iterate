@@ -13,6 +13,13 @@ import { normalizePath } from "../durable-object-names.ts";
  * placeholder outside the path fails loudly at substitution instead of
  * leaking the literal reference string to the provider. The `field` key is
  * optional; omit it for whole-material (plain-string) secrets.
+ *
+ * Headers may also carry the placeholder inside a **Basic** Authorization
+ * credential (`Authorization: Basic base64(user:getSecret(...))`). GitHub's
+ * git-over-HTTPS smart HTTP endpoint only accepts Basic (not Bearer), so
+ * sandbox git plants that shape; discovery and substitution peel the base64
+ * payload so the placeholder stays findable without putting token bytes in
+ * the container.
  */
 const SECRET_REFERENCE =
   /getSecret\(\s*\{\s*path\s*:\s*"([^"]+)"\s*(?:,\s*field\s*:\s*"([^"]+)"\s*)?\}\s*\)/g;
@@ -93,11 +100,85 @@ export function secretReferencePathsFromRequest(request: {
 }
 
 function collectSecretReferences(byKey: Map<string, SecretReference>, value: string): void {
-  for (const match of value.matchAll(SECRET_REFERENCE)) {
-    const path = normalizeSecretPath(match[1]!);
-    const field = match[2];
-    byKey.set(`${path} ${field ?? ""}`, field === undefined ? { path } : { field, path });
+  for (const candidate of headerValuesForSecretScan(value)) {
+    for (const match of candidate.matchAll(SECRET_REFERENCE)) {
+      const path = normalizeSecretPath(match[1]!);
+      const field = match[2];
+      byKey.set(`${path} ${field ?? ""}`, field === undefined ? { path } : { field, path });
+    }
   }
+}
+
+/**
+ * Values to scan for `getSecret(...)` placeholders: the raw header string,
+ * plus — when the header is HTTP Basic auth — the base64-decoded credential
+ * payload. Git (and anything else that only speaks Basic) base64-encodes
+ * `username:password` into `Authorization: Basic …`; without peeling that
+ * layer the placeholder inside the password is invisible to discovery and
+ * substitution.
+ */
+function headerValuesForSecretScan(value: string): string[] {
+  const decoded = decodeBasicAuthorizationCredential(value);
+  return decoded === null ? [value] : [value, decoded.credential];
+}
+
+/**
+ * Peel `Authorization: Basic <base64>` into its decoded `user:pass` payload.
+ * Returns null when the value is not Basic or the base64 is invalid. Callers
+ * re-encode with `btoa` after substitution (placeholders and tokens are
+ * ASCII, so the latin1 btoa/atob pair is the right codec).
+ */
+function decodeBasicAuthorizationCredential(
+  value: string,
+): { prefix: string; encoded: string; suffix: string; credential: string } | null {
+  const match = /^(\s*[Bb]asic\s+)([A-Za-z0-9+/]+=*)(\s*)$/.exec(value);
+  if (match === null) return null;
+  try {
+    return {
+      prefix: match[1]!,
+      encoded: match[2]!,
+      suffix: match[3]!,
+      credential: atob(match[2]!),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Substitute every `getSecret({ path… })` match in a plain header value. */
+function substituteSecretPlaceholdersInText(
+  value: string,
+  resolve: (reference: SecretReference) => string,
+): string {
+  return value.replaceAll(SECRET_REFERENCE, (_match, path: string, field: string | undefined) =>
+    resolve(
+      field === undefined
+        ? { path: normalizeSecretPath(path) }
+        : { field, path: normalizeSecretPath(path) },
+    ),
+  );
+}
+
+/**
+ * Substitute placeholders in one header value, including inside Basic auth
+ * base64 payloads. Non-Basic headers (Bearer, custom) substitute in place;
+ * Basic peels → substitutes the credential → re-encodes so the provider sees
+ * a real `user:token` pair.
+ */
+function substituteSecretPlaceholdersInHeaderValue(
+  value: string,
+  resolve: (reference: SecretReference) => string,
+): string {
+  const basic = decodeBasicAuthorizationCredential(value);
+  if (basic !== null) {
+    const substituted = substituteSecretPlaceholdersInText(basic.credential, resolve);
+    if (substituted !== basic.credential) {
+      return `${basic.prefix}${btoa(substituted)}${basic.suffix}`;
+    }
+    // No placeholder in the credential — still run plain substitution in case
+    // the scheme/prefix somehow carried one (it shouldn't), then return.
+  }
+  return substituteSecretPlaceholdersInText(value, resolve);
 }
 
 /**
@@ -119,27 +200,48 @@ function decodedUrl(url: string): string {
 export function platformReferencesFromHeaders(headers: Headers): PlatformReference[] {
   const byPath = new Map<string, PlatformReference>();
   headers.forEach((value) => {
-    for (const match of value.matchAll(PLATFORM_REFERENCE)) {
-      byPath.set(match[1]!, { platform: match[1]! });
+    for (const candidate of headerValuesForSecretScan(value)) {
+      for (const match of candidate.matchAll(PLATFORM_REFERENCE)) {
+        byPath.set(match[1]!, { platform: match[1]! });
+      }
     }
   });
   return [...byPath.values()];
 }
 
 /** Rewrites every `getSecret({ platform: ... })` placeholder in every header
- * using `resolve`. Runs in trusted platform code (the project egress door). */
+ * using `resolve`. Runs in trusted platform code (the project egress door).
+ * Peels Basic Authorization base64 the same way path-secret substitution does. */
 export function substitutePlatformHeaders(
   request: Request,
   resolve: (reference: PlatformReference) => string,
 ): Request {
   const headers = new Headers(request.headers);
   headers.forEach((value, name) => {
-    headers.set(
-      name,
-      value.replaceAll(PLATFORM_REFERENCE, (_match, platform: string) => resolve({ platform })),
-    );
+    headers.set(name, substitutePlatformPlaceholdersInHeaderValue(value, resolve));
   });
   return new Request(request, { headers });
+}
+
+function substitutePlatformPlaceholdersInText(
+  value: string,
+  resolve: (reference: PlatformReference) => string,
+): string {
+  return value.replaceAll(PLATFORM_REFERENCE, (_match, platform: string) => resolve({ platform }));
+}
+
+function substitutePlatformPlaceholdersInHeaderValue(
+  value: string,
+  resolve: (reference: PlatformReference) => string,
+): string {
+  const basic = decodeBasicAuthorizationCredential(value);
+  if (basic !== null) {
+    const substituted = substitutePlatformPlaceholdersInText(basic.credential, resolve);
+    if (substituted !== basic.credential) {
+      return `${basic.prefix}${btoa(substituted)}${basic.suffix}`;
+    }
+  }
+  return substitutePlatformPlaceholdersInText(value, resolve);
 }
 
 /**
@@ -174,6 +276,12 @@ export function selectSecretField(material: unknown, field?: string): string {
  * The resolver is handed the parsed reference and returns the substituted
  * string; it runs in the Secret DO (trusted platform code), so material bytes
  * are only ever handled here on the way out to a pinned host.
+ *
+ * Basic Authorization headers are special: the placeholder may live inside
+ * the base64 credential (`user:getSecret(...)`). That shape is required for
+ * GitHub git-over-HTTPS (Bearer is rejected with 401). Decode → substitute →
+ * re-encode so providers see a real token while the container still only held
+ * the placeholder.
  */
 export function substituteSecretHeaders(
   request: Request,
@@ -181,16 +289,7 @@ export function substituteSecretHeaders(
 ): Request {
   const headers = new Headers(request.headers);
   headers.forEach((value, name) => {
-    headers.set(
-      name,
-      value.replaceAll(SECRET_REFERENCE, (_match, path: string, field: string | undefined) =>
-        resolve(
-          field === undefined
-            ? { path: normalizeSecretPath(path) }
-            : { field, path: normalizeSecretPath(path) },
-        ),
-      ),
-    );
+    headers.set(name, substituteSecretPlaceholdersInHeaderValue(value, resolve));
   });
   return new Request(request, { headers });
 }
