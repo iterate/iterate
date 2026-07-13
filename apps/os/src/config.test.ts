@@ -78,6 +78,27 @@ describe("AppConfig", () => {
     );
   });
 
+  it("accepts an explicit provider origin with platform Petshop client credentials", () => {
+    const petshop = {
+      baseUrl: "https://dummy-petshop.iterate-preview-3.com",
+      oauthClientId: "petshop-client-id",
+      oauthClientSecret: "petshop-client-secret",
+    };
+    const parsePetshop = (value: Record<string, string>) =>
+      parseAppConfigFromEnv({
+        configSchema: AppConfig,
+        prefix: "APP_CONFIG_",
+        env: {
+          APP_CONFIG: JSON.stringify(baseConfig),
+          APP_CONFIG_INTEGRATIONS__PETSHOP: JSON.stringify(value),
+        },
+      });
+
+    expect(parsePetshop(petshop).integrations.petshop?.baseUrl).toBe(petshop.baseUrl);
+    const { baseUrl: _baseUrl, ...withoutBaseUrl } = petshop;
+    expect(parsePetshop(withoutBaseUrl).integrations.petshop?.baseUrl).toBeUndefined();
+  });
+
   it("accepts platform Parallel integration runtime config", () => {
     const parsed = parseAppConfigFromEnv({
       configSchema: AppConfig,

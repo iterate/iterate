@@ -12,6 +12,34 @@ whose Bot API authenticates in the path `/bot<token>/…`) — never the query
 string, never the body; a placeholder anywhere else in the URL is rejected
 loudly rather than passed through. One request references one secret.
 
+The egress pin is part of the material's authenticated context. Ciphertext is
+bound to its project, secret path, exact effective origins, and the offset of
+the event that stores it. Every update event without replacement material
+clears retained material, including egress-only and refresh-only updates;
+replacement material must carry its complete egress policy in that same
+authorized update, so it never inherits a policy selected by a public event.
+Copying ciphertext into another event, path, project, or policy cannot re-pin
+it because authentication fails. Credential-bearing
+fetches own redirect handling: every hop is manual, bounded, and revalidated.
+Same-origin redirects may retain credentials; cross-origin redirects are
+rejected, even when both origins appear in an allowlist, so headers and bodies
+never acquire a new destination implicitly. Terminal responses are
+reconstructed before returning to callers: fetch provenance
+(`url`/`redirected`), URL-bearing navigation headers, and credential-bearing
+runtime errors do not leave the cell.
+
+Secret streams remain readable and accept user-appended events, including
+`events.iterate.com/secret/*` facts. Those facts can change metadata or clear
+material, but they cannot forge usable material: only trusted code can produce
+ciphertext that authenticates against the exact context and event offset where
+it is stored.
+
+A refresh also authenticates its state transition: the strategy and reducer-owned
+update offset selected by a request must still be current before provider I/O
+begins, and the result is compare-appended at the exact next event offset. Any
+intervening update, even one repeating the same strategy, therefore cannot mint
+or resurrect material from a stale request.
+
 Credential refresh does not weaken the invariant, because it runs INSIDE the
 cell: a **named strategy** (`oauth-refresh-token`, `github-app-installation`,
 `waitrose-session`)

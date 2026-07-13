@@ -88,7 +88,7 @@ async function invokeCapability(
 /**
  * Base class for stateless dynamic workers — the project worker (a repo's
  * default export) and stateless apps. A WorkerEntrypoint whose env carries
- * the platform's ITX binding, plus the platform ceremony every worker needs
+ * the platform's itx binding, plus the platform ceremony every worker needs
  * but shouldn't have to hand-roll:
  *
  * - `processEventBatch` / `processEvent`: the platform delivers every

@@ -26,7 +26,7 @@ function statefulWorkerVersion(ref: StatefulDynamicWorkerRef, sourceCacheKey: st
  */
 export class StatefulWorkerDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  // The hosted Durable Object class sees the same scoped ITX binding as a
+  // The hosted Durable Object class sees the same scoped itx binding as a
   // stateless worker at this path. That is what lets a provided durable
   // capability call sibling capabilities through `this.env.ITX.get()`.
   readonly #workerRunner = new DynamicWorkerRunner({

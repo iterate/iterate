@@ -52,10 +52,12 @@ function sseStream(...chunks: unknown[]): ReadableStream<Uint8Array> {
 }
 
 describe("minimal web-chat agent processors", () => {
-  it("explains the exact codemode shape expected by the ITX script runner", () => {
+  it("explains the exact codemode shape expected by the itx script runner", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
       "The block must contain a single async arrow function",
     );
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("```ts");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toMatch(/JavaScript|```js(?:\s|$)|\bITX\b/);
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("async (itx) => {");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
@@ -330,7 +332,7 @@ describe("minimal web-chat agent processors", () => {
           aiCalls.push(body);
           return {
             response: [
-              "```js",
+              "```ts",
               "async (itx) => {",
               "  await itx.chat.sendMessage('hello from ai');",
               "}",
@@ -483,7 +485,7 @@ describe("minimal web-chat agent processors", () => {
     ].join("\n");
     await stream.append({
       type: "events.iterate.com/agent/output-added",
-      payload: { content: `Reading the saved output now.\n\n\`\`\`js\n${script}\n\`\`\`` },
+      payload: { content: `Reading the saved output now.\n\n\`\`\`ts\n${script}\n\`\`\`` },
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
 
@@ -500,7 +502,7 @@ describe("minimal web-chat agent processors", () => {
     // Mirrors a prd incident (agents/web/2026-07-10t05-13-04-967z): the model
     // planned a whole workflow as four sequential scripts in one response.
     // Only the first used to run — silently; the model believed all four did.
-    const block = (body: string) => `\`\`\`js\nasync (itx) => {\n  ${body}\n}\n\`\`\``;
+    const block = (body: string) => `\`\`\`ts\nasync (itx) => {\n  ${body}\n}\n\`\`\``;
     await stream.append({
       type: "events.iterate.com/agent/output-added",
       payload: {
@@ -520,8 +522,40 @@ describe("minimal web-chat agent processors", () => {
         event.payload.content.includes("3 fenced code blocks"),
     );
     expect(corrective?.payload).toMatchObject({
+      content: expect.stringContaining("```ts block"),
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
+    expect(corrective?.payload?.content).not.toContain("```js block");
+  });
+
+  it("rejects mixed-language multi-block responses without executing the TypeScript block", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+
+    await stream.append({
+      type: "events.iterate.com/agent/output-added",
+      payload: {
+        content: [
+          "```ts\nasync (itx) => {\n  return 1;\n}\n```",
+          "```python\nprint('planned next step')\n```",
+        ].join("\n\n"),
+      },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+
+    expect(
+      stream.events.filter(
+        (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      ),
+    ).toHaveLength(0);
+    expect(
+      stream.events.find(
+        (event) =>
+          event.type === "events.iterate.com/agent/input-added" &&
+          typeof event.payload?.content === "string" &&
+          event.payload.content.includes("2 fenced code blocks"),
+      )?.payload,
+    ).toMatchObject({ llmRequestPolicy: { behaviour: "after-current-request" } });
   });
 
   it("rejects a fenced block that does not start with async, with corrective feedback", async () => {
@@ -533,7 +567,7 @@ describe("minimal web-chat agent processors", () => {
     await stream.append({
       type: "events.iterate.com/agent/output-added",
       payload: {
-        content: "```js\n// Plan: greet the user first\nasync (itx) => {\n  return 1;\n}\n```",
+        content: "```ts\n// Plan: greet the user first\nasync (itx) => {\n  return 1;\n}\n```",
       },
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
@@ -552,7 +586,7 @@ describe("minimal web-chat agent processors", () => {
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
 
-    // A fence with a non-JS language tag is the same mistake in a different
+    // A fence with a non-TypeScript language tag is the same mistake in a different
     // costume — the extraction regex refuses it, and the system prompt
     // promises rejection-with-feedback, not silence.
     await stream.append({
@@ -718,7 +752,7 @@ describe("minimal web-chat agent processors", () => {
         async run(_model, body) {
           aiCalls.push(body);
           resolveFirstCall();
-          return { response: "```js\nasync (itx) => {}\n```" };
+          return { response: "```ts\nasync (itx) => {}\n```" };
         },
       },
     });
@@ -816,7 +850,7 @@ describe("minimal web-chat agent processors", () => {
       ai: {
         async run() {
           return sseStream(
-            { choices: [{ delta: { content: "```js\n" } }] },
+            { choices: [{ delta: { content: "```ts\n" } }] },
             {
               choices: [
                 {

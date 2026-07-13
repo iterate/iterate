@@ -113,6 +113,18 @@ export async function lookupConnectionClaim(
   return foldConnectionClaim(events, { externalId, slug });
 }
 
+/** Whether a provider external id has a live directory claim for a project.
+ * Platform credential mints use this to prevent a project-authored refresh
+ * configuration from acting as another project's provider installation. */
+export async function isConnectionClaimedByProject(input: {
+  externalId: string;
+  projectId: string;
+  slug: string;
+}): Promise<boolean> {
+  const claim = await lookupConnectionClaim(input.slug, input.externalId);
+  return claim?.projectId === input.projectId;
+}
+
 /** The outcome of routing one inbound webhook: delivered to a connection, or
  * `ignored` because no project has claimed its external id (the caller ACKs the
  * ignored case with a 200 — see the webhook handlers' cardinal rule). */

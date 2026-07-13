@@ -17,7 +17,7 @@ import { requireBaseUrl as requireOsBaseUrl } from "../test-support/os-client.ts
 //   - session-scoped project-selection gating: `authorize` redirects to
 //     `/project-access` until a fresh selection is stored for THIS session
 //   - project-grant reconstruction (the token only reaches the selected
-//     project, and `exec_js` shows up)
+//     project, and `exec_typescript` shows up)
 //
 // It needs a Better Auth browser session, which without a browser means the
 // bootstrap-admin email/password (the auth worker's AppConfig service token). That
@@ -276,13 +276,15 @@ test("project MCP OAuth opaque-token flow", async () => {
   const tools = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   expect(tools.status, "MCP tools/list").toBe(200);
   const toolNames = tools.parsed.result?.tools?.map((tool) => tool.name) ?? [];
-  expect(toolNames, "opaque token grants the project MCP tool surface").toContain("exec_js");
+  expect(toolNames, "opaque token grants the project MCP tool surface").toContain(
+    "exec_typescript",
+  );
   expect(toolNames, "assistant tool is hidden by default").not.toContain("ask_assistant");
 
   const agentTools = await mcp({ jsonrpc: "2.0", id: 3, method: "tools/list" }, "?withAgent=true");
   expect(agentTools.status, "MCP tools/list with agent opt-in").toBe(200);
   const agentToolNames = agentTools.parsed.result?.tools?.map((tool) => tool.name) ?? [];
-  expect(agentToolNames, "agent opt-in keeps exec_js").toContain("exec_js");
+  expect(agentToolNames, "agent opt-in keeps exec_typescript").toContain("exec_typescript");
   expect(agentToolNames, "agent opt-in exposes assistant tool").toContain("ask_assistant");
 
   console.log(

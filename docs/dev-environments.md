@@ -102,7 +102,7 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
     npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
       --transport http \
       --method tools/call \
-      --tool-name exec_js \
+      --tool-name exec_typescript \
       --tool-arg project=<project-slug> \
       --tool-arg "code=async (itx) => { return await itx.__describe(); }" \
       --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"

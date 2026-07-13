@@ -14,7 +14,7 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 
 | Path                       | What                                                                                                                                            |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`                 | The public ITX contract (the design of record)                                                                                                  |
+| `types.ts`                 | The public itx contract (the design of record)                                                                                                  |
 | `rpc-targets.ts`           | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress              |
 | `auth.ts`                  | The auth adapter: credentials → `ItxAuth` (see below)                                                                                           |
 | `itx-client.ts`            | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                                 |
@@ -276,7 +276,7 @@ the interceptor sees placeholders, never material
 `itx.workers.get(ref)` runs caller-supplied code in an isolate via the Worker
 Loader. Runners are `DynamicWorkerRunner`
 (`domains/workers/worker-runner.ts`) — its constructor is the one place a
-dynamic isolate gets its scoped ITX binding and egress fetcher. A `DynamicWorkerRef` is
+dynamic isolate gets its scoped itx binding and egress fetcher. A `DynamicWorkerRef` is
 `stateless` (a WorkerEntrypoint export, with
 optional `props`) or `stateful` (a DurableObject class export hosted by
 `StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is an
@@ -320,8 +320,8 @@ reference**: no prompt body, the offset is the `llmRequestId`. That same
 processor rebuilds the request by reducing committed history up to that
 offset, runs it through the Cloudflare AI binding (`env.AI`), and appends
 started/chunk/output/completed events. The agent contract: respond with
-exactly one fenced JavaScript block containing a single
-`async (itx) => { … }`, which the ITX processor executes; replies reach the
+exactly one fenced TypeScript block containing a single
+`async (itx) => { … }`, which the itx processor executes; replies reach the
 user via `itx.chat.sendMessage(message)`
 (`events.iterate.com/agents/web-message-sent`). Scripts behave like tool
 calls: a returned value (or thrown error) renders back into history as the

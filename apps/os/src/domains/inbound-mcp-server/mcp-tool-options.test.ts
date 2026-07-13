@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readInboundMcpToolOptions } from "./mcp-tool-options.ts";
 
 describe("readInboundMcpToolOptions", () => {
-  it("defaults to the exec_js-only surface", () => {
+  it("defaults to the exec_typescript-only surface", () => {
     expect(readInboundMcpToolOptions(new Request("https://mcp.test/api/mcp"))).toEqual({
       withAgent: false,
     });
