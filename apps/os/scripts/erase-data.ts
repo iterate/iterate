@@ -96,8 +96,11 @@ export default async function eraseData(options: {
   try {
     let instancesDeleted = 0;
     for (;;) {
+      // Explicit page=1 on purpose: cf() fails loudly on implicitly truncated
+      // listings, but this delete-then-relist loop consumes one page at a
+      // time until the namespace is empty — truncation is the design.
       const instances = await cf<{ id: string }[]>(
-        `/ai-search/namespaces/${env.osWorkerName}/instances?per_page=100`,
+        `/ai-search/namespaces/${env.osWorkerName}/instances?per_page=100&page=1`,
       );
       if (instances.length === 0) break;
       for (const instance of instances) {
@@ -121,7 +124,11 @@ export default async function eraseData(options: {
     try {
       let objectsDeleted = 0;
       for (;;) {
-        const listing = await cf<{ key: string }[]>(`/r2/buckets/${bucket}/objects?per_page=1000`);
+        // Same explicit-page opt-out of cf()'s truncation guard as the
+        // instance loop above: delete-then-relist until the bucket is empty.
+        const listing = await cf<{ key: string }[]>(
+          `/r2/buckets/${bucket}/objects?per_page=1000&page=1`,
+        );
         if (listing.length === 0) break;
         for (const object of listing) {
           await cf(`/r2/buckets/${bucket}/objects/${encodeURIComponent(object.key)}`, {
