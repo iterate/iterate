@@ -84,7 +84,10 @@ import { isRootWorkspacePath, normalizeWorkspacePath } from "./domains/workspace
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import { normalizeSecretPath } from "./domains/secrets/utils.ts";
-import type { SecretWebSocketRelayInput } from "./domains/secrets/websocket-relay.ts";
+import {
+  encodeSecretWebSocketRelayRequest,
+  type SecretWebSocketRelayInput,
+} from "./domains/secrets/websocket-relay.ts";
 import {
   completeConnect,
   connectTelegram,
@@ -1835,9 +1838,12 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
    * Discord-shaped WebSocket relay: IDENTIFY with material held only in the
    * Secret DO, then a pair-bridged socket for app frames. See
    * `SecretWebSocketRelayInput` / petshop `/gateway`.
+   *
+   * Routed through DO **fetch** (not a JSRPC method) so `Response.webSocket`
+   * can leave the Secret DO — method returns reject sockets with DataCloneError.
    */
   relayWebSocket(input: SecretWebSocketRelayInput): Promise<Response> {
-    return this.durableObjectStub.relayWebSocket(input);
+    return this.durableObjectStub.fetch(encodeSecretWebSocketRelayRequest(input));
   }
 
   /** Restart the secret's server-side object; the next request boots it fresh. */

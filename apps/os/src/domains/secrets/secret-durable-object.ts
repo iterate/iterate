@@ -27,6 +27,8 @@ import {
 import {
   buildIdentifyFrame,
   createUpstreamMessageBuffer,
+  isSecretWebSocketRelayRequest,
+  parseSecretWebSocketRelayRequest,
   type SecretWebSocketRelayInput,
   waitForJsonOp,
   waitForOpen,
@@ -195,6 +197,21 @@ export class SecretDurableObject extends DurableObject<Env> {
    * that used to do exactly this.
    */
   async fetch(request: Request): Promise<Response> {
+    // IDENTIFY relay must ride DO **fetch** so Response.webSocket survives the
+    // hop (JSRPC method returns reject webSocket with DataCloneError).
+    if (isSecretWebSocketRelayRequest(request)) {
+      try {
+        return await this.#relayWebSocket(await parseSecretWebSocketRelayRequest(request));
+      } catch (error) {
+        if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
+        const message = error instanceof Error ? error.message : String(error);
+        return new Response(JSON.stringify({ error: "websocket_relay_failed", message }), {
+          status: 502,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+
     let references;
     try {
       references = secretReferencesFromRequest(request);
@@ -275,9 +292,12 @@ export class SecretDurableObject extends DurableObject<Env> {
    * material held only in this DO, return a pair-bridged 101. The caller never
    * sees the token — only subsequent app frames (ready, dispatch, echo, …).
    *
+   * Private: only invoked via `fetch` with `isSecretWebSocketRelayRequest` so
+   * the 101 Response.webSocket can leave the DO (JSRPC method returns cannot).
+   *
    * Petshop: `wss://…/gateway` with `identify: {}` (defaults to hello → identify).
    */
-  async relayWebSocket(input: SecretWebSocketRelayInput): Promise<Response> {
+  async #relayWebSocket(input: SecretWebSocketRelayInput): Promise<Response> {
     // Closed on every failure path after accept so the DO does not leak sockets.
     let upstream: WebSocket | null = null;
     let messageBuffer: ReturnType<typeof createUpstreamMessageBuffer> | null = null;
@@ -300,7 +320,11 @@ export class SecretDurableObject extends DurableObject<Env> {
       const upgradeRequest = new Request(upgradeUrl, {
         headers: { Upgrade: "websocket", Connection: "Upgrade" },
       });
-      const upgradeResponse = await fetch(upgradeRequest);
+      // Same redirect + pin revalidation as secret.fetch (ADR 0005): never
+      // follow an off-pin Location with credential material / IDENTIFY.
+      const upgradeResponse = await fetchWithCredentialRedirects(upgradeRequest, {
+        assertUrlAllowed: (url) => assertOriginPinned(url, state),
+      });
       upstream = upgradeResponse.webSocket;
       if (upstream == null) {
         return new Response(
@@ -355,7 +379,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         messageBuffer.detach(upstream);
       }
       closeWebSocketQuietly(upstream, 1011, "websocket relay failed");
-      if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
+      if (error instanceof SecretSubstitutionError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       return new Response(JSON.stringify({ error: "websocket_relay_failed", message }), {
         status: 502,

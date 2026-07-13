@@ -64,15 +64,15 @@ send IDENTIFY immediately after open.
 
 ## Implementation map
 
-| Piece                                 | Role                                                           |
-| ------------------------------------- | -------------------------------------------------------------- |
-| `sandboxOutboundFor`                  | All container HTTP(S) → Project DO `fetch`                     |
-| Project `#egress`                     | Policy, secrets, then `maybeBridgeWebSocketResponse`           |
-| `websocket-bridge.ts`                 | `WebSocketPair` + half-open frame pump                         |
-| Secret `fetch`                        | Handshake placeholder substitution + bridge                    |
-| Secret `relayWebSocket`               | Trusted IDENTIFY then bridge                                   |
-| `credential-fetch` `sanitizeResponse` | Preserves workerd `webSocket` slot across hops                 |
-| Approval hold                         | **Denies** WebSocket upgrades (cannot buffer/hold a handshake) |
+| Piece                                 | Role                                                                                     |
+| ------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `sandboxOutboundFor`                  | All container HTTP(S) → Project DO `fetch`                                               |
+| Project `#egress`                     | Policy, secrets, then `maybeBridgeWebSocketResponse`                                     |
+| `websocket-bridge.ts`                 | `WebSocketPair` + half-open frame pump                                                   |
+| Secret `fetch`                        | Handshake placeholder substitution + bridge                                              |
+| Secret `relayWebSocket`               | Trusted IDENTIFY then bridge (routed via DO **fetch** so `Response.webSocket` transfers) |
+| `credential-fetch` `sanitizeResponse` | Preserves workerd `webSocket` slot across hops                                           |
+| Approval hold                         | **Denies** WebSocket upgrades (cannot buffer/hold a handshake)                           |
 
 ## Sandbox e2e (opt-in)
 

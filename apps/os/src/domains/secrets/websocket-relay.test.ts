@@ -2,8 +2,12 @@ import { describe, expect, test, vi } from "vitest";
 import {
   buildIdentifyFrame,
   createUpstreamMessageBuffer,
+  encodeSecretWebSocketRelayRequest,
   injectTokenPlaceholder,
+  isSecretWebSocketRelayRequest,
   messageDataToText,
+  parseSecretWebSocketRelayRequest,
+  SECRET_WS_RELAY_FETCH_URL,
   waitForJsonOp,
 } from "./websocket-relay.ts";
 
@@ -68,6 +72,29 @@ describe("messageDataToText", () => {
   test("handles string and ArrayBuffer", () => {
     expect(messageDataToText("hi")).toBe("hi");
     expect(messageDataToText(new TextEncoder().encode("ab").buffer)).toBe("ab");
+  });
+});
+
+describe("encode/parse secret websocket relay request", () => {
+  test("round-trips input over the internal fetch URL", async () => {
+    const request = encodeSecretWebSocketRelayRequest({
+      url: "wss://gateway.example/gateway",
+      identify: { waitForOp: "hello", tokenField: "token" },
+      timeoutMs: 5_000,
+    });
+    expect(isSecretWebSocketRelayRequest(request)).toBe(true);
+    expect(request.url).toBe(SECRET_WS_RELAY_FETCH_URL);
+    await expect(parseSecretWebSocketRelayRequest(request)).resolves.toEqual({
+      url: "wss://gateway.example/gateway",
+      identify: { waitForOp: "hello", tokenField: "token" },
+      timeoutMs: 5_000,
+    });
+  });
+
+  test("rejects ordinary secret fetch URLs", () => {
+    expect(isSecretWebSocketRelayRequest(new Request("https://api.openai.com/v1/realtime"))).toBe(
+      false,
+    );
   });
 });
 

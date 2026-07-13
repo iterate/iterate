@@ -5,7 +5,15 @@
  *
  * Petshop proof: apps/dummy-petshop `/gateway` (see gateway.ts).
  * Design: integrations-and-secrets-design.md "WebSocket egress + relay".
+ *
+ * Transport: `Response.webSocket` only survives the Durable Object **fetch**
+ * hop (not arbitrary JSRPC method returns). SecretRpcTarget therefore encodes
+ * the relay as an internal `stub.fetch` request; the Secret DO detects that
+ * shape and runs the IDENTIFY handshake inside `fetch`.
  */
+
+/** Internal URL used only for Secret DO fetch → relayWebSocket routing. */
+export const SECRET_WS_RELAY_FETCH_URL = "https://iterate.internal/__secret_ws_relay";
 
 export type SecretWebSocketRelayInput = {
   /** Absolute ws/wss (or http/https, upgraded) URL on the secret's egress pin. */
@@ -32,6 +40,50 @@ export type SecretWebSocketRelayInput = {
   /** Bound for hello wait + identify round-trip. Default 15_000. */
   timeoutMs?: number;
 };
+
+/** Build the DO-fetch request that carries `relayWebSocket` input over the fetch hop. */
+export function encodeSecretWebSocketRelayRequest(input: SecretWebSocketRelayInput): Request {
+  return new Request(SECRET_WS_RELAY_FETCH_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function isSecretWebSocketRelayRequest(request: Request): boolean {
+  return new URL(request.url).href === SECRET_WS_RELAY_FETCH_URL;
+}
+
+export async function parseSecretWebSocketRelayRequest(
+  request: Request,
+): Promise<SecretWebSocketRelayInput> {
+  const body: unknown = await request.json();
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error("secret websocket relay body must be a JSON object");
+  }
+  const record = body as Record<string, unknown>;
+  if (typeof record.url !== "string" || record.url.length === 0) {
+    throw new Error("secret websocket relay requires a non-empty url string");
+  }
+  const input: SecretWebSocketRelayInput = { url: record.url };
+  if (record.timeoutMs !== undefined) {
+    if (typeof record.timeoutMs !== "number" || !Number.isFinite(record.timeoutMs)) {
+      throw new Error("secret websocket relay timeoutMs must be a finite number");
+    }
+    input.timeoutMs = record.timeoutMs;
+  }
+  if (record.identify !== undefined) {
+    if (
+      record.identify === null ||
+      typeof record.identify !== "object" ||
+      Array.isArray(record.identify)
+    ) {
+      throw new Error("secret websocket relay identify must be an object");
+    }
+    input.identify = record.identify as SecretWebSocketRelayInput["identify"];
+  }
+  return input;
+}
 
 const DEFAULT_IDENTIFY_FRAME: Record<string, unknown> = {
   op: "identify",
