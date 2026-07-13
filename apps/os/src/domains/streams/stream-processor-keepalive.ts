@@ -112,6 +112,15 @@ const CRASH_LOOP_EVIDENCE_THRESHOLD = 3;
  */
 export const MAX_CONSECUTIVE_BUSY_REFIRES = 90;
 
+/** The semantic outcome of one platform alarm reaching the keepalive. */
+export type ProcessorKeepaliveAlarmAction =
+  | "not_due"
+  | "busy_rearmed"
+  | "revival_hung_backoff"
+  | "clean_disarmed"
+  | "revived"
+  | "revival_failed";
+
 export function revivalBackoffMs(revivals: number): number {
   return REVIVAL_BACKOFF_MS[revivals - 1] ?? REVIVAL_BACKOFF_PLATEAU_MS;
 }
@@ -181,10 +190,10 @@ export class ProcessorKeepalive {
    * subsystem's slice (the scheduler's), so this self-gates on the persisted
    * armed time and does nothing when the fire is not the keepalive's.
    */
-  async onAlarm(): Promise<void> {
+  async onAlarm(): Promise<ProcessorKeepaliveAlarmAction> {
     const now = this.#hooks.now();
     const armedAt = this.armedAtMs;
-    if (armedAt === null || now < armedAt) return;
+    if (armedAt === null || now < armedAt) return "not_due";
 
     // Still working (or a revival pass is still running — its safety net owns
     // the cadence, and a SECOND pass must never start underneath it): push
@@ -196,7 +205,7 @@ export class ProcessorKeepalive {
       this.#busyRefires += 1;
       if (this.#busyRefires < MAX_CONSECUTIVE_BUSY_REFIRES) {
         this.#arm(now + KEEPALIVE_ALARM_LEAD_MS);
-        return;
+        return "busy_rearmed";
       }
       if (this.#reviving) {
         // The revival pass itself is hung. Starting another would lift the
@@ -204,7 +213,7 @@ export class ProcessorKeepalive {
         // — the impossibility guarantee holds (~4 wakes/day) and any real
         // settlement resets the counter.
         this.#arm(now + REVIVAL_BACKOFF_PLATEAU_MS);
-        return;
+        return "revival_hung_backoff";
       }
     }
 
@@ -216,16 +225,18 @@ export class ProcessorKeepalive {
     if (this.#inFlight === 0 && this.#sawCleanSettle && !this.#sawFailure) {
       this.#sawCleanSettle = false;
       this.#disarmAndReset();
-      return;
+      return "clean_disarmed";
     }
 
     // Revival: either this is a fresh incarnation (the armer died — flags
     // empty) or tracked work failed. Mark durably BEFORE doing anything, arm
     // the safety-net retry at the backoff, then run the pass.
-    await this.#revive(now);
+    return await this.#revive(now);
   }
 
-  async #revive(now: number): Promise<void> {
+  async #revive(
+    now: number,
+  ): Promise<Extract<ProcessorKeepaliveAlarmAction, "revived" | "revival_failed">> {
     const previous = this.#hooks.readRecord();
     const priorRevivals =
       previous === undefined || previous.version !== this.#hooks.version ? 0 : previous.revivals;
@@ -269,6 +280,7 @@ export class ProcessorKeepalive {
       this.#sawCleanSettle = true;
       const wedged = this.#inFlight > 0 && this.#busyRefires >= MAX_CONSECUTIVE_BUSY_REFIRES;
       if (!wedged) this.#arm(this.#hooks.now() + KEEPALIVE_ALARM_LEAD_MS);
+      return "revived";
     } catch (error) {
       console.error("stream processor host revival failed; backing off", {
         revivals: record.revivals,
@@ -277,6 +289,7 @@ export class ProcessorKeepalive {
       });
       this.#sawFailure = true;
       // The safety-net alarm armed above owns the retry.
+      return "revival_failed";
     } finally {
       this.#reviving = false;
     }
