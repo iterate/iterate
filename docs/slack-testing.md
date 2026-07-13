@@ -30,14 +30,16 @@ The Doppler secrets are split by purpose:
 
 - `APP_CONFIG_INTEGRATIONS__SLACK` contains the Slack app credentials for the
   OS deployment: OAuth client ID, OAuth client secret, and webhook signing
-  secret. It also contains `botToken`, the deployment-level outbound fallback
-  for that same Slack app.
+  secret. It also contains `botToken`, a recovery credential for that same
+  Slack app.
 - The OS **Connect Slack** flow stores the workspace bot token for a project at
-  `/secrets/integrations/slack/bot-token` and claims the Slack team in the
-  deployment's `/integrations/slack-team-directory` stream.
-- Slack Web API calls use the project workspace token first. If the project has
-  no connected Slack token, OS falls back to
-  `APP_CONFIG_INTEGRATIONS__SLACK.botToken`.
+  `/secrets/integrations/slack/<connection>/bot-token` and claims the Slack
+  team in the deployment's `/integrations/_directory` stream.
+- Slack Web API calls use the connected project's workspace token first. If
+  Slack rejects that token, OS uses `auth.test` to prove that
+  `APP_CONFIG_INTEGRATIONS__SLACK.botToken` belongs to the connection's
+  journaled team before retrying. A typo'd or disconnected connection never
+  gets the recovery credential.
 
 ## Trigger actor for smoke tests
 
@@ -98,9 +100,9 @@ otherwise:
 - The app scope `chat:write.public` lets a Slack app post into public channels,
   so a bot user not appearing as a channel member does not rule out its app
   posting a reply.
-- If production has `APP_CONFIG_INTEGRATIONS__SLACK.botToken`, it can use that
-  fallback token for outbound Slack Web API calls when no project token is
-  available.
+- If production has `APP_CONFIG_INTEGRATIONS__SLACK.botToken`, it can recover
+  outbound Slack Web API calls from a missing, expired, or revoked connection
+  token after verifying the connection's Slack team.
 
 For a precise diagnosis, inspect the Slack event wrapper and traces:
 
