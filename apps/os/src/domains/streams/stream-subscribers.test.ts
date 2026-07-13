@@ -1564,6 +1564,128 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBeGreaterThan(readsBefore);
   });
 
+  it("w0. rapid appends retain one contiguous fresh tail while a push is in flight", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    const firstDelivery = Promise.withResolvers<void>();
+    h.dialImpl.push = async (batch) => {
+      if (batch.events[0]?.offset === 1) await firstDelivery.promise;
+    };
+
+    const first = evt(1, "a");
+    h.append(first);
+    h.subscribers.wake([{ event: first, byteLength: 64 }]);
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1]]);
+
+    const second = evt(2, "b");
+    h.append(second);
+    h.subscribers.wake([{ event: second, byteLength: 64 }]);
+    const third = evt(3, "c");
+    h.append(third);
+    h.subscribers.wake([{ event: third, byteLength: 64 }]);
+
+    firstDelivery.resolve();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [1],
+      [2, 3],
+    ]);
+    expect(h.row("k")?.ackedOffset).toBe(3);
+    expect(h.storageReads()).toBe(0);
+  });
+
+  it("w0a. idle appends retain only the latest fresh tail", async () => {
+    const h = makeHarness();
+    const first = evt(1, "a");
+    h.append(first);
+    h.subscribers.wake([{ event: first, byteLength: 64 }], 64);
+    const second = evt(2, "b");
+    h.append(second);
+    h.subscribers.wake([{ event: second, byteLength: 64 }], 64);
+
+    const sink = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: sink.sink,
+      replayAfterOffset: 0,
+    });
+
+    expect(sink.batches.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [1, 2],
+    ]);
+    expect(h.storageReads()).toBe(1);
+  });
+
+  it("w0b. fresh-tail accumulation falls back to storage across the byte bound", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    const firstDelivery = Promise.withResolvers<void>();
+    h.dialImpl.push = async (batch) => {
+      if (batch.events[0]?.offset === 1) await firstDelivery.promise;
+    };
+
+    const first = evt(1, "a");
+    h.append(first);
+    h.setEventByteLength(1, 64);
+    h.subscribers.wake([{ event: first, byteLength: 64 }], 64);
+
+    const second = evt(2, "b");
+    h.append(second);
+    h.setEventByteLength(2, 64);
+    h.subscribers.wake([{ event: second, byteLength: 64 }], 64);
+    const third = evt(3, "c");
+    h.append(third);
+    h.setEventByteLength(3, PUSH_DELIVERY_BATCH_BYTE_LIMIT);
+    h.subscribers.wake(
+      [{ event: third, byteLength: PUSH_DELIVERY_BATCH_BYTE_LIMIT }],
+      PUSH_DELIVERY_BATCH_BYTE_LIMIT,
+    );
+
+    firstDelivery.resolve();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [1],
+      [2],
+      [3],
+    ]);
+    expect(h.row("k")?.ackedOffset).toBe(3);
+    expect(h.storageReads()).toBe(1);
+  });
+
+  it("w0c. fresh-tail accumulation falls back to storage across the row bound", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    const firstDelivery = Promise.withResolvers<void>();
+    h.dialImpl.push = async (batch) => {
+      if (batch.events[0]?.offset === 1) await firstDelivery.promise;
+    };
+
+    const first = evt(1, "a");
+    h.append(first);
+    h.subscribers.wake([{ event: first, byteLength: 64 }], 64);
+
+    const middle = Array.from({ length: PUSH_DELIVERY_BATCH_LIMIT - 1 }, (_, index) =>
+      evt(index + 2, "b"),
+    );
+    h.append(...middle);
+    h.subscribers.wake(
+      middle.map((event) => ({ event, byteLength: 64 })),
+      middle.length * 64,
+    );
+    const last = evt(PUSH_DELIVERY_BATCH_LIMIT + 1, "c");
+    h.append(last);
+    h.subscribers.wake([{ event: last, byteLength: 64 }], 64);
+
+    firstDelivery.resolve();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.length)).toEqual([1, PUSH_DELIVERY_BATCH_LIMIT]);
+    expect(h.row("k")?.ackedOffset).toBe(PUSH_DELIVERY_BATCH_LIMIT + 1);
+    expect(h.storageReads()).toBe(1);
+  });
+
   it("w1. byte-capped batches resume inside the fresh tail without storage reads", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
@@ -1777,7 +1899,7 @@ describe("StreamSubscribers", () => {
     const coreStateCallsBefore = h.coreStateCalls();
     const cursorGetsBefore = h.store.getCalls;
 
-    h.subscribers.wake(freshTail);
+    h.subscribers.wake(freshTail, fresh.length * 64);
     await h.settle();
 
     expect(h.pushes).toHaveLength(subscriptionCount);

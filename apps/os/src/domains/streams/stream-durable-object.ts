@@ -452,11 +452,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     this.#coreProcessorState = workingState;
     this.#checkpointCoreProcessorState(eventsToInsert.length, committedAtMs);
-    this.#metrics.ingress.bump(
-      committedAtMs,
-      eventsToInsert.length,
-      freshTail.reduce((sum, entry) => sum + entry.byteLength, 0),
-    );
+    const freshTailByteLength = freshTail.reduce((sum, entry) => sum + entry.byteLength, 0);
+    this.#metrics.ingress.bump(committedAtMs, eventsToInsert.length, freshTailByteLength);
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
@@ -470,7 +467,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (reducedEvents !== undefined) {
       this.#processEvents(reducedEvents);
     }
-    this.#subscribers.wake(freshTail);
+    this.#subscribers.wake(freshTail, freshTailByteLength);
 
     // Re-arm (or clear) the idle timer against the post-append connection set,
     // so a stream that just went quiet sheds its durable delivery sessions

@@ -418,7 +418,7 @@ export class StreamSubscribers {
   // ===========================================================================
 
   /**
-   * The just-committed events of the most recent append, handed over by the
+   * The just-committed events of recent contiguous appends, handed over by the
    * commit path so caught-up pumps and drains consume them directly instead
    * of re-reading (and re-parsing) them from SQLite once per delivery lane.
    * Correctness is offset-gated, never freshness-gated: `#readBatch` uses the
@@ -428,6 +428,7 @@ export class StreamSubscribers {
    * delivery can resume at a later position in the same tail without SQL.
    */
   #freshTail: SizedStreamEvent[] = [];
+  #freshTailByteLength = 0;
   #freshTailProjection: ReadBatchProjection | undefined;
   #freshTailSizedProjection: ReadBatchProjection | undefined;
   /** One immutable SQLite range shared by lanes aligned within this wake. */
@@ -449,13 +450,34 @@ export class StreamSubscribers {
    * committed (already sized by the log write) so tailing consumers skip the
    * storage round trip.
    */
-  wake(freshTail?: SizedStreamEvent[]): void {
+  wake(freshTail?: SizedStreamEvent[], freshTailByteLength?: number): void {
     this.#wakeGeneration += 1;
     this.#storageReadCache = undefined;
     this.#storageReadProjection = undefined;
     this.#storageReadSizedProjection = undefined;
     if (freshTail !== undefined && freshTail.length > 0) {
-      this.#freshTail = freshTail;
+      const retainedLastOffset = this.#freshTail.at(-1)?.event.offset;
+      const incomingFirstOffset = freshTail[0]!.event.offset;
+      const contiguous =
+        retainedLastOffset !== undefined && incomingFirstOffset === retainedLastOffset + 1;
+      const withinRowLimit = this.#freshTail.length + freshTail.length <= PUSH_DELIVERY_BATCH_LIMIT;
+      // Connection pumps advance their cursor before yielding. Only awaited
+      // drains and wake handshakes can be overtaken by later append turns.
+      const deliveryInFlight = this.#pushDrains.size > 0 || this.#pokesInFlight.size > 0;
+      const incomingBytes =
+        freshTailByteLength ?? freshTail.reduce((sum, entry) => sum + entry.byteLength, 0);
+      if (
+        deliveryInFlight &&
+        contiguous &&
+        withinRowLimit &&
+        this.#freshTailByteLength + incomingBytes <= PUSH_DELIVERY_BATCH_BYTE_LIMIT
+      ) {
+        this.#freshTail.push(...freshTail);
+        this.#freshTailByteLength += incomingBytes;
+      } else {
+        this.#freshTail = freshTail;
+        this.#freshTailByteLength = incomingBytes;
+      }
       this.#freshTailProjection = undefined;
       this.#freshTailSizedProjection = undefined;
     }
