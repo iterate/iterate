@@ -870,11 +870,11 @@ export interface Search {
    */
   query(input: {
     q: string;
-    /** Max chunks to return (1–50). */
+    /** Max chunks to return (1–50, default 20 — tuned for recall). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1). */
+    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
     scoreThreshold?: number;
     /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
     source?: string;

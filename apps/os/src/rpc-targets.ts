@@ -2059,8 +2059,13 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
               ? undefined
               : normalizeSearchExcludeKinds(input.exclude).filter((kind) => kind !== "docs"),
         }),
-        max_num_results: input.limit,
-        match_threshold: input.scoreThreshold,
+        // Tuned for GENEROUS INCLUSION (Jonas, 2026-07-13): recall over
+        // precision — a downstream fast-LLM pass can always filter the result
+        // set in conversation context, but a hit that never surfaces is gone.
+        // Defaults beat the instance's (10 results, 0.4 threshold); explicit
+        // caller values still win.
+        max_num_results: input.limit ?? 20,
+        match_threshold: input.scoreThreshold ?? 0.2,
         // OR-mode keyword matching: dogfooding showed the default AND-mode
         // misses exact-token queries whose terms don't co-occur in one chunk;
         // hybrid rrf fusion keeps precision.
@@ -2154,11 +2159,11 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    */
   async query(input: {
     q: string;
-    /** Max chunks to return (1–50). */
+    /** Max chunks to return (1–50, default 20 — tuned for recall). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1). */
+    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
     scoreThreshold?: number;
     /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
     source?: string;

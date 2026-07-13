@@ -405,6 +405,8 @@ export function projectSearchInstanceConfig(input: { bucketName: string; project
   indexing_options: { keyword_tokenizer: "porter" | "trigram" };
   custom_metadata: { field_name: string; data_type: "text" }[];
   sync_interval: 3600;
+  score_threshold: number;
+  max_num_results: number;
 } {
   return {
     id: projectSearchInstanceId(input.projectId),
@@ -415,6 +417,12 @@ export function projectSearchInstanceConfig(input: { bucketName: string; project
     indexing_options: { keyword_tokenizer: "trigram" },
     custom_metadata: [...SEARCH_METADATA_SCHEMA],
     sync_interval: 3600,
+    // Generous inclusion at birth (query-time options still override): recall
+    // over precision — downstream consumers can filter with a fast LLM, but a
+    // hit below the threshold never surfaces at all. Platform defaults are
+    // 0.4 / 10.
+    score_threshold: 0.2,
+    max_num_results: 20,
   };
 }
 
