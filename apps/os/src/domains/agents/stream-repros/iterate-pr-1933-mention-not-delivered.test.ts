@@ -57,6 +57,7 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
     ];
 
     const processor = new RepoProcessor({
+      taskChangesForArtifactPush: async () => [],
       createRepoArtifact: async () => {
         throw new Error("not part of this repro");
       },
