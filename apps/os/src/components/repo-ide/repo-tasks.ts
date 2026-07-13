@@ -24,12 +24,6 @@ export type RepoTaskComment = {
   body: string;
 };
 
-export type RepoTaskAssignment = {
-  agentPath: string;
-  content: string;
-  instructions: string;
-};
-
 export type RepoTaskBoardRowField = "folder" | "label" | null;
 
 export type RepoTaskBoardQuery = {
@@ -178,7 +172,10 @@ export function repoTaskAgentPath(repoPath: string, taskPath: string): string {
  * Pure assignment projection. Calling code commits `content` before sending
  * `instructions`, so a born agent always sees its durable task assignment.
  */
-export function prepareRepoTaskAssignment(task: RepoTask, repoPath: string): RepoTaskAssignment {
+export function prepareRepoTaskAssignment(
+  task: RepoTask,
+  repoPath: string,
+): { agentPath: string; content: string; instructions: string } {
   const agentPath = repoTaskAgentPath(repoPath, task.path);
   const stateContent =
     task.state === DEFAULT_TASK_STATE

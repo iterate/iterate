@@ -55,6 +55,14 @@ async function issue(
   });
 }
 
+function tamperGrantSignature(token: string): string {
+  const [payload, signature, extra] = token.split(".");
+  if (payload === undefined || signature === undefined || extra !== undefined || signature === "")
+    throw new Error("Expected a signed operator grant.");
+  const firstCharacter = signature[0] === "A" ? "B" : "A";
+  return `${payload}.${firstCharacter}${signature.slice(1)}`;
+}
+
 describe("operator sessions", () => {
   it("issues origin-bound project access without impersonating a customer or exposing the admin secret", async () => {
     const auditLog = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -259,7 +267,7 @@ describe("operator sessions", () => {
       await verifyOperatorGrant({
         audience: ORIGIN,
         secret: ADMIN_SECRET,
-        token: issued.token.replace(/\.([^.])/, (_, first) => `.${first === "A" ? "B" : "A"}`),
+        token: tamperGrantSignature(issued.token),
       }),
     ).toBeNull();
   });
