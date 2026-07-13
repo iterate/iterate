@@ -529,3 +529,50 @@ Raw records are in `/tmp/derived-batch34-{baseline,candidate}-{1..5}.log`,
 `/tmp/derived-batch100-{baseline,candidate}-{1..5}.log`, and
 `/tmp/derived-batch500-{baseline,candidate}-{1..5}.log` for the life of this
 workstation.
+
+## 2026-07-13: Deferred Quiet-Tail Push Acknowledgements
+
+Successful push delivery now leaves the final cursor acknowledgement staged in
+memory instead of forcing `flushPending("all")` when the drain reaches the
+stream tail. The next push frame claim atomically checkpoints that prior ack in
+the same SQLite statement required to claim the new frame. Failure transitions,
+the recovery alarm, and idle teardown remain durable lifecycle checkpoints.
+
+This makes the cursor store's existing cross-drain batching policy effective
+for trickle traffic. Previously the subscriber drain tracked a staged ack only
+to force it immediately at each quiet tail, adding a synchronous SQLite write
+and output gate after every successful one-batch delivery. The change removes
+that bookkeeping and three tail flushes for a net `-11` production lines. It
+adds no queue, timer, schema, transaction, protocol, or persistence mechanism.
+
+Five mirrored host-timed rounds compared exact parent `d81f658d8` on port 5202
+with the candidate on port 5201. Each side delivered 1,000 sequential one-event
+dense cross-posts per round. Every sample started before the awaited source
+append RPC and ended only when the destination subscription callback observed
+the unique marker, so the measurement does not depend on a Worker isolate clock
+advancing without network I/O:
+
+| Samples/side | Baseline p50 / p95 / mean | Candidate p50 / p95 / mean | Candidate change p50 / p95 / mean |
+| -----------: | ------------------------: | -------------------------: | --------------------------------: |
+|        5,000 |  4.157 / 6.515 / 4.479 ms |   3.827 / 6.203 / 4.116 ms |         7.9% / 4.8% / 8.1% faster |
+
+Candidate p50 was faster in all five rounds and mean was faster in all five;
+one round's p95 was 0.5% slower while pooled p95 improved. P50 throughput rose
+8.6%. The benchmark harness now has independent
+`STREAM_BENCH_DENSE_CROSSPOST_SAMPLES` and
+`STREAM_BENCH_SPARSE_CROSSPOST_SAMPLES` controls so a singleton trickle test
+does not also amplify 100-event sparse batches.
+
+The correctness tradeoff is bounded and matches the documented at-least-once
+contract. If an incarnation dies after the receiver acknowledged the quiet-tail
+frame but before the next claim or lifecycle flush, durable storage still holds
+that exact claimed frame. Recovery may therefore replay one already-successful
+frame per subscription with the same delivery ID. It cannot skip the frame or
+invent a different boundary. Real-SQLite tests prove the next claim atomically
+checkpoints the previous ack and lifecycle flushes persist a quiet tail; the
+subscriber test now proves reaching the tail does not force an early flush.
+All 363 Stream-domain tests pass, along with OS typecheck and focused lint and
+format checks.
+
+Raw records are in `/tmp/quiet-tail-{baseline,candidate}-{1..5}.log` for the
+life of this workstation.

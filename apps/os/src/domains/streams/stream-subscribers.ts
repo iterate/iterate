@@ -727,7 +727,6 @@ export class StreamSubscribers {
       // Reconciliation invokes this async body synchronously through its first
       // await, so its validated snapshot is exact for iteration one only.
       let initial: PushDrainStart | undefined = start;
-      let hasStagedPushAck = false;
       try {
         for (;;) {
           const snapshot = initial;
@@ -743,10 +742,7 @@ export class StreamSubscribers {
           // The core state is reduced synchronously with every commit, so its
           // head is authoritative for this incarnation. Do not issue a final
           // empty range query after the previous iteration acked the head.
-          if (row.ackedOffset >= state.maxOffset) {
-            if (hasStagedPushAck) this.#hooks.store.flushPending("all");
-            return;
-          }
+          if (row.ackedOffset >= state.maxOffset) return;
           const hasPendingPushFrame =
             config.delivery.mode === "push" &&
             row.pendingThroughOffset !== null &&
@@ -884,7 +880,6 @@ export class StreamSubscribers {
             // and boundedly lagged; the in-memory cursor advances immediately.
             this.#hooks.store.skip(subscriptionKey, lastOffset, row.epoch);
             if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) {
-              if (hasStagedPushAck) this.#hooks.store.flushPending("all");
               return;
             }
             continue;
@@ -914,9 +909,6 @@ export class StreamSubscribers {
               row.epoch,
             );
             if (claim === undefined) continue;
-            // This confirmed claim atomically checkpointed any staged ack from
-            // the preceding successful batch.
-            hasStagedPushAck = false;
             pushStreamMaxOffset = claim.streamMaxOffset;
             pushAttempt = claim.attempt;
             this.#hooks.armAlarm(dispatchAtMs + DELIVERY_TIMEOUT_MS);
@@ -1007,7 +999,6 @@ export class StreamSubscribers {
           let acknowledged: boolean;
           if (config.delivery.mode === "push") {
             acknowledged = this.#hooks.store.stageAck(subscriptionKey, lastOffset, row.epoch);
-            if (acknowledged) hasStagedPushAck = true;
           } else {
             acknowledged = this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);
           }
@@ -1015,7 +1006,6 @@ export class StreamSubscribers {
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
           if (lastOffset >= state.maxOffset && wakeGeneration === this.#wakeGeneration) {
-            if (hasStagedPushAck) this.#hooks.store.flushPending("all");
             return;
           }
         }

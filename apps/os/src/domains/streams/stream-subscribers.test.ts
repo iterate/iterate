@@ -617,7 +617,9 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toMatchObject({ ackedOffset: 3, attempt: 0, nextAttemptAt: null });
     expect(h.store.stageAckCalls).toBe(1);
     expect(h.store.ackCalls).toBe(0);
-    expect(h.store.flushPendingModes.filter((mode) => mode === "all")).toHaveLength(1);
+    // A quiet successful tail stays staged. The next push claim atomically
+    // checkpoints it; the alarm and idle teardown remain lifecycle flushes.
+    expect(h.store.flushPendingModes.filter((mode) => mode === "all")).toHaveLength(0);
 
     h.append(evt(4, "d"), evt(5, "e"));
     h.subscribers.wake();
@@ -627,7 +629,7 @@ describe("StreamSubscribers", () => {
     expect(h.pushes[1].events.map((event) => event.offset)).toEqual([4, 5]);
     expect(h.pushes[1].deliveryId).toBe("k:4-5");
     expect(h.row("k")?.ackedOffset).toBe(5);
-    expect(h.store.flushPendingModes.filter((mode) => mode === "all")).toHaveLength(2);
+    expect(h.store.flushPendingModes.filter((mode) => mode === "all")).toHaveLength(0);
   });
 
   it("b. selector skip-not-defer: non-matching events advance the cursor without a dial call", async () => {
