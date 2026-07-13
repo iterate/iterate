@@ -3,7 +3,7 @@ import { defineProcessorContract, type ProcessorState } from "../streams/process
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
-export const DEFAULT_AGENT_MODEL = "openai/gpt-5.5";
+export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
 export const DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS = 100;
 
@@ -549,12 +549,12 @@ export const AgentProcessorContract = defineProcessorContract({
             "Agent birth applies the platform default model unless something already chose one.",
           payload: {
             ifUnset: true,
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
           },
         },
         {
           description: "The project explicitly selects a Workers AI model.",
-          payload: { model: "openai/gpt-5.5" },
+          payload: { model: "openai/gpt-5.6-sol" },
         },
       ],
     },
@@ -571,7 +571,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "A user input triggered a request, debounced 250ms so rapid-fire inputs collapse into one turn.",
           payload: {
             debounceMs: 250,
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
             requestId: "llm-request:gen-3",
           },
         },
@@ -593,7 +593,7 @@ export const AgentProcessorContract = defineProcessorContract({
           description:
             "The debounce elapsed and the request went out; this event's own offset becomes the llmRequestOffset the processor answers to.",
           payload: {
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
             requestId: "llm-request:gen-3",
           },
         },
@@ -608,7 +608,7 @@ export const AgentProcessorContract = defineProcessorContract({
       examples: [
         {
           description: "The agent picks up a prepared request and dials the AI binding.",
-          payload: { llmRequestOffset: 57, model: "openai/gpt-5.5" },
+          payload: { llmRequestOffset: 57, model: "openai/gpt-5.6-sol" },
         },
       ],
     },
@@ -693,7 +693,7 @@ export const AgentProcessorContract = defineProcessorContract({
             "An OpenAI model reports a mostly-cache-hit request at about a tenth of the model's window.",
           payload: {
             llmRequestOffset: 57,
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
             maxContextTokens: 272000,
             inputTokens: 29295,
             outputTokens: 111,
