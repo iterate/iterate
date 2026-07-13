@@ -4,8 +4,9 @@
 //
 // Also proves the artifact's two core promises:
 // - package-backed: the generated file typechecks with the exact vendor type
-//   packages declared by `iterate` — the same text agents receive through the
-//   typechecker and `__describe().types`.
+//   packages declared by `iterate` — the same public text agents receive
+//   through `__describe().types`. The resource-bounded in-Worker checker uses
+//   a compiler-only structural Octokit shim, tested in virtual-project.test.
 // - sound: every contract-defining class typechecks with
 //   `implements <its generated interface>` injected, so the published
 //   interfaces are really what the implementation provides.

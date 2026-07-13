@@ -2,9 +2,11 @@
 // sidecar ships) against the assembled virtual project, so "the platform
 // surface compiles clean under the sidecar's lib + shims" is a tested
 // invariant, not a hope. Network is stubbed: acquisitions serve from an
-// in-memory fake registry. The platform surface deliberately imports the
-// exact Octokit type, so every fresh checker acquires that pinned package;
-// package names that appear only in comments still must not trigger a fetch.
+// in-memory fake registry. The published surface deliberately imports the
+// exact Octokit type, while the resource-bounded Worker sidecar substitutes
+// its structural RPC-safe entry points so unrelated scripts do not eagerly
+// load that large package graph. Explicit user imports still acquire the
+// pinned package; names that appear only in comments still must not fetch.
 import { createCompiler } from "tswasm";
 import { beforeAll, expect, test } from "vitest";
 import type { CapabilityDescription } from "../itx/describe.ts";
@@ -124,16 +126,33 @@ const WEATHER_MOUNT: CapabilityDescription = {
   types: "export type Forecast = { forecast(input: { city: string }): Promise<string> };",
 };
 
-test("the platform surface compiles clean with its pinned Octokit type", async () => {
+test("the platform surface compiles clean without eagerly loading Octokit's package graph", async () => {
   fetchedUrls = [];
   const problems = await checkItxScript({
     capabilities: [],
-    code: "async (itx) => {}",
+    code: `async (itx) => {
+      const octokit = itx.integrations.github.get().octokit;
+      const [pr, viewer] = await Promise.all([
+        octokit.rest.pulls.get({ owner: "acme", repo: "widgets", pull_number: 7 }),
+        octokit.graphql<{ viewer: { login: string } }>("query { viewer { login } }")
+      ]);
+      return { pr, viewer };
+    }`,
     typechecker,
   });
   expect(problems).toEqual([]);
-  expect(fetchedUrls.some((url) => url.includes("octokit"))).toBe(true);
+  expect(fetchedUrls.some((url) => url.includes("octokit"))).toBe(false);
   expect(fetchedUrls.some((url) => url.includes("@slack/web-api"))).toBe(false);
+});
+
+test("an explicit Octokit import still acquires the pinned upstream package", async () => {
+  fetchedUrls = [];
+  const problems = await checkCapabilityTypes({
+    typechecker,
+    types: 'export type GithubClient = import("octokit").Octokit;',
+  });
+  expect(problems).toEqual([]);
+  expect(fetchedUrls.some((url) => url.includes("octokit"))).toBe(true);
 });
 
 test("a wrong call into the typed surface is a compiler error with a did-you-mean", async () => {
