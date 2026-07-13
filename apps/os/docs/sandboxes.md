@@ -187,6 +187,12 @@ Durable Object, the same decision point `ProjectEgressEntrypoint` gives dynamic
 workers' `globalOutbound`. So a sandbox reaches the outside world only through
 the same allow/deny/secret-substitution policy as the rest of the project.
 
+**WebSockets:** outbound `wss://` works on this path (HTTP/1.1 upgrade under
+MITM). Accepted upgrades are pair-bridged in project egress. Header secrets use
+`getSecret` on the upgrade; Discord-style frame auth uses
+`secret.relayWebSocket`. Details:
+[sandbox-websocket-egress.md](./sandbox-websocket-egress.md).
+
 Wiring (three points):
 
 - `src/worker.ts` re-exports `ContainerProxy` from `@cloudflare/sandbox` —

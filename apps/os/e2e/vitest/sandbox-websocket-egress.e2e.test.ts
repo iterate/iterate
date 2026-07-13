@@ -2,9 +2,7 @@
 // egress. Local containers with OS_SANDBOX_CONTAINER_LOCAL_DEV also work for
 // this check; deployed e2e is the Firecracker path.
 //
-// P0 experiment (2026-07-13, local containers): both direct-fetch and project
-// paths completed WSS under Intercept CA to ws.postman-echo.com. See
-// apps/os/docs/sandbox-websocket-egress-experiment.md.
+// Docs: apps/os/docs/sandbox-websocket-egress.md
 
 import { describe, expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";

@@ -96,6 +96,7 @@ lane, where a project-authored worker (in-jail `read()`, arbitrary
 credential-exchange bodies for providers the platform carries no named
 strategy for) extends the cell to DO + jail with the same boundary: bytes only
 leave toward pinned hosts, and installing the worker is gated like a material
-write. WebSocket egress is likewise deferred, not foreclosed: an Upgrade is
-just a fetch through the same `fetch()` surface, and the relay returns as a
-pure addition when a consumer exists.
+write. WebSocket egress uses the same `fetch()` surface for upgrade-header
+credentials; Discord-shaped IDENTIFY is `secret.relayWebSocket` (trusted
+frame send). Frames are never scanned for placeholders. See
+[sandbox-websocket-egress.md](../sandbox-websocket-egress.md).

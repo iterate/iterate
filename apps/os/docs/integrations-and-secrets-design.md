@@ -185,8 +185,11 @@ Deferred to the userspace-integrations PR (see ADR 0005):
   boundary stays "bytes only leave toward pinned hosts"; worker install gated
   like a material write.
 - **WebSocket egress + relay** (the three gateway credential shapes petshop
-  already serves). An Upgrade is a fetch through the same surface; the relay
-  returns as a pure addition.
+  already serves). Landed in outline: Upgrade is a fetch through the same
+  surface with pair-bridge; Discord IDENTIFY is `secret.relayWebSocket`
+  (trusted frame send, not frame scanning). See
+  [sandbox-websocket-egress.md](./sandbox-websocket-egress.md). Remaining:
+  full petshop e2e lanes for all three shapes.
 - **A userspace webhook-verification story** (the compute-methods question
   returns here, answered inside the jail rather than on the public secret).
 

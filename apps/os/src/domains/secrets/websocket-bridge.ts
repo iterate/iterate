@@ -75,7 +75,7 @@ const NON_SETTABLE_CLOSE_CODES = new Set([1004, 1005, 1006, 1015]);
 export function normalizeWebSocketClose(
   code: number,
   reason: string,
-): { code?: number; reason: string } {
+): { code?: number; reason?: string } {
   const truncated =
     typeof reason === "string" && reason.length > 0
       ? // Spec: reason is at most 123 UTF-8 bytes; approximate with JS length.
