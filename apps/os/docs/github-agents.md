@@ -83,24 +83,52 @@ The GitHub capability is deliberately ordinary:
 const octokit = itx.integrations.github[connection].octokit;
 const pr = await octokit.rest.pulls.get({ owner, repo, pull_number });
 await octokit.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
+
+const reviewThreads = await octokit.graphql(
+  `query ($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100) { nodes { isResolved } }
+      }
+    }
+  }`,
+  { owner, repo, number: pull_number },
+);
 ```
 
-`octokit` is the `Octokit` exported by `@octokit/rest`; Iterate supplies its
-GitHub App installation authentication and request transport. `.rest` is the
-package's normal property. The connection's `__describe()` exposes the exact
-type as:
+`octokit` is the `Octokit` exported by the main `octokit` package; Iterate
+supplies its GitHub App installation authentication and request transport.
+Use `.rest.*` for routine endpoint calls and `.graphql(query, variables)` when
+GraphQL's query shape or API coverage is useful. `.request(...)` is available
+too. Pagination uses the serializable route-string form:
+
+```js
+await octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+  owner,
+  repo,
+  pull_number,
+});
+```
+
+The connection's `__describe()` exposes the exact package type as:
 
 ```ts
 export type GithubConnection = {
-  octokit: import("@octokit/rest").Octokit;
+  octokit: import("octokit").Octokit;
 };
 ```
 
-Use the package types and [official Octokit documentation](https://octokit.github.io/rest.js/).
-The only RPC-specific caveat is to call `paginate(...)` directly rather than
-`paginate.iterator()`, because an async iterator cannot cross the ITX RPC
-boundary. The explicit `.octokit` segment is mandatory; a direct `.rest` on
-the connection is rejected.
+Use the package types and [official Octokit documentation](https://github.com/octokit/octokit.js/).
+Octokit's retry and throttling plugins are disabled, so it does not replay
+5xx, 429, or 408 responses. The secret transport may refresh credentials and
+repeat once after a 401. Inspect GitHub state before manually retrying an
+ambiguous failed write.
+
+RPC arguments must be serializable. For pagination, pass a route string and
+params as above; endpoint-function overloads, map callbacks, and
+`paginate.iterator()` cannot cross the boundary. The explicit `.octokit`
+segment is mandatory; direct `.rest` or `.graphql` on the connection is
+rejected.
 
 For code work, the agent fetches the live PR, clones its head repository/ref
 into a project sandbox, edits and tests normally, commits, and non-force

@@ -71,7 +71,8 @@ describe("agentDefaultsForPath", () => {
     const prompt = defaultsFor("/agents/repos/root/pull-requests/7").systemPrompt;
     expect(prompt).toContain("attached to one GitHub pull request");
     expect(prompt).toContain(".octokit.rest.issues.createComment");
-    expect(prompt).toContain("ordinary Octokit");
+    expect(prompt).toContain("all-in-one Octokit");
+    expect(prompt).toContain(".graphql(query, variables)");
 
     const configured = defaultsFor("/agents/repos/root/pull-requests/7").events.find(
       (event) => event.type === "events.iterate.com/github-agent/configure",

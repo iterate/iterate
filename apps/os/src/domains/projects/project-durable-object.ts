@@ -46,6 +46,13 @@ import {
   type EgressRule,
   type HumanApprovalRequestedPayload,
 } from "./egress-approvals.ts";
+import {
+  applyOpenAiAiGatewayCacheHeaders,
+  isOpenAiPublicApiRequest,
+  openAiAiGatewayBindingHeaders,
+  openAiAiGatewayRoutingFromConfig,
+  openAiGatewayBindingEndpoint,
+} from "./openai-ai-gateway-egress.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
@@ -543,6 +550,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   /** The egress lanes proper: platform references, secret substitution, bare fetch. */
   async #egress(request: Request): Promise<Response> {
+    // Sandbox coding agents (Codex, etc.) call api.openai.com with a placeholder
+    // or dummy key. Route them through Cloudflare AI Gateway with the platform
+    // OpenAI key + project metadata — same BYOK/observability posture as agent DO
+    // turns, without exposing openAiApiKey via getSecret({ platform }).
+    if (isOpenAiPublicApiRequest(request)) {
+      const routed = await this.#egressOpenAiViaAiGateway(request);
+      if (routed !== null) return routed;
+      // Fall through when accountId/gateway config is missing (local/dev edge).
+    }
+
     let secretPaths: string[];
     try {
       // Placeholders live in the request envelope: headers, or the URL for
@@ -584,6 +601,51 @@ export class ProjectDurableObject extends DurableObject<Env> {
         path: secretPaths[0]!,
       }),
     ).fetch(request);
+  }
+
+  /**
+   * Route JSON POST/PUT to `api.openai.com` through Cloudflare AI Gateway via
+   * the Workers AI binding only (same door as agent BYOK). Returns null when
+   * the request is not binding-shaped (GET, non-JSON, missing gateway) so
+   * normal egress applies — no REST rewrite and no direct-OpenAI platform-key
+   * ladder.
+   */
+  async #egressOpenAiViaAiGateway(request: Request): Promise<Response | null> {
+    if (request.method !== "POST" && request.method !== "PUT") return null;
+
+    const config = parseConfig(this.env);
+    const routing = openAiAiGatewayRoutingFromConfig(config);
+    if (routing === null) return null;
+
+    const gateway = this.env.AI?.gateway?.(routing.gatewayId);
+    if (gateway === undefined) return null;
+
+    const endpoint = openAiGatewayBindingEndpoint(request.url);
+    if (endpoint.replace(/\?.*$/, "").length === 0) return null;
+
+    let body: unknown;
+    try {
+      body = await request.clone().json();
+    } catch {
+      return null;
+    }
+
+    const headers = openAiAiGatewayBindingHeaders({
+      openaiApiKey: routing.openaiApiKey,
+      projectId: this.#name.projectId,
+      requestHeaders: request.headers,
+    });
+    await applyOpenAiAiGatewayCacheHeaders({
+      headers,
+      body,
+      responseCacheTtlSeconds: routing.responseCacheTtlSeconds,
+    });
+    return gateway.run({
+      provider: "openai",
+      endpoint,
+      headers,
+      query: body,
+    });
   }
 
   interceptEgress(handler: ProjectEgressInterceptor): ProjectEgressIntercept {
