@@ -85,6 +85,7 @@ import {
   MAX_CONSECUTIVE_SKIPS,
   MAX_DELIVERY_ATTEMPTS,
   PUSH_DELIVERY_BATCH_BYTE_LIMIT,
+  PUSH_DELIVERY_BATCH_LIMIT,
   SKIP_CONFIRM_ATTEMPTS,
 } from "./subscriber-math.ts";
 
@@ -297,6 +298,7 @@ type ReadBatchProjection = {
 
 type ReadBatchResult = {
   events: StreamEvent[];
+  scannedEventCount: number;
   lastOffset: number | undefined;
   eventByteLengths: readonly number[] | undefined;
   byteLength: number;
@@ -723,13 +725,8 @@ export class StreamSubscribers {
           // removed/replaced webhook can never keep POSTing a stale batch to
           // the old URL. The cost is one row/config re-read per event on a
           // backlog, noise against the HTTP POST itself.
-          const limit =
-            config.delivery.mode === "webhook"
-              ? 1
-              : Math.min(
-                  this.#batchLimits.get(subscriptionKey) ?? DELIVERY_BATCH_LIMIT,
-                  DELIVERY_BATCH_LIMIT,
-                );
+          const maxLimit = config.delivery.mode === "push" ? PUSH_DELIVERY_BATCH_LIMIT : 1;
+          const limit = Math.min(this.#batchLimits.get(subscriptionKey) ?? maxLimit, maxLimit);
           const selector =
             config.selector === undefined
               ? undefined
@@ -829,7 +826,15 @@ export class StreamSubscribers {
             // (halved the bisect window or stepped over confirmed poison) and
             // the loop should try again NOW; anything else backs off or parks
             // and the alarm/resume owns the future.
-            if (this.#onPushFailure({ subscriptionKey, config, matched, error }) === "continue") {
+            if (
+              this.#onPushFailure({
+                subscriptionKey,
+                config,
+                matched,
+                scannedEventCount: read.scannedEventCount,
+                error,
+              }) === "continue"
+            ) {
               continue;
             }
             return;
@@ -906,6 +911,7 @@ export class StreamSubscribers {
     ) {
       return {
         events: (durableOnly ? cached.durableEvents : cached.events).slice(),
+        scannedEventCount: cached.events.length,
         lastOffset: cached.lastOffset,
         eventByteLengths: durableOnly ? cached.durableEventByteLengths : cached.eventByteLengths,
         byteLength: durableOnly ? cached.durableByteLength : cached.byteLength,
@@ -961,7 +967,7 @@ export class StreamSubscribers {
       }
       bytes = nextBytes;
     }
-    if (!useFreshTail && limit === DELIVERY_BATCH_LIMIT) {
+    if (!useFreshTail && (limit === DELIVERY_BATCH_LIMIT || limit === PUSH_DELIVERY_BATCH_LIMIT)) {
       if (exceededByteLimit) {
         this.#storageReadLimitHints.set(byteLimit, Math.max(2, events.length + 1));
       } else if (
@@ -1023,6 +1029,7 @@ export class StreamSubscribers {
       }
       return {
         events: (durableOnly ? durableEvents : events).slice(),
+        scannedEventCount: events.length,
         lastOffset,
         eventByteLengths: durableOnly ? durableByteLengths : eventByteLengths,
         byteLength: durableOnly ? durableBytes : bytes,
@@ -1032,6 +1039,7 @@ export class StreamSubscribers {
     }
     return {
       events: durableOnly ? durableEvents : events,
+      scannedEventCount: events.length,
       lastOffset,
       eventByteLengths: durableOnly ? durableByteLengths : eventByteLengths,
       byteLength: durableOnly ? durableBytes : bytes,
@@ -1135,9 +1143,10 @@ export class StreamSubscribers {
     subscriptionKey: string;
     config: SubscriptionConfiguredPayload;
     matched: StreamEvent[];
+    scannedEventCount: number;
     error: unknown;
   }): "continue" | "stop" {
-    const { subscriptionKey, config, matched, error } = args;
+    const { subscriptionKey, config, matched, scannedEventCount, error } = args;
     // A receiver that DECLARED itself unavailable (see
     // StreamReceiverUnavailableError) is down, not poisoned: no bisecting, no
     // skip confirmation — the same batch backs off and redelivers whole, and
@@ -1153,11 +1162,11 @@ export class StreamSubscribers {
     }
     if (config.onPoison === "skip") {
       if (matched.length > 1) {
-        // Bisect: retry immediately with a halved batch. Bounded by
-        // log2(DELIVERY_BATCH_LIMIT) extra attempts; no backoff — the receiver
-        // just proved it is alive enough to reject.
-        const current = this.#batchLimits.get(subscriptionKey) ?? DELIVERY_BATCH_LIMIT;
-        this.#batchLimits.set(subscriptionKey, halveBatchLimit(current));
+        // Bisect the batch that actually failed, not the configured ceiling:
+        // a byte cap, selector, or short tail may already have made it much
+        // smaller. Retrying an identical failed frame adds receiver side
+        // effects without narrowing the poison search.
+        this.#batchLimits.set(subscriptionKey, halveBatchLimit(scannedEventCount));
         return "continue";
       }
       const row = this.#hooks.store.get(subscriptionKey);

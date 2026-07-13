@@ -38,6 +38,9 @@ export const MAX_CONSECUTIVE_SKIPS = 3;
  */
 export const DELIVERY_BATCH_LIMIT = 1000;
 
+/** Internal push event ceiling; the 4 MiB byte cap remains authoritative. */
+export const PUSH_DELIVERY_BATCH_LIMIT = 4000;
+
 /** Soft cap for browser/hosted sink frames (large events shrink the batch). */
 export const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
 

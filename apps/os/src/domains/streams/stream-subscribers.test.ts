@@ -24,8 +24,10 @@ import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
 import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
 import {
+  DELIVERY_BATCH_LIMIT,
   MAX_DELIVERY_ATTEMPTS,
   PUSH_DELIVERY_BATCH_BYTE_LIMIT,
+  PUSH_DELIVERY_BATCH_LIMIT,
   SKIP_CONFIRM_ATTEMPTS,
   computeBackoffMs,
 } from "./subscriber-math.ts";
@@ -717,30 +719,13 @@ describe("StreamSubscribers", () => {
       await h.settle();
     }
 
-    // The full deterministic delivery transcript: batch limits halve toward 1
-    // (1000, 500, 250, 125, 62, 31, 15, 7, 3, 1) until offset 2 is isolated,
-    // the lone event must fail SKIP_CONFIRM_ATTEMPTS deliveries, then delivery
-    // steps over it.
+    // Bisect the actual failed frame immediately; the configured ceiling may
+    // be much larger than a byte-capped, selected, or short-tail batch.
     expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
-      [1, 2, 3, 4], // limit 1000
-      [1, 2, 3, 4], // limit 500
-      [1, 2, 3, 4], // limit 250
-      [1, 2, 3, 4], // limit 125
-      [1, 2, 3, 4], // limit 62
-      [1, 2, 3, 4], // limit 31
-      [1, 2, 3, 4], // limit 15
-      [1, 2, 3, 4], // limit 7
-      [1, 2, 3], // limit 3
-      [1], // limit 1 — clean, delivered; bisect window resets
-      [2, 3, 4], // limit 1000 again
-      [2, 3, 4], // limit 500
-      [2, 3, 4], // limit 250
-      [2, 3, 4], // limit 125
-      [2, 3, 4], // limit 62
-      [2, 3, 4], // limit 31
-      [2, 3, 4], // limit 15
-      [2, 3, 4], // limit 7
-      [2, 3, 4], // limit 3
+      [1, 2, 3, 4],
+      [1, 2],
+      [1], // clean, delivered; bisect window resets
+      [2, 3, 4],
       [2], // isolated: confirm attempt 1 -> backoff
       [2], // confirm attempt 2 (alarm) -> backoff
       [2], // confirm attempt 3 (alarm) -> poison verdict, skipped
@@ -756,6 +741,28 @@ describe("StreamSubscribers", () => {
     expect(skipFacts[0].idempotencyKey).toBe("push-poison-skipped:k:2");
     expect(h.factsOfType(PARKED)).toHaveLength(0);
     expect(h.row("k")).toMatchObject({ ackedOffset: 4, attempt: 0, nextAttemptAt: null });
+  });
+
+  it("g2. poison bisection halves the scanned range under a sparse selector", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip", selector: { eventTypes: ["selected"] } }), 0);
+    h.append(
+      ...Array.from({ length: 8 }, (_, index) =>
+        evt(index + 1, (index + 1) % 4 === 0 ? "selected" : "ignored"),
+      ),
+    );
+    h.dialImpl.push = async () => {
+      throw new Error("reject selected events");
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+      [4, 8],
+      [4],
+    ]);
+    expect(h.storageReadLimits).toEqual([PUSH_DELIVERY_BATCH_LIMIT, 4]);
   });
 
   it("h. skip mode parks when everything fails instead of mass-skipping the backlog", async () => {
@@ -1493,7 +1500,7 @@ describe("StreamSubscribers", () => {
       [5, 6, 7, 8],
       [9, 10],
     ]);
-    expect(h.storageReadLimits).toEqual([1000, 2, 2, 4, 8]);
+    expect(h.storageReadLimits).toEqual([PUSH_DELIVERY_BATCH_LIMIT, 2, 2, 4, 8]);
     expect(h.egress.every(({ bytes }) => bytes <= PUSH_DELIVERY_BATCH_BYTE_LIMIT)).toBe(true);
     expect(h.row("k")?.ackedOffset).toBe(10);
   });
@@ -1509,7 +1516,7 @@ describe("StreamSubscribers", () => {
     h.subscribers.wake();
     await h.settle();
 
-    expect(h.storageReadLimits).toEqual([1000]);
+    expect(h.storageReadLimits).toEqual([PUSH_DELIVERY_BATCH_LIMIT]);
     expect(h.pushes).toHaveLength(subscriptionCount);
     expect(h.pushes.every((batch) => batch.events.length === 10)).toBe(true);
     expect(h.pushes.every((batch) => batch.events.at(-1)?.offset === 10)).toBe(true);
@@ -1520,7 +1527,7 @@ describe("StreamSubscribers", () => {
     h.subscribers.wake();
     await h.settle();
 
-    expect(h.storageReadLimits).toEqual([1000, 1000]);
+    expect(h.storageReadLimits).toEqual([PUSH_DELIVERY_BATCH_LIMIT, PUSH_DELIVERY_BATCH_LIMIT]);
     expect(h.pushes).toHaveLength(subscriptionCount * 2);
     expect(h.pushes.slice(subscriptionCount).every((batch) => batch.events[0]?.offset === 11)).toBe(
       true,
@@ -1551,7 +1558,7 @@ describe("StreamSubscribers", () => {
 
     h.subscribers.wake();
 
-    expect(h.storageReadLimits).toEqual([1000]);
+    expect(h.storageReadLimits).toEqual([PUSH_DELIVERY_BATCH_LIMIT]);
     expect(h.pushes).toHaveLength(subscriptionCount);
     expect(h.pushes.every((batch) => batch.events.length === 256)).toBe(true);
     // One unsized projection + one selector-sized projection; neither the
@@ -1576,7 +1583,7 @@ describe("StreamSubscribers", () => {
 
     h.subscribers.wake();
 
-    expect(h.storageReadLimits).toEqual([1000, 1000]);
+    expect(h.storageReadLimits).toEqual([PUSH_DELIVERY_BATCH_LIMIT, PUSH_DELIVERY_BATCH_LIMIT]);
     expect(h.eventByteLengthReads()).toBe(2);
     expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([[1], [1]]);
 
@@ -1611,7 +1618,38 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")?.ackedOffset).toBe(300);
   });
 
-  it("w1f. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
+  it("w1f. push and connection lanes keep independent event count ceilings", async () => {
+    const h = makeHarness();
+    const connection = makeSink();
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      sink: connection.sink,
+      replayAfterOffset: 0,
+    });
+    await h.settle();
+
+    h.configure(pushPayload(), 0);
+    const backlog = Array.from({ length: PUSH_DELIVERY_BATCH_LIMIT + 500 }, (_, index) =>
+      evt(index + 1, "event"),
+    );
+    h.append(...backlog);
+    for (const event of backlog) h.setEventByteLength(event.offset, 64);
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(connection.batches.slice(1).map((batch) => batch.events.length)).toEqual([
+      DELIVERY_BATCH_LIMIT,
+      DELIVERY_BATCH_LIMIT,
+      DELIVERY_BATCH_LIMIT,
+      DELIVERY_BATCH_LIMIT,
+      500,
+    ]);
+    expect(h.pushes.map((batch) => batch.events.length)).toEqual([PUSH_DELIVERY_BATCH_LIMIT, 500]);
+    expect(h.row("k")?.ackedOffset).toBe(PUSH_DELIVERY_BATCH_LIMIT + 500);
+  });
+
+  it("w1g. aligned fan-out scans a fresh-tail projection once with isolated batch arrays", async () => {
     const h = makeHarness();
     const subscriptionCount = 100;
     for (let index = 0; index < subscriptionCount; index += 1) {
@@ -1652,7 +1690,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1g. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
+  it("w1h. filtered fan-out keeps exact bytes after an unfiltered cached projection", async () => {
     const h = makeHarness();
     const all = makeSink();
     const selected = makeSink();
@@ -1684,7 +1722,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1h. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
+  it("w1i. filtered durable fan-out keeps byte lengths aligned while dropping ephemeral rows", async () => {
     const h = makeHarness();
     const selector = { eventTypes: ["selected"] };
     const ephemeral = makeSink();
@@ -1724,7 +1762,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w1i. aligned lanes evaluate one shared selector projection with isolated arrays", async () => {
+  it("w1j. aligned lanes evaluate one shared selector projection with isolated arrays", async () => {
     const h = makeHarness();
     const connectionCount = 100;
     const sinks = Array.from({ length: connectionCount }, () => makeSink());
@@ -1767,7 +1805,7 @@ describe("StreamSubscribers", () => {
     expect(sinks.every(({ batches }) => batches.at(-1)?.events[0]?.offset === 501)).toBe(true);
   });
 
-  it("w1j. cached selector failures still emit one keyed fact per durable lane", async () => {
+  it("w1k. cached selector failures still emit one keyed fact per durable lane", async () => {
     const h = makeHarness();
     const selector = { condition: "$number(payload.message) = 42" };
     h.configure(pushPayload({ subscriptionKey: "failure-a", selector }), 0);
