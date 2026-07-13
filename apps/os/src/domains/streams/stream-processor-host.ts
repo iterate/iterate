@@ -515,10 +515,6 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
           if (atMs <= firedAt) alarmSlices.delete(name);
         }
         span.setAttribute("iterate.alarm.kind", "processor_keepalive");
-        span.setAttribute("iterate.stream.path", options.path.slice(0, 256));
-        if (options.projectId !== null) {
-          span.setAttribute("iterate.project.id", options.projectId);
-        }
         if (alarmInfo !== undefined) {
           span.setAttribute("iterate.alarm.is_retry", alarmInfo.isRetry);
           span.setAttribute("iterate.alarm.retry_count", alarmInfo.retryCount);

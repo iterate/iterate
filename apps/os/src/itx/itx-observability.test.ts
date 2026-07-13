@@ -10,13 +10,15 @@ afterEach(() => {
 
 describe("ITX observability", () => {
   it("names RPCs by target and method without exposing arbitrary property names", () => {
-    class ProjectsRpcTarget {}
+    class ProjectsRpcTarget {
+      create() {}
+    }
 
     expect(itxRpcMethod({ path: ["create"], target: new ProjectsRpcTarget() })).toBe(
       "Projects.create",
     );
-    expect(itxRpcMethod({ path: ["projects", "get"], target: {} })).toBe("projects.get");
-    expect(itxRpcMethod({ path: ["customer@example.com"], target: {} })).toBe("Object.property");
+    expect(itxRpcMethod({ path: ["projects", "get"], target: {} })).toBe("Object.call");
+    expect(itxRpcMethod({ path: ["customer@example.com"], target: {} })).toBe("Object.call");
   });
 
   it("falls back without invoking a target's constructor property", () => {
@@ -29,10 +31,13 @@ describe("ITX observability", () => {
       },
     );
 
-    expect(itxRpcMethod({ path: ["run"], target })).toBe("Rpc.run");
+    expect(itxRpcMethod({ path: ["run"], target })).toBe("Rpc.call");
   });
 
   it("emits one linked operation event for one successful RPC", async () => {
+    class ProjectsRpcTarget {
+      get() {}
+    }
     const events: WideLogEvent[] = [];
     vi.spyOn(console, "log").mockImplementation((event) => void events.push(event as WideLogEvent));
     const session = createItxRpcSessionOptions({
@@ -42,10 +47,7 @@ describe("ITX observability", () => {
     });
 
     await expect(
-      session.onCall!(
-        { path: ["get"], target: new (class ProjectsRpcTarget {})() },
-        async () => "result",
-      ),
+      session.onCall!({ path: ["get"], target: new ProjectsRpcTarget() }, async () => "result"),
     ).resolves.toBe("result");
 
     expect(events).toHaveLength(1);

@@ -144,8 +144,7 @@ export class DynamicWorkerRunner {
     ref: DynamicWorkerRef;
     request: Request;
   }): Promise<Response> {
-    return this.#trace(ref, "fetch", "dynamic_worker.fetch", async (span) => {
-      span.setAttribute("http.request.method", request.method);
+    return this.#trace(ref, "fetch", async (span) => {
       const response =
         ref.type === "stateful"
           ? await (
@@ -190,8 +189,7 @@ export class DynamicWorkerRunner {
       );
     }
 
-    const operation = traceNamePart(path.length === 0 ? "root" : path.join("."));
-    return this.#trace(ref, operation, "dynamic_worker.call", async () => {
+    return this.#trace(ref, "call", async () => {
       if (ref.type === "stateful") {
         // Method replay must happen inside StatefulWorkerDurableObject. Returning
         // a dynamic facet stub through one DO and then invoking it from another RPC
@@ -254,28 +252,18 @@ export class DynamicWorkerRunner {
 
   #trace<T>(
     ref: DynamicWorkerRef,
-    operation: string,
-    name: string,
+    operation: "call" | "fetch",
     callback: (span: {
       setAttribute(name: string, value: boolean | number | string): void;
     }) => Promise<T>,
   ): Promise<T> {
-    return tracing.enterSpan(name, async (span) => {
+    return tracing.enterSpan(`dynamic_worker.${operation}`, async (span) => {
       span.setAttribute("iterate.worker.operation", operation);
       span.setAttribute("iterate.worker.source", ref.source.files.type);
       span.setAttribute("iterate.worker.type", ref.type);
-      if (ref.type === "stateful") {
-        span.setAttribute("iterate.worker.class", traceNamePart(ref.className));
-      } else {
-        span.setAttribute("iterate.worker.entrypoint", traceNamePart(ref.entrypoint ?? "default"));
-      }
       return await callback(span);
     });
   }
-}
-
-function traceNamePart(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_./:$-]+/g, "_").slice(0, 120) || "unknown";
 }
 
 /**

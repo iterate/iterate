@@ -83,8 +83,6 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     await this.#processorHost.handleAlarm(alarmInfo);
     await tracing.enterSpan("alarm scheduler trigger due", async (span) => {
       span.setAttribute("iterate.alarm.kind", "scheduler_trigger_due");
-      span.setAttribute("iterate.project.id", this.#name.projectId);
-      span.setAttribute("iterate.stream.path", this.#name.path.slice(0, 256));
       if (alarmInfo !== undefined) {
         span.setAttribute("iterate.alarm.is_retry", alarmInfo.isRetry);
         span.setAttribute("iterate.alarm.retry_count", alarmInfo.retryCount);

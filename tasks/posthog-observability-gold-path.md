@@ -90,9 +90,11 @@ ITX call operation + `itx <semantic method>` span
 The span display name is a bounded semantic name such as
 `itx Projects.get`. The structured log uses the stable message `itx_rpc` and
 stores the semantic name in `itx.method`, which keeps Cloudflare grouping
-low-cardinality without losing searchability. Never put arguments or results
-in either. Multiple calls over one socket produce N small call events, not one
-large session event.
+low-cardinality without losing searchability. A name is used only when the
+method exists as a data property on the target's prototype; dynamic/arbitrary
+property keys collapse to `call`. Never put arguments or results in either.
+Multiple calls over one socket produce N small call events, not one large
+session event.
 
 The Cap'n Web package patch is deliberately minimal. The server-side
 `onCall(info, invoke)` hook and promise-pipeline propagation touch only the

@@ -31,10 +31,26 @@ function targetName(target: unknown): string {
   }
 }
 
+function methodName(target: unknown, path: RpcCallInfo["path"]): string {
+  const candidate = path.at(-1);
+  if (typeof candidate !== "string") return "call";
+  try {
+    let prototype = Object.getPrototypeOf(target) as object | null;
+    for (let depth = 0; prototype !== null && depth < 10; depth++) {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, candidate);
+      if (descriptor !== undefined) {
+        return typeof descriptor.value === "function" ? safeNamePart(candidate, "call") : "call";
+      }
+      prototype = Object.getPrototypeOf(prototype) as object | null;
+    }
+  } catch {
+    return "call";
+  }
+  return "call";
+}
+
 export function itxRpcMethod(info: Pick<RpcCallInfo, "path" | "target">): string {
-  const path = info.path.map((part) => safeNamePart(part, "property"));
-  if (path.length === 0) return `${targetName(info.target)}.call`;
-  return (path.length > 1 ? path : [targetName(info.target), ...path]).join(".").slice(0, 240);
+  return `${targetName(info.target)}.${methodName(info.target, info.path)}`;
 }
 
 /**
