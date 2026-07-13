@@ -1,8 +1,8 @@
-import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
 import type { AuthenticatedSession } from "@iterate-com/auth/server";
 import type { SignInAuthError } from "~/auth/errors.ts";
 import type { AppConfig } from "~/config.ts";
 import type { Principal } from "~/auth/principal.ts";
+import type { WideLogger } from "~/observability/wide-log.ts";
 
 /**
  * Per-request server context, passed to TanStack Start's server handler in
@@ -18,7 +18,7 @@ export interface RequestContext {
   /** Runtime config with `baseUrl` defaulted to the request origin. */
   config: AppConfig;
   isEventDocsHost: boolean;
-  log: SharedRequestLogger;
+  log: WideLogger;
   rawRequest?: Request;
   /** `ExecutionContext.waitUntil`, for work that should outlive the response. */
   waitUntil: (promise: Promise<unknown>) => void;
