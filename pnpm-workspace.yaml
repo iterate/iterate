@@ -75,7 +75,7 @@ overrides:
   agents>x402: '-'
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
-  capnweb: https://github.com/iterate/capnweb.git#0182f2c3c6176cd68d994c02c208a0a7102c7a70
+  capnweb: https://github.com/iterate/capnweb.git#f404ba297d164676e9e079b80afe10df8bf7ff1b
   quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
   srvx: 0.11.12
   wrangler: 4.107.0
@@ -92,4 +92,3 @@ patchedDependencies:
   '@cloudflare/worker-bundler@0.2.1': patches/@cloudflare__worker-bundler@0.2.1.patch
   '@cloudflare/workers-types@4.20260621.1': patches/@cloudflare__workers-types@4.20260621.1.patch
   '@journeyapps/wa-sqlite@1.7.0': patches/@journeyapps__wa-sqlite@1.7.0.patch
-  capnweb@0.8.0: patches/capnweb@0.8.0.patch
