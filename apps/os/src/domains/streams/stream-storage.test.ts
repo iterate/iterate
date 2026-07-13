@@ -565,6 +565,38 @@ describe("StreamEventLog.getRange", () => {
     for (const event of committedEvents) expect(hits.get(event.idempotencyKey)).toEqual(event);
   });
 
+  it("resolves acknowledged idempotency hits without reading event bodies or chunks", () => {
+    const statements: string[] = [];
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(
+      wrapSqlStorage(db, (statement) => statements.push(statement)),
+      "/tests/stream",
+    );
+    log.insert([
+      { ...event(1, "small"), idempotencyKey: "small" },
+      {
+        ...event(2, "large"),
+        payload: { text: "x".repeat(600 * 1024) },
+        idempotencyKey: "large",
+      },
+    ]);
+    statements.length = 0;
+
+    expect(log.getOffsetByIdempotencyKey("large")).toBe(2);
+    expect(log.getOffsetByIdempotencyKey("missing")).toBeUndefined();
+    expect(log.getOffsetsByIdempotencyKeys(["missing", "large", "small"])).toEqual(
+      new Map([
+        ["small", 1],
+        ["large", 2],
+      ]),
+    );
+    expect(statements).toHaveLength(3);
+    for (const statement of statements) {
+      expect(statement).not.toContain("event_json");
+      expect(statement).not.toContain("event_chunks");
+    }
+  });
+
   it("does not sort batched idempotency hits that callers resolve by key", () => {
     const db = new DatabaseSync(":memory:");
     let lookup: { statement: string; bindings: readonly SqlStorageValue[] } | undefined;

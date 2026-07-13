@@ -65,10 +65,51 @@ test("creates a project and uses project streams through v4 ITX", async () => {
     await stream.appendAck({
       type: STREAM_EVENT_TYPE,
       payload: { marker: ackMarker },
+      idempotencyKey: `stream-e2e-ack:${ackMarker}`,
     }),
   ).toBeUndefined();
   const headAfterAck = await stream.head();
   expect(headAfterAck.maxOffset).toBe(appended!.offset + 1);
+  expect(
+    await stream.appendAck({
+      type: STREAM_EVENT_TYPE,
+      payload: { marker: `${ackMarker}-duplicate` },
+      idempotencyKey: `stream-e2e-ack:${ackMarker}`,
+    }),
+  ).toBeUndefined();
+  expect(await stream.head()).toEqual(headAfterAck);
+
+  const sameBatchKey = `stream-e2e-ack-batch:${ackMarker}`;
+  await stream.appendAck(
+    {
+      type: STREAM_EVENT_TYPE,
+      payload: { marker: `${ackMarker}-batch` },
+      idempotencyKey: sameBatchKey,
+    },
+    {
+      type: STREAM_EVENT_TYPE,
+      payload: { marker: `${ackMarker}-batch-duplicate` },
+      idempotencyKey: sameBatchKey,
+    },
+  );
+  const headAfterSameBatch = await stream.head();
+  expect(headAfterSameBatch.maxOffset).toBe(headAfterAck.maxOffset + 1);
+
+  const mixedKey = `stream-e2e-ack-mixed:${ackMarker}`;
+  await stream.appendAck(
+    {
+      type: STREAM_EVENT_TYPE,
+      payload: { marker: `${ackMarker}-duplicate` },
+      idempotencyKey: `stream-e2e-ack:${ackMarker}`,
+    },
+    {
+      type: STREAM_EVENT_TYPE,
+      payload: { marker: `${ackMarker}-mixed` },
+      idempotencyKey: mixedKey,
+    },
+  );
+  const headAfterMixed = await stream.head();
+  expect(headAfterMixed.maxOffset).toBe(headAfterSameBatch.maxOffset + 1);
 
   const read = await stream.getEvents({ afterOffset: 0 });
   expect(read).toEqual(
@@ -83,8 +124,21 @@ test("creates a project and uses project streams through v4 ITX", async () => {
         payload: { marker: ackMarker },
         type: STREAM_EVENT_TYPE,
       }),
+      expect.objectContaining({
+        offset: headAfterSameBatch.maxOffset,
+        payload: { marker: `${ackMarker}-batch` },
+        type: STREAM_EVENT_TYPE,
+      }),
+      expect.objectContaining({
+        offset: headAfterMixed.maxOffset,
+        payload: { marker: `${ackMarker}-mixed` },
+        type: STREAM_EVENT_TYPE,
+      }),
     ]),
   );
+  const markers = read.map((event) => (event.payload as { marker?: unknown }).marker);
+  expect(markers).not.toContain(`${ackMarker}-duplicate`);
+  expect(markers).not.toContain(`${ackMarker}-batch-duplicate`);
 
   await waitFor(
     () =>

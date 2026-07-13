@@ -252,6 +252,14 @@ export class StreamDurableObject extends DurableObject<Env> {
    * Returns the persisted events (including offsets + `createdAt`) in input order.
    */
   append(...eventInputs: StreamEventInput[]): StreamEvent[] {
+    return this.#append(eventInputs, true);
+  }
+
+  /** The shared commit path; void callers need only duplicate offsets, not stored envelopes. */
+  #append(
+    eventInputs: readonly StreamEventInput[],
+    materializeIdempotencyHits: boolean,
+  ): StreamEvent[] {
     let workingState = this.#coreProcessorState;
     let nextOffset = workingState.maxOffset;
     const events: StreamEvent[] = [];
@@ -261,7 +269,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     let reducedEvents: ReducedCoreEvent[] | undefined;
     let committedAt: string | undefined;
     let committedAtMs = 0;
-    let idempotencyHitsInBatch: Map<string, StreamEvent> | undefined;
+    let idempotencyHitsInBatch: Map<string, StreamEvent | number> | undefined;
     let idempotencyKeys: Set<string> | undefined;
     let ordinaryRun: OrdinaryEventRun | undefined;
     // The single-event path is already allocation-minimal. Variadic appends
@@ -288,11 +296,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     const persistedSingleIdempotencyHit =
       singleInput?.idempotencyKey === undefined
         ? undefined
-        : this.#log.getByIdempotencyKey(singleInput.idempotencyKey);
+        : materializeIdempotencyHits
+          ? this.#log.getByIdempotencyKey(singleInput.idempotencyKey)
+          : this.#log.getOffsetByIdempotencyKey(singleInput.idempotencyKey);
     const persistedIdempotencyHits =
       idempotencyKeys === undefined
         ? undefined
-        : this.#log.getByIdempotencyKeys([...idempotencyKeys]);
+        : materializeIdempotencyHits
+          ? this.#log.getByIdempotencyKeys([...idempotencyKeys])
+          : this.#log.getOffsetsByIdempotencyKeys([...idempotencyKeys]);
 
     // 1. Validate inputs, assign offsets, and reduce state.
     const inputCount = singleInput === undefined ? parsedInputs!.length : 1;
@@ -320,11 +332,14 @@ export class StreamDurableObject extends DurableObject<Env> {
           persistedSingleIdempotencyHit ??
           persistedIdempotencyHits?.get(body.idempotencyKey);
         if (existing !== undefined) {
-          if (expectedOffset !== undefined && expectedOffset !== existing.offset) {
-            throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
+          const existingOffset = typeof existing === "number" ? existing : existing.offset;
+          if (expectedOffset !== undefined && expectedOffset !== existingOffset) {
+            throw new Error(`idempotency hit at offset ${existingOffset}, got ${expectedOffset}`);
           }
-          newEvents ??= events.slice();
-          events.push(existing);
+          if (typeof existing !== "number") {
+            newEvents ??= events.slice();
+            events.push(existing);
+          }
           continue;
         }
       }
@@ -387,7 +402,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       events.push(committed);
       newEvents?.push(committed);
       if (committed.idempotencyKey !== undefined) {
-        (idempotencyHitsInBatch ??= new Map()).set(committed.idempotencyKey, committed);
+        (idempotencyHitsInBatch ??= new Map()).set(
+          committed.idempotencyKey,
+          materializeIdempotencyHits ? committed : committed.offset,
+        );
       }
     }
 
@@ -446,7 +464,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Commit events without serializing their committed envelopes back to the caller. */
   appendAck(...eventInputs: StreamEventInput[]): void {
-    this.append(...eventInputs);
+    this.#append(eventInputs, false);
   }
 
   /**

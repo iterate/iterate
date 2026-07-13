@@ -487,6 +487,42 @@ export class StreamEventLog {
     return chunked === undefined ? undefined : this.#parseEvent(chunked.chunks, chunked.byteLength);
   }
 
+  /** Resolve a void append's duplicate without materializing its stored event. */
+  getOffsetByIdempotencyKey(idempotencyKey: string): number | undefined {
+    return this.sql
+      .exec<{ offset: number }>(
+        "select offset from events where idempotency_key = ?",
+        idempotencyKey,
+      )
+      .toArray()[0]?.offset;
+  }
+
+  /** Batched counterpart to getOffsetByIdempotencyKey for variadic void appends. */
+  getOffsetsByIdempotencyKeys(idempotencyKeys: readonly string[]): Map<string, number> {
+    if (idempotencyKeys.length === 1) {
+      const idempotencyKey = idempotencyKeys[0]!;
+      const offset = this.getOffsetByIdempotencyKey(idempotencyKey);
+      return offset === undefined ? new Map() : new Map([[idempotencyKey, offset]]);
+    }
+    const offsets = new Map<string, number>();
+    for (let start = 0; start < idempotencyKeys.length; start += MAX_SQL_BINDINGS) {
+      const keys = idempotencyKeys.slice(start, start + MAX_SQL_BINDINGS);
+      for (const [idempotencyKey, offset] of this.sql
+        .exec(
+          `
+            select idempotency_key as idempotencyKey, offset
+            from events
+            where idempotency_key in (${keys.map(() => "?").join(", ")})
+          `,
+          ...keys,
+        )
+        .raw<[string, number]>()) {
+        offsets.set(idempotencyKey, offset);
+      }
+    }
+    return offsets;
+  }
+
   /**
    * Resolves an append batch's durable idempotency hits with one query per 100
    * keys. Missing keys return no rows; common hits parse directly from the
