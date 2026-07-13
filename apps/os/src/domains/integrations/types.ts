@@ -62,7 +62,8 @@ export type IntegrationConnectionListEntry =
     };
 
 /** Outcome of `completeConnect` (the OAuth/installation redirect callback):
- * `ok` plus the `callbackUrl` to send the browser back to; on failure, a
+ * `ok` plus the browser's next URL (a provider authorization URL for an
+ * intermediate step, otherwise the product callback); on failure, a
  * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }

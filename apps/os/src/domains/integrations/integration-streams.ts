@@ -74,12 +74,13 @@ function directoryKey(slug: string, externalId: string): string {
 
 /**
  * Folds the deployment-wide integration directory: for each `(slug,
- * externalId)`, latest claim wins; an unclaim clears it only when BOTH the
- * project and the connection match the live claim — one project can hold
- * several external accounts, and a stale connection's disconnect must not tear
- * down the claim a newer connection now owns. This is the provider-agnostic
- * generalization of the old Slack team directory (D4): the same fold serves
- * Slack team ids, GitHub installation ids, and any future provider.
+ * externalId)`, the first live project owner wins. That project may update the
+ * connection name; another project can claim the id only after a matching
+ * unclaim clears it. Requiring BOTH the project and connection on an unclaim
+ * also prevents a stale connection's disconnect from tearing down the claim a
+ * newer connection now owns. This is the provider-agnostic generalization of
+ * the old Slack team directory (D4): the same fold serves Slack team ids,
+ * GitHub installation ids, and any future provider.
  */
 export function foldConnectionDirectory(
   events: readonly StreamEvent[],
@@ -102,7 +103,10 @@ export function foldConnectionDirectory(
     const key = directoryKey(payload.slug, payload.externalId);
     if (event.type === CONNECTION_CLAIMED_EVENT_TYPE) {
       if (typeof payload.connection !== "string") continue;
-      claims.set(key, { connection: payload.connection, projectId: payload.projectId });
+      const existingClaim = claims.get(key);
+      if (existingClaim === undefined || existingClaim.projectId === payload.projectId) {
+        claims.set(key, { connection: payload.connection, projectId: payload.projectId });
+      }
     } else if (
       event.type === CONNECTION_UNCLAIMED_EVENT_TYPE &&
       claims.get(key)?.projectId === payload.projectId &&
@@ -122,18 +126,6 @@ export async function lookupConnectionClaim(
 ): Promise<ConnectionClaim | null> {
   const events = await readAllStreamEvents(null, INTEGRATION_DIRECTORY_STREAM_PATH);
   return foldConnectionDirectory(events).get(directoryKey(slug, externalId)) ?? null;
-}
-
-/** Whether a provider external id has a live directory claim for a project.
- * Platform credential mints use this to prevent a project-authored refresh
- * configuration from acting as another project's provider installation. */
-export async function isConnectionClaimedByProject(input: {
-  externalId: string;
-  projectId: string;
-  slug: string;
-}): Promise<boolean> {
-  const claim = await lookupConnectionClaim(input.slug, input.externalId);
-  return claim?.projectId === input.projectId;
 }
 
 /** The outcome of routing one inbound webhook: delivered to a connection, or

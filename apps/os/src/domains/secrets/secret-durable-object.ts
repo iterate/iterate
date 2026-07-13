@@ -10,8 +10,10 @@ import type {
 } from "../streams/rpc-types.ts";
 import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
-import { mintGithubInstallationToken } from "../integrations/github-app.ts";
-import { isConnectionClaimedByProject } from "../integrations/integration-streams.ts";
+import {
+  assertGithubInstallationTokenMintAuthorized,
+  mintGithubInstallationToken,
+} from "../integrations/github-app.ts";
 import { isStreamOffsetConflictError } from "../streams/rpc-types.ts";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
@@ -194,7 +196,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
 
     try {
-      const state = await this.#snapshot();
+      let state = await this.#snapshot();
       assertOriginPinned(request.url, state);
 
       // A refresh-and-retry needs the body twice; clone while it is still
@@ -216,11 +218,13 @@ export class SecretDurableObject extends DurableObject<Env> {
         // (the first-use case — e.g. a fresh GitHub installation), then retry.
         if (retry === null || !isMintableMiss(error)) throw error;
         await this.#refresh(retry);
-        substituted = await this.#substitute(retry.source, await this.#snapshot());
+        state = await this.#snapshot();
+        substituted = await this.#substitute(retry.source, state);
         retry = null; // one refresh per request: a just-minted token gets no second go
       }
 
       await this.#appendUsed(request.url);
+      await this.#assertGithubInstallationUseAuthorized(state.refresh);
       const response = await fetchWithCredentialRedirects(substituted, {
         assertUrlAllowed: (url) => assertOriginPinned(url, state),
       });
@@ -236,6 +240,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       const retriedState = await this.#snapshot();
       const retried = await this.#substitute(retry.source, retriedState);
       await this.#appendUsed(request.url);
+      await this.#assertGithubInstallationUseAuthorized(retriedState.refresh);
       return await fetchWithCredentialRedirects(retried, {
         assertUrlAllowed: (url) => assertOriginPinned(url, retriedState),
       });
@@ -262,6 +267,19 @@ export class SecretDurableObject extends DurableObject<Env> {
       this.#refreshing = undefined;
     });
     return this.#refreshing;
+  }
+
+  async #assertGithubInstallationUseAuthorized(refresh: SecretRefresh | null): Promise<void> {
+    if (refresh?.kind !== "github-app-installation") return;
+    try {
+      await assertGithubInstallationTokenMintAuthorized({
+        installationId: refresh.installationId,
+        privateKey: refresh.privateKey,
+        projectId: this.#name.projectId,
+      });
+    } catch {
+      throw new SecretSubstitutionError("secret_not_found");
+    }
   }
 
   async #doRefresh(expected: { strategy: SecretRefresh; updatedOffset: number }): Promise<void> {
@@ -374,15 +392,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (refresh.privateKey === "material") {
       privateKeyPem = readStringField(material, "privateKey");
     } else {
-      if (
-        !(await isConnectionClaimedByProject({
-          externalId: refresh.installationId,
-          projectId: this.#name.projectId,
-          slug: "github",
-        }))
-      ) {
-        throw new SecretSubstitutionError("secret_not_found");
-      }
+      await this.#assertGithubInstallationUseAuthorized(refresh);
       privateKeyPem = resolvePlatformGithubAppKey({
         apiBase: refresh.apiBase,
         appId: refresh.appId,

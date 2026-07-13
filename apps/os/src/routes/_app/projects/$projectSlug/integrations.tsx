@@ -58,7 +58,6 @@ import {
   Plus,
   Search as SearchIcon,
   Send,
-  Sparkles,
   type LucideIcon,
   Unplug,
 } from "lucide-react";
@@ -136,15 +135,6 @@ const BUILTIN_API_INTEGRATIONS = [
     keyReference: "Call itx.ai.run(model, body)",
     name: "Cloudflare Edge AI",
     namespace: "itx.ai",
-  },
-  {
-    description:
-      "OpenAI API calls through project egress or workers without storing a project-owned OpenAI key.",
-    docsUrl: "https://platform.openai.com/docs/api-reference",
-    icon: Sparkles,
-    keyReference: 'Authorization: Bearer getSecret({ platform: "openAiApiKey" })',
-    name: "OpenAI",
-    namespace: "itx.egress.fetch",
   },
 ] as const;
 

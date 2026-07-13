@@ -15,7 +15,7 @@ const unclaim = (slug: string, externalId: string, projectId: string, connection
   event(CONNECTION_UNCLAIMED_EVENT_TYPE, { connection, externalId, projectId, slug });
 
 describe("foldConnectionDirectory", () => {
-  test("latest claim wins; a matching unclaim clears it", () => {
+  test("a matching unclaim clears a live claim", () => {
     const claims = foldConnectionDirectory([
       claim("slack", "T1", "prj_1", "acme"),
       unclaim("slack", "T1", "prj_1", "acme"),
@@ -42,6 +42,17 @@ describe("foldConnectionDirectory", () => {
     ]);
     expect(claims.has("slack T0")).toBe(false);
     expect(claims.get("slack T1")).toEqual({ connection: "acme", projectId: "prj_1" });
+  });
+
+  test("another project's claim cannot replace a live owner", () => {
+    const claims = foldConnectionDirectory([
+      claim("github", "123", "prj_1", "install-123"),
+      claim("github", "123", "prj_2", "stolen-install-123"),
+    ]);
+    expect(claims.get("github 123")).toEqual({
+      connection: "install-123",
+      projectId: "prj_1",
+    });
   });
 
   test("the same external id under different slugs does not collide", () => {

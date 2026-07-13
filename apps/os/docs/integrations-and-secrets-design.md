@@ -90,11 +90,14 @@ event.
 
 `platform-secrets.ts` — a known, closed registry over typed AppConfig:
 
-- **API keys** (`integrations.exa.apiKey`, `integrations.parallel.apiKey`,
-  `openAiApiKey`): substitutable into project egress as
+- **API keys** (`integrations.exa.apiKey`, `integrations.parallel.apiKey`):
+  substitutable into project egress as
   `getSecret({ platform: "<configPath>" })` header references, resolved at
   the project egress door, each pinned to its provider origins. Adding one is
   adding a config key + a row.
+- **The internal OpenAI key is not in this registry.** The Agent Durable
+  Object may use it only through its hardcoded Cloudflare AI Gateway model
+  transport; project egress cannot reference or receive it.
 - **OAuth client credentials** (`integrations.google`,
   `integrations.petshop`): resolved by the `oauth-refresh-token` strategy.
   The registry's origin pin means even a hostile `secret.update` configuring
