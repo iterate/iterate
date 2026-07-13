@@ -2,8 +2,8 @@
 // as ordinary code in its own repo and mounts it into the integrations
 // collection with provideCapability({ path: ["integrations", "ocado"] }) —
 // data, not deployment. It is then addressed exactly like a built-in, at fully
-// qualified connection paths: itx.integrations.ocado.family.searchProducts(...)
-// and itx.integrations.ocado.mum.basket.add(...). Per-connection session
+// qualified connection paths: itx.integrations.ocado.get("family").searchProducts(...)
+// and itx.integrations.ocado.get("mum").basket.add(...). Per-connection session
 // secrets ride as getSecret(path) placeholders in the worker's fetch
 // headers and substitute at project egress: the echo fixture (standing in for
 // the vendor API) is the only party that ever sees material.
@@ -53,15 +53,15 @@ function ocadoWorkerSource(echoUrl: string): string {
       };
     }
 
-    // Mounted at ["integrations", "ocado"], so the first remaining path
-    // segment is the CONNECTION and the rest is the SDK method path — the same
+    // Mounted at ["integrations", "ocado"], so get(connection) supplies
+    // the first remaining path segment and the rest is the SDK method path — the same
     // /integrations/<slug>/<connection> address shape as built-ins.
     export class OcadoIntegration extends WorkerEntrypoint {
       invokeCapability({ path, args }) {
         const [connection, ...rest] = path;
         if (!connection || rest.length === 0) {
           throw new Error(
-            "ocado expects <connection>.<method>, e.g. itx.integrations.ocado.family.searchProducts(...)",
+            'ocado expects <connection>.<method>, e.g. itx.integrations.ocado.get("family").searchProducts(...)',
           );
         }
         let receiver = ocadoSdk(connection);
@@ -91,7 +91,7 @@ describe("provided integrations", () => {
 
       // Before the mount, the name resolves through the capability table and
       // fails loudly — nothing is silently invented.
-      await expect(integrations.ocado.family.searchProducts("milk")).rejects.toThrow(
+      await expect(integrations.ocado.get("family").searchProducts("milk")).rejects.toThrow(
         /no capability/,
       );
 
@@ -158,7 +158,7 @@ describe("provided integrations", () => {
         type: "itx-expression",
         flattenNestedPaths: true,
         instructions:
-          "Ocado grocery integration. Address a connection first: itx.integrations.ocado.<connection>.searchProducts(term) / .basket.add(itemId).",
+          'Ocado grocery integration. Select a connection with get("<connection>"): itx.integrations.ocado.get("family").searchProducts(term) / .basket.add(itemId).',
         expression: [
           "workers",
           [
@@ -177,7 +177,7 @@ describe("provided integrations", () => {
       });
 
       // Same address shape as a built-in, fully qualified connection first.
-      const search = await integrations.ocado.family.searchProducts("milk");
+      const search = await integrations.ocado.get("family").searchProducts("milk");
       expect(search).toEqual({
         operation: "search-products",
         payload: { term: "milk" },
@@ -185,7 +185,7 @@ describe("provided integrations", () => {
         receivedAuthorization: secrets.family,
       });
 
-      const basket = await integrations.ocado.mum.basket.add("item-123");
+      const basket = await integrations.ocado.get("mum").basket.add("item-123");
       expect(basket).toEqual({
         operation: "basket-add",
         payload: { itemId: "item-123" },
@@ -215,11 +215,12 @@ describe("provided integrations", () => {
         ]),
       );
 
-      // Built-ins stay strict: no implicit connection, unknown names stay loud.
-      await expect(integrations.slack.chat.postMessage({ text: "hi" })).rejects.toThrow(
-        /use itx.integrations.list\(\) to see connections/,
+      // get() is the only selector and teaches the missing-connection case;
+      // unknown integration names still stay loud.
+      await expect(integrations.slack.get().chat.postMessage({ text: "hi" })).rejects.toThrow(
+        /No connected slack account is available/,
       );
-      await expect(integrations.tesco.family.searchProducts("milk")).rejects.toThrow(
+      await expect(integrations.tesco.get("family").searchProducts("milk")).rejects.toThrow(
         /no capability/,
       );
 
@@ -245,20 +246,38 @@ describe("provided integrations", () => {
     await project.__describe();
     const integrations = project.integrations as any;
 
-    // A call without a connection is an error that teaches the grammar.
-    await expect(integrations.waitrose.mum()).rejects.toThrow(
-      /itx.integrations.waitrose expected `<connection>.<method>`/,
+    // get() is the only connection selector. With no connected secret it
+    // explains how to connect or select an exact account.
+    await expect(integrations.waitrose.get().shoppingContext()).rejects.toThrow(
+      /No connected waitrose account is available/,
+    );
+
+    using sessionSecret = project.secrets.get("/secrets/integrations/waitrose/mum/session");
+    await sessionSecret.update({
+      egress: { urls: ["https://www.waitrose.com"] },
+      material: { username: "mum@example.com", password: "not-used" },
+    });
+    await waitForCondition(async () => (await sessionSecret.__describe()).hasMaterial, {
+      description: "waitrose/mum connection secret to fold",
+    });
+    await waitForCondition(
+      async () =>
+        (await project.integrations.list()).some(
+          (entry) => entry.integration === "waitrose" && entry.connection === "mum",
+        ),
+      { description: "waitrose/mum to appear in integrations.list()" },
     );
 
     // The connection node answers __describe with the client surface and the
-    // connection-secret recipe — no journal, no vendor round trip.
-    const description = await integrations.waitrose.mum.__describe();
+    // connection-secret recipe — no journal, no vendor round trip. This also
+    // proves get() resolves the first credential-defined connection.
+    const description = await integrations.waitrose.get().__describe();
     const rendered = JSON.stringify(description);
     expect(rendered).toContain("vendored Waitrose client");
     expect(rendered).toContain("waitrose-session");
 
     // A method the client does not have misses loudly instead of dialing out.
-    await expect(integrations.waitrose.mum.noSuchMethod()).rejects.toThrow(/noSuchMethod/);
+    await expect(integrations.waitrose.get("mum").noSuchMethod()).rejects.toThrow(/noSuchMethod/);
   });
 });
 

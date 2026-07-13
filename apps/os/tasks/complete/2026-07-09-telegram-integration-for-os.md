@@ -41,7 +41,7 @@ Add a `telegram` built-in integration mirroring the Slack integration shape:
 - A router processor forwards each chat's updates to a per-chat agent stream;
   an agent processor transcribes messages into agent inputs and the agent
   replies via the bot API.
-- Agents and itx scripts get `itx.integrations.telegram["<connection>"]` for
+- Agents and itx scripts get `itx.integrations.telegram.get("<connection>")` for
   arbitrary Bot API calls (`sendMessage`, `sendChatAction`, …), token
   substituted at the egress door — material never read back.
 
@@ -110,7 +110,7 @@ seam — it's small, generic, and keeps the write-only-material invariant.)**
   `sendChatAction: typing` while the agent LLM is working, and instructs the
   agent (system prompt in `project-processor-implementation.ts`, alongside the
   Slack one) to reply with
-  `itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text })`.
+  `itx.integrations.telegram.get("<connection>").sendMessage({ chat_id, text })`.
 - v1 scope: text messages only. Photos/voice/stickers/edits are transcribed as
   a bracketed placeholder like `[photo]` **(assumption)**.
 - Ignore updates from bots (`message.from.is_bot`) to prevent loops.
@@ -166,7 +166,7 @@ and outbound calls at a fake Bot API server (follow whatever pattern
       (chat id parsed from the agent path so replies need no payload
       spelunking); birth certificate arms `telegram-agent` on
       `/agents/telegram/**`_
-- [x] `rpc-targets.ts`: `itx.integrations.telegram["<connection>"].<method>`
+- [x] `rpc-targets.ts`: `itx.integrations.telegram.get("<connection>").<method>`
       dispatch branch + the `connectTelegram` verb reachable from the
       dashboard — _flat one-segment method dispatch with `__describe` +
       TELEGRAM_CALL_GRAMMAR; `connectTelegram` verb; itx-api regenerated;
@@ -308,7 +308,7 @@ messageId }`. A request without a marker is an unmet obligation (crash →
   `itx.streams`, or a thin `reply({ text, ... })` capability mounted on
   telegram agent scopes constructs it (chat_id filled from the path) —
   whichever reads best in the system prompt. Raw
-  `itx.integrations.telegram["<conn>"].sendMessage` stays available for
+  `itx.integrations.telegram.get("<conn>").sendMessage` stays available for
   arbitrary Bot API use.
 
 ### Part 2 touch points
@@ -609,7 +609,7 @@ gate, not authz.
   CONFLICTING — CI runs with an empty merge sha are the tell). Merged
   origin/main: #1784's one-subscription-concept means connectTelegram's wake
   subscription now persists the itx processor expression
-  (["integrations", "telegram", <connection>, "processor"]) and the telegram
+  (["integrations", "telegram", ["get", <connection>], "processor"]) and the telegram
   dispatch gained the ProcessorRelayRpcTarget node mirroring Slack's.
 - 2026-07-08 (night): CI "Preview / deploy + e2e" flaked once on the new
   births-agents test (timed out right after deploy; passes in ~7s when run

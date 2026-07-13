@@ -20,7 +20,7 @@ import {
 import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
-import { GithubAgentProcessorContract } from "../repos/github-agent-processor-contract.ts";
+import { githubAgentSubscriptionConfiguredEvent } from "../repos/github-agent-mechanics.ts";
 import { isGithubAgentPath } from "../repos/github-agent-utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
@@ -377,7 +377,14 @@ function agentSubscriptionEvents(input: {
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug, "agent")] : []),
     ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
-    ...(input.github ? [subscription(GithubAgentProcessorContract.slug, "agent")] : []),
+    ...(input.github
+      ? [
+          githubAgentSubscriptionConfiguredEvent({
+            agentPath: input.childPath,
+            projectId: input.projectId,
+          }),
+        ]
+      : []),
   ];
 }
 

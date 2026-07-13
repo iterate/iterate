@@ -34,8 +34,8 @@ Relevant OS foundations already exist:
   Slack webhooks.
 - Slack appends raw webhooks to `/integrations/slack` as
   `events.iterate.com/slack/webhook-received`.
-- `SlackCapability` exposes `itx.slack.*` by reading a project Slack token and
-  calling the Slack Web API.
+- The Slack integration exposes `itx.integrations.slack.get().*` through its
+  wrapped WebClient and project connection secret.
 
 ## Target Shape
 

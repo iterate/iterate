@@ -1,6 +1,10 @@
 import type { ProcessorEvent } from "../streams/processor-contracts.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import {
+  githubAgentSubscriptionConfiguredEvent,
+  obsoleteGithubAgentSubscriptionRemovedEvent,
+} from "./github-agent-mechanics.ts";
 import { githubAgentPath, pullRequestNumbersFromWebhookBody } from "./github-agent-utils.ts";
 
 /** The one event this processor acts on, narrowed from the contract by its type string. */
@@ -96,6 +100,10 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       );
       const github = state.github;
       if (prNumbers.length === 0 || github === null) return;
+      const projectId = this.projectId;
+      if (projectId === null) {
+        throw new Error(`GitHub PR routing requires a project-scoped repo: ${this.path}`);
+      }
       // Durable obligation, not best-effort: this forward is the webhook's
       // only path to the PR agent (the Slack router once lost a message to a
       // fire-and-forget append). A check/workflow delivery may name several
@@ -114,7 +122,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
               {
                 type: "events.iterate.com/github-agent/route-configured" as const,
                 idempotencyKey: this.idempotencyKey(
-                  `pr-route:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
+                  `github-agent-route:${github.connection}:${github.owner}/${github.repo}:${prNumber}`,
                 ),
                 payload: {
                   ...github,
@@ -123,6 +131,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
                   streamPath,
                 },
               },
+              githubAgentSubscriptionConfiguredEvent({
+                agentPath: streamPath,
+                projectId,
+              }),
+              obsoleteGithubAgentSubscriptionRemovedEvent({
+                agentPath: streamPath,
+                projectId,
+              }),
               {
                 type: "events.iterate.com/github/webhook-received" as const,
                 idempotencyKey: this.idempotencyKey("pr-forward", event),

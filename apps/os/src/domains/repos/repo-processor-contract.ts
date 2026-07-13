@@ -288,6 +288,8 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/created",
     "events.iterate.com/github/webhook-received",
     "events.iterate.com/github-agent/route-configured",
+    "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/stream/subscription-removed",
   ],
 });
 

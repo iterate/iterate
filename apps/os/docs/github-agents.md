@@ -23,11 +23,25 @@ metadata are projected from their ordinary GitHub webhooks.
 
 ## Turn policy
 
-| Activity                                                     | Agent behavior                                |
-| ------------------------------------------------------------ | --------------------------------------------- |
-| New human comment, review, or PR body containing `@iterate`  | Queue after the current turn                  |
-| Opened, ready, or synchronized reviewable head, when enabled | Interrupt work for the obsolete previous head |
-| CI, unmentioned discussion, edits, labels, bot mentions      | Record only                                   |
+| Activity                                                                       | Agent behavior                                 |
+| ------------------------------------------------------------------------------ | ---------------------------------------------- |
+| New trusted comment, submitted review, or opened PR body containing `@iterate` | Queue after the current turn                   |
+| Later trusted comment or submitted review after that first mention             | Queue like a message in an active Slack thread |
+| Opened, ready, or synchronized reviewable head, when enabled                   | Interrupt work for the obsolete previous head  |
+| CI, unmentioned discussion before activation, edits, bot messages              | Record only                                    |
+
+Fresh mentions in issue comments and inline review comments get an immediate
+eyes reaction before the agent starts. A submitted review body also triggers,
+including a review whose summary says `@iterate`, but GitHub does not expose a
+reaction target for the review summary itself. Reactions communicate progress;
+every conversational turn on which the agent acts must still end in a visible
+PR comment with the result, status, or blocker.
+
+Conversational turns are privileged: only comments, reviews, and PR authors
+GitHub classifies as `OWNER`, `MEMBER`, or `COLLABORATOR` can activate or
+continue them. Public contributors' text remains observable in the bounded PR
+activity but cannot instruct the project agent. Repository labels retain
+GitHub's normal permission checks.
 
 Drafts stay quiet until `ready_for_review`. Automatic review inputs name the
 immutable head SHA, require the agent to verify it is still current, and ask
@@ -64,23 +78,59 @@ await itx.agents.get("/agents/repos/config/pull-requests/42").configure({
 });
 ```
 
+### Keep review policy in Markdown
+
+The configuration value is deliberately the rule text, not a platform-owned
+file path. A project can keep that text in its config repo and have its project
+worker load it when each PR agent is born. For example, add
+`agents/github-review.md`, then use the following branch in `worker.ts`'s
+`child-stream-created` reaction:
+
+```ts
+const isPullRequestAgent = /^\/agents\/repos\/[^/]+\/pull-requests\/\d+$/.test(childPath);
+const overrides = isPullRequestAgent
+  ? {
+      githubAgent: {
+        automaticReview: {
+          enabled: true,
+          instructions: (await itx.repo.readFile({ path: "agents/github-review.md" })).content,
+        },
+      },
+    }
+  : undefined;
+const defaults = await itx.agents.defaults.forPath(childPath, overrides);
+await itx.streams.get(childPath).append(...defaults.events);
+```
+
+This makes the Markdown file the review policy for every new non-draft PR
+head. The agent reads the complete diff and submits exactly one GitHub
+`COMMENT` review for that immutable head. One review may contain a summary and
+multiple inline comments; the hidden head marker prevents duplicate reviews
+when event delivery or a tool call is retried. Changing or disabling the policy
+is a normal config-repo commit. Existing PR agents can be reconfigured directly
+with the same complete configuration shape shown above.
+
 Two GitHub-native labels override the project default for one PR:
 
 - `iterate:review` enables automatic review.
 - `iterate:skip-review` disables it and wins if both labels are present.
 
-Applying `iterate:review`, or removing `iterate:skip-review`, reviews the
-current head if it has not already been requested. A human can always request
+Applying `iterate:review` reviews the current head if it has not already been
+requested. Removing `iterate:skip-review` does the same only when the project
+default or `iterate:review` still enables reviews. A trusted human can always request
 one review without changing persistent policy by commenting
 `@iterate review now`. Label permissions are GitHub's normal repository
-permissions; the agent maintains no second authorization or command state.
+permissions; the agent maintains no second authorization or command state. Each
+trusted `review now` comment is a distinct request, so it can deliberately
+produce another review of the same head; delivery retries of that one request
+remain idempotent.
 
 ## GitHub and code tools
 
 The GitHub capability is deliberately ordinary:
 
 ```js
-const octokit = itx.integrations.github[connection].octokit;
+const octokit = itx.integrations.github.get(connection).octokit;
 const pr = await octokit.rest.pulls.get({ owner, repo, pull_number });
 await octokit.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
 

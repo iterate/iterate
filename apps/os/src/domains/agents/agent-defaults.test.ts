@@ -73,6 +73,9 @@ describe("agentDefaultsForPath", () => {
     expect(prompt).toContain(".octokit.rest.issues.createComment");
     expect(prompt).toContain("all-in-one Octokit");
     expect(prompt).toContain(".graphql(query, variables)");
+    expect(prompt).toContain("repo.data.permissions");
+    expect(prompt).toContain("Use Promise.all");
+    expect(prompt).toContain("VISIBLE HANDOFF INVARIANT");
 
     const configured = defaultsFor("/agents/repos/root/pull-requests/7").events.find(
       (event) => event.type === "events.iterate.com/github-agent/configure",

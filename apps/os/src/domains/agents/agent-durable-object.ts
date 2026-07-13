@@ -18,6 +18,7 @@ import {
 } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { GithubAgentProcessor } from "../repos/github-agent-processor-implementation.ts";
+import { connectionOctokit } from "../integrations/github-api.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
@@ -232,8 +233,46 @@ export class AgentDurableObject extends DurableObject<Env> {
   // Registered on every agent host; it wakes on routed PR agent streams
   // (`/agents/repos/<slug>/pull-requests/<n>`). Replies leave through the
   // linked connection's itx.integrations.github Octokit, called by the agent
-  // itself, so there are no side-effect deps here.
-  readonly githubAgentProcessor = this.#processorHost.add((deps) => new GithubAgentProcessor(deps));
+  // itself. The sole platform-side GitHub action is the best-effort 👀 ack on
+  // a fresh mention, mirroring Slack before the LLM turn begins.
+  readonly githubAgentProcessor = this.#processorHost.add(
+    (deps) =>
+      new GithubAgentProcessor({
+        ...deps,
+        addEyesReaction: async ({ commentId, connection, kind, owner, repo }) => {
+          try {
+            const reactions = connectionOctokit({
+              connection,
+              projectId: this.#name.projectId,
+            }).rest.reactions;
+            if (kind === "issue-comment") {
+              await reactions.createForIssueComment({
+                comment_id: commentId,
+                content: "eyes",
+                owner,
+                repo,
+              });
+            } else {
+              await reactions.createForPullRequestReviewComment({
+                comment_id: commentId,
+                content: "eyes",
+                owner,
+                repo,
+              });
+            }
+          } catch (error) {
+            // Acknowledgements are cosmetic. A failure must not prevent the
+            // processor from committing and waking the real agent request.
+            console.error("[github-agent] GitHub eyes reaction failed", {
+              commentId,
+              error,
+              kind,
+              path: this.#name.path,
+            });
+          }
+        },
+      }),
+  );
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
