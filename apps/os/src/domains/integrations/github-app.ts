@@ -6,6 +6,28 @@
 // App private key comes from deployment config and never reaches a caller.
 
 import { computeSignatureBase64Url } from "../secrets/utils.ts";
+import type { PlatformCredsRef } from "../secrets/types.ts";
+import { lookupConnectionClaim } from "./integration-streams.ts";
+
+/**
+ * Platform App authority follows the deployment-wide integration claim. A
+ * project-owned App key is independent of that directory because possessing
+ * the key is the authority for its own installations.
+ */
+export async function assertGithubInstallationTokenMintAuthorized(input: {
+  installationId: string;
+  privateKey: PlatformCredsRef | "material";
+  projectId: string;
+}): Promise<void> {
+  if (input.privateKey === "material") return;
+
+  const claim = await lookupConnectionClaim("github", input.installationId);
+  if (claim?.projectId !== input.projectId) {
+    throw new Error(
+      `GitHub installation ${input.installationId} is not claimed by project ${input.projectId}.`,
+    );
+  }
+}
 
 function base64UrlOfJson(value: unknown): string {
   return btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");

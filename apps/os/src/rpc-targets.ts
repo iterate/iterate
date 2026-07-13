@@ -2581,9 +2581,9 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   /** Called by the app worker's OAuth callback route; authority is the
    * HMAC-signed OAuth state minted by startOAuthFlow. */
   completeConnect(input: {
-    /** OAuth authorization code (slack/google). */
+    /** OAuth authorization code (Slack/Google, or GitHub's proof callback). */
     code?: string;
-    /** GitHub App installation id — github's callback carries this, not a code. */
+    /** Untrusted GitHub setup-URL installation id, verified through user OAuth. */
     installationId?: string;
     provider: OAuthProviderSlug;
     state: string;

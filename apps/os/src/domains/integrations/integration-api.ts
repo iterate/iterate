@@ -63,12 +63,15 @@ async function handleOAuthCallback(input: {
   const callbackUrl = unverified.callbackUrl ?? null;
   if (error) return redirectWithError(callbackUrl, `${input.provider}_oauth_denied`);
 
-  // GitHub connects via App installation: the callback carries `installation_id`
-  // (+ setup_action), not an OAuth `code`. slack/google carry a code.
+  // GitHub is a two-stage callback. The setup URL first supplies an untrusted
+  // installation_id; completeConnect redirects through GitHub user OAuth, and
+  // the second callback supplies the code that proves access to that id.
   const code = url.searchParams.get("code") ?? undefined;
   const installationId = url.searchParams.get("installation_id") ?? undefined;
   if (input.provider === "github") {
-    if (!installationId) return redirectWithError(callbackUrl, "github_missing_installation_id");
+    if (!installationId && !code) {
+      return redirectWithError(callbackUrl, "github_missing_installation_id");
+    }
   } else if (!code) {
     return redirectWithError(callbackUrl, `${input.provider}_oauth_missing_code`);
   }

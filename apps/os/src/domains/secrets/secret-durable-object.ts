@@ -10,10 +10,17 @@ import type {
 } from "../streams/rpc-types.ts";
 import { LiveStateRpcTarget, StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
-import { mintGithubInstallationToken } from "../integrations/github-app.ts";
+import {
+  assertGithubInstallationTokenMintAuthorized,
+  mintGithubInstallationToken,
+} from "../integrations/github-app.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./crypto.ts";
-import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
+import {
+  PLATFORM_GITHUB_API_BASE,
+  resolvePlatformClientCreds,
+  resolvePlatformGithubAppKey,
+} from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
@@ -185,6 +192,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       }
 
       await this.#appendUsed(request.url);
+      await this.#assertGithubInstallationUseAuthorized(state.refresh);
       const response = await fetch(substituted);
       if (response.status !== 401 || retry === null) return response;
 
@@ -197,6 +205,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       }
       const retried = await this.#substitute(retry.source, await this.#snapshot());
       await this.#appendUsed(request.url);
+      await this.#assertGithubInstallationUseAuthorized(retry.strategy);
       return await fetch(retried);
     } catch (error) {
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
@@ -219,6 +228,15 @@ export class SecretDurableObject extends DurableObject<Env> {
       this.#refreshing = undefined;
     });
     return this.#refreshing;
+  }
+
+  async #assertGithubInstallationUseAuthorized(refresh: SecretRefresh | null): Promise<void> {
+    if (refresh?.kind !== "github-app-installation") return;
+    await assertGithubInstallationTokenMintAuthorized({
+      installationId: refresh.installationId,
+      privateKey: refresh.privateKey,
+      projectId: this.#name.projectId,
+    });
   }
 
   async #doRefresh(refresh: SecretRefresh): Promise<void> {
@@ -306,13 +324,26 @@ export class SecretDurableObject extends DurableObject<Env> {
     material: Record<string, unknown>,
   ): Promise<void> {
     assertOriginPinned(refresh.apiBase, state);
-    const privateKeyPem =
-      refresh.privateKey === "material"
-        ? readStringField(material, "privateKey")
-        : resolvePlatformGithubAppKey(parseConfig(this.env), refresh.privateKey, refresh.apiBase);
+    let apiBase = refresh.apiBase;
+    let appId = refresh.appId;
+    let privateKeyPem: string;
+    if (refresh.privateKey === "material") {
+      privateKeyPem = readStringField(material, "privateKey");
+    } else {
+      await this.#assertGithubInstallationUseAuthorized(refresh);
+      const config = parseConfig(this.env);
+      privateKeyPem = resolvePlatformGithubAppKey(
+        config,
+        refresh.privateKey,
+        refresh.apiBase,
+        refresh.appId,
+      );
+      apiBase = PLATFORM_GITHUB_API_BASE;
+      appId = config.integrations.github!.appId!;
+    }
     const token = await mintGithubInstallationToken({
-      apiBase: refresh.apiBase,
-      appId: refresh.appId,
+      apiBase,
+      appId,
       installationId: refresh.installationId,
       privateKeyPem,
     });

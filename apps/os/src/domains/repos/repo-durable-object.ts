@@ -15,7 +15,10 @@ import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { stableSha256 } from "../workers/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
-import { mintGithubInstallationToken } from "../integrations/github-app.ts";
+import {
+  assertGithubInstallationTokenMintAuthorized,
+  mintGithubInstallationToken,
+} from "../integrations/github-app.ts";
 import { ROOT_WORKSPACE_PATH } from "../workspaces/utils.ts";
 import type {
   CommitRepoFilesInput,
@@ -849,12 +852,20 @@ export class RepoDurableObject extends DurableObject<Env> {
    * needs the token as a Basic password, which the placeholder-substitution
    * pipeline cannot produce.
    */
-  #mintGithubToken(link: GithubRepoLink): Promise<string> {
+  async #mintGithubToken(link: GithubRepoLink): Promise<string> {
+    if (this.#name.projectId === null) {
+      throw new Error("GitHub-backed repos require a project-scoped repo.");
+    }
     const github = parseConfig(this.env).integrations.github;
     if (!github?.appId || !github.privateKey) {
       throw new Error("GitHub App is not configured for this deployment (appId/privateKey).");
     }
-    return mintGithubInstallationToken({
+    await assertGithubInstallationTokenMintAuthorized({
+      installationId: link.installationId,
+      privateKey: { platform: "integrations.github" },
+      projectId: this.#name.projectId,
+    });
+    return await mintGithubInstallationToken({
       apiBase: "https://api.github.com",
       appId: github.appId,
       installationId: link.installationId,

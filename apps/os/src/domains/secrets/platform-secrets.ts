@@ -128,14 +128,23 @@ export function resolvePlatformGithubAppKey(
   config: AppConfig,
   ref: PlatformCredsRef,
   apiBase: string,
+  appId?: string,
 ): string {
   if (ref.platform !== "integrations.github") {
     throw new SecretSubstitutionError("secret_not_found");
   }
-  const privateKey = config.integrations.github?.privateKey?.exposeSecret();
-  if (privateKey === undefined) throw new SecretSubstitutionError("secret_not_found");
-  if (new URL(apiBase).origin !== "https://api.github.com") {
+  const github = config.integrations.github;
+  if (github?.appId === undefined || github.privateKey === undefined) {
+    throw new SecretSubstitutionError("secret_not_found");
+  }
+  if (new URL(apiBase).href !== `${PLATFORM_GITHUB_API_BASE}/`) {
     throw new SecretSubstitutionError("secret_not_allowed_for_origin");
   }
-  return privateKey;
+  if (appId !== undefined && appId !== github.appId) {
+    throw new SecretSubstitutionError("secret_not_found");
+  }
+  return github.privateKey.exposeSecret();
 }
+
+/** The API identity paired with the deployment's first-party GitHub App. */
+export const PLATFORM_GITHUB_API_BASE = "https://api.github.com";

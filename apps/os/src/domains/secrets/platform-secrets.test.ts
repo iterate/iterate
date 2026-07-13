@@ -128,6 +128,7 @@ describe("resolvePlatformGithubAppKey", () => {
       config,
       { platform: "integrations.github" },
       "https://api.github.com",
+      "12345",
     );
     expect(privateKey).toContain("BEGIN PRIVATE KEY");
 
@@ -136,6 +137,27 @@ describe("resolvePlatformGithubAppKey", () => {
         config,
         { platform: "integrations.github" },
         "https://dummy-petshop.example.com",
+        "12345",
+      ),
+    ).toThrow(SecretSubstitutionError);
+
+    expect(() =>
+      resolvePlatformGithubAppKey(
+        config,
+        { platform: "integrations.github" },
+        "https://api.github.com/proxy",
+        "12345",
+      ),
+    ).toThrow(SecretSubstitutionError);
+  });
+
+  test("the caller-supplied App id must match the configured App", () => {
+    expect(() =>
+      resolvePlatformGithubAppKey(
+        config,
+        { platform: "integrations.github" },
+        "https://api.github.com",
+        "attacker-app",
       ),
     ).toThrow(SecretSubstitutionError);
   });
