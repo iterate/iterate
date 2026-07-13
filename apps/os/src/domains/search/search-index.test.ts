@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
+  fileRef,
   fileSearchKey,
+  repoFileRef,
+  searchMetadata,
+  streamEventsRef,
   normalizeCustomSearchKind,
   projectSearchInstanceConfig,
   projectSearchInstanceId,
@@ -115,7 +119,7 @@ describe("projectSearchInstanceId / projectSearchInstanceConfig", () => {
     });
     expect(config.source_params.include_items).toEqual(["prj_abc123/**"]);
     expect(config.index_method).toEqual({ vector: true, keyword: true });
-    expect(config.custom_metadata.map((f) => f.field_name)).toEqual(["kind", "context"]);
+    expect(config.custom_metadata.map((f) => f.field_name)).toEqual(["kind", "context", "ref"]);
   });
 });
 
@@ -182,5 +186,31 @@ describe("normalizeCustomSearchKind / sanitizeSearchDocumentId", () => {
     expect(normalizeCustomSearchKind("Notes")).toBe("notes");
     expect(sanitizeSearchDocumentId("/2026/07/meeting notes.md")).toBe("2026/07/meeting-notes.md");
     expect(sanitizeSearchDocumentId("")).toBe("untitled");
+  });
+});
+
+describe("ref expressions (search hits lead back to domain objects)", () => {
+  it("builds evaluable itx expressions for each corpus kind", () => {
+    expect(
+      streamEventsRef({ path: "/agents/slack/T1", firstOffset: 101, lastOffset: 200 }),
+    ).toEqual([
+      "streams",
+      ["get", "/agents/slack/T1"],
+      ["getEvents", { afterOffset: 100, beforeOffset: 201 }],
+    ]);
+    expect(fileRef("/reports/q3.pdf")).toEqual(["files", ["get", "/reports/q3.pdf"]]);
+    expect(repoFileRef({ repoPath: "/repos/config", filePath: "src/worker.ts" })).toEqual([
+      "repos",
+      ["get", "/repos/config"],
+      ["readFile", { path: "src/worker.ts" }],
+    ]);
+  });
+
+  it("stores the serialized ref in metadata, omitting only oversized ones", () => {
+    const metadata = searchMetadata("files", "File /x", fileRef("/x"));
+    expect(JSON.parse(metadata.ref!)).toEqual(["files", ["get", "/x"]]);
+    const huge = searchMetadata("files", "File /x", fileRef("/" + "x".repeat(600)));
+    expect(huge.ref).toBeUndefined();
+    expect(huge.kind).toBe("files");
   });
 });

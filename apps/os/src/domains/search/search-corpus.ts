@@ -16,6 +16,7 @@
 //   {projectId}/repos{repoPath}/files{repoFilePath}       repo file contents at HEAD
 //   {projectId}/{kind}/{id}                               anything else, via itx.search.index()
 
+import type { ItxExpression } from "../../itx/expression.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 
 /** Offsets per stream-event segment document. */
@@ -80,6 +81,8 @@ const MAX_CONTEXT_METADATA_CHARS = 500;
  * - `context` — a one-line human-readable source descriptor. AI Search's
  *   special `context` field is also attached to every chunk and passed to the
  *   generation model, so answers cite where a fact came from.
+ * - `ref` — the serialized itx expression leading back to the domain object
+ *   (see {@link searchMetadata}); what makes every hit resolvable.
  *
  * projectSearchInstanceConfig declares this at instance creation; changing it
  * forces a full re-index, so it is deliberately minimal.
@@ -87,11 +90,29 @@ const MAX_CONTEXT_METADATA_CHARS = 500;
 const SEARCH_METADATA_SCHEMA = [
   { field_name: "kind", data_type: "text" },
   { field_name: "context", data_type: "text" },
+  { field_name: "ref", data_type: "text" },
 ] as const;
 
-/** Build the R2 `customMetadata` (→ `x-amz-meta-*` → AI Search attributes) for one document. */
-export function searchMetadata(kind: string, context: string): Record<string, string> {
-  return { kind, context: context.slice(0, MAX_CONTEXT_METADATA_CHARS) };
+/**
+ * Build the R2 `customMetadata` (→ `x-amz-meta-*` → AI Search attributes) for
+ * one document. EVERY corpus document carries a `ref` — the serialized itx
+ * expression leading back to the domain object it mirrors — so every search
+ * hit is resolvable. A ref that would overflow the 500-char metadata value
+ * cap is omitted (hit still returns, just without the shortcut) rather than
+ * truncated into corrupt JSON.
+ */
+export function searchMetadata(
+  kind: string,
+  context: string,
+  ref: ItxExpression,
+): Record<string, string> {
+  const metadata: Record<string, string> = {
+    kind,
+    context: context.slice(0, MAX_CONTEXT_METADATA_CHARS),
+  };
+  const serialized = JSON.stringify(ref);
+  if (serialized.length <= MAX_CONTEXT_METADATA_CHARS) metadata.ref = serialized;
+  return metadata;
 }
 
 /** One retrieved chunk: the matched index document plus its scored text and provenance. */
@@ -106,6 +127,16 @@ export type SearchResultChunk = {
   kind?: string;
   /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
   context?: string;
+  /**
+   * The itx expression that leads back to the DOMAIN OBJECT this hit mirrors
+   * — evaluate it against the project itx to fetch the real thing instead of
+   * trusting chunk text. E.g. `["streams", ["get", "/agents/x"],
+   * ["getEvents", { afterOffset: 100, beforeOffset: 201 }]]` for a stream
+   * segment, `["files", ["get", "/reports/q3.pdf"]]` for a file, `["repos",
+   * ["get", "/repos/config"], ["readFile", { path: "worker.ts" }]]` for a
+   * repo file, `["docs", ["get", { name }]]` for a docs entry.
+   */
+  ref?: ItxExpression;
 };
 
 /** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */
@@ -153,6 +184,58 @@ export function repoFileSearchKey(input: {
   filePath: string;
 }): string {
   return `${input.projectId}/repos${input.repoPath}/files/${input.filePath}`;
+}
+
+/**
+ * Object key for one PINNED stream event (`itx.search.indexEvent`): a focused
+ * single-event document, distinct from the bulk `events-` segment docs so a
+ * pinned event isn't buried among 99 neighbors. Lives under the `streams`
+ * kind so source scoping and refs treat it as stream content.
+ */
+export function pinnedEventKey(input: {
+  projectId: string;
+  streamPath: string;
+  offset: number;
+}): string {
+  return `${input.projectId}/streams${input.streamPath}/event-${String(input.offset).padStart(8, "0")}.md`;
+}
+
+/** The ref expression for a stream offset window — evaluates to the events themselves. */
+export function streamEventsRef(input: {
+  path: string;
+  firstOffset: number;
+  lastOffset: number;
+}): ItxExpression {
+  return [
+    "streams",
+    ["get", input.path],
+    ["getEvents", { afterOffset: input.firstOffset - 1, beforeOffset: input.lastOffset + 1 }],
+  ];
+}
+
+/** The ref expression for an itx.files path — evaluates to the file handle. */
+export function fileRef(path: string): ItxExpression {
+  return ["files", ["get", path]];
+}
+
+/** The ref expression for a repo file at HEAD — evaluates to `{ commitOid, content, path }`. */
+export function repoFileRef(input: { repoPath: string; filePath: string }): ItxExpression {
+  return ["repos", ["get", input.repoPath], ["readFile", { path: input.filePath }]];
+}
+
+/**
+ * One pinned event rendered as a focused markdown document: the event body
+ * plus the caller's note, so the annotation is searchable alongside the
+ * content it annotates.
+ */
+export function renderPinnedEventDocument(input: { event: StreamEvent; note?: string }): string {
+  const lines = [
+    `# Pinned event: ${input.event.type} — ${input.event.path} @ ${input.event.offset}`,
+    ``,
+  ];
+  if (input.note !== undefined && input.note.length > 0) lines.push(`> ${input.note}`, ``);
+  lines.push(renderEvent(input.event), ``);
+  return lines.join("\n");
 }
 
 /** The segment (0-based) an offset belongs to. Offset 1 → segment 0. */

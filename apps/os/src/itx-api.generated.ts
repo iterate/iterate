@@ -888,17 +888,38 @@ export interface Search {
     systemPrompt?: string;
   }): Promise<SearchAnswerResult>;
   /**
-   * Add (or replace) one arbitrary document in the search corpus — the general
-   * mechanism to make any content findable via `query`. `id` is stable within
-   * `(project, kind)`, so re-indexing the same id overwrites. `context` is the
-   * one-line descriptor shown on every hit and to the answer model.
+   * Add (or replace) one document in the search corpus — the general
+   * mechanism to make derived content (summaries, notes, digests) findable
+   * via `query`. `ref` is REQUIRED: the itx expression leading back to the
+   * domain object the text derives from (e.g. `["streams", ["get", path],
+   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
+   * a search result is never a dead end. `id` is stable within
+   * `(project, kind)`, so re-indexing the same id overwrites. `context` is
+   * the one-line descriptor shown on every hit and to the answer model.
    */
   index(input: {
     kind: string;
     id: string;
     text: string;
+    /** The itx expression that leads back to the source domain object. */
+    ref: ItxExpression;
     title?: string;
     context?: string;
+  }): Promise<{ key: string }>;
+  /**
+   * Pin one stream event into the search corpus by its coordinates — the
+   * domain-object way to make a specific moment findable. The event's content
+   * is read from the stream (never trusted from the caller) and indexed as a
+   * focused document together with the optional `note`; the search hit's
+   * `ref` leads back to `{ path, offset }`. Idempotent per (stream, offset).
+   */
+  indexEvent(input: {
+    /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+    stream: string;
+    /** The event's offset on that stream. */
+    offset: number;
+    /** Optional annotation, indexed alongside the event ("decision made here"). */
+    note?: string;
   }): Promise<{ key: string }>;
   /**
    * Re-index one stream from the beginning — the repair verb for streams that
@@ -2773,6 +2794,16 @@ export type SearchResultChunk = {
   kind?: string;
   /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
   context?: string;
+  /**
+   * The itx expression that leads back to the DOMAIN OBJECT this hit mirrors
+   * — evaluate it against the project itx to fetch the real thing instead of
+   * trusting chunk text. E.g. `["streams", ["get", "/agents/x"],
+   * ["getEvents", { afterOffset: 100, beforeOffset: 201 }]]` for a stream
+   * segment, `["files", ["get", "/reports/q3.pdf"]]` for a file, `["repos",
+   * ["get", "/repos/config"], ["readFile", { path: "worker.ts" }]]` for a
+   * repo file, `["docs", ["get", { name }]]` for a docs entry.
+   */
+  ref?: ItxExpression;
 };
 
 /**

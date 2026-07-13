@@ -200,12 +200,14 @@ import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
 import {
   ensureProjectSearchInstance,
   indexDocument,
+  indexPinnedStreamEvent,
   indexEntireStream,
   indexStreamEventBatch,
   mirrorFileToSearchIndex,
   triggerProjectSearchSync,
 } from "./domains/search/search-index.ts";
 import { projectSearchInstanceId, searchFilters } from "./domains/search/search-corpus.ts";
+import { ItxExpression } from "./itx/expression.ts";
 import type {
   SearchAnswerResult,
   SearchKind,
@@ -1961,6 +1963,15 @@ class FilesRpcTarget extends IterateRpcTarget<"Files"> {
   }
 }
 
+/** Parse a stored ref metadata value; malformed JSON/shape yields undefined, never a throw. */
+function parseStoredRef(serialized: string): ItxExpression | undefined {
+  try {
+    return ItxExpression.parse(JSON.parse(serialized));
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Project search over everything the project accumulates — stream events,
  * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
@@ -1981,19 +1992,22 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     return describeNode({
       instructions:
         "One search over everything this project accumulates — stream events, itx.files, repo " +
-        "files, and itx.docs — via Cloudflare AI Search (indexed on a schedule; expect minutes " +
-        "of lag behind writes). query({ q }) returns scored chunks, each tagged with its `kind` " +
-        'and a human-readable `context` ("Stream /agents/… events 101–200", "Repo /repos/config · ' +
-        'src/worker.ts", …). answer({ q }) additionally generates a cited answer. Narrow with ' +
-        'source ("streams" | "files" | "repos") or exclude noisy kinds (exclude: ["streams"]). ' +
-        "index({ kind, id, text }) adds an arbitrary document. indexStream/indexRepo/backfillFiles " +
-        "backfill content written before indexing. Every stream is indexed except ephemeral " +
-        "events; webhook streams are duplicative but valuable — expect many similar hits for " +
-        "busy PRs; exclude or scope to narrow.",
+        "files, and itx.docs — via this project's own AI Search instance. query({ q }) returns " +
+        "scored chunks; every hit carries a `ref` that leads BACK TO THE DOMAIN OBJECT — " +
+        '{ type: "stream", path, firstOffset, lastOffset } (fetch via itx.streams.get(path)' +
+        '.getEvents), { type: "file", path } (itx.files.get), { type: "repoFile", repoPath, ' +
+        "filePath } (itx.repos.get(repoPath).readFile), or an itx.docs entry — plus `kind` and a " +
+        "human-readable `context`. answer({ q }) generates a cited answer. Narrow with source " +
+        '("streams" | "files" | "repos") or exclude kinds. indexEvent({ stream, offset, note? }) ' +
+        "pins one event by coordinates; index({ kind, id, text }) adds a standalone document; " +
+        "indexStream/indexRepo/backfillFiles backfill pre-existing content. Everything indexes " +
+        "automatically except ephemeral events; expect up to ~a minute of indexing lag.",
       children: {
         answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
-        index: "Add/replace one arbitrary document ({ kind, id, text, title?, context? }).",
+        index: "Add/replace one standalone document ({ kind, id, text, title?, context? }).",
+        indexEvent:
+          "Pin one stream event by coordinates ({ stream, offset, note? }) — ref leads back to it.",
         indexRepo: "Snapshot one repo's default-branch HEAD into the search corpus now.",
         indexStream: "Re-index one stream from the beginning (backfill/repair).",
         query:
@@ -2046,6 +2060,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       content: chunk.text,
       kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
       context: typeof metadata.context === "string" ? metadata.context : undefined,
+      // Every corpus writer stores `ref` — the serialized itx expression back
+      // to the domain object. Parse defensively: a hit without one (foreign
+      // object, oversized ref) is still a valid result, just not a shortcut.
+      ref: typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined,
     };
   }
 
@@ -2073,6 +2091,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       content: hit.summary,
       kind: "docs",
       context: `${hit.kind}: ${hit.name} — fetch with ${hit.fetchCall}`,
+      ref: ["docs", ["get", { name: hit.name }]] as ItxExpression,
     }));
   }
 
@@ -2170,21 +2189,67 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   }
 
   /**
-   * Add (or replace) one arbitrary document in the search corpus — the general
-   * mechanism to make any content findable via `query`. `id` is stable within
-   * `(project, kind)`, so re-indexing the same id overwrites. `context` is the
-   * one-line descriptor shown on every hit and to the answer model.
+   * Add (or replace) one document in the search corpus — the general
+   * mechanism to make derived content (summaries, notes, digests) findable
+   * via `query`. `ref` is REQUIRED: the itx expression leading back to the
+   * domain object the text derives from (e.g. `["streams", ["get", path],
+   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
+   * a search result is never a dead end. `id` is stable within
+   * `(project, kind)`, so re-indexing the same id overwrites. `context` is
+   * the one-line descriptor shown on every hit and to the answer model.
    */
   async index(input: {
     kind: string;
     id: string;
     text: string;
+    /** The itx expression that leads back to the source domain object. */
+    ref: ItxExpression;
     title?: string;
     context?: string;
   }): Promise<{ key: string }> {
     const result = await indexDocument({ ...input, projectId: this.props.projectId });
     // First index() bootstraps the project's instance; the sync trigger makes
     // the document searchable in seconds instead of the hourly schedule.
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
+  }
+
+  /**
+   * Pin one stream event into the search corpus by its coordinates — the
+   * domain-object way to make a specific moment findable. The event's content
+   * is read from the stream (never trusted from the caller) and indexed as a
+   * focused document together with the optional `note`; the search hit's
+   * `ref` leads back to `{ path, offset }`. Idempotent per (stream, offset).
+   */
+  async indexEvent(input: {
+    /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+    stream: string;
+    /** The event's offset on that stream. */
+    offset: number;
+    /** Optional annotation, indexed alongside the event ("decision made here"). */
+    note?: string;
+  }): Promise<{ key: string }> {
+    const path = normalizePath(input.stream);
+    const streamStub = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: this.props.projectId, path },
+        { allowNullProjectId: true },
+      ),
+    );
+    const [event] = await streamStub.getEvents({
+      afterOffset: input.offset - 1,
+      beforeOffset: input.offset + 1,
+      limit: 1,
+    });
+    if (event === undefined) {
+      throw new Error(`no event at offset ${input.offset} on stream ${path}`);
+    }
+    const result = await indexPinnedStreamEvent({
+      projectId: this.props.projectId,
+      event,
+      note: input.note,
+    });
     await ensureProjectSearchInstance(this.props.projectId);
     await triggerProjectSearchSync(this.props.projectId);
     return result;

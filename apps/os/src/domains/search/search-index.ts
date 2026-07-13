@@ -33,10 +33,16 @@
 // created per project at runtime.
 
 import { itxEnv } from "../../env.ts";
+import { ItxExpression } from "../../itx/expression.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import type { StreamPushEventBatch } from "../streams/rpc-types.ts";
 import {
   MAX_SEARCH_KEY_BYTES,
+  fileRef,
+  pinnedEventKey,
+  renderPinnedEventDocument,
+  repoFileRef,
+  streamEventsRef,
   SEARCH_MAX_DOCUMENT_BYTES,
   SEARCH_SEGMENT_SIZE,
   fileSearchKey,
@@ -99,6 +105,38 @@ export async function triggerProjectSearchSync(projectId: string): Promise<void>
 }
 
 /**
+ * Pin ONE stream event into the corpus as a focused document (the write side
+ * of `itx.search.indexEvent`). The event already lives in its 100-offset
+ * segment doc; pinning gives it a document of its own — sharper retrieval,
+ * plus the caller's note indexed alongside — while the ref still leads back
+ * to the real event coordinates. Idempotent per (stream, offset).
+ */
+export async function indexPinnedStreamEvent(input: {
+  projectId: string;
+  event: StreamEvent;
+  note?: string;
+}): Promise<{ key: string }> {
+  const key = pinnedEventKey({
+    projectId: input.projectId,
+    streamPath: input.event.path,
+    offset: input.event.offset,
+  });
+  await itxEnv.SEARCH_BUCKET.put(key, renderPinnedEventDocument(input), {
+    httpMetadata: { contentType: "text/markdown" },
+    customMetadata: searchMetadata(
+      "streams",
+      `Pinned event ${input.event.path} @ ${input.event.offset} (${input.event.type})`,
+      streamEventsRef({
+        path: input.event.path,
+        firstOffset: input.event.offset,
+        lastOffset: input.event.offset,
+      }),
+    ),
+  });
+  return { key };
+}
+
+/**
  * Index one delivered stream batch: rewrite every segment document the batch
  * touches. For each affected segment it re-reads the segment's FULL offset
  * range back from the stream (via `readEvents`) rather than indexing only the
@@ -154,11 +192,13 @@ export async function indexStreamEventBatch(input: {
       await itxEnv.SEARCH_BUCKET.delete(key);
       continue;
     }
+    const { first: firstOffset, last: lastOffset } = segmentOffsetRange(segment);
     await itxEnv.SEARCH_BUCKET.put(key, document, {
       httpMetadata: { contentType: "text/markdown" },
       customMetadata: searchMetadata(
         "streams",
         streamSegmentContext({ streamPath: batch.path, segment }),
+        streamEventsRef({ path: batch.path, firstOffset, lastOffset }),
       ),
     });
   }
@@ -172,6 +212,11 @@ export async function indexStreamEventBatch(input: {
  * boundary, so gaps from ephemeral/disallow-listed offsets don't matter).
  * Idempotent: same events → same segment documents.
  */
+function offsetRangeOf(segment: number): { firstOffset: number; lastOffset: number } {
+  const { first, last } = segmentOffsetRange(segment);
+  return { firstOffset: first, lastOffset: last };
+}
+
 export async function indexEntireStream(input: {
   projectId: string;
   path: string;
@@ -206,6 +251,7 @@ export async function indexEntireStream(input: {
         customMetadata: searchMetadata(
           "streams",
           streamSegmentContext({ streamPath: input.path, segment: currentSegment }),
+          streamEventsRef({ path: input.path, ...offsetRangeOf(currentSegment) }),
         ),
       },
     );
@@ -260,7 +306,7 @@ export async function mirrorFileToSearchIndex(input: {
     }
     await itxEnv.SEARCH_BUCKET.put(key, input.bytes, {
       httpMetadata: { contentType: input.contentType },
-      customMetadata: searchMetadata("files", `File ${input.path}`),
+      customMetadata: searchMetadata("files", `File ${input.path}`, fileRef(input.path)),
     });
     return "mirrored";
   } catch (error) {
@@ -325,7 +371,11 @@ export async function indexRepoSnapshotToSearchIndex(input: {
     try {
       await itxEnv.SEARCH_BUCKET.put(key, bytes, {
         httpMetadata: { contentType: "text/plain" },
-        customMetadata: searchMetadata("repos", `Repo ${input.repoPath} · ${filePath}`),
+        customMetadata: searchMetadata(
+          "repos",
+          `Repo ${input.repoPath} · ${filePath}`,
+          repoFileRef({ repoPath: input.repoPath, filePath }),
+        ),
       });
       indexed += 1;
     } catch (error) {
@@ -355,21 +405,28 @@ export async function indexRepoSnapshotToSearchIndex(input: {
 /**
  * Upsert one arbitrary document into the corpus — the primitive behind
  * `itx.search.index`. Any code that has content worth finding later writes it
- * here with a `kind` (for filtering) and a `context` (shown in results and to
- * the answer model). Idempotent per `(projectId, kind, id)`: re-indexing the
+ * here with a `kind` (for filtering), a `context` (shown in results and to
+ * the answer model), and a REQUIRED `ref` — the itx expression leading back
+ * to the domain object the text derives from, so a hit on this document is
+ * never a dead end. Idempotent per `(projectId, kind, id)`: re-indexing the
  * same id overwrites. Returns the R2 key. Throws on reserved/invalid kinds
- * (see normalizeCustomSearchKind).
+ * (see normalizeCustomSearchKind) and malformed refs.
  */
 export async function indexDocument(input: {
   projectId: string;
   kind: string;
   id: string;
   text: string;
+  ref: ItxExpression;
   title?: string;
   context?: string;
 }): Promise<{ key: string }> {
   const kind = normalizeCustomSearchKind(input.kind);
   const id = sanitizeSearchDocumentId(input.id);
+  const ref = ItxExpression.parse(input.ref);
+  if (JSON.stringify(ref).length > 500) {
+    throw new Error("ref expression too large (serialized cap: 500 chars)");
+  }
   // AI Search decides indexability by file EXTENSION and silently skips
   // extension-less keys (live-verified: an extension-less notes doc never
   // became searchable), so the key must end in .md.
@@ -381,7 +438,7 @@ export async function indexDocument(input: {
   const context = input.context ?? input.title ?? `${kind} ${id}`;
   await itxEnv.SEARCH_BUCKET.put(key, body, {
     httpMetadata: { contentType: "text/markdown" },
-    customMetadata: searchMetadata(kind, context),
+    customMetadata: searchMetadata(kind, context, ref),
   });
   return { key };
 }
