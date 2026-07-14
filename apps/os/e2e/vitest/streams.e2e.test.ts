@@ -9,12 +9,23 @@
 import { expect, test } from "vitest";
 import type { StreamEventBatch } from "../../src/domains/streams/rpc-types.ts";
 import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
+import type { Stream, StreamPushEventBatch } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/stream-e2e";
 const CROSS_POST_EVENT_TYPE = "events.iterate.test/minimal-v4/cross-post";
+
+async function acceptCrossPostDirect(stream: Stream, batch: StreamPushEventBatch): Promise<void> {
+  await (
+    stream as unknown as {
+      durableObjectStub: {
+        acceptCrossPost(batch: StreamPushEventBatch): Promise<void> | void;
+      };
+    }
+  ).durableObjectStub.acceptCrossPost(batch);
+}
 
 type CoreStreamState = {
   eventCount: number;
@@ -673,6 +684,91 @@ test("crossPostTo copies matching events with source provenance", async () => {
   );
   const copies = await target.getEvents({ eventTypes: [CROSS_POST_EVENT_TYPE], limit: 500 });
   expect(copies.filter((event) => event.payload?.marker === marker)).toHaveLength(1);
+});
+
+test("exact cross-post retries fall back without losing newly eligible events", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/os-port/cross-post-retry/source/${marker}`;
+  const targetPath = `/e2e/os-port/cross-post-retry/target/${marker}`;
+  const subscriptionKey = `copy-${marker}`;
+  const createdAt = new Date(0).toISOString();
+
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = itx.projects.create({
+    slug: `os-stream-cross-post-retry-${RUN_SUFFIX}-${marker}`,
+  });
+  const projectId = (await project.__describe()).projectId;
+  using target = project.streams.get(targetPath);
+
+  const batch = (args: {
+    configuredOffset: number;
+    offsets: number[];
+    path?: string;
+    projectId?: string;
+  }): StreamPushEventBatch => {
+    const path = args.path ?? sourcePath;
+    return {
+      attempt: 1,
+      configuredEvent: {
+        createdAt,
+        offset: args.configuredOffset,
+        path,
+        payload: { params: {} },
+        type: "events.iterate.com/stream/subscription-configured",
+      },
+      deliveryId: `${subscriptionKey}:1-3`,
+      events: args.offsets.map((offset) => ({
+        createdAt,
+        offset,
+        path,
+        payload: { marker, offset, path },
+        type: CROSS_POST_EVENT_TYPE,
+      })),
+      path,
+      projectId: args.projectId ?? projectId,
+      streamMaxOffset: 3,
+      subscriptionKey,
+    };
+  };
+
+  const first = batch({ configuredOffset: 10, offsets: [1, 3] });
+  await acceptCrossPostDirect(target, first);
+  await acceptCrossPostDirect(target, first);
+  expect(await target.getEvents({ eventTypes: [CROSS_POST_EVENT_TYPE] })).toHaveLength(2);
+
+  // A replacement subscription can produce the same first/last delivery ID
+  // while making an interior event newly eligible. Its config offset must
+  // distinguish the frame-level acknowledgement; per-event keys retain 1/3.
+  await acceptCrossPostDirect(target, batch({ configuredOffset: 11, offsets: [1, 2, 3] }));
+  expect(await target.getEvents({ eventTypes: [CROSS_POST_EVENT_TYPE] })).toHaveLength(3);
+
+  await acceptCrossPostDirect(
+    target,
+    batch({ configuredOffset: 10, offsets: [1], path: `${sourcePath}/other` }),
+  );
+  await acceptCrossPostDirect(
+    target,
+    batch({ configuredOffset: 10, offsets: [1], projectId: `${projectId}_other` }),
+  );
+  expect(await target.getEvents({ eventTypes: [CROSS_POST_EVENT_TYPE] })).toHaveLength(5);
+
+  await target.kill().catch(() => undefined);
+  await acceptCrossPostDirect(target, first);
+  expect(await target.getEvents({ eventTypes: [CROSS_POST_EVENT_TYPE] })).toHaveLength(5);
+
+  await target.append({
+    type: "events.iterate.com/stream/paused",
+    payload: { reason: "exercise failed cross-post acknowledgement" },
+  });
+  const afterFailure = batch({ configuredOffset: 12, offsets: [4] });
+  await expect(acceptCrossPostDirect(target, afterFailure)).rejects.toThrow(/paused/);
+  await target.append({
+    type: "events.iterate.com/stream/resumed",
+    payload: { reason: "retry after failed cross-post acknowledgement" },
+  });
+  await acceptCrossPostDirect(target, afterFailure);
+  expect(await target.getEvents({ eventTypes: [CROSS_POST_EVENT_TYPE] })).toHaveLength(6);
 });
 
 test("cross-post conditions gate cross-posting on event content", async () => {

@@ -2026,3 +2026,76 @@ cheap while `transactionSync` plus `RETURNING` adds more SQLite work than it
 removes. The implementation and disposable harness lane were deleted entirely;
 production, schema, generated API, and persistent data are unchanged. Raw
 records are `/tmp/stream-idempotent-{parent,candidate}-r{1..5}.log`.
+
+## 2026-07-14: Exact Cross-Post Delivery Acknowledgements Retained
+
+The destination Stream's existing activation-local acknowledgement cache is
+per event and holds 128 idempotency keys. That completely covers ordinary
+cross-post retries through 128 events, but the push spine deliberately permits
+8,000-event frames. An exact retry of a maximum frame therefore rebuilt every
+provenance-stamped append input and issued 80 SQLite idempotency queries in
+100-binding chunks before discovering that all 8,000 copies were already
+durable.
+
+A focused harness now invokes the destination Durable Object twice with the
+exact same realistic `StreamPushEventBatch` at 1, 128, and 8,000 events. The
+first awaited RPC seeds the durable copies; Node times repeated awaited second
+RPCs and verifies that the destination head never advances. Timing encloses
+the full WebSocket and Workers RPC operation, including retransmission and
+deserialization of the frame, so it remains valid when Cloudflare freezes an
+isolate clock between network events. Unlike the older cross-post replay lane,
+this is the same delivery identity and configuration, not a newly appended
+`subscription-configured` event.
+
+The retained implementation remembers a successful complete delivery identity
+at the destination. Its key includes source project, source path, subscription
+key, committed configuration offset, and delivery ID. Including the
+configuration offset is required: replacement selectors can produce the same
+first/last delivery ID while making an interior event newly eligible. The
+cache holds at most 128 identities, declines identities over 2,048 code units,
+and is activation-local. A miss, eviction, oversized identity, or reactivation
+falls through to the existing durable per-event idempotency path. The identity
+is remembered only after `appendAck` returns, so a paused-stream or validation
+failure remains retryable.
+
+Five 60-sample rounds per revision ran in `C,P,P,C,C,P,P,C,C,P` order against
+exact parent `b5119f84f`, with five warmups per event count and only one Workers
+stack resident. Positive change means lower latency.
+
+| Exact cross-post retry | Event count |    Parent | Candidate |          Change |
+| ---------------------- | ----------: | --------: | --------: | --------------: |
+| Median-of-round p50    |           1 |  0.804 ms |  0.782 ms |      2.8% lower |
+| Median-of-round p95    |           1 |  1.320 ms |  1.281 ms |      2.9% lower |
+| Median-of-round mean   |           1 |  0.849 ms |  0.883 ms |     3.9% higher |
+| Median-of-round p50    |         128 |  1.574 ms |  1.198 ms | **23.9% lower** |
+| Median-of-round p95    |         128 |  2.469 ms |  1.597 ms | **35.3% lower** |
+| Median-of-round mean   |         128 |  1.728 ms |  1.243 ms | **28.1% lower** |
+| Median-of-round p50    |       8,000 | 51.180 ms | 21.871 ms | **57.3% lower** |
+| Median-of-round p95    |       8,000 | 54.071 ms | 23.689 ms | **56.2% lower** |
+| Median-of-round mean   |       8,000 | 51.119 ms | 21.846 ms | **57.3% lower** |
+
+The 8,000-event median capacity rises from about 156,300 to 365,800 event
+identities per second, **2.34x**. Its remaining ~22 ms is the cost of sending
+and decoding the complete retry frame; a receiver-side cache cannot avoid
+those wire bytes. The one-event mean moved 0.034 ms backward while p50 and p95
+improved, which is operationally neutral and below the local transport noise.
+
+One uncounted candidate process closed its client WebSocket with code 1006
+while starting a second synthetic high-volume run and then the detached local
+dev process exited without a Worker exception. The exact same run passed after
+a clean restart, all ten counted rounds passed, and the full source-driven
+Stream e2e file subsequently passed on one candidate stack. The failed record
+is retained as
+`/tmp/stream-xpost-delivery-candidate-r3-websocket-1006.log`; it is not evidence
+of a cache-held frame because the cache retains only a bounded identity string,
+but it remains a local stress-harness caveat.
+
+Correctness verification includes all 374 Stream unit tests, all 16
+deployment-style Stream e2e tests, and OS typecheck. The new e2e guard covers
+exact dedupe, replacement configuration with a newly eligible interior event,
+distinct source projects and paths, DO reactivation, and a failed paused-stream
+append followed by successful retry. Production changes are `+58/-1` lines,
+with no persistent format, migration, background work, timer, compatibility
+branch, or extra RPC. Raw counted records are
+`/tmp/stream-xpost-delivery-{parent,candidate}-r{1..5}.log`; the experiment
+ended at `2026-07-14T06:47:55Z`.

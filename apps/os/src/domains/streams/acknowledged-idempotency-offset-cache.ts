@@ -1,5 +1,8 @@
+import type { StreamPushEventBatch } from "./rpc-types.ts";
+
 const MAX_ENTRIES = 128;
 const MAX_KEY_CODE_UNITS = 512;
+const MAX_DELIVERY_IDENTITY_CODE_UNITS = 2_048;
 
 /**
  * Activation-local offsets for durable events committed through appendAck.
@@ -29,5 +32,51 @@ export class AcknowledgedIdempotencyOffsetCache {
       if (oldest !== undefined) this.#offsets.delete(oldest);
     }
     this.#offsets.set(idempotencyKey, offset);
+  }
+}
+
+type CrossPostDeliveryIdentity = Pick<
+  StreamPushEventBatch,
+  "deliveryId" | "path" | "projectId" | "subscriptionKey"
+> & {
+  configuredEvent: Pick<StreamPushEventBatch["configuredEvent"], "offset">;
+};
+
+/**
+ * Activation-local acknowledgement of complete cross-post delivery frames.
+ * Misses always rebuild the append and use its durable per-event idempotency.
+ */
+export class AcknowledgedCrossPostDeliveryCache {
+  readonly #identities = new Set<string>();
+
+  has(batch: CrossPostDeliveryIdentity): boolean {
+    const identity = this.#identity(batch);
+    return identity !== undefined && this.#identities.has(identity);
+  }
+
+  remember(batch: CrossPostDeliveryIdentity): void {
+    const identity = this.#identity(batch);
+    if (identity === undefined || this.#identities.has(identity)) return;
+    if (this.#identities.size === MAX_ENTRIES) {
+      const oldest = this.#identities.values().next().value;
+      if (oldest !== undefined) this.#identities.delete(oldest);
+    }
+    this.#identities.add(identity);
+  }
+
+  #identity(batch: CrossPostDeliveryIdentity): string | undefined {
+    const codeUnits =
+      (batch.projectId?.length ?? 0) +
+      batch.path.length +
+      batch.subscriptionKey.length +
+      batch.deliveryId.length;
+    if (codeUnits > MAX_DELIVERY_IDENTITY_CODE_UNITS) return undefined;
+    return JSON.stringify([
+      batch.projectId,
+      batch.path,
+      batch.subscriptionKey,
+      batch.configuredEvent.offset,
+      batch.deliveryId,
+    ]);
   }
 }
