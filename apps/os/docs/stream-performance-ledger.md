@@ -1254,3 +1254,34 @@ failure/retry soak, plus explicit destructive rollout and rollback approval.
 The two p95 regressions should be included in that soak gate. Raw records are
 `/tmp/cumulative-3-{main,candidate}.log` and corresponding `-full.log` files
 for the life of this workstation.
+
+## 2026-07-14: Third Cumulative Tail Confirmation
+
+The two apparent tail regressions above came from 20-sample lanes, where this
+harness's p95 index is the single maximum. A focused, still host-timed lane now
+supports independently larger concurrent-append and forced-reactivation
+sample counts without rerunning unrelated workloads.
+
+Three rounds per revision ran 200 measured groups of 32 concurrent singleton
+appends and 100 reactivations in `C,M,M,C,C,M` order. Values are medians of
+per-round statistics:
+
+| Workload                       | Metric |      Main | Candidate | Change |
+| ------------------------------ | ------ | --------: | --------: | -----: |
+| 32 concurrent singleton calls  | p50    | 10.722 ms |  8.007 ms |  25.3% |
+|                                | p95    | 14.148 ms | 12.400 ms |  12.4% |
+|                                | mean   | 11.288 ms |  8.792 ms |  22.1% |
+| Head after forced reactivation | p50    |  2.444 ms |  2.044 ms |  16.4% |
+|                                | mean   |  2.654 ms |  2.261 ms |  14.8% |
+
+One further isolated round per revision used 1,000 forced reactivations. The
+candidate improved p50 from `2.621` to `2.039` ms (22.2%), p95 from `3.675`
+to `2.974` ms (19.1%), p99 from `7.703` to `6.979` ms (9.4%), and mean from
+`2.737` to `2.202` ms (19.5%). Candidate maximum was worse (`22.827` versus
+`9.164` ms), but that single host outlier did not persist in p99 across 1,000
+complete kill-and-reactivate cycles.
+
+This clears both suite-level tail warnings. It also rejects checkpoint-tail
+work as the next optimization: there is no reproduced checkpoint regression
+to pay complexity for. Raw records are `/tmp/stream-focused-{main,candidate}-r{1,2,3}.log`
+and `/tmp/stream-cold1000-{main,candidate}-r1.log` locally.

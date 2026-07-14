@@ -7,6 +7,7 @@ import type { Stream, StreamEventInput } from "../../src/itx-api.generated.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const ENABLED = process.env.STREAM_CUMULATIVE_BENCHMARK === "1";
+const FOCUS_TAILS = process.env.STREAM_BENCH_FOCUS_TAILS === "1";
 const IMPLEMENTATION = process.env.STREAM_BENCH_IMPLEMENTATION;
 const REVISION = process.env.STREAM_BENCH_REVISION ?? "unknown";
 const EVENT_TYPE = "events.iterate.test/stream-cumulative-benchmark";
@@ -18,6 +19,7 @@ const LARGE_PAYLOAD = "l".repeat(256 * 1_024);
 const INLINE_LARGE_PAYLOAD = "i".repeat(768 * 1_024);
 const TAIL_SAMPLES = Number(process.env.STREAM_BENCH_TAIL_SAMPLES ?? "0");
 const APPEND_SAMPLES = Number(process.env.STREAM_BENCH_APPEND_SAMPLES ?? "0");
+const CONCURRENT_APPEND_SAMPLES = Number(process.env.STREAM_BENCH_CONCURRENT_APPEND_SAMPLES ?? "0");
 const BATCH_SAMPLES = Number(process.env.STREAM_BENCH_BATCH_SAMPLES ?? "0");
 const BATCH_SIZE = Number(process.env.STREAM_BENCH_BATCH_SIZE ?? "100");
 const DENSE_CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_DENSE_CROSSPOST_SAMPLES ?? "0");
@@ -136,7 +138,7 @@ async function forceIdleTeardown(stream: StreamHandle): Promise<void> {
   ).durableObjectStub.runIdleTeardownNow();
 }
 
-test.skipIf(!ENABLED)(
+test.skipIf(!ENABLED || FOCUS_TAILS)(
   "cumulative Stream latency and throughput",
   async () => {
     if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
@@ -213,7 +215,7 @@ test.skipIf(!ENABLED)(
     {
       using stream = project.streams.get(`/bench/${runId}/append-concurrent`);
       const samples = await measure(
-        20,
+        CONCURRENT_APPEND_SAMPLES || 20,
         async (iteration) => {
           await Promise.all(
             Array.from({ length: 32 }, (_, index) =>
@@ -768,6 +770,78 @@ test.skipIf(!ENABLED)(
         samples.push(performance.now() - startedAt);
         expect(observedHead).toBeGreaterThanOrEqual(expectedHead);
         expectedHead = observedHead;
+      }
+      metrics.head_after_forced_reactivation = summarize(samples);
+    }
+
+    const output: BenchmarkOutput = {
+      implementation: IMPLEMENTATION,
+      metrics,
+      revision: REVISION,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
+  },
+  600_000,
+);
+
+test.skipIf(!ENABLED || !FOCUS_TAILS)(
+  "focused Stream append and reactivation tails",
+  async () => {
+    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
+      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
+    }
+
+    const metrics: Record<string, Metric> = {};
+    const runId = crypto.randomUUID().slice(0, 8);
+
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({
+      projectId: `prj_${crypto.randomUUID()}`,
+      slug: `stream-tail-${IMPLEMENTATION}-${runId}`,
+    });
+    await project.__describe();
+
+    {
+      using stream = project.streams.get(`/bench/${runId}/append-concurrent`);
+      const concurrentSamples = CONCURRENT_APPEND_SAMPLES || 200;
+      const samples = await measure(
+        concurrentSamples,
+        async (iteration) => {
+          await Promise.all(
+            Array.from({ length: 32 }, (_, index) =>
+              commitDiscardingResult(
+                stream,
+                event({ marker: `concurrent-${iteration}-${index}-${crypto.randomUUID()}` }),
+              ),
+            ),
+          );
+        },
+        10,
+      );
+      metrics.append_concurrent_32_singletons = summarize(samples, 32);
+      expect((await readHead(stream)).maxOffset).toBeGreaterThanOrEqual(
+        (concurrentSamples + 10) * 32,
+      );
+    }
+
+    {
+      const path = `/bench/${runId}/cold-head`;
+      using stream = project.streams.get(path);
+      await commitDiscardingResult(stream, event({ marker: "cold-seed" }));
+      const expectedHead = (await readHead(stream)).maxOffset;
+      const samples: number[] = [];
+      for (let iteration = 0; iteration < (COLD_SAMPLES || 100); iteration += 1) {
+        await stream.kill().catch(() => undefined);
+        using reactivated = project.streams.get(path);
+        const startedAt = performance.now();
+        const observedHead = (await readHead(reactivated)).maxOffset;
+        samples.push(performance.now() - startedAt);
+        expect(observedHead).toBeGreaterThanOrEqual(expectedHead);
       }
       metrics.head_after_forced_reactivation = summarize(samples);
     }
