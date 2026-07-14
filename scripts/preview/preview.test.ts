@@ -42,6 +42,7 @@ const {
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
   reconcileEnvironmentConfigLeaseResources,
+  releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
@@ -1669,6 +1670,60 @@ describe("lease ownership during acquire", () => {
       dopplerConfig: "preview_seven",
       slug: "preview-7",
     });
+  });
+});
+
+describe("cleanup lease release", () => {
+  const lease = { type: "environment-config", slug: "preview-4", leaseId: "lease-1950" };
+
+  it("releases the lease even when teardown/erase failed — the slot is left dirty, not leaked", async () => {
+    // 2026-07-14 incident: a Cloudflare 429 failed erase-data mid-cleanup and
+    // the old code bailed before releasing; the merged PR's lease leaked for
+    // 24h and starved the fleet. The dirty slot is the harmless half: every
+    // acquire erases on entry (see the entry-invariant test above).
+    const release = vi.fn(async () => ({ released: true }));
+    const semaphore = fakeSemaphore({ release });
+
+    const result = await releaseLeaseDespiteTeardownFailure({
+      lease,
+      semaphore,
+      teardownOk: false,
+    });
+
+    expect(result).toEqual({ ok: true, released: true });
+    expect(release).toHaveBeenCalledExactlyOnceWith({
+      type: "environment-config",
+      slug: "preview-4",
+      leaseId: "lease-1950",
+    });
+  });
+
+  it("treats an already-gone lease as a successful (non-)release", async () => {
+    const semaphore = fakeSemaphore({ release: vi.fn(async () => ({ released: false })) });
+
+    const result = await releaseLeaseDespiteTeardownFailure({
+      lease,
+      semaphore,
+      teardownOk: true,
+    });
+
+    expect(result).toEqual({ ok: true, released: false });
+  });
+
+  it("reports ok=false only when the release call itself fails — that is the real leak", async () => {
+    const semaphore = fakeSemaphore({
+      release: vi.fn(async () => {
+        throw new Error("semaphore unreachable");
+      }),
+    });
+
+    const result = await releaseLeaseDespiteTeardownFailure({
+      lease,
+      semaphore,
+      teardownOk: false,
+    });
+
+    expect(result).toEqual({ ok: false, released: false });
   });
 });
 
