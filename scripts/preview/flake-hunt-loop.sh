@@ -93,6 +93,10 @@ slot_reclaims=0
 # WARMUP_RUNS uncounted `preview test` invocations warm the slot first; their
 # pass/fail is ignored on purpose (they exist only to prime caches/containers).
 WARMUP_RUNS="${WARMUP_RUNS:-0}"
+# Returns 1 if a warmup run hit the ownership refusal. That one failure mode
+# must not be swallowed with the rest: the refusal nulls the recorded lease in
+# the PR body, so the next counted run would exit as SKIPPED (no lease) and
+# never reach the steal handling below.
 warm_slot() {
   local prefix=$1 w wlog
   for w in $(seq 1 "$WARMUP_RUNS"); do
@@ -100,9 +104,34 @@ warm_slot() {
     echo "warmup $w/$WARMUP_RUNS: priming the slot (result ignored) -> $wlog"
     doppler run --project _shared --config prd -- pnpm preview test \
       --pull-request-number "$PR_NUMBER" >"$wlog" 2>&1 || true
+    if grep -q "no longer belongs to" "$wlog"; then
+      echo "warmup $w/$WARMUP_RUNS: slot claimed externally mid-warmup"
+      return 1
+    fi
   done
 }
-warm_slot "warmup"
+
+# Re-claim a slot after an external steal, then re-warm it. The warmup itself
+# can lose the new slot to another steal, so loop until a warmup completes or
+# the budget runs out. Returns 1 when the budget is exhausted.
+reclaim_and_warm() {
+  while [ "$slot_reclaims" -lt "$MAX_SLOT_RECLAIMS" ]; do
+    slot_reclaims=$((slot_reclaims + 1))
+    deploy_full_fleet "reclaim $slot_reclaims" "$LOG_DIR/reclaim-$(printf '%02d' "$slot_reclaims")-deploy.log" || exit 4
+    # The re-claimed slot is as cold as the preflight one — give it the same
+    # warmup so the streak's next counted run isn't a cold-boot roll.
+    if warm_slot "reclaim-$slot_reclaims-warmup"; then return 0; fi
+  done
+  return 1
+}
+
+if ! warm_slot "warmup"; then
+  echo "warmup: slot claimed externally — re-claiming"
+  if ! reclaim_and_warm; then
+    echo "warmup: FAIL — slot re-claim budget (MAX_SLOT_RECLAIMS=$MAX_SLOT_RECLAIMS) exhausted"
+    exit 1
+  fi
+fi
 
 i="$START_AT"
 last_run=$((START_AT + RUNS - 1))
@@ -158,15 +187,12 @@ while [ "$i" -le "$last_run" ]; do
     # "no longer belongs to" is the ownership-guard refusal from preview.ts
     # (reassertEnvironmentConfigLease) — grep for the dialed-by-name string
     # there before rewording it.
-    if grep -q "no longer belongs to" "$log" && [ "$slot_reclaims" -lt "$MAX_SLOT_RECLAIMS" ]; then
-      slot_reclaims=$((slot_reclaims + 1))
-      echo "run $i: SLOT CLAIMED EXTERNALLY — re-claiming a slot and re-running run $i uncounted (reclaim $slot_reclaims/$MAX_SLOT_RECLAIMS) ($started-$finished UTC) $log"
-      mv "$log" "$LOG_DIR/run-$(printf '%03d' "$i")-slot-stolen-$slot_reclaims.log"
-      deploy_full_fleet "reclaim $slot_reclaims" "$LOG_DIR/reclaim-$(printf '%02d' "$slot_reclaims")-deploy.log" || exit 4
-      # The re-claimed slot is as cold as the preflight one — give it the
-      # same warmup so the streak's next counted run isn't a cold-boot roll.
-      warm_slot "reclaim-$slot_reclaims-warmup"
-      continue
+    if grep -q "no longer belongs to" "$log"; then
+      echo "run $i: SLOT CLAIMED EXTERNALLY — re-claiming a slot and re-running run $i uncounted ($started-$finished UTC) $log"
+      mv "$log" "$LOG_DIR/run-$(printf '%03d' "$i")-slot-stolen-$((slot_reclaims + 1)).log"
+      if reclaim_and_warm; then continue; fi
+      echo "run $i: FAIL — slot re-claim budget (MAX_SLOT_RECLAIMS=$MAX_SLOT_RECLAIMS) exhausted"
+      exit 1
     fi
     echo "run $i: FAIL exit=$exit_code ($started-$finished UTC) $log"
     exit 1
