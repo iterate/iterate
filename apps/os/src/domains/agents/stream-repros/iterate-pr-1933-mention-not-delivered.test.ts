@@ -115,11 +115,11 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
     expect(turnPayload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
     expect(reactions).toEqual([
       {
-        commentId: 4962404485,
         connection: "install-115079265",
         kind: "issue-comment",
         owner: "iterate",
         repo: "iterate",
+        targetId: 4962404485,
       },
     ]);
     expect(legacyAgent.events).toEqual(fixture.legacyTargetEvents);

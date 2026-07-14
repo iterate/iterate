@@ -194,7 +194,13 @@ export async function routeIntegrationWebhook(input: {
             slug: input.slug,
           }),
         ]),
-    input.event,
+    {
+      ...input.event,
+      // Preserve the trusted routing decision on the durable fact. Downstream
+      // userspace can select the exact account that received the webhook
+      // instead of accidentally acting through the project's first connection.
+      payload: { ...input.event.payload, connection: claim.connection },
+    },
   );
   return { connection: claim.connection, ok: true, projectId: claim.projectId };
 }

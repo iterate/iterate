@@ -1,36 +1,14 @@
 // Contract for the "github-agent" processor that runs on one routed PR
 // agent stream (`/agents/repos/<slug>/pull-requests/<n>`), shaped after the
-// email-agent processor contract. One configuration fact owns all project
-// policy; routed webhooks own per-PR controls and model-visible inputs belong
-// to the agent contract.
+// email-agent processor contract. Routed webhooks own the bounded PR
+// projection and model-visible conversational inputs. Automatic review
+// policy is ordinary project userspace: config-repo workers append review
+// tasks directly when their own repository rules say to do so.
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
-
-/** The complete project-owned policy for one GitHub agent. This is one value,
- * not a family of enable/disable facts: configuring again replaces it. */
-export const GithubAgentConfiguration = z.object({
-  automaticReview: z
-    .object({
-      enabled: z.boolean().default(false),
-      /** Project-owned review rules become task context only for a review
-       * turn, rather than permanent system-prompt ballast. */
-      instructions: z
-        .string()
-        .trim()
-        .min(1)
-        .default(
-          "Review the complete pull-request diff for correctness, security, regressions, and missing tests. Report only specific actionable findings supported by the changed code.",
-        ),
-    })
-    .prefault({}),
-});
-
-export type GithubAgentConfiguration = z.infer<typeof GithubAgentConfiguration>;
-/** Partial GitHub pull-request agent policy accepted by agent defaults and configuration calls. */
-export type GithubAgentConfigurationInput = z.input<typeof GithubAgentConfiguration>;
 
 const PullRequestProjection = z.object({
   author: z.string().optional(),
@@ -60,13 +38,6 @@ const PullRequestActivity = z.object({
   trustedInstructionSource: z.boolean().default(false),
 });
 
-const ReviewCandidate = z.object({
-  draft: z.boolean(),
-  headSha: z.string(),
-  offset: z.number().int().positive(),
-  supersededHeadSha: z.string().optional(),
-});
-
 /**
  * Processor for one pull-request agent stream.
  *
@@ -75,17 +46,17 @@ const ReviewCandidate = z.object({
  * PR route context and a bounded projection of its webhook timeline. Raw
  * webhook events remain observable on the stream, but they are not copied one
  * by one into the LLM's permanent history. A turn gets one compact current
- * snapshot when a trusted human mentions the agent, on later trusted comments
- * in that activated PR conversation, or when project policy asks for an automatic
- * review of a new head. Replies leave through the named GitHub connection's
+ * snapshot when a trusted human mentions the agent or on later trusted comments
+ * in that activated PR conversation. Review automation is deliberately absent:
+ * project config workers consume the same webhooks and append their own review
+ * tasks. Replies leave through the named GitHub connection's
  * `itx.integrations.github.get(connection).octokit` capability.
  */
 export const GithubAgentProcessorContract = defineProcessorContract({
   slug: "github-agent",
-  version: "0.2.0",
+  version: "0.3.0",
   description: "Handles GitHub-specific behavior for one routed pull-request agent stream.",
   stateSchema: z.object({
-    configuration: GithubAgentConfiguration.prefault({}),
     connection: z.string().optional(),
     conversationActive: z.boolean().default(false),
     installationId: z.string().optional(),
@@ -95,28 +66,9 @@ export const GithubAgentProcessorContract = defineProcessorContract({
     recentActivity: z.array(PullRequestActivity).default([]),
     repo: z.string().optional(),
     repoPath: z.string().optional(),
-    reviewCandidate: ReviewCandidate.nullable().default(null),
     streamPath: z.string().optional(),
   }),
   events: {
-    "events.iterate.com/github-agent/configure": {
-      description:
-        "The complete project-owned policy for one GitHub pull-request agent. A later fact replaces every option together.",
-      payloadSchema: GithubAgentConfiguration,
-      examples: [
-        {
-          description:
-            "Automatic reviews interrupt obsolete work on every non-draft head; trusted human mentions queue.",
-          payload: {
-            automaticReview: {
-              enabled: true,
-              instructions:
-                "Every new public event needs a schema example, documentation, and a reducer test.",
-            },
-          },
-        },
-      ],
-    },
     "events.iterate.com/github-agent/repository-collaborator-verified": {
       description:
         "Internal audit fact recording that GitHub verified a human trigger source as a repository collaborator when its webhook author_association was inconclusive.",
@@ -129,7 +81,6 @@ export const GithubAgentProcessorContract = defineProcessorContract({
   },
   processorDeps: [AgentProcessorContract, RepoProcessorContract],
   consumes: [
-    "events.iterate.com/github-agent/configure",
     "events.iterate.com/github-agent/repository-collaborator-verified",
     "events.iterate.com/github-agent/route-configured",
     "events.iterate.com/github/webhook-received",
