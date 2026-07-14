@@ -25,8 +25,6 @@
     "e2e": "pnpm --dir apps/os e2e",
     "vitest": "pnpm --dir apps/os test",
     "test": "pnpm -r --parallel --filter '!iterate' test",
-    "test:onboarding": "pnpm -r --parallel --filter '!iterate' test:onboarding",
-    "test:onboarding:production": "pnpm -r --parallel --filter '!iterate' test:onboarding:production",
     "clean": "rm -rf ./**/node_modules",
     "super-reset": "pnpm i && pnpm -r --parallel --filter '!iterate' super-reset",
     "auth:mint": "tsx scripts/auth/mint-session.ts",

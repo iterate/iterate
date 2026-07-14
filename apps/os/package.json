@@ -27,7 +27,6 @@
     "playwright": "playwright test",
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
-    "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -108,7 +107,6 @@
     "iterate": "workspace:*",
     "jsdom": "27.4.0",
     "miniflare": "catalog:cloudflare",
-    "tinyexec": "^1.0.2",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",

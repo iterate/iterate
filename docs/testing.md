@@ -64,6 +64,9 @@ away from.
 | TUI              | `pnpm exec tsx e2e/tui-test/run.ts`   | `apps/os/e2e/tui-test/`                 | The `iterate chat` TUI through a real PTY (Microsoft TUI Test) against a disposable project.                                                                                                                                                                                                                                                                                                                              |
 | Playwright specs | `pnpm spec` (repo root)               | `specs/` (`playwright.config.ts`)       | Browser-level product flows: signup, project create, dashboard, REPL, agent chat, reactivity.                                                                                                                                                                                                                                                                                                                             |
 
+Smoke-testing a deployment (what the deploy pipeline probes automatically,
+plus manual/agent recipes for production): [Smoke testing](smoke-testing.md).
+
 ## What earns a test
 
 The default is a covering e2e. A **unit test** earns its place in exactly

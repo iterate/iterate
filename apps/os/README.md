@@ -209,6 +209,7 @@ test coverage removed without replacement is
 - [Cloudflare Sandboxes & Containers](./docs/cloudflare-sandboxes.md) — platform guide: namespace layout, **SSH into an instance**, feature inventory, deprecations, ops
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)
+- [Smoke-Testing A Deployment](../../docs/smoke-testing.md) — deploy-inline probes + manual recipes
 - [Agent Smoke Testing](./docs/agent-smoke-testing.md)
 - [Doppler-Backed Scripts](./docs/doppler-backed-scripts.md)
 - [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)
