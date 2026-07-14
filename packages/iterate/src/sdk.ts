@@ -43,6 +43,11 @@ type StreamSubscribeArgs = Omit<Parameters<Stream["subscribe"]>[0], "processEven
  * operation as `subscribe` rather than exposing transport batching to user
  * code. Synchronous handlers run without a microtask yield between events;
  * asynchronous handlers are awaited in order within each delivered batch.
+ *
+ * The Workers RPC invocation that supplies `processEvent` must remain alive
+ * for the subscription lifetime. Retaining only the returned handle in a
+ * stateless Worker field does not keep that callback capability connected
+ * after the initiating invocation returns.
  */
 export function subscribe(
   stream: Pick<Stream, "subscribe">,

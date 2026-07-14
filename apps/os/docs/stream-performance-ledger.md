@@ -2845,3 +2845,152 @@ measurement gap for real Worker consumers. Raw Worker records are
 restored to shipping OS version `a0e07804-fac5-4858-95eb-a5e37c9532d0`, and
 dashboard, event-docs, OS-API, and auth-RPC smoke checks passed. Production was
 not deployed or erased.
+
+## 2026-07-14: Receiver-Side `processEvent` Collapse Accepted
+
+### Implementation And Correctness Boundary
+
+The rejected per-event wire experiment above established the boundary: Stream
+delivery must remain one batched RPC, acknowledgement, and cursor unit. The
+receiver no longer needs to expose that transport unit to ordinary handlers.
+The accepted implementation does two small things:
+
+- `IterateWorkerEntrypoint` and `IterateDurableObject` call `processEvent`
+  synchronously and await only a returned promise. Synchronous handlers no
+  longer pay one forced promise and microtask boundary per event.
+- `iterate/sdk` exports `subscribe(stream, { processEvent, ...options })`. The
+  helper installs one internal `processEventBatch` callback, receives one wire
+  batch, and invokes the user handler locally in order.
+
+Asynchronous handlers are still awaited in order, rejection still rejects the
+batch, and no acknowledgement or cursor advances before handler settlement.
+Ten embedded-SDK runtime tests cover synchronous no-yield delivery, asynchronous
+ordering, rejection propagation, both base classes, the subscription helper,
+and generated-module loading.
+
+An actual Worker experiment exposed a separate lifecycle rule. A callback
+capability supplied by a Workers RPC invocation disconnects when that
+invocation returns; retaining only the subscription handle in a stateless
+Worker field does not extend the callback lifetime. The deployed benchmark now
+keeps the initiating invocation pending until every completion is observed,
+and the SDK documentation states this requirement.
+
+### Receiver And Exact-Parent Local Results
+
+A Node receiver-only prefilter ran 500 batches for nine rounds with PCM-shaped
+events. Positive change means less dispatch time. The asynchronous control was
+unchanged; the synchronous path removed the forced per-event promise cost.
+
+| Events per batch | Previous adapter | Conditional-await adapter | Speedup |
+| ---------------: | ---------------: | ------------------------: | ------: |
+|               32 |         0.967 ms |                  0.273 ms |   3.55x |
+|              128 |         3.691 ms |                  0.745 ms |   4.96x |
+|              512 |        14.846 ms |                  2.914 ms |   5.09x |
+|            2,048 |        62.706 ms |                 14.617 ms |   4.29x |
+
+The SDK subscription helper's extra function dispatch was then isolated from
+network effects. Across 3,000 batches of 1,000 events per round, its median
+cost was 24.856 ms per three million events versus 4.190 ms for a hand-written
+batch loop. That is a 6.9 microsecond absolute increment per 1,000-event batch,
+or about 6.9 nanoseconds per event. The large relative percentage is an
+artifact of both loops taking only microseconds per batch.
+
+The exact shipping parent and candidate then ran in local workerd with five
+fresh processes per revision, 20 singleton observations and 50 1,000-event
+PCM observations per process. Every candidate process beat every baseline
+process on the batch path.
+
+| 1,000 x 1,920-byte batch | Previous adapter | Candidate | Improvement |
+| ------------------------ | ---------------: | --------: | ----------: |
+| p50                      |        53.799 ms | 49.726 ms |       7.57% |
+| p95                      |        64.645 ms | 58.123 ms |      10.09% |
+| mean                     |        54.829 ms | 50.317 ms |       8.23% |
+
+### Deployed Durable Worker Consumer
+
+The deployed lane timed only on the Node host around actual network I/O:
+
+```text
+Node host -> OS Worker -> source Stream DO -> Project Worker processEventBatch
+          -> local processEvent -> OS Worker -> output Stream DO -> Node waiter
+```
+
+Five alternating deployment-period runs per revision initially showed the
+candidate ahead by 11.54% at pooled p50, 9.96% at p95, and 10.40% at mean for
+1,000 PCM events. Because deployment weather was material, the stronger lane
+selected the old or new loop from the event payload inside one deployed Worker
+version. Seven fresh projects produced 105 valid batch pairs:
+
+| Deployed durable batch | Previous adapter |  Candidate | Improvement |
+| ---------------------- | ---------------: | ---------: | ----------: |
+| pooled p50             |       233.645 ms | 222.287 ms |       4.86% |
+| pooled p95             |       695.938 ms | 571.228 ms |      17.92% |
+| pooled mean            |       348.336 ms | 306.965 ms |      11.88% |
+
+The median within-pair improvement was 2.28%; the candidate won 55 of 105
+pairs, and both execution-order strata favored it. One separate 40-pair
+process was excluded in full after Cloudflare reported R2 backup throttle code 10058. It was infrastructure failure, not latency data.
+
+### Deployed Ephemeral Subscription
+
+The first whole-helper A/B used the real exported `subscribe` helper in a
+deployed Project Worker but assigned baseline and candidate to different source
+Stream DOs. Seven valid projects produced 105 pairs. That lane failed its 5%
+non-inferiority gate: candidate pooled p50 was 4.40% slower and paired median
+was 3.74% slower, although p95 was 2.24% better. Only 47 of 105 pairs favored
+the helper. The local 6.9-microsecond result showed that the 9.3-millisecond
+pooled gap could not plausibly be receiver dispatch, so the physical-stream
+confounder was removed rather than rationalized.
+
+The decisive lane used one source Stream DO, one ephemeral batched callback,
+one output Stream DO, and payload-selected old/new receiver loops. Seven fresh
+projects completed all 105 1,000-event pairs. Positive change favors
+`processEvent`:
+
+| Shared-transport result | Previous adapter | `processEvent` |  Change |
+| ----------------------- | ---------------: | -------------: | ------: |
+| pooled p50              |       205.546 ms |     211.278 ms |  -2.79% |
+| pooled p95              |       536.181 ms |     594.663 ms | -10.91% |
+| pooled mean             |       265.742 ms |     281.453 ms |  -5.91% |
+| paired median change    |              n/a |            n/a |  +1.57% |
+| within-pair wins        |              n/a |         57/105 |     n/a |
+
+Both execution-order strata were non-negative for the candidate (+3.23% and
++0.003%). Six of seven per-project median changes were within 1.6%; the seventh
+was -4.92%. This supports central-path parity for receiver-side dispatch. It
+does not prove tail parity: random multi-second Cloudflare stalls were larger
+on the candidate samples in this collection, so no p95 or mean improvement is
+claimed.
+
+One of eight earlier whole-helper projects was invalidated in full after four
+successful warmups. Its source append succeeded in 1.234 seconds, but no
+completion reached the output Stream DO and the host waiter expired after
+60.063 seconds. No Project Worker exception was recorded. The correlated wait
+trace is
+[`f6a91b92d44cb3d34c271e3a39d82d84`](https://dash.cloudflare.com/376ef7ed81b0573f93524de763666c15/observability/traces/f6a91b92d44cb3d34c271e3a39d82d84),
+and the failure remains classified as an unexplained ephemeral capability or
+delivery loss rather than benchmark latency. All seven shared-transport
+projects completed after the lifecycle fix.
+
+### Decision, Cost, And Collapse
+
+Receiver-side `processEvent` is accepted, while direct per-event wire delivery
+remains rejected. The external model can stay append, subscribe, read, and
+wait-for-event; `processEventBatch` remains an internal protocol and an escape
+hatch only for intentional whole-batch atomicity.
+
+The production source cost is 47 added and 4 removed lines in one SDK module,
+plus one regenerated embedded-module line. The rest is 197 lines of runtime
+tests and 300 added/26 removed lines in the reusable benchmark. There is no
+storage change, migration, flag, service, queue, retry protocol, fallback, or
+second subscription transport. Collapse is one helper and two short adapter
+loops, so it can be reverted cleanly without data work. Preview 5 was restored
+from shipping commit `7a781d177` as Worker version
+`1665fbd8-a32a-4f28-a52d-23157021722e`; all four smoke checks passed, and
+production was not touched.
+
+Raw records are `/tmp/process-event-local-{main,candidate}-r{1..5}.log`,
+`/tmp/process-event-preview5-{main,candidate}-r{1..5}.log`,
+`/tmp/process-event-preview5-paired-r{1..7}.log`,
+`/tmp/process-event-preview5-ephemeral-r{1..8}.log`, and
+`/tmp/process-event-preview5-ephemeral-shared-r{1..7}.log`.
