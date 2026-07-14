@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useReducer, useSyncExternalStore } from "react";
 import type { Stream } from "../../../../../itx-api.generated.ts";
 import type { StreamProcessorStateStorage } from "../../../stream-processor.ts";
-import { browserProcessorStateStorage } from "../processor-state-storage.ts";
 import type { SqlClient } from "../stream-browser-db.ts";
 import {
   acquireStreamRuntime,
@@ -13,9 +12,12 @@ import {
 
 /**
  * What every browser-hosted processor's constructor receives: the stream
- * connection, the local SQLite client, and checkpoint storage scoped to the
- * processor's (slug, subscription) row. Having one canonical shape is what
- * lets {@link useStreamProcessorStore} construct any processor class.
+ * connection and the local SQLite client. Having one canonical shape is what
+ * lets {@link useStreamProcessorStore} construct any processor class. The
+ * legacy checkpoint storage hooks stay in the type (optional) for
+ * compatibility, but the hook no longer wires them: the runtime drives the
+ * processor with a StreamProcessorRunner whose progress lives in the
+ * transactional browser progress store, not in the processor instance.
  */
 type BrowserProcessorConstructorArgs<State> = {
   stream: Stream;
@@ -23,7 +25,7 @@ type BrowserProcessorConstructorArgs<State> = {
   path: string;
   projectId: string;
   sql: SqlClient;
-} & Required<StreamProcessorStateStorage<State>>;
+} & StreamProcessorStateStorage<State>;
 
 /**
  * Mount a browser-hosted stream processor and subscribe this component to its
@@ -86,20 +88,8 @@ export function useStreamProcessorStore<State>(input: {
         schemaVersion,
         tables: JSON.parse(tablesKey) as string[],
         ...(resetOnSchemaVersionChange == null ? {} : { resetOnSchemaVersionChange }),
-        createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
-          const storage = browserProcessorStateStorage<State>({
-            sql,
-            processorSlug: slug,
-            subscriptionKey,
-          });
-          return new Processor({
-            stream,
-            path,
-            projectId,
-            sql,
-            readState: storage.readState,
-            writeState: storage.writeState,
-          });
+        createProcessor({ stream, path, projectId, sql }) {
+          return new Processor({ stream, path, projectId, sql });
         },
       }),
     [

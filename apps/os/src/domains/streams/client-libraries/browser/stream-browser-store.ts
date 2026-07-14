@@ -7,11 +7,14 @@
 // same mirror reactively.
 //
 // A view encodes its own processor + resume config (no central registry): it passes the
-// processor, its schema version (for the writer-lock name), the tables to clear on a
-// mirror discard, and how to read its durable checkpoint back. The runtime always opens a
-// connection (so a follower can still append / read runtimeState) and — only as leader —
-// hosts the processor over a fresh subscription, mirroring the Durable-Object-side
-// stream processor host.
+// processor, its schema version (for the writer-lock name), and the tables to clear on a
+// mirror discard. The runtime always opens a connection (so a follower can still append /
+// read runtimeState) and — only as leader — drives the processor with a
+// StreamProcessorRunner over a fresh subscription, mirroring the Durable-Object-side
+// registry cutover: the runner owns the two-cursor progress (persisted through the
+// transactional browser progress store, processor-state-storage.ts), and the store's
+// commit flushes the processor's buffered projection writes and the progress record in
+// ONE SQLite transaction.
 
 import type { ProcessorRuntimeState, SubscriptionKey } from "../../rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "../../schemas.ts";
@@ -21,10 +24,16 @@ import {
   hostRuntimeCapabilities,
   type AnyHostedProcessor,
 } from "../../processor-host-capabilities.ts";
+import { StreamProcessorRunner } from "../../stream-processor-runner.ts";
+import type { StreamProcessor } from "../../stream-processor.ts";
 import { LatencyRing, type LatencyStats } from "../../stream-runtime-metrics.ts";
 import type { SubscriberMetricsReport } from "../../subscriber-metrics.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
-import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
+import {
+  browserProcessorProgressStore,
+  resetBrowserProcessorProjection,
+} from "./processor-state-storage.ts";
+import type { BrowserProjectionWriteBuffer } from "./projection-write-buffer.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
   StreamBrowserDatabase,
@@ -64,13 +73,20 @@ const APPEND_MAX_RETRIES = 8;
 export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /**
- * The slice of `StreamProcessor` the browser runtime drives: read the
- * checkpoint to pick the replay cursor, then feed delivered batches into
- * `ingest`. Structural so views construct whatever processor class they like.
- * This is exactly the surface the Durable-Object-side host drives, so it is
- * that host's type rather than a duplicate.
+ * The processor surface the browser runtime hosts under runner drive: the
+ * shared hosted-capability slice (contract, metrics, runtime state) PLUS the
+ * two browser-specific members the transactional committer needs —
+ * `projectionBuffer` (the shared write buffer the progress store drains into
+ * its commit transaction) and `ensureProjectionSchema` (the prepare()
+ * successor, run before the first checkpoint read). Structural so views (and
+ * the streams-example-app) construct whatever processor class they like; the
+ * runner's own construction check rejects anything that is not a real
+ * StreamProcessor.
  */
-type BrowserHostedProcessor = AnyHostedProcessor;
+type BrowserHostedProcessor = AnyHostedProcessor & {
+  readonly projectionBuffer: BrowserProjectionWriteBuffer;
+  ensureProjectionSchema(sql: SqlClient): Promise<void>;
+};
 
 export type StreamBrowserSnapshot = {
   connectionStatus: StreamBrowserConnectionStatus | "reconnecting" | "subscribing" | "subscribed";
@@ -456,11 +472,16 @@ function createStreamRuntime(
   const transportRtt = new LatencyRing();
   // The leader election's live hosted processor. Its StreamProcessor-provided
   // `subscriberMetrics` is the ONE place this browser's consumption metrics
-  // live: appendBatch feeds committed offsets in, the base class's ingest
-  // closes the consume-own-append loop, and stream-side pings land their
-  // clock-offset estimate here too. Followers host no processor → no
+  // live: appendBatch feeds committed offsets in, the runner's committed-frame
+  // report closes the consume-own-append loop, and stream-side pings land
+  // their clock-offset estimate here too. Followers host no processor → no
   // self-measured metrics, honestly.
   let currentProcessor: BrowserHostedProcessor | undefined;
+  // The election's delivery driver. Disposed on every election teardown so a
+  // superseded incarnation's queued frames reject instead of racing the next
+  // election's runner over the same mirror (its in-flight commits are fenced
+  // durably by the progress store's cursorRevision/monotonic guards either way).
+  let electionRunner: StreamProcessorRunner<any> | undefined;
 
   /** The one builder for this browser's measured metrics (store API + debug registry). */
   function readMetrics(): BrowserStreamMetrics {
@@ -912,12 +933,25 @@ function createStreamRuntime(
   }
 
   async function discardLocalMirror() {
-    await streamDatabase.clearTables(tables);
-    // Projection tables are shared by every browser subscription for this
-    // processor slug. If the table is discarded, every checkpoint for that
-    // slug is invalid too; leaving an older subscription_key row behind lets
-    // readers that pick the highest checkpoint resurrect stale reduced state.
-    await deleteBrowserProcessorState({ sql, processorSlug: slug });
+    // Clear the slug's projection tables AND rewind its resume cursor in ONE
+    // transaction (resetBrowserProcessorProjection): a crash between the two
+    // could otherwise leave a stale checkpoint over an empty mirror — the
+    // silent-hole incident class. The rewind covers every subscription key
+    // for the slug (the tables are shared per-slug; a leftover row would let
+    // readers that pick the highest checkpoint resurrect stale reduced
+    // state), and its cursorRevision bump fences any in-flight commit from a
+    // stale runner incarnation out of the rebuilt mirror.
+    const projectionResetStatements: { sql: string }[] = [];
+    for (const table of tables) {
+      const [present] = await sql.exec(
+        `SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?`,
+        [table],
+      );
+      if (present !== undefined) projectionResetStatements.push({ sql: `DELETE FROM ${table}` });
+    }
+    await resetBrowserProcessorProjection({ sql, processorSlug: slug, projectionResetStatements });
+    // Same broadcast clearTables published: views remount their mirror reads.
+    streamDatabase.notifyChanged({ kind: "clear" });
     await streamDatabase.compact();
     snapshot = {
       ...snapshot,
@@ -946,18 +980,13 @@ function createStreamRuntime(
   // back to the offset check: discard when the server has fewer committed events than we do.
   async function reconcileLocalMirrorWithServer(
     rpc: BrowserStreamClient,
+    // The acknowledged resume cursor, read through the election's progress
+    // store (which runs the projection schema/reset FIRST — a version reset
+    // must land before this cursor is trusted). The RUNNER is created after
+    // this reconcile, so any discard's rewind is what its load reads.
+    readAcknowledgedOffset: () => Promise<number>,
   ): Promise<{ serverMaxOffset: number }> {
-    // Deliberately a throwaway instance: processors memoize their checkpoint on
-    // first read, so the real instance must be created after any discard below.
-    const processor = args.createProcessor({
-      stream: rpc,
-      path: args.streamPath,
-      projectId: args.projectId,
-      sql,
-      subscriptionKey,
-    });
-    const checkpoint = await processor.snapshot();
-    const localMaxOffset = checkpoint.offset;
+    const localMaxOffset = await readAcknowledgedOffset();
     const { coreProcessorState: rawCoreProcessorState } = await rpc.runtimeState();
     const coreProcessorState = parseBrowserCoreProcessorState(rawCoreProcessorState);
     const reconciled = { serverMaxOffset: coreProcessorState.maxOffset };
@@ -1208,14 +1237,12 @@ function createStreamRuntime(
         if (!ownsRuntime()) return undefined;
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
-        const { serverMaxOffset } = await withDeadline(
-          "reconcile",
-          reconcileLocalMirrorWithServer(election.connection),
-        );
-        // Re-check after every await: a step that settles late (after this
-        // election was superseded) must not write runtime-wide fields like
-        // lastDeliveredOffset over the current election's values.
-        if (!ownsRuntime()) return undefined;
+        // The election's drive pieces. The processor carries the shared
+        // projection-write buffer; the progress store drains that buffer into
+        // the SAME transaction that persists the two-cursor progress record.
+        // Constructed BEFORE reconcile so the reconcile's checkpoint read runs
+        // the projection schema/reset first (the prepare() ordering); the
+        // RUNNER is constructed after, so a discard's rewind is what it loads.
         const processor = args.createProcessor({
           stream: election.connection,
           path: args.streamPath,
@@ -1223,18 +1250,61 @@ function createStreamRuntime(
           sql,
           subscriptionKey,
         });
-        // The checkpoint read goes to the shared db worker; an un-deadlined
-        // hang here would park the runtime as a forever-"leader" with no
+        const progress = browserProcessorProgressStore({
+          sql,
+          processorSlug: slug,
+          subscriptionKey,
+          contractVersion: processor.contract.version,
+          ensureProjectionSchema: (client) => processor.ensureProjectionSchema(client),
+          projection: processor.projectionBuffer,
+        });
+        const { serverMaxOffset } = await withDeadline(
+          "reconcile",
+          reconcileLocalMirrorWithServer(
+            election.connection,
+            async () => (await progress.read())?.processing.acknowledgedThroughOffset ?? 0,
+          ),
+        );
+        // Re-check after every await: a step that settles late (after this
+        // election was superseded) must not write runtime-wide fields like
+        // lastDeliveredOffset over the current election's values.
+        if (!ownsRuntime()) return undefined;
+        const runner = new StreamProcessorRunner({
+          // The structural config type narrows back to the class here; the
+          // runner's own construction (runnerDriver) fails loudly on anything
+          // that is not a real StreamProcessor instance.
+          processor: processor as unknown as StreamProcessor<any, any>,
+          // The runner's self-pulls (the trailing catch-up behind a frame
+          // stamped past its own tail) read the journal through this stream;
+          // the mirror stores ephemeral rows (the subscription lane delivers
+          // them), so those reads must include them too — a default read
+          // would seal permanent holes where chunk runs belong and advance
+          // the cursor past rows nothing would ever refetch.
+          stream: streamWithEphemeralRangeReads(election.connection),
+          durability: { progress },
+          // No recovery adapter: a browser tab has no keepalive alarm — a
+          // closed tab's unfinished frame is simply redelivered to the next
+          // leader from the durably committed cursor.
+        });
+        if (!ownsRuntime()) {
+          runner.dispose();
+          return undefined;
+        }
+        electionRunner = runner;
+        // openDelivery loads the two-cursor progress (running any pending
+        // reduce-only refold) and answers the resume cursor plus the wire
+        // sink. The load goes to the shared db worker; an un-deadlined hang
+        // here would park the runtime as a forever-"leader" with no
         // subscription, no probe, and no error.
-        const checkpoint = await withDeadline("checkpoint read", processor.snapshot());
+        const opened = await withDeadline("checkpoint read", runner.openDelivery());
         if (!ownsRuntime()) return undefined;
 
         // Far behind the head? PULL history with paged reads before opening the
         // one-directional subscription (see the flow-control block up top). Each
-        // page is fetched, applied, and checkpointed before the next is
+        // page is fetched, applied, and committed before the next is
         // requested, so the server can never outrun the mirror here — and a
-        // page failure just reconnects and resumes from the checkpoint.
-        let catchUpOffset = checkpoint.offset;
+        // page failure just reconnects and resumes from the committed cursor.
+        let catchUpOffset = opened.checkpointOffset;
         let serverHead = serverMaxOffset;
         let catchUpPageLimit = CATCHUP_PAGE_LIMIT;
         if (serverHead - catchUpOffset > CATCHUP_THRESHOLD_EVENTS) {
@@ -1285,22 +1355,43 @@ function createStreamRuntime(
             lastBatchEvents = page.length;
             totalDeliveredEvents += page.length;
             // Deliberately NOT deadlined, unlike the read-only steps above: a
-            // deadline can only ABANDON this promise, not cancel the ingest —
-            // the old processor would keep committing projection rows and its
-            // checkpoint in the db worker while the timeout's fresh election
-            // spun up a second processor over the same tables (browser
-            // projection/checkpoint writes are non-atomic; two interleaved
-            // writers can regress reduced state). A wedged db worker parking
-            // this await is the known "worker death is undetected" latent —
-            // the safe fix is generation-fenced worker shutdown inside
-            // StreamBrowserDatabase, not a deadline here.
-            await processor.ingest({ events: page, streamMaxOffset: serverHead });
+            // deadline can only ABANDON this promise, not cancel the frame —
+            // the old runner would keep committing in the db worker while the
+            // timeout's fresh election spun up a second runner over the same
+            // tables (the progress store's revision/monotonic fences reject a
+            // stale writer's commits, but abandoning a healthy apply is still
+            // wrong). A wedged db worker parking this await is the known
+            // "worker death is undetected" latent — the safe fix is
+            // generation-fenced worker shutdown inside StreamBrowserDatabase,
+            // not a deadline here.
+            //
+            // streamMaxOffset is the PAGE'S OWN TAIL, not serverHead: the
+            // runner schedules a trailing type-unfiltered self-pull behind
+            // every frame that ends short of its stamped head (the DO wake
+            // lane's wedge-closer), and stamping serverHead here would make
+            // that pull re-fetch the very backlog this loop is already
+            // pull-paging — the whole catch-up would transfer twice. This
+            // loop delivers every committed row itself, so each page honestly
+            // IS the head of what has been delivered.
+            await opened.sink({ events: page, streamMaxOffset: page.at(-1)!.offset });
             if (!ownsRuntime()) return undefined;
             catchUpOffset = page.at(-1)!.offset;
             lastDeliveredOffset = catchUpOffset;
           }
         }
         lastDeliveredOffset = catchUpOffset;
+        // The live capabilities ride as SIBLINGS of the serializable
+        // descriptor — the same position the wake handshake gives them,
+        // built by the same shared helper so the two hosts cannot drift.
+        // Half our measured transport RTT is the one-way estimate that
+        // turns observed pings into the clock-offset correction.
+        const capabilities = hostRuntimeCapabilities(processor, {
+          now: () => Date.now(),
+          oneWayEstimateMs: () => {
+            const rtt = transportRtt.stats();
+            return rtt === null ? undefined : rtt.p50 / 2;
+          },
+        });
         return {
           processor,
           replayAfterOffset: catchUpOffset,
@@ -1310,25 +1401,24 @@ function createStreamRuntime(
               announcement: announceContract(processor.contract),
             },
           },
-          // The live capabilities ride as SIBLINGS of the serializable
-          // descriptor — the same position the wake handshake gives them,
-          // built by the same shared helper so the two hosts cannot drift.
-          // Half our measured transport RTT is the one-way estimate that
-          // turns observed pings into the clock-offset correction.
-          ...hostRuntimeCapabilities(processor, {
-            now: () => Date.now(),
-            oneWayEstimateMs: () => {
-              const rtt = transportRtt.stats();
-              return rtt === null ? undefined : rtt.p50 / 2;
-            },
+          // The processor's own runtime bag and metrics, but the SNAPSHOT
+          // re-pinned to the runner's committed progress (the registry
+          // cutover's read-your-writes repointing): the runner owns the
+          // cursors now, and the processor's legacy internal checkpoint —
+          // which runner drive never advances — would report the schema
+          // default forever to the processor inspector panels.
+          getRuntimeState: async () => ({
+            ...(await capabilities.getRuntimeState()),
+            snapshot: await runner.snapshot(),
           }),
+          ping: capabilities.ping,
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
           // lastDeliveredOffset), or the liveness probe would read a dead
           // subscription's stale pushes as healthy.
           processEventBatch: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) =>
-            ingestWithSelfHeal(processor, batch, election),
+            ingestWithSelfHeal(opened.sink, batch, election),
         };
       })
       .then(async (ready) => {
@@ -1402,14 +1492,15 @@ function createStreamRuntime(
   // so the server replays from there), with bounded exponential backoff so repeated failures
   // don't busy-loop. A disposed runtime, or a callback from a superseded connection, stops.
   async function ingestWithSelfHeal(
-    processor: BrowserHostedProcessor,
+    sink: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) => Promise<void>,
     batch: { events: readonly StreamEvent[]; streamMaxOffset: number },
     election: { connection: BrowserStreamClient },
   ): Promise<void> {
     // A batch delivered to a superseded election must not be applied: its
-    // processor's queued ingests would interleave with (and can regress the
-    // checkpoint of) the current election's processor on the same tables — and
-    // it must not count as delivery progress either (see below).
+    // runner's queued frames would interleave with the current election's
+    // runner on the same tables (the progress store's fences reject a stale
+    // commit durably, but feeding known-stale frames is still waste) — and it
+    // must not count as delivery progress either (see below).
     if (disposed || stream !== election.connection) return;
     // Live-tail safety valve (see MAX_PENDING_INGEST_EVENTS): the server pump
     // is one-directional and can outrun SQLite; queued-but-unapplied events
@@ -1445,14 +1536,14 @@ function createStreamRuntime(
       // Serialize the apply and RE-CHECK ownership inside the slot. The entry
       // guard above is not enough: two rapid batches both pass it, then batch
       // A's failure schedules a reconnect while batch B already holds the next
-      // slot in the processor's own chain — B would apply over the failure,
-      // advancing the checkpoint PAST A's rows. The relaxed (gap-tolerant)
+      // slot in the runner's own chain — B would apply over the failure,
+      // advancing the cursor PAST A's rows. The relaxed (gap-tolerant)
       // mirror trigger accepts that hole, so nothing would ever repair it; the
-      // strict trigger used to fail B loudly by accident. `scheduleReconnect`
+      // per-event gap check fails B loudly instead. `scheduleReconnect`
       // clears `stream` synchronously, so a re-check inside the slot sees it.
       const run = ingestChain.then(async () => {
         if (disposed || stream !== election.connection) return;
-        await processor.ingest(batch);
+        await sink(batch);
         ingestFailureCount = 0;
         lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.streamMaxOffset);
       });
@@ -1488,6 +1579,13 @@ function createStreamRuntime(
     subscriptionHandle = undefined;
     writerRole?.release();
     writerRole = undefined;
+    // Dispose the election's runner so queued frames (and its trailing
+    // self-pulls) reject at their turn instead of racing the next election's
+    // runner over the shared mirror. A frame already PAST the dispose check
+    // can still finish — the progress store's cursorRevision/monotonic fences
+    // are what durably contain that incarnation, not this best-effort stop.
+    electionRunner?.dispose();
+    electionRunner = undefined;
     // In-flight own-append correlations belong to the dying subscription; the
     // fresh election replays, and a replayed delivery must not close a stale
     // loop with an inflated sample.
@@ -2074,6 +2172,30 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number, message: string): P
 
 function isWriteStatement(sql: string) {
   return /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|REPLACE|PRAGMA\s+user_version)/i.test(sql);
+}
+
+/**
+ * The stream the runner self-pulls through, with `readEvents` forced to
+ * `includeEphemeral: true`. The browser mirror is the ONE consumer that
+ * stores ephemeral rows (the session subscription lane delivers them; the
+ * store's own catch-up pager reads them explicitly), while the public
+ * `readEvents` default excludes them — so an unwrapped runner self-pull
+ * (trailing catch-up, refold) would skip every chunk run, sealing permanent
+ * holes in the mirror and false-firing the raw-events gap check. Everything
+ * else passes through to the live connection.
+ */
+function streamWithEphemeralRangeReads(connection: BrowserStreamClient): Stream {
+  return new Proxy(connection, {
+    get(target, property, receiver) {
+      if (property === "readEvents") {
+        return (readArgs?: Parameters<Stream["readEvents"]>[0]) =>
+          target.readEvents({ ...readArgs, includeEphemeral: true });
+      }
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...fnArgs: unknown[]) => Reflect.apply(value, target, fnArgs);
+    },
+  }) as Stream;
 }
 
 function resolveStreamUrl(args: {
