@@ -71,14 +71,25 @@ async function ensureOsUnderTest(): Promise<void> {
     return;
   }
 
+  // The stashed target is what the browser project's `define` already baked
+  // in at config eval — reuse is only sound against exactly that URL, the
+  // same way Playwright's reuseExistingServer probes its one predetermined
+  // target. A live server on any other port is split-brain, not a reuse.
+  const target = await resolveLocalOsDevTargetOnce();
   const live = localOsDevServer.readLive();
   if (live) {
+    if (live.baseUrl !== target.baseUrl) {
+      throw new Error(
+        `A dev server appeared at ${live.baseUrl} after this run resolved its target ` +
+          `${target.baseUrl}. Re-run so config eval and globalSetup agree on one server, ` +
+          `or \`pnpm dev kill\` the stray one.`,
+      );
+    }
     await waitForHealth(live);
     console.log(`[e2e] reusing dev server at ${live.baseUrl} (pid ${live.pid}).`);
     return;
   }
 
-  const target = await resolveLocalOsDevTargetOnce();
   const started = await startDevServer({ detach: true, port: target.port });
   const { baseUrl, pid, startedAt } = started;
   if (!baseUrl || !pid || !startedAt) {
@@ -104,7 +115,9 @@ async function waitForHealth(server: { baseUrl: string; pid: number; startedAt: 
   let lastFailure = "";
   do {
     try {
-      const response = await fetch(url);
+      // Per-probe abort so a socket that connects but never answers can't
+      // outlive the deadline check below.
+      const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
       if (response.ok) return;
       lastFailure = `status ${response.status}`;
     } catch (error) {
