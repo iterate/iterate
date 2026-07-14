@@ -1979,3 +1979,50 @@ types, and persistent-data format are unchanged. The clean no-HMR run, the
 two-collision HMR run, runner source, workerd actor eviction path, and first-party
 uniqueness/deployment docs were all inspected before rejecting a repo runtime
 change.
+
+## 2026-07-14: Insert-First Idempotent Append Rejected
+
+A first-time idempotency-keyed `appendAck` normally performs an indexed point
+lookup, reduces the event, then inserts it. A narrow prototype tested whether
+SQLite's unique index could make the new-versus-retry decision during the
+insert and remove that lookup. It applied only to one durable, ordinary,
+inline event with no offset assertion. `INSERT ... ON CONFLICT(idempotency_key)
+... DO NOTHING RETURNING offset` distinguished a new row from a retry, while a
+synchronous transaction enclosed the insert and validation so a paused-stream
+rejection rolled the candidate row back. Batches, control and ephemeral events,
+large events, offset assertions, and result-bearing appends retained the
+general path.
+
+The prototype passed OS typecheck, 101 focused storage/validation/reducer unit
+tests, and every measured end-to-end correctness assertion. Five 600-sample
+rounds per revision then ran in `C,P,P,C,C,P,P,C,C,P` order against exact
+parent `0cb85e10a`, with 20 warmups per round and only one Workers stack
+resident. Each Node interval enclosed one awaited WebSocket `appendAck`, so
+the measurement remains valid when Workers freezes an isolate clock between
+network events.
+
+| First-time keyed 1 KiB `appendAck` |   Parent | Insert first |       Change |
+| ---------------------------------- | -------: | -----------: | -----------: |
+| Median-of-round p50                | 2.568 ms |     2.867 ms | 11.6% slower |
+| Median-of-round p95                | 3.805 ms |     4.789 ms | 25.9% slower |
+| Median-of-round mean               | 2.698 ms |     3.103 ms | 15.0% slower |
+| Pooled p50 (3,000 samples)         | 2.625 ms |     2.857 ms |  8.8% slower |
+| Pooled p95                         | 4.125 ms |     4.789 ms | 16.1% slower |
+| Pooled mean                        | 2.827 ms |     3.171 ms | 12.2% slower |
+
+Absolute process speed varied, so each round also carried the unchanged
+unkeyed-singleton lane as a local control. The median keyed/unkeyed p50 ratio
+was `1.065` on the parent and `1.070` with insert-first: after normalization,
+the transaction shape still recovered none of the lookup cost. The direct
+alternating comparison moved materially backward, and the paired control rules
+out a hidden relative win.
+
+The rejected shape added 91 production lines because duplicate validation
+semantics require the insert and reducer to share a rollback boundary, while
+post-commit state, metrics, cache, breaker effects, delivery wake, and idle
+teardown still have to match the general path. That is a second commit protocol
+for no measured gain. The likely explanation is that the partial-index miss is
+cheap while `transactionSync` plus `RETURNING` adds more SQLite work than it
+removes. The implementation and disposable harness lane were deleted entirely;
+production, schema, generated API, and persistent data are unchanged. Raw
+records are `/tmp/stream-idempotent-{parent,candidate}-r{1..5}.log`.
