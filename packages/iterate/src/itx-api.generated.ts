@@ -947,16 +947,25 @@ export interface Search {
    * `ref` is the itx expression fetching exactly that event. Idempotent per
    * (stream, offset).
    */
-  indexEvent(input: {
-    /** The stream path, e.g. "/agents/slack/T1/thr-9" (`path` works too). */
-    stream?: string;
-    /** Alias for `stream` — every other stream-taking verb says `path`. */
-    path?: string;
-    /** The event's offset on that stream. */
-    offset: number;
-    /** Optional annotation, indexed alongside the event ("decision made here"). */
-    note?: string;
-  }): Promise<{ key: string }>;
+  indexEvent(
+    input: (
+      | {
+          /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+          path: string;
+          stream?: undefined;
+        }
+      | {
+          /** Alias for `path` (the original name of this parameter). */
+          stream: string;
+          path?: undefined;
+        }
+    ) & {
+      /** The event's offset on that stream. */
+      offset: number;
+      /** Optional annotation, indexed alongside the event ("decision made here"). */
+      note?: string;
+    },
+  ): Promise<{ key: string }>;
   /**
    * Re-index one stream from the beginning — the repair verb for streams that
    * predate search indexing, or the rare tail gap a failed per-batch write can

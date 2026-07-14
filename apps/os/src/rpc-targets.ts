@@ -2307,18 +2307,29 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * `ref` is the itx expression fetching exactly that event. Idempotent per
    * (stream, offset).
    */
-  async indexEvent(input: {
-    /** The stream path, e.g. "/agents/slack/T1/thr-9" (`path` works too). */
-    stream?: string;
-    /** Alias for `stream` — every other stream-taking verb says `path`. */
-    path?: string;
-    /** The event's offset on that stream. */
-    offset: number;
-    /** Optional annotation, indexed alongside the event ("decision made here"). */
-    note?: string;
-  }): Promise<{ key: string }> {
-    const streamPath = input.stream ?? input.path;
+  async indexEvent(
+    input: (
+      | {
+          /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+          path: string;
+          stream?: undefined;
+        }
+      | {
+          /** Alias for `path` (the original name of this parameter). */
+          stream: string;
+          path?: undefined;
+        }
+    ) & {
+      /** The event's offset on that stream. */
+      offset: number;
+      /** Optional annotation, indexed alongside the event ("decision made here"). */
+      note?: string;
+    },
+  ): Promise<{ key: string }> {
+    const streamPath = input.path ?? input.stream;
     if (streamPath === undefined) {
+      // Unreachable for TS callers (the union requires one); itx callers are
+      // dynamic, so keep the runtime guard with a pointed message.
       throw new Error("indexEvent needs the stream path: { path, offset }");
     }
     const path = normalizePath(streamPath);
