@@ -52,6 +52,11 @@ const WORKER_CONSUMER_BATCH_SAMPLES = Number(
 const WORKER_CONSUMER_BATCH_SIZE = Number(
   process.env.STREAM_BENCH_WORKER_CONSUMER_BATCH_SIZE ?? "100",
 );
+const WORKER_CONSUMER_PROCESS_EVENT =
+  process.env.STREAM_BENCH_WORKER_CONSUMER_PROCESS_EVENT === "1";
+const WORKER_CONSUMER_PAYLOAD_BYTES = Number(
+  process.env.STREAM_BENCH_WORKER_CONSUMER_PAYLOAD_BYTES ?? "0",
+);
 
 type StreamHandle = Stream & Disposable;
 
@@ -1223,12 +1228,18 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     if (!Number.isInteger(WORKER_CONSUMER_BATCH_SAMPLES) || WORKER_CONSUMER_BATCH_SAMPLES < 1) {
       throw new Error("STREAM_BENCH_WORKER_CONSUMER_BATCH_SAMPLES must be a positive integer.");
     }
+    const maxBatchSize = WORKER_CONSUMER_PROCESS_EVENT ? 1_000 : 100;
     if (
       !Number.isInteger(WORKER_CONSUMER_BATCH_SIZE) ||
       WORKER_CONSUMER_BATCH_SIZE < 1 ||
-      WORKER_CONSUMER_BATCH_SIZE > 100
+      WORKER_CONSUMER_BATCH_SIZE > maxBatchSize
     ) {
-      throw new Error("STREAM_BENCH_WORKER_CONSUMER_BATCH_SIZE must be an integer from 1 to 100.");
+      throw new Error(
+        `STREAM_BENCH_WORKER_CONSUMER_BATCH_SIZE must be an integer from 1 to ${maxBatchSize}.`,
+      );
+    }
+    if (!Number.isInteger(WORKER_CONSUMER_PAYLOAD_BYTES) || WORKER_CONSUMER_PAYLOAD_BYTES < 0) {
+      throw new Error("STREAM_BENCH_WORKER_CONSUMER_PAYLOAD_BYTES must be a non-negative integer.");
     }
 
     const runId = crypto.randomUUID().slice(0, 8);
@@ -1246,11 +1257,66 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     });
     await project.__describe();
 
+    const processEventWorkerSource = `
+      import { IterateWorkerEntrypoint } from "iterate/sdk";
+
+      const SOURCE_PATH = ${JSON.stringify(sourcePath)};
+      const OUTPUT_PATH = ${JSON.stringify(outputPath)};
+      const TRIGGER_TYPE = ${JSON.stringify(triggerType)};
+      const COMPLETED_TYPE = ${JSON.stringify(completedType)};
+
+      export default class ProjectWorker extends IterateWorkerEntrypoint {
+        #iteration;
+        #receivedCount = 0;
+
+        fetch() {
+          return new Response("stream process-event adapter benchmark");
+        }
+
+        processEvent(event) {
+          if (event.path !== SOURCE_PATH || event.type !== TRIGGER_TYPE) return;
+          const { count, index, iteration } = event.payload;
+          if (index === 0) {
+            this.#iteration = iteration;
+            this.#receivedCount = 0;
+          }
+          if (iteration !== this.#iteration || index !== this.#receivedCount) {
+            throw new Error(
+              \`Out-of-order processEvent: expected \${this.#iteration}#\${this.#receivedCount}, got \${iteration}#\${index}.\`,
+            );
+          }
+          this.#receivedCount += 1;
+          if (this.#receivedCount < count) return;
+          if (this.#receivedCount !== count) {
+            throw new Error(\`processEvent received too many events for \${iteration}.\`);
+          }
+          this.#iteration = undefined;
+          this.#receivedCount = 0;
+          return this.#complete(iteration, count, event);
+        }
+
+        async #complete(iteration, count, event) {
+          const project = await this.env.ITX.get();
+          try {
+            await project.streams.get(OUTPUT_PATH).append({
+              type: COMPLETED_TYPE,
+              idempotencyKey: \`worker-completed:\${event.path}@\${event.offset}\`,
+              payload: { count, iteration },
+            });
+          } finally {
+            project[Symbol.dispose]?.();
+          }
+        }
+      }
+    `;
+
     await project.repo.commitFiles({
       changes: [
         {
           path: "worker.ts",
-          content: `
+          content: WORKER_CONSUMER_PROCESS_EVENT
+            ? processEventWorkerSource
+            : `
             import { WorkerEntrypoint } from "cloudflare:workers";
 
             const SOURCE_PATH = ${JSON.stringify(sourcePath)};
@@ -1296,7 +1362,9 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           `,
         },
       ],
-      message: "Install Stream Worker-consumer benchmark",
+      message: WORKER_CONSUMER_PROCESS_EVENT
+        ? "Install Stream process-event adapter benchmark"
+        : "Install Stream Worker-consumer benchmark",
     });
 
     using source = project.streams.get(sourcePath);
@@ -1313,7 +1381,12 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
       await source.append(
         ...Array.from({ length: count }, (_, index) => ({
           type: triggerType,
-          payload: { index, iteration },
+          payload: {
+            blob: "p".repeat(WORKER_CONSUMER_PAYLOAD_BYTES),
+            count,
+            index,
+            iteration,
+          },
         })),
       );
       const observed = await completed;
@@ -1343,14 +1416,15 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
       );
     }
 
+    const metricPrefix = WORKER_CONSUMER_PROCESS_EVENT
+      ? "worker_consumer_process_event"
+      : "worker_consumer_forward";
     const output: BenchmarkOutput = {
       implementation: IMPLEMENTATION,
       metrics: {
-        worker_consumer_forward_single: summarize(singletonSamples),
-        [`worker_consumer_forward_batch_${WORKER_CONSUMER_BATCH_SIZE}`]: summarize(
-          batchSamples,
-          WORKER_CONSUMER_BATCH_SIZE,
-        ),
+        [`${metricPrefix}_single`]: summarize(singletonSamples),
+        [`${metricPrefix}_batch_${WORKER_CONSUMER_BATCH_SIZE}x${WORKER_CONSUMER_PAYLOAD_BYTES}`]:
+          summarize(batchSamples, WORKER_CONSUMER_BATCH_SIZE),
       },
       revision: REVISION,
       timestamp: new Date().toISOString(),

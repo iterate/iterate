@@ -126,12 +126,15 @@ export class IterateWorkerEntrypoint<
    * the delivery contract). Override `processEvent`, not this, unless you
    * need whole-batch atomicity. */
   async processEventBatch(batch: StreamEventBatch): Promise<void> {
-    for (const event of batch.events) await this.processEvent(event);
+    for (const event of batch.events) {
+      const result = this.processEvent(event);
+      if (result !== undefined) await result;
+    }
   }
 
   /** Called once per delivered event, in per-stream order, at-least-once.
    * Override to react; the default ignores everything. */
-  protected async processEvent(_event: StreamEvent): Promise<void> {}
+  protected processEvent(_event: StreamEvent): void | Promise<void> {}
 
   /** Platform entry point for flattened `itx.worker.<path>` capability
    * calls (see the class docstring). */
@@ -161,12 +164,15 @@ export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends D
   /** Platform entry point for event delivery — see
    * `IterateWorkerEntrypoint.processEventBatch`. */
   async processEventBatch(batch: StreamEventBatch): Promise<void> {
-    for (const event of batch.events) await this.processEvent(event);
+    for (const event of batch.events) {
+      const result = this.processEvent(event);
+      if (result !== undefined) await result;
+    }
   }
 
   /** Called once per delivered event — see
    * `IterateWorkerEntrypoint.processEvent`. */
-  protected async processEvent(_event: StreamEvent): Promise<void> {}
+  protected processEvent(_event: StreamEvent): void | Promise<void> {}
 
   /** Platform entry point for flattened `itx.worker.<path>` capability
    * calls — see `IterateWorkerEntrypoint.invokeCapability`. */
