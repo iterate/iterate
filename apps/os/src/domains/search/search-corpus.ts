@@ -303,20 +303,34 @@ export function extractMatchSnippet(text: string, query: string, maxChars: numbe
     ),
   ];
   const lower = flat.toLowerCase();
+  // Whole-token matches only ("app" must not center the window on "happy" or
+  // "offset"); a term that never appears as a whole token falls back to a
+  // substring hit — better an approximate center than the document head.
+  const escapeTerm = (term: string) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let at = -1;
   let bestRarity = Infinity;
   let bestLength = 0;
+  let substringFallback = -1;
   for (const term of terms) {
-    const first = lower.indexOf(term);
-    if (first === -1) continue;
+    const wordPattern = new RegExp(`(?<![a-z0-9_-])${escapeTerm(term)}(?![a-z0-9_-])`, "g");
+    let first = -1;
     let count = 0;
-    for (let i = first; i !== -1 && count < 50; i = lower.indexOf(term, i + term.length)) count++;
+    for (const match of lower.matchAll(wordPattern)) {
+      if (first === -1) first = match.index;
+      if (++count >= 50) break;
+    }
+    if (first === -1) {
+      const loose = lower.indexOf(term);
+      if (loose !== -1 && substringFallback === -1) substringFallback = loose;
+      continue;
+    }
     if (count < bestRarity || (count === bestRarity && term.length > bestLength)) {
       bestRarity = count;
       bestLength = term.length;
       at = first;
     }
   }
+  if (at === -1) at = substringFallback;
   if (at === -1) return `${flat.slice(0, maxChars)}…`;
   let start = Math.max(0, at - Math.floor(maxChars / 2));
   // Snap forward to a word start ONLY when mid-word: at position 0 or just

@@ -195,8 +195,17 @@ describe("extractMatchSnippet", () => {
 
   it("falls back to the head when no term matches, and passes short text through", () => {
     expect(extractMatchSnippet("short text", "zzz", 100)).toBe("short text");
-    const head = extractMatchSnippet("a ".repeat(200), "zzz", 50);
-    expect(head.endsWith("…")).toBe(true);
+    expect(extractMatchSnippet("a ".repeat(200), "zzz", 50).endsWith("…")).toBe(true);
+  });
+
+  it("matches whole tokens only — 'app' cannot center the window on 'happy'", () => {
+    const text =
+      "everyone was happy happy happy " +
+      "pad ".repeat(100) +
+      "the app crashed today" +
+      " tail".repeat(60);
+    const snippet = extractMatchSnippet(text, "app", 100);
+    expect(snippet).toContain("app crashed");
   });
 });
 
