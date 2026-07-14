@@ -88,7 +88,7 @@ test("append accepts an offset assertion on a subscription-configured core event
     },
   });
 
-  expect(configured!.offset).toBe(4);
+  expect(configured!).toMatchObject({ offset: 4 });
 });
 
 // B6: the subscriber descriptor supplied to subscribe() must be validated at the
@@ -140,6 +140,6 @@ test("subscribe rejects a malformed subscriber descriptor instead of corrupting 
   expect(state.coreProcessorState.connectionsByKey?.[rejectedKey]).toBeUndefined();
   // The reduced roster tracks configured subscriptions only (core state v14).
   for (const [key, connection] of Object.entries(state.coreProcessorState.connectionsByKey ?? {})) {
-    expect(connection.subscriptionType, `roster entry ${key}`).toBe("configured");
+    expect(connection, `roster entry ${key}`).toMatchObject({ subscriptionType: "configured" });
   }
 });

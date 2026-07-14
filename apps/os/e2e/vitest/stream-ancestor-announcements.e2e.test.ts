@@ -2,20 +2,6 @@ import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// Ancestor announcements are load-bearing platform state: integration listing
-// walks childPaths, and the project processor's birth reactions (mechanics,
-// agent policy) trigger on the root's `child-stream-created` fold. These tests
-// pin the two guarantees that keep a newborn stream from being orphaned:
-//
-// 1. A newborn stream announces itself to EVERY ancestor, root included.
-// 2. An announcement lost in flight — the 2026-07-09 prd incident: a deploy
-//    rollover recycled the isolate mid birth turn, orphaning a Telegram
-//    connection stream and its chat stream — heals on the stream's next wake,
-//    because every `woken` fact re-announces with idempotent appends.
-
-const announcementKey = (ancestorPath: string, childPath: string) =>
-  `child-stream-created:${ancestorPath}:${childPath}`;
-
 test("a newborn stream announces itself to every ancestor", async () => {
   const marker = crypto.randomUUID();
   const childPath = `/announce-birth-${marker}/child`;
@@ -103,3 +89,17 @@ test("a lost ancestor announcement heals on the stream's next wake", async () =>
   const healed = await root.getEvent({ idempotencyKey: announcementKey("/", childPath) });
   expect(healed?.payload).toEqual({ childPath });
 });
+
+// Ancestor announcements are load-bearing platform state: integration listing
+// walks childPaths, and the project processor's birth reactions (mechanics,
+// agent policy) trigger on the root's `child-stream-created` fold. These tests
+// pin the two guarantees that keep a newborn stream from being orphaned:
+//
+// 1. A newborn stream announces itself to EVERY ancestor, root included.
+// 2. An announcement lost in flight — the 2026-07-09 prd incident: a deploy
+//    rollover recycled the isolate mid birth turn, orphaning a Telegram
+//    connection stream and its chat stream — heals on the stream's next wake,
+//    because every `woken` fact re-announces with idempotent appends.
+
+const announcementKey = (ancestorPath: string, childPath: string) =>
+  `child-stream-created:${ancestorPath}:${childPath}`;

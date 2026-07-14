@@ -125,7 +125,7 @@ test(
     expect(result.proofOffset).toBeGreaterThan(0);
     expect(result.proofViaHostOffset).toBeGreaterThan(result.proofOffset);
     expect(result.proofViaHostsGetOffset).toBeGreaterThan(result.proofViaHostOffset);
-    expect(result.hostPath).toBe(agentPath);
+    expect(result).toMatchObject({ hostPath: agentPath });
 
     // The side effects are real, not just unthrown: the message folded into
     // the agent stream and the dynamic capability appended the proof event.
@@ -161,10 +161,10 @@ test(
       capnwebAgent.message("capnweb fanout B"),
       capnwebAgent.__describe(),
     ]);
-    expect(sentA.type).toBe("events.iterate.com/agents/message-received");
-    expect(sentB.type).toBe("events.iterate.com/agents/message-received");
-    expect(sentA.offset).not.toBe(sentB.offset);
-    expect(description.agentPath).toBe("/agents/fanout-capnweb");
+    expect(sentA).toMatchObject({ type: "events.iterate.com/agents/message-received" });
+    expect(sentB).toMatchObject({ type: "events.iterate.com/agents/message-received" });
+    expect(sentA).not.toMatchObject({ offset: sentB.offset });
+    expect(description).toMatchObject({ agentPath: "/agents/fanout-capnweb" });
 
     // The same pattern on the WORKERD lane (script isolate over env.ITX),
     // written with a `using` declaration exactly as prompts/examples teach.
@@ -182,7 +182,7 @@ test(
     `);
     expect(run.result).toMatchObject({ path: "/agents/fanout-workerd" });
     const result = run.result as { a: number; b: number };
-    expect(result.a).not.toBe(result.b);
+    expect(result).not.toMatchObject({ a: result.b });
     expect(Math.min(result.a, result.b)).toBeGreaterThan(0);
   },
 );

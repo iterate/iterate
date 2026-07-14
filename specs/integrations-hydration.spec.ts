@@ -12,7 +12,7 @@ test("hydrates the client-only integrations route without rebuilding the shell",
   });
 
   await page.goto(`/projects/${fixture.project.slug}/integrations`);
-  await expect(page.getByRole("heading", { name: "Connectable integrations" })).toBeVisible();
+  await page.getByRole("heading", { name: "Connectable integrations" }).waitFor();
 
   expect(hydrationErrors).toEqual([]);
 });

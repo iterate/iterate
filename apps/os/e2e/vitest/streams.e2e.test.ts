@@ -176,8 +176,7 @@ test("stream subscribe replays history, tails live appends, and unsubscribes", a
 
   expect(batchStates.length).toBeGreaterThanOrEqual(1);
   for (const state of batchStates) {
-    expect(state.projectId).toBe(projectDescription.projectId);
-    expect(state.path).toBe(streamPath);
+    expect(state).toMatchObject({ projectId: projectDescription.projectId, path: streamPath });
   }
   expect(batchStates.at(-1)!.eventCount).toBeGreaterThanOrEqual(Math.max(...offsets));
 
@@ -269,8 +268,8 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
 
   // An ordinary commit: consecutive offsets, self-describing flag, and
   // idempotency dedup works (it is a row like any other).
-  expect(chunk!.offset).toBe(before!.offset + 1);
-  expect(after!.offset).toBe(chunk!.offset + 1);
+  expect(chunk).toMatchObject({ offset: before!.offset + 1 });
+  expect(after).toMatchObject({ offset: chunk!.offset + 1 });
   expect(chunk).toMatchObject({ ephemeral: true, type: ephemeralType });
   const [deduped] = await stream.append({
     type: ephemeralType,
@@ -278,7 +277,7 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
     idempotencyKey: `chunk-${marker}`,
     payload: { marker },
   });
-  expect(deduped!.offset).toBe(chunk!.offset);
+  expect(deduped).toMatchObject({ offset: chunk!.offset });
 
   // Default reads skip it; includeEphemeral opts in.
   const readWindow = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };
