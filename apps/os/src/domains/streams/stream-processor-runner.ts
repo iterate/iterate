@@ -294,6 +294,11 @@ export class StreamProcessorRunner<
   #chain: Promise<void> = Promise.resolve();
   #disposed = false;
   readonly #eventWaiters = new Set<EventWaiter>();
+  readonly #stateChangeObservers = new Set<
+    (snapshot: { offset: number; state: ProcessorState<Contract> }) => void
+  >();
+  /** Memoized schema default, for pre-load `currentState` reads. */
+  #defaultState: ProcessorState<Contract> | undefined;
 
   constructor(args: {
     /** The processor under drive — passed IN; the runner never constructs one. */
@@ -427,6 +432,65 @@ export class StreamProcessorRunner<
    */
   get isLoaded(): boolean {
     return this.#hasLoaded;
+  }
+
+  /**
+   * The current committed fold, synchronously (the schema default until the
+   * first load) — the legacy `StreamProcessor.currentState`
+   * (stream-processor.ts:859), kept so a hosting registry can assemble its
+   * live state without an async hop. Gate on {@link isLoaded} first: a cold
+   * runner reports the default, and publishing that anywhere live would wipe
+   * real facts for subscribers.
+   */
+  get currentState(): ProcessorState<Contract> {
+    if (this.#progress !== undefined) return this.#progress.reduction.state;
+    this.#defaultState ??= this.driver.initialState();
+    return this.#defaultState;
+  }
+
+  /**
+   * External confirmation that published state IS the fold — the legacy
+   * zero-batch caught-up confirmation (stream-processor.ts:883). With the
+   * runner this is almost always redundant (`#load` performs any pending
+   * refold itself, so `isLoaded` is true after every successful load); it
+   * survives for a host that confirmed the fold through its own delivery
+   * machinery, mirroring the legacy host's catch-up contract.
+   */
+  markLoaded(): void {
+    this.#hasLoaded = true;
+  }
+
+  /**
+   * Observe committed reduced-state changes IN-PROCESS: the observer is a
+   * local function (the hosting registry wires it to reassemble its
+   * live-state engine), never a retained RPC stub. It fires after a frame
+   * commit lands durably AND the committed state changed identity — the
+   * runner's home for the legacy `StreamProcessor.observeStateChanges` +
+   * post-persist notify (stream-processor.ts:892, :727). Operator cursor
+   * controls (`reReduce`/`reprocessFrom`/`skipThrough`) do NOT notify —
+   * callers of those refresh live state themselves. Returns an unsubscribe.
+   */
+  observeStateChanges(
+    observer: (snapshot: { offset: number; state: ProcessorState<Contract> }) => void,
+  ): () => void {
+    this.#stateChangeObservers.add(observer);
+    return () => void this.#stateChangeObservers.delete(observer);
+  }
+
+  /**
+   * Pull-page the journal from the ACKNOWLEDGED cursor and drive ordinary
+   * frames until caught up — the public door for read-your-writes pulls and a
+   * hosting registry's cold-load healing (the legacy host's `catchUpInternal`
+   * shape). One page of lookahead, so every non-final frame carries a
+   * `streamMaxOffset` past its own tail and only the genuinely final page is
+   * at-head. Serialized with delivered frames on the runner's chain; failures
+   * RETHROW — the caller owns any swallow-and-log policy.
+   */
+  catchUp(): Promise<void> {
+    return this.#enqueue(async () => {
+      await this.#load();
+      await this.#selfCatchUp();
+    });
   }
 
   /**
@@ -643,6 +707,7 @@ export class StreamProcessorRunner<
       waiter.reject(new Error("StreamProcessorRunner disposed"));
     }
     this.#eventWaiters.clear();
+    this.#stateChangeObservers.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -817,11 +882,21 @@ export class StreamProcessorRunner<
         cursorRevision: ctx.revision,
       },
     };
+    const previousCommittedState = this.#progress?.reduction.state;
     await this.#commit(next, ctx.revision);
     this.#progress = next;
     ctx.eventsSinceCommit = 0;
     const committedEvents = ctx.uncommittedEvents.splice(0);
     const committedFailures = ctx.uncommittedParseFailures.splice(0);
+    // Observers before waiters, both after the durable commit — the legacy
+    // ingest ordering (stream-processor.ts:726-729): by the time either
+    // fires, published state already reflects the committed frame.
+    if (!Object.is(previousCommittedState, next.reduction.state)) {
+      this.#notifyStateChange({
+        offset: next.reduction.reducedThroughOffset,
+        state: next.reduction.state,
+      });
+    }
     this.#resolveEventWaiters(committedEvents);
     // Record skipped unparseable events AFTER the commit, in the background:
     // the raw event in the log is the authoritative record and the
@@ -1138,6 +1213,19 @@ export class StreamProcessorRunner<
       throw new Error("StreamProcessorRunner progress read before load — this is a runner bug");
     }
     return this.#progress;
+  }
+
+  // A throwing observer is ITS bug, never the frame's: the commit already
+  // landed, so failures are logged and the loop continues (legacy
+  // #notifyStateChange, stream-processor.ts:899).
+  #notifyStateChange(snapshot: { offset: number; state: ProcessorState<Contract> }): void {
+    for (const observer of [...this.#stateChangeObservers]) {
+      try {
+        observer(snapshot);
+      } catch (error) {
+        console.error("stream processor runner state-change observer failed", error);
+      }
+    }
   }
 
   // Settle `waitUntilEvent` waiters whose predicate matches a just-committed
