@@ -472,7 +472,12 @@ function HistoryResolutionStep({
         </span>
         <p className="text-xs text-muted-foreground">
           GitHub and this project both have commits the other side is missing. Choose how to
-          reconcile — default is to pull GitHub&apos;s version into the project.
+          reconcile
+          {defaultChoice === "pull"
+            ? " — recommended is to pull GitHub's version into the project."
+            : defaultChoice === "push"
+              ? " — you were pushing, so force-push is pre-selected."
+              : "."}
         </p>
         <p className="break-all text-[11px] text-muted-foreground/80">{reason}</p>
       </div>
@@ -483,6 +488,10 @@ function HistoryResolutionStep({
       >
         {GITHUB_HISTORY_RESOLUTION_OPTIONS.map((option) => {
           const selected = choice === option.value;
+          // "Recommended" tracks the contextual default (pull after connect/sync,
+          // push after a non-FF push) — not the static option.default used only
+          // for the connect-time default preference.
+          const recommended = option.value === defaultChoice;
           return (
             <button
               key={option.value}
@@ -499,7 +508,7 @@ function HistoryResolutionStep({
             >
               <span className="text-xs font-medium">
                 {option.label}
-                {option.default ? (
+                {recommended ? (
                   <span className="ml-1 font-normal text-muted-foreground">(recommended)</span>
                 ) : null}
               </span>

@@ -48,10 +48,21 @@ export const GITHUB_HISTORY_RESOLUTION_OPTIONS: ReadonlyArray<{
   },
 ];
 
-/** Deterministic agent path for a one-shot GitHub history merge. */
+/** One-shot merge agent path under `/agents/web/…`. Segments are lowercase —
+ * project agent stream routes parse `_splat` with StreamPath, which rejects
+ * uppercase (e.g. the `T` in ISO timestamps). */
 export function githubHistoryMergeAgentPath(repoPath: string): string {
-  const repoSlug = repoPath.replace(/^\/repos\//, "").replace(/[^a-zA-Z0-9_-]+/g, "-") || "repo";
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const repoSlug =
+    repoPath
+      .replace(/^\/repos\//, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "repo";
+  const stamp = new Date()
+    .toISOString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
   return `/agents/web/github-merge-${repoSlug}-${stamp}`;
 }
 

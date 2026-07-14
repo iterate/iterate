@@ -42,9 +42,12 @@ describe("github history resolution options", () => {
 });
 
 describe("githubHistoryMergeAgentPath", () => {
-  it("stays under /agents/web and slugs the repo path", () => {
-    const path = githubHistoryMergeAgentPath("/repos/config");
-    expect(path.startsWith("/agents/web/github-merge-config-")).toBe(true);
+  it("stays under /agents/web and uses only lowercase stream-safe segments", () => {
+    const path = githubHistoryMergeAgentPath("/repos/Config-Repo");
+    expect(path.startsWith("/agents/web/github-merge-config-repo-")).toBe(true);
+    // StreamPath rejects uppercase (ISO's "T" used to break navigation).
+    expect(path).toBe(path.toLowerCase());
+    expect(path).toMatch(/^\/agents\/web\/github-merge-[a-z0-9-]+$/);
   });
 });
 
