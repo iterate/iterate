@@ -59,7 +59,7 @@ const SANDBOX_ENV_STORAGE_KEY = "iterate-sandbox-env";
  * (sleepAfter, keepAlive, containerTimeouts — `setSleepAfter` and friends
  * write the SDK's own storage keys and its constructor restores them); a
  * second copy would go stale the moment a caller uses the SDK setters on the
- * bare stub.
+ * project-scoped stub.
  */
 const SANDBOX_RECORD_STORAGE_KEY = "iterate-sandbox-record";
 
@@ -373,6 +373,26 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   /**
+   * Backup handles are bucket-wide bearer capabilities in the upstream SDK.
+   * Projects must never mint or restore them directly: a handle copied from
+   * one project's sandbox would otherwise restore into another project's
+   * sandbox in the same deployment. Platform lifecycle code calls `super.*`
+   * from the private backup helpers below, so the handles never cross the DO
+   * capability boundary.
+   */
+  override async createBackup(
+    _options: Parameters<Sandbox<Env>["createBackup"]>[0],
+  ): Promise<never> {
+    throw new Error("sandbox backups are managed by the platform lifecycle");
+  }
+
+  override async restoreBackup(
+    _backup: Parameters<Sandbox<Env>["restoreBackup"]>[0],
+  ): Promise<never> {
+    throw new Error("sandbox backups are managed by the platform lifecycle");
+  }
+
+  /**
    * The capability-tree `__describe()` convention, answered by the sandbox
    * itself: instructions for a model-eyed caller plus the durable record as
    * structured extras (`sandbox`). sleepAfter is read live off the SDK's own
@@ -385,7 +405,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     return describeNode({
       instructions:
         `The sandbox at "${path}" — a real Linux container (Cloudflare instance type ` +
-        `${record.instanceType}, fixed for life), the bare Cloudflare Sandbox SDK surface ` +
+        `${record.instanceType}, fixed for life), the project-scoped Cloudflare Sandbox SDK surface ` +
         `(https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). ` +
         `Only /workspace survives sleep (snapshot-restored); setEnvVars is durable here and ` +
         `values should be getSecret placeholders. Current sleepAfter: ${this.sleepAfter}.`,
@@ -706,7 +726,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // save anyway.
     if (this.ctx.container?.running !== true) return;
     const { projectId, path } = this.#identity();
-    const backup = await this.createBackup({
+    const backup = await super.createBackup({
       dir: SANDBOX_WORKSPACE_DIR,
       name: `${projectId}${path}`,
       ttl: SANDBOX_BACKUP_TTL_SECONDS,
@@ -745,7 +765,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       // Same redial as every command: an interrupted SESSION dial means the
       // restore never started, and giving up would silently discard a valid
       // snapshot.
-      const result = await this.#redialOnInterruptedSessionSetup(() => this.restoreBackup(backup));
+      const result = await this.#redialOnInterruptedSessionSetup(() => super.restoreBackup(backup));
       return result.success ? backup.id : null;
     } catch (error) {
       console.warn("sandbox workspace restore failed; starting with an empty workspace", error);
@@ -883,7 +903,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   // Notes for maintainers:
   // - These are real prototype methods, not `field = () => …` — instance
   //   fields are invisible over workers RPC, and callers hold this class's
-  //   bare stub.
+  //   project-scoped stub.
   // - Provisioning itself must call `super.*` (it runs INSIDE the guard;
   //   `this.*` would deadlock on its own promise). The SDK's backup/restore
   //   internals use their own private exec paths and are unaffected.

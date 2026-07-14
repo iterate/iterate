@@ -1276,12 +1276,12 @@ async function agentBootProjectFacts(
  * folders in the stream tree), and the sandbox itself carries the imperative
  * lifecycle (`start`/`sleep`/`destroy`).
  *
- * `get(path)` returns the sandbox Durable Object's own RPC stub —
- * deliberately NO RpcTarget wrapper, so the caller sees exactly what the
- * `@cloudflare/sandbox` SDK exposes and new SDK methods need no forwarding
- * code here. Confinement is by name: the stub is minted from this project's
- * id plus the validated path, after the same project-access assert every
- * collection performs.
+ * `get(path)` returns the sandbox Durable Object's own project-scoped RPC
+ * stub. The Durable Object explicitly denies SDK backup/restore methods:
+ * upstream backup IDs are bucket-wide bearer capabilities and may only be
+ * used by the platform's private sleep/wake lifecycle. Confinement is by
+ * name: the stub is minted from this project's id plus the validated path,
+ * after the same project-access assert every collection performs.
  *
  * The instance type is CONFIGURATION, not identity — but Cloudflare fixes
  * instance type per container class (instance-types.ts), so each type is its
@@ -1299,7 +1299,7 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its bare Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy()/kill() and __describe() like every node. The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
+        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its project-scoped Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy()/kill() and __describe() like every node. Direct createBackup/restoreBackup calls are denied because backup handles are private platform capabilities. The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
       children: {
         create: "Create a sandbox (strict: existing/destroyed names are errors). Returns { path }.",
         get: "The sandbox at a created path (boots the container on first use).",

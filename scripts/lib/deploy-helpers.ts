@@ -19,6 +19,7 @@ import { CloudflareApiError, type DeployableEnv, type EnvContext } from "./env-c
 type CfContext = Pick<EnvContext<DeployableEnv>, "cf" | "cfV4">;
 
 const SecretBindings = z.array(z.object({ name: z.string(), type: z.string() }));
+const CloudflareApiErrors = z.array(z.object({ code: z.number() }).passthrough());
 
 /**
  * Spawn a command with inherited stdio and throw on a nonzero exit — the
@@ -148,7 +149,17 @@ export async function assertWorkerSecretAbsent(input: {
   try {
     current = SecretBindings.parse(await input.cf(scriptPath));
   } catch (error) {
-    if (error instanceof CloudflareApiError && error.status === 404) {
+    const cloudflareErrors =
+      error instanceof CloudflareApiError
+        ? CloudflareApiErrors.safeParse(error.details)
+        : undefined;
+    if (
+      error instanceof CloudflareApiError &&
+      error.status === 404 &&
+      cloudflareErrors?.success === true &&
+      cloudflareErrors.data.length > 0 &&
+      cloudflareErrors.data.every((detail) => detail.code === 10007)
+    ) {
       console.log(
         `Worker not created; forbidden secret absent: ${input.workerName}/${input.secretName}`,
       );

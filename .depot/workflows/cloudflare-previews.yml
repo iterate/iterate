@@ -9,10 +9,9 @@
 # "Preview / deploy + e2e" as skipped, clobbering the earlier success on every
 # merged PR (GitHub displays the latest check run per name). The two workflows
 # still coordinate through the same concurrency groups (copied verbatim in the
-# cleanup file): closing a PR mid-deploy cancels the in-flight deploy run
-# (cancel-in-progress on the shared workflow-level group) and the job-level
-# lifecycle group serializes whatever remains. The two never race the same
-# preview slot.
+# cleanup file): deploy and cleanup serialize for a PR. A close never cancels a
+# credentialed erase/deploy process whose remote side effects may outlive its
+# runner; cleanup waits, then reasserts the exact lease before acting.
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged. Test
@@ -72,7 +71,7 @@ on:
 
 concurrency:
   group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   preview:

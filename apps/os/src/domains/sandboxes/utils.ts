@@ -6,8 +6,8 @@ import {
 import type { SandboxInstanceType } from "./instance-types.ts";
 
 /**
- * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
- * wrapped on top. Whatever the installed SDK exposes is callable —
+ * One sandbox: the project-scoped `@cloudflare/sandbox` Durable Object stub.
+ * The installed SDK surface is callable except for platform-only operations —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
  * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this
  * contract deliberately does not re-declare that surface (same stance as
@@ -36,6 +36,9 @@ import type { SandboxInstanceType } from "./instance-types.ts";
  *   through project egress policy; there is no direct internet path.
  * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
  *   snapshots cover persistence, and `tunnels` covers public URLs.
+ * - `createBackup` and `restoreBackup` are unavailable (they throw): upstream
+ *   backup IDs are bucket-wide bearer capabilities, so only this sandbox's
+ *   private platform lifecycle may hold and use them.
  */
 export type CloudflareSandbox = object & {
   /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */

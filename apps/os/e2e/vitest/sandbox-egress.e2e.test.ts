@@ -88,17 +88,33 @@ describe("sandbox egress", () => {
         "async (itx) => {",
         `  const { path } = await itx.sandboxes.create({ name: ${JSON.stringify(sandboxName)}, instanceType: "lite" });`,
         "  const sandbox = await itx.sandboxes.get(path);",
+        "  let createBackupError = null;",
+        "  let restoreBackupError = null;",
+        "  try { await sandbox.createBackup({ dir: '/workspace' }); } catch (error) { createBackupError = String(error); }",
+        "  try { await sandbox.restoreBackup({ id: '00000000-0000-4000-8000-000000000000', dir: '/workspace' }); } catch (error) { restoreBackupError = String(error); }",
         `  const echo = await sandbox.exec(${JSON.stringify(curlCommand)});`,
         `  const issuer = await sandbox.exec(${JSON.stringify(issuerCommand)});`,
-        "  return { body: echo.stdout, exitCode: echo.exitCode, certIssuer: issuer.stdout.trim() };",
+        "  return { body: echo.stdout, exitCode: echo.exitCode, certIssuer: issuer.stdout.trim(), createBackupError, restoreBackupError };",
         "}",
       ].join("\n");
 
       try {
         const { result } = await project.capabilityHost.runScript(script);
-        const proof = result as { body: string; certIssuer: string; exitCode: number };
+        const proof = result as {
+          body: string;
+          certIssuer: string;
+          createBackupError: string | null;
+          exitCode: number;
+          restoreBackupError: string | null;
+        };
 
         expect(proof.exitCode).toBe(0);
+        expect(proof.createBackupError).toContain(
+          "sandbox backups are managed by the platform lifecycle",
+        );
+        expect(proof.restoreBackupError).toContain(
+          "sandbox backups are managed by the platform lifecycle",
+        );
 
         // (1) MITM: the container was handed the interception CA's cert, proving
         // the TLS session was terminated by the container proxy, not the origin.

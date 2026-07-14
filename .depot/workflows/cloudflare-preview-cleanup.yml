@@ -7,10 +7,9 @@
 # latest check run per name).
 #
 # The concurrency groups below match cloudflare-previews.yml for the same PR,
-# so the two workflows still coordinate: closing a PR mid-deploy cancels the
-# in-flight deploy run (cancel-in-progress on the shared workflow-level group)
-# and the job-level lifecycle group serializes whatever remains. Cleanup never
-# races a deploy for the same preview slot.
+# so deploy and cleanup serialize. Closing a PR never cancels a credentialed
+# erase/deploy process whose remote side effects may outlive its runner;
+# cleanup waits, then reasserts the exact lease before acting.
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged.
@@ -48,7 +47,7 @@ on:
 
 concurrency:
   group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   cleanup:

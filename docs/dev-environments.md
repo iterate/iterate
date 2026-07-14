@@ -407,16 +407,33 @@ records the slot, per-app URLs and statuses; the workflow logs narrate every
 decision (which apps were selected and why, lease transitions, slot waits).
 Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
 PR's apps (for os that means erasing the slot's data — auth D1 and
-project-directory KV) and releases the slot — after verifying the PR still
-holds it.
+project-directory KV, files/sandbox-backup/search R2 buckets, and resettable Durable Objects)
+and releases the slot — after verifying the PR still holds it.
 
 Slot cleanliness is an **invariant of entry**, not a promise about exits:
-every handover — a fresh acquire, an adopted lease, a reclaim, an
-`assign`ed slot — erases the slot's data before the new holder gets it. So
+every handover — a fresh acquire, an expired-but-free re-acquisition, an
+operator reclaim, or an `assign`ed slot — records the exact lease capability,
+then erases the slot's data before deploying or testing it. So
 even when an exit path skips the cleanup erase (failed cleanup followed by
 lease expiry, `release --force`, a run cancelled mid-claim), the next tenant
 never sees the previous one's data; they just pay the ~half-minute wipe on
-their first deploy to that slot. The one deliberate exception is manual
+their first deploy to that slot. Only renewal of the exact recorded lease ID
+preserves continuity. Automation does not force-adopt an unrecorded hold,
+reconstruct a capability from a holder, or force-repair a stale lease ID. An
+unrecorded generation remains quarantined; release it explicitly or wait for
+it to expire. A legitimate handover
+wipes and redeploys the complete preview app fleet, even when the slug did not
+change, so no previous holder's Worker code remains. The lease row in
+Semaphore's SQLite Durable Object stores `preparing` until every app has
+deployed at the current head, when the exact lease capability marks it `ready`.
+There is no second marker resource to reconcile, and an editable PR description
+is never authoritative for readiness, though its exact lease ID is required
+alongside the authenticated Semaphore admin identity.
+If the entry wipe fails, automation keeps that lease and aborts instead of
+putting the slot back in the pool: destructive cleanup may still be running.
+Release such a hold explicitly only after confirming the cleanup process is
+quiescent; ordinary lease expiry remains the abandoned-run safety valve.
+The one deliberate exception is manual
 `preview acquire` (Story 4): it parks a slot without wiping it, so you can
 lease a slot precisely to inspect what's on it.
 

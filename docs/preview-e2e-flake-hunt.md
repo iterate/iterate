@@ -89,16 +89,22 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
 
 Found before the first e2e run: every slot was leased, but pr-1634 and
 pr-1636 each held **two** slots while their PR bodies recorded only one. A
-deploy run that is cancelled (`cancel-in-progress` on a rapid push) between
+deploy run that was cancelled (`cancel-in-progress` on a rapid push) between
 the semaphore acquire and the PR-body write leaves a lease no later run knows
 about; the next run sees "no lease recorded" and leases a second slot. The
 leaked lease blocks other PRs for up to the full lease duration, and their
 deploys queue for 20 minutes then fail.
 
-Fix: `claimEnvironmentConfigLease` now adopts any lease the semaphore already
-attributes to the holder (re-issued under a fresh leaseId, same pattern as
-lease repair) before acquiring a fresh slot. Guard test in
-`scripts/preview/preview.test.ts`.
+The final fix serializes the complete PR lifecycle and makes exclusive fresh
+acquisition one RPC on the resource type's Semaphore Durable Object. Every new
+lease generation is stored as `preparing`, and the exact capability is written
+to managed PR state before any wipe or deploy. A predictable holder can never
+recover an existing generation. Cancellation before the write leaves a
+quarantined lease instead of granting a second slot; cancellation after the
+write can continue only with the exact slug + lease ID. Stale capabilities are
+never force-repaired. The same lease row carries the full-fleet obligation and
+only the exact generation can mark itself `ready`, so there is no second marker
+resource or contributor-editable readiness state to reconcile.
 
 ### 2. "The weird JWKS issue": OS teardown bakes JWKS against a parked auth
 

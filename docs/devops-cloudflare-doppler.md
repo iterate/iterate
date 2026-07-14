@@ -81,14 +81,29 @@ deletion at the edge) structurally impossible — there is no destroy, no
 
 ## Erasing an environment
 
-`pnpm erase-data --env <name>` (in apps/os) wipes the auth D1 rows and the
-project-directory KV. Durable Objects are addressed by project id, so with
-those gone every existing DO becomes a permanently unreachable orphan and
-the env is logically pristine with zero downtime — orphaned DO storage costs
-pennies and there is no Cloudflare API to delete DO instances. Redeploy auth
-afterwards (OAuth clients are data too; its deploy re-seeds them). Preview
-slots persist data across pushes; erasing is an explicit action, not part of
-deploys.
+`pnpm erase-data --env <name>` (in apps/os) is destructive and requires the
+explicit environment name. It parks the OS Worker while resetting its
+non-container Durable Object classes, clears every auth D1 table and the
+project-directory KV, removes per-project AI Search instances, and bulk-deletes
+the files, sandbox-backup, and search-index R2 buckets through
+short-lived local Wrangler remote bindings. R2 credentials never become
+Worker bindings and no cleanup Worker or public route is deployed. Any AI
+Search management or R2 failure fails the whole erase. A successful exhaustive
+namespace listing can prove that the environment has no AI Search namespace;
+an API error, including an ambiguous 404, cannot.
+
+The parked OS Worker serves 503 until the next OS deploy. Redeploy auth too:
+OAuth clients are data and auth deploy re-seeds the OS client. Preview lease
+handover invokes this erase automatically; only an exact lease-ID renewal is
+continuous. A fresh or expired-but-free lease is wiped and then receives a
+complete preview-fleet deploy so no previous holder's data or Worker code
+survives. Every new lease generation is `preparing` in the Semaphore Durable
+Object until the exact lease ID marks it `ready` after that full-fleet deploy.
+The exact lease capability is recorded before the wipe begins. An interrupted
+run can continue only from that exact slug + lease ID; an unrecorded generation
+stays quarantined and cannot be reconstructed from its predictable holder.
+Automation never force-repairs a stale lease ID; an operator must release that
+hold explicitly or wait for expiry.
 
 ## Bringing up a new environment
 

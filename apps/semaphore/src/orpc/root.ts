@@ -84,6 +84,27 @@ function getCoordinator(type: string) {
   return env.RESOURCE_COORDINATOR.getByName(type);
 }
 
+async function withAuthoritativeLeaseState<
+  T extends {
+    type: string;
+    slug: string;
+    leaseState: "available" | "leased";
+    leasedUntil: number | null;
+    holder: string | null;
+  },
+>(resource: T): Promise<T> {
+  const lease = await getCoordinator(resource.type).getLease({
+    type: resource.type,
+    slug: resource.slug,
+  });
+  return {
+    ...resource,
+    leaseState: lease ? "leased" : "available",
+    leasedUntil: lease?.expiresAt ?? null,
+    holder: lease?.holder ?? null,
+  };
+}
+
 const addResourceProcedure = semaphore.resources.add
   .use(requireAuth)
   .use(mapResourceErrors)
@@ -114,7 +135,10 @@ const deleteResourceProcedure = semaphore.resources.delete
 const listResourcesProcedure = semaphore.resources.list
   .use(requireAuth)
   .use(mapResourceErrors)
-  .handler(async ({ input }) => listResourcesFromDb(env.DB, { type: input.type }));
+  .handler(async ({ input }) => {
+    const resources = await listResourcesFromDb(env.DB, { type: input.type });
+    return await Promise.all(resources.map(withAuthoritativeLeaseState));
+  });
 
 const findResourceProcedure = semaphore.resources.find
   .use(requireAuth)
@@ -127,7 +151,7 @@ const findResourceProcedure = semaphore.resources.find
       });
     }
 
-    return resource;
+    return await withAuthoritativeLeaseState(resource);
   });
 
 const acquireResourceProcedure = semaphore.resources.acquire
@@ -155,6 +179,43 @@ const acquireResourceProcedure = semaphore.resources.acquire
     return lease;
   });
 
+const acquireResourceExclusiveProcedure = semaphore.resources.acquireExclusive
+  .use(requireAuth)
+  .use(mapResourceErrors)
+  .handler(async ({ input }) => {
+    const { type, holder, leaseMs, waitMs = 0 } = input;
+    const hasInventory = await hasInventoryForType(env.DB, type);
+    if (!hasInventory) {
+      throw new ORPCError("NOT_FOUND", {
+        message: "No resources are configured for this type.",
+      });
+    }
+
+    const result = await getCoordinator(type).acquireExclusive({
+      type,
+      holder,
+      leaseMs,
+      waitMs,
+    });
+    if (result.status === "acquired") {
+      return result.lease;
+    }
+
+    if (result.status === "unavailable") {
+      throw new ORPCError("CONFLICT", {
+        message:
+          waitMs > 0
+            ? "No resource became available before waitMs elapsed."
+            : "No resource is currently available for this type.",
+      });
+    }
+
+    throw new ORPCError("CONFLICT", {
+      message:
+        "The holder already has an active lease. Continue it with the exact slug and leaseId capability, or wait for it to be released or expire.",
+    });
+  });
+
 const acquireSpecificResourceProcedure = semaphore.resources.acquireSpecific
   .use(requireAuth)
   .use(mapResourceErrors)
@@ -176,6 +237,14 @@ const renewResourceLeaseProcedure = semaphore.resources.renew
   .handler(async ({ input }) => {
     const { type, slug, leaseId, leaseMs } = input;
     return await getCoordinator(type).renew({ type, slug, leaseId, leaseMs });
+  });
+
+const markResourceLeaseReadyProcedure = semaphore.resources.markReady
+  .use(requireAuth)
+  .use(mapResourceErrors)
+  .handler(async ({ input }) => {
+    const { type, slug, leaseId } = input;
+    return await getCoordinator(type).markReady({ type, slug, leaseId });
   });
 
 const releaseResourceProcedure = semaphore.resources.release
@@ -219,8 +288,10 @@ export const appRouter = semaphore.router({
     list: listResourcesProcedure,
     find: findResourceProcedure,
     acquire: acquireResourceProcedure,
+    acquireExclusive: acquireResourceExclusiveProcedure,
     acquireSpecific: acquireSpecificResourceProcedure,
     renew: renewResourceLeaseProcedure,
+    markReady: markResourceLeaseReadyProcedure,
     release: releaseResourceProcedure,
   }),
 });

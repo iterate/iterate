@@ -820,12 +820,12 @@ export interface ProjectRepoCollection extends RepoCollection {
  * folders in the stream tree), and the sandbox itself carries the imperative
  * lifecycle (`start`/`sleep`/`destroy`).
  *
- * `get(path)` returns the sandbox Durable Object's own RPC stub —
- * deliberately NO RpcTarget wrapper, so the caller sees exactly what the
- * `@cloudflare/sandbox` SDK exposes and new SDK methods need no forwarding
- * code here. Confinement is by name: the stub is minted from this project's
- * id plus the validated path, after the same project-access assert every
- * collection performs.
+ * `get(path)` returns the sandbox Durable Object's own project-scoped RPC
+ * stub. The Durable Object explicitly denies SDK backup/restore methods:
+ * upstream backup IDs are bucket-wide bearer capabilities and may only be
+ * used by the platform's private sleep/wake lifecycle. Confinement is by
+ * name: the stub is minted from this project's id plus the validated path,
+ * after the same project-access assert every collection performs.
  *
  * The instance type is CONFIGURATION, not identity — but Cloudflare fixes
  * instance type per container class (instance-types.ts), so each type is its
@@ -2379,8 +2379,8 @@ export type SandboxInstanceType =
   | "standard-4";
 
 /**
- * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
- * wrapped on top. Whatever the installed SDK exposes is callable —
+ * One sandbox: the project-scoped `@cloudflare/sandbox` Durable Object stub.
+ * The installed SDK surface is callable except for platform-only operations —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
  * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this
  * contract deliberately does not re-declare that surface (same stance as
@@ -2409,6 +2409,9 @@ export type SandboxInstanceType =
  *   through project egress policy; there is no direct internet path.
  * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
  *   snapshots cover persistence, and `tunnels` covers public URLs.
+ * - `createBackup` and `restoreBackup` are unavailable (they throw): upstream
+ *   backup IDs are bucket-wide bearer capabilities, so only this sandbox's
+ *   private platform lifecycle may hold and use them.
  */
 export type CloudflareSandbox = object & {
   /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */

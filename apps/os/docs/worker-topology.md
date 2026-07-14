@@ -64,18 +64,20 @@ code via `wrangler deploy --secrets-file`.
 
 ## Lifecycle scripts (apps/os/scripts)
 
-| Command                           | What                                                                                                |
-| --------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `pnpm dev`                        | local dev server (vite + workerd); `start --detach`/`status`/`attach`/`kill` for parallel worktrees |
-| `pnpm run deploy --env preview_3` | build → deploy+secrets (one version) → smoke probe                                                  |
-| `pnpm ensure-resources --env X`   | create-only bring-up (KV, auth D1, DNS); reconciles IDs into envs.ts                                |
-| `pnpm erase-data --env X`         | wipe auth D1 rows + project-directory KV; DOs become unreachable orphans                            |
+| Command                           | What                                                                                                 |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                        | local dev server (vite + workerd); `start --detach`/`status`/`attach`/`kill` for parallel worktrees  |
+| `pnpm run deploy --env preview_3` | build → deploy+secrets (one version) → smoke probe                                                   |
+| `pnpm ensure-resources --env X`   | create-only bring-up (KV, auth D1, DNS); reconciles IDs into envs.ts                                 |
+| `pnpm erase-data --env X`         | park OS; reset non-container DOs; wipe auth D1, project-directory KV, files/search R2, and AI Search |
 
 Workers are never deleted and routes/DNS are ensure-only, so deploys can't
 strand an environment's hostnames (the old zombie-route/522 class is
-structurally gone). There is no Cloudflare API to delete DO instances; the
-only storage-reclaim path is a `deleted_classes`/re-add migration dance —
-run rarely, if ever, since orphaned storage costs pennies.
+structurally gone). `erase-data` performs the `deleted` tombstone/re-add reset
+for non-container Durable Object classes and leaves the OS Worker parked at
+503 until redeploy. Container-bearing sandbox classes are retained because
+Cloudflare cannot currently recreate them through that reset path; their
+unreachable backups expire through the bucket lifecycle policy.
 
 ## Notes
 

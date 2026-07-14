@@ -95,6 +95,7 @@ export const SemaphoreLeaseRecord = z.object({
   leaseId: z.uuid(),
   expiresAt: z.number().int().positive(),
   holder: z.string().nullable().default(null),
+  phase: z.enum(["preparing", "ready"]),
 });
 
 const AddResourceInput = z.object({
@@ -124,6 +125,18 @@ export const AcquireResourceInput = z.object({
   holder: semaphoreHolderSchema.optional(),
 });
 
+/**
+ * Acquire a fresh lease only when this holder has no active generation.
+ * `holder` is an attribution and uniqueness key, never a capability: an
+ * existing generation can be continued only with its exact slug + leaseId.
+ */
+export const AcquireExclusiveResourceInput = z.object({
+  type: semaphoreKeySchema,
+  holder: semaphoreHolderSchema,
+  leaseMs: semaphoreLeaseMsSchema,
+  waitMs: semaphoreWaitMsSchema.optional(),
+});
+
 export const AcquireSpecificResourceInput = z.object({
   type: semaphoreKeySchema,
   slug: semaphoreKeySchema,
@@ -142,6 +155,12 @@ const RenewResourceLeaseInput = z.object({
   slug: semaphoreKeySchema,
   leaseId: z.uuid(),
   leaseMs: semaphoreLeaseMsSchema,
+});
+
+export const MarkResourceLeaseReadyInput = z.object({
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
+  leaseId: z.uuid(),
 });
 
 export const ReleaseResourceInput = z
@@ -216,6 +235,15 @@ export const semaphoreContract = oc.router({
       .input(AcquireResourceInput)
       .output(SemaphoreLeaseRecord),
 
+    acquireExclusive: oc
+      .route({
+        method: "POST",
+        path: "/resources/acquire-exclusive",
+        tags: ["/resources"],
+      })
+      .input(AcquireExclusiveResourceInput)
+      .output(SemaphoreLeaseRecord),
+
     acquireSpecific: oc
       .route({
         method: "POST",
@@ -232,6 +260,15 @@ export const semaphoreContract = oc.router({
         tags: ["/resources"],
       })
       .input(RenewResourceLeaseInput)
+      .output(SemaphoreLeaseRecord.nullable()),
+
+    markReady: oc
+      .route({
+        method: "POST",
+        path: "/resources/mark-ready",
+        tags: ["/resources"],
+      })
+      .input(MarkResourceLeaseReadyInput)
       .output(SemaphoreLeaseRecord.nullable()),
 
     release: oc

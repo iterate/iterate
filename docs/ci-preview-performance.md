@@ -125,8 +125,10 @@ core-count and run-count, not wall-clock padding:
   `depot ci metrics` before changing the size in either direction.
 - **Cleanup job: the small 2-core default runner.** It only runs a
   Doppler-wrapped destroy; it doesn't need the preview job's cores.
-- **`cancel-in-progress: true`** on the preview workflow cancels superseded
-  runs when you push again, so only the latest commit's run pays.
+- **Per-PR lifecycle serialization** lets a credentialed erase/deploy finish
+  before a newer push or close cleanup starts. Pending superseded runs may be
+  coalesced by the concurrency group, but an active destructive run is never
+  canceled while its remote side effects could still be completing.
 - **The preview-CI image bake is weekly, not daily.** Nothing consumes that
   snapshot today (Depot CI uses its standard runners), so a daily bake was
   spending compute on an unused artifact. Make it daily again — or delete

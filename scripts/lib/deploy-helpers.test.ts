@@ -28,6 +28,31 @@ describe("assertWorkerSecretAbsent", () => {
     expect(cf).toHaveBeenCalledExactlyOnceWith(listPath);
   });
 
+  it("propagates an unrelated 404 instead of treating it as a missing Worker", async () => {
+    const cloudflareError = new CloudflareApiError("GET", listPath, 404, [{ code: 10090 }]);
+    const cf = vi.fn(async () => {
+      throw cloudflareError;
+    });
+
+    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).rejects.toBe(
+      cloudflareError,
+    );
+  });
+
+  it("propagates a mixed 404 instead of accepting one missing-Worker detail", async () => {
+    const cloudflareError = new CloudflareApiError("GET", listPath, 404, [
+      { code: 10007 },
+      { code: 10090 },
+    ]);
+    const cf = vi.fn(async () => {
+      throw cloudflareError;
+    });
+
+    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).rejects.toBe(
+      cloudflareError,
+    );
+  });
+
   it("fails closed without mutating an existing binding", async () => {
     const cf = vi.fn(async () => [{ name: secretName, type: "secret_text" }]);
 

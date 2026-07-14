@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
-import { createSemaphoreClient } from "../../src/contract.ts";
+import { createSemaphoreClient, type SemaphoreLeaseRecord } from "../../src/contract.ts";
 import {
   createSemaphoreAppFixture,
   requireSemaphoreBaseUrl,
@@ -125,7 +125,7 @@ describe.sequential("live semaphore E2E", () => {
     expect(listed[0]?.leaseState).toBe("available");
     expect(listed[0]?.leasedUntil).toBeNull();
 
-    const lease = await apiJson<{ slug: string; leaseId: string }>("/api/resources/acquire", {
+    const lease = await apiJson<SemaphoreLeaseRecord>("/api/resources/acquire", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -137,6 +137,7 @@ describe.sequential("live semaphore E2E", () => {
     });
     leasedResources.push({ type, slug: lease.slug, leaseId: lease.leaseId });
     expect(lease.slug).toBe("alpha");
+    expect(lease.phase).toBe("preparing");
 
     const leasedList = await apiJson<Array<{ leaseState: string; leasedUntil: number | null }>>(
       `/api/resources?type=${encodeURIComponent(type)}`,
@@ -218,20 +219,18 @@ describe.sequential("live semaphore E2E", () => {
     });
     leasedResources.push({ type, slug: firstLease.slug, leaseId: firstLease.leaseId });
 
-    const waitingLeasePromise = apiJson<{ slug: string; leaseId: string }>(
-      "/api/resources/acquire",
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          type,
-          leaseMs: 60_000,
-          waitMs: 5_000,
-        }),
+    const waitingLeasePromise = apiJson<SemaphoreLeaseRecord>("/api/resources/acquire-exclusive", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
       },
-    );
+      body: JSON.stringify({
+        type,
+        holder: "pr-waiting",
+        leaseMs: 60_000,
+        waitMs: 5_000,
+      }),
+    });
 
     await sleep(250);
 
@@ -261,6 +260,112 @@ describe.sequential("live semaphore E2E", () => {
     const waitingLease = await waitingLeasePromise;
     leasedResources.push({ type, slug: waitingLease.slug, leaseId: waitingLease.leaseId });
     expect(waitingLease.slug).toBe("only");
+    expect(waitingLease).toMatchObject({ holder: "pr-waiting", phase: "preparing" });
+  }, 120_000);
+
+  test("never reconstructs a preparing capability from its holder", async () => {
+    const type = uniqueType();
+    const created = await semaphore.resources.add({
+      type,
+      slug: "preview-slot",
+      data: { token: "secret-preview-slot" },
+    });
+    createdResources.push({ type, slug: created.slug });
+
+    const first = await semaphore.resources.acquireExclusive({
+      type,
+      holder: "pr-1948",
+      leaseMs: 60_000,
+    });
+    leasedResources.push({ type, slug: first.slug, leaseId: first.leaseId });
+    expect(first).toMatchObject({
+      slug: "preview-slot",
+      holder: "pr-1948",
+      phase: "preparing",
+    });
+
+    await expect(
+      semaphore.resources.acquireExclusive({
+        type,
+        holder: "pr-1948",
+        leaseMs: 120_000,
+      }),
+    ).rejects.toThrow(/already has an active lease/i);
+
+    expect(
+      await semaphore.resources.markReady({
+        type,
+        slug: first.slug,
+        leaseId: randomUUID(),
+      }),
+    ).toBeNull();
+
+    const ready = await semaphore.resources.markReady({
+      type,
+      slug: first.slug,
+      leaseId: first.leaseId,
+    });
+    expect(ready).toMatchObject({
+      slug: first.slug,
+      leaseId: first.leaseId,
+      holder: "pr-1948",
+      phase: "ready",
+    });
+
+    // An exact retry is idempotent, but the predictable holder string is never
+    // authority to recover any generation.
+    expect(
+      await semaphore.resources.markReady({
+        type,
+        slug: first.slug,
+        leaseId: first.leaseId,
+      }),
+    ).toMatchObject({ leaseId: first.leaseId, phase: "ready" });
+    await expect(
+      semaphore.resources.acquireExclusive({
+        type,
+        holder: "pr-1948",
+        leaseMs: 120_000,
+      }),
+    ).rejects.toThrow(/already has an active lease/i);
+
+    const renewed = await semaphore.resources.renew({
+      type,
+      slug: first.slug,
+      leaseId: first.leaseId,
+      leaseMs: 120_000,
+    });
+    expect(renewed).toMatchObject({ leaseId: first.leaseId, phase: "ready" });
+  }, 120_000);
+
+  test("fails closed when a holder already has any active lease", async () => {
+    const type = uniqueType();
+    for (const slug of ["alpha", "beta"]) {
+      const created = await semaphore.resources.add({
+        type,
+        slug,
+        data: { token: `secret-${slug}` },
+      });
+      createdResources.push({ type, slug: created.slug });
+    }
+
+    for (let index = 0; index < 2; index += 1) {
+      const lease = await semaphore.resources.acquire({
+        type,
+        holder: "pr-ambiguous",
+        leaseMs: 60_000,
+      });
+      leasedResources.push({ type, slug: lease.slug, leaseId: lease.leaseId });
+      expect(lease.phase).toBe("preparing");
+    }
+
+    await expect(
+      semaphore.resources.acquireExclusive({
+        type,
+        holder: "pr-ambiguous",
+        leaseMs: 60_000,
+      }),
+    ).rejects.toThrow(/already has an active lease/i);
   }, 120_000);
 
   test("records the lease holder and honors force acquire/release", async () => {

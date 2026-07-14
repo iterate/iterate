@@ -7,7 +7,7 @@ Cloudflare-only: TanStack Start + oRPC + sqlfu/D1 inventory storage, with a Dura
 - **API:** oRPC over OpenAPI/HTTP at `/api`
 - **Frontend:** TanStack Start + Router + Query
 - **DB:** sqlfu-generated D1 query wrappers (`sql/.generated/`)
-- **Coordinator:** one Durable Object per resource `type` handles active leases, waiters, and expiry
+- **Coordinator:** one SQLite Durable Object per resource `type` handles active leases, handover phase, waiters, and expiry
 - **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`)
 
 ## Auth
@@ -85,6 +85,44 @@ preview inventory from this package, run:
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
+
+### Cancellation-safe preview handover
+
+Every new lease generation starts in `phase: "preparing"`. The phase and lease
+capability live in the existing `ResourceCoordinator` Durable Object's local
+SQLite `leases` table; D1 is inventory plus a non-authoritative status mirror,
+and there is no second marker resource to reconcile. On first activation after
+this schema is deployed, existing lease rows receive `phase: "preparing"` and
+must complete a fresh full-fleet handover before tests may trust them. There is
+no legacy-ready migration path.
+
+Preview CI uses two authenticated oRPC operations:
+
+1. `resources.acquireExclusive({ type, holder, leaseMs, waitMs? })` acquires a
+   new preparing generation only when the holder has no active lease. It never
+   returns an existing generation: if a run is cancelled before persisting the
+   capability, the slot stays quarantined until an operator releases it or the
+   lease expires. `waitMs` has the same bounded wait semantics as
+   `resources.acquire`, except an existing holder lease fails immediately.
+2. After cleanup and deployment have completed, CI calls
+   `resources.markReady({ type, slug, leaseId })`. This exact-capability
+   transition returns the updated `SemaphoreLeaseRecord` with
+   `phase: "ready"`. A missing, expired, replaced, or otherwise stale
+   generation returns `null`. Repeating the call with the current exact
+   capability is idempotent and returns that same ready generation.
+
+At every phase, a predictable holder such as `pr-1948` is attribution and a
+uniqueness key, not authority. Continuation uses the exact-capability operation
+`resources.renew({ type, slug, leaseId, leaseMs })`, which preserves and
+returns the lease phase. Preview orchestration records that exact capability
+before erasing a slot. This prevents a restarted or overlapping workflow from
+reconstructing access using only its PR number.
+
+All of these API procedures require the admin identity described in **Auth**.
+Internally the oRPC handlers call public methods with the same names on the
+default `ResourceCoordinator` Durable Object class (`acquireExclusive` and
+`markReady`). Coordination does not use a named Worker entrypoint, an HTTP
+fetch adapter, D1 marker rows, or external I/O inside a concurrency block.
 
 ## Dashboard
 
