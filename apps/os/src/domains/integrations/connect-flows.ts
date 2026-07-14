@@ -25,7 +25,6 @@
 
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import type { SecretRefresh } from "../secrets/types.ts";
 import type {
   CompleteConnectResult,
@@ -43,6 +42,7 @@ import {
 import {
   appendConnectionDirectoryEvent,
   appendConnectionDirectoryEvents,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
   integrationStreamStub,
   latestStreamEventOfTypes,
   lookupConnectionClaim,
@@ -292,9 +292,6 @@ async function recordConnection(input: {
    * route inbound events). Connect time is THE arming point — connection
    * streams are born here, not at project create. */
   processorSubscription?: {
-    idempotencyKey: string;
-    /** Itx expression to the router's processor node (see the subscription builder). */
-    processor: (string | [string, ...unknown[]])[];
     processorSlug: string;
   };
   /** Claim this connection's external id in the deployment-wide directory
@@ -321,14 +318,11 @@ async function recordConnection(input: {
   await integrationStreamStub(input.projectId, streamPath).append(
     ...(input.processorSubscription
       ? [
-          buildDurableObjectProcessorSubscriptionConfiguredEvent({
-            durableObjectName: DurableObjectNameCodec.stringify({
-              projectId: input.projectId,
-              path: streamPath,
-            }),
-            idempotencyKey: input.processorSubscription.idempotencyKey,
-            processor: input.processorSubscription.processor,
+          buildIntegrationRouterSubscriptionConfiguredEvent({
+            connection: input.connection,
+            projectId: input.projectId,
             processorSlug: input.processorSubscription.processorSlug,
+            slug: input.slug,
           }),
         ]
       : []),
@@ -463,8 +457,6 @@ async function recordSlackConnection(input: {
       },
     },
     processorSubscription: {
-      idempotencyKey: `slack-router-subscription:${input.projectId}:${input.connection}`,
-      processor: ["integrations", "slack", ["get", input.connection], "processor"],
       processorSlug: SlackProcessorContract.slug,
     },
     directoryClaim: { externalId: input.teamId },
@@ -858,8 +850,6 @@ export async function connectTelegram(input: {
       },
     },
     processorSubscription: {
-      idempotencyKey: `telegram-router-subscription:${input.projectId}:${connection}`,
-      processor: ["integrations", "telegram", ["get", connection], "processor"],
       processorSlug: TelegramProcessorContract.slug,
     },
     directoryClaim: {
