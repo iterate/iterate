@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cutoverLeaseRequest,
   drainLegacyPreviewChecks,
+  listPreviewChecksForRefs,
   migratePreviewFleet,
   previewFleetTargets,
+  withGitHubSecondaryRateLimitRetry,
   type PreviewFleetMigrationDependencies,
 } from "./migrate-os-auth-preview-fleet.ts";
 
@@ -114,6 +116,58 @@ describe("cutoverLeaseRequest", () => {
       holder: "main-auth-rpc-security-cutover",
       force: true,
     });
+  });
+});
+
+describe("GitHub check discovery", () => {
+  it("deduplicates refs, keeps one request in flight, and honors Retry-After", async () => {
+    const calls: string[] = [];
+    const sleep = vi.fn(async () => undefined);
+    let active = 0;
+    let maxActive = 0;
+    let firstRefAttempts = 0;
+
+    const checks = await listPreviewChecksForRefs({
+      refs: ["first", "first", "second"],
+      sleep,
+      listChecksForRef: async (ref) => {
+        calls.push(ref);
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        try {
+          if (ref === "first" && firstRefAttempts++ === 0) {
+            throw Object.assign(new Error("You have exceeded a secondary rate limit."), {
+              status: 403,
+              response: { headers: { "retry-after": "1" } },
+            });
+          }
+          await Promise.resolve();
+          return [{ id: calls.length, name: ref, status: "completed" }];
+        } finally {
+          active -= 1;
+        }
+      },
+    });
+
+    expect(calls).toEqual(["first", "first", "second"]);
+    expect(maxActive).toBe(1);
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(1_000);
+    expect(checks.map((check) => check.name)).toEqual(["first", "second"]);
+  });
+
+  it("does not retry an ordinary authorization failure", async () => {
+    const forbidden = Object.assign(new Error("Resource not accessible by integration"), {
+      status: 403,
+      response: { headers: {} },
+    });
+    const operation = vi.fn(async () => {
+      throw forbidden;
+    });
+    const sleep = vi.fn(async () => undefined);
+
+    await expect(withGitHubSecondaryRateLimitRetry(operation, { sleep })).rejects.toBe(forbidden);
+    expect(operation).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
   });
 });
 
