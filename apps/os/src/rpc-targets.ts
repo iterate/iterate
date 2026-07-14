@@ -2000,6 +2000,13 @@ function parseStoredRef(serialized: string): ItxExpression | undefined {
 }
 
 /**
+ * Longest per-hit `content` a search result carries inline. 20 default-limit
+ * hits at this cap ≈ 24k chars — under the 30k script-result spill threshold,
+ * so a plain query({ q }) never detours through a workspace file.
+ */
+const MAX_RESULT_CONTENT_CHARS = 1_200;
+
+/**
  * Search everything this project has accumulated — every conversation (web
  * chat, Slack threads, email, Telegram), inbound webhook (GitHub, Slack),
  * stream event, itx.files object, repo file, and custom document — with
@@ -2116,10 +2123,19 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   #toChunk(chunk: AiSearchSearchResponse["chunks"][number]): SearchResultChunk {
     const metadata = chunk.item.metadata ?? {};
     const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
+    // Cap per-hit content: chunks are ~1024 tokens and context expansion
+    // multiplies them, so 20 generous-default hits of full text blew the 30k
+    // inline script-result cap and forced a workspace spill + parse detour
+    // (live prd incident, 2026-07-14). The content is for judging relevance;
+    // `ref` is the fetch path for the full source.
+    const content =
+      chunk.text.length > MAX_RESULT_CONTENT_CHARS
+        ? `${chunk.text.slice(0, MAX_RESULT_CONTENT_CHARS)}\n… [truncated — evaluate \`ref\` for the full source]`
+        : chunk.text;
     return {
       filename: chunk.item.key,
       score: chunk.score,
-      content: chunk.text,
+      content,
       kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
       context: typeof metadata.context === "string" ? metadata.context : undefined,
       // Every corpus writer stores `ref` — the serialized itx expression back

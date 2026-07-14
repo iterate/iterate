@@ -142,6 +142,13 @@ const SHARED_FILES: Record<string, string> = {
       target: "esnext",
       strict: false,
       skipLibCheck: true,
+      // A checker never emits; without this, allowJs makes the compiler plan
+      // JS output that collides with the input twin (TS5055).
+      noEmit: true,
+      // The runtime-grammar twin (script-runtime.js, see
+      // assembleScriptProject) must be parsed; checkJs stays off — the twin
+      // exists only for TS-only-syntax grammar errors, never type checking.
+      allowJs: true,
     },
   }),
 };
@@ -317,6 +324,14 @@ function assembleScriptProject(
     `const script: (itx: Itx, ...rest: any[]) => unknown = (`,
   ];
   files["script.ts"] = [...prelude, code, ");"].join("\n");
+  // The runtime-grammar twin: the SAME code as a .js file. The script RUNTIME
+  // executes plain JavaScript, but script.ts validates TypeScript — so
+  // TS-only syntax (`(r: any) =>`, generics, `as` casts) passes the type
+  // check and then dies at run time with a bare "Unexpected token" (live prd
+  // incident, 2026-07-14). TypeScript's parser reports exactly that class on
+  // .js files as grammar errors (TS8002-8039, "... can only be used in
+  // TypeScript files"), which the gate turns into a corrective rejection.
+  files["script-runtime.js"] = ["void (", code, ");"].join("\n");
   return { files, preludeLineCount: prelude.length };
 }
 
@@ -351,6 +366,11 @@ const EXECUTION_CHECK_DEADLINE_MS = 10_000;
  */
 const TS_PROPERTY_NEAR_MISS = 2551; // Property 'X' does not exist on type 'T'. Did you mean 'Y'?
 const TS_NAME_NEAR_MISS = 2552; // Cannot find name 'X'. Did you mean 'Y'?
+
+/** "X can only be used in TypeScript files" — the 8xxx grammar family the
+ * parser reports on .js files for TS-only syntax. The exact class that
+ * typechecks as script.ts but crashes the plain-JavaScript runtime. */
+const isTypescriptOnlySyntax = (code: number) => code >= 8002 && code <= 8039;
 
 /** TS grammar diagnostics live in the 1xxx range. Unparseable code is the one
  * verdict that needs no type knowledge at all — the runtime's module loader
@@ -462,12 +482,35 @@ export async function checkItxScriptForExecution(input: {
       diagnostic.fileName === "script.ts" &&
       isProvableBlocker(diagnostic),
   );
-  if (blocking.length === 0) return { verdict: "clean" };
-  const problems = formatProblems(blocking, {
-    label: "script",
-    primaryFile: "script.ts",
-    lineOffset: -project.preludeLineCount,
-  });
+  // TS-only syntax in the runtime-grammar twin: provable (the parser names
+  // the exact construct) and fatal at run time, so block with the corrective
+  // framing instead of letting the runtime throw a bare "Unexpected token".
+  const runtimeGrammar = checked.diagnostics.filter(
+    (diagnostic) =>
+      diagnostic.category === "error" &&
+      diagnostic.fileName === "script-runtime.js" &&
+      isTypescriptOnlySyntax(diagnostic.code),
+  );
+  if (blocking.length === 0 && runtimeGrammar.length === 0) return { verdict: "clean" };
+  const problems = [
+    ...formatProblems(blocking, {
+      label: "script",
+      primaryFile: "script.ts",
+      lineOffset: -project.preludeLineCount,
+    }),
+    ...formatProblems(runtimeGrammar, {
+      label: "script",
+      primaryFile: "script-runtime.js",
+      lineOffset: -1, // the twin's one-line `void (` prelude
+    }),
+  ];
+  if (runtimeGrammar.length > 0) {
+    problems.push(
+      "The script runtime executes plain JavaScript: TypeScript-only syntax (type " +
+        "annotations like `(x: any)`, generics, `as` casts, interfaces) fails at run time. " +
+        "Rewrite without type syntax.",
+    );
+  }
   return { verdict: "problems", problems: [...problems, ...checked.notes] };
 }
 
