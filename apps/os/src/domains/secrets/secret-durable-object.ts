@@ -29,6 +29,7 @@ import {
   substituteSecretRequest,
   SecretSubstitutionError,
 } from "./utils.ts";
+import { withWebSocketHandshakeHeaders } from "./websocket-handshake.ts";
 
 type SecretState = InstanceType<typeof SecretProcessor>["state"];
 type SecretSnapshot = { offset: number; state: SecretState };
@@ -46,9 +47,9 @@ const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
  * within the pin — so a refresh, like any use, only ever moves bytes toward
  * pinned hosts.
  *
- * WebSocket egress (an Upgrade request through this same `fetch()`) is
- * deliberately deferred, not foreclosed: it returns as a pure addition inside
- * this surface when a consumer exists.
+ * WebSocket upgrades use this same fetch lane: placeholders in the handshake
+ * headers or URL are substituted before opening the pinned upstream socket.
+ * Application frames are opaque and are never scanned for placeholders.
  */
 export class SecretDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -190,10 +191,6 @@ export class SecretDurableObject extends DurableObject<Env> {
       // One request, one secret: cross-secret chaining is not supported.
       return secretErrorResponse("secret_reference_foreign");
     }
-    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-      // Deferred, not foreclosed: WS egress returns inside this same surface.
-      return Response.json({ error: "websocket egress is not supported yet" }, { status: 501 });
-    }
 
     try {
       let state = await this.#snapshot();
@@ -228,22 +225,27 @@ export class SecretDurableObject extends DurableObject<Env> {
       const response = await fetchWithCredentialRedirects(substituted, {
         assertUrlAllowed: (url) => assertOriginPinned(url, state),
       });
-      if (response.status !== 401 || retry === null) return response;
+      if (response.status !== 401 || retry === null) {
+        return await withWebSocketHandshakeHeaders(request, response);
+      }
 
       try {
         await this.#refresh(retry);
       } catch {
         // The provider (or config) refused the refresh: the original 401 is
         // the caller's answer, not an opaque exception.
-        return response;
+        return await withWebSocketHandshakeHeaders(request, response);
       }
       const retriedState = await this.#snapshot();
       const retried = await this.#substitute(retry.source, retriedState);
       await this.#appendUsed(request.url);
       await this.#assertGithubInstallationUseAuthorized(retriedState.refresh);
-      return await fetchWithCredentialRedirects(retried, {
-        assertUrlAllowed: (url) => assertOriginPinned(url, retriedState),
-      });
+      return await withWebSocketHandshakeHeaders(
+        request,
+        await fetchWithCredentialRedirects(retried, {
+          assertUrlAllowed: (url) => assertOriginPinned(url, retriedState),
+        }),
+      );
     } catch (error) {
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       throw error;

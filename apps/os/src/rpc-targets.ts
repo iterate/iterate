@@ -1843,7 +1843,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return describeNode({
       instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
-        fetch: "Egress fetch with secret placeholders substituted server-side.",
+        fetch:
+          "Egress fetch with secret placeholders substituted server-side (HTTP headers/URL, including Upgrade handshake).",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
         update:
           "Set the value, egress URLs, and/or refresh strategy. A value requires its complete egress policy in the same update; every update without a value clears stored material.",
