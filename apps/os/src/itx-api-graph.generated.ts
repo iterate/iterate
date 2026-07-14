@@ -24,15 +24,22 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Session",
     kind: "interface",
     sourceText:
-      "/**\n * What you authenticate into: a catalog that vends itxs.\n *\n * A session is NOT an itx — it is the directory you use to reach one.\n * `projects` is principal-scoped. `streams` and `repos` here are the\n * deployment-wide surfaces backed by `projectId: null`, so only admin/internal\n * auth can reach them.\n */\nexport interface Session {\n  /** Includes `principal` — who this session is. */\n  __describe(): Promise<Description & { principal: string }>;\n  /** Deployment-wide streams (admin only; projectId: null). */\n  streams: StreamCollection;\n  /** Deployment-wide repos (admin only; projectId: null). */\n  repos: RepoCollection;\n  /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */\n  projects: ProjectCollection;\n}",
+      "/**\n * What you authenticate into: a catalog that vends itxs.\n *\n * A session is NOT an itx — it is the directory you use to reach one.\n * `projects` is principal-scoped. `streams` and `repos` here are the\n * deployment-wide surfaces backed by `projectId: null`, so only admin/internal\n * auth can reach them.\n */\nexport interface Session {\n  /** Includes `principal` — who this session is. */\n  __describe(): Promise<Description & { principal: string }>;\n  /** Deployment-wide streams (admin only; projectId: null). */\n  streams: StreamCollection;\n  /** Deployment-wide repos (admin only; projectId: null). */\n  repos: RepoCollection;\n  /** Admin-only storage-level Stream Durable Object recovery. */\n  streamRecovery: StreamRecoveryCollection;\n  /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */\n  projects: ProjectCollection;\n}",
     summary: "What you authenticate into: a catalog that vends itxs.",
     memberSummaries: {
       __describe: "Includes `principal` — who this session is.",
       streams: "Deployment-wide streams (admin only; projectId: null).",
       repos: "Deployment-wide repos (admin only; projectId: null).",
+      streamRecovery: "Admin-only storage-level Stream Durable Object recovery.",
       projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
     },
-    referencedTypeNames: ["Description", "StreamCollection", "RepoCollection", "ProjectCollection"],
+    referencedTypeNames: [
+      "Description",
+      "StreamCollection",
+      "RepoCollection",
+      "StreamRecoveryCollection",
+      "ProjectCollection",
+    ],
   },
   {
     name: "Project",
@@ -153,6 +160,17 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       get: "The repo at a path.",
     },
     referencedTypeNames: ["Description", "Repo"],
+  },
+  {
+    name: "StreamRecoveryCollection",
+    kind: "interface",
+    sourceText:
+      "/** Admin-only catalog for storage-level recovery of Stream Durable Objects. */\nexport interface StreamRecoveryCollection {\n  __describe(): Promise<Description>;\n  /** Address one stream by its complete coordinate. */\n  get(input: { projectId: string | null; path: string }): StreamRecovery;\n}",
+    summary: "Admin-only catalog for storage-level recovery of Stream Durable Objects.",
+    memberSummaries: {
+      get: "Address one stream by its complete coordinate.",
+    },
+    referencedTypeNames: ["Description", "StreamRecovery"],
   },
   {
     name: "ProjectCollection",
@@ -724,6 +742,18 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "StreamSubscriptionHandle",
       "StreamPushEventBatch",
     ],
+  },
+  {
+    name: "StreamRecovery",
+    kind: "interface",
+    sourceText:
+      "/** Admin-only storage-level export/restore handle backed by one Stream Durable Object. */\nexport interface StreamRecovery {\n  __describe(): Promise<Description>;\n  /** Export a bounded page of the normalized surviving stream log. */\n  exportForRecovery(args?: {\n    afterOffset?: number;\n    limit?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportPage>;\n  /** Replace the complete stream log and rebuild its core delivery state. */\n  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{\n    restoredEventCount: number;\n    lastImportedOffset: number;\n    currentMaxOffset: number;\n  }>;\n}",
+    summary: "Admin-only storage-level export/restore handle backed by one Stream Durable Object.",
+    memberSummaries: {
+      exportForRecovery: "Export a bounded page of the normalized surviving stream log.",
+      restoreFromRecovery: "Replace the complete stream log and rebuild its core delivery state.",
+    },
+    referencedTypeNames: ["Description", "StreamRecoveryExportPage", "StreamRecoveryRestoreInput"],
   },
   {
     name: "StreamProcessorRpc",
@@ -1730,6 +1760,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "Live subscription handle returned by `Stream.subscribe`.",
     memberSummaries: {},
     referencedTypeNames: ["SubscriptionKey"],
+  },
+  {
+    name: "StreamRecoveryExportPage",
+    kind: "typeAlias",
+    sourceText:
+      '/** One bounded page of a stream\'s storage-level recovery export. */\nexport type StreamRecoveryExportPage = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  events: {\n    type: string;\n    payload?: Record<string, unknown> | undefined;\n    metadata?: Record<string, unknown> | undefined;\n    source?:\n      | {\n          processor?:\n            | {\n                slug: string;\n                version: string;\n                stream: { path: string; projectId: string | null };\n                whileProcessing?: { offset: number; type: string } | undefined;\n              }\n            | undefined;\n          crossPostedFrom?:\n            | {\n                subscriptionKey: string;\n                createdAt: string;\n                offset: number;\n                path: string;\n                projectId: string | null;\n                type: string;\n              }[]\n            | undefined;\n        }\n      | undefined;\n    idempotencyKey?: string | undefined;\n    ephemeral?: true | undefined;\n    offset: number;\n    createdAt: string;\n    path: string;\n  }[];\n  throughOffset: number;\n  complete: boolean;\n};',
+    summary: "One bounded page of a stream's storage-level recovery export.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "StreamRecoveryRestoreInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** A complete normalized stream log accepted by storage-level recovery restore. */\nexport type StreamRecoveryRestoreInput = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  events: {\n    type: string;\n    payload?: Record<string, unknown> | undefined;\n    metadata?: Record<string, unknown> | undefined;\n    source?:\n      | {\n          processor?:\n            | {\n                slug: string;\n                version: string;\n                stream: { path: string; projectId: string | null };\n                whileProcessing?: { offset: number; type: string } | undefined;\n              }\n            | undefined;\n          crossPostedFrom?:\n            | {\n                subscriptionKey: string;\n                createdAt: string;\n                offset: number;\n                path: string;\n                projectId: string | null;\n                type: string;\n              }[]\n            | undefined;\n        }\n      | undefined;\n    idempotencyKey?: string | undefined;\n    ephemeral?: true | undefined;\n    offset: number;\n    createdAt: string;\n    path: string;\n  }[];\n  highestAssignedOffset: number;\n};',
+    summary: "A complete normalized stream log accepted by storage-level recovery restore.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "ProjectDeploymentStatus",

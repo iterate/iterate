@@ -58,6 +58,10 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
+import type {
+  StreamRecoveryExportPage,
+  StreamRecoveryRestoreInput,
+} from "./domains/streams/recovery.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import {
@@ -703,6 +707,78 @@ class StreamCollectionRpcTarget<
       projectId: this.props.projectId,
       path,
     });
+  }
+}
+
+/** Admin-only catalog for storage-level recovery of Stream Durable Objects. */
+class StreamRecoveryCollectionRpcTarget extends IterateRpcTarget<"StreamRecoveryCollection"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Admin-only storage recovery catalog. get({ projectId, path }) addresses one Stream Durable Object without adding recovery verbs to the normal Stream capability.",
+      children: { get: "Address one stream by its complete project/path coordinate." },
+      parent: "session.streamRecovery",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth }) {
+    super();
+    if (!props.auth.isAdmin()) throw new Error("stream recovery requires an admin principal");
+  }
+
+  /** Address one stream by its complete coordinate. */
+  get(input: { projectId: string | null; path: string }): StreamRecoveryRpcTarget {
+    return new StreamRecoveryRpcTarget({
+      auth: this.props.auth,
+      projectId: input.projectId,
+      path: normalizePath(input.path),
+    });
+  }
+}
+
+/** Admin-only storage-level export/restore handle backed by one Stream Durable Object. */
+class StreamRecoveryRpcTarget extends IterateRpcTarget<"StreamRecovery"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions: `Admin-only recovery handle for ${this.props.projectId ?? "deployment"}:${this.props.path}. Export and restore preserve exact committed offsets.`,
+      children: {
+        exportForRecovery: "Export one bounded page, including surviving ephemeral rows.",
+        restoreFromRecovery: "Replace the complete log and rebuild stream delivery from it.",
+      },
+      parent: "session.streamRecovery.get({ projectId, path })",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; projectId: string | null; path: string }) {
+    super();
+    if (!props.auth.isAdmin()) throw new Error("stream recovery requires an admin principal");
+  }
+
+  get #durableObjectStub() {
+    return env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: this.props.projectId, path: this.props.path },
+        { allowNullProjectId: true },
+      ),
+    );
+  }
+
+  /** Export a bounded page of the normalized surviving stream log. */
+  exportForRecovery(args?: {
+    afterOffset?: number;
+    limit?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportPage> {
+    return this.#durableObjectStub.exportForRecovery(args);
+  }
+
+  /** Replace the complete stream log and rebuild its core delivery state. */
+  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
+    restoredEventCount: number;
+    lastImportedOffset: number;
+    currentMaxOffset: number;
+  }> {
+    return this.#durableObjectStub.restoreFromRecovery(input);
   }
 }
 
@@ -5429,6 +5505,7 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       children: {
         projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
         repos: "Deployment-wide repos (admin only; projectId: null).",
+        streamRecovery: "Admin-only storage-level Stream Durable Object recovery.",
         streams: "Deployment-wide streams (admin only; projectId: null).",
       },
       parent: "the /api unauthenticated entrypoint, via authenticate(credentials)",
@@ -5450,6 +5527,11 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       auth: this.props.auth,
       projectId: null,
     });
+  }
+
+  /** Admin-only storage-level Stream Durable Object recovery. */
+  get streamRecovery(): StreamRecoveryCollectionRpcTarget {
+    return new StreamRecoveryCollectionRpcTarget({ auth: this.props.auth });
   }
 
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */

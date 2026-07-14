@@ -324,4 +324,42 @@ describe("StreamSubscribers with a DO-faithful (log-appending) harness", () => {
     expect(pokeCount).toBe(2);
     expect(h.subscribers.hasConnection("k")).toBe(true);
   });
+
+  it("recovery makes an in-flight pre-recovery poke inert", async () => {
+    let releasePoke: (() => void) | undefined;
+    let sinkDisposed = false;
+    const h = makeFaithfulHarness(async () => {
+      await new Promise<void>((resolve) => {
+        releasePoke = resolve;
+      });
+      const sink = Object.assign(() => undefined, {
+        [Symbol.dispose]() {
+          sinkDisposed = true;
+        },
+      }) as RetainedProcessEventBatch;
+      return { checkpointOffset: 999, sink };
+    });
+    h.configured["k"] = {
+      latestConfiguredEvent: {
+        offset: 1,
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: h.wakePayload,
+        createdAt: new Date(1).toISOString(),
+      },
+    };
+    h.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: h.wakePayload,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.pokes).toHaveLength(1);
+
+    h.subscribers.resetForRecovery();
+    releasePoke!();
+    await h.settle();
+
+    expect(sinkDisposed).toBe(true);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")?.ackedOffset).not.toBe(999);
+  });
 });

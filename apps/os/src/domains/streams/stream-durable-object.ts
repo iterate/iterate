@@ -13,6 +13,14 @@ import type {
 import { StreamOffsetConflictError } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
+import {
+  assertValidStreamRecoveryLog,
+  STREAM_RECOVERY_FORMAT,
+  STREAM_RECOVERY_VERSION,
+  StreamRecoveryRestoreInput as StreamRecoveryRestoreInputSchema,
+  type StreamRecoveryExportPage,
+  type StreamRecoveryRestoreInput,
+} from "./recovery.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
   reconcileSubscriptionCursorRows,
@@ -374,6 +382,95 @@ export class StreamDurableObject extends DurableObject<Env> {
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
       includeEphemeral: args.includeEphemeral,
     });
+  }
+
+  /**
+   * Admin-gated by the session recovery RPC target. Includes ephemeral rows and
+   * preserves the normalized surviving log's assigned offsets. As with normal
+   * stream reads, retired unknown envelope fields are not resurrected.
+   */
+  exportForRecovery(
+    args: { afterOffset?: number; limit?: number; throughOffset?: number } = {},
+  ): StreamRecoveryExportPage {
+    const afterOffset = args.afterOffset ?? 0;
+    const limit = args.limit ?? MAX_GET_EVENTS_LIMIT;
+    if (!Number.isInteger(afterOffset) || afterOffset < 0) {
+      throw new Error("recovery export afterOffset must be a non-negative integer");
+    }
+    if (!Number.isInteger(limit) || limit <= 0 || limit > MAX_GET_EVENTS_LIMIT) {
+      throw new Error(`recovery export limit must be an integer from 1 to ${MAX_GET_EVENTS_LIMIT}`);
+    }
+    const currentHighestAssignedOffset = this.#log.highestAssignedOffset();
+    const throughOffset = args.throughOffset ?? currentHighestAssignedOffset;
+    if (
+      !Number.isInteger(throughOffset) ||
+      throughOffset < 0 ||
+      throughOffset > currentHighestAssignedOffset
+    ) {
+      throw new Error(
+        `recovery export throughOffset must be an integer from 0 to ${currentHighestAssignedOffset}`,
+      );
+    }
+    const events = this.#log.getRange({
+      afterOffset,
+      beforeOffset: throughOffset + 1,
+      limit,
+      includeEphemeral: true,
+    });
+    return {
+      format: STREAM_RECOVERY_FORMAT,
+      version: STREAM_RECOVERY_VERSION,
+      stream: this.name,
+      events,
+      throughOffset,
+      complete: events.length < limit || events.at(-1)?.offset === throughOffset,
+    };
+  }
+
+  /**
+   * Replace this stream with an exported log, retaining original offsets.
+   * Normal append is intentionally unsuitable: secret ciphertext authenticates
+   * the original offset, project id, and path. Cursor storage is discarded so
+   * restored subscribers rebuild from their journaled configuration.
+   */
+  restoreFromRecovery(input: StreamRecoveryRestoreInput): {
+    restoredEventCount: number;
+    lastImportedOffset: number;
+    currentMaxOffset: number;
+  } {
+    const parsed = StreamRecoveryRestoreInputSchema.parse(input);
+    assertValidStreamRecoveryLog(parsed, this.name);
+    const recoveredCoreState = this.#foldRecoveryCoreProcessorState(parsed);
+
+    this.#subscribers.resetForRecovery();
+    this.ctx.storage.transactionSync(() => {
+      this.#log.replaceAll(parsed.events, parsed.highestAssignedOffset);
+      this.ctx.storage.sql.exec("delete from subscriptions");
+      this.#writeCoreProcessorState(recoveredCoreState);
+    });
+    this.#coreProcessorState = recoveredCoreState;
+
+    // The imported incarnation's live connections are gone. A fresh woken
+    // fact clears their folded roster and reconciles every durable subscriber.
+    const [woken] = this.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnationId: crypto.randomUUID() },
+    });
+    return {
+      restoredEventCount: parsed.events.length,
+      lastImportedOffset: parsed.events.at(-1)!.offset,
+      currentMaxOffset: woken!.offset,
+    };
+  }
+
+  /** Validate and fold the import completely before any live/storage mutation. */
+  #foldRecoveryCoreProcessorState(input: StreamRecoveryRestoreInput): CoreProcessorState {
+    let next = CoreProcessorContract.stateSchema.parse({});
+    for (const event of input.events) next = this.#reduce({ event, state: next }, "replay");
+    if (input.highestAssignedOffset > next.maxOffset) {
+      next = { ...next, maxOffset: input.highestAssignedOffset };
+    }
+    return next;
   }
 
   // ===========================================================================

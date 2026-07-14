@@ -64,6 +64,8 @@ export interface Session {
   streams: StreamCollection;
   /** Deployment-wide repos (admin only; projectId: null). */
   repos: RepoCollection;
+  /** Admin-only storage-level Stream Durable Object recovery. */
+  streamRecovery: StreamRecoveryCollection;
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
   projects: ProjectCollection;
 }
@@ -194,6 +196,13 @@ export interface RepoCollection {
   create(input: { path: string }): Promise<Repo>;
   /** The repo at a path. */
   get(path: string): Repo;
+}
+
+/** Admin-only catalog for storage-level recovery of Stream Durable Objects. */
+export interface StreamRecoveryCollection {
+  __describe(): Promise<Description>;
+  /** Address one stream by its complete coordinate. */
+  get(input: { projectId: string | null; path: string }): StreamRecovery;
 }
 
 /** Catalog of projects reachable from a {@link Session}. */
@@ -1349,6 +1358,23 @@ export interface Stream {
   }): Promise<StreamEvent>;
   /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
   removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
+}
+
+/** Admin-only storage-level export/restore handle backed by one Stream Durable Object. */
+export interface StreamRecovery {
+  __describe(): Promise<Description>;
+  /** Export a bounded page of the normalized surviving stream log. */
+  exportForRecovery(args?: {
+    afterOffset?: number;
+    limit?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportPage>;
+  /** Replace the complete stream log and rebuild its core delivery state. */
+  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
+    restoredEventCount: number;
+    lastImportedOffset: number;
+    currentMaxOffset: number;
+  }>;
 }
 
 /**
@@ -2849,6 +2875,87 @@ export type StreamSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
   unsubscribe(): void;
+};
+
+/** One bounded page of a stream's storage-level recovery export. */
+export type StreamRecoveryExportPage = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  events: {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          crossPostedFrom?:
+            | {
+                subscriptionKey: string;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  }[];
+  throughOffset: number;
+  complete: boolean;
+};
+
+/** A complete normalized stream log accepted by storage-level recovery restore. */
+export type StreamRecoveryRestoreInput = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  events: {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          crossPostedFrom?:
+            | {
+                subscriptionKey: string;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  }[];
+  highestAssignedOffset: number;
 };
 
 /**
