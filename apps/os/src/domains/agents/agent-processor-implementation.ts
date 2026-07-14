@@ -508,13 +508,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // Undefined means the agent has never been busy; genesis idle is not news.
     if (flip === undefined) return;
     const announced = args.state.announcedStatus;
-    // With nothing announced yet, only a BUSY flip is due. An idle flip with
-    // no prior announcement means no surface ever painted anything (a whole
-    // turn folded in one at-head page — a replayed pre-announcement journal
+    // Busy is due unless already announced; idle is due ONLY when a busy
+    // announcement stands. An idle flip with no busy in the journal — the
+    // record is undefined OR authored-only (title/note/shortStatus patches
+    // never carry busy) — means no surface ever painted anything (a whole
+    // turn folded in one at-head page: a replayed pre-announcement journal
     // or a synthetically seeded lifecycle), so there is nothing to clear;
     // announcing it would append one idle event to every historical agent
     // journal on the first refold after a contract deploy.
-    const announcementDue = announced === undefined ? flip.busy : announced.busy !== flip.busy;
+    const announcementDue = flip.busy ? announced?.busy !== true : announced?.busy === true;
     if (!announcementDue) {
       this.#cancelIdleStatusAnnouncement();
       return;

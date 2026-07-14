@@ -2421,6 +2421,44 @@ describe("busy/idle status announcements", () => {
     expect(deriveAgentBusy(agent.state)).toBe(false);
   });
 
+  it("a replayed settled turn with only authored patches journaled stays silent too", async () => {
+    // Same replay shape as above, but the journal carries an authored status
+    // patch — announcedStatus EXISTS without busy ever journaled. Idle is due
+    // only when a busy announcement stands, so this still announces nothing.
+    const stream = new MemoryStream();
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { title: "Lisbon trip" },
+      },
+      userMessage(),
+      {
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        payload: { debounceMs: 0, model: "gpt-test", requestId: "llm-request:gen-0" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        idempotencyKey: "agent/llm-request-requested@3",
+        payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: { durationMs: 10, llmRequestOffset: 4, result: { status: "success" } },
+      },
+    );
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      statusIdleDebounceMs: 0,
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(announcements(stream)).toEqual([{ title: "Lisbon trip" }]);
+    expect(agent.state.announcedStatus).toEqual({ title: "Lisbon trip" });
+  });
+
   it("folds agent-authored patches into the status record without announcing anything", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
