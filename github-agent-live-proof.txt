@@ -1,0 +1,3 @@
+This ordinary changed file deliberately violates the configured proof rule.
+
+fart
