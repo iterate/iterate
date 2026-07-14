@@ -57,6 +57,17 @@ export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
 export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
 
 /**
+ * Trailing delay before the fold's busy→idle flip is announced as a
+ * status-changed event. The fold passes through idle for one append
+ * round-trip during every hand-off (llm-request-completed lands, THEN the
+ * extracted script-execution-requested lands; script-execution-completed
+ * lands, THEN the rendered result input lands), and announcing those blips
+ * would flicker every "is thinking..." surface downstream. Busy flips
+ * announce immediately — only idle waits.
+ */
+export const DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS = 1_000;
+
+/**
  * The default codemode system prompt for web-chat agents (child agents, MCP
  * session agents, and the onboarding agent build on it). Deliberately small:
  * it teaches the ACT contract, the turn loop, the config repo (the one lever
@@ -111,11 +122,15 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // SEARCH THE PROJECT'S PAST (conversations/webhooks/files indexed):",
   '  const memory = await itx.search.query({ q: "what did we decide about deploys" });',
   "",
-  "  // TALK — and run slow work in parallel alongside (your parallel tool calling):",
-  "  const [, page] = await Promise.all([",
+  "  // TALK — set title + note the moment the topic is clear, alongside your first message:",
+  "  const [, , page] = await Promise.all([",
+  '    itx.agent.setTitle("Workers digest"),',
   '    itx.chat.sendMessage("Reading the docs now..."),',
   '    itx.browser.quickAction("markdown", { url: "https://developers.cloudflare.com/workers/" }),',
   "  ]);",
+  '  // Surfaces complete "<you> is ..." from your status — keep it fresh; ending a turn',
+  "  // waiting on a human? add blocked: true.",
+  '  await itx.agent.setStatus({ shortStatus: "summarizing docs" });',
   "",
   "  // SEARCH THE WEB; read any public repo raw:",
   '  const found = await itx.mcp.exa.web_search_exa({ query: "capnweb promise pipelining", numResults: 5 });',
@@ -130,12 +145,14 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // (several files? itx.workspace is your private overlay — readFile/writeFile/edit/glob —",
   "  //  shipped as ONE commit: await itx.workspace.git.commit({ message }))",
   "",
-  "  // DELEGATE — messaging a path births an agent there; the message must carry ALL context:",
-  "  await Promise.all([",
-  '    itx.agents.get("research-pricing").message("Deep-dive competitor pricing. Context: ..."),',
-  '    itx.agents.get("research-reviews").message("Summarize what customers say. Context: ..."),',
-  "  ]); // now END YOUR TURN — their reports arrive as your inputs; synthesize then",
-  "  // Standing agents are project infrastructure — e.g. report friction to a shared collector:",
+  "  // RESEARCH — itx.parallel and itx.mcp.exa fan out in ONE call; almost always",
+  "  // better than spawning agents. DELEGATE ultra sparingly, for a genuinely",
+  "  // separate workstream only. HARD RULE: max ONE level — if an agent delegated",
+  "  // to YOU, never delegate further (subagent trees fan out into runaway cost).",
+  "  // Messaging a path births an agent; the message must carry ALL context:",
+  '  await itx.agents.get("research-pricing").message("Deep-dive competitor pricing. Context: ...");',
+  "  // now END YOUR TURN — the report arrives as your input.",
+  "  // Standing agents are project infrastructure — e.g. a shared friction collector:",
   '  await itx.agents.get("/agents/bugs").message("docs.search returned nothing for query X");',
   "",
   "  // CONNECT AN API — MCP servers and OpenAPI specs become callable in one expression:",
@@ -293,9 +310,130 @@ const LlmRequestResult = z.discriminatedUnion("status", [
   }),
 ]);
 
+/** One busy/phase flip in the fold: the new value plus which consumed event
+ * established it (see the `status` state field). */
+const AgentStatusChange = z.object({
+  busy: z.boolean(),
+  phase: z.enum(["llm", "script"]).optional(),
+  sinceOffset: z.number().int().nonnegative(),
+  since: z.string(),
+});
+
+/**
+ * The merged agent status record: what every consumer of
+ * `agent/status-changed` patches folds. `busy`/`sinceOffset` are
+ * platform-patched (the derived busy flag and its generation guard);
+ * `title`/`note`/`shortStatus` are agent-authored via itx.agent.setStatus.
+ */
+export const AgentStatusRecord = z.object({
+  busy: z.boolean().optional(),
+  /** What the busy agent is doing right now, derived by the platform
+   * (deriveAgentPhase): an LLM request or a running script. Rides busy
+   * patches (same sinceOffset guard) and clears with idle. */
+  phase: z.enum(["llm", "script"]).optional(),
+  sinceOffset: z.number().int().nonnegative().optional(),
+  /** Agent-authored: the agent ended its turn waiting on a human (an
+   * answer, an approval, a secret). The platform clears it on the next
+   * busy flip — the human responding IS the unblock; still waiting, the
+   * agent sets it again when it ends that turn. */
+  blocked: z.boolean().optional(),
+  title: z.string().optional(),
+  note: z.string().optional(),
+  shortStatus: z.string().optional(),
+  /** A small identity mark for roster/list surfaces: a builtin name
+   * ("slack" | "github" | "email" | "telegram" | "web") or an https image
+   * URL. Integration processors stamp their builtin at birth; the agent may
+   * override via setStatus. */
+  icon: z.string().optional(),
+});
+/** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */
+export type AgentStatusRecord = z.infer<typeof AgentStatusRecord>;
+
+/**
+ * Merge one status-changed payload into a folded status record — THE fold
+ * every consumer shares (the agent's own state, the Slack painter, the
+ * project roster). Busy patches carry their sinceOffset generation guard: an
+ * older busy patch (a debounce timer's idle append that lost its race with
+ * newer work) folds to nothing. Authored fields are last-write-wins in
+ * journal order. Returns the SAME reference when nothing changed, so
+ * copy-on-write consumers keep state identity.
+ */
+export function mergeAgentStatusPatch(
+  record: AgentStatusRecord | undefined,
+  patch: AgentStatusRecord,
+): AgentStatusRecord | undefined {
+  const busyAccepted =
+    patch.busy !== undefined &&
+    patch.sinceOffset !== undefined &&
+    (record?.sinceOffset === undefined || patch.sinceOffset >= record.sinceOffset);
+  const next: AgentStatusRecord = {
+    ...record,
+    ...(busyAccepted ? { busy: patch.busy, sinceOffset: patch.sinceOffset } : {}),
+    ...(patch.blocked === undefined ? {} : { blocked: patch.blocked }),
+    ...(patch.title === undefined ? {} : { title: patch.title }),
+    ...(patch.note === undefined ? {} : { note: patch.note }),
+    ...(patch.shortStatus === undefined ? {} : { shortStatus: patch.shortStatus }),
+    ...(patch.icon === undefined ? {} : { icon: patch.icon }),
+  };
+  // The phase belongs to the accepted busy value: an idle patch (or a busy
+  // patch without one) clears it rather than leaving a stale "running a
+  // script" against fresher busy truth.
+  if (busyAccepted) {
+    if (patch.phase === undefined) delete next.phase;
+    else next.phase = patch.phase;
+  }
+  if (record !== undefined && agentStatusRecordsEqual(record, next)) return record;
+  if (record === undefined && Object.keys(next).length === 0) return undefined;
+  return next;
+}
+
+function agentStatusRecordsEqual(a: AgentStatusRecord, b: AgentStatusRecord): boolean {
+  return (
+    a.busy === b.busy &&
+    a.phase === b.phase &&
+    a.sinceOffset === b.sinceOffset &&
+    a.blocked === b.blocked &&
+    a.title === b.title &&
+    a.note === b.note &&
+    a.shortStatus === b.shortStatus &&
+    a.icon === b.icon
+  );
+}
+
+/**
+ * Derives whether the agent is busy from folded state. Busy means the loop
+ * OWES something: a queued trigger, a scheduled or in-flight LLM request, or
+ * a script still running. The derivation is continuous across a whole
+ * multi-turn run except for gaps one append wide (llm-request-completed →
+ * the extracted script request; script-completed → the rendered result input
+ * that re-queues the loop) — which is exactly what the idle announcement
+ * debounce papers over.
+ */
+/** What a busy agent is doing right now: a running script wins over the LLM
+ * lifecycle around it. Only meaningful while deriveAgentBusy is true. */
+export function deriveAgentPhase(
+  state: Pick<AgentProcessorState, "activeScriptExecutionIds">,
+): "llm" | "script" {
+  return state.activeScriptExecutionIds.length > 0 ? "script" : "llm";
+}
+
+export function deriveAgentBusy(
+  state: Pick<
+    AgentProcessorState,
+    "activeScriptExecutionIds" | "currentRequest" | "llmRequests" | "pendingTriggerOffset"
+  >,
+): boolean {
+  return (
+    state.activeScriptExecutionIds.length > 0 ||
+    state.currentRequest !== null ||
+    state.pendingTriggerOffset !== null ||
+    Object.keys(state.llmRequests).length > 0
+  );
+}
+
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "0.8.0",
+  version: "0.9.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z.object({
@@ -374,6 +512,32 @@ export const AgentProcessorContract = defineProcessorContract({
         }),
       )
       .default({}),
+    /**
+     * Scripts the agent's turns spawned that have not completed, folded from
+     * the capability host's request/completed lifecycle on this stream. The
+     * script OBLIGATION (code, expiry, recovery) belongs to the capability
+     * host processor; this fold exists so the agent's busy derivation
+     * (deriveAgentBusy) covers script execution too.
+     */
+    activeScriptExecutionIds: z.array(z.string()).default([]),
+    /**
+     * When the derived busy flag (deriveAgentBusy) last flipped: the consumed
+     * event that flipped it, by offset (the announcement's generation guard
+     * and idempotency key) and createdAt (the idle announcement debounce
+     * counts from it). The stored busy always equals the derived value —
+     * kept so the fold can stamp flips without re-deriving the previous
+     * value.
+     */
+    status: AgentStatusChange.optional(),
+    /**
+     * The merged status record as journaled, folded from the agent's own
+     * status-changed patches (mergeAgentStatusPatch): the platform's busy
+     * announcements plus the agent-authored title/note/shortStatus. The
+     * reconciler compares its busy against the derived flag and announces
+     * the difference; equality there is what makes the announcement loop
+     * terminate.
+     */
+    announcedStatus: AgentStatusRecord.optional(),
     /**
      * Lifetime token totals, folded from token-usage-reported. Cost/observability
      * data, not loop-control state: nothing in the agent loop branches on it.
@@ -788,6 +952,80 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
     },
+    "events.iterate.com/agent/status-changed": {
+      description:
+        "A patch to the agent's status record, for surfaces that show the agent (Slack assistant " +
+        "status, typing indicators, the project's agents roster). Consumers fold these by MERGING " +
+        "each payload into their status record. Two writers: the PLATFORM patches the derived " +
+        "busy flag (deriveAgentBusy — busy flips announce immediately; the busy→idle flip only " +
+        "after a trailing debounce, so the one-append gaps inside a turn hand-off never surface " +
+        "as flicker), and the AGENT patches its own title / note / shortStatus via " +
+        "itx.agent.setStatus. sinceOffset rides every busy patch as its generation guard: every " +
+        "fold consuming these MUST ignore a busy patch whose sinceOffset is below the last " +
+        "accepted one — that is the whole correctness story for a debounce timer whose idle " +
+        "append lost the race with newer work. Authored fields have no guard; journal order is " +
+        "their last-write-wins.",
+      payloadSchema: z.object({
+        /** The derived busy flag; platform-patched, always paired with sinceOffset. */
+        busy: z.boolean().optional(),
+        /** What the busy agent is doing (platform-derived): an LLM request or
+         * a running script. Rides busy patches; absent on idle. */
+        phase: z.enum(["llm", "script"]).optional(),
+        /** Offset of the consumed event that established the busy value — the
+         * announcement's generation guard. Present exactly when `busy` is. */
+        sinceOffset: z.number().int().nonnegative().optional(),
+        /** The agent ended its turn waiting on a human. Agent-authored via
+         * setStatus; the platform patches it false on the next busy flip. */
+        blocked: z.boolean().optional(),
+        /** Agent-authored display name for this agent/conversation. */
+        title: z.string().optional(),
+        /** Agent-authored one-or-two-sentence description of what this agent
+         * is (for) or is working on. */
+        note: z.string().optional(),
+        /** Agent-authored fragment completing the sentence "<agent> is …",
+         * e.g. "booking your flight to Lisbon". Painted verbatim into thread
+         * statuses while the agent is busy. */
+        shortStatus: z.string().optional(),
+        /** A builtin icon name (slack | github | email | telegram | web) or
+         * an https image URL, shown on roster/list surfaces. */
+        icon: z.string().optional(),
+      }),
+      examples: [
+        {
+          description: "A user message queued a turn; the agent is making an LLM request.",
+          payload: { busy: true, phase: "llm", sinceOffset: 57 },
+        },
+        {
+          description: "The turn's response carried a script, now executing.",
+          payload: { busy: true, phase: "script", sinceOffset: 61 },
+        },
+        {
+          description: "The agent ended its turn waiting on the user (and said so in shortStatus).",
+          payload: { blocked: true, shortStatus: "waiting for your Acme API key" },
+        },
+        {
+          description: "The Slack thread processor stamped the thread's identity at birth.",
+          payload: {
+            icon: "slack",
+            title: "#trip-planning",
+            note: "Slack thread in #trip-planning",
+          },
+        },
+        {
+          description: "The agent set its title and described its current work mid-script.",
+          payload: {
+            title: "Lisbon trip planning",
+            note: "Helping Jane plan a 3-day Lisbon trip in September.",
+            shortStatus: "comparing flight prices",
+          },
+        },
+        {
+          description:
+            "The final turn completed with nothing queued, and the idle debounce elapsed.",
+          payload: { busy: false, sinceOffset: 64 },
+        },
+      ],
+    },
   },
   processorDeps: [CapabilityHostProcessorContract, CoreProcessorContract],
   consumes: [
@@ -806,6 +1044,8 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/history-reset",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
+    "events.iterate.com/agent/status-changed",
+    "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
   ],
   emits: [
@@ -821,6 +1061,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
+    "events.iterate.com/agent/status-changed",
     "events.iterate.com/capability-host/script-execution-requested",
   ],
 });

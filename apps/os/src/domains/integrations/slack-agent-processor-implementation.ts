@@ -14,19 +14,24 @@
 // - The Slack calls themselves are acknowledgement/cosmetic lanes and must be
 //   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
 //   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
-//   status is repainted once per at-head batch from the latest lifecycle fact
-//   instead of once per event.
+//   status is repainted once per at-head batch from the latest announced
+//   status instead of once per event.
 //
-// Adaptation from legacy: the itx agent contract has no
-// `agent/status-updated` event. The Slack "is thinking..." status now keys off
-// the agent's own LLM request lifecycle (`llm-request-requested` /
-// `llm-request-completed`), and "is using tools..." off the itx script
-// execution journal, which is what those statuses meant downstream anyway.
+// The "is thinking..." status is a pure PAINT of the agent processor's own
+// `agent/status-changed` announcements. The agent owns the busy/idle
+// derivation (LLM lifecycle, running scripts, queued triggers) AND the
+// trailing idle debounce, so this processor keeps no lifecycle fold and no
+// clear obligation of its own — busy paints the status, idle clears it, and
+// the announcement's sinceOffset guard (see the event's contract) keeps a
+// stale idle from overwriting newer work.
 
 import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
+import {
+  mergeAgentStatusPatch,
+  type AgentFileAttachment,
+} from "../agents/agent-processor-contract.ts";
 import {
   readRecord,
   readString,
@@ -41,36 +46,15 @@ import {
 /** One file shared on a Slack message, as the webhook carries it. */
 type SlackSharedFile = { mimetype?: string; name?: string; urlPrivate: string };
 
-/** Open (or supersede) the clear obligation exactly when the folded work set
- * becomes idle. The completion event's offset is its stable generation. */
-function statusClearState(input: {
-  event: { createdAt: string; offset: number };
-  state: SlackAgentProcessorState;
-}): SlackAgentProcessorState {
-  const idle =
-    input.state.activeLlmRequestOffsets.length === 0 &&
-    input.state.activeScriptExecutionIds.length === 0;
-  return {
-    ...input.state,
-    pendingStatusClear: idle
-      ? {
-          due: false,
-          latestMessageTs: input.state.latestMessageTs,
-          requestedAt: input.event.createdAt,
-          triggerOffset: input.event.offset,
-        }
-      : undefined,
-  };
-}
-
 export class SlackAgentProcessor extends StreamProcessor<
   SlackAgentProcessorContract,
   {
     callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
+    /** Resolves a channel id to its display name (conversations.info) for the
+     * birth identity patch; null on any failure — the id then stands in. */
+    fetchSlackChannelName?(channel: string): Promise<string | null>;
     /** Injectable clock for the acknowledgement freshness gates. */
     now?: () => number;
-    /** Trailing delay before clearing an idle assistant status. */
-    statusClearDebounceMs?: number;
     /** Downloads Slack-shared files into project file storage (see
      * storeSlackFilesForAgent in slack-api.ts). `storageKey` is stable per
      * webhook event so replays overwrite instead of duplicating. */
@@ -89,63 +73,14 @@ export class SlackAgentProcessor extends StreamProcessor<
     StreamProcessor<SlackAgentProcessorContract>["reduce"]
   >[0]): SlackAgentProcessorState {
     switch (event.type) {
-      case "events.iterate.com/agent/llm-request-requested":
-        return {
-          ...state,
-          activeLlmRequestOffsets: [...state.activeLlmRequestOffsets, event.offset],
-          pendingStatusClear: undefined,
-        };
-      case "events.iterate.com/agent/llm-request-completed":
-        return statusClearState({
-          event,
-          state: {
-            ...state,
-            activeLlmRequestOffsets: state.activeLlmRequestOffsets.filter(
-              (offset) => offset !== event.payload.llmRequestOffset,
-            ),
-          },
-        });
-      case "events.iterate.com/agent/llm-request-cancelled": {
-        if (event.payload.phase !== "requested") return state;
-        const cancelledRequestOffset = event.payload.llmRequestOffset;
-        return statusClearState({
-          event,
-          state: {
-            ...state,
-            activeLlmRequestOffsets: state.activeLlmRequestOffsets.filter(
-              (offset) => offset !== cancelledRequestOffset,
-            ),
-          },
-        });
+      case "events.iterate.com/agent/status-changed": {
+        // The contract's shared merge fold: busy patches carry their
+        // sinceOffset guard, authored title/note/shortStatus patches are
+        // last-write-wins.
+        const status = mergeAgentStatusPatch(state.status, event.payload);
+        if (status === state.status) return state;
+        return { ...state, ...(status === undefined ? {} : { status }) };
       }
-      case "events.iterate.com/capability-host/script-execution-requested":
-        return {
-          ...state,
-          activeScriptExecutionIds: state.activeScriptExecutionIds.includes(
-            event.payload.executionId,
-          )
-            ? state.activeScriptExecutionIds
-            : [...state.activeScriptExecutionIds, event.payload.executionId],
-          pendingStatusClear: undefined,
-        };
-      case "events.iterate.com/capability-host/script-execution-completed":
-        return statusClearState({
-          event,
-          state: {
-            ...state,
-            activeScriptExecutionIds: state.activeScriptExecutionIds.filter(
-              (executionId) => executionId !== event.payload.executionId,
-            ),
-          },
-        });
-      case "events.iterate.com/slack-agent/status-clear-due":
-        return state.pendingStatusClear?.triggerOffset === event.payload.triggerOffset
-          ? { ...state, pendingStatusClear: { ...state.pendingStatusClear, due: true } }
-          : state;
-      case "events.iterate.com/slack-agent/status-clear-completed":
-        return state.pendingStatusClear?.triggerOffset === event.payload.triggerOffset
-          ? { ...state, pendingStatusClear: undefined }
-          : state;
       case "events.iterate.com/slack/thread-route-configured":
         return {
           ...state,
@@ -179,9 +114,27 @@ export class SlackAgentProcessor extends StreamProcessor<
     state,
   }: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
-      case "events.iterate.com/slack/thread-route-configured":
-        // Route context (channel/thread_ts/streamPath) is captured in reduce().
+      case "events.iterate.com/slack/thread-route-configured": {
+        // Route context (channel/thread_ts/streamPath) is captured in
+        // reduce(). The route additionally stamps the thread's roster
+        // identity ONCE: the slack icon and a "#channel" title/note (the
+        // agent's own setStatus patches win later by journal order).
+        const channel = event.payload.channel;
+        blockProcessorWhile(async () => {
+          const name = (await this.deps.fetchSlackChannelName?.(channel).catch(() => null)) ?? null;
+          const label = name === null ? channel : `#${name}`;
+          await append({
+            type: "events.iterate.com/agent/status-changed",
+            idempotencyKey: this.idempotencyKey("status-identity"),
+            payload: {
+              icon: "slack",
+              title: `${label} thread`,
+              note: `Slack thread in ${label}`,
+            },
+          });
+        });
         return;
+      }
       case "events.iterate.com/slack/webhook-received": {
         // The webhook transcribes into the unified inbound message event —
         // Slack messages are messages FROM a user, `from` carries the facts.
@@ -295,147 +248,123 @@ export class SlackAgentProcessor extends StreamProcessor<
         });
         return;
       }
-      // LLM/script lifecycle facts drive the assistant status, which is
-      // repainted once per batch in processEventBatch — nothing per event.
+      // Status announcements drive the assistant status, which is repainted
+      // once per batch in processEventBatch — nothing per event.
       default:
         return;
     }
   }
 
-  /** Latest lifecycle fact deferred until an at-head repaint. */
-  #unpaintedLifecycleFact: { createdAt: string; type: string } | undefined;
-  #statusClearAttempt:
-    | {
-        cancel(): void;
-        triggerOffset: number;
-      }
-    | undefined;
+  /** Latest status announcement deferred until an at-head repaint. */
+  #unpaintedStatusFact: { createdAt: string; type: string } | undefined;
+  /** Whether THIS incarnation painted a busy status: a stale idle
+   * announcement must still clear what we ourselves put up, while a refold
+   * (fresh instance, all facts stale) must repaint nothing at all. */
+  #paintedBusyStatus = false;
+  /** The title this incarnation painted, so repeated repaints of an unchanged
+   * title cost no Slack calls. */
+  #paintedTitle: string | undefined;
 
   /**
-   * Repaint from folded active work, matching the web UI. An LLM completion
-   * must not clear Slack while a script is running, and idle clears trail
-   * briefly so LLM → script → LLM hand-offs do not flicker.
+   * Paint the agent's announced status onto the assistant thread, once per
+   * at-head batch (never per event, so a refold cannot replay historical
+   * flips). Both directions are freshness-gated like every other
+   * acknowledgement — a refold's months-old announcements must not burst
+   * Slack calls across every historical thread — with one exception: a stale
+   * idle still clears a busy status this incarnation painted.
    */
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
     const latest =
-      args.reducedEvents.findLast(({ event }) => slackAgentStatusForEvent(event) != null)?.event ??
-      this.#unpaintedLifecycleFact;
+      args.reducedEvents.findLast(
+        ({ event }) => event.type === "events.iterate.com/agent/status-changed",
+      )?.event ?? this.#unpaintedStatusFact;
     if (args.checkpointOffset < args.streamMaxOffset) {
-      this.#unpaintedLifecycleFact = latest;
+      this.#unpaintedStatusFact = latest;
       return;
     }
-    this.#unpaintedLifecycleFact = undefined;
-    const { channel, threadTs } = args.state;
-    const hasScripts = args.state.activeScriptExecutionIds.length > 0;
-    const hasLlm = args.state.activeLlmRequestOffsets.length > 0;
+    this.#unpaintedStatusFact = undefined;
+    if (latest == null) return;
+    const { channel, latestMessageTs, status, threadTs } = args.state;
+    if (channel == null || threadTs == null) return;
+    const fresh = webhookAckIsFresh(latest, (this.deps.now ?? Date.now)());
 
-    if (hasScripts || hasLlm) {
-      this.#cancelStatusClear();
-      if (
-        latest == null ||
-        !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)()) ||
-        channel == null ||
-        threadTs == null
-      ) {
-        return;
-      }
-      const status = hasScripts
-        ? { status: "is using tools...", loading_messages: ["Using tools..."] }
-        : { status: "is thinking...", loading_messages: ["Thinking..."] };
-      args.blockProcessorWhile(() =>
-        this.#callSlackApi("assistant.threads.setStatus", {
+    // The agent-authored title paints whenever the folded title differs from
+    // what this incarnation painted — freshness-gated with everything else,
+    // so a refold never replays historical renames. The painted-title record
+    // is written only AFTER the call succeeds: a rejected call fails the
+    // batch, and the redelivered batch must retry the rename instead of
+    // seeing it as already painted.
+    const title = args.state.status?.title;
+    if (fresh && title !== undefined && title !== this.#paintedTitle) {
+      args.blockProcessorWhile(async () => {
+        await this.#callSlackApi("assistant.threads.setTitle", {
           channel_id: channel,
           thread_ts: threadTs,
-          ...status,
-        }),
-      );
-    }
-  }
-
-  /**
-   * The fold owns the desired clear until a completion fact closes it. A
-   * delayed attempt may disappear with an isolate; the host's revival pass
-   * calls this reconciler in a fresh incarnation and re-derives it.
-   */
-  protected override async reconcile(
-    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["reconcile"]>[0],
-  ): Promise<void> {
-    const pending = args.state.pendingStatusClear;
-    if (pending == null) {
-      this.#cancelStatusClear();
-      return;
-    }
-    const { channel, threadTs } = args.state;
-    const target =
-      channel == null || threadTs == null
-        ? null
-        : { channel, latestMessageTs: pending.latestMessageTs, threadTs };
-    const complete = async () => {
-      if (target != null) await this.#clearStatus(target);
-      await args.append({
-        type: "events.iterate.com/slack-agent/status-clear-completed",
-        idempotencyKey: this.idempotencyKey(`status-clear-completed@${pending.triggerOffset}`),
-        payload: { triggerOffset: pending.triggerOffset },
+          title,
+        });
+        this.#paintedTitle = title;
       });
-    };
-    if (pending.due) {
-      this.#cancelStatusClear();
-      args.blockProcessorWhile(complete);
-      return;
     }
 
-    if (this.#statusClearAttempt?.triggerOffset === pending.triggerOffset) return;
-    this.#cancelStatusClear();
-    const dueAt = Date.parse(pending.requestedAt) + (this.deps.statusClearDebounceMs ?? 1_000);
-    const delay = Math.max(0, dueAt - (this.deps.now ?? Date.now)());
-    if (delay === 0) {
-      args.blockProcessorWhile(complete);
-      return;
-    }
-
-    const markDue = async () => {
-      await args.append({
-        type: "events.iterate.com/slack-agent/status-clear-due",
-        idempotencyKey: this.idempotencyKey(`status-clear-due@${pending.triggerOffset}`),
-        payload: { triggerOffset: pending.triggerOffset },
+    if (status?.busy) {
+      if (!fresh) return;
+      // The agent's own words win; otherwise the platform-derived phase says
+      // what it is doing ("making an LLM request" / "running a script").
+      const text =
+        status.shortStatus ??
+        (status.phase === "script" ? "running a script" : "making an LLM request");
+      args.blockProcessorWhile(async () => {
+        await this.#callSlackApi("assistant.threads.setStatus", {
+          channel_id: channel,
+          thread_ts: threadTs,
+          status: `is ${text}...`,
+          loading_messages: [`${text}...`],
+        });
+        this.#paintedBusyStatus = true;
       });
-    };
-
-    let settleWait!: (run: boolean) => void;
-    let settled = false;
-    const wait = new Promise<boolean>((resolve) => {
-      settleWait = resolve;
+      return;
+    }
+    // Only an EXPLICIT idle clears. An authored-only record (title/note/
+    // shortStatus with busy never announced) says nothing about work, and
+    // clearing on it would strip the 👀 ack for a message the agent has not
+    // even picked up yet.
+    if (status?.busy !== false) return;
+    // A blocked turn ended WAITING on the human: say so instead of going
+    // quiet. The 👀 still comes off — the message was handled — and the
+    // next busy flip (the platform clears `blocked` in it) repaints.
+    if (status.blocked === true) {
+      if (!fresh && !this.#paintedBusyStatus) return;
+      const text = status.shortStatus ?? "waiting for input";
+      args.blockProcessorWhile(async () => {
+        await this.#callSlackApi("assistant.threads.setStatus", {
+          channel_id: channel,
+          thread_ts: threadTs,
+          status: `is ${text}...`,
+          loading_messages: [`${text}...`],
+        });
+        if (latestMessageTs != null) {
+          await this.#callSlackApi("reactions.remove", {
+            channel,
+            name: "eyes",
+            timestamp: latestMessageTs,
+          });
+        }
+        this.#paintedBusyStatus = true;
+      });
+      return;
+    }
+    if (!fresh && !this.#paintedBusyStatus) return;
+    args.blockProcessorWhile(async () => {
+      await this.#clearStatus({
+        channel,
+        ...(latestMessageTs == null ? {} : { latestMessageTs }),
+        threadTs,
+      });
+      this.#paintedBusyStatus = false;
     });
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      settleWait(true);
-    }, delay);
-    const attempt = {
-      triggerOffset: pending.triggerOffset,
-      cancel: () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        settleWait(false);
-      },
-    };
-    this.#statusClearAttempt = attempt;
-    args.runInBackground(async () => {
-      try {
-        if (await wait) await markDue();
-      } finally {
-        if (this.#statusClearAttempt === attempt) this.#statusClearAttempt = undefined;
-      }
-    });
-  }
-
-  #cancelStatusClear() {
-    this.#statusClearAttempt?.cancel();
-    this.#statusClearAttempt = undefined;
   }
 
   async #clearStatus(target: { channel: string; latestMessageTs?: string; threadTs: string }) {
@@ -818,29 +747,4 @@ export function eyesReactionTargetFromWebhookPayload(
   const botUserId = botUserIdFromPayload(payload);
   if (eventUserId != null && botUserId != null && eventUserId === botUserId) return null;
   return { channel: target.channel, timestamp: target.messageTs };
-}
-
-function slackAgentStatusForEvent(event: { type: string }): {
-  clear: boolean;
-  status: { loading_messages?: string[]; status: string };
-} | null {
-  switch (event.type) {
-    case "events.iterate.com/agent/llm-request-requested":
-      return {
-        clear: false,
-        status: { status: "is thinking...", loading_messages: ["Thinking..."] },
-      };
-    case "events.iterate.com/agent/llm-request-completed":
-    case "events.iterate.com/agent/llm-request-cancelled":
-      return { clear: true, status: { status: "" } };
-    case "events.iterate.com/capability-host/script-execution-requested":
-      return {
-        clear: false,
-        status: { status: "is using tools...", loading_messages: ["Using tools..."] },
-      };
-    case "events.iterate.com/capability-host/script-execution-completed":
-      return { clear: true, status: { status: "" } };
-    default:
-      return null;
-  }
 }

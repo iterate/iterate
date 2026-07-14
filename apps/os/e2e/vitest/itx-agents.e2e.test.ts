@@ -10,6 +10,61 @@ import {
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // These are hand written tests - they MUST pass
+test("Agent scripts update their own status record via itx.agent.setStatus", async () => {
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+
+  using project = itx.projects.create({ slug: "agent-set-status" });
+  const agentPath = `/agents/set-status-${crypto.randomUUID()}`;
+  using agent = project.agents.get(agentPath);
+
+  const statusPatch = agent.stream.waitForEvent({
+    eventTypes: ["events.iterate.com/agent/status-changed"],
+    predicate: (event) =>
+      (event.payload as { title?: string } | undefined)?.title === "Lisbon trip",
+    timeoutMs: 30_000,
+  });
+
+  await agent.stream.append({
+    type: AGENT_OUTPUT_ADDED_TYPE,
+    payload: {
+      content: fencedAgentScript(`
+        async (itx) => {
+          await itx.agent.setStatus({
+            title: "Lisbon trip",
+            note: "Planning a 3-day Lisbon trip.",
+            shortStatus: "comparing flights",
+          });
+        }
+      `),
+    },
+  });
+
+  expect(await statusPatch).toMatchObject({
+    type: "events.iterate.com/agent/status-changed",
+    payload: {
+      title: "Lisbon trip",
+      note: "Planning a 3-day Lisbon trip.",
+      shortStatus: "comparing flights",
+    },
+  });
+
+  // The merged record lands in the agent's reduced state (announcedStatus),
+  // which is what the project roster and every painter read.
+  await waitForCondition(
+    async () => {
+      const snapshot = await agent.processor.snapshot();
+      const announced = (snapshot.state as { announcedStatus?: { title?: string } })
+        .announcedStatus;
+      return announced?.title === "Lisbon trip";
+    },
+    { description: "announcedStatus.title folded into agent state", timeoutMs: 30_000 },
+  );
+});
+
 test("Agent scripts can send web-chat messages (with file attachments) and call project tools", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
