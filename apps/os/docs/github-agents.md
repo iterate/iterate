@@ -235,8 +235,20 @@ is a user-style view and may show every flag false even when the installation
 can write; attempt the requested operation and report GitHub's actual error.
 
 For code work, the agent fetches the live PR and uses the route prompt's exact
-`GH_TOKEN` recipe to bind a sandbox to that installation. The recipe is shared
-with sandbox provisioning and configures Git smart HTTP as Basic
+plural sandbox API recipe:
+
+```ts
+const { path } = await itx.sandboxes.create({
+  name: `github-pr-${pullNumber}-${Date.now()}`,
+  instanceType: "basic",
+});
+const sandbox = await itx.sandboxes.get(path);
+```
+
+There is no singular `itx.sandbox`. The stock image includes Ubuntu, Node, Bun,
+git, curl, and jq; agents must not assume Python or other tools are installed.
+The route's `GH_TOKEN` recipe then binds the sandbox to that installation. It is
+shared with sandbox provisioning and configures Git smart HTTP as Basic
 `x-access-token:<installation-token>` auth; GitHub rejects API-style Bearer auth
 on that endpoint. It clones the head repository/ref, edits and tests, commits,
 and non-force pushes the exact head branch. `itx.repo` and `itx.workspace`
