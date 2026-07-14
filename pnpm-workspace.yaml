@@ -11,7 +11,6 @@ catalogs:
   cloudflare:
     '@cloudflare/unenv-preset': ^2.16.0
     '@cloudflare/vite-plugin': 1.43.0
-    '@cloudflare/vitest-pool-workers': ^0.14.9
     '@cloudflare/workers-types': ^4.20260621.1
     miniflare: 4.20260701.0
     workerd: 1.20260701.0
@@ -30,7 +29,6 @@ minimumReleaseAgeExclude:
   - '@cloudflare/workerd-windows-64'
   - '@cloudflare/unenv-preset'
   - '@cloudflare/vite-plugin'
-  - '@cloudflare/vitest-pool-workers'
   - '@cloudflare/worker-bundler'
   - '@cloudflare/workers-types'
   - '@mmkal/jsonata'

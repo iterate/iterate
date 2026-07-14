@@ -48,7 +48,3 @@ export function createAdminOsItx(input?: { baseUrl?: string; context?: string })
     ? connectItx({ auth, baseUrl, projectId: input.context })
     : connectItx({ auth, baseUrl });
 }
-
-export function uniqueSuffix() {
-  return `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-}

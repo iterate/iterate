@@ -14,6 +14,7 @@
     "./apps/internal-router-contract": "./src/apps/internal-router-contract.ts",
     "./test-support/vitest-e2e": "./src/test-support/vitest-e2e/index.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",
+    "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
     "./request-logging": "./src/request-logging.ts",
     "./slugify": "./src/slugify.ts",
     "./posthog": {
