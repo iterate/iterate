@@ -312,11 +312,63 @@ const AgentStatusChange = z.object({
   since: z.string(),
 });
 
-/** The last accepted status announcement (see the `announcedStatus` state field). */
-const AnnouncedAgentStatus = z.object({
-  busy: z.boolean(),
-  sinceOffset: z.number().int().nonnegative(),
+/**
+ * The merged agent status record: what every consumer of
+ * `agent/status-changed` patches folds. `busy`/`sinceOffset` are
+ * platform-patched (the derived busy flag and its generation guard);
+ * `title`/`note`/`shortStatus` are agent-authored via itx.agent.setStatus.
+ */
+export const AgentStatusRecord = z.object({
+  busy: z.boolean().optional(),
+  sinceOffset: z.number().int().nonnegative().optional(),
+  title: z.string().optional(),
+  note: z.string().optional(),
+  shortStatus: z.string().optional(),
 });
+/** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */
+export type AgentStatusRecord = z.infer<typeof AgentStatusRecord>;
+
+/** One status-changed payload, as consumers receive it. */
+export type AgentStatusPatch = AgentStatusRecord;
+
+/**
+ * Merge one status-changed payload into a folded status record — THE fold
+ * every consumer shares (the agent's own state, the Slack painter, the
+ * project roster). Busy patches carry their sinceOffset generation guard: an
+ * older busy patch (a debounce timer's idle append that lost its race with
+ * newer work) folds to nothing. Authored fields are last-write-wins in
+ * journal order. Returns the SAME reference when nothing changed, so
+ * copy-on-write consumers keep state identity.
+ */
+export function mergeAgentStatusPatch(
+  record: AgentStatusRecord | undefined,
+  patch: AgentStatusPatch,
+): AgentStatusRecord | undefined {
+  const busyAccepted =
+    patch.busy !== undefined &&
+    patch.sinceOffset !== undefined &&
+    (record?.sinceOffset === undefined || patch.sinceOffset >= record.sinceOffset);
+  const next: AgentStatusRecord = {
+    ...record,
+    ...(busyAccepted ? { busy: patch.busy, sinceOffset: patch.sinceOffset } : {}),
+    ...(patch.title === undefined ? {} : { title: patch.title }),
+    ...(patch.note === undefined ? {} : { note: patch.note }),
+    ...(patch.shortStatus === undefined ? {} : { shortStatus: patch.shortStatus }),
+  };
+  if (record !== undefined && agentStatusRecordsEqual(record, next)) return record;
+  if (record === undefined && Object.keys(next).length === 0) return undefined;
+  return next;
+}
+
+function agentStatusRecordsEqual(a: AgentStatusRecord, b: AgentStatusRecord): boolean {
+  return (
+    a.busy === b.busy &&
+    a.sinceOffset === b.sinceOffset &&
+    a.title === b.title &&
+    a.note === b.note &&
+    a.shortStatus === b.shortStatus
+  );
+}
 
 /**
  * Derives whether the agent is busy from folded state. Busy means the loop
@@ -440,12 +492,14 @@ export const AgentProcessorContract = defineProcessorContract({
      */
     status: AgentStatusChange.optional(),
     /**
-     * The last status announcement accepted into the journal, folded from
-     * the agent's own status-changed events. The reconciler compares it
-     * against the derived busy flag and announces the difference; equality
-     * here is what makes the announcement loop terminate.
+     * The merged status record as journaled, folded from the agent's own
+     * status-changed patches (mergeAgentStatusPatch): the platform's busy
+     * announcements plus the agent-authored title/note/shortStatus. The
+     * reconciler compares its busy against the derived flag and announces
+     * the difference; equality there is what makes the announcement loop
+     * terminate.
      */
-    announcedStatus: AnnouncedAgentStatus.optional(),
+    announcedStatus: AgentStatusRecord.optional(),
     /**
      * Lifetime token totals, folded from token-usage-reported. Cost/observability
      * data, not loop-control state: nothing in the agent loop branches on it.
@@ -862,27 +916,45 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/status-changed": {
       description:
-        "The agent's status changed — today the derived busy flag (deriveAgentBusy), for surfaces " +
-        "that show the agent as working (Slack assistant status, typing indicators, the agents " +
-        "list). Consumers fold these by MERGING each payload into their status record, so " +
-        "agent-authored fields (title, note, shortStatus) can join as optional patch fields " +
-        "without a contract break. Busy flips announce immediately; the busy→idle flip is " +
-        "announced only after a trailing debounce, so the one-append gaps inside a turn hand-off " +
-        "(LLM completion → script request, script completion → rendered result) never surface as " +
-        "flicker. sinceOffset is the lifecycle event that established the busy value; every fold " +
-        "consuming these MUST ignore a busy patch whose sinceOffset is below the last accepted " +
-        "one — that is the whole correctness story for a debounce timer whose idle append lost " +
-        "the race with newer work.",
+        "A patch to the agent's status record, for surfaces that show the agent (Slack assistant " +
+        "status, typing indicators, the project's agents roster). Consumers fold these by MERGING " +
+        "each payload into their status record. Two writers: the PLATFORM patches the derived " +
+        "busy flag (deriveAgentBusy — busy flips announce immediately; the busy→idle flip only " +
+        "after a trailing debounce, so the one-append gaps inside a turn hand-off never surface " +
+        "as flicker), and the AGENT patches its own title / note / shortStatus via " +
+        "itx.agent.setStatus. sinceOffset rides every busy patch as its generation guard: every " +
+        "fold consuming these MUST ignore a busy patch whose sinceOffset is below the last " +
+        "accepted one — that is the whole correctness story for a debounce timer whose idle " +
+        "append lost the race with newer work. Authored fields have no guard; journal order is " +
+        "their last-write-wins.",
       payloadSchema: z.object({
-        busy: z.boolean(),
+        /** The derived busy flag; platform-patched, always paired with sinceOffset. */
+        busy: z.boolean().optional(),
         /** Offset of the consumed event that established the busy value — the
-         * announcement's generation guard. */
-        sinceOffset: z.number().int().nonnegative(),
+         * announcement's generation guard. Present exactly when `busy` is. */
+        sinceOffset: z.number().int().nonnegative().optional(),
+        /** Agent-authored display name for this agent/conversation. */
+        title: z.string().optional(),
+        /** Agent-authored one-or-two-sentence description of what this agent
+         * is (for) or is working on. */
+        note: z.string().optional(),
+        /** Agent-authored fragment completing the sentence "<agent> is …",
+         * e.g. "booking your flight to Lisbon". Painted verbatim into thread
+         * statuses while the agent is busy. */
+        shortStatus: z.string().optional(),
       }),
       examples: [
         {
           description: "A user message queued a turn; the agent is working.",
           payload: { busy: true, sinceOffset: 57 },
+        },
+        {
+          description: "The agent set its title and described its current work mid-script.",
+          payload: {
+            title: "Lisbon trip planning",
+            note: "Helping Jane plan a 3-day Lisbon trip in September.",
+            shortStatus: "comparing flight prices",
+          },
         },
         {
           description:

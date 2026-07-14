@@ -65,6 +65,7 @@ import {
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
+import { SidebarRecentAgents } from "./agent-roster.tsx";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
@@ -90,6 +91,10 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
   // Missing projects (auth knows them, this deployment's engine does not) are
   // not navigable — the /projects page owns setting them up.
   const projects = data?.filter((project) => project.deploymentStatus !== "missing") ?? [];
+  // The agents roster subscribes per project (same `address` lane as ⌘K), so
+  // it only mounts once a project route resolves the active project.
+  const matches = useMatches();
+  const activeProject = getActiveRouteProject(matches);
 
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
@@ -107,6 +112,9 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
         <AppSidebarNav routeConfig={routeConfig} />
       </SidebarContent>
       <SidebarFooter>
+        {activeProject === null ? null : (
+          <SidebarRecentAgents projectId={activeProject.id} projectSlug={activeProject.slug} />
+        )}
         <AppSidebarCollapseButton />
         <AppSidebarUser />
       </SidebarFooter>

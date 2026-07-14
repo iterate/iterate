@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import { AgentProcessorContract, AgentStatusRecord } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 
@@ -28,17 +28,13 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
     /**
-     * The agent's last accepted status announcement — what the assistant
-     * status should show. Folded from agent/status-changed with the
-     * contract's sinceOffset guard (an older announcement never overwrites a
-     * newer one, whatever order they landed in).
+     * The agent's merged status record — what the assistant thread should
+     * show. Folded from agent/status-changed patches with the contract's
+     * shared merge (mergeAgentStatusPatch): busy patches are
+     * sinceOffset-guarded, authored title/note/shortStatus are
+     * last-write-wins.
      */
-    status: z
-      .object({
-        busy: z.boolean(),
-        sinceOffset: z.number().int().nonnegative(),
-      })
-      .optional(),
+    status: AgentStatusRecord.optional(),
     botBotId: z.string().optional(),
     botUserId: z.string().optional(),
     channel: z.string().optional(),

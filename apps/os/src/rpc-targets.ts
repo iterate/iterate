@@ -292,6 +292,7 @@ import type { AgentProcessorState } from "./domains/agents/agent-processor-contr
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
+import type { AgentStatusTouchInput } from "./domains/projects/agent-status-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type {
@@ -4045,6 +4046,41 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
+   * Update this agent's status record — the title, note, and shortStatus that
+   * project surfaces (the agents list, the Slack thread status) show for it.
+   * A MERGE: only the fields you pass change; the platform patches the
+   * busy/idle flag into the same record on its own. `shortStatus` completes
+   * the sentence "<agent> is …" (e.g. "comparing flight prices") and is shown
+   * verbatim while the agent works — update it as your work moves through
+   * phases. `note` is a one-or-two-sentence description of the agent or its
+   * current focus; `title` names the agent/conversation.
+   */
+  async setStatus(input: {
+    title?: string;
+    note?: string;
+    shortStatus?: string;
+  }): Promise<StreamEvent> {
+    const patch = {
+      ...(input.title === undefined ? {} : { title: input.title.trim() }),
+      ...(input.note === undefined ? {} : { note: input.note.trim() }),
+      ...(input.shortStatus === undefined ? {} : { shortStatus: input.shortStatus.trim() }),
+    };
+    if (Object.keys(patch).length === 0) {
+      throw new Error("agent.setStatus requires at least one of title, note, shortStatus.");
+    }
+    const [event] = await this.stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: patch,
+    });
+    return event;
+  }
+
+  /** Name this agent/conversation — sugar for `setStatus({ title })`. */
+  setTitle(title: string): Promise<StreamEvent> {
+    return this.setStatus({ title });
+  }
+
+  /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
@@ -4132,6 +4168,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         capabilityHost:
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
+        setStatus:
+          'Merge-update this agent\'s title / note / shortStatus (shortStatus completes "<agent> is …" on live surfaces).',
+        setTitle: "Name this agent/conversation (sugar for setStatus({ title })).",
         configure:
           "Set this agent's policy ({ systemPrompt?, model? }); on a never-seen path this births the agent with defaults plus the overrides.",
         kill: "Restart the agent's server-side object; the next request boots it fresh.",
@@ -4878,6 +4917,7 @@ type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
   touchStreamActivity(input: TouchInput): Promise<void>;
+  touchAgentStatus(input: AgentStatusTouchInput): Promise<void>;
 };
 
 /**
@@ -5254,6 +5294,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
+    this.#indexAgentStatus(batch);
     this.#indexStreamSearch(batch);
     try {
       return await this.worker.processEventBatch(batch);
@@ -5297,6 +5338,30 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     ).catch(() => {
       // Recency self-heals from the next batch; never surface into worker delivery.
     });
+  }
+
+  /**
+   * Platform step: fold an agent batch's status-changed patches into the
+   * project's agents roster (a peer slice of `itx.liveState` — see
+   * AgentStatusDatabase). Same rules as {@link #indexStreamActivity}:
+   * idempotent (event offsets guard redelivery), fire-and-forget, MUST NOT
+   * throw — a dropped dial heals on the agent's next status patch.
+   */
+  #indexAgentStatus(batch: StreamPushEventBatch): void {
+    if (!batch.path.startsWith("/agents/")) return;
+    const events = batch.events
+      .filter((event) => event.type === "events.iterate.com/agent/status-changed")
+      .map((event) => ({
+        payload: event.payload,
+        offset: event.offset,
+        createdAt: event.createdAt,
+      }));
+    if (events.length === 0) return;
+    void Promise.resolve(this.#projectDo.touchAgentStatus({ path: batch.path, events })).catch(
+      () => {
+        // The roster self-heals from the next status patch; never surface into worker delivery.
+      },
+    );
   }
 
   /**

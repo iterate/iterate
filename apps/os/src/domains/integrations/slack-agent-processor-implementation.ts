@@ -28,7 +28,10 @@
 import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
+import {
+  mergeAgentStatusPatch,
+  type AgentFileAttachment,
+} from "../agents/agent-processor-contract.ts";
 import {
   readRecord,
   readString,
@@ -67,18 +70,14 @@ export class SlackAgentProcessor extends StreamProcessor<
     StreamProcessor<SlackAgentProcessorContract>["reduce"]
   >[0]): SlackAgentProcessorState {
     switch (event.type) {
-      case "events.iterate.com/agent/status-changed":
-        // The contract's stale-announcement guard: a debounced idle append
-        // that lost its race with newer work carries an older sinceOffset.
-        if (state.status !== undefined && event.payload.sinceOffset < state.status.sinceOffset)
-          return state;
-        return {
-          ...state,
-          status: {
-            busy: event.payload.busy,
-            sinceOffset: event.payload.sinceOffset,
-          },
-        };
+      case "events.iterate.com/agent/status-changed": {
+        // The contract's shared merge fold: busy patches carry their
+        // sinceOffset guard, authored title/note/shortStatus patches are
+        // last-write-wins.
+        const status = mergeAgentStatusPatch(state.status, event.payload);
+        if (status === state.status) return state;
+        return { ...state, ...(status === undefined ? {} : { status }) };
+      }
       case "events.iterate.com/slack/thread-route-configured":
         return {
           ...state,
@@ -241,6 +240,9 @@ export class SlackAgentProcessor extends StreamProcessor<
    * announcement must still clear what we ourselves put up, while a refold
    * (fresh instance, all facts stale) must repaint nothing at all. */
   #paintedBusyStatus = false;
+  /** The title this incarnation painted, so repeated repaints of an unchanged
+   * title cost no Slack calls. */
+  #paintedTitle: string | undefined;
 
   /**
    * Paint the agent's announced status onto the assistant thread, once per
@@ -268,15 +270,32 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (channel == null || threadTs == null) return;
     const fresh = webhookAckIsFresh(latest, (this.deps.now ?? Date.now)());
 
+    // The agent-authored title paints whenever the folded title differs from
+    // what this incarnation painted — freshness-gated with everything else,
+    // so a refold never replays historical renames.
+    const title = args.state.status?.title;
+    if (fresh && title !== undefined && title !== this.#paintedTitle) {
+      this.#paintedTitle = title;
+      args.blockProcessorWhile(() =>
+        this.#callSlackApi("assistant.threads.setTitle", {
+          channel_id: channel,
+          thread_ts: threadTs,
+          title,
+        }),
+      );
+    }
+
     if (status?.busy) {
       if (!fresh) return;
+      // The agent's own words win: shortStatus completes "<agent> is …".
+      const text = status.shortStatus === undefined ? "thinking" : status.shortStatus;
       this.#paintedBusyStatus = true;
       args.blockProcessorWhile(() =>
         this.#callSlackApi("assistant.threads.setStatus", {
           channel_id: channel,
           thread_ts: threadTs,
-          status: "is thinking...",
-          loading_messages: ["Thinking..."],
+          status: `is ${text}...`,
+          loading_messages: [text === "thinking" ? "Thinking..." : `${text}...`],
         }),
       );
       return;

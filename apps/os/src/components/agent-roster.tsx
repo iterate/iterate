@@ -1,0 +1,167 @@
+import { useMemo, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { ChevronDown, ChevronUp, Circle } from "lucide-react";
+import {
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@iterate-com/ui/components/sidebar";
+import { cn } from "@iterate-com/ui/lib/utils";
+import { useLiveState } from "~/itx/itx-react.tsx";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+
+/** How many agents the project sidebar shows; the list scrolls past ~5. */
+const MAX_SIDEBAR_AGENTS = 10;
+
+type RosterRow = {
+  path: string;
+  busy: boolean;
+  title: string;
+  /** The expandable secondary line: what the agent is doing right now
+   * (shortStatus, while busy) or its standing note. */
+  detail: string | undefined;
+  lastActivityAt: string;
+};
+
+/**
+ * The project's agents roster, merged live from two `itx.liveState` slices:
+ * the agent-status view (busy/title/note/shortStatus per agent, folded from
+ * each agent's own status-changed patches) and the streams index (recency).
+ * Subscribed through `address` — the sidebar lives in the app shell, outside
+ * the project's ItxProvider — so it never suspends and paints when the
+ * project socket connects.
+ */
+function useAgentRoster(projectId: string): RosterRow[] {
+  const roster = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.agents,
+    [projectId],
+    { address: { projectId } },
+  );
+  const streamsIndex = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.streamsIndex,
+    [projectId],
+    { address: { projectId } },
+  );
+  return useMemo(() => {
+    if (roster.value === undefined) return [];
+    return Object.values(roster.value)
+      .map((row): RosterRow => {
+        const busy = row.status.busy === true;
+        return {
+          path: row.path,
+          busy,
+          title: row.status.title ?? agentPathLabel(row.path),
+          detail:
+            busy && row.status.shortStatus !== undefined
+              ? `is ${row.status.shortStatus}…`
+              : row.status.note,
+          lastActivityAt: streamsIndex.value?.[row.path]?.lastActivityAt ?? row.updatedAt,
+        };
+      })
+      .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  }, [roster.value, streamsIndex.value]);
+}
+
+/**
+ * The most recently active agents, at the bottom of the project sidebar: a
+ * live busy dot, the agent's title, and its expandable status line. Hidden
+ * while the sidebar is collapsed to icons, and absent entirely until any
+ * agent has announced status.
+ */
+export function SidebarRecentAgents({
+  projectId,
+  projectSlug,
+}: {
+  projectId: string;
+  projectSlug: string;
+}) {
+  const rows = useAgentRoster(projectId);
+  if (rows.length === 0) return null;
+  return (
+    <SidebarGroup className="py-0 group-data-[collapsible=icon]:hidden">
+      <SidebarGroupLabel>Agents</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <div className="max-h-56 overflow-y-auto no-scrollbar">
+          <SidebarMenu>
+            {rows.slice(0, MAX_SIDEBAR_AGENTS).map((row) => (
+              <AgentRosterMenuItem key={row.path} projectSlug={projectSlug} row={row} />
+            ))}
+          </SidebarMenu>
+        </div>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
+/** The same roster as a plain list for the agents page side panel — every agent, newest first. */
+export function AgentRosterList({
+  projectId,
+  projectSlug,
+}: {
+  projectId: string;
+  projectSlug: string;
+}) {
+  const rows = useAgentRoster(projectId);
+  if (rows.length === 0) return null;
+  return (
+    <SidebarMenu>
+      {rows.map((row) => (
+        <AgentRosterMenuItem key={row.path} projectSlug={projectSlug} row={row} />
+      ))}
+    </SidebarMenu>
+  );
+}
+
+function AgentRosterMenuItem({ projectSlug, row }: { projectSlug: string; row: RosterRow }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        className="h-auto py-1.5 pr-7"
+        tooltip={row.title}
+        render={<Link {...linkOptionsForStreamPath(projectSlug, row.path)} />}
+      >
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex items-center gap-2">
+            <Circle
+              aria-label={row.busy ? "busy" : "idle"}
+              className={cn(
+                "size-2 shrink-0",
+                row.busy
+                  ? "animate-pulse fill-green-500 text-green-500"
+                  : "fill-muted-foreground/40 text-muted-foreground/40",
+              )}
+            />
+            <span className="min-w-0 flex-1 truncate">{row.title}</span>
+          </div>
+          {row.detail === undefined ? null : (
+            <span className={cn("text-xs text-muted-foreground", expanded ? "" : "truncate")}>
+              {row.detail}
+            </span>
+          )}
+        </div>
+      </SidebarMenuButton>
+      {row.detail === undefined ? null : (
+        <SidebarMenuAction
+          aria-label={expanded ? "Collapse status" : "Expand status"}
+          onClick={() => setExpanded((value) => !value)}
+          showOnHover
+        >
+          {expanded ? <ChevronUp /> : <ChevronDown />}
+        </SidebarMenuAction>
+      )}
+    </SidebarMenuItem>
+  );
+}
+
+/** "/agents/slack/nustom/c123/ts-1" → "slack/nustom/c123/ts-1" — the path sans its /agents/ prefix. */
+function agentPathLabel(path: string): string {
+  const segments = path.split("/").filter(Boolean);
+  return segments.length > 1 ? segments.slice(1).join("/") : path;
+}

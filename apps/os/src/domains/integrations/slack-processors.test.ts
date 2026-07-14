@@ -856,6 +856,66 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
+  it("paints the agent's shortStatus verbatim and its title via setTitle", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    // The agent authored a title and shortStatus mid-work; the busy patch
+    // lands in the same batch. One title paint, one status paint — the
+    // agent's own words complete "<agent> is …".
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { title: "Trip planning", shortStatus: "comparing flights" },
+      },
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: true, sinceOffset: 2 },
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setTitle",
+        body: { channel_id: "C123", thread_ts: "111.222", title: "Trip planning" },
+      },
+      {
+        method: "assistant.threads.setStatus",
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is comparing flights...",
+          loading_messages: ["comparing flights..."],
+        },
+      },
+    ]);
+
+    // An unchanged title never repaints; a shortStatus change repaints the status.
+    slackCalls.length = 0;
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { shortStatus: "booking the winner" },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is booking the winner...",
+          loading_messages: ["booking the winner..."],
+        },
+      },
+    ]);
+  });
+
   it("ignores a stale idle announcement that lost its race with newer work", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 

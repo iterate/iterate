@@ -2239,7 +2239,7 @@ describe("token usage and history reset", () => {
   });
 });
 
-describe("busy/idle activity announcements", () => {
+describe("busy/idle status announcements", () => {
   const userMessage = () => ({
     type: "events.iterate.com/agents/message-received" as const,
     payload: { content: "hi", from: { kind: "user" as const, origin: "web" } },
@@ -2419,6 +2419,32 @@ describe("busy/idle activity announcements", () => {
 
     expect(announcements(stream)).toEqual([]);
     expect(deriveAgentBusy(agent.state)).toBe(false);
+  });
+
+  it("folds agent-authored patches into the status record without announcing anything", async () => {
+    const stream = new MemoryStream();
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const cursors = new Map<object, number>();
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { title: "Lisbon trip", note: "Planning a trip", shortStatus: "comparing flights" },
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors });
+    expect(agent.state.announcedStatus).toEqual({
+      title: "Lisbon trip",
+      note: "Planning a trip",
+      shortStatus: "comparing flights",
+    });
+    // Authored fields alone announce nothing and trigger no turn.
+    const journalLength = stream.events.length;
+    await deliverNewEvents({ processor: agent, stream, cursors });
+    expect(stream.events.length).toBe(journalLength);
+
+    // The platform's busy announcement then merges INTO the same record.
+    await stream.append(userMessage());
+    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliverNewEvents({ processor: agent, stream, cursors });
+    expect(agent.state.announcedStatus).toMatchObject({ busy: true, title: "Lisbon trip" });
   });
 
   it("the fold ignores a stale idle announcement that lost its race", () => {

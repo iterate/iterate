@@ -29,6 +29,7 @@ import {
   DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   deriveAgentBusy,
+  mergeAgentStatusPatch,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
 import {
@@ -1246,22 +1247,16 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
             ),
           }
         : state;
-    case "events.iterate.com/agent/status-changed":
-      // The stale-announcement guard: a debounced idle append that lost its
-      // race with newer work carries an older sinceOffset and folds to nothing.
-      if (
-        state.announcedStatus !== undefined &&
-        event.payload.sinceOffset < state.announcedStatus.sinceOffset
-      ) {
-        return state;
-      }
+    case "events.iterate.com/agent/status-changed": {
+      // The shared merge fold: platform busy patches (sinceOffset-guarded)
+      // and agent-authored title/note/shortStatus patches land in one record.
+      const announcedStatus = mergeAgentStatusPatch(state.announcedStatus, event.payload);
+      if (announcedStatus === state.announcedStatus) return state;
       return {
         ...state,
-        announcedStatus: {
-          busy: event.payload.busy,
-          sinceOffset: event.payload.sinceOffset,
-        },
+        ...(announcedStatus === undefined ? {} : { announcedStatus }),
       };
+    }
     default:
       return state;
   }
