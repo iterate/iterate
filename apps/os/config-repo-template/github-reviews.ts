@@ -27,7 +27,7 @@ type GithubReviewTarget = {
   trigger: "automatic" | "cancel" | "explicit";
 };
 
-export type GithubReviewEventResult = "cancelled" | "disabled" | "ignored" | "queued" | "stale";
+export type GithubReviewEventResult = "cancelled" | "ignored" | "queued" | "stale";
 
 /** Complete userspace review reaction. Repository selection, controls, rules,
  * check visibility, timeout, and the agent task all remain config-repo code. */
@@ -52,8 +52,15 @@ export async function processGithubReviewEvent(input: {
   const liveHeadSha = live.head.sha;
 
   if (target.trigger === "cancel") {
-    // A late label delivery must not cancel work after the label was removed.
-    if (!liveLabels.includes(input.config.skipLabel.toLowerCase())) return "stale";
+    // A late disable delivery must not cancel work after the PR was reopened,
+    // made ready, or had its skip label removed.
+    if (
+      live.state === "open" &&
+      live.draft !== true &&
+      !liveLabels.includes(input.config.skipLabel.toLowerCase())
+    ) {
+      return "stale";
+    }
     await cancelReviewChecks({
       appSlug: target.appSlug,
       externalIdPrefix: githubReviewExternalIdPrefix(target, input.itx.projectId),
@@ -62,7 +69,7 @@ export async function processGithubReviewEvent(input: {
       octokit,
       owner: target.owner,
       repo: target.repo,
-      summary: "Review disabled by the pull request's skip label.",
+      summary: "Review disabled because the pull request is closed, draft, or skipped.",
       title: "Review disabled",
     });
     return "cancelled";
@@ -76,7 +83,20 @@ export async function processGithubReviewEvent(input: {
     live.draft === true ||
     liveLabels.includes(input.config.skipLabel.toLowerCase())
   ) {
-    return "disabled";
+    // State can change between the triggering webhook and this live read.
+    // Reconcile visible UI instead of merely declining to start new work.
+    await cancelReviewChecks({
+      appSlug: target.appSlug,
+      externalIdPrefix: githubReviewExternalIdPrefix(target, input.itx.projectId),
+      headSha: liveHeadSha,
+      itx: input.itx,
+      octokit,
+      owner: target.owner,
+      repo: target.repo,
+      summary: "Review disabled because the pull request is closed, draft, or skipped.",
+      title: "Review disabled",
+    });
+    return "cancelled";
   }
 
   const [defaults, rulesFile] = await Promise.all([
@@ -198,8 +218,7 @@ export function githubReviewTarget(
     headSha === undefined ||
     installationId === undefined ||
     number === undefined ||
-    Number(pathMatch[1]) !== number ||
-    pullRequest.state !== "open"
+    Number(pathMatch[1]) !== number
   ) {
     return null;
   }
@@ -218,11 +237,17 @@ export function githubReviewTarget(
 
   let trigger: GithubReviewTarget["trigger"];
   let requestKey: string;
-  if (action === "labeled" && changedLabel === skipLabel) {
+  if (
+    (action === "labeled" && changedLabel === skipLabel) ||
+    action === "closed" ||
+    action === "converted_to_draft"
+  ) {
     trigger = "cancel";
     requestKey = `cancel:${event.offset}`;
   } else {
-    if (labels.includes(skipLabel) || pullRequest.draft === true) return null;
+    if (pullRequest.state !== "open" || labels.includes(skipLabel) || pullRequest.draft === true) {
+      return null;
+    }
     if (["opened", "ready_for_review", "synchronize"].includes(action ?? "")) {
       trigger = "automatic";
       requestKey = `head:${headSha}`;

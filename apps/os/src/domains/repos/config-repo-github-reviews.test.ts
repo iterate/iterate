@@ -22,6 +22,7 @@ function webhook(input?: {
   labels?: string[];
   offset?: number;
   pathNumber?: number;
+  state?: "closed" | "open";
 }): StreamEvent {
   const number = 7;
   return {
@@ -43,7 +44,7 @@ function webhook(input?: {
           head: { sha: input?.headSha ?? "head-b" },
           labels: (input?.labels ?? []).map((name) => ({ name })),
           number,
-          state: "open",
+          state: input?.state ?? "open",
         },
       },
     },
@@ -52,8 +53,10 @@ function webhook(input?: {
 
 function harness(input?: {
   checkRuns?: (args: { page: number; ref: string }) => unknown[];
+  liveDraft?: boolean;
   liveHead?: string;
   liveLabels?: string[];
+  liveState?: "closed" | "open";
   update?: ReturnType<typeof vi.fn>;
 }) {
   let nextCheckId = 100;
@@ -83,10 +86,10 @@ function harness(input?: {
       pulls: {
         get: vi.fn().mockResolvedValue({
           data: {
-            draft: false,
+            draft: input?.liveDraft ?? false,
             head: { sha: input?.liveHead ?? "head-b" },
             labels: (input?.liveLabels ?? []).map((name) => ({ name })),
-            state: "open",
+            state: input?.liveState ?? "open",
           },
         }),
       },
@@ -306,6 +309,69 @@ describe("config-repo GitHub reviews", () => {
       expect.objectContaining({ check_run_id: 88, conclusion: "cancelled" }),
     );
     expect(h.cancel).toHaveBeenCalledWith("github-review-timeout:88");
+    expect(h.append).not.toHaveBeenCalled();
+  });
+
+  it("cancels current-head review UI when the pull request becomes draft", async () => {
+    const h = harness({
+      liveDraft: true,
+      checkRuns: () => [
+        {
+          app: { slug: "iterate-preview" },
+          external_id: "iterate-review:prj_test:42:7:head:head-b",
+          html_url: null,
+          id: 89,
+          status: "in_progress",
+        },
+      ],
+    });
+    const event = webhook({ action: "converted_to_draft" });
+
+    await expect(processGithubReviewEvent({ config: CONFIG, event, itx: h.itx })).resolves.toBe(
+      "cancelled",
+    );
+
+    expect(h.update).toHaveBeenCalledWith(
+      expect.objectContaining({ check_run_id: 89, conclusion: "cancelled" }),
+    );
+    expect(h.cancel).toHaveBeenCalledWith("github-review-timeout:89");
+    expect(h.append).not.toHaveBeenCalled();
+  });
+
+  it("builds a cancellation target for a closed pull-request delivery", async () => {
+    const h = harness({ liveState: "closed" });
+    const event = webhook({ action: "closed", state: "closed" });
+
+    await expect(processGithubReviewEvent({ config: CONFIG, event, itx: h.itx })).resolves.toBe(
+      "cancelled",
+    );
+
+    expect(h.listForRef).toHaveBeenCalled();
+    expect(h.append).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a close racing with an otherwise eligible webhook", async () => {
+    const h = harness({
+      liveState: "closed",
+      checkRuns: () => [
+        {
+          app: { slug: "iterate-preview" },
+          external_id: "iterate-review:prj_test:42:7:head:head-b",
+          html_url: null,
+          id: 90,
+          status: "in_progress",
+        },
+      ],
+    });
+
+    await expect(
+      processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx }),
+    ).resolves.toBe("cancelled");
+
+    expect(h.update).toHaveBeenCalledWith(
+      expect.objectContaining({ check_run_id: 90, conclusion: "cancelled" }),
+    );
+    expect(h.defaultsForPath).not.toHaveBeenCalled();
     expect(h.append).not.toHaveBeenCalled();
   });
 

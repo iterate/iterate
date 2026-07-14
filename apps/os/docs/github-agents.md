@@ -100,8 +100,9 @@ PRs. `iterate:skip-review` disables one PR and wins if both labels exist;
 `iterate:review` requests the current head explicitly, including a fresh run
 when that head was already reviewed. Adding `iterate:skip-review` immediately
 cancels App-owned work for the live head; removing it reviews the current
-head. Label authorization is GitHub's normal repository authorization; the
-agent maintains no command state of its own.
+head. Closing the pull request or converting it to draft also immediately
+cancels current-head review work. Label authorization is GitHub's normal
+repository authorization; the agent maintains no command state of its own.
 
 Rules are ordinary trusted Markdown at `agents/github-review.md`. For example:
 
