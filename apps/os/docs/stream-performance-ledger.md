@@ -1734,3 +1734,43 @@ final one.
 
 All ten cumulative test processes passed. Raw records are
 `/tmp/cumulative-4-{main,candidate}-r{1..5}.log` locally.
+
+## 2026-07-14: One Stream Activation KV Snapshot Rejected
+
+Workerd implements each synchronous-KV `get()` as its own prepared point
+query, has no synchronous multi-get, and implements `list()` as one range
+query. A bounded prototype therefore replaced Stream's two construction-time
+point reads (canonical Durable Object identity and `coreState`) with one fully
+consumed `kv.list()` snapshot. Unknown keys were ignored, the raw snapshot was
+released after construction, and checkpoint/name validation was unchanged.
+
+The source-level statement count fell from two to one, but real workerd did not
+benefit. Three 200-reactivation rounds per revision ran in `C,P,P,C,C,P` order
+against exact parent `6666feede`, stopping the inactive server at each switch.
+Both revisions used the candidate `head()` API so the measurement differed
+only in activation storage reads. Host timers enclosed the awaited head RPC,
+and each iteration asserted the durable offset.
+
+| Forced Stream reactivation | Two point reads | One list snapshot | Change |
+| -------------------------- | --------------: | ----------------: | -----: |
+| Median-of-round p50        |        2.273 ms |          2.312 ms |  -1.7% |
+| Median-of-round p95        |        3.399 ms |          3.918 ms | -15.3% |
+| Median-of-round mean       |        2.371 ms |          2.493 ms |  -5.2% |
+| Pooled p50                 |        2.363 ms |          2.377 ms |  -0.6% |
+| Pooled p95                 |        3.767 ms |          3.931 ms |  -4.4% |
+| Pooled mean                |        2.554 ms |          2.604 ms |  -1.9% |
+
+The list iterator and JavaScript key/value pair allocation absorb the saved
+statement dispatch. The candidate also had the worse maximum (`18.870 ms`
+versus `10.617 ms`). An earlier smoke round looked favorable, which is why the
+alternating exact-parent pool was required. Two initial parent rounds were
+discarded before analysis after noticing that harness `main` mode called the
+larger legacy `runtimeState()` projection; they were rerun through `head()` and
+do not contribute to the table.
+
+The acceptance gate required at least 5% p50 and mean improvement with no p95
+regression. It failed every part, so the activation helper, prefetched identity
+option, constructor plumbing, and tests were all removed. Production and
+persistent data are exactly unchanged. Raw valid records are
+`/tmp/stream-activation-list-{parent,candidate}-r{1,2,3}.log`; the favorable
+non-counted smoke is `/tmp/stream-activation-list-candidate-smoke.log` locally.
