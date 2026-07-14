@@ -19,6 +19,7 @@
 const MAX_DURABLE_OBJECT_NAME_BYTES = 256;
 const GLOBAL_DURABLE_OBJECT_HOST = "global";
 const DURABLE_OBJECT_HOST_SUFFIX = ".iterate";
+const DURABLE_OBJECT_NAME_STORAGE_KEY = "iterate:durable-object-name";
 
 type DurableObjectName = string;
 
@@ -102,6 +103,39 @@ function assertLegalDurableObjectName(name: string): void {
       `Durable Object name must be at most ${MAX_DURABLE_OBJECT_NAME_BYTES} bytes, got ${byteLength}.`,
     );
   }
+}
+
+/**
+ * Resolve a Durable Object's canonical name even when an ID-only RPC
+ * capability reactivates it. Cloudflare exposes `ctx.id.name` as optional:
+ * calls through a returned/stored capability can preserve the object ID while
+ * dropping the original name. Persist it on the first named activation and
+ * require every later named activation to agree.
+ */
+export function resolveDurableObjectName(ctx: Pick<DurableObjectState, "id" | "storage">): string {
+  const runtimeName = ctx.id.name;
+  const storedName = ctx.storage.kv.get<unknown>(DURABLE_OBJECT_NAME_STORAGE_KEY);
+
+  if (runtimeName !== undefined) {
+    assertLegalDurableObjectName(runtimeName);
+    if (storedName !== undefined && storedName !== runtimeName) {
+      throw new Error(
+        `Durable Object identity mismatch: runtime name "${runtimeName}" does not match stored name "${String(storedName)}".`,
+      );
+    }
+    if (storedName === undefined) {
+      ctx.storage.kv.put(DURABLE_OBJECT_NAME_STORAGE_KEY, runtimeName);
+    }
+    return runtimeName;
+  }
+
+  if (typeof storedName !== "string") {
+    throw new Error(
+      "Durable Object name is unavailable and no canonical name was stored by a prior named activation.",
+    );
+  }
+  assertLegalDurableObjectName(storedName);
+  return storedName;
 }
 
 function assertProjectId(projectId: string): void {

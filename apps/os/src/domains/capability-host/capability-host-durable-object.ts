@@ -2,7 +2,11 @@ import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
+import {
+  DurableObjectNameCodec,
+  parentScopePath,
+  resolveDurableObjectName,
+} from "../durable-object-names.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
 import type {
   StreamSubscriberWakeRequest,
@@ -38,7 +42,7 @@ type ScriptExecutionLoopbackExports = {
  * host on a local miss.
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(resolveDurableObjectName(this.ctx));
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),

@@ -2,7 +2,7 @@ import { DurableObject, tracing } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
 import { AcknowledgedIdempotencyOffsetCache } from "./acknowledged-idempotency-offset-cache.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { parseStreamAppendInput } from "./stream-event-validation.ts";
@@ -84,7 +84,7 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  * that touch SQLite/KV must remain synchronous.
  */
 export class StreamDurableObject extends DurableObject<Env> {
-  readonly name = parseStreamDurableObjectName(this.ctx.id.name);
+  readonly name = parseStreamDurableObjectName(resolveDurableObjectName(this.ctx));
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
    * The spine's durable cursor rows. A field (not inlined into the hooks)

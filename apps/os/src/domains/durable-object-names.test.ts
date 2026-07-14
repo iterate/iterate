@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { DurableObjectNameCodec } from "./durable-object-names.ts";
+import { DurableObjectNameCodec, resolveDurableObjectName } from "./durable-object-names.ts";
+
+function identityContext(args: { name?: string; values?: Map<string, unknown> }) {
+  const values = args.values ?? new Map<string, unknown>();
+  const ctx = {
+    id: { name: args.name },
+    storage: {
+      kv: {
+        get: <T>(key: string) => values.get(key) as T | undefined,
+        put: (key: string, value: unknown) => void values.set(key, value),
+      },
+    },
+  } as unknown as Parameters<typeof resolveDurableObjectName>[0];
+  return { ctx, values };
+}
 
 describe("DurableObjectNameCodec", () => {
   it("encodes project-local stream coordinates", () => {
@@ -108,5 +122,29 @@ describe("DurableObjectNameCodec", () => {
 
   it("rejects global names unless null project ids are allowed", () => {
     expect(() => DurableObjectNameCodec.parse("global.iterate/")).toThrow(/allowNullProjectId/);
+  });
+});
+
+describe("resolveDurableObjectName", () => {
+  it("persists a named activation and restores it for an ID-only reactivation", () => {
+    const first = identityContext({ name: "prj_123.iterate/" });
+    expect(resolveDurableObjectName(first.ctx)).toBe("prj_123.iterate/");
+
+    const reactivated = identityContext({ values: first.values });
+    expect(resolveDurableObjectName(reactivated.ctx)).toBe("prj_123.iterate/");
+  });
+
+  it("rejects a runtime name that disagrees with stored identity", () => {
+    const first = identityContext({ name: "prj_123.iterate/" });
+    resolveDurableObjectName(first.ctx);
+
+    const mismatched = identityContext({ name: "prj_other.iterate/", values: first.values });
+    expect(() => resolveDurableObjectName(mismatched.ctx)).toThrow(/identity mismatch/);
+  });
+
+  it("rejects an ID-only first activation with no canonical identity", () => {
+    expect(() => resolveDurableObjectName(identityContext({}).ctx)).toThrow(
+      /no canonical name was stored/,
+    );
   });
 });

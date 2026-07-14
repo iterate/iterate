@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import { takeWorkerFetchDispatch, workerBuildingResponse } from "./worker-fetch-dispatch.ts";
 import { isWorkerBuildInProgressError } from "./worker-loader.ts";
@@ -25,7 +25,8 @@ function statefulWorkerVersion(ref: StatefulDynamicWorkerRef, sourceCacheKey: st
  * identity; instead the facet is aborted and re-created against the same DO.
  */
 export class StatefulWorkerDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #durableObjectName = resolveDurableObjectName(this.ctx);
+  readonly #name = DurableObjectNameCodec.parse(this.#durableObjectName);
   // The hosted Durable Object class sees the same scoped itx binding as a
   // stateless worker at this path. That is what lets a provided durable
   // capability call sibling capabilities through `this.env.ITX.get()`.
@@ -97,9 +98,9 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   /** Abort the hosted facet and current outer Durable Object incarnation. */
   kill(): void {
     try {
-      this.ctx.facets.abort(FACET_NAME, `kill requested for ${this.ctx.id.name}`);
+      this.ctx.facets.abort(FACET_NAME, `kill requested for ${this.#durableObjectName}`);
     } catch (error) {
-      console.warn(`stateful worker facet kill skipped for ${this.ctx.id.name}`, error);
+      console.warn(`stateful worker facet kill skipped for ${this.#durableObjectName}`, error);
     }
     this.ctx.abort("kill requested");
   }
@@ -127,7 +128,10 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // turn and matches Cloudflare's current guidance for SQLite-backed DOs.
     const previous = this.ctx.storage.kv.get<string>(VERSION_STORAGE_KEY);
     if (previous && previous !== version) {
-      this.ctx.facets.abort(FACET_NAME, `stateful worker source changed for ${this.ctx.id.name}`);
+      this.ctx.facets.abort(
+        FACET_NAME,
+        `stateful worker source changed for ${this.#durableObjectName}`,
+      );
     }
     if (previous !== version) this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
     return this.ctx.facets.get(FACET_NAME, () => ({ class: klass }));
@@ -186,11 +190,11 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
           this.ctx.storage.kv.put(VERSION_STORAGE_KEY, version);
           this.ctx.facets.abort(
             FACET_NAME,
-            `stateful worker source changed (stale-while-rebuild) for ${this.ctx.id.name}`,
+            `stateful worker source changed (stale-while-rebuild) for ${this.#durableObjectName}`,
           );
         } catch (error) {
           // The stale facet keeps serving; the next call retries the refresh.
-          console.warn(`stale-while-rebuild refresh failed for ${this.ctx.id.name}`, error);
+          console.warn(`stale-while-rebuild refresh failed for ${this.#durableObjectName}`, error);
         } finally {
           this.#refreshInFlight = false;
         }
@@ -205,7 +209,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     }
     if (ref.path !== this.#name.path || ref.durableWorkerKey !== durableWorkerKey) {
       throw new Error(
-        `Stateful worker ref ${ref.path}?durableWorkerKey=${ref.durableWorkerKey} does not match Durable Object ${this.ctx.id.name}.`,
+        `Stateful worker ref ${ref.path}?durableWorkerKey=${ref.durableWorkerKey} does not match Durable Object ${this.#durableObjectName}.`,
       );
     }
   }

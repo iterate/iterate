@@ -25,7 +25,7 @@ import {
 } from "../repos/github-review-check.ts";
 import { connectionOctokit } from "../integrations/github-api.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
@@ -51,7 +51,7 @@ type PendingGithubReviewCheck = {
 };
 
 export class AgentDurableObject extends DurableObject<Env> {
-  readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
+  readonly #name = parseAgentDurableObjectName(resolveDurableObjectName(this.ctx));
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,

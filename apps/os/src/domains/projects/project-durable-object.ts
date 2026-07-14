@@ -9,7 +9,7 @@ import {
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
 import type {
   StreamSubscriberWakeRequest,
@@ -60,7 +60,8 @@ import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #durableObjectName = resolveDurableObjectName(this.ctx);
+  readonly #name = DurableObjectNameCodec.parse(this.#durableObjectName);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
   // Last time #egressRules paid a catch-up — bounds rules staleness to ~5s.
   #egressRulesFreshAt = 0;
@@ -189,7 +190,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   describe() {
     return {
       projectId: this.#name.projectId,
-      name: this.ctx.id.name!,
+      name: this.#durableObjectName,
     };
   }
 

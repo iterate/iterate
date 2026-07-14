@@ -8,6 +8,7 @@ import type {
 } from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { resolveDurableObjectName } from "../durable-object-names.ts";
 import type { ScheduleView } from "./types.ts";
 import { SchedulerProcessor } from "./scheduler-processor-implementation.ts";
 import {
@@ -41,7 +42,7 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * successful set is read-your-writes visible AND provably alarm-armed.
  */
 export class SchedulerDurableObject extends DurableObject<Env> {
-  readonly #name = parseSchedulerDurableObjectName(this.ctx.id.name!);
+  readonly #name = parseSchedulerDurableObjectName(resolveDurableObjectName(this.ctx));
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,

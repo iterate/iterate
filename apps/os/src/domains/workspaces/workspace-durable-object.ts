@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { WorkspaceFileSystem } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
 import type { Env } from "../../env.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
 import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import type {
   EditWorkspaceFileInput,
@@ -51,11 +51,12 @@ import { ROOT_WORKSPACE_PATH, isRootWorkspacePath } from "./utils.ts";
  * git, and sibling-DO stubs into the core, and delegates.
  */
 export class WorkspaceDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #durableObjectName = resolveDurableObjectName(this.ctx);
+  readonly #name = DurableObjectNameCodec.parse(this.#durableObjectName);
   readonly #isRoot = isRootWorkspacePath(this.#name.path);
   readonly #workspace = new UnboundedWorkspace({
     sql: this.ctx.storage.sql,
-    name: () => this.ctx.id.name,
+    name: () => this.#durableObjectName,
     // Files past @cloudflare/shell's inline threshold (1.5MB — the DO SQLite
     // row cap zone) spill transparently to R2, so workspace files have no
     // practical size limit. The bucket is shared with the files domain, whose
@@ -64,7 +65,7 @@ export class WorkspaceDurableObject extends DurableObject<Env> {
     // the object lifecycle: rm/mv/overwrite/recursive-delete all clean up the
     // bucket objects, so reset()'s wipe leaves nothing orphaned.
     r2: this.env.FILES_BUCKET,
-    r2Prefix: `workspace/${this.ctx.id.name!}`,
+    r2Prefix: `workspace/${this.#durableObjectName}`,
   });
   readonly #core = new WorkspaceCore({
     git: createGit(new WorkspaceFileSystem(this.#workspace), "/"),

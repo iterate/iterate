@@ -13,7 +13,7 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { stableSha256 } from "../workers/utils.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
@@ -78,7 +78,9 @@ type RepoHead = {
 };
 
 export class RepoDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!, { allowNullProjectId: true });
+  readonly #name = DurableObjectNameCodec.parse(resolveDurableObjectName(this.ctx), {
+    allowNullProjectId: true,
+  });
   readonly #host = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),

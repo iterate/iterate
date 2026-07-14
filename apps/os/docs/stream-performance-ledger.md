@@ -1564,3 +1564,71 @@ sustained deterministic failure, and reset only after checkpoint progress.
 Raw records are `/tmp/stream-immediate-redial-candidate-r{1,2,3}.log` and
 `/tmp/stream-immediate-redial-parent-r{1,2,3b}.log`; the invalid parent attempt
 is `/tmp/stream-immediate-redial-parent-r3.log` locally.
+
+## 2026-07-14: ID-Only Durable Object Reactivation Fixed
+
+The recurring Cap'n Web failure in the kill/reactivate benchmark was not a
+malformed response frame. The client received a valid rejection, but the
+server-side error was `Cannot read properties of undefined (reading
+'length')`. A temporary guard moved that failure to an explicit `Durable Object
+name is unavailable` error at the Project processor relay. Cloudflare's
+`DurableObjectId.name` is optional, and workerd's `actor.h` exposes `getName()`
+as an optional value. An RPC capability can preserve an object ID across
+reactivation without preserving the name originally passed to `idFromName()`.
+
+Every non-sandbox domain object had treated `ctx.id.name` as permanent. Project
+reactivation through its returned processor capability therefore passed
+`undefined` into the name codec, where the byte-length check produced the
+misleading decoder-adjacent error. Stream had the same latent assumption, as
+did Agent, Secret, Repo, Workspace, Scheduler, StatefulWorker, CapabilityHost,
+and their name-derived paths or diagnostics.
+
+The retained fix centralizes canonical identity in
+`resolveDurableObjectName()`. On the first named activation it validates the
+runtime name and stores one synchronous `ctx.storage.kv` identity value. Later
+named activations read and require an exact match. ID-only activations recover
+the stored value and still validate the name grammar. An ID-only first
+activation, a malformed stored value, or an identity disagreement fails
+closed. Sandbox keeps its existing explicit identity protocol, which already
+handles the same runtime behavior.
+
+The unfixed server failed three times in 119 observed kill/reactivation cycles,
+at iterations 19, 78, and 20 in three independent runs. The read-validated fix
+then completed 300 diagnostic cycles, 200 clean cycles, and 100 cycles against
+the exact final code without a failure: 600/600 successful reactivations, each
+including an 8,000-event append and processor checkpoint catch-up. The clean
+200-cycle distribution was `297.3 ms` p50, `351.7 ms` p95, and `304.3 ms` mean;
+the final 100 cycles were `302.8 ms`, `362.6 ms`, and `312.3 ms`. Host timers
+enclosed the awaited append and checkpoint RPCs, so this evidence remains
+valid under Workers' frozen-clock model.
+
+Identity recovery pays only on object construction, never on an already-live
+request path. Three 200-sample rounds against exact parent `9c1f38363` measured
+the following forced Stream reactivation cost:
+
+| Cold head after forced reactivation | Exact parent | Identity read |      Cost |
+| ----------------------------------- | -----------: | ------------: | --------: |
+| p50                                 |     2.134 ms |      2.395 ms | +0.261 ms |
+| p95                                 |     3.235 ms |      4.060 ms | +0.825 ms |
+| mean                                |     2.284 ms |      2.564 ms | +0.280 ms |
+
+This is a deliberate correctness tax of about `0.28 ms` per cold activation.
+An alternative wrote the runtime name on every named activation and read only
+for ID-only activation. In a contemporaneous 600-sample check it moved p50 and
+mean favorably but worsened p95 (`3.567 ms` versus parent `3.092 ms`) and would
+silently overwrite a conflicting identity. That ambiguous timing result did
+not justify weakening the invariant or adding unconditional storage churn, so
+the read-and-compare shape was restored.
+
+The production change is one generic helper, one small key per Durable Object,
+and mechanical adoption in nine domain classes. It adds no service, alarm,
+queue, schema migration, asynchronous turn, or request-state machine. It
+collapses cleanly: removing the helper calls makes the identity keys inert.
+There is intentionally no compatibility recovery for an old object whose
+first post-deploy activation is ID-only and has no canonical key; rollout
+therefore assumes the planned production data erase. Unit tests cover persist,
+restore, mismatch, and missing identity. The 387-test name/Stream unit surface
+and full OS TypeScript check pass. Raw stress records are
+`/tmp/stream-kill-identity-recovery-r1.log` and
+`/tmp/stream-kill-identity-recovery-{clean,final}.log`; cold-cost records are
+`/tmp/stream-identity-cost-{candidate,parent}-r{1,2,3}.log` locally.

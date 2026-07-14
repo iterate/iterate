@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
 import type {
   StreamSubscriberWakeRequest,
@@ -51,7 +51,7 @@ const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
  * this surface when a consumer exists.
  */
 export class SecretDurableObject extends DurableObject<Env> {
-  readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
+  readonly #name = DurableObjectNameCodec.parse(resolveDurableObjectName(this.ctx));
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
