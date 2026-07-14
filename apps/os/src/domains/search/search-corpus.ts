@@ -51,17 +51,18 @@ const SEARCH_EVENT_TYPE_DISALLOW_LIST: ReadonlySet<string> = new Set([
 // `repos`, plus arbitrary custom kinds written by itx.search.index(). The
 // first segment of every R2 key IS the kind (`{projectId}/{kind}/…`), so it
 // doubles as the folder-scoping token AND the `kind` metadata attribute.
-// `docs` is federated from the in-worker itx.docs index rather than stored in
-// R2 (see SearchRpcTarget.query), but shares the vocabulary so callers filter
-// uniformly. Kinds are plain strings on the API surface (custom kinds made a
-// closed union wrong); normalizeSearchSource is the validation gate.
+// `docs` is federated at query time from the deployment-level docs index
+// (see SearchRpcTarget.query), never stored in any PROJECT corpus, but shares
+// the vocabulary so callers filter uniformly. Kinds are plain strings on the
+// API surface (custom kinds made a closed union wrong); normalizeSearchSource
+// is the validation gate.
 
 /**
  * Kinds `itx.search.index()` must not write: the three platform namespaces
  * (their subtrees are owned by the platform writers — the repo indexer's
  * stale-key sweep would silently DELETE foreign objects under
- * `{prj}/repos/…`), and `docs` (a federated kind that never lives in R2, so a
- * stored impostor would bypass `exclude: ["docs"]`).
+ * `{prj}/repos/…`), and `docs` (federated at query time, never stored in a
+ * project corpus — a stored impostor would bypass `exclude: ["docs"]`).
  */
 const RESERVED_SEARCH_KINDS: ReadonlySet<string> = new Set(["streams", "files", "repos", "docs"]);
 
@@ -113,9 +114,17 @@ export function searchMetadata(
 
 /** One retrieved chunk: the matched index document plus its scored text and provenance. */
 export type SearchResultChunk = {
-  /** The index object key, e.g. `prj_x/streams/agents/…/events-00000001.md`. */
+  /**
+   * The internal corpus key this chunk came from (diagnostic; for federated
+   * docs hits it holds the docs.get fetchCall instead). Use `ref` — not this
+   * — to fetch the source.
+   */
   filename: string;
-  /** Relevance score in [0, 1]. */
+  /**
+   * Relevance in [0, 1] for corpus hits. `kind: "docs"` hits carry synthetic
+   * scores in a descending band from 0.5 — not comparable to corpus
+   * relevance.
+   */
   score: number;
   /** The matched text content (the specific matching chunk). */
   content: string;
