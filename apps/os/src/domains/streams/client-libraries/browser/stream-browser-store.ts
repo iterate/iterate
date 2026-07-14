@@ -408,17 +408,36 @@ function createStreamRuntime(
   // Contract of the two arrival stamps (both per-connection evidence, like the strike
   // ledger; both reset where a fresh connection is installed and again when its liveness
   // probe starts, so an arrival on a previous socket — or a pre-subscribe catch-up page —
-  // never vouches for the current live subscription):
+  // never vouches for the current live subscription).
+  //
+  // Exact window semantics: verifyDelivery anchors BOTH windows at checkStartedAt — the
+  // moment the check acquired its single-flight latch, BEFORE its guarded read (up to two
+  // GUARDED_CALL_TIMEOUT_MS windows with the retry) and BEFORE its delivery grace. The
+  // stamps themselves are re-read at judgment time (after the grace), so an arrival during
+  // the read or the grace is newer than the anchor and always counts; what the early anchor
+  // guarantees is that read latency and the grace wait can never shift a window LATE and
+  // silently shrink it (judging against a post-grace `now` disqualified arrivals from early
+  // in the current probe interval and revoked the first paced probe's baseline grace):
   //   - lastDeliveryArrivalAt: REAL arrivals only. `undefined` means no delivery has
-  //     arrived on the current connection since its probe started. A recent real arrival
-  //     is liveness for EVERY caller of verifyDelivery.
+  //     arrived on the current connection since its probe started. Liveness for EVERY
+  //     caller of verifyDelivery, exactly when
+  //       checkStartedAt - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS
+  //     — an arrival within the probe interval ending when the check began counts, and so
+  //     does anything newer.
   //   - arrivalBaselineAt: when the current connection started counting. It is grace, not
   //     liveness: only the paced probe (and resume checks) treat a fresh, arrival-less
-  //     subscription within one interval of this baseline as "too early to judge" — that
-  //     keeps the first paced probe after subscribe from false-positiving. A nudge does
-  //     NOT honor it: a nudge carries caller evidence that the server just appended, so a
-  //     server-ahead subscription with ZERO real arrivals is escalated right after the
-  //     delivery grace instead of no-oping for up to a full probe interval.
+  //     subscription as "too early to judge", exactly when
+  //       checkStartedAt - arrivalBaselineAt <= LIVENESS_PROBE_INTERVAL_MS + DELIVERY_GRACE_MS.
+  //     The + DELIVERY_GRACE_MS slack is what makes the promised grace real: the first
+  //     paced probe fires exactly one interval after the baseline is stamped (the same
+  //     startLivenessProbe stamps it and starts the setInterval), so a bare-interval bound
+  //     would leave the first probe's grace to timer lag. With the slack the first probe
+  //     always starts inside the window and the second (two intervals after the baseline)
+  //     always starts outside — the second paced probe is the earliest that can declare an
+  //     arrival-less subscription orphaned. A nudge does NOT honor this baseline: a nudge
+  //     carries caller evidence that the server just appended, so a server-ahead
+  //     subscription with ZERO real arrivals is escalated right after the delivery grace
+  //     instead of no-oping for up to a full probe interval.
   let reconciledIncarnation: string | undefined;
   let lastDeliveredOffset = -1;
   let deliveryArrivals = 0;
@@ -1378,6 +1397,13 @@ function createStreamRuntime(
       return;
     }
     verifyInFlight = true;
+    // The anchor for every silence window below (see the arrival stamps'
+    // contract at their declaration): captured before the guarded read and the
+    // delivery grace, so neither a slow read (10s timeout, retried once) nor
+    // the grace wait shifts a window late and shrinks it. Stamps are re-read
+    // at judgment time — an arrival during the read or the grace is newer than
+    // this anchor and counts as liveness.
+    const checkStartedAt = Date.now();
     try {
       // Every runtime-state read doubles as a transport-RTT sample (timed
       // guards against recording abandoned late resolutions itself).
@@ -1404,38 +1430,43 @@ function createStreamRuntime(
       }
       if (coreProcessorState.maxOffset <= lastDeliveredOffset) return; // mirror is current
       // Server is ahead — give an in-flight delivery a moment, then require
-      // SILENCE across a full check interval before declaring the
-      // subscription orphaned. lastDeliveredOffset lagging is NOT the stall
-      // signal: a batch that arrived before this check and is still ingesting
-      // (or several, queued) adds no new arrival during the grace window, and
-      // reconnecting under it would abandon a healthy mid-apply mirror.
-      // Arrival — the ledger's counter/stamp, bumped before the possibly-slow
-      // ingest — is what proves the delivery lane is alive.
+      // SILENCE across the full check interval ENDING AT checkStartedAt before
+      // declaring the subscription orphaned. lastDeliveredOffset lagging is
+      // NOT the stall signal: a batch that arrived before this check and is
+      // still ingesting (or several, queued) adds no new arrival during the
+      // grace window, and reconnecting under it would abandon a healthy
+      // mid-apply mirror. Arrival — the ledger's counter/stamp, bumped before
+      // the possibly-slow ingest — is what proves the delivery lane is alive.
       await new Promise((resolve) => setTimeout(resolve, DELIVERY_GRACE_MS));
       if (disposed || stream !== connection) return;
       if (pendingIngestEvents > 0) return; // an arrived batch is still ingesting
-      const now = Date.now();
       if (
         lastDeliveryArrivalAt !== undefined &&
-        now - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS
+        checkStartedAt - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS
       ) {
-        return; // recent REAL arrival — deliveries flowing (liveness for every caller)
+        // REAL arrival within the probe interval ending when this check began
+        // — or newer (the stamp is re-read here, so an arrival during the read
+        // or the grace makes this difference negative). Deliveries flowing;
+        // liveness for every caller.
+        return;
       }
       if (
         !requireRealArrival &&
         lastDeliveryArrivalAt === undefined &&
-        now - arrivalBaselineAt <= LIVENESS_PROBE_INTERVAL_MS
+        checkStartedAt - arrivalBaselineAt <= LIVENESS_PROBE_INTERVAL_MS + DELIVERY_GRACE_MS
       ) {
-        // Fresh, arrival-less subscription within one interval of its own
-        // start: too early for the paced probe (or a resume check) to judge.
+        // Fresh, arrival-less subscription: too early for the paced probe (or
+        // a resume check) to judge. The bound is interval + grace so the first
+        // paced probe — which fires exactly one interval after the baseline —
+        // is reliably inside it (exact semantics at the stamps' declaration).
         // A nudge (requireRealArrival) skips this grace — see above.
         return;
       }
       throw new Error(
         `server is at offset ${coreProcessorState.maxOffset} but ${
           lastDeliveryArrivalAt === undefined
-            ? `no delivery has arrived since the subscription went live ${now - arrivalBaselineAt}ms ago`
-            : `no delivery arrived within the last ${LIVENESS_PROBE_INTERVAL_MS}ms`
+            ? `no delivery has arrived since the subscription went live ${Date.now() - arrivalBaselineAt}ms ago`
+            : `no delivery arrived in the ${LIVENESS_PROBE_INTERVAL_MS}ms before this check began (last arrival ${Date.now() - lastDeliveryArrivalAt}ms ago)`
         } (applied through ${lastDeliveredOffset}); subscription is orphaned`,
       );
     } catch (error) {
@@ -1464,11 +1495,13 @@ function createStreamRuntime(
     // The subscription just went live: clear the real-arrival stamp and restart
     // the baseline so the orphan check measures silence from THIS
     // subscription's start, not from a pre-subscribe catch-up page or a
-    // delivery that rode a previous socket. The paced probe grants one full
-    // interval of grace from this baseline (the old per-probe detector's
-    // arrivals-since-probe-start semantics); a nudge does not — zero real
-    // arrivals plus server-ahead evidence escalates right after the delivery
-    // grace (see the stamps' contract at their declaration).
+    // delivery that rode a previous socket. Checks starting within
+    // interval + grace of this baseline treat an arrival-less subscription as
+    // too early to judge — the first paced probe (one interval from here) is
+    // always inside that window, so the second is the earliest that can
+    // declare it orphaned. A nudge gets no such grace — zero real arrivals
+    // plus server-ahead evidence escalates right after the delivery grace
+    // (exact window semantics at the stamps' declaration).
     lastDeliveryArrivalAt = undefined;
     arrivalBaselineAt = Date.now();
     livenessTimer = setInterval(
