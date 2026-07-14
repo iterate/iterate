@@ -13,6 +13,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const ENABLED = process.env.STREAM_CUMULATIVE_BENCHMARK === "1";
 const FOCUS_TAILS = process.env.STREAM_BENCH_FOCUS_TAILS === "1";
+const FOCUS_LIVE_TAILS = process.env.STREAM_BENCH_FOCUS_LIVE_TAILS === "1";
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
 const FOCUS_CROSSPOST_EXACT_RETRY = process.env.STREAM_BENCH_FOCUS_CROSSPOST_EXACT_RETRY === "1";
 const IMPLEMENTATION = process.env.STREAM_BENCH_IMPLEMENTATION;
@@ -908,6 +909,102 @@ test.skipIf(!ENABLED || !FOCUS_TAILS)(
         expect(observedHead).toBeGreaterThanOrEqual(expectedHead);
       }
       metrics.head_after_forced_reactivation = summarize(samples);
+    }
+
+    const output: BenchmarkOutput = {
+      implementation: IMPLEMENTATION,
+      metrics,
+      revision: REVISION,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
+  },
+  600_000,
+);
+
+test.skipIf(!ENABLED || !FOCUS_LIVE_TAILS)(
+  "focused Stream live delivery tails",
+  async () => {
+    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
+      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
+    }
+
+    const metrics: Record<string, Metric> = {};
+    const runId = crypto.randomUUID().slice(0, 8);
+    const sampleCount = TAIL_SAMPLES || 300;
+
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({
+      projectId: `prj_${crypto.randomUUID()}`,
+      slug: `stream-live-tail-${IMPLEMENTATION}-${runId}`,
+    });
+    await project.__describe();
+
+    {
+      using stream = project.streams.get(`/bench/${runId}/live-one`);
+      const arrivedAt = new Map<string, number>();
+      const handle = await stream.subscribe({
+        eventTypes: [EVENT_TYPE],
+        processEventBatch: (batch) => {
+          const now = performance.now();
+          for (const delivered of batch.events) {
+            const marker = markerOf(delivered.payload);
+            if (marker !== undefined && !arrivedAt.has(marker)) arrivedAt.set(marker, now);
+          }
+        },
+      });
+      const samples: number[] = [];
+
+      for (let iteration = -10; iteration < sampleCount; iteration += 1) {
+        const marker = `live-one-${iteration}`;
+        const startedAt = performance.now();
+        await commitDiscardingResult(stream, event({ marker }));
+        await waitFor(() => arrivedAt.has(marker), `one-subscriber event ${iteration}`);
+        if (iteration >= 0) samples.push(arrivedAt.get(marker)! - startedAt);
+      }
+      metrics.live_delivery_one_subscriber = summarize(samples);
+      await Promise.resolve(handle.unsubscribe());
+    }
+
+    {
+      using stream = project.streams.get(`/bench/${runId}/live-fanout`);
+      const subscriberCount = 25;
+      const arrived = new Map<string, Set<number>>();
+      const handles = await Promise.all(
+        Array.from(
+          { length: subscriberCount },
+          async (_, subscriber) =>
+            await stream.subscribe({
+              eventTypes: [EVENT_TYPE],
+              processEventBatch: (batch) => {
+                for (const delivered of batch.events) {
+                  const marker = markerOf(delivered.payload);
+                  if (marker === undefined) continue;
+                  const subscribers = arrived.get(marker) ?? new Set<number>();
+                  subscribers.add(subscriber);
+                  arrived.set(marker, subscribers);
+                }
+              },
+            }),
+        ),
+      );
+      const samples: number[] = [];
+      for (let iteration = -10; iteration < sampleCount; iteration += 1) {
+        const marker = `fanout-${iteration}`;
+        const startedAt = performance.now();
+        await commitDiscardingResult(stream, event({ marker }));
+        await waitFor(
+          () => arrived.get(marker)?.size === subscriberCount,
+          `25-subscriber event ${iteration}`,
+        );
+        if (iteration >= 0) samples.push(performance.now() - startedAt);
+      }
+      metrics.live_delivery_25_subscribers = summarize(samples, subscriberCount);
+      await Promise.all(handles.map(async (handle) => await Promise.resolve(handle.unsubscribe())));
     }
 
     const output: BenchmarkOutput = {
