@@ -1,11 +1,12 @@
 import { expect } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import {
   signUpWithEmailOtp,
   startEmailOtpSignIn,
   uniqueSignupEmail,
 } from "./test-support/email-otp-signup.ts";
-import { test, uniqueSlug } from "./test-support/test.ts";
+import { test } from "./test-support/test.ts";
 
 // Deviation from the suite's forged-session fixture pattern: this spec uses a
 // freshly signed-up user, not a forged session. Creating a project mints new
@@ -16,13 +17,13 @@ test("a new user can create a project through the UI form", async ({ page }) => 
     !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
-  const firstSlug = uniqueSlug("first-project");
+  const firstSlug = uniqueFixtureSlug("first-project");
   await signUpWithEmailOtp(page, {
     email: uniqueSignupEmail("create-project"),
     projectSlug: firstSlug,
   });
 
-  const slug = uniqueSlug("create-project");
+  const slug = uniqueFixtureSlug("create-project");
   // spinner-waiter is disabled through here: the /projects pending state and
   // the agent page's loading state both render two spinner-matching elements
   // at once, tripping its strict-mode isVisible.

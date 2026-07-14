@@ -43,7 +43,7 @@ async function importForgeKey(forgePrivateJwk: string) {
   const forgeJwk = JSON.parse(forgePrivateJwk) as JWK & { kid?: string; alg?: string };
   const alg = forgeJwk.alg ?? "EdDSA";
   const key = await importJWK(forgeJwk, alg);
-  return { key, protectedHeader: { alg, kid: forgeJwk.kid } as const };
+  return { key, protectedHeader: { alg, kid: forgeJwk.kid, typ: "JWT" } as const };
 }
 
 export function forgedSubjectForEmail(email: string) {

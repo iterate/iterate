@@ -111,17 +111,17 @@ deployment under test — tests never invent parallel names for them. The two
 knobs. Nothing else exists (the root Playwright config additionally honors
 the Playwright-conventional `CI` and `VIDEO_MODE`).
 
-| Variable                         | Set by                                                  | Controls                                                                                                      | Default                         |
-| -------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `APP_CONFIG_BASE_URL`            | Doppler (deployed configs); unset in local configs      | THE deployment under test, for every lane                                                                     | Local dev-server discovery file |
-| `APP_CONFIG_ADMIN_API_SECRET`    | Doppler                                                 | Admin credential for the itx surface (project seeding, admin lanes)                                           | None — lanes that need it throw |
-| `APP_CONFIG_INTEGRATIONS__SLACK` | Doppler                                                 | Gates the slack-agent e2e suite (provides the Slack signing secret)                                           | Unset → suite skips             |
-| `E2E_RETRY_TELEMETRY_FILE`       | The preview lane (`scripts/preview/preview.ts`), or you | Where the vitest `RetryTelemetryReporter` writes its JSON (see [Retries and timeouts](#retries-and-timeouts)) | Unset → log line only, no file  |
-| `OS_E2E_TUI_PROJECT_ID`          | `e2e/tui-test/run.ts` (internal; passed to the spec)    | The disposable project the TUI spec chats against                                                             | Unset → TUI spec skips          |
-| `OS_E2E_TUI_SNAPSHOT`            | You                                                     | `"1"` opts into the manual aesthetic TUI snapshot test                                                        | Skipped                         |
-| `GITHUB_SHA`                     | GitHub Actions (ambient)                                | Labels the preview-smoke seed project slug in CI                                                              | `"manual"`                      |
-| `CI`                             | GitHub Actions                                          | Playwright: `forbidOnly`, one retry, trace on first retry, never reuse an existing dev server                 | Unset locally                   |
-| `VIDEO_MODE`                     | You                                                     | `"1"` makes Playwright record video with relaxed timeouts                                                     | Video only retained on failure  |
+| Variable                         | Set by                                                  | Controls                                                                                                         | Default                         |
+| -------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `APP_CONFIG_BASE_URL`            | Doppler (deployed configs); unset in local configs      | THE deployment under test, for every lane                                                                        | Local dev-server discovery file |
+| `APP_CONFIG_ADMIN_API_SECRET`    | Doppler                                                 | Admin credential for the itx surface (project seeding, admin lanes)                                              | None — lanes that need it throw |
+| `APP_CONFIG_INTEGRATIONS__SLACK` | Doppler                                                 | Gates the slack-agent e2e suite (provides the Slack signing secret)                                              | Unset → suite skips             |
+| `E2E_RETRY_TELEMETRY_FILE`       | The preview lane (`scripts/preview/preview.ts`), or you | Where the vitest `RetryTelemetryReporter` writes its JSON (see [Retries and timeouts](#retries-and-timeouts))    | Unset → log line only, no file  |
+| `OS_E2E_TUI_PROJECT_ID`          | `e2e/tui-test/run.ts` (internal; passed to the spec)    | The disposable project the TUI spec chats against                                                                | Unset → TUI spec skips          |
+| `OS_E2E_TUI_SNAPSHOT`            | You                                                     | `"1"` opts into the manual aesthetic TUI snapshot test                                                           | Skipped                         |
+| `GITHUB_SHA`                     | GitHub Actions (ambient)                                | Labels the preview-smoke seed project slug in CI                                                                 | `"manual"`                      |
+| `CI`                             | GitHub Actions                                          | Playwright: `forbidOnly`, one retry, trace on first retry, never reuse an existing dev server                    | Unset locally                   |
+| `VIDEO_MODE`                     | You                                                     | `"1"` records spec demo videos with relaxed timeouts — see [Video mode](#video-mode-recorded-spec-demos-for-prs) | Video only retained on failure  |
 
 ## Artifacts
 
@@ -136,6 +136,75 @@ the Playwright-conventional `CI` and `VIDEO_MODE`).
   `test-results/` directory, then uploads that one workspace-relative directory
   as a CI artifact. The collection paths live in
   `scripts/preview/collect-test-artifacts.sh`.
+
+## Where test helpers live
+
+Four layers. A helper lives at the **lowest layer all its consumers share**,
+and imports point **down** only. When both lanes need a helper, it moves down
+a layer — never sideways into a copy.
+
+| Layer                     | Home                                                                                | Charter                                                                                                                                                                                                                                     |
+| ------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L0 policy & infra         | `packages/shared/src/test-support/`                                                 | Runner-agnostic: the [e2e-policy budgets and retry telemetry](#retries-and-timeouts) (`e2e-policy/`), vitest run-artifact plumbing (`vitest-e2e/`), the fixture slug convention (`fixture-slug.ts`).                                        |
+| L1 environment & identity | `apps/os/scripts/` and `scripts/auth/`                                              | The deployment under test and who you are against it: dev-server lifecycle (`dev.ts`, `lib/dev-server-info.ts`), Doppler plumbing, the auth forge (`scripts/auth/forge-token.ts` behind `pnpm auth:mint`). Consumed by both lanes' configs. |
+| L2 surface clients        | `apps/os/e2e/test-support/` (itx surface) · `specs/test-support/` (browser surface) | Lane-specific clients and fixtures: admin itx handles and disposable projects on the itx side; forged browser sessions and page plugins on the Playwright side.                                                                             |
+| L3 domain harnesses       | `apps/os/src/domains/*/test-helpers.ts`, colocated with the domain                  | Unit-lane fakes implementing real interfaces (stream processor harnesses etc.); never imported by L2 or above.                                                                                                                              |
+
+Anti-goal: one mega test-support package. That would drag itx clients and
+forge machinery into a package that production workers import; the layers keep
+the credentialed, lane-specific pieces at the edges that need them. The
+"lowest shared layer" rule is also deliberately lazy — e.g.
+`apps/os/e2e/test-support/wait-for-condition.ts` stays L2 until a Playwright
+spec actually needs it: "needed by both lanes" is proven by a consumer, not
+predicted.
+
+## Video mode: recorded spec demos for PRs
+
+Any Playwright spec re-runs as a watchable demo — pointer highlights on every
+action, dead air compressed, the blank startup lead-in trimmed. Design and
+plugin by Misha: [middlewright](https://github.com/iterate/middlewright)'s
+`videoMode`, wired in `specs/test-support/test.ts`; the auto start-trim
+shipped in iterate/middlewright#3 / PR #1788.
+
+```bash
+# local dev, one flow (the config auto-starts the dev server; specs read
+# os secrets from the apps/os Doppler scope themselves)
+VIDEO_MODE=1 pnpm spec -g "dashboard"
+
+# against a deployed slot — note --project os: the repo root scopes to
+# _shared, which lacks the os APP_CONFIG_* values the specs need
+doppler run --project os --config preview_3 -- env VIDEO_MODE=1 pnpm spec -g "dashboard"
+```
+
+`VIDEO_MODE=1` flips two things:
+
+- **Config** (`playwright.config.ts`): `video: "on"` plus relaxed budgets
+  (10s `actionTimeout`, 300s test timeout) so highlight pauses don't trip the
+  deliberately-tight normal budgets.
+- **Plugin** (`videoMode` in `specs/test-support/test.ts`): records each
+  action's bounding box during the run, then post-renders with ffmpeg (must
+  be installed): pointer highlights, dead-air spans >300ms sped up, a 1s
+  final hold, and the blank `about:blank`-to-first-paint lead-in trimmed
+  automatically (`trimStart: "auto"`, pixel-based; an explicit
+  `page.videoMode.setStartTime()` in a spec still wins).
+
+Output lands under `test-results/playwright-output/<test-title-dir>/`:
+`video-rendered.webm` (the demo), `video-raw.webm`, and a `video-mode.html`
+frame-stepper, all also attached to the HTML report.
+
+**Getting the video into a PR description is manual** — the "automatic" part
+is only the recording/trimming. GitHub renders an inline video player only
+for `user-attachments` URLs, and only its web editors mint those (`<video>`
+tags pointing at any other host are sanitised — which is why older PRs fell
+back to release-asset GIFs, e.g. PR #1764):
+
+1. Convert for the widest GitHub support:
+   `ffmpeg -i video-rendered.webm demo.mp4`.
+2. Drag (or paste) `demo.mp4` into the PR-description editor on github.com.
+   GitHub uploads it and inserts a `https://github.com/user-attachments/assets/…`
+   URL — leave it on its own line and it renders as an inline player. There
+   is no API or `gh` route for this upload. PR #1788's before/after clip is
+   the working example.
 
 ## Retries and timeouts
 

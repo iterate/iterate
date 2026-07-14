@@ -1,37 +1,23 @@
 import type { Page } from "@playwright/test";
 import { z } from "zod/v4";
-import {
-  ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
-  ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
-  ITERATE_IS_ADMIN_CLAIM,
-  ITERATE_ROLE_CLAIM,
-  type IterateAuthAccessTokenOrganizationClaim,
-  type IterateAuthProjectClaim,
+import type {
+  IterateAuthAccessTokenOrganizationClaim,
+  IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { connectItx } from "../../apps/os/src/itx-client.ts";
-
-type ForgePrivateJwk = JsonWebKey & {
-  alg?: string;
-  kid?: string;
-};
+import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 
 type OsPlaywrightAuthConfig = {
   adminApiSecret: string;
   clientId: string;
-  forgePrivateJwk: ForgePrivateJwk;
+  /** The forge private JWK as its raw JSON string — what forge-token.ts consumes. */
+  forgePrivateJwk: string;
   issuer: string;
 };
 
 type OsPlaywrightAuthEnv = z.infer<typeof OsPlaywrightAuthEnv>;
-
-const ForgePrivateJwkSchema = z
-  .looseObject({
-    crv: z.literal("Ed25519"),
-    kid: z.string().min(1),
-    kty: z.literal("OKP"),
-  })
-  .transform((value) => value as ForgePrivateJwk);
 
 const OsPlaywrightAuthEnv = z.object({
   /** OS admin handle used to create and clean up fixture projects through /api/itx. */
@@ -44,15 +30,14 @@ const OsPlaywrightAuthEnv = z.object({
   AUTH_FORGE_PRIVATE_JWK: z
     .string()
     .min(1)
-    .transform((value, context) => {
+    .refine((value) => {
       try {
-        return JSON.parse(value);
-      } catch (error) {
-        context.addIssue({ code: "custom", message: `Invalid JSON ${value}: ${error}` });
-        return z.NEVER;
+        JSON.parse(value);
+        return true;
+      } catch {
+        return false;
       }
-    })
-    .pipe(ForgePrivateJwkSchema),
+    }, "must be the forge private JWK as a JSON string"),
 });
 
 export type MintedIterateSession = {
@@ -62,7 +47,6 @@ export type MintedIterateSession = {
 };
 
 let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
-let signingKeyPromise: Promise<CryptoKey> | undefined;
 
 export async function createProjectFixture(
   slugPrefix: string,
@@ -170,53 +154,40 @@ export async function mintIterateSession(input: {
   email: string;
   organizations: IterateAuthAccessTokenOrganizationClaim[];
   projects: IterateAuthProjectClaim[];
-}) {
+}): Promise<MintedIterateSession> {
   const config = await resolveOsPlaywrightAuthConfig();
-  const subject = `usr_forged_${input.email.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
-  const now = Math.floor(Date.now() / 1000);
-  const ttlSeconds = 60 * 60;
-  const expiresAtSeconds = now + ttlSeconds;
-  const sessionId = `ses_forged_${crypto.randomUUID().slice(0, 8)}`;
-
-  const accessToken = await signJwt({
+  // Signing lives in scripts/auth/forge-token.ts (the core behind
+  // `pnpm auth:mint`); this layer only picks the audience for the deployment
+  // under test and wraps the token pair in a browser cookie.
+  const accessToken = await mintForgedAccessToken({
+    forgePrivateJwk: config.forgePrivateJwk,
+    issuer: config.issuer,
     audience: authResourceForBaseUrl(input.baseUrl),
-    issuer: config.issuer,
-    payload: {
-      email: input.email,
-      scope: "openid profile email",
-      scopes: ["openid", "profile", "email"],
-      sid: sessionId,
-      [ITERATE_IS_ADMIN_CLAIM]: false,
-      [ITERATE_ROLE_CLAIM]: null,
-      [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: input.organizations,
-      [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: input.projects,
-    },
-    subject,
-    now,
-    expiresAtSeconds,
-    privateJwk: config.forgePrivateJwk,
+    email: input.email,
+    organizations: input.organizations,
+    projects: input.projects,
   });
-  const idToken = await signJwt({
-    audience: config.clientId,
+  const idToken = await mintForgedIdToken({
+    forgePrivateJwk: config.forgePrivateJwk,
     issuer: config.issuer,
-    payload: {
-      email: input.email,
-      email_verified: true,
-      name: input.email.split("@")[0] || input.email,
-      [ITERATE_IS_ADMIN_CLAIM]: false,
-      [ITERATE_ROLE_CLAIM]: null,
-    },
-    subject,
-    now,
-    expiresAtSeconds,
-    privateJwk: config.forgePrivateJwk,
+    clientId: config.clientId,
+    email: input.email,
   });
 
   return {
     accessToken,
-    expiresAtMs: expiresAtSeconds * 1000,
+    // The cookie's expiry mirrors the access token's `exp` claim exactly —
+    // the same derivation the session-from-token endpoint does server-side.
+    expiresAtMs: jwtExpirySeconds(accessToken) * 1000,
     idToken,
   };
+}
+
+function jwtExpirySeconds(token: string) {
+  const payload = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")) as {
+    exp: number;
+  };
+  return payload.exp;
 }
 
 async function resolveOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
@@ -268,48 +239,6 @@ async function loadOsPlaywrightAuthEnv(): Promise<OsPlaywrightAuthEnv> {
   );
 }
 
-async function signJwt(input: {
-  audience: string;
-  expiresAtSeconds: number;
-  issuer: string;
-  now: number;
-  payload: Record<string, unknown>;
-  privateJwk: ForgePrivateJwk;
-  subject: string;
-}) {
-  const header = base64UrlEncode(
-    JSON.stringify({
-      alg: "EdDSA",
-      kid: input.privateJwk.kid,
-      typ: "JWT",
-    }),
-  );
-  const payload = base64UrlEncode(
-    JSON.stringify({
-      ...input.payload,
-      aud: input.audience,
-      exp: input.expiresAtSeconds,
-      iat: input.now,
-      iss: input.issuer,
-      sub: input.subject,
-    }),
-  );
-  const signingInput = `${header}.${payload}`;
-  const signature = await crypto.subtle.sign(
-    { name: "Ed25519" },
-    await signingKey(input.privateJwk),
-    new TextEncoder().encode(signingInput),
-  );
-  return `${signingInput}.${base64UrlEncode(signature)}`;
-}
-
-async function signingKey(privateJwk: ForgePrivateJwk) {
-  signingKeyPromise =
-    signingKeyPromise ||
-    crypto.subtle.importKey("jwk", privateJwk, { name: "Ed25519" }, false, ["sign"]);
-  return await signingKeyPromise;
-}
-
 function authResourceForBaseUrl(baseUrl: string) {
   const url = new URL(baseUrl);
   if (
@@ -321,13 +250,4 @@ function authResourceForBaseUrl(baseUrl: string) {
     return `http://${url.hostname}`;
   }
   return baseUrl.replace(/\/+$/, "");
-}
-
-function base64UrlEncode(value: string | ArrayBuffer) {
-  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
-  return Buffer.from(bytes).toString("base64url");
-}
-
-function uniqueFixtureSlug(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`.toLowerCase();
 }
