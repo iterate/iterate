@@ -88,11 +88,39 @@ export default async function eraseData(options: {
   }
   console.log(`KV: deleted ${deleted} keys`);
 
+  // Delete a batch of items with bounded concurrency and a deadline: this
+  // script runs inside the preview-slot cleanup job's 10-MINUTE ceiling, and
+  // an e2e-churned search-index bucket holds thousands of objects —
+  // one-at-a-time REST deletes blew the ceiling on the first live run
+  // (preview_6, 2026-07-14). The API's global rate limit (~1200 req/5min)
+  // caps total call volume anyway, so a huge backlog cannot finish in one
+  // run by construction: each pass deletes what fits its budget and the next
+  // release continues — convergent, never job-killing.
+  const deleteAll = async (input: {
+    items: readonly string[];
+    deadline: number;
+    deleteOne: (item: string) => Promise<void>;
+  }) => {
+    const queue = [...input.items];
+    let deleted = 0;
+    await Promise.all(
+      Array.from({ length: 10 }, async () => {
+        for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
+          if (Date.now() > input.deadline) return;
+          await input.deleteOne(item);
+          deleted += 1;
+        }
+      }),
+    );
+    return deleted;
+  };
+
   // ---- AI Search: delete every per-project instance ---------------------------
   // Instances are born with their project (create saga) and are pure derived
   // state over the corpus bucket — without this step an e2e-heavy slot
   // accumulates hundreds of orphaned instances per lease (observed: 162 from
   // one e2e run). Best-effort: the namespace may not exist on old envs.
+  const instanceDeadline = Date.now() + 90_000;
   try {
     let instancesDeleted = 0;
     for (;;) {
@@ -103,11 +131,19 @@ export default async function eraseData(options: {
         `/ai-search/namespaces/${env.osWorkerName}/instances?per_page=100&page=1`,
       );
       if (instances.length === 0) break;
-      for (const instance of instances) {
-        await cf(`/ai-search/namespaces/${env.osWorkerName}/instances/${instance.id}`, {
-          method: "DELETE",
-        });
-        instancesDeleted += 1;
+      const deleted = await deleteAll({
+        items: instances.map((instance) => instance.id),
+        deadline: instanceDeadline,
+        deleteOne: async (id) => {
+          await cf(`/ai-search/namespaces/${env.osWorkerName}/instances/${id}`, {
+            method: "DELETE",
+          });
+        },
+      });
+      instancesDeleted += deleted;
+      if (deleted < instances.length) {
+        console.warn(`AI Search: deadline hit with instances remaining — next release continues`);
+        break;
       }
     }
     console.log(`AI Search: deleted ${instancesDeleted} instances`);
@@ -120,6 +156,7 @@ export default async function eraseData(options: {
   // user data under this script's contract. (The sandboxes bucket is left
   // alone deliberately — container teardown is broken upstream, see the DO
   // section, and its backups expire on a lifecycle rule.)
+  const bucketDeadline = Date.now() + 180_000;
   for (const bucket of [`${env.osWorkerName}-search-index`, `${env.osWorkerName}-files`]) {
     try {
       let objectsDeleted = 0;
@@ -130,11 +167,21 @@ export default async function eraseData(options: {
           `/r2/buckets/${bucket}/objects?per_page=1000&page=1`,
         );
         if (listing.length === 0) break;
-        for (const object of listing) {
-          await cf(`/r2/buckets/${bucket}/objects/${encodeURIComponent(object.key)}`, {
-            method: "DELETE",
-          });
-          objectsDeleted += 1;
+        const deleted = await deleteAll({
+          items: listing.map((object) => object.key),
+          deadline: bucketDeadline,
+          deleteOne: async (key) => {
+            await cf(`/r2/buckets/${bucket}/objects/${encodeURIComponent(key)}`, {
+              method: "DELETE",
+            });
+          },
+        });
+        objectsDeleted += deleted;
+        if (deleted < listing.length) {
+          console.warn(
+            `R2 ${bucket}: deadline hit with objects remaining — next release continues`,
+          );
+          break;
         }
       }
       console.log(`R2 ${bucket}: deleted ${objectsDeleted} objects`);
