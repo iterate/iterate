@@ -1,9 +1,8 @@
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { ExternalLinkIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -15,6 +14,8 @@ import {
   isGithubHistoryConflictError,
   type GithubHistoryResolutionChoice,
 } from "./github-history-resolution.ts";
+import type { InstallationRepo } from "~/components/github-installation-repos.ts";
+import { InstallationRepoPicker } from "~/components/github-installation-repos.tsx";
 import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
 type HistoryResolution = {
@@ -286,22 +287,19 @@ function LinkForm({
       );
     },
   });
-  const [connection, setConnection] = useState("");
-  const [owner, setOwner] = useState("");
-  const [repo, setRepo] = useState("");
+  // Default to the first connection so the Octokit installation list loads
+  // immediately — same ergonomics as "Add from GitHub" on the repos page.
+  const [connection, setConnection] = useState(connections[0] ?? "");
+  const [selected, setSelected] = useState<InstallationRepo | null>(null);
 
   const link = useMutation({
-    // Trimmed at the call, not just in the enable-check: a padded owner/repo
-    // would store a link (and a full_name webhook condition) GitHub payloads
-    // never match — mirroring would work while cross-post silently didn't.
     mutationFn: async () => {
-      const ownerName = owner.trim();
-      const repoName = repo.trim();
+      if (selected === null) throw new Error("Pick a GitHub repository.");
       const handle = itx.repos.get(repoPath);
       const result = await handle.linkGithub({
         connection,
-        owner: ownerName,
-        repo: repoName,
+        owner: selected.owner,
+        repo: selected.name,
       });
       // Prefer GitHub's history when connecting: try a non-forced pull first.
       // Empty / already-aligned GitHub is a no-op success; unrelated history
@@ -388,7 +386,7 @@ function LinkForm({
       className="flex flex-col gap-2 p-3"
       onSubmit={(event) => {
         event.preventDefault();
-        if (connection === "" || owner.trim() === "" || repo.trim() === "") return;
+        if (connection === "" || selected === null) return;
         link.mutate();
       }}
     >
@@ -396,42 +394,56 @@ function LinkForm({
         Back this repo with GitHub
       </span>
       <p className="text-xs text-muted-foreground">
-        Linking pulls from GitHub by default. Commits then mirror out automatically, and GitHub
-        webhooks about the repository land on this repo&apos;s stream. The repository is created
-        (private) if missing and the installation can create org repositories.
+        Pick a repository the GitHub App can see. Linking pulls from GitHub by default; commits then
+        mirror out and webhooks land on this repo&apos;s stream.
       </p>
-      <NativeSelect
-        size="sm"
-        className="w-full"
-        value={connection}
-        onChange={(event) => setConnection(event.target.value)}
-      >
-        <NativeSelectOption value="">Pick a connection…</NativeSelectOption>
-        {connections.map((name) => (
-          <NativeSelectOption key={name} value={name}>
-            {name}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
-      <Input
-        placeholder="Owner (org)"
-        className="h-8 text-xs"
-        value={owner}
-        onChange={(event) => setOwner(event.target.value)}
-      />
-      <Input
-        placeholder="Repository"
-        className="h-8 text-xs"
-        value={repo}
-        onChange={(event) => setRepo(event.target.value)}
-      />
+      {connections.length > 1 ? (
+        <NativeSelect
+          size="sm"
+          className="w-full"
+          value={connection}
+          onChange={(event) => {
+            setConnection(event.target.value);
+            setSelected(null);
+          }}
+        >
+          {connections.map((name) => (
+            <NativeSelectOption key={name} value={name}>
+              {name}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      ) : (
+        <span className="text-xs text-muted-foreground">via {connection}</span>
+      )}
+      {connection === "" ? null : (
+        <Suspense
+          fallback={
+            <div
+              className="rounded-md border p-2 text-xs text-muted-foreground"
+              data-spinner="true"
+            >
+              Loading repositories…
+            </div>
+          }
+        >
+          <InstallationRepoPicker
+            connection={connection}
+            projectId={projectId}
+            selected={selected}
+            onSelect={setSelected}
+            dense
+            filterPlaceholder="Filter repositories…"
+          />
+        </Suspense>
+      )}
       <Button
         type="submit"
         size="sm"
         className="text-xs"
-        disabled={link.isPending || connection === "" || owner.trim() === "" || repo.trim() === ""}
+        disabled={link.isPending || connection === "" || selected === null}
       >
-        {link.isPending ? "Linking…" : "Link to GitHub"}
+        {link.isPending ? "Linking…" : selected === null ? "Pick a repository" : "Link to GitHub"}
       </Button>
     </form>
   );
