@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   GITHUB_HISTORY_RESOLUTION_OPTIONS,
+  GITHUB_UI_FORCE_PULL_DEPTH,
   githubHistoryMergeAgentInstructions,
   githubHistoryMergeAgentPath,
   isGithubHistoryConflictError,
@@ -17,7 +18,7 @@ describe("isGithubHistoryConflictError", () => {
     ).toBe(true);
   });
 
-  it("recognizes push non-fast-forward wording", () => {
+  it("recognizes push non-fast-forward wording from the durable object", () => {
     expect(
       isGithubHistoryConflictError(
         new Error(
@@ -27,17 +28,31 @@ describe("isGithubHistoryConflictError", () => {
     ).toBe(true);
   });
 
+  it("recognizes isomorphic-git PushRejectedError wording", () => {
+    // Thrown before RepoDurableObject reaches its custom pushed.ok message.
+    expect(
+      isGithubHistoryConflictError(
+        new Error("Push rejected because it was not a simple fast-forward"),
+      ),
+    ).toBe(true);
+  });
+
   it("does not treat auth or network failures as history conflicts", () => {
     expect(isGithubHistoryConflictError(new Error("Bad credentials"))).toBe(false);
     expect(isGithubHistoryConflictError(new Error("ENOTFOUND api.github.com"))).toBe(false);
+    // Loose "unrelated" alone used to false-positive; require the quoted status form.
+    expect(isGithubHistoryConflictError(new Error("unrelated transport failure"))).toBe(false);
   });
 });
 
 describe("github history resolution options", () => {
-  it("defaults to pull (GitHub wins)", () => {
-    const defaults = GITHUB_HISTORY_RESOLUTION_OPTIONS.filter((option) => option.default);
-    expect(defaults).toHaveLength(1);
-    expect(defaults[0]?.value).toBe("pull");
+  it("lists pull, push, and agent without a static default flag", () => {
+    expect(GITHUB_HISTORY_RESOLUTION_OPTIONS.map((option) => option.value)).toEqual([
+      "pull",
+      "push",
+      "agent",
+    ]);
+    expect(GITHUB_UI_FORCE_PULL_DEPTH).toBeGreaterThan(0);
   });
 });
 
@@ -61,5 +76,9 @@ describe("githubHistoryMergeAgentInstructions", () => {
     expect(text).toContain("/repos/config");
     expect(text).toContain("iterate/config");
     expect(text).toContain("sandboxes.create");
+    // Publishable sequence: force-pull base, then commitFiles, then mirror push.
+    expect(text).toContain("syncFromGithub({ force: true");
+    expect(text).toContain("commitFiles");
+    expect(text).toContain("pushToGithub()");
   });
 });

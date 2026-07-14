@@ -4,20 +4,31 @@
  * merges divergent histories in a sandbox.
  */
 
+/**
+ * Shallow window for force-pull from the UI. Full history clones can exceed
+ * the DO isolate's memory (a ~21MB pack can inflate past 128MB); GitHub keeps
+ * the full history so a later deeper sync can always widen the window.
+ */
+export const GITHUB_UI_FORCE_PULL_DEPTH = 50;
+
 /** True when a push/sync failure is the non-fast-forward / diverged case the
  * resolution UI handles — not auth, network, or empty-repo failures. */
 export function isGithubHistoryConflictError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const lower = message.toLowerCase();
+  // Canonical backend messages + isomorphic-git's own PushRejectedError text
+  // (thrown before RepoDurableObject wraps pushed.ok rejections). Keep this
+  // tight: loose substrings like bare "unrelated" false-positive on auth noise.
   return (
     lower.includes("non-fast-forward") ||
-    lower.includes("is not a fast-forward") ||
+    lower.includes("not a simple fast-forward") ||
     lower.includes("not a fast-forward") ||
-    lower.includes('"diverged"') ||
-    lower.includes('"behind"') ||
-    lower.includes('"unrelated"') ||
-    lower.includes("diverged") ||
-    lower.includes("unrelated")
+    lower.includes("push rejected") ||
+    lower.includes("syncfromgithub is not a fast-forward") ||
+    // GitHub compare statuses quoted in syncFromGithub's error.
+    lower.includes('github says "diverged"') ||
+    lower.includes('github says "behind"') ||
+    lower.includes('github says "unrelated"')
   );
 }
 
@@ -27,14 +38,11 @@ export const GITHUB_HISTORY_RESOLUTION_OPTIONS: ReadonlyArray<{
   value: GithubHistoryResolutionChoice;
   label: string;
   description: string;
-  /** Default selection when histories diverge after a connect/sync. */
-  default?: boolean;
 }> = [
   {
     value: "pull",
     label: "Use GitHub's version",
     description: "Replace this project's history with GitHub's main (force pull).",
-    default: true,
   },
   {
     value: "push",
@@ -77,15 +85,23 @@ export function githubHistoryMergeAgentInstructions(input: {
     `The project repo at ${input.repoPath} is linked to GitHub ${input.owner}/${input.repo}, but the histories have diverged (non-fast-forward).`,
     "Your job: merge both sides carefully and leave the project on a single coherent main that also mirrors back to GitHub.",
     "",
-    "Suggested approach:",
+    "Suggested approach (this sequence converges; do not invent a different push order):",
     "1. Inspect both sides: read files and recent log on `itx.repos.get(" +
       JSON.stringify(input.repoPath) +
       ")`, and inspect GitHub via `itx.integrations.github.get(...).octokit` if needed.",
-    "2. Create a sandbox (`itx.sandboxes.create`) and clone or materialize both histories there so you can run real git merge tooling.",
-    "3. Resolve conflicts intentionally — keep the meaningful config/product changes from both sides; do not blindly discard either history.",
-    "4. Commit the merged tree to the project repo with `commitFiles` (or equivalent), then `pushToGithub()` so the mirror is current.",
+    "2. Create a sandbox (`itx.sandboxes.create`) and materialize BOTH trees there so you can merge with real git tooling.",
+    "3. Produce the integrated file tree (resolve conflicts intentionally — keep meaningful changes from both sides).",
+    "4. Land it on the project with a publishable sequence:",
+    "   a. Snapshot the merged tree (paths + contents) from the sandbox.",
+    "   b. `await itx.repos.get(" +
+      JSON.stringify(input.repoPath) +
+      ").syncFromGithub({ force: true, depth: " +
+      String(GITHUB_UI_FORCE_PULL_DEPTH) +
+      " })` so the project head is an ancestor of (or equal to) GitHub's main.",
+    "   c. `commitFiles` the merged tree on top of that head.",
+    "   d. `pushToGithub()` — now a normal fast-forward mirror push.",
     "5. Summarize what you merged and any choices you made.",
     "",
-    "Do not force-push to GitHub unless the user explicitly asks after you present options. Prefer a merge commit (or clean integrated tree) on the project side, then a normal mirror push.",
+    "Avoid force-pushing to GitHub unless the user explicitly asks after you present options. Prefer step 4's force-pull-then-commit so the mirror stays a normal fast-forward.",
   ].join("\n");
 }

@@ -15,7 +15,10 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@iterate-com/ui
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { toast } from "@iterate-com/ui/components/sonner";
-import type { InstallationRepo } from "~/components/github-installation-repos.ts";
+import {
+  listGithubConnections,
+  type InstallationRepo,
+} from "~/components/github-installation-repos.ts";
 import { InstallationRepoList } from "~/components/github-installation-repos.tsx";
 import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
@@ -47,22 +50,8 @@ export function AddRepoFromGithub({
 }) {
   const connections = useItxQuery({
     key: ["github-connections", projectId],
-    query: async (itx) => {
-      // Failures come back as data (an empty list, so the row simply doesn't
-      // render): this is optional sugar on the repos page, and a throw from a
-      // suspense query would take down the whole page, not just the button.
-      try {
-        const entries = await itx.integrations.list();
-        // Only builtin GitHub connections can back a repo (they carry the App
-        // installation the mirror pushes authenticate through).
-        return entries.flatMap((entry) =>
-          entry.source === "builtin" && entry.integration === "github" ? [entry.connection] : [],
-        );
-      } catch (error) {
-        console.error("AddRepoFromGithub: listing integrations failed", error);
-        return [];
-      }
-    },
+    // Shared with the repo IDE GitHub panel — must never throw.
+    query: (itx) => listGithubConnections(itx),
   });
   const [open, setOpen] = useState(false);
   if (connections.length === 0) return null;

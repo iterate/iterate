@@ -4,6 +4,26 @@ import type { ItxReactHandle } from "~/itx/itx-react.tsx";
  * a picker, not a mirror of the whole org. */
 const MAX_INSTALLATION_REPO_PAGES = 5;
 
+/**
+ * Builtin GitHub connection names for a project. Failures return `[]` (never
+ * throw): both the repos-page wizard and the IDE GitHub panel share the
+ * `["github-connections", projectId]` suspense query key, and a throw would
+ * take down the whole page / poison the shared cache with an error.
+ */
+export async function listGithubConnections(itx: ItxReactHandle): Promise<string[]> {
+  try {
+    const entries = await itx.integrations.list();
+    // Only builtin GitHub connections can back a repo (they carry the App
+    // installation the mirror pushes authenticate through).
+    return entries.flatMap((entry) =>
+      entry.source === "builtin" && entry.integration === "github" ? [entry.connection] : [],
+    );
+  } catch (error) {
+    console.error("listGithubConnections: listing integrations failed", error);
+    return [];
+  }
+}
+
 export type InstallationRepo = {
   defaultBranch: string;
   fullName: string;

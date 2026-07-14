@@ -9,12 +9,16 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import type { RepoProcessorState } from "../../domains/repos/repo-processor-contract.ts";
 import {
   GITHUB_HISTORY_RESOLUTION_OPTIONS,
+  GITHUB_UI_FORCE_PULL_DEPTH,
   githubHistoryMergeAgentInstructions,
   githubHistoryMergeAgentPath,
   isGithubHistoryConflictError,
   type GithubHistoryResolutionChoice,
 } from "./github-history-resolution.ts";
-import type { InstallationRepo } from "~/components/github-installation-repos.ts";
+import {
+  listGithubConnections,
+  type InstallationRepo,
+} from "~/components/github-installation-repos.ts";
 import { InstallationRepoPicker } from "~/components/github-installation-repos.tsx";
 import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
@@ -32,8 +36,12 @@ type HistoryResolution = {
  * Connecting prefers pulling from GitHub; when histories diverge, a small
  * resolution step offers force-pull, force-push, or an agent merge.
  *
- * Resolution state lives on this parent so a successful `linkGithub` (which
- * flips `state.github` live) does not unmount the conflict step mid-flow.
+ * Link + resolve mutations live on this parent so:
+ * - a successful `linkGithub` (which flips `state.github` live) does not
+ *   unmount the conflict step mid-flow, and
+ * - the panel does not swap to interactive LinkedPanel while the pull-first
+ *   sync is still running (that window previously enabled concurrent
+ *   push/sync/unlink against a half-finished link).
  */
 export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; repoPath: string }) {
   const itx = useItx();
@@ -47,6 +55,70 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
   );
   const state = repoProcessor.value;
 
+  const link = useMutation({
+    mutationFn: async (input: { connection: string; owner: string; repo: string }) => {
+      const handle = itx.repos.get(repoPath);
+      const result = await handle.linkGithub({
+        connection: input.connection,
+        owner: input.owner,
+        repo: input.repo,
+      });
+      // Prefer GitHub's history when connecting: try a non-forced pull first.
+      // Empty / already-aligned GitHub is a no-op success; unrelated history
+      // surfaces as a conflict for the resolution step.
+      try {
+        const sync = await handle.syncFromGithub({});
+        return { kind: "synced" as const, result, sync };
+      } catch (syncError) {
+        if (isGithubHistoryConflictError(syncError)) {
+          return {
+            kind: "conflict" as const,
+            result,
+            reason:
+              syncError instanceof Error
+                ? syncError.message
+                : "Histories diverged; choose how to reconcile.",
+          };
+        }
+        // Sync failed for a non-conflict reason (empty GitHub branch, network,
+        // …). If the seed push already landed, the link is usable; otherwise
+        // surface the better error.
+        if (result.initialPush.ok) {
+          return { kind: "pushed" as const, result };
+        }
+        throw syncError instanceof Error
+          ? syncError
+          : new Error(
+              result.initialPush.error ??
+                (syncError instanceof Error ? syncError.message : String(syncError)),
+            );
+      }
+    },
+    onSuccess: (outcome) => {
+      if (outcome.kind === "conflict") {
+        setResolution({
+          owner: outcome.result.owner,
+          repo: outcome.result.repo,
+          preferred: "pull",
+          reason: outcome.reason,
+        });
+        return;
+      }
+      if (outcome.kind === "synced") {
+        toast.success(
+          outcome.sync.changed
+            ? `Linked to ${outcome.result.owner}/${outcome.result.repo} and pulled GitHub's ${outcome.sync.commitOid.slice(0, 7)}.`
+            : `Linked to ${outcome.result.owner}/${outcome.result.repo}${outcome.result.created ? " (created)" : ""}; already aligned with GitHub.`,
+        );
+        return;
+      }
+      toast.success(
+        `Linked to ${outcome.result.owner}/${outcome.result.repo}${outcome.result.created ? " (created)" : ""}; mirror seeded at ${outcome.result.initialPush.commitOid?.slice(0, 7)}.`,
+      );
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not link."),
+  });
+
   const resolve = useMutation({
     mutationFn: async (choice: GithubHistoryResolutionChoice) => {
       if (resolution === null) throw new Error("Nothing to resolve.");
@@ -54,7 +126,10 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
       if (choice === "pull") {
         return {
           kind: "pull" as const,
-          result: await handle.syncFromGithub({ force: true }),
+          result: await handle.syncFromGithub({
+            force: true,
+            depth: GITHUB_UI_FORCE_PULL_DEPTH,
+          }),
         };
       }
       if (choice === "push") {
@@ -120,11 +195,27 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
     );
   }
 
+  // Hold the interactive LinkedPanel until the whole link→pull mutation settles
+  // — otherwise live state flips to linked mid-sync and exposes push/unlink.
+  if (link.isPending) {
+    return (
+      <div className="flex flex-col gap-2 p-3" data-spinner="true">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Linking…
+        </span>
+        <p className="text-xs text-muted-foreground">
+          Recording the GitHub link and pulling from GitHub. This can take a moment for larger
+          repositories.
+        </p>
+      </div>
+    );
+  }
+
   return state.github === null ? (
     <LinkForm
       projectId={projectId}
-      repoPath={repoPath}
-      onHistoryConflict={(next) => setResolution(next)}
+      linking={link.isPending}
+      onLink={(input) => link.mutate(input)}
     />
   ) : (
     <LinkedPanel
@@ -267,99 +358,23 @@ function LinkedPanel({
 
 function LinkForm({
   projectId,
-  repoPath,
-  onHistoryConflict,
+  linking,
+  onLink,
 }: {
   projectId: string;
-  repoPath: string;
-  onHistoryConflict: (resolution: HistoryResolution) => void;
+  linking: boolean;
+  onLink: (input: { connection: string; owner: string; repo: string }) => void;
 }) {
-  const itx = useItx();
   const params = useParams({ strict: false }) as { projectSlug?: string };
   const connections = useItxQuery({
     key: ["github-connections", projectId],
-    query: async (itx) => {
-      const entries = await itx.integrations.list();
-      // Only builtin GitHub connections can back a repo (they carry the App
-      // installation the mirror pushes authenticate through).
-      return entries.flatMap((entry) =>
-        entry.source === "builtin" && entry.integration === "github" ? [entry.connection] : [],
-      );
-    },
+    // Shared with AddRepoFromGithub — must never throw (see listGithubConnections).
+    query: (itx) => listGithubConnections(itx),
   });
   // Default to the first connection so the Octokit installation list loads
   // immediately — same ergonomics as "Add from GitHub" on the repos page.
   const [connection, setConnection] = useState(connections[0] ?? "");
   const [selected, setSelected] = useState<InstallationRepo | null>(null);
-
-  const link = useMutation({
-    mutationFn: async () => {
-      if (selected === null) throw new Error("Pick a GitHub repository.");
-      const handle = itx.repos.get(repoPath);
-      const result = await handle.linkGithub({
-        connection,
-        owner: selected.owner,
-        repo: selected.name,
-      });
-      // Prefer GitHub's history when connecting: try a non-forced pull first.
-      // Empty / already-aligned GitHub is a no-op success; unrelated history
-      // surfaces as a conflict for the resolution step.
-      try {
-        const sync = await handle.syncFromGithub({});
-        return {
-          kind: "synced" as const,
-          result,
-          sync,
-        };
-      } catch (syncError) {
-        if (isGithubHistoryConflictError(syncError)) {
-          return {
-            kind: "conflict" as const,
-            result,
-            reason:
-              syncError instanceof Error
-                ? syncError.message
-                : "Histories diverged; choose how to reconcile.",
-          };
-        }
-        // Sync failed for a non-conflict reason (empty GitHub branch, network,
-        // …). If the seed push already landed, the link is usable; otherwise
-        // surface the better error.
-        if (result.initialPush.ok) {
-          return { kind: "pushed" as const, result };
-        }
-        throw syncError instanceof Error
-          ? syncError
-          : new Error(
-              result.initialPush.error ??
-                (syncError instanceof Error ? syncError.message : String(syncError)),
-            );
-      }
-    },
-    onSuccess: (outcome) => {
-      if (outcome.kind === "conflict") {
-        onHistoryConflict({
-          owner: outcome.result.owner,
-          repo: outcome.result.repo,
-          preferred: "pull",
-          reason: outcome.reason,
-        });
-        return;
-      }
-      if (outcome.kind === "synced") {
-        toast.success(
-          outcome.sync.changed
-            ? `Linked to ${outcome.result.owner}/${outcome.result.repo} and pulled GitHub's ${outcome.sync.commitOid.slice(0, 7)}.`
-            : `Linked to ${outcome.result.owner}/${outcome.result.repo}${outcome.result.created ? " (created)" : ""}; already aligned with GitHub.`,
-        );
-        return;
-      }
-      toast.success(
-        `Linked to ${outcome.result.owner}/${outcome.result.repo}${outcome.result.created ? " (created)" : ""}; mirror seeded at ${outcome.result.initialPush.commitOid?.slice(0, 7)}.`,
-      );
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not link."),
-  });
 
   if (connections.length === 0) {
     return (
@@ -386,8 +401,8 @@ function LinkForm({
       className="flex flex-col gap-2 p-3"
       onSubmit={(event) => {
         event.preventDefault();
-        if (connection === "" || selected === null) return;
-        link.mutate();
+        if (connection === "" || selected === null || linking) return;
+        onLink({ connection, owner: selected.owner, repo: selected.name });
       }}
     >
       <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -441,9 +456,9 @@ function LinkForm({
         type="submit"
         size="sm"
         className="text-xs"
-        disabled={link.isPending || connection === "" || selected === null}
+        disabled={linking || connection === "" || selected === null}
       >
-        {link.isPending ? "Linking…" : selected === null ? "Pick a repository" : "Link to GitHub"}
+        {linking ? "Linking…" : selected === null ? "Pick a repository" : "Link to GitHub"}
       </Button>
     </form>
   );
@@ -463,6 +478,7 @@ function HistoryResolutionStep({
   onConfirm: (choice: GithubHistoryResolutionChoice) => void;
 }) {
   const [choice, setChoice] = useState<GithubHistoryResolutionChoice>(defaultChoice);
+  const destructive = choice === "pull" || choice === "push";
 
   return (
     <div className="flex flex-col gap-3 p-3" data-testid="github-history-resolution">
@@ -474,9 +490,9 @@ function HistoryResolutionStep({
           GitHub and this project both have commits the other side is missing. Choose how to
           reconcile
           {defaultChoice === "pull"
-            ? " — recommended is to pull GitHub's version into the project."
+            ? " — recommended is to pull GitHub's version into the project (this discards project-only commits)."
             : defaultChoice === "push"
-              ? " — you were pushing, so force-push is pre-selected."
+              ? " — you were pushing, so force-push is pre-selected (this overwrites GitHub)."
               : "."}
         </p>
         <p className="break-all text-[11px] text-muted-foreground/80">{reason}</p>
@@ -488,9 +504,6 @@ function HistoryResolutionStep({
       >
         {GITHUB_HISTORY_RESOLUTION_OPTIONS.map((option) => {
           const selected = choice === option.value;
-          // "Recommended" tracks the contextual default (pull after connect/sync,
-          // push after a non-FF push) — not the static option.default used only
-          // for the connect-time default preference.
           const recommended = option.value === defaultChoice;
           return (
             <button
@@ -520,7 +533,13 @@ function HistoryResolutionStep({
         })}
       </div>
       <div className="flex flex-col gap-1.5">
-        <Button size="sm" className="text-xs" disabled={busy} onClick={() => onConfirm(choice)}>
+        <Button
+          size="sm"
+          className="text-xs"
+          variant={destructive ? "destructive" : "default"}
+          disabled={busy}
+          onClick={() => onConfirm(choice)}
+        >
           {busy
             ? choice === "agent"
               ? "Starting agent…"
@@ -531,7 +550,7 @@ function HistoryResolutionStep({
               ? "Start merge agent"
               : choice === "push"
                 ? "Force push to GitHub"
-                : "Use GitHub's version"}
+                : "Replace with GitHub's version"}
         </Button>
         <Button size="sm" variant="outline" className="text-xs" disabled={busy} onClick={onCancel}>
           Cancel
