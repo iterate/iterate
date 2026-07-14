@@ -8,6 +8,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const ENABLED = process.env.STREAM_CUMULATIVE_BENCHMARK === "1";
 const FOCUS_TAILS = process.env.STREAM_BENCH_FOCUS_TAILS === "1";
+const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
 const IMPLEMENTATION = process.env.STREAM_BENCH_IMPLEMENTATION;
 const REVISION = process.env.STREAM_BENCH_REVISION ?? "unknown";
 const EVENT_TYPE = "events.iterate.test/stream-cumulative-benchmark";
@@ -30,6 +31,10 @@ const SPARSE_SKIP_SAMPLES = Number(process.env.STREAM_BENCH_SPARSE_SKIP_SAMPLES 
 const COLD_SAMPLES = Number(process.env.STREAM_BENCH_COLD_SAMPLES ?? "0");
 const INLINE_LARGE_SAMPLES = Number(process.env.STREAM_BENCH_INLINE_LARGE_SAMPLES ?? "0");
 const CHECKPOINT_CYCLE_SAMPLES = Number(process.env.STREAM_BENCH_CHECKPOINT_CYCLE_SAMPLES ?? "0");
+const PROCESSOR_CATCHUP_SAMPLES = Number(process.env.STREAM_BENCH_PROCESSOR_CATCHUP_SAMPLES ?? "0");
+const PROCESSOR_CATCHUP_EVENTS = Number(
+  process.env.STREAM_BENCH_PROCESSOR_CATCHUP_EVENTS ?? "8000",
+);
 
 type StreamHandle = Stream & Disposable;
 
@@ -138,7 +143,40 @@ async function forceIdleTeardown(stream: StreamHandle): Promise<void> {
   ).durableObjectStub.runIdleTeardownNow();
 }
 
-test.skipIf(!ENABLED || FOCUS_TAILS)(
+async function killProject(project: { kill(): Promise<void> }): Promise<void> {
+  try {
+    await project.kill();
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("kill requested")) throw error;
+  }
+}
+
+async function measureProcessorCatchup(projectId: string, samples: number): Promise<number[]> {
+  const measured: number[] = [];
+  const auth = { type: "admin-secret" as const, secret: adminSecret() };
+  for (let iteration = -2; iteration < samples; iteration += 1) {
+    {
+      using killer = withItxSession({ auth, projectId });
+      await killProject(killer);
+    }
+
+    using project = withItxSession({ auth, projectId });
+    using stream = project.streams.get("/");
+    const initialHead = (await stream.head()).maxOffset;
+    const startedAt = performance.now();
+    await stream.appendAck(
+      ...Array.from({ length: PROCESSOR_CATCHUP_EVENTS }, (_, index) =>
+        event({ marker: `processor-catchup-${iteration}-${index}`, payload: "x" }),
+      ),
+    );
+    const expectedOffset = initialHead + PROCESSOR_CATCHUP_EVENTS;
+    await project.processor.waitUntilEvent({ offset: expectedOffset, timeoutMs: 30_000 });
+    if (iteration >= 0) measured.push(performance.now() - startedAt);
+  }
+  return measured;
+}
+
+test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP)(
   "cumulative Stream latency and throughput",
   async () => {
     if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
@@ -153,8 +191,9 @@ test.skipIf(!ENABLED || FOCUS_TAILS)(
       type: "admin-secret",
       secret: adminSecret(),
     });
+    const projectId = `prj_${crypto.randomUUID()}`;
     using project = itx.projects.create({
-      projectId: `prj_${crypto.randomUUID()}`,
+      projectId,
       slug: `stream-cumulative-${IMPLEMENTATION}-${runId}`,
     });
     await project.__describe();
@@ -756,6 +795,11 @@ test.skipIf(!ENABLED || FOCUS_TAILS)(
       metrics.checkpoint_clean_total_cycle = summarize(cleanTotalSamples, 500);
     }
 
+    if (PROCESSOR_CATCHUP_SAMPLES > 0) {
+      const samples = await measureProcessorCatchup(projectId, PROCESSOR_CATCHUP_SAMPLES);
+      metrics.processor_catchup_after_kill = summarize(samples, PROCESSOR_CATCHUP_EVENTS);
+    }
+
     {
       const path = `/bench/${runId}/cold-head`;
       using stream = project.streams.get(path);
@@ -849,6 +893,40 @@ test.skipIf(!ENABLED || !FOCUS_TAILS)(
     const output: BenchmarkOutput = {
       implementation: IMPLEMENTATION,
       metrics,
+      revision: REVISION,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
+  },
+  600_000,
+);
+
+test.skipIf(!ENABLED || !FOCUS_PROCESSOR_CATCHUP)(
+  "focused hosted processor backlog catch-up",
+  async () => {
+    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
+      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
+    }
+    if (PROCESSOR_CATCHUP_SAMPLES <= 0) {
+      throw new Error("STREAM_BENCH_PROCESSOR_CATCHUP_SAMPLES must be positive.");
+    }
+
+    const runId = crypto.randomUUID().slice(0, 8);
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    const projectId = `prj_${crypto.randomUUID()}`;
+    using project = itx.projects.create({
+      projectId,
+      slug: `stream-processor-${IMPLEMENTATION}-${runId}`,
+    });
+    await project.__describe();
+
+    const samples = await measureProcessorCatchup(projectId, PROCESSOR_CATCHUP_SAMPLES);
+    const output: BenchmarkOutput = {
+      implementation: IMPLEMENTATION,
+      metrics: {
+        processor_catchup_after_kill: summarize(samples, PROCESSOR_CATCHUP_EVENTS),
+      },
       revision: REVISION,
       timestamp: new Date().toISOString(),
     };
