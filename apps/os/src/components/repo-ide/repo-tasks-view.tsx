@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { DragDropProvider, useDraggable, useDroppable } from "@dnd-kit/react";
 import { Link } from "@tanstack/react-router";
 import {
@@ -82,6 +82,7 @@ import {
   type FileEntry,
   type WorkingTreeChanges,
 } from "./staged-changes.ts";
+import { reconcileEditorPathOverride, type EditorPathOverride } from "./repo-task-editor-state.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
@@ -119,11 +120,11 @@ export function RepoTasksView({
   onAssignAgent: (task: RepoTask, renamedFromPath?: string) => Promise<string | undefined>;
 }) {
   const [draft, setDraft] = useState<RepoTask | undefined>();
-  const [editorPath, setEditorPath] = useState(selectedPath);
-  const draftRef = useRef(draft);
-  const onSetWorkingRef = useRef(onSetWorking);
-  draftRef.current = draft;
-  onSetWorkingRef.current = onSetWorking;
+  const [editorPathOverride, setEditorPathOverride] = useState<EditorPathOverride>();
+  const editorPath =
+    editorPathOverride !== undefined && editorPathOverride.source === selectedPath
+      ? editorPathOverride.target
+      : selectedPath;
   const renameOrigins = useRef(new Map<string, string>());
   const lastCreationContext = useRef<{
     state: string;
@@ -179,8 +180,11 @@ export function RepoTasksView({
   const columns = taskStateColumns(tasks);
   const selectedTask = tasks.find((task) => task.path === editorPath);
   const editorTask = draft ?? selectedTask;
-  const editorTaskRef = useRef(editorTask);
-  editorTaskRef.current = editorTask;
+
+  useEffect(() => {
+    setEditorPathOverride((override) => reconcileEditorPathOverride(override, selectedPath));
+  }, [selectedPath]);
+
   const writeTask = (task: RepoTask, content: string) => {
     const baseline = textContentForEntry(changes.get(task.path)?.staged) ?? headContents[task.path];
     onSetWorking(task.path, content === baseline ? undefined : { type: "write", content });
@@ -188,7 +192,7 @@ export function RepoTasksView({
   const selectTask = (path: string | undefined) => {
     // Keep the editor bound to its destination synchronously. Working-tree
     // renames update the task list before router navigation can update the URL.
-    setEditorPath(path);
+    setEditorPathOverride({ source: selectedPath, target: path });
     onPatchSearch({ file: path, diff: undefined, preview: undefined, staged: undefined });
   };
   const persistDraft = (task = draft) => {
@@ -299,40 +303,35 @@ export function RepoTasksView({
     selectTask(undefined);
   };
 
-  useEffect(
-    () => () => {
-      const pendingDraft = draftRef.current;
-      if (pendingDraft === undefined) return;
-      onSetWorkingRef.current(pendingDraft.path, {
-        type: "write",
-        content: pendingDraft.content,
-      });
-    },
-    [],
-  );
+  const persistDraftOnUnmount = useEffectEvent(() => {
+    if (draft === undefined) return;
+    onSetWorking(draft.path, { type: "write", content: draft.content });
+  });
 
-  useEffect(() => setEditorPath(selectedPath), [selectedPath]);
+  const createTaskFromKeyboard = useEffectEvent((event: KeyboardEvent) => {
+    const target = event.target;
+    if (
+      event.key.toLocaleLowerCase() !== "c" ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      editorTask !== undefined ||
+      (target instanceof HTMLElement &&
+        (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)))
+    )
+      return;
+    event.preventDefault();
+    const context = lastCreationContext.current;
+    createTask(context.state, context.folderPath, context.labels);
+  });
+
+  useEffect(() => () => persistDraftOnUnmount(), []);
 
   useEffect(() => {
-    const createFromKeyboard = (event: KeyboardEvent) => {
-      const target = event.target;
-      if (
-        event.key.toLocaleLowerCase() !== "c" ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.altKey ||
-        editorTaskRef.current !== undefined ||
-        (target instanceof HTMLElement &&
-          (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)))
-      )
-        return;
-      event.preventDefault();
-      const context = lastCreationContext.current;
-      createTask(context.state, context.folderPath, context.labels);
-    };
+    const createFromKeyboard = (event: KeyboardEvent) => createTaskFromKeyboard(event);
     window.addEventListener("keydown", createFromKeyboard);
     return () => window.removeEventListener("keydown", createFromKeyboard);
-  });
+  }, []);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -562,7 +561,7 @@ function BoardDisplaySettings({
   );
 }
 
-function TaskColumn({
+export function TaskColumn({
   state,
   rowKey,
   rowLabel,
@@ -604,15 +603,6 @@ function TaskColumn({
         </header>
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
-        <Button
-          variant="ghost"
-          className="mb-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
-          title={`Add task to ${creationLabel}`}
-          aria-label={`Add task to ${creationLabel}`}
-          onClick={onCreate}
-        >
-          <PlusIcon data-icon="inline-start" />
-        </Button>
         <div className="flex flex-col gap-2">
           {tasks.map((task) => (
             <TaskCard
@@ -624,6 +614,15 @@ function TaskColumn({
             />
           ))}
         </div>
+        <Button
+          variant="ghost"
+          className="mt-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
+          title={`Add task to ${creationLabel}`}
+          aria-label={`Add task to ${creationLabel}`}
+          onClick={onCreate}
+        >
+          <PlusIcon data-icon="inline-start" />
+        </Button>
       </div>
     </section>
   );
@@ -744,7 +743,7 @@ function TaskEditorSheet({
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [pathValue, setPathValue] = useState("");
-  const [pathWasEdited, setPathWasEdited] = useState(false);
+  const pathWasEditedRef = useRef(false);
   const [assigning, setAssigning] = useState(false);
   const [assignedAgent, setAssignedAgent] = useState<string | undefined>();
   const editorSessionOpenRef = useRef(false);
@@ -754,13 +753,13 @@ function TaskEditorSheet({
   useEffect(() => {
     if (taskPath === undefined) {
       editorSessionOpenRef.current = false;
-      setPathWasEdited(false);
+      pathWasEditedRef.current = false;
       return;
     }
     setPathValue(`/${taskPath}`);
     if (editorSessionOpenRef.current) return;
     editorSessionOpenRef.current = true;
-    setPathWasEdited(false);
+    pathWasEditedRef.current = false;
     const focusEditor = () => {
       const editor = editorRef.current;
       if (editor === null) return;
@@ -781,15 +780,15 @@ function TaskEditorSheet({
 
   const resolvePath = () => {
     if (task === undefined) return undefined;
-    if (!pathWasEdited) return task;
+    if (!pathWasEditedRef.current) return task;
     const resolved = onResolvePath(pathValue);
     if (resolved === undefined) {
       setPathValue(`/${task.path}`);
-      setPathWasEdited(false);
+      pathWasEditedRef.current = false;
       return undefined;
     }
     setPathValue(`/${resolved.path}`);
-    setPathWasEdited(false);
+    pathWasEditedRef.current = false;
     return resolved;
   };
 
@@ -820,7 +819,7 @@ function TaskEditorSheet({
               aria-label="Task file path"
               className="h-6 rounded-none border-0 px-0 font-mono text-xs text-muted-foreground shadow-none focus-visible:ring-0"
               onChange={(event) => {
-                setPathWasEdited(true);
+                pathWasEditedRef.current = true;
                 setPathValue(event.currentTarget.value);
               }}
               onKeyDown={(event) => {
@@ -830,7 +829,7 @@ function TaskEditorSheet({
                   event.currentTarget.blur();
                 } else if (event.key === "Escape") {
                   setPathValue(`/${task.path}`);
-                  setPathWasEdited(false);
+                  pathWasEditedRef.current = false;
                   event.currentTarget.blur();
                 }
               }}
@@ -907,7 +906,9 @@ function TaskEditorSheet({
                     className="shrink-0 text-muted-foreground hover:text-destructive"
                     title="Delete task"
                     aria-label="Delete task"
-                    onClick={() => withResolvedPath(() => setDeleteOpen(true))}
+                    onClick={() => {
+                      if (resolvePath() !== undefined) setDeleteOpen(true);
+                    }}
                   >
                     <Trash2Icon data-icon="inline-start" />
                   </Button>
@@ -920,7 +921,7 @@ function TaskEditorSheet({
             aria-label={`Edit ${task.title} Markdown`}
             value={task.content}
             onChange={(event) =>
-              onChangeContent(event.currentTarget.value, isNew && !pathWasEdited)
+              onChangeContent(event.currentTarget.value, isNew && !pathWasEditedRef.current)
             }
             onKeyDown={(event) => {
               if (

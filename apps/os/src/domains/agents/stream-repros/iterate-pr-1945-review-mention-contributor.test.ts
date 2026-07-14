@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GithubAgentProcessor } from "../../repos/github-agent-processor-implementation.ts";
 import type { StreamEvent } from "../../streams/schemas.ts";
-import { deliverNewEvents, MemoryStream } from "../test-helpers.ts";
+import { deliverNewEvents, MemoryStream } from "../../streams/test-helpers.ts";
 import fixture from "./iterate-pr-1945-review-mention-contributor.json";
 
 describe("production stream repro: iterate PR 1945 review mention was treated as an outsider", () => {

@@ -13,6 +13,7 @@ import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
+import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
 import { OS_PREVIEW_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 import {
   parseWorkerSizeFromDeployOutput,
@@ -184,7 +185,9 @@ async function deployPreviewApps({
     );
     const cleanupResult = await cleanupPreviewForPullRequest({ ...runtime, context });
     if (!cleanupResult.ok) {
-      throw new Error("Failed to tear down previews for a draft PR.");
+      // ok=false means the lease RELEASE failed (a failed teardown alone
+      // still releases and reports ok — see cleanupPreviewForPullRequest).
+      throw new Error("Failed to release the draft PR's preview slot lease.");
     }
     // Pin the post-teardown state in this write: the GitHub read inside
     // updatePreviewState can be stale (read-after-write lag) and would
@@ -643,8 +646,21 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
     }),
   });
 
+  // Exit-code contract (the only consumer is the cleanup workflow's
+  // red/green — nothing gates on it): exit non-zero ONLY when the lease
+  // RELEASE failed, because a held lease leaks the slot for 24h and starves
+  // the fleet. A failed teardown/erase alone exits zero with a loud warning:
+  // the lease was released, the fleet is healthy, and the dirty slot
+  // self-heals — every acquire erases on entry (eraseAcquiredSlotOrGiveItBack).
   if (!result.ok) {
-    throw new Error("Failed to clean up Cloudflare preview apps.");
+    throw new Error(
+      "Failed to release the preview slot lease — it leaks until its 24h expiry. Re-run cleanup, or free it with `pnpm preview release --slot <N> --force`.",
+    );
+  }
+  if (result.teardownFailed) {
+    logPreview(
+      "cleanup exits 0 despite the failed teardown: the lease was released (fleet healthy) and the dirty slot is erased by its next acquire",
+    );
   }
 
   return result;
@@ -2429,12 +2445,17 @@ async function checkCloudflareZoneWithApi(input: {
   const url = new URL("https://api.cloudflare.com/client/v4/zones");
   url.searchParams.set("name", input.domain);
   url.searchParams.set("per_page", "50");
-  const response = await fetch(url, {
-    headers: {
-      authorization: `Bearer ${input.apiToken}`,
-    },
-    signal: input.signal,
-  });
+  const response = await fetchCloudflareWith429Retry(
+    `GET ${url.pathname}`,
+    () =>
+      fetch(url, {
+        headers: {
+          authorization: `Bearer ${input.apiToken}`,
+        },
+        signal: input.signal,
+      }),
+    { signal: input.signal },
+  );
   const parsed = CloudflareZonesResponse.parse(await response.json());
   if (!response.ok || !parsed.success) {
     return {
@@ -2799,6 +2820,7 @@ async function cleanupPreviewForPullRequest(
       return {
         ok: true,
         released: false,
+        teardownFailed: false,
         state: current.state,
       };
     }
@@ -2831,6 +2853,7 @@ async function cleanupPreviewForPullRequest(
       ok: true,
       released: false,
       skippedTeardown: true,
+      teardownFailed: false,
       state: update.state,
     };
   }
@@ -2896,34 +2919,81 @@ async function cleanupPreviewForPullRequest(
     latestState = update.state;
   }
 
-  if (!ok) {
+  // Cleanup's contract: RELEASING THE LEASE is the load-bearing outcome, not
+  // the teardown. A failed teardown/erase leaves only slot-local dirt, and
+  // dirt is self-healing — every acquire erases the slot before handing it
+  // out (see eraseAcquiredSlotOrGiveItBack) — but a lease that is never
+  // released leaks until its 24h expiry and starves the 9-slot fleet
+  // (2026-07-14: a Cloudflare API 429 failed erase-data mid-cleanup for the
+  // merged pr-1950; the old code bailed before releasing and pr-1988 waited
+  // 360s for a slot that never came). So: always release; `ok: false` now
+  // means the RELEASE itself failed — the lease truly leaked.
+  const releaseResult = await releaseLeaseDespiteTeardownFailure({
+    lease: environmentConfigLease,
+    semaphore,
+    teardownOk: ok,
+  });
+  if (!releaseResult.ok) {
+    // Keep the recorded lease in the PR body so a cleanup re-run still finds
+    // the slot to release.
     return {
       ok: false,
       released: false,
+      teardownFailed: !ok,
       state: latestState,
     };
   }
-
-  const released = await semaphore.release({
-    type: environmentConfigLease.type,
-    slug: environmentConfigLease.slug,
-    leaseId: environmentConfigLease.leaseId,
-  });
-  logPreview(
-    released.released
-      ? `lease released: ${environmentConfigLease.slug} is free again`
-      : `lease was already gone for ${environmentConfigLease.slug}`,
-  );
   const update = await updatePreviewState(params.context, (state) => ({
     ...state,
     environmentConfigLease: null,
+    notice: ok
+      ? state.notice
+      : `Teardown failed but the lease was released; ${environmentConfigLease.slug} is left dirty and its next acquire erases it before use. (preview cleanup at ${new Date().toISOString()})`,
   }));
 
   return {
     ok: true,
-    released: released.released,
+    released: releaseResult.released,
+    teardownFailed: !ok,
     state: update.state,
   };
+}
+
+/**
+ * Release cleanup's lease whether or not teardown succeeded, loudly flagging
+ * the dirty-slot case. Returns `ok: false` only when the release call itself
+ * failed — that is the one outcome where the lease actually leaks (until its
+ * 24h expiry); a teardown failure alone is not a leak because the next
+ * acquire erases the slot on entry (eraseAcquiredSlotOrGiveItBack).
+ */
+async function releaseLeaseDespiteTeardownFailure(input: {
+  lease: { type: string; slug: string; leaseId: string };
+  semaphore: PreviewSemaphoreResourceClient;
+  teardownOk: boolean;
+}): Promise<{ ok: boolean; released: boolean }> {
+  if (!input.teardownOk) {
+    logPreview(
+      `teardown FAILED on ${input.lease.slug} — releasing the lease anyway and leaving the slot dirty; its next acquire erases it before use (see eraseAcquiredSlotOrGiveItBack)`,
+    );
+  }
+  try {
+    const released = await input.semaphore.release({
+      type: input.lease.type,
+      slug: input.lease.slug,
+      leaseId: input.lease.leaseId,
+    });
+    logPreview(
+      released.released
+        ? `lease released: ${input.lease.slug} is free again`
+        : `lease was already gone for ${input.lease.slug}`,
+    );
+    return { ok: true, released: released.released };
+  } catch (error) {
+    logPreview(
+      `FAILED to release the lease on ${input.lease.slug} — it leaks until its 24h expiry (free it with \`pnpm preview release --slot ${input.lease.slug} --force\` or re-run cleanup): ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { ok: false, released: false };
+  }
 }
 
 async function deployPreviewAppWithStatus(input: {
@@ -4383,6 +4453,7 @@ export const previewInternals = {
   readPlaywrightRetryTelemetry,
   readVitestRetryTelemetry,
   reconcileEnvironmentConfigLeaseResources,
+  releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   renderPreviewRetrySummary,
   resolveAuthPreviewRootSecret,

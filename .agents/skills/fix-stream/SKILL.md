@@ -47,7 +47,7 @@ Print conversation: `user-message-received` payload.content vs `web-message-sent
 
 ## 3. Repro test — in-memory, not e2e
 
-Real LLM slow/expensive/flaky. Bug almost always deterministic at transport boundary -> in-memory test: real processors + real reducers, fake transport, no deployment, no real LLM. Harness lives in `apps/os/src/domains/agents/test-helpers.ts`: `MemoryStream`, `deliverNewEvents`; fake the `ai` dep (`env.AI.run`) on `AgentProcessor` — see `agent-processors.test.ts` for usage of all.
+Real LLM slow/expensive/flaky. Bug almost always deterministic at transport boundary -> in-memory test: real processors + real reducers, fake transport, no deployment, no real LLM. Harness lives in `apps/os/src/domains/streams/test-helpers.ts`: `MemoryStream`, `MemoryStreamNetwork`, `deliverNewEvents`; fake the `ai` dep (`env.AI.run`) on `AgentProcessor` — see `agent-processors.test.ts` for usage of all.
 
 Test file: `apps/os/src/domains/agents/stream-repros/<slug>-<id>-<complaint>.test.ts`. Fixture JSON next to it.
 

@@ -1,10 +1,12 @@
-// In-memory test doubles for the stream substrate, plus the processor-host
-// harness: REAL host code (createStreamProcessorHost — keepalive, alarm
-// slices, revival, catch-up) and REAL processors running in plain node
-// against a fake DurableObjectState, an in-memory journal, and a mutable
-// clock. Lifecycle failure is a first-class operator: `crash()` kills the
-// incarnation exactly the way an eviction does — in-memory state and
-// in-flight work die, the journal, KV, and the durable alarm survive.
+// In-memory test doubles for the stream substrate — the ONE MemoryStream
+// (plus MemoryStreamNetwork for router suites observing cross-stream
+// forwards and deliverNewEvents for cursor-based pull delivery) — plus the
+// processor-host harness: REAL host code (createStreamProcessorHost —
+// keepalive, alarm slices, revival, catch-up) and REAL processors running in
+// plain node against a fake DurableObjectState, an in-memory journal, and a
+// mutable clock. Lifecycle failure is a first-class operator: `crash()`
+// kills the incarnation exactly the way an eviction does — in-memory state
+// and in-flight work die, the journal, KV, and the durable alarm survive.
 //
 // Runtime state is produced by LIFECYCLE, never by field injection: an empty
 // live-execution set IS "crashed mid-attempt", reached by crashing; a
@@ -18,11 +20,6 @@ import type { StreamAppendResultOptions } from "./rpc-types.ts";
 import type { AnyHostedProcessor } from "./processor-host-capabilities.ts";
 import { createStreamProcessorHost, type StreamProcessorHost } from "./stream-processor-host.ts";
 
-/**
- * The empty `runtimeState()` answer every test MemoryStream serves. ONE home
- * on purpose: a change to the runtime shape becomes a one-line edit here
- * instead of the same mechanical edit in every test double.
- */
 function emptyThroughputReport() {
   return {
     perSecond5s: 0,
@@ -32,7 +29,8 @@ function emptyThroughputReport() {
   };
 }
 
-export function emptyStreamRuntimeState() {
+/** The empty `runtimeState()` answer the test MemoryStream serves. */
+function emptyStreamRuntimeState() {
   return {
     coreProcessorState: null,
     runtime: {
@@ -91,6 +89,10 @@ export class MemoryStream implements Stream {
   events: StreamEvent[] = [];
   /** Injectable clock for createdAt stamps; harnesses point it at virtual time. */
   now: () => number = Date.now;
+  /** Simulate a transient Stream DO outage: appends of this type throw. */
+  failAppendsOfType: string | undefined;
+  /** Set by MemoryStreamNetwork.get(); a detached stream answers `at()` with itself. */
+  network: MemoryStreamNetwork | undefined;
 
   constructor(readonly path = "/agents/test") {}
 
@@ -104,6 +106,9 @@ export class MemoryStream implements Stream {
 
   async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     const appended = inputs.map((input) => {
+      if (input.type === this.failAppendsOfType) {
+        throw new Error(`injected append failure for ${input.type}`);
+      }
       const existing =
         input.idempotencyKey === undefined
           ? undefined
@@ -127,8 +132,8 @@ export class MemoryStream implements Stream {
     return appended;
   }
 
-  at(): Stream {
-    return this;
+  at(path?: string): Stream {
+    return path === undefined || this.network === undefined ? this : this.network.get(path);
   }
 
   async getEvent(
@@ -214,6 +219,53 @@ export class MemoryStream implements Stream {
   async removeCrossPost(): Promise<never> {
     throw new Error("MemoryStream does not implement removeCrossPost().");
   }
+}
+
+/**
+ * In-memory network of streams keyed by path, so router tests can observe
+ * the cross-stream forwards (`stream.at(path).append(...)`) next to
+ * same-stream appends. `now` feeds every member stream's createdAt stamp, so
+ * freshness-gated lanes (webhook ack horizons) can be tested on both sides
+ * of the horizon. `eventsAt` never creates a stream — `network.streams.size`
+ * assertions ("nothing was forwarded anywhere") stay honest.
+ */
+export class MemoryStreamNetwork {
+  readonly streams = new Map<string, MemoryStream>();
+
+  constructor(readonly now: () => number = Date.now) {}
+
+  get(path: string): MemoryStream {
+    let stream = this.streams.get(path);
+    if (stream === undefined) {
+      stream = new MemoryStream(path);
+      stream.network = this;
+      stream.now = this.now;
+      this.streams.set(path, stream);
+    }
+    return stream;
+  }
+
+  eventsAt(path: string): StreamEvent[] {
+    return this.streams.get(path)?.events ?? [];
+  }
+}
+
+export type ProcessorLike = {
+  ingest(input: { events: StreamEvent[]; streamMaxOffset: number }): Promise<void>;
+};
+
+/** Cursor-based pull delivery mirroring production subscription semantics. */
+export async function deliverNewEvents(input: {
+  processor: ProcessorLike;
+  stream: MemoryStream;
+  cursors: Map<object, number>;
+}) {
+  const cursor = input.cursors.get(input.processor) ?? 0;
+  const events = input.stream.events.slice(cursor);
+  input.cursors.set(input.processor, input.stream.events.length);
+  if (events.length === 0) return;
+  const streamMaxOffset = input.stream.events.at(-1)?.offset ?? 0;
+  await input.processor.ingest({ events, streamMaxOffset });
 }
 
 /** The durable substrate an eviction does NOT destroy. */

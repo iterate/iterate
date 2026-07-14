@@ -1,17 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Stream } from "../../itx-api.generated.ts";
 import {
   activeSpans,
   recordedSpans,
   resetRecordedSpans,
 } from "../../test/cloudflare-workers-shim.ts";
-import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { StreamProcessorSnapshot } from "../streams/stream-processor.ts";
-import {
-  appendTestEvents,
-  createMemoryStreamAppend,
-  emptyStreamRuntimeState,
-} from "../streams/test-helpers.ts";
+import { MemoryStream, appendTestEvents } from "../streams/test-helpers.ts";
 import {
   SchedulerProcessor,
   type SchedulerProcessorDeps,
@@ -24,111 +18,6 @@ import { SCHEDULER_HEARTBEAT_MS } from "./recurrence.ts";
 
 const T0 = Date.parse("2026-01-15T12:00:00Z");
 
-/**
- * In-memory Stream with a controllable clock: `createdAt` comes from the same
- * fake clock the processor's `now` dep reads, so reduce-time math
- * (`Date.parse(event.createdAt)`) is exact in assertions. `failAppendsOfType`
- * simulates a transient Stream DO outage for specific event types.
- */
-class MemoryStream implements Stream {
-  events: StreamEvent[] = [];
-  failAppendsOfType: string | undefined;
-
-  constructor(
-    readonly clock: { now: number },
-    readonly path = "/scheduler/primary",
-  ) {}
-
-  async __describe() {
-    return { instructions: "in-memory test stream", types: "", children: {} };
-  }
-
-  async kill(): Promise<void> {}
-
-  append = createMemoryStreamAppend((...inputs) => this.#appendEvents(...inputs));
-
-  async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    return inputs.map((input) => {
-      if (input.type === this.failAppendsOfType) {
-        throw new Error(`injected append failure for ${input.type}`);
-      }
-      const existing =
-        input.idempotencyKey === undefined
-          ? undefined
-          : this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
-      if (existing !== undefined) return existing;
-      const event: StreamEvent = {
-        ...input,
-        createdAt: new Date(this.clock.now).toISOString(),
-        offset: this.events.length + 1,
-        path: this.path,
-      };
-      this.events.push(event);
-      return event;
-    });
-  }
-
-  at(): Stream {
-    return this;
-  }
-
-  async getEvent(
-    input: { offset: number } | { idempotencyKey: string },
-  ): Promise<StreamEvent | undefined> {
-    if ("offset" in input) return this.events.find((event) => event.offset === input.offset);
-    return this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
-  }
-
-  async getEvents(input: Parameters<Stream["getEvents"]>[0] = {}): Promise<StreamEvent[]> {
-    const { afterOffset = 0, limit = 500 } = input;
-    return this.events.filter((event) => event.offset > afterOffset).slice(0, limit);
-  }
-
-  readEvents(input: Parameters<Stream["readEvents"]>[0] = {}) {
-    let afterOffset = input.afterOffset ?? 0;
-    return {
-      next: async () => {
-        const page = await this.getEvents({ ...input, afterOffset });
-        afterOffset = page.at(-1)?.offset ?? afterOffset;
-        return page;
-      },
-      [Symbol.dispose]() {},
-    };
-  }
-
-  async waitForEvent(): Promise<StreamEvent> {
-    throw new Error("not used");
-  }
-
-  async getProcessorRuntimeState(): Promise<null> {
-    return null;
-  }
-
-  async head() {
-    return { createdAt: this.events[0]?.createdAt, maxOffset: this.events.at(-1)?.offset ?? 0 };
-  }
-
-  async runtimeState() {
-    return emptyStreamRuntimeState();
-  }
-
-  async subscribe(): Promise<never> {
-    throw new Error("MemoryStream does not implement subscribe().");
-  }
-
-  async acceptCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement acceptCrossPost().");
-  }
-
-  async crossPostTo(): Promise<never> {
-    throw new Error("MemoryStream does not implement crossPostTo().");
-  }
-
-  async removeCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement removeCrossPost().");
-  }
-}
-
 const SET_TYPE = "events.iterate.com/scheduler/schedule-set";
 const CANCELLED_TYPE = "events.iterate.com/scheduler/schedule-cancelled";
 const REQUESTED_TYPE = "events.iterate.com/scheduler/trigger-requested";
@@ -140,7 +29,10 @@ function makeHarness(options?: {
   snapshotStore?: { snapshot: StreamProcessorSnapshot<SchedulerProcessorState> | undefined };
 }) {
   const clock = { now: T0 };
-  const stream = new MemoryStream(clock);
+  // createdAt comes from the same fake clock the processor's `now` dep reads,
+  // so reduce-time math (`Date.parse(event.createdAt)`) is exact in assertions.
+  const stream = new MemoryStream("/scheduler/primary");
+  stream.now = () => clock.now;
   const repointAlarm = vi.fn(options?.repointAlarm ?? (async () => {}));
   const invokeCapability = vi.fn(
     options?.invokeCapability ?? (async () => "ok"),

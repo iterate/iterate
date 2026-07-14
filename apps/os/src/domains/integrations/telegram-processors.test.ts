@@ -3,13 +3,13 @@
 // module mocks. Helpers live at the bottom of the file.
 
 import { describe, expect, it } from "vitest";
-import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { Stream } from "../../itx-api.generated.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import { telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import {
+  MemoryStreamNetwork as CanonicalMemoryStreamNetwork,
   appendTestEvents,
-  createMemoryStreamAppend,
-  emptyStreamRuntimeState,
+  deliverNewEvents,
 } from "../streams/test-helpers.ts";
 import { TelegramProcessor } from "./telegram-processor-implementation.ts";
 import {
@@ -1060,141 +1060,14 @@ function setup(input: { agentPath?: string; now?: () => number } = {}) {
 }
 
 /**
- * In-memory network of streams keyed by path, so router tests can observe the
- * cross-stream forwards (`stream.at(path).append(...)`) next to same-stream
- * appends. Same shape as slack-processors.test.ts.
+ * The canonical in-memory network with its clock pinned to the epoch: the
+ * ack-freshness fixtures in this file pair processor clocks of
+ * `now: () => 60_000` (fresh) and `now: () => 999_999_999_999` (stale refold)
+ * against ~epoch createdAt stamps. Wall-clock stamps would make the stale
+ * replay's events look fresh and re-type months-old messages.
  */
-class MemoryStreamNetwork {
-  readonly streams = new Map<string, MemoryStream>();
-
-  get(path: string): MemoryStream {
-    let stream = this.streams.get(path);
-    if (stream === undefined) {
-      stream = new MemoryStream(this, path);
-      this.streams.set(path, stream);
-    }
-    return stream;
+class MemoryStreamNetwork extends CanonicalMemoryStreamNetwork {
+  constructor() {
+    super(() => 0);
   }
-
-  eventsAt(path: string): StreamEvent[] {
-    return this.streams.get(path)?.events ?? [];
-  }
-}
-
-class MemoryStream implements Stream {
-  events: StreamEvent[] = [];
-
-  async __describe() {
-    return { instructions: "in-memory test stream", types: "", children: {} };
-  }
-
-  constructor(
-    readonly network: MemoryStreamNetwork,
-    readonly path: string,
-  ) {}
-
-  append = createMemoryStreamAppend((...inputs) => this.#appendEvents(...inputs));
-
-  async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    return inputs.map((input) => {
-      const existing =
-        input.idempotencyKey === undefined
-          ? undefined
-          : this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
-      if (existing !== undefined) return existing;
-      const event: StreamEvent = {
-        ...input,
-        createdAt: new Date(this.events.length + 1).toISOString(),
-        offset: this.events.length + 1,
-        path: this.path,
-      };
-      this.events.push(event);
-      return event;
-    });
-  }
-
-  at(path: string): Stream {
-    return this.network.get(path);
-  }
-
-  async getEvent(): Promise<StreamEvent | undefined> {
-    return undefined;
-  }
-
-  async getEvents(input: Parameters<Stream["getEvents"]>[0] = {}): Promise<StreamEvent[]> {
-    const { afterOffset = 0, limit = 500 } = input;
-    const beforeOffset = input.beforeOffset ?? Number.MAX_SAFE_INTEGER;
-    return this.events
-      .filter((event) => event.offset > afterOffset)
-      .filter((event) => event.offset < beforeOffset)
-      .filter(
-        (event) =>
-          input.eventTypes === undefined ||
-          input.eventTypes.includes("*") ||
-          input.eventTypes.includes(event.type),
-      )
-      .slice(0, limit);
-  }
-
-  readEvents(input: Parameters<Stream["readEvents"]>[0] = {}) {
-    let afterOffset = input.afterOffset ?? 0;
-    return {
-      next: async () => {
-        const page = await this.getEvents({ ...input, afterOffset });
-        afterOffset = page.at(-1)?.offset ?? afterOffset;
-        return page;
-      },
-      [Symbol.dispose]() {},
-    };
-  }
-
-  async waitForEvent(): Promise<StreamEvent> {
-    throw new Error("MemoryStream does not implement waitForEvent().");
-  }
-
-  async getProcessorRuntimeState(): Promise<null> {
-    return null;
-  }
-
-  async head() {
-    return { createdAt: this.events[0]?.createdAt, maxOffset: this.events.at(-1)?.offset ?? 0 };
-  }
-
-  async runtimeState() {
-    return emptyStreamRuntimeState();
-  }
-
-  async subscribe(): Promise<never> {
-    throw new Error("MemoryStream does not implement subscribe().");
-  }
-
-  async acceptCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement acceptCrossPost().");
-  }
-
-  async kill(): Promise<void> {}
-
-  async crossPostTo(): Promise<never> {
-    throw new Error("MemoryStream does not implement crossPostTo().");
-  }
-
-  async removeCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement removeCrossPost().");
-  }
-}
-
-type ProcessorLike = {
-  ingest(input: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
-};
-
-async function deliverNewEvents(input: {
-  cursors: Map<object, number>;
-  processor: ProcessorLike;
-  stream: MemoryStream;
-}) {
-  const cursor = input.cursors.get(input.processor) ?? 0;
-  const events = input.stream.events.slice(cursor);
-  input.cursors.set(input.processor, input.stream.events.length);
-  if (events.length === 0) return;
-  await input.processor.ingest({ events, streamMaxOffset: input.stream.events.length });
 }

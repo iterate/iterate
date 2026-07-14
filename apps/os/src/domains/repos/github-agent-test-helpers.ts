@@ -1,143 +1,20 @@
-import type { Stream } from "../../itx-api.generated.ts";
-import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
-import { createMemoryStreamAppend, emptyStreamRuntimeState } from "../streams/test-helpers.ts";
+// GitHub-router/agent test fixtures over the canonical in-memory stream
+// harness (../streams/test-helpers.ts).
 
-/** Minimal in-memory stream network shared by the GitHub router and agent tests. */
-export class MemoryStreamNetwork {
-  readonly streams = new Map<string, MemoryStream>();
+import { MemoryStreamNetwork as CanonicalMemoryStreamNetwork } from "../streams/test-helpers.ts";
 
-  get(path: string): MemoryStream {
-    let stream = this.streams.get(path);
-    if (stream === undefined) {
-      stream = new MemoryStream(this, path);
-      this.streams.set(path, stream);
-    }
-    return stream;
-  }
+export { MemoryStream, deliverNewEvents } from "../streams/test-helpers.ts";
 
-  eventsAt(path: string): StreamEvent[] {
-    return this.streams.get(path)?.events ?? [];
+/**
+ * The canonical network with its clock pinned to the epoch: the GitHub agent
+ * suite pairs processor clocks like `now: () => 10` with ~epoch createdAt
+ * stamps, so the 👀-ack freshness gate sees a small positive age.
+ */
+export class MemoryStreamNetwork extends CanonicalMemoryStreamNetwork {
+  constructor() {
+    super(() => 0);
   }
 }
-
-export class MemoryStream implements Stream {
-  events: StreamEvent[] = [];
-
-  async __describe() {
-    return { instructions: "in-memory test stream", types: "", children: {} };
-  }
-
-  async kill(): Promise<void> {}
-
-  constructor(
-    readonly network: MemoryStreamNetwork,
-    readonly path: string,
-  ) {}
-
-  append = createMemoryStreamAppend((...inputs) => this.#appendEvents(...inputs));
-
-  async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    return inputs.map((input) => {
-      const existing =
-        input.idempotencyKey === undefined
-          ? undefined
-          : this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
-      if (existing !== undefined) return existing;
-      const event: StreamEvent = {
-        ...input,
-        createdAt: new Date(this.events.length + 1).toISOString(),
-        offset: this.events.length + 1,
-        path: this.path,
-      };
-      this.events.push(event);
-      return event;
-    });
-  }
-
-  at(path: string): Stream {
-    return this.network.get(path);
-  }
-
-  async getEvent(): Promise<StreamEvent | undefined> {
-    return undefined;
-  }
-
-  async getEvents(input: Parameters<Stream["getEvents"]>[0] = {}): Promise<StreamEvent[]> {
-    const { afterOffset = 0, limit = 500 } = input;
-    const beforeOffset = input.beforeOffset ?? Number.MAX_SAFE_INTEGER;
-    return this.events
-      .filter((event) => event.offset > afterOffset)
-      .filter((event) => event.offset < beforeOffset)
-      .filter(
-        (event) =>
-          input.eventTypes === undefined ||
-          input.eventTypes.includes("*") ||
-          input.eventTypes.includes(event.type),
-      )
-      .slice(0, limit);
-  }
-
-  readEvents(input: Parameters<Stream["readEvents"]>[0] = {}) {
-    let afterOffset = input.afterOffset ?? 0;
-    return {
-      next: async () => {
-        const page = await this.getEvents({ ...input, afterOffset });
-        afterOffset = page.at(-1)?.offset ?? afterOffset;
-        return page;
-      },
-      [Symbol.dispose]() {},
-    };
-  }
-
-  async waitForEvent(): Promise<StreamEvent> {
-    throw new Error("MemoryStream does not implement waitForEvent().");
-  }
-
-  async getProcessorRuntimeState(): Promise<null> {
-    return null;
-  }
-
-  async head() {
-    return { createdAt: this.events[0]?.createdAt, maxOffset: this.events.at(-1)?.offset ?? 0 };
-  }
-
-  async runtimeState() {
-    return emptyStreamRuntimeState();
-  }
-
-  async subscribe(): Promise<never> {
-    throw new Error("MemoryStream does not implement subscribe().");
-  }
-
-  async acceptCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement acceptCrossPost().");
-  }
-
-  async crossPostTo(): Promise<never> {
-    throw new Error("MemoryStream does not implement crossPostTo().");
-  }
-
-  async removeCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement removeCrossPost().");
-  }
-}
-
-type ProcessorLike = {
-  ingest(input: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
-};
-
-export async function deliverNewEvents(input: {
-  cursors: Map<object, number>;
-  processor: ProcessorLike;
-  stream: MemoryStream;
-}) {
-  const cursor = input.cursors.get(input.processor) ?? 0;
-  const events = input.stream.events.slice(cursor);
-  input.cursors.set(input.processor, input.stream.events.length);
-  if (events.length === 0) return;
-  await input.processor.ingest({ events, streamMaxOffset: input.stream.events.length });
-}
-
 export const GITHUB_LINK = {
   connection: "install-789",
   installationId: "789",

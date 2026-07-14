@@ -2081,14 +2081,57 @@ function parseStoredRef(serialized: string): ItxExpression | undefined {
 
 /**
  * Total `content` budget across one query's hits, split evenly (clamped to
- * [300, 1200] per hit). Sized so the WHOLE stringified result — content plus
- * per-hit metadata/ref overhead — stays under the 30k script-result spill
- * threshold at the generous 20-hit default, so a plain query({ q }) never
- * detours through a workspace file.
+ * [250, 1000] per hit). Sized from live anatomy (prd, 2026-07-14: a default
+ * query was 26.4k chars — at the 30k script-result spill edge): with
+ * per-document dedupe and this budget a default query lands ~12-15k chars
+ * (~3-4k tokens), so TWO parallel queries fit one inline script return.
+ * `content` is for judging relevance; `ref` fetches the full source.
  */
-const RESULT_CONTENT_BUDGET_CHARS = 16_000;
+const RESULT_CONTENT_BUDGET_CHARS = 12_000;
 const resultContentCap = (hitCount: number): number =>
-  Math.min(1_200, Math.max(300, Math.floor(RESULT_CONTENT_BUDGET_CHARS / Math.max(1, hitCount))));
+  Math.min(1_000, Math.max(250, Math.floor(RESULT_CONTENT_BUDGET_CHARS / Math.max(1, hitCount))));
+
+/**
+ * One result row per MATCH LOCATION — full-text-search semantics. The corpus
+ * stores stream events in 100-offset SEGMENT documents, so ten different
+ * pirate mentions in one segment are ten different chunks of ONE document:
+ * deduping by document would collapse ten real matches to one. The identity
+ * that matches user intuition is the chunk-narrowed ref window (the exact
+ * events a chunk covers): distinct windows stay distinct rows; the SAME
+ * window (context-expansion echoes, re-scored duplicates) collapses to its
+ * best score. Non-stream documents (files, repo files, custom docs) narrow
+ * to the whole-object ref, so their chunks collapse per document — which is
+ * right: every chunk of one file leads to the same domain object.
+ */
+function dedupeChunksByMatchLocation(
+  chunks: AiSearchSearchResponse["chunks"],
+): AiSearchSearchResponse["chunks"] {
+  const best = new Map<string, AiSearchSearchResponse["chunks"][number]>();
+  for (const chunk of chunks) {
+    const metadata = chunk.item.metadata ?? {};
+    const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
+    const narrowed =
+      storedRef === undefined ? undefined : narrowStreamRefToChunk(storedRef, chunk.text);
+    // narrowStreamRefToChunk returns the stored ref UNCHANGED when the chunk
+    // text carries no offset headers (the continuation slice of one oversized
+    // event) — identical for every such chunk in the segment, though they are
+    // DISTINCT matches (possibly of different giant events). Give those their
+    // own identity via the chunk text: over-keeping beats collapsing real
+    // matches. Non-stream documents narrow to the whole-object ref by design
+    // and keep whole-document identity — every chunk of one file leads to the
+    // same domain object.
+    const narrowedToWindow = narrowed !== undefined && narrowed !== storedRef;
+    const isStreamDocument = metadata.kind === "streams";
+    const identity = narrowedToWindow
+      ? `${chunk.item.key}#${JSON.stringify(narrowed)}`
+      : isStreamDocument
+        ? `${chunk.item.key}#raw:${chunk.text.slice(0, 120)}`
+        : chunk.item.key;
+    const existing = best.get(identity);
+    if (existing === undefined || chunk.score > existing.score) best.set(identity, chunk);
+  }
+  return [...best.values()];
+}
 
 /**
  * Search everything this project has accumulated — every conversation (web
@@ -2162,13 +2205,16 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     return env.SEARCH_INSTANCES.get(projectSearchInstanceId(this.props.projectId));
   }
 
-  #searchOptions(input: {
-    limit?: number;
-    rewriteQuery?: boolean;
-    scoreThreshold?: number;
-    source?: string;
-    exclude?: readonly string[];
-  }): AiSearchOptions {
+  #searchOptions(
+    input: {
+      limit?: number;
+      rewriteQuery?: boolean;
+      scoreThreshold?: number;
+      source?: string;
+      exclude?: readonly string[];
+    },
+    options?: { expandContext?: boolean },
+  ): AiSearchOptions {
     return {
       retrieval: {
         filters: searchFilters({
@@ -2195,9 +2241,12 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         // misses exact-token queries whose terms don't co-occur in one chunk;
         // hybrid rrf fusion keeps precision.
         keyword_match_mode: "or",
-        // One neighboring chunk heals JSON payloads split across chunk
-        // boundaries in stream segment documents.
-        context_expansion: 1,
+        // Neighbor expansion triples every chunk's text. Worth it ONLY where
+        // a model reads the chunks server-side (answer's RAG generation);
+        // query() consumers judge relevance and follow `ref` for the full
+        // source, so expansion just bloats the wire (live: it pushed a
+        // default query to the spill edge).
+        context_expansion: options?.expandContext ? 1 : 0,
       },
       query_rewrite: input.rewriteQuery === undefined ? undefined : { enabled: input.rewriteQuery },
     };
@@ -2302,7 +2351,13 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * Retrieve scored chunks matching a query, scoped to this project's own
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
-   * so callers can contextualize a hit. Docs hits carry synthetic 0.5-band
+   * so callers can contextualize a hit. ONE row per MATCH — distinct event
+   * windows within one stream segment stay distinct rows (full-text-search
+   * semantics); only same-location re-scores collapse. Content capped so a
+   * full default result is ~3-4k tokens —
+   * about two queries fit one inline script return; fanning out more, return
+   * selected fields (kind/context/ref), not whole results. Docs hits carry
+   * synthetic 0.5-band
    * scores (not comparable to corpus relevance), ride on top of `limit`
    * corpus chunks (their own cap: min(limit, 5)), and ignore
    * `scoreThreshold`. On a
@@ -2341,10 +2396,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       if (input.source !== undefined) return { searchQuery: input.q, results: [], warning };
       return { searchQuery: input.q, results: docs.value, warning };
     }
+    const deduped = dedupeChunksByMatchLocation(corpus.value.chunks);
     const results = [
-      ...corpus.value.chunks.map((chunk) =>
-        this.#toChunk(chunk, resultContentCap(corpus.value.chunks.length)),
-      ),
+      ...deduped.map((chunk) => this.#toChunk(chunk, resultContentCap(deduped.length))),
       ...docs.value,
     ].sort((a, b) => b.score - a.score);
     return { searchQuery: corpus.value.search_query, results };
@@ -2370,7 +2424,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     // Validation (bad source/exclude) throws HERE, outside the degrade path:
     // an invalid request is the caller's bug, never a warning — mirroring
     // query(), whose #searchOptions also runs before any catch.
-    const searchOptions = this.#searchOptions(input);
+    const searchOptions = this.#searchOptions(input, { expandContext: true });
     let response: AiSearchChatCompletionsResponse;
     try {
       response = await this.#instance.chatCompletions({
