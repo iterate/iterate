@@ -2000,11 +2000,15 @@ function parseStoredRef(serialized: string): ItxExpression | undefined {
 }
 
 /**
- * Longest per-hit `content` a search result carries inline. 20 default-limit
- * hits at this cap ≈ 24k chars — under the 30k script-result spill threshold,
- * so a plain query({ q }) never detours through a workspace file.
+ * Total `content` budget across one query's hits, split evenly (clamped to
+ * [300, 1200] per hit). Sized so the WHOLE stringified result — content plus
+ * per-hit metadata/ref overhead — stays under the 30k script-result spill
+ * threshold at the generous 20-hit default, so a plain query({ q }) never
+ * detours through a workspace file.
  */
-const MAX_RESULT_CONTENT_CHARS = 1_200;
+const RESULT_CONTENT_BUDGET_CHARS = 16_000;
+const resultContentCap = (hitCount: number): number =>
+  Math.min(1_200, Math.max(300, Math.floor(RESULT_CONTENT_BUDGET_CHARS / Math.max(1, hitCount))));
 
 /**
  * Search everything this project has accumulated — every conversation (web
@@ -2120,17 +2124,25 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   }
 
   /** Map one AI Search chunk to a provenance-carrying result. */
-  #toChunk(chunk: AiSearchSearchResponse["chunks"][number]): SearchResultChunk {
+  #toChunk(
+    chunk: AiSearchSearchResponse["chunks"][number],
+    maxContentChars: number,
+  ): SearchResultChunk {
     const metadata = chunk.item.metadata ?? {};
     const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
     // Cap per-hit content: chunks are ~1024 tokens and context expansion
     // multiplies them, so 20 generous-default hits of full text blew the 30k
     // inline script-result cap and forced a workspace spill + parse detour
     // (live prd incident, 2026-07-14). The content is for judging relevance;
-    // `ref` is the fetch path for the full source.
+    // `ref` is the fetch path for the full source — when a ref was too large
+    // to store, the marker points at the source description instead.
+    const truncationMarker =
+      storedRef !== undefined
+        ? "\n… [truncated — evaluate `ref` for the full source]"
+        : "\n… [truncated — no ref stored; locate the source via `context`/`filename`]";
     const content =
-      chunk.text.length > MAX_RESULT_CONTENT_CHARS
-        ? `${chunk.text.slice(0, MAX_RESULT_CONTENT_CHARS)}\n… [truncated — evaluate \`ref\` for the full source]`
+      chunk.text.length > maxContentChars
+        ? `${chunk.text.slice(0, maxContentChars)}${truncationMarker}`
         : chunk.text;
     return {
       filename: chunk.item.key,
@@ -2250,7 +2262,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       return { searchQuery: input.q, results: docs.value, warning };
     }
     const results = [
-      ...corpus.value.chunks.map((chunk) => this.#toChunk(chunk)),
+      ...corpus.value.chunks.map((chunk) =>
+        this.#toChunk(chunk, resultContentCap(corpus.value.chunks.length)),
+      ),
       ...docs.value,
     ].sort((a, b) => b.score - a.score);
     return { searchQuery: corpus.value.search_query, results };
@@ -2296,7 +2310,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     return {
       response: response.choices[0]?.message.content ?? "",
       searchQuery: input.q,
-      results: response.chunks.map((chunk) => this.#toChunk(chunk)),
+      results: response.chunks.map((chunk) =>
+        this.#toChunk(chunk, resultContentCap(response.chunks.length)),
+      ),
     };
   }
 

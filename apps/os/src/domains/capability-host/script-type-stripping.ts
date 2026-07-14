@@ -13,7 +13,12 @@ import { transform } from "sucrase";
  */
 export function stripScriptTypes(code: string): string {
   try {
-    return transform(code, { transforms: ["typescript"] }).code;
+    // disableESTransforms: types ONLY. Without it sucrase also downlevels
+    // `?.`/`??`, injecting helper FUNCTIONS before the arrow expression —
+    // which breaks the `const fn = <expr>` embedding and needlessly
+    // rewrites syntax workerd supports natively (broke 44/55 catalogue
+    // examples on the first CI run of this change).
+    return transform(code, { transforms: ["typescript"], disableESTransforms: true }).code;
   } catch {
     return code;
   }
