@@ -14,6 +14,7 @@
 // contract is directional silence, not a specific protocol encoding.
 
 import { expect, test } from "vitest";
+import { appendEvents } from "../test-support/append-events.ts";
 import { adminSecret, withItxSession, type ItxWebSocketMessage } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -68,11 +69,13 @@ test("ephemeral live delivery originates zero subscriber-side frames", async () 
   const appended = await project.streams
     .get(streamPath)
     .append(
+      { return: "events" },
       { type: EVENT_TYPE, payload: { n: 1 } },
       { type: EVENT_TYPE, payload: { n: 2 } },
       { type: EVENT_TYPE, payload: { n: 3 } },
     );
-  const lastOffset = appended.at(-1)!.offset;
+  if (appended?.return !== "events") throw new Error("append returned no events");
+  const lastOffset = appended.events.at(-1)!.offset;
   await waitFor(() => receivedOffsets.includes(lastOffset), 15_000, "live batch delivery");
 
   const liveFrames = frames.slice(liveDeliveryStartsAt);
@@ -125,7 +128,7 @@ test("warm ephemeral delivery latency: measure and bound append→delivered", as
   const deltas: number[] = [];
   for (let sample = 0; sample < SAMPLES; sample += 1) {
     const sentAt = performance.now();
-    const [event] = await project.streams.get(streamPath).append({
+    const [event] = await appendEvents(project.streams.get(streamPath), {
       type: EVENT_TYPE,
       payload: { sample },
     });

@@ -1220,12 +1220,8 @@ export interface ProjectWorker {
  */
 export interface Stream {
   __describe(): Promise<Description>;
-  /** Commit events; resolves with the same events carrying offsets and timestamps. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  /** Commit events and wait for durability without returning their committed envelopes. */
-  appendAck(...events: StreamEventInput[]): Promise<void>;
-  /** Commit events; resolves with one input-aligned offset per event. */
-  appendOffsets(...events: StreamEventInput[]): Promise<number[]>;
+  /** Commit events and resolve with only the requested result projection. */
+  append(...args: StreamAppendArguments): Promise<StreamAppendResult>;
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
   /** One event by offset or idempotencyKey; undefined when it does not exist.
@@ -2678,42 +2674,16 @@ export type DynamicWorkerDispatchOptions = {
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
 
-/** Append input for `Stream.append`: event type, JSON payload, optional
- * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
- * second-class row: excluded from range reads unless `includeEphemeral`,
- * never delivered to durable subscribers (wake/push/webhook), and evictable —
- * for transient signals (LLM streaming chunks) whose durable truth lands as
- * its own event. */
-export type StreamEventInput = {
-  type: string;
-  payload?: Record<string, unknown> | undefined;
-  metadata?: Record<string, unknown> | undefined;
-  source?:
-    | {
-        processor?:
-          | {
-              slug: string;
-              version: string;
-              stream: { path: string; projectId: string | null };
-              whileProcessing?: { offset: number; type: string } | undefined;
-            }
-          | undefined;
-        crossPostedFrom?:
-          | {
-              subscriptionKey: string;
-              createdAt: string;
-              offset: number;
-              path: string;
-              projectId: string | null;
-              type: string;
-            }[]
-          | undefined;
-      }
-    | undefined;
-  idempotencyKey?: string | undefined;
-  ephemeral?: true | undefined;
-};
+/** The wire arguments accepted by the single append operation. */
+export type StreamAppendArguments =
+  | StreamEventInput[]
+  | [options: StreamAppendResultOptions, ...events: StreamEventInput[]];
+
+/** The optional result projection returned by append. */
+export type StreamAppendResult =
+  | { return: "events"; events: StreamEvent[] }
+  | { return: "offsets"; offsets: number[] }
+  | undefined;
 
 /** The read window accepted by `Stream.getEvents` / `Stream.readEvents`. */
 export type StreamEventReadInput = {
@@ -3194,6 +3164,52 @@ export type WorkspaceFileInfo = {
   type: "directory" | "file" | "symlink";
   updatedAt: number;
 };
+
+/** Append input for `Stream.append`: event type, JSON payload, optional
+ * metadata, provenance source, and idempotency key — everything before the
+ * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
+ * second-class row: excluded from range reads unless `includeEphemeral`,
+ * never delivered to durable subscribers (wake/push/webhook), and evictable —
+ * for transient signals (LLM streaming chunks) whose durable truth lands as
+ * its own event. */
+export type StreamEventInput = {
+  type: string;
+  payload?: Record<string, unknown> | undefined;
+  metadata?: Record<string, unknown> | undefined;
+  source?:
+    | {
+        processor?:
+          | {
+              slug: string;
+              version: string;
+              stream: { path: string; projectId: string | null };
+              whileProcessing?: { offset: number; type: string } | undefined;
+            }
+          | undefined;
+        crossPostedFrom?:
+          | {
+              subscriptionKey: string;
+              createdAt: string;
+              offset: number;
+              path: string;
+              projectId: string | null;
+              type: string;
+            }[]
+          | undefined;
+      }
+    | undefined;
+  idempotencyKey?: string | undefined;
+  ephemeral?: true | undefined;
+};
+
+/**
+ * Optional result projection for `Stream.append`.
+ *
+ * Omit this argument for the cheapest useful append result: a durability
+ * acknowledgement with no response payload. Callers that need committed data
+ * select only the representation they will consume on the same append verb.
+ */
+export type StreamAppendResultOptions = { return: "events" | "offsets" };
 
 /** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
 export type StreamSubscriptionType = "configured" | "ephemeral";

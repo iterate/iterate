@@ -27,11 +27,16 @@ test("creates a disposable project and uses project streams through itx", async 
     },
   });
 
-  // append creates the stream on first write and returns the committed events.
-  const [appended] = await stream.append({
-    type: eventType,
-    payload: { marker },
-  });
+  // append creates the stream on first write and can project committed events.
+  const appendResult = await stream.append(
+    { return: "events" },
+    {
+      type: eventType,
+      payload: { marker },
+    },
+  );
+  if (appendResult?.return !== "events") throw new Error("append returned no event");
+  const [appended] = appendResult.events;
   expect(appended).toMatchObject({
     offset: expect.any(Number),
     type: eventType,

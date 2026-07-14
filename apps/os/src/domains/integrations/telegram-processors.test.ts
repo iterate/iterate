@@ -6,7 +6,11 @@ import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { emptyStreamRuntimeState } from "../streams/test-helpers.ts";
+import {
+  appendTestEvents,
+  createMemoryStreamAppend,
+  emptyStreamRuntimeState,
+} from "../streams/test-helpers.ts";
 import { TelegramProcessor } from "./telegram-processor-implementation.ts";
 import {
   TELEGRAM_NEW_SESSION_ACK_TEXT,
@@ -160,7 +164,7 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const [webhook] = await stream.append({
+    const [webhook] = await appendTestEvents(stream, {
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
@@ -628,7 +632,7 @@ describe("TelegramAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
     telegramCalls.length = 0;
 
-    const [llm] = await stream.append({
+    const [llm] = await appendTestEvents(stream, {
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
     });
@@ -639,7 +643,7 @@ describe("TelegramAgentProcessor", () => {
 
     // The fold catches up: the next batch reaches head (its own event is an
     // unconsumed stream fact, so the carried lifecycle fact is what paints).
-    const [woken] = await stream.append({
+    const [woken] = await appendTestEvents(stream, {
       type: "events.iterate.com/stream/woken",
       payload: { reason: "catch-up" },
     });
@@ -653,7 +657,7 @@ describe("TelegramAgentProcessor", () => {
     const agentPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-5000`;
     const { cursors, network, processor, sentMessages, stream } = setup({ agentPath });
 
-    const [request] = await stream.append({
+    const [request] = await appendTestEvents(stream, {
       type: "events.iterate.com/telegram/send-requested",
       payload: { text: "hello from the agent" },
     });
@@ -684,7 +688,7 @@ describe("TelegramAgentProcessor", () => {
     const { cursors, processor, sendFailures, sentMessages, stream } = setup();
     sendFailures.push(new Error("telegram is down"));
 
-    const [request] = await stream.append({
+    const [request] = await appendTestEvents(stream, {
       type: "events.iterate.com/telegram/send-requested",
       payload: { text: "must arrive" },
     });
@@ -732,7 +736,7 @@ describe("TelegramAgentProcessor", () => {
   it("never re-sends a MARKED request on replay (the crash-after-marker case)", async () => {
     const { cursors, processor, sentMessages, stream } = setup();
 
-    const [request] = await stream.append({
+    const [request] = await appendTestEvents(stream, {
       type: "events.iterate.com/telegram/send-requested",
       payload: { text: "already delivered" },
     });
@@ -1088,7 +1092,9 @@ class MemoryStream implements Stream {
     readonly path: string,
   ) {}
 
-  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+  append = createMemoryStreamAppend((...inputs) => this.#appendEvents(...inputs));
+
+  async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     return inputs.map((input) => {
       const existing =
         input.idempotencyKey === undefined
@@ -1104,14 +1110,6 @@ class MemoryStream implements Stream {
       this.events.push(event);
       return event;
     });
-  }
-
-  async appendAck(...inputs: StreamEventInput[]): Promise<void> {
-    await this.append(...inputs);
-  }
-
-  async appendOffsets(...inputs: StreamEventInput[]): Promise<number[]> {
-    return (await this.append(...inputs)).map((event) => event.offset);
   }
 
   at(path: string): Stream {

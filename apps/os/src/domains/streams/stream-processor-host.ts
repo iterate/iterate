@@ -275,7 +275,7 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       // consumes list — so the fact reaches every processor's batch and the
       // end-of-batch reconciliations run even for processors that do not
       // consume it. Failures throw: the keepalive's breaker owns retries.
-      await options.stream.appendAck({
+      await options.stream.append({
         type: PROCESSOR_HOST_REVIVED_EVENT_TYPE,
         // Keyed per attempt: a platform retry of a throwing alarm handler
         // re-runs the pass without journaling a duplicate fact; distinct
@@ -292,7 +292,7 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
       }
     },
     appendFact: (event) => {
-      void Promise.resolve(options.stream.appendAck(event)).catch((error: unknown) => {
+      void Promise.resolve(options.stream.append(event)).catch((error: unknown) => {
         console.error("stream processor host evidence append failed", error);
       });
     },

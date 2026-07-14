@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { appendEvents } from "../test-support/append-events.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   AGENT_OUTPUT_ADDED_TYPE,
@@ -99,10 +100,17 @@ describe("itx", () => {
         await itx.chat.sendMessage(${JSON.stringify(marker)});
       }
     `);
-    const [historicalOutput] = await agent.stream.append({
-      type: AGENT_OUTPUT_ADDED_TYPE,
-      payload: { content },
-    });
+    const historicalOutputResult = await agent.stream.append(
+      { return: "events" },
+      {
+        type: AGENT_OUTPUT_ADDED_TYPE,
+        payload: { content },
+      },
+    );
+    if (historicalOutputResult?.return !== "events") {
+      throw new Error("append did not return events");
+    }
+    const [historicalOutput] = historicalOutputResult.events;
 
     const providerSelected = agent.stream.waitForEvent({
       afterOffset: historicalOutput.offset,
@@ -529,7 +537,7 @@ describe("itx", () => {
       timeoutMs: 30_000,
     });
 
-    const [sourceEvent] = await project.streams.get(sourcePath).append({
+    const [sourceEvent] = await appendEvents(project.streams.get(sourcePath), {
       type: "events.iterate.com/test/source",
       metadata: { crossPostMarker: marker },
       payload: { text: "hello from a child stream" },

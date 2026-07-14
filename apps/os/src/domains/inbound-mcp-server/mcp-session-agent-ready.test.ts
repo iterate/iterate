@@ -23,8 +23,9 @@ describe("ensureMcpSessionAgentReady", () => {
           get(path) {
             requestedPath = path;
             return {
-              async appendAck(...events: StreamEventInput[]) {
+              async append(...events: StreamEventInput[]) {
                 appended.push(...events);
+                return undefined;
               },
               async waitForEvent(args) {
                 waitCalls.push(args);

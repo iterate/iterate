@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { createProcessorHostHarness, emptyStreamRuntimeState } from "../streams/test-helpers.ts";
+import {
+  appendTestEvents,
+  createMemoryStreamAppend,
+  createProcessorHostHarness,
+  emptyStreamRuntimeState,
+} from "../streams/test-helpers.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,
@@ -50,7 +55,9 @@ class MemoryStream implements Stream {
     readonly path: string,
   ) {}
 
-  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+  append = createMemoryStreamAppend((...inputs) => this.#appendEvents(...inputs));
+
+  async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     return inputs.map((input) => {
       const existing =
         input.idempotencyKey === undefined
@@ -66,14 +73,6 @@ class MemoryStream implements Stream {
       this.events.push(event);
       return event;
     });
-  }
-
-  async appendAck(...inputs: StreamEventInput[]): Promise<void> {
-    await this.append(...inputs);
-  }
-
-  async appendOffsets(...inputs: StreamEventInput[]): Promise<number[]> {
-    return (await this.append(...inputs)).map((event) => event.offset);
   }
 
   at(path: string): Stream {
@@ -545,10 +544,10 @@ describe("SlackProcessor (webhook router)", () => {
       connection: CONNECTION,
     });
     // The connected fact folds first (the connection names new thread paths).
-    const [connected] = await stream.append(connectedEvent());
+    const [connected] = await appendTestEvents(stream, connectedEvent());
     await processor.ingest({ events: [connected!], streamMaxOffset: 1 });
     expect(processor.checkpointOffset).toBe(1);
-    const [webhook] = await stream.append({
+    const [webhook] = await appendTestEvents(stream, {
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
@@ -799,7 +798,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
     slackCalls.length = 0;
 
-    const [requested] = await stream.append({
+    const [requested] = await appendTestEvents(stream, {
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", requestId: "llm-request:1" },
     });
@@ -950,7 +949,7 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
     slackCalls.length = 0;
 
-    const [requested] = await stream.append({
+    const [requested] = await appendTestEvents(stream, {
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", requestId: "llm-request:1" },
     });
@@ -996,7 +995,7 @@ describe("SlackAgentProcessor", () => {
       payload: humanMessageWebhookPayload({}),
     });
     await deliverNewEvents({ cursors, processor, stream });
-    const [requestA] = await stream.append({
+    const [requestA] = await appendTestEvents(stream, {
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", requestId: "llm-request:a" },
     });
@@ -1010,7 +1009,7 @@ describe("SlackAgentProcessor", () => {
       },
     });
     await deliverNewEvents({ cursors, processor, stream });
-    const [requestB] = await stream.append({
+    const [requestB] = await appendTestEvents(stream, {
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", requestId: "llm-request:b" },
     });
@@ -1067,7 +1066,7 @@ describe("SlackAgentProcessor", () => {
         payload: humanMessageWebhookPayload({}),
       });
       await deliverNewEvents({ cursors, processor, stream });
-      const [requestA] = await stream.append({
+      const [requestA] = await appendTestEvents(stream, {
         type: "events.iterate.com/agent/llm-request-requested",
         payload: { model: "gpt-test", requestId: "llm-request:a" },
       });
@@ -1140,7 +1139,7 @@ describe("SlackAgentProcessor", () => {
         },
       });
       await h.deliverAll();
-      const [requested] = await h.stream.append({
+      const [requested] = await appendTestEvents(h.stream, {
         type: "events.iterate.com/agent/llm-request-requested",
         payload: { model: "gpt-test", requestId: "llm-request:1" },
       });
@@ -1186,7 +1185,8 @@ describe("SlackAgentProcessor", () => {
     // catch-up batch that reaches head contains no lifecycle facts at all.
     // The repaint must not lose the completion: without the carry, Slack
     // keeps "is thinking..." and the eyes reaction forever.
-    const [completed, render] = await stream.append(
+    const [completed, render] = await appendTestEvents(
+      stream,
       {
         type: "events.iterate.com/agent/llm-request-completed",
         payload: {
@@ -1249,7 +1249,7 @@ describe("SlackAgentProcessor", () => {
       payload: humanMessageWebhookPayload({}),
     });
     await deliverNewEvents({ cursors, processor, stream });
-    const [requested] = await stream.append({
+    const [requested] = await appendTestEvents(stream, {
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", requestId: "llm-request:1" },
     });

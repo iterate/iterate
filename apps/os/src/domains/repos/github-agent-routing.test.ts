@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { appendTestEvents } from "../streams/test-helpers.ts";
 import {
   GITHUB_LINK,
   MemoryStream,
@@ -336,7 +337,7 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
     const stream = network.get("/repos/config");
     const createCalls: unknown[] = [];
     const processor = newCreatingRepoProcessor(stream, createCalls);
-    const [requested, linked] = await stream.append(createRequested, {
+    const [requested, linked] = await appendTestEvents(stream, createRequested, {
       type: "events.iterate.com/repo/github-link-configured",
       payload: GITHUB_LINK,
     });

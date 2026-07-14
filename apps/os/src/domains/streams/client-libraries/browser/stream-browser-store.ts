@@ -13,6 +13,7 @@
 // hosts the processor over a fresh subscription, mirroring the Durable-Object-side
 // stream processor host.
 
+import { appendedEvents } from "../../rpc-types.ts";
 import type { ProcessorRuntimeState, SubscriptionKey } from "../../rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "../../schemas.ts";
 import type { Stream } from "../../../../itx-api.generated.ts";
@@ -1546,8 +1547,8 @@ function createStreamRuntime(
         const t0 = Date.now();
         for (let attempt = 0; ; attempt++) {
           try {
-            const committed = await callWhenReady(
-              (rpc) => rpc.append(...events) as Promise<StreamEvent[]>,
+            const committed = appendedEvents(
+              await callWhenReady((rpc) => rpc.append({ return: "events" }, ...events)),
             );
             const maxCommittedOffset = committed.reduce(
               (max, event) => Math.max(max, event.offset),

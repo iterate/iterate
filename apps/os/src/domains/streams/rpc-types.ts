@@ -5,7 +5,40 @@
  * contract and the server-side host/subscriber machinery build against.
  */
 import type { LiveUpdate } from "../../lib/live-state/protocol.ts";
-import type { StreamEvent } from "./schemas.ts";
+import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+
+/**
+ * Optional result projection for `Stream.append`.
+ *
+ * Omit this argument for the cheapest useful append result: a durability
+ * acknowledgement with no response payload. Callers that need committed data
+ * select only the representation they will consume on the same append verb.
+ */
+export type StreamAppendResultOptions = { return: "events" | "offsets" };
+
+/** The wire arguments accepted by the single append operation. */
+export type StreamAppendArguments =
+  | StreamEventInput[]
+  | [options: StreamAppendResultOptions, ...events: StreamEventInput[]];
+
+/** The optional result projection returned by append. */
+export type StreamAppendResult =
+  | { return: "events"; events: StreamEvent[] }
+  | { return: "offsets"; offsets: number[] }
+  | undefined;
+
+/** The public append call signature. */
+export type StreamAppend = (...args: StreamAppendArguments) => Promise<StreamAppendResult>;
+
+export function appendedEvents(result: StreamAppendResult): StreamEvent[] {
+  if (result?.return !== "events") throw new Error("append did not return committed events");
+  return result.events;
+}
+
+export function appendedOffsets(result: StreamAppendResult): number[] {
+  if (result?.return !== "offsets") throw new Error("append did not return committed offsets");
+  return result.offsets;
+}
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;

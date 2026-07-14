@@ -16,7 +16,7 @@ import { StreamProcessor, type StreamProcessorConstructorArgs } from "./stream-p
 import { PROCESSOR_HOST_REVIVED_EVENT_TYPE } from "./stream-processor-host.ts";
 import { revivalBackoffMs, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 import type { SubscriberMetricsReport } from "./subscriber-metrics.ts";
-import { createProcessorHostHarness } from "./test-helpers.ts";
+import { appendTestEvents, createProcessorHostHarness } from "./test-helpers.ts";
 
 const PING = "events.iterate.com/test/ping";
 const POISON = "events.iterate.com/test/poison";
@@ -97,7 +97,8 @@ describe("wake sink failure fence", () => {
       await ingestThrough(args);
       if (offset !== undefined) successfulOffsets.push(offset);
     });
-    const events = await h.stream.append(
+    const events = await appendTestEvents(
+      h.stream,
       { type: PING, payload: {} },
       { type: PING, payload: {} },
       { type: PING, payload: {} },
@@ -270,7 +271,7 @@ describe("filtered wake-lane delivery", () => {
     const h = createProcessorHostHarness({
       build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
     });
-    const [ping] = await h.stream.append({ type: PING, payload: {} });
+    const [ping] = await appendTestEvents(h.stream, { type: PING, payload: {} });
     await h.stream.append({ type: "events.iterate.com/other/presence-fact", payload: {} });
     let reads = 0;
     h.stream.readEvents = () => {
@@ -456,7 +457,7 @@ describe("subscriber metrics", () => {
     const h = createProcessorHostHarness({
       build: (host) => ({ a: host.add((deps) => new Recorder(RecorderA, deps)) }),
     });
-    const [ping] = await h.stream.append({ type: PING, payload: {} });
+    const [ping] = await appendTestEvents(h.stream, { type: PING, payload: {} });
     const wake = await h.host.wakeStreamSubscriber({
       stream: { projectId: "prj_test", path: h.stream.path, streamMaxOffset: 1 },
       subscriptionKey: "wake:recorder-a",

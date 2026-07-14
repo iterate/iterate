@@ -20,10 +20,15 @@ test("agent checkpoint reconstructs chunked history after eviction and catches u
     role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
     content: `${index}:`.padEnd(512, "x"),
   }));
-  const [reset] = await agent.stream.append({
-    type: HISTORY_RESET,
-    payload: { history, systemPrompt: "checkpoint eviction test" },
-  });
+  const resetResult = await agent.stream.append(
+    { return: "events" },
+    {
+      type: HISTORY_RESET,
+      payload: { history, systemPrompt: "checkpoint eviction test" },
+    },
+  );
+  if (resetResult?.return !== "events") throw new Error("append did not return events");
+  const [reset] = resetResult.events;
   await agent.processor.waitUntilEvent({ offset: reset!.offset, timeoutMs: 30_000 });
 
   await killAgent(agent);
@@ -31,13 +36,18 @@ test("agent checkpoint reconstructs chunked history after eviction and catches u
   expect(reactivated.offset).toBeGreaterThanOrEqual(reset!.offset);
   expect(reactivated.state.history).toEqual(history);
 
-  const [appended] = await agent.stream.append({
-    type: INPUT_ADDED,
-    payload: {
-      content: "after eviction",
-      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+  const appendedResult = await agent.stream.append(
+    { return: "events" },
+    {
+      type: INPUT_ADDED,
+      payload: {
+        content: "after eviction",
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
     },
-  });
+  );
+  if (appendedResult?.return !== "events") throw new Error("append did not return events");
+  const [appended] = appendedResult.events;
   const caughtUp = await agent.processor.snapshot();
   expect(caughtUp.offset).toBeGreaterThanOrEqual(appended!.offset);
   expect(caughtUp.state.history.at(-1)).toEqual({ role: "user", content: "after eviction" });

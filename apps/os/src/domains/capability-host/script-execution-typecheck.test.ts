@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Project } from "../../itx-api.generated.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
+import { appendTestEvents, MemoryStream } from "../streams/test-helpers.ts";
 import {
   CapabilityHostProcessor,
   type ParentCapabilityHost,
@@ -51,7 +51,7 @@ function makeProcessor(options: {
 }
 
 async function requestScript(stream: MemoryStream, processor: CapabilityHostProcessor) {
-  const [requested] = await stream.append({
+  const [requested] = await appendTestEvents(stream, {
     type: T.requested,
     payload: { code: "async (itx) => itx.streams.gett('/')", executionId: "exec-1" },
   });

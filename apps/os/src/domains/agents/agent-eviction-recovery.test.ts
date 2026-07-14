@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  appendTestEvents,
   createProcessorHostHarness,
   MemoryStream,
   type ProcessorHostHarness,
@@ -162,7 +163,10 @@ describe("attempt bookkeeping under stream failures", () => {
     let failStartedAppends = true;
     const realAppend = stream.append.bind(stream);
     stream.append = async (...inputs) => {
-      if (failStartedAppends && inputs.some((input) => input.type === T.started)) {
+      if (
+        failStartedAppends &&
+        inputs.some((input) => "type" in input && input.type === T.started)
+      ) {
         throw new Error("stream hiccup");
       }
       return realAppend(...inputs);
@@ -180,7 +184,7 @@ describe("attempt bookkeeping under stream failures", () => {
       },
       now: () => Date.now(),
     });
-    const [requested] = await realAppend({
+    const [requested] = await appendTestEvents(stream, {
       type: T.requested,
       payload: { model: "gpt-test", requestId: "llm-request:gen-1" },
     });
@@ -196,7 +200,10 @@ describe("attempt bookkeeping under stream failures", () => {
     // The stream recovers; the next batch's reconciliation retries the whole
     // attempt — a leaked live-set entry would make it skip this id forever.
     failStartedAppends = false;
-    const [nudge] = await realAppend({ type: "events.iterate.com/test/nudge", payload: {} });
+    const [nudge] = await appendTestEvents(stream, {
+      type: "events.iterate.com/test/nudge",
+      payload: {},
+    });
     await agent.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
     await vi.waitFor(() => {
       const completion = stream.events.find(
@@ -224,7 +231,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
       },
       now: () => Date.now(),
     });
-    const [requested] = await stream.append({
+    const [requested] = await appendTestEvents(stream, {
       type: T.requested,
       payload: {
         model: "gpt-test",
@@ -270,7 +277,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
       },
       { type: T.requested, payload: { model: "m", requestId: "r" } },
     );
-    const [nudge] = await stream.append({
+    const [nudge] = await appendTestEvents(stream, {
       type: T.userMessage,
       payload: { content: "hello? anyone?", from: { kind: "user", origin: "web" } },
     });
@@ -301,7 +308,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
       },
       now: () => now,
     });
-    const [requested] = await stream.append({
+    const [requested] = await appendTestEvents(stream, {
       type: T.requested,
       payload: { model: "m", requestId: "r", expiresAt: now - 1 },
     });

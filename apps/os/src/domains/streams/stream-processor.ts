@@ -2,6 +2,7 @@ import { RpcTarget } from "capnweb";
 import type { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import { appendedOffsets } from "./rpc-types.ts";
 import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
 import { SubscriberMetrics } from "./subscriber-metrics.ts";
 import {
@@ -656,7 +657,7 @@ export abstract class StreamProcessor<
       // runtime speaking, not the processor author. It still carries the full
       // provenance stamp (which processor skipped which event).
       this.runInBackground(() =>
-        this.stream.appendAck({
+        this.stream.append({
           type: "events.iterate.com/stream/error-occurred",
           idempotencyKey: this.idempotencyKey("event-parse-failed", event),
           source: { processor: this.#processorStamp(event) },
@@ -733,9 +734,14 @@ export abstract class StreamProcessor<
     // offsets come back through this processor's own subscription, and
     // noteBatchIngested closes the sample. Sibling-stream appends (appendTo)
     // never loop back here, so they are not timed.
-    if (args.target !== this.stream) return args.target.appendOffsets(...events);
+    if (args.target !== this.stream) {
+      return args.target
+        .append({ return: "offsets" }, ...events)
+        .then((result) => appendedOffsets(result));
+    }
     const t0 = Date.now();
-    return Promise.resolve(this.stream.appendOffsets(...events)).then((committedOffsets) => {
+    return Promise.resolve(this.stream.append({ return: "offsets" }, ...events)).then((result) => {
+      const committedOffsets = appendedOffsets(result);
       const maxCommittedOffset = committedOffsets.reduce((max, offset) => Math.max(max, offset), 0);
       if (maxCommittedOffset > 0) {
         this.subscriberMetrics.noteAppendCommitted({ maxCommittedOffset, t0, atMs: Date.now() });

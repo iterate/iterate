@@ -2,9 +2,10 @@ import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
+import {
+  appendedOffsets,
+  type StreamSubscriberWakeRequest,
+  type StreamSubscriberWakeResponse,
 } from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
@@ -100,8 +101,11 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   async setSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {
     // Fail loudly at set time; raw appends bypass this and park via the reducer.
     assertValidRecurrence(input.recurrence);
-    const [offset] = await this.#stream.appendOffsets(
-      this.#schedulerProcessor.buildScheduleSetEvent(input),
+    const [offset] = appendedOffsets(
+      await this.#stream.append(
+        { return: "offsets" },
+        this.#schedulerProcessor.buildScheduleSetEvent(input),
+      ),
     );
     await this.#ingestThrough(offset!);
     const view = this.#schedulerProcessor.getScheduleView(input.key);
@@ -110,8 +114,11 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   }
 
   async cancelSchedule(key: string): Promise<void> {
-    const [offset] = await this.#stream.appendOffsets(
-      this.#schedulerProcessor.buildScheduleCancelledEvent(key),
+    const [offset] = appendedOffsets(
+      await this.#stream.append(
+        { return: "offsets" },
+        this.#schedulerProcessor.buildScheduleCancelledEvent(key),
+      ),
     );
     await this.#ingestThrough(offset!);
   }
@@ -120,7 +127,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   async triggerSchedule(key: string): Promise<{ executionId: string }> {
     await this.#processorHost.catchUp(PROCESSOR_SLUG);
     const { event, executionId } = this.#schedulerProcessor.buildManualTriggerEvent(key);
-    const [offset] = await this.#stream.appendOffsets(event);
+    const [offset] = appendedOffsets(await this.#stream.append({ return: "offsets" }, event));
     await this.#ingestThrough(offset!);
     return { executionId };
   }

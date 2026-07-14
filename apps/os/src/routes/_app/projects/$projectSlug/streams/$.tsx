@@ -44,10 +44,15 @@ function ProjectStreamDetailContent() {
   const itx = useItx();
 
   async function submitMessage(message: string) {
-    const [event] = await itx.streams.get(streamPath).append({
-      type: "events.iterate.com/agents/message-received",
-      payload: { content: message, from: { kind: "user", origin: "web" } },
-    });
+    const result = await itx.streams.get(streamPath).append(
+      { return: "events" },
+      {
+        type: "events.iterate.com/agents/message-received",
+        payload: { content: message, from: { kind: "user", origin: "web" } },
+      },
+    );
+    if (result?.return !== "events") throw new Error("message append returned no event");
+    const [event] = result.events;
     // Feeds the composer's consume-own-append metric (see StreamMessageComposer).
     return event;
   }

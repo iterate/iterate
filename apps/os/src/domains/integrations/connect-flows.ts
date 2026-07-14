@@ -315,7 +315,7 @@ async function recordConnection(input: {
       ...(secret.refresh ? { refresh: secret.refresh } : {}),
     });
   }
-  await integrationStreamStub(input.projectId, streamPath).appendAck(
+  await integrationStreamStub(input.projectId, streamPath).append(
     ...(input.processorSubscription
       ? [
           buildIntegrationRouterSubscriptionConfiguredEvent({
@@ -1232,7 +1232,7 @@ async function recordDisconnection(input: {
   await integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath(input.slug, input.connection),
-  ).appendAck(input.disconnectedEvent);
+  ).append(input.disconnectedEvent);
   if (input.unclaimExternalId) {
     await appendConnectionDirectoryEvent({
       claimed: false,

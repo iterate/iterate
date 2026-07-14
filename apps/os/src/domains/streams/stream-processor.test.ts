@@ -193,9 +193,9 @@ describe("StreamProcessor parse-failure skipping", () => {
   function recordingStream() {
     const appends: StreamEventInput[] = [];
     const stream = {
-      appendAck: (...events: StreamEventInput[]) => {
+      append: (...events: StreamEventInput[]) => {
         appends.push(...events);
-        return Promise.resolve();
+        return Promise.resolve(undefined);
       },
     } as unknown as Stream;
     return { appends, stream };
@@ -289,7 +289,7 @@ describe("StreamProcessor parse-failure skipping", () => {
         path: "/tests/counter",
         projectId: null,
         stream: {
-          appendAck: () => Promise.reject(new Error("append transport down")),
+          append: () => Promise.reject(new Error("append transport down")),
         } as unknown as Stream,
       });
 
@@ -400,13 +400,19 @@ describe("StreamProcessor provenance stamping", () => {
         }));
       };
       return {
-        append: (...events: StreamEventInput[]) => {
-          resultProjections.push("events");
-          return Promise.resolve(commit(events));
-        },
-        appendOffsets: (...events: StreamEventInput[]) => {
-          resultProjections.push("offsets");
-          return Promise.resolve(commit(events).map((event) => event.offset));
+        append: async (...args: Parameters<Stream["append"]>) => {
+          const options = "return" in args[0]! ? args[0] : undefined;
+          const events = (options === undefined ? args : args.slice(1)) as StreamEventInput[];
+          const committed = commit(events);
+          if (options?.return === "events") {
+            resultProjections.push("events");
+            return { return: "events", events: committed };
+          }
+          if (options?.return === "offsets") {
+            resultProjections.push("offsets");
+            return { return: "offsets", offsets: committed.map((event) => event.offset) };
+          }
+          return undefined;
         },
         at: (child: string) => streamAt(child),
       } as unknown as Stream;

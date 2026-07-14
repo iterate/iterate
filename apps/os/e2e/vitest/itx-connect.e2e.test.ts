@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
+import { appendEvents } from "../test-support/append-events.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startMockMcp, startMockOpenApi } from "./itx-capability-fixtures.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
@@ -340,7 +341,7 @@ describe("itx", () => {
       type: "itx-expression",
     });
     // @ts-expect-error - mounted expression stream root.
-    const [event] = await project.mySpecialStream.append({
+    const [event] = await appendEvents(project.mySpecialStream, {
       payload: { ok: true },
       type: "events.iterate.test/itx-expression-stream",
     });

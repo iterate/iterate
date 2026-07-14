@@ -12,7 +12,7 @@
 // vendor fake that hasn't resolved yet. Every state a test exercises is
 // therefore a reachable state, and the test doubles as the existence proof.
 
-import type { Stream } from "../../itx-api.generated.ts";
+import type { Stream, StreamAppendResultOptions } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { AnyHostedProcessor } from "./processor-host-capabilities.ts";
 import { createStreamProcessorHost, type StreamProcessorHost } from "./stream-processor-host.ts";
@@ -47,6 +47,43 @@ export function emptyStreamRuntimeState() {
   };
 }
 
+export function createMemoryStreamAppend(
+  commit: (...inputs: StreamEventInput[]) => StreamEvent[] | Promise<StreamEvent[]>,
+): Stream["append"] {
+  return async (...args) => {
+    const first = args[0];
+    const options: StreamAppendResultOptions | undefined =
+      typeof first === "object" && first !== null && !("type" in first) && "return" in first
+        ? first
+        : undefined;
+    const inputs = (options === undefined ? args : args.slice(1)) as StreamEventInput[];
+    const events = await commit(...inputs);
+    if (options?.return === "events") return { return: "events", events };
+    if (options?.return === "offsets") {
+      return { return: "offsets", offsets: events.map((event) => event.offset) };
+    }
+    return undefined;
+  };
+}
+
+export async function appendTestEvents(
+  stream: Pick<Stream, "append">,
+  ...events: StreamEventInput[]
+): Promise<StreamEvent[]> {
+  const result = await stream.append({ return: "events" }, ...events);
+  if (result?.return !== "events") throw new Error("append did not return events");
+  return result.events;
+}
+
+export async function appendTestOffsets(
+  stream: Pick<Stream, "append">,
+  ...events: StreamEventInput[]
+): Promise<number[]> {
+  const result = await stream.append({ return: "offsets" }, ...events);
+  if (result?.return !== "offsets") throw new Error("append did not return offsets");
+  return result.offsets;
+}
+
 export class MemoryStream implements Stream {
   events: StreamEvent[] = [];
   /** Injectable clock for createdAt stamps; harnesses point it at virtual time. */
@@ -60,7 +97,9 @@ export class MemoryStream implements Stream {
 
   async kill(): Promise<void> {}
 
-  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+  append = createMemoryStreamAppend((...inputs) => this.#appendEvents(...inputs));
+
+  async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     const appended = inputs.map((input) => {
       const existing =
         input.idempotencyKey === undefined
@@ -83,14 +122,6 @@ export class MemoryStream implements Stream {
       return event;
     });
     return appended;
-  }
-
-  async appendAck(...inputs: StreamEventInput[]): Promise<void> {
-    await this.append(...inputs);
-  }
-
-  async appendOffsets(...inputs: StreamEventInput[]): Promise<number[]> {
-    return (await this.append(...inputs)).map((event) => event.offset);
   }
 
   at(): Stream {

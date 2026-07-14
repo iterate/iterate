@@ -17,6 +17,7 @@ import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
 } from "./agent-processor-contract.ts";
 import { MemoryStream, deliverNewEvents, type ProcessorLike } from "./test-helpers.ts";
+import { appendTestEvents } from "../streams/test-helpers.ts";
 
 function agentRequestEvents(content: string, model = DEFAULT_AGENT_MODEL): StreamEventInput[] {
   return [
@@ -409,7 +410,7 @@ describe("minimal web-chat agent processors", () => {
       },
     });
 
-    const events = await stream.append(...agentRequestEvents("hello"));
+    const events = await appendTestEvents(stream, ...agentRequestEvents("hello"));
     const requested = events.at(-1)!;
     await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
     await stream.waitForEvent({
@@ -433,10 +434,13 @@ describe("minimal web-chat agent processors", () => {
   it("rebuilds the exact prompt when a requested obligation comes from a restored checkpoint", async () => {
     const stream = new MemoryStream();
     const aiCalls: unknown[] = [];
-    const requestEvents = await stream.append(...agentRequestEvents("recover this prompt"));
+    const requestEvents = await appendTestEvents(
+      stream,
+      ...agentRequestEvents("recover this prompt"),
+    );
     const requested = requestEvents.at(-1)!;
     const checkpointState = reduceAgentEvents(stream.events);
-    const [nudge] = await stream.append({
+    const [nudge] = await appendTestEvents(stream, {
       type: "events.iterate.com/test/nudge",
       payload: {},
     });
@@ -1285,7 +1289,7 @@ describe("minimal web-chat agent processors", () => {
     const stream = new MemoryStream();
     // Incarnation 1: accepted the request and appended started, then died —
     // simulated by writing the events directly, never running a processor.
-    const [requested] = await stream.append({
+    const [requested] = await appendTestEvents(stream, {
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", requestId: "llm-request:gen-1" },
     });
@@ -1333,7 +1337,7 @@ describe("minimal web-chat agent processors", () => {
     // A LIVE request in this incarnation is never swept: accept a new request
     // (execution registers synchronously) and deliver the batch — no crash
     // cancel appears for it while it runs.
-    const [second] = await stream.append({
+    const [second] = await appendTestEvents(stream, {
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", requestId: "llm-request:gen-2" },
     });
@@ -1564,7 +1568,8 @@ describe("interrupt and stray-request hygiene", () => {
     });
     // A current request mid-lifecycle plus a stray raw-appended requested
     // event: driving the stray would run a parallel LLM turn nobody asked for.
-    const [, current, stray] = await stream.append(
+    const [, current, stray] = await appendTestEvents(
+      stream,
       {
         type: "events.iterate.com/agent/llm-request-scheduled",
         payload: { debounceMs: 60_000, model: "m", requestId: "llm-request:gen-0" },

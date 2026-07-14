@@ -7,7 +7,11 @@ import {
 } from "../../test/cloudflare-workers-shim.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { StreamProcessorSnapshot } from "../streams/stream-processor.ts";
-import { emptyStreamRuntimeState } from "../streams/test-helpers.ts";
+import {
+  appendTestEvents,
+  createMemoryStreamAppend,
+  emptyStreamRuntimeState,
+} from "../streams/test-helpers.ts";
 import {
   SchedulerProcessor,
   type SchedulerProcessorDeps,
@@ -41,7 +45,9 @@ class MemoryStream implements Stream {
 
   async kill(): Promise<void> {}
 
-  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+  append = createMemoryStreamAppend((...inputs) => this.#appendEvents(...inputs));
+
+  async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     return inputs.map((input) => {
       if (input.type === this.failAppendsOfType) {
         throw new Error(`injected append failure for ${input.type}`);
@@ -60,14 +66,6 @@ class MemoryStream implements Stream {
       this.events.push(event);
       return event;
     });
-  }
-
-  async appendAck(...inputs: StreamEventInput[]): Promise<void> {
-    await this.append(...inputs);
-  }
-
-  async appendOffsets(...inputs: StreamEventInput[]): Promise<number[]> {
-    return (await this.append(...inputs)).map((event) => event.offset);
   }
 
   at(): Stream {
@@ -457,7 +455,7 @@ describe("triggering", () => {
     } = { snapshot: undefined };
     const harness = makeHarness({ snapshotStore });
     const { clock, deliver, invokeCapability, processor, stream } = harness;
-    const [defined] = await stream.append(setEvent("report"));
+    const [defined] = await appendTestEvents(stream, setEvent("report"));
     const payload = defined!.payload as ScheduleSetPayload;
     snapshotStore.snapshot = {
       offset: defined!.offset,
@@ -569,7 +567,7 @@ describe("triggering", () => {
     await deliver();
     clock.now = T0 + 61_000;
     await harness.processor.triggerDue();
-    const [reset] = await stream.append(setEvent("report", "async () => 'v2'"));
+    const [reset] = await appendTestEvents(stream, setEvent("report", "async () => 'v2'"));
     await deliver();
     await waitForCompletion(harness);
 

@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../../src/domains/streams/schemas.ts";
 import type { Stream } from "../../src/itx-api.generated.ts";
+import { appendEvents } from "../test-support/append-events.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -339,7 +340,7 @@ test("project streams are born with the project-worker push feed and replace it 
   // Appending advances the feed's authoritative cursor once the project
   // worker acks the batch (durable delivery, so it retries until the seeded
   // worker answers).
-  const [appended] = await stream.append({
+  const [appended] = await appendEvents(stream, {
     type: "events.iterate.test/lifecycle-worker-feed",
     payload: { marker },
   });
@@ -357,7 +358,7 @@ test("project streams are born with the project-worker push feed and replace it 
   // Config replacement: a same-key subscription-configured append overrides
   // the birth-certificate feed (latest committed event per key wins).
   const narrowedTypes = [`events.iterate.test/lifecycle-worker-feed-selected-${marker}`];
-  const [replacement] = await stream.append({
+  const [replacement] = await appendEvents(stream, {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: "project-worker",
@@ -389,7 +390,7 @@ test("a contiguous cursor-set batch preserves the final audited seek", async () 
   const initial = asStreamRuntimeState(await stream.runtimeState());
   expect(initial.runtime.subscriptions["project-worker"]?.mode).toBe("push");
 
-  await stream.appendAck(
+  await stream.append(
     ...Array.from({ length: 100 }, (_, index) => ({
       type: "events.iterate.com/stream/subscription-cursor-set",
       payload: {

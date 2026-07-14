@@ -8,7 +8,7 @@
 
 import { expect, test } from "vitest";
 import type { StreamEventBatch } from "../../src/domains/streams/rpc-types.ts";
-import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
+import type { StreamEvent, StreamEventInput } from "../../src/domains/streams/schemas.ts";
 import type { Stream, StreamPushEventBatch } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -16,6 +16,24 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/stream-e2e";
 const CROSS_POST_EVENT_TYPE = "events.iterate.test/minimal-v4/cross-post";
+
+async function appendEvents(
+  stream: Pick<Stream, "append">,
+  ...events: StreamEventInput[]
+): Promise<StreamEvent[]> {
+  const result = await stream.append({ return: "events" }, ...events);
+  if (result?.return !== "events") throw new Error("append returned no committed events");
+  return result.events;
+}
+
+async function appendOffsets(
+  stream: Pick<Stream, "append">,
+  ...events: StreamEventInput[]
+): Promise<number[]> {
+  const result = await stream.append({ return: "offsets" }, ...events);
+  if (result?.return !== "offsets") throw new Error("append returned no committed offsets");
+  return result.offsets;
+}
 
 async function acceptCrossPostDirect(stream: Stream, batch: StreamPushEventBatch): Promise<void> {
   await (
@@ -55,7 +73,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
     },
   });
 
-  const [appended] = await stream.append({
+  const [appended] = await appendEvents(stream, {
     type: STREAM_EVENT_TYPE,
     payload: { marker },
   });
@@ -73,7 +91,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
 
   const ackMarker = crypto.randomUUID();
   expect(
-    await stream.appendAck({
+    await stream.append({
       type: STREAM_EVENT_TYPE,
       payload: { marker: ackMarker },
       idempotencyKey: `stream-e2e-ack:${ackMarker}`,
@@ -82,7 +100,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
   const headAfterAck = await stream.head();
   expect(headAfterAck.maxOffset).toBe(appended!.offset + 1);
   expect(
-    await stream.appendAck({
+    await stream.append({
       type: STREAM_EVENT_TYPE,
       payload: { marker: `${ackMarker}-duplicate` },
       idempotencyKey: `stream-e2e-ack:${ackMarker}`,
@@ -91,7 +109,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
   expect(await stream.head()).toEqual(headAfterAck);
 
   const sameBatchKey = `stream-e2e-ack-batch:${ackMarker}`;
-  await stream.appendAck(
+  await stream.append(
     {
       type: STREAM_EVENT_TYPE,
       payload: { marker: `${ackMarker}-batch` },
@@ -107,7 +125,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
   expect(headAfterSameBatch.maxOffset).toBe(headAfterAck.maxOffset + 1);
 
   const mixedKey = `stream-e2e-ack-mixed:${ackMarker}`;
-  await stream.appendAck(
+  await stream.append(
     {
       type: STREAM_EVENT_TYPE,
       payload: { marker: `${ackMarker}-duplicate` },
@@ -124,7 +142,8 @@ test("creates a project and uses project streams through v4 itx", async () => {
 
   const offsetKey = `stream-e2e-offsets:${ackMarker}`;
   expect(
-    await stream.appendOffsets(
+    await appendOffsets(
+      stream,
       {
         type: STREAM_EVENT_TYPE,
         payload: { marker: `${ackMarker}-existing-offset` },
@@ -201,7 +220,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
   await subscription.unsubscribe();
 });
 
-test("appendAck retries remain exact across cache hits and authoritative fallbacks", async () => {
+test("acknowledgement-only append retries remain exact across cache hits and authoritative fallbacks", async () => {
   const marker = crypto.randomUUID();
   using session = withItxSession();
   using itx = session.authenticate({
@@ -215,12 +234,12 @@ test("appendAck retries remain exact across cache hits and authoritative fallbac
     type: STREAM_EVENT_TYPE,
   }));
 
-  await stream.appendAck(...batch);
+  await stream.append(...batch);
   const afterBatch = await stream.head();
-  await stream.appendAck(...batch);
+  await stream.append(...batch);
   expect(await stream.head()).toEqual(afterBatch);
 
-  await stream.appendAck(
+  await stream.append(
     ...Array.from({ length: 29 }, (_, index) => ({
       idempotencyKey: `append-ack-cache:${marker}:rollover:${index}`,
       payload: { index, marker },
@@ -228,13 +247,13 @@ test("appendAck retries remain exact across cache hits and authoritative fallbac
     })),
   );
   const afterRollover = await stream.head();
-  await stream.appendAck(batch[0]!);
+  await stream.append(batch[0]!);
   expect(await stream.head()).toEqual(afterRollover);
 
   const longKey = `append-ack-cache:${"x".repeat(513)}`;
-  await stream.appendAck({ idempotencyKey: longKey, payload: { marker }, type: STREAM_EVENT_TYPE });
+  await stream.append({ idempotencyKey: longKey, payload: { marker }, type: STREAM_EVENT_TYPE });
   const afterLongKey = await stream.head();
-  await stream.appendAck({
+  await stream.append({
     idempotencyKey: longKey,
     payload: { duplicate: true },
     type: STREAM_EVENT_TYPE,
@@ -256,7 +275,8 @@ test("stream getEvents defaults to a bounded page and supports event type filter
   using project = itx.projects.create({ slug: `os-stream-get-events-${RUN_SUFFIX}-${marker}` });
   using stream = project.streams.get(streamPath);
 
-  const appendedEvents = await stream.append(
+  const appendedEvents = await appendEvents(
+    stream,
     ...Array.from({ length: 505 }, (_, index) => ({
       type: index % 2 === 0 ? selectedType : otherType,
       payload: { index, marker },
@@ -326,7 +346,8 @@ test("cold activation catches core state up from the journal tail", async () => 
   using project = itx.projects.create({ slug: `os-stream-checkpoint-${RUN_SUFFIX}-${marker}` });
   using stream = project.streams.get(streamPath);
 
-  const appended = await stream.append(
+  const appended = await appendEvents(
+    stream,
     ...Array.from({ length: 65 }, (_, index) => ({
       type: STREAM_EVENT_TYPE,
       payload: { index, marker },
@@ -352,13 +373,14 @@ test("variadic ordinary appends preserve the exact circuit-breaker trip event", 
   using project = itx.projects.create({ slug: `os-stream-breaker-${RUN_SUFFIX}-${marker}` });
   using stream = project.streams.get(streamPath);
 
-  const [configured] = await stream.append({
+  const [configured] = await appendEvents(stream, {
     type: "events.iterate.com/stream/configured",
     payload: {
       config: { circuitBreaker: { burstCapacity: 1, refillRatePerMinute: 1 } },
     },
   });
-  const burst = await stream.append(
+  const burst = await appendEvents(
+    stream,
     ...Array.from({ length: 3 }, (_, index) => ({
       type: STREAM_EVENT_TYPE,
       payload: { index, marker },
@@ -507,23 +529,23 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
     },
   });
 
-  const [before] = await stream.append({
+  const [before] = await appendEvents(stream, {
     type: STREAM_EVENT_TYPE,
     payload: { marker, position: "before" },
   });
-  const [chunk] = await stream.append({
+  const [chunk] = await appendEvents(stream, {
     type: ephemeralType,
     ephemeral: true,
     idempotencyKey: `chunk-${marker}`,
     payload: { marker },
   });
-  const [singleDeduped] = await stream.append({
+  const [singleDeduped] = await appendEvents(stream, {
     type: ephemeralType,
     ephemeral: true,
     idempotencyKey: `chunk-${marker}`,
     payload: { marker },
   });
-  const [after] = await stream.append({
+  const [after] = await appendEvents(stream, {
     type: STREAM_EVENT_TYPE,
     payload: { marker, position: "after" },
   });
@@ -534,7 +556,8 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
   expect(singleDeduped).toEqual(chunk);
   expect(after!.offset).toBe(chunk!.offset + 1);
   expect(chunk).toMatchObject({ ephemeral: true, type: ephemeralType });
-  const [mixedBefore, deduped, mixedAfter] = await stream.append(
+  const [mixedBefore, deduped, mixedAfter] = await appendEvents(
+    stream,
     { type: STREAM_EVENT_TYPE, payload: { marker, position: "mixed-before" } },
     {
       type: ephemeralType,
@@ -606,14 +629,14 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
 
   // Restart: ephemeral rows recover the allocator like any other row — the
   // next offsets continue past the ephemeral head.
-  const burst = await stream.append({
+  const burst = await appendEvents(stream, {
     type: ephemeralType,
     ephemeral: true,
     payload: { marker, sequence: 2 },
   });
   const burstHead = burst.at(-1)!.offset;
   await stream.kill().catch(() => undefined);
-  const [reborn] = await stream.append({
+  const [reborn] = await appendEvents(stream, {
     type: STREAM_EVENT_TYPE,
     payload: { marker, position: "post-kill" },
   });
@@ -647,7 +670,7 @@ test("crossPostTo copies matching events with source provenance", async () => {
     eventTypes: [CROSS_POST_EVENT_TYPE],
     timeoutMs: 15_000,
   });
-  const [sourceEvent] = await source.append({
+  const [sourceEvent] = await appendEvents(source, {
     type: CROSS_POST_EVENT_TYPE,
     payload: { marker },
   });
@@ -1037,7 +1060,7 @@ test("crossPostTo transform reshapes the copied event and keeps the provenance c
     eventTypes: ["e2e/summary"],
     timeoutMs: 15_000,
   });
-  const [sourceEvent] = await source.append({
+  const [sourceEvent] = await appendEvents(source, {
     type: CROSS_POST_EVENT_TYPE,
     payload: { original: marker },
   });

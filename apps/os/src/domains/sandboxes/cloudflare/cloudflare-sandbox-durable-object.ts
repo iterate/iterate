@@ -1137,7 +1137,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
         DurableObjectNameCodec.stringify({ projectId, path }),
       );
       this.ctx.waitUntil(
-        Promise.resolve(stream.appendAck(event)).catch((error: unknown) =>
+        Promise.resolve(stream.append(event)).catch((error: unknown) =>
           console.warn(`sandbox lifecycle event append failed (${input.type})`, error),
         ),
       );

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import { EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
-import { emptyStreamRuntimeState } from "../streams/test-helpers.ts";
+import { createMemoryStreamAppend, emptyStreamRuntimeState } from "../streams/test-helpers.ts";
 import { EmailProcessor } from "./email-processor-implementation.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
@@ -43,7 +43,9 @@ class MemoryStream implements Stream {
     readonly path: string,
   ) {}
 
-  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
+  append = createMemoryStreamAppend((...inputs) => this.#appendEvents(...inputs));
+
+  async #appendEvents(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
     return inputs.map((input) => {
       const existing =
         input.idempotencyKey === undefined
@@ -59,14 +61,6 @@ class MemoryStream implements Stream {
       this.events.push(event);
       return event;
     });
-  }
-
-  async appendAck(...inputs: StreamEventInput[]): Promise<void> {
-    await this.append(...inputs);
-  }
-
-  async appendOffsets(...inputs: StreamEventInput[]): Promise<number[]> {
-    return (await this.append(...inputs)).map((event) => event.offset);
   }
 
   at(path: string): Stream {

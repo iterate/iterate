@@ -18,7 +18,7 @@ const network = vi.hoisted(() => {
         streams.set(name, stored);
         const append = (...inputs: Omit<StoredEvent, "offset">[]) => {
           appendBatches.push({ inputs, name });
-          return inputs.map((input) => {
+          inputs.map((input) => {
             const existing = input.idempotencyKey
               ? stored.find((event) => event.idempotencyKey === input.idempotencyKey)
               : undefined;
@@ -27,10 +27,10 @@ const network = vi.hoisted(() => {
             stored.push(event);
             return event;
           });
+          return undefined;
         };
         return {
           append,
-          appendAck: append,
           getEvents(input: { afterOffset?: number; limit?: number } = {}) {
             const { afterOffset = 0, limit = 500 } = input;
             return stored.filter((event) => event.offset > afterOffset).slice(0, limit);

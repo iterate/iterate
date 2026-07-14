@@ -6,7 +6,7 @@ const MAX_KEY_CODE_UNITS = 512;
 const MAX_DELIVERY_IDENTITY_CODE_UNITS = 2_048;
 
 /**
- * Activation-local offsets for durable events committed through appendAck.
+ * Activation-local offsets for durable events committed through acknowledgement-only append.
  * Misses always fall back to SQLite; only a complete batch hit bypasses it.
  */
 export class AcknowledgedIdempotencyOffsetCache {

@@ -6,7 +6,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { Project } from "../../itx-api.generated.ts";
-import { MemoryStream } from "../streams/test-helpers.ts";
+import { appendTestEvents, MemoryStream } from "../streams/test-helpers.ts";
 import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";
 
 const T = {
@@ -47,7 +47,7 @@ describe("script execution reconciliation", () => {
         return { ok: true };
       },
     });
-    const [requested] = await stream.append({
+    const [requested] = await appendTestEvents(stream, {
       type: T.requested,
       payload: { code: "async () => 1", executionId: "exec-1" },
     });
@@ -108,7 +108,10 @@ describe("script execution reconciliation", () => {
     let failStartedAppends = true;
     const realAppend = stream.append.bind(stream);
     stream.append = async (...inputs) => {
-      if (failStartedAppends && inputs.some((input) => input.type === T.started)) {
+      if (
+        failStartedAppends &&
+        inputs.some((input) => "type" in input && input.type === T.started)
+      ) {
         throw new Error("stream hiccup");
       }
       return realAppend(...inputs);

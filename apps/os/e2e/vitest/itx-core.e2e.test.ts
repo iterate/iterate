@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { newHttpBatchRpcSession } from "capnweb";
 import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
 import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
+import { appendEvents } from "../test-support/append-events.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
 
@@ -141,7 +142,7 @@ describe("itx", () => {
 
     // The cross-post pipe stays live after bootstrap: a fresh append on the
     // config repo's stream shows up on `/` as a provenance-stamped copy.
-    const [configRepoFact] = await project.streams.get("/repos/config").append({
+    const [configRepoFact] = await appendEvents(project.streams.get("/repos/config"), {
       type: "events.iterate.test/config-repo-fact",
       payload: { marker: description.projectId },
     });
@@ -169,7 +170,7 @@ describe("itx", () => {
     );
     expect(await workerResponse.json()).toMatchObject({ app: "hello", path: "/probe" });
 
-    const [committedEvent] = await project.streams.get("/some/path").append({
+    const [committedEvent] = await appendEvents(project.streams.get("/some/path"), {
       type: "hello-world",
     });
     expect(committedEvent).toMatchObject({
@@ -265,7 +266,7 @@ describe("itx", () => {
     });
 
     const path = `/global-${crypto.randomUUID()}`;
-    const [streamEvent] = await itx.streams.get(path).append({
+    const [streamEvent] = await appendEvents(itx.streams.get(path), {
       type: "events.iterate.test/global-stream",
       payload: { path },
     });

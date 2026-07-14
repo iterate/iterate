@@ -15,6 +15,7 @@ import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
 } from "../streams/rpc-types.ts";
+import { appendedOffsets } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
@@ -329,10 +330,15 @@ export class ProjectDurableObject extends DurableObject<Env> {
     };
 
     const stream = this.#ownStream();
-    const [approvalRequestEventOffset] = await stream.appendOffsets({
-      type: "events.iterate.com/project/human-approval-requested",
-      payload: requestedPayload,
-    });
+    const [approvalRequestEventOffset] = appendedOffsets(
+      await stream.append(
+        { return: "offsets" },
+        {
+          type: "events.iterate.com/project/human-approval-requested",
+          payload: requestedPayload,
+        },
+      ),
+    );
     if (approvalRequestEventOffset === undefined)
       throw new Error("approval append returned no offset");
 
@@ -343,7 +349,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     });
 
     if (resolution === "expired") {
-      await stream.appendAck({
+      await stream.append({
         type: "events.iterate.com/project/human-approval-rejected",
         idempotencyKey: `human-approval-expired:${approvalRequestEventOffset}`,
         payload: { approvalRequestEventOffset, reason: "expired" },
@@ -378,7 +384,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // upstream truly returned (or the true upstream error).
     const settle = (payload: { status?: number; error?: string }) =>
       stream
-        .appendAck({
+        .append({
           type: "events.iterate.com/project/human-approval-settled",
           idempotencyKey: `human-approval-settled:${approvalRequestEventOffset}`,
           payload: { approvalRequestEventOffset, ...payload },

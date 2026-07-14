@@ -271,6 +271,9 @@ import type {
   StreamPushEventBatch,
   ProcessorRuntimeState,
   ProcessorSnapshot,
+  StreamAppend,
+  StreamAppendArguments,
+  StreamAppendResult,
   StreamEventReadInput,
   StreamHead,
   StreamProcessorRpc,
@@ -280,7 +283,11 @@ import type {
   StreamSubscriptionHandle,
   WakeableStreamProcessorRpc,
 } from "./domains/streams/rpc-types.ts";
-import { StreamReceiverUnavailableError } from "./domains/streams/rpc-types.ts";
+import {
+  appendedEvents,
+  appendedOffsets,
+  StreamReceiverUnavailableError,
+} from "./domains/streams/rpc-types.ts";
 import type {
   ConnectionRuntimeState,
   SubscriptionRuntimeState,
@@ -418,11 +425,10 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), appendAck(events), appendOffsets(events), head(), readEvents(), getEvents(), waitForEvent(), subscribe(), crossPostTo(), kill(). Streams are the coordination primitive — processors and agents communicate by appending and reducing events. THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
+      instructions: `A durable event stream at path "${this.props.path}". Its conceptual operations are append, subscribe, read, and wait-for-event. Streams are the coordination primitive — processors and agents communicate by appending and reducing events. append(...events) is acknowledgement-only by default; request offsets or full committed envelopes on the same verb with append({ return: "offsets" | "events" }, ...events). THE LOCALITY RULE: a processor on stream A can only react to events ON stream A; to react to another stream's events, cross-post them here (copies carry full source.crossPostedFrom provenance chains). append({ ..., ephemeral: true }) commits a TRANSIENT event: live subscribe() connections see it, but default reads and ALL durable delivery (processors, the project worker feed) never do, and the row may be evicted later — append the durable fact separately.`,
       children: {
-        append: "Commit events; returns them with offsets.",
-        appendAck: "Commit events without returning their committed envelopes.",
-        appendOffsets: "Commit events and return only their input-aligned offsets.",
+        append:
+          'Commit events; acknowledgement-only by default, or pass { return: "offsets" | "events" } first for an input-aligned result.',
         at: "The stream at a sub-path.",
         crossPostTo:
           "Copy matching events onto another stream (optionally JSONata-transformed). Rides durable delivery, so ephemeral events are never cross-posted; a selector matching only ephemeral types delivers nothing.",
@@ -462,19 +468,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // TypeScript infers through the generated DurableObjectStub<StreamDurableObject>
   // type and would publish the DO's internal core-processor/runtime-state
   // implementation instead of the RPC API.
-  /** Commit events; resolves with the same events carrying offsets and timestamps. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(...events);
-  }
-
-  /** Commit events and wait for durability without returning their committed envelopes. */
-  appendAck(...events: StreamEventInput[]): Promise<void> {
-    return this.durableObjectStub.appendAck(...events);
-  }
-
-  /** Commit events; resolves with one input-aligned offset per event. */
-  appendOffsets(...events: StreamEventInput[]): Promise<number[]> {
-    return this.durableObjectStub.appendOffsets(...events);
+  /** Commit events and resolve with only the requested result projection. */
+  append(...args: StreamAppendArguments): Promise<StreamAppendResult> {
+    const append = this.durableObjectStub.append as unknown as (
+      ...inputs: StreamAppendArguments
+    ) => Promise<StreamAppendResult>;
+    return append(...args);
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -673,19 +672,24 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       ...(args.eventTypes === undefined ? {} : { eventTypes: args.eventTypes }),
       ...(args.condition === undefined ? {} : { condition: args.condition }),
     };
-    const [event] = await this.append({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        subscriptionKey: args.key ?? `cross-post:${destination}`,
-        delivery: {
-          mode: "push",
-          expression: ["streams", ["get", destination], "acceptCrossPost"],
+    const [event] = appendedEvents(
+      await this.append(
+        { return: "events" },
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: args.key ?? `cross-post:${destination}`,
+            delivery: {
+              mode: "push",
+              expression: ["streams", ["get", destination], "acceptCrossPost"],
+            },
+            ...(Object.keys(selector).length === 0 ? {} : { selector }),
+            ...(args.deliver === undefined ? {} : { deliver: args.deliver }),
+            ...(args.transform === undefined ? {} : { params: { transform: args.transform } }),
+          },
         },
-        ...(Object.keys(selector).length === 0 ? {} : { selector }),
-        ...(args.deliver === undefined ? {} : { deliver: args.deliver }),
-        ...(args.transform === undefined ? {} : { params: { transform: args.transform } }),
-      },
-    });
+      ),
+    );
     return event!;
   }
 
@@ -694,10 +698,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     const key =
       args.key ?? (args.path === undefined ? undefined : `cross-post:${normalizePath(args.path)}`);
     if (key === undefined) throw new Error("removeCrossPost needs a path or key");
-    const [event] = await this.append({
-      type: "events.iterate.com/stream/subscription-removed",
-      payload: { subscriptionKey: key },
-    });
+    const [event] = appendedEvents(
+      await this.append(
+        { return: "events" },
+        {
+          type: "events.iterate.com/stream/subscription-removed",
+          payload: { subscriptionKey: key },
+        },
+      ),
+    );
     return event!;
   }
 }
@@ -876,19 +885,26 @@ async function requestRepoCreate(input: {
     projectId: input.projectId,
   });
   const timing = { projectId: input.projectId, path };
-  const [, createRequestedOffset] = await timedStep("create-timing", timing, "repo-append", () =>
-    stream.appendOffsets(
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
-        processor: ["repos", ["get", path], "processor"],
-        processorSlug: RepoProcessorContract.slug,
-      }),
-      {
-        type: "events.iterate.com/repo/create-requested",
-        idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
-        payload: { projectId: input.projectId, path },
-      },
-    ),
+  const [, createRequestedOffset] = await timedStep(
+    "create-timing",
+    timing,
+    "repo-append",
+    async () =>
+      appendedOffsets(
+        await stream.append(
+          { return: "offsets" },
+          buildDurableObjectProcessorSubscriptionConfiguredEvent({
+            durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
+            processor: ["repos", ["get", path], "processor"],
+            processorSlug: RepoProcessorContract.slug,
+          }),
+          {
+            type: "events.iterate.com/repo/create-requested",
+            idempotencyKey: `repo-create-requested:${input.projectId}:${path}`,
+            payload: { projectId: input.projectId, path },
+          },
+        ),
+      ),
   );
 
   await timedStep("create-timing", timing, "wait-repo-created", () =>
@@ -1412,7 +1428,11 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     // namespace: the Durable Object there is the strict authority on whether
     // the sandbox is live, destroyed, or (after a create that died between
     // this append and its call) still to be born — the retry heals it.
-    const [claim] = await this.#catalogue.append(
+    const catalogue = this.#catalogue as unknown as {
+      append: StreamAppend;
+    };
+    const outcome = await catalogue.append(
+      { return: "events" },
       SandboxProcessorContract.buildEvent({
         type: "events.iterate.com/sandbox/create-requested",
         idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
@@ -1425,6 +1445,10 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
         },
       }),
     );
+    if (outcome?.return !== "events") {
+      throw new Error(`sandbox "${path}": the catalogue append returned no events`);
+    }
+    const [claim] = outcome.events;
     if (claim === undefined) {
       throw new Error(`sandbox "${path}": the catalogue append returned no event`);
     }
@@ -1904,7 +1928,10 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
    * Replacement material requires its complete egress policy in the same
    * update. Every update without replacement material clears stored material. */
   update(input: SecretUpdateInput): Promise<StreamEvent> {
-    return this.durableObjectStub.update(input);
+    const stub = this.durableObjectStub as unknown as {
+      update(input: SecretUpdateInput): Promise<StreamEvent>;
+    };
+    return stub.update(input);
   }
 
   /** The secret stream processor; its public state IS the SecretDescription. */
@@ -3565,10 +3592,8 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       path: scopePath,
     });
     await Promise.all([
-      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).appendAck(
-        routeEvent,
-      ),
-      integrationStreamStub(this.props.projectId, scopePath).appendAck(
+      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append(routeEvent),
+      integrationStreamStub(this.props.projectId, scopePath).append(
         routeEvent,
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName,
@@ -3693,7 +3718,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       contentType: attachment.type,
     }));
     const appendAudit = () =>
-      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).appendAck({
+      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
         type: EMAIL_SENT_EVENT_TYPE,
         idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
         // Recipients + subject for audit; bodies stay out of the stream. The
@@ -3808,10 +3833,15 @@ class AgentChatRpcTarget extends IterateRpcTarget<"AgentChat"> {
             files: options.files,
             projectId: this.props.projectId,
           });
-    const [event] = await this.stream.append({
-      type: "events.iterate.com/agents/web-message-sent",
-      payload: { message: trimmed, ...(files === undefined ? {} : { files }) },
-    });
+    const [event] = appendedEvents(
+      await this.stream.append(
+        { return: "events" },
+        {
+          type: "events.iterate.com/agents/web-message-sent",
+          payload: { message: trimmed, ...(files === undefined ? {} : { files }) },
+        },
+      ),
+    );
     return event;
   }
 }
@@ -3960,14 +3990,19 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
             files: fileInputs,
             projectId: this.#props.projectId,
           });
-    const [event] = await this.stream.append({
-      type: "events.iterate.com/agents/message-received",
-      payload: {
-        content: message,
-        from,
-        ...(files === undefined ? {} : { files }),
-      },
-    });
+    const [event] = appendedEvents(
+      await this.stream.append(
+        { return: "events" },
+        {
+          type: "events.iterate.com/agents/message-received",
+          payload: {
+            content: message,
+            from,
+            ...(files === undefined ? {} : { files }),
+          },
+        },
+      ),
+    );
     return event;
   }
 
@@ -4017,7 +4052,18 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         payload: { model: defaults.model },
       });
     }
-    await this.stream.appendAck(...events);
+    if (input.githubAgent !== undefined) {
+      const configured = defaults.events.find(
+        (event) => event.type === "events.iterate.com/github-agent/configure",
+      );
+      if (configured !== undefined) {
+        events.push({
+          type: configured.type,
+          payload: configured.payload,
+        });
+      }
+    }
+    await this.stream.append(...events);
   }
 
   /**
@@ -4040,13 +4086,18 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     timeoutMs?: number;
   }): Promise<StreamEvent> {
     const from = this.#messageFrom();
-    const [sent] = await this.stream.append({
-      type: "events.iterate.com/agents/message-received",
-      payload: {
-        content: input.message,
-        from: from.kind === "user" ? { kind: "user", origin: input.origin ?? "web" } : from,
-      },
-    });
+    const [sent] = appendedEvents(
+      await this.stream.append(
+        { return: "events" },
+        {
+          type: "events.iterate.com/agents/message-received",
+          payload: {
+            content: input.message,
+            from: from.kind === "user" ? { kind: "user", origin: input.origin ?? "web" } : from,
+          },
+        },
+      ),
+    );
     return await this.stream.waitForEvent({
       afterOffset: sent.offset,
       eventTypes: ["events.iterate.com/agents/web-message-sent"],
@@ -4080,17 +4131,22 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       files: input.files,
       projectId: this.#props.projectId,
     });
-    const [event] = await this.stream.append({
-      type: "events.iterate.com/agent/input-added",
-      payload: {
-        content:
-          input.message ?? `[Files attached: ${files.map((file) => file.filename).join(", ")}]`,
-        files,
-        ...(input.llmRequestPolicy === undefined
-          ? {}
-          : { llmRequestPolicy: input.llmRequestPolicy }),
-      },
-    });
+    const [event] = appendedEvents(
+      await this.stream.append(
+        { return: "events" },
+        {
+          type: "events.iterate.com/agent/input-added",
+          payload: {
+            content:
+              input.message ?? `[Files attached: ${files.map((file) => file.filename).join(", ")}]`,
+            files,
+            ...(input.llmRequestPolicy === undefined
+              ? {}
+              : { llmRequestPolicy: input.llmRequestPolicy }),
+          },
+        },
+      ),
+    );
     return { event, files };
   }
 
@@ -4390,31 +4446,34 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // The config repo (its processor subscription, its cross-post rule onto
     // `/`, and its create request) is armed by the project processor's
     // create-requested lane, on the repo's own stream at CONFIG_REPO_PATH.
-    const appendRootEvents = () =>
-      stream.appendOffsets(
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: "/",
+    const appendRootEvents = async () =>
+      appendedOffsets(
+        await stream.append(
+          { return: "offsets" },
+          buildDurableObjectProcessorSubscriptionConfiguredEvent({
+            durableObjectName: streamDurableObjectName({
+              projectId: registered.projectId,
+              path: "/",
+            }),
+            processor: ["processor"],
+            processorSlug: ProjectProcessorContract.slug,
           }),
-          processor: ["processor"],
-          processorSlug: ProjectProcessorContract.slug,
-        }),
-        {
-          type: "events.iterate.com/project/create-requested",
-          idempotencyKey: `project-create-requested:${registered.projectId}`,
-          payload: {
-            onboardingActive: true,
-            projectId: registered.projectId,
-            slug: registered.slug,
-            // The creating user's email seeds owner-scoped project state (the
-            // inbound email sender allowlist). Admin/CLI creates have no user
-            // email; nothing is seeded and the deployment allowlist governs.
-            ...(userPrincipalOf(this.props.auth)?.email === undefined
-              ? {}
-              : { creatorEmail: userPrincipalOf(this.props.auth)!.email }),
+          {
+            type: "events.iterate.com/project/create-requested",
+            idempotencyKey: `project-create-requested:${registered.projectId}`,
+            payload: {
+              onboardingActive: true,
+              projectId: registered.projectId,
+              slug: registered.slug,
+              // The creating user's email seeds owner-scoped project state (the
+              // inbound email sender allowlist). Admin/CLI creates have no user
+              // email; nothing is seeded and the deployment allowlist governs.
+              ...(userPrincipalOf(this.props.auth)?.email === undefined
+                ? {}
+                : { creatorEmail: userPrincipalOf(this.props.auth)!.email }),
+            },
           },
-        },
+        ),
       );
     // The email sender-allowlist seed ALSO lands synchronously here, not only
     // in the project processor's create-requested lane: the dashboard uses
@@ -4426,7 +4485,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     const seedEmailAllowlist = () =>
       creatorEmail === undefined
         ? Promise.resolve()
-        : integrationStreamStub(registered.projectId, EMAIL_INTEGRATION_STREAM_PATH).appendAck(
+        : integrationStreamStub(registered.projectId, EMAIL_INTEGRATION_STREAM_PATH).append(
             buildDurableObjectProcessorSubscriptionConfiguredEvent({
               durableObjectName: streamDurableObjectName({
                 projectId: registered.projectId,

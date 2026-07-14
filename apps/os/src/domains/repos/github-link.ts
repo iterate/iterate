@@ -164,7 +164,7 @@ export async function linkRepoToGithub(input: {
     await integrationStreamStub(
       input.projectId,
       integrationConnectionStreamPath("github", previous.connection),
-    ).appendAck({
+    ).append({
       type: "events.iterate.com/stream/subscription-removed",
       payload: { subscriptionKey },
     });
@@ -182,7 +182,7 @@ export async function linkRepoToGithub(input: {
     integrationConnectionStreamPath("github", input.connection),
   );
   try {
-    await connectionStream.appendAck(
+    await connectionStream.append(
       githubCrossPostSubscriptionEvent({ owner, repo, repoPath, subscriptionKey }),
     );
     await repoStub.configureGithubLink(link);
@@ -194,7 +194,7 @@ export async function linkRepoToGithub(input: {
     // compensation failures are named in the surfaced error, and a re-run of
     // linkGithub repairs everything (subscriptions replace by key).
     try {
-      await connectionStream.appendAck({
+      await connectionStream.append({
         type: "events.iterate.com/stream/subscription-removed",
         payload: { subscriptionKey },
       });
@@ -208,7 +208,7 @@ export async function linkRepoToGithub(input: {
         await integrationStreamStub(
           input.projectId,
           integrationConnectionStreamPath("github", previous.connection),
-        ).appendAck(
+        ).append(
           githubCrossPostSubscriptionEvent({
             owner: previous.owner,
             repo: previous.repo,
@@ -260,7 +260,7 @@ export async function unlinkRepoFromGithub(input: {
   await integrationStreamStub(
     input.projectId,
     integrationConnectionStreamPath("github", link.connection),
-  ).appendAck({
+  ).append({
     type: "events.iterate.com/stream/subscription-removed",
     payload: { subscriptionKey: githubCrossPostSubscriptionKey(repoPath) },
   });

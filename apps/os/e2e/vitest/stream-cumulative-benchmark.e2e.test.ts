@@ -148,7 +148,7 @@ async function commitDiscardingResult(
   ...events: StreamEventInput[]
 ): Promise<void> {
   if (IMPLEMENTATION === "candidate") {
-    await stream.appendAck(...events);
+    await stream.append(...events);
     return;
   }
   void (await stream.append(...events));
@@ -202,7 +202,7 @@ async function measureProcessorCatchup(projectId: string, samples: number): Prom
     using stream = project.streams.get("/");
     const initialHead = (await stream.head()).maxOffset;
     const startedAt = performance.now();
-    await stream.appendAck(
+    await stream.append(
       ...Array.from({ length: PROCESSOR_CATCHUP_EVENTS }, (_, index) =>
         event({ marker: `processor-catchup-${iteration}-${index}`, payload: "x" }),
       ),
@@ -790,7 +790,7 @@ test.skipIf(
 
       const appendFiveBatches = async (stream: StreamHandle, iteration: number) => {
         for (let batch = 0; batch < 5; batch += 1) {
-          await stream.appendAck(
+          await stream.append(
             ...Array.from({ length: 100 }, (_, index) =>
               event({
                 marker: `checkpoint-${iteration}-${batch}-${index}`,

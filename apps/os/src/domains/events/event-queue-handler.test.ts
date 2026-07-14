@@ -26,8 +26,9 @@ function createEnv(options: { cloudflareApiToken?: string } = {}) {
       : { APP_CONFIG_CLOUDFLARE__API_TOKEN: options.cloudflareApiToken }),
     STREAM: {
       getByName: vi.fn((name: string) => ({
-        appendAck: vi.fn(async (...events: StreamEventInput[]) => {
+        append: vi.fn(async (...events: StreamEventInput[]) => {
           appends.push({ name, events });
+          return undefined;
         }),
       })),
     },
@@ -342,7 +343,7 @@ describe("event queue handler", () => {
       "msg-ok",
     );
     vi.mocked(env.STREAM.getByName).mockReturnValueOnce({
-      appendAck: vi.fn(async () => {
+      append: vi.fn(async () => {
         throw new Error("stream unavailable");
       }),
     } as never);
@@ -369,7 +370,7 @@ describe("event queue handler", () => {
       "msg-repo-fails",
     );
     vi.mocked(env.STREAM.getByName).mockReturnValueOnce({
-      appendAck: vi.fn(async () => {
+      append: vi.fn(async () => {
         throw new Error("repo stream unavailable");
       }),
     } as never);
