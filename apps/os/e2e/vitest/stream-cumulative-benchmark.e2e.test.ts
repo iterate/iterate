@@ -17,6 +17,7 @@ const FOCUS_LIVE_TAILS = process.env.STREAM_BENCH_FOCUS_LIVE_TAILS === "1";
 const FOCUS_WAIT_FOR_EVENT = process.env.STREAM_BENCH_FOCUS_WAIT_FOR_EVENT === "1";
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
 const FOCUS_CROSSPOST_EXACT_RETRY = process.env.STREAM_BENCH_FOCUS_CROSSPOST_EXACT_RETRY === "1";
+const FOCUS_STORAGE_JOURNAL = process.env.STREAM_BENCH_FOCUS_STORAGE_JOURNAL === "1";
 const IMPLEMENTATION = process.env.STREAM_BENCH_IMPLEMENTATION;
 const REVISION = process.env.STREAM_BENCH_REVISION ?? "unknown";
 const EVENT_TYPE = "events.iterate.test/stream-cumulative-benchmark";
@@ -219,7 +220,8 @@ test.skipIf(
     FOCUS_LIVE_TAILS ||
     FOCUS_WAIT_FOR_EVENT ||
     FOCUS_PROCESSOR_CATCHUP ||
-    FOCUS_CROSSPOST_EXACT_RETRY,
+    FOCUS_CROSSPOST_EXACT_RETRY ||
+    FOCUS_STORAGE_JOURNAL,
 )(
   "cumulative Stream latency and throughput",
   async () => {
@@ -877,6 +879,171 @@ test.skipIf(
         expectedHead = observedHead;
       }
       metrics.head_after_forced_reactivation = summarize(samples);
+    }
+
+    const output: BenchmarkOutput = {
+      implementation: IMPLEMENTATION,
+      metrics,
+      revision: REVISION,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
+  },
+  600_000,
+);
+
+test.skipIf(!ENABLED || !FOCUS_STORAGE_JOURNAL)(
+  "focused Stream storage journal",
+  async () => {
+    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
+      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
+    }
+
+    const metrics: Record<string, Metric> = {};
+    const runId = crypto.randomUUID().slice(0, 8);
+    const samples = Number(process.env.STREAM_BENCH_STORAGE_SAMPLES ?? "80");
+    if (!Number.isInteger(samples) || samples < 1) {
+      throw new Error("STREAM_BENCH_STORAGE_SAMPLES must be a positive integer.");
+    }
+
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({
+      projectId: `prj_${crypto.randomUUID()}`,
+      slug: `stream-storage-${IMPLEMENTATION}-${runId}`,
+    });
+    await project.__describe();
+
+    {
+      using stream = project.streams.get(`/bench/${runId}/single-1k`);
+      metrics.append_single_1k = summarize(
+        await measure(
+          samples * 2,
+          async (iteration) => {
+            await stream.appendAck(event({ marker: `single-${iteration}-${runId}` }));
+          },
+          10,
+        ),
+      );
+    }
+
+    for (const [label, batchSize, payload, sampleDivisor] of [
+      ["append_batch_100_tiny", 100, "x", 1],
+      ["append_batch_100_1k", 100, SMALL_PAYLOAD, 1],
+      ["append_batch_1000_tiny", 1_000, "x", 4],
+    ] as const) {
+      using stream = project.streams.get(`/bench/${runId}/${label}`);
+      const batchSamples = Math.max(10, Math.floor(samples / sampleDivisor));
+      metrics[label] = summarize(
+        await measure(
+          batchSamples,
+          async (iteration) => {
+            await stream.appendAck(
+              ...Array.from({ length: batchSize }, (_, index) =>
+                event({ marker: `${label}-${iteration}-${index}`, payload }),
+              ),
+            );
+          },
+          5,
+        ),
+        batchSize,
+      );
+    }
+
+    {
+      using stream = project.streams.get(`/bench/${runId}/batch-keyed`);
+      metrics.append_batch_100_keyed_tiny = summarize(
+        await measure(
+          samples,
+          async (iteration) => {
+            await stream.appendAck(
+              ...Array.from({ length: 100 }, (_, index) =>
+                event({
+                  idempotencyKey: `keyed-${runId}-${iteration}-${index}`,
+                  marker: `keyed-${iteration}-${index}`,
+                  payload: "x",
+                }),
+              ),
+            );
+          },
+          5,
+        ),
+        100,
+      );
+    }
+
+    {
+      const path = `/bench/${runId}/read-dense`;
+      using stream = project.streams.get(path);
+      await stream.appendAck(
+        ...Array.from({ length: 500 }, (_, index) =>
+          event({ marker: `dense-${index}`, payload: SMALL_PAYLOAD }),
+        ),
+      );
+      metrics.read_after_reactivation_dense_500x1k = summarize(
+        await measure(
+          Math.max(20, Math.floor(samples / 2)),
+          async () => {
+            await stream.kill().catch(() => undefined);
+            using reactivated = project.streams.get(path);
+            const events = await reactivated.getEvents({ afterOffset: 0, limit: 500 });
+            if (events.length !== 500) throw new Error("Dense cold replay lost events.");
+          },
+          3,
+        ),
+      );
+    }
+
+    {
+      const path = `/bench/${runId}/read-sparse`;
+      using stream = project.streams.get(path);
+      for (let start = 0; start < 2_000; start += 500) {
+        await stream.appendAck(
+          ...Array.from({ length: 500 }, (_, index) => {
+            const absoluteIndex = start + index;
+            return event({
+              marker: `sparse-${absoluteIndex}`,
+              payload: "x".repeat(128),
+              type: absoluteIndex % 100 === 0 ? SELECTED_TYPE : OTHER_TYPE,
+            });
+          }),
+        );
+      }
+      metrics.read_after_reactivation_sparse_20_of_2000 = summarize(
+        await measure(
+          Math.max(20, Math.floor(samples / 2)),
+          async () => {
+            await stream.kill().catch(() => undefined);
+            using reactivated = project.streams.get(path);
+            const events = await reactivated.getEvents({
+              afterOffset: 0,
+              eventTypes: [SELECTED_TYPE],
+              limit: 500,
+            });
+            if (events.length !== 20) throw new Error("Sparse cold replay lost selected events.");
+          },
+          3,
+        ),
+      );
+    }
+
+    for (const [label, payload, sampleDivisor] of [
+      ["append_single_768k_inline", INLINE_LARGE_PAYLOAD, 4],
+      ["append_single_1100k_chunked", "c".repeat(1_100 * 1_024), 8],
+    ] as const) {
+      using stream = project.streams.get(`/bench/${runId}/${label}`);
+      metrics[label] = summarize(
+        await measure(
+          Math.max(10, Math.floor(samples / sampleDivisor)),
+          async (iteration) => {
+            await stream.appendAck(event({ marker: `${label}-${iteration}`, payload }));
+          },
+          3,
+        ),
+      );
     }
 
     const output: BenchmarkOutput = {
