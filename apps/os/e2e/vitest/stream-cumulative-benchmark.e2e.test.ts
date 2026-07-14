@@ -14,6 +14,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 const ENABLED = process.env.STREAM_CUMULATIVE_BENCHMARK === "1";
 const FOCUS_TAILS = process.env.STREAM_BENCH_FOCUS_TAILS === "1";
 const FOCUS_LIVE_TAILS = process.env.STREAM_BENCH_FOCUS_LIVE_TAILS === "1";
+const FOCUS_WAIT_FOR_EVENT = process.env.STREAM_BENCH_FOCUS_WAIT_FOR_EVENT === "1";
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
 const FOCUS_CROSSPOST_EXACT_RETRY = process.env.STREAM_BENCH_FOCUS_CROSSPOST_EXACT_RETRY === "1";
 const IMPLEMENTATION = process.env.STREAM_BENCH_IMPLEMENTATION;
@@ -102,6 +103,22 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 15_0
   const deadline = performance.now() + timeoutMs;
   while (!predicate()) {
     if (performance.now() > deadline) throw new Error(`Timed out waiting for ${label}.`);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+async function waitForWaiterConnection(stream: StreamHandle, timeoutMs = 15_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    const connections = (await stream.runtimeState()).runtime.connections;
+    const established = Object.values(connections).some((connection) => {
+      const subscriber = connection.subscriber as { description?: unknown } | undefined;
+      return subscriber?.description === "waitForEvent";
+    });
+    if (established) return;
+    if (performance.now() > deadline) {
+      throw new Error("Timed out waiting for waitForEvent connection.");
+    }
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
 }
@@ -200,6 +217,7 @@ test.skipIf(
   !ENABLED ||
     FOCUS_TAILS ||
     FOCUS_LIVE_TAILS ||
+    FOCUS_WAIT_FOR_EVENT ||
     FOCUS_PROCESSOR_CATCHUP ||
     FOCUS_CROSSPOST_EXACT_RETRY,
 )(
@@ -1041,6 +1059,85 @@ test.skipIf(!ENABLED || !FOCUS_LIVE_TAILS)(
       }
       metrics.live_delivery_25_subscribers = summarize(samples, subscriberCount);
       await Promise.all(handles.map(async (handle) => await Promise.resolve(handle.unsubscribe())));
+    }
+
+    const output: BenchmarkOutput = {
+      implementation: IMPLEMENTATION,
+      metrics,
+      revision: REVISION,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
+  },
+  600_000,
+);
+
+test.skipIf(!ENABLED || !FOCUS_WAIT_FOR_EVENT)(
+  "focused Stream waitForEvent latency",
+  async () => {
+    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
+      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
+    }
+
+    const metrics: Record<string, Metric> = {};
+    const runId = crypto.randomUUID().slice(0, 8);
+    const sampleCount = TAIL_SAMPLES || 200;
+
+    using session = withItxSession();
+    using itx = session.authenticate({
+      type: "admin-secret",
+      secret: adminSecret(),
+    });
+    using project = itx.projects.create({
+      projectId: `prj_${crypto.randomUUID()}`,
+      slug: `stream-wait-${IMPLEMENTATION}-${runId}`,
+    });
+    await project.__describe();
+
+    {
+      using stream = project.streams.get(`/bench/${runId}/wait-replay`);
+      let afterOffset = (await readHead(stream)).maxOffset;
+      const samples: number[] = [];
+      for (let iteration = -10; iteration < sampleCount; iteration += 1) {
+        const marker = `wait-replay-${iteration}`;
+        await commitDiscardingResult(stream, event({ marker }));
+        const startedAt = performance.now();
+        const delivered = await stream.waitForEvent({
+          afterOffset,
+          eventTypes: [EVENT_TYPE],
+          timeoutMs: 15_000,
+        });
+        if (markerOf(delivered.payload) !== marker) {
+          throw new Error(`Replayed wait returned the wrong event for iteration ${iteration}.`);
+        }
+        if (iteration >= 0) samples.push(performance.now() - startedAt);
+        afterOffset = delivered.offset;
+      }
+      metrics.wait_for_existing_event = summarize(samples);
+    }
+
+    {
+      using stream = project.streams.get(`/bench/${runId}/wait-live`);
+      let afterOffset = (await readHead(stream)).maxOffset;
+      const samples: number[] = [];
+      for (let iteration = -10; iteration < sampleCount; iteration += 1) {
+        const marker = `wait-live-${iteration}`;
+        const pending = stream.waitForEvent({
+          afterOffset,
+          eventTypes: [EVENT_TYPE],
+          timeoutMs: 15_000,
+        });
+        await waitForWaiterConnection(stream);
+        const startedAt = performance.now();
+        await commitDiscardingResult(stream, event({ marker }));
+        const delivered = await pending;
+        if (markerOf(delivered.payload) !== marker) {
+          throw new Error(`Live wait returned the wrong event for iteration ${iteration}.`);
+        }
+        if (iteration >= 0) samples.push(performance.now() - startedAt);
+        afterOffset = delivered.offset;
+      }
+      metrics.wait_for_live_event = summarize(samples);
     }
 
     const output: BenchmarkOutput = {
