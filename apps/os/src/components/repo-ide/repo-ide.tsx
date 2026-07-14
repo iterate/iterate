@@ -29,6 +29,13 @@ import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import { RepoTasksView } from "./repo-tasks-view.tsx";
 import {
+  isRepoTaskPath,
+  prepareRepoTaskAssignment,
+  repoTaskAssignmentFileChanges,
+  repoTaskAssignmentHeadPaths,
+  type RepoTask,
+} from "./repo-tasks.ts";
+import {
   commitPlan,
   effectiveEntry,
   useWorkingTree,
@@ -44,7 +51,15 @@ import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
  * slots per path, localStorage-backed per HEAD oid) committed through
  * `itx.repos.get(path).commitFiles` as a single batch.
  */
-export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: string }) {
+export function RepoIde({
+  projectId,
+  projectSlug,
+  repoPath,
+}: {
+  projectId: string;
+  projectSlug: string;
+  repoPath: string;
+}) {
   const itx = useItx();
   const queryClient = useQueryClient();
   const files = useItxQuery({
@@ -210,6 +225,100 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
     },
   });
 
+  const assignTaskAgent = async (task: RepoTask, pendingRenameFromPath?: string) => {
+    const assignment = prepareRepoTaskAssignment(task, repoPath);
+    const renamedFromPath =
+      pendingRenameFromPath !== undefined && headPathSet.has(pendingRenameFromPath)
+        ? pendingRenameFromPath
+        : undefined;
+    const sourceStore = store;
+    const previousTaskPaths = headPaths.filter(isRepoTaskPath);
+    const previousTaskContents =
+      queryClient.getQueryData<Record<string, string>>([
+        "itx",
+        "repo-task-files",
+        projectId,
+        repoPath,
+        files.commitOid,
+        previousTaskPaths.join("\n"),
+      ]) ?? {};
+    let committed = false;
+    try {
+      const result = await itx.repos.get(repoPath).commitFiles({
+        message: `Assign task: ${task.title}`,
+        changes: repoTaskAssignmentFileChanges(task, assignment.content, renamedFromPath),
+      });
+      committed = true;
+
+      // Keep the durable assignment as the local overlay while HEAD refreshes.
+      // This is load-bearing for tasks created only in the working tree: if we
+      // clear first, the board drops the card before listFiles catches up.
+      sourceStore.setWorking(task.path, { type: "write", content: assignment.content });
+      sourceStore.setStaged(task.path, undefined);
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-files", projectId, repoPath],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["itx", "repo-log", projectId, repoPath],
+      });
+
+      const refreshedFiles = queryClient.getQueryData<{ commitOid: string; paths: string[] }>([
+        "itx",
+        "repo-files",
+        projectId,
+        repoPath,
+      ]);
+      // A successful commit is the authority even if the invalidated query
+      // briefly returns its previous cached HEAD. Project this known atomic
+      // mutation locally so we can migrate every unrelated working edit and
+      // start the agent without waiting for eventual cache convergence.
+      const nextFiles =
+        refreshedFiles?.commitOid === result.commitOid
+          ? refreshedFiles
+          : {
+              commitOid: result.commitOid,
+              paths: repoTaskAssignmentHeadPaths(headPaths, task, renamedFromPath),
+            };
+      if (refreshedFiles?.commitOid !== result.commitOid) {
+        queryClient.setQueryData(["itx", "repo-files", projectId, repoPath], nextFiles);
+      }
+      const nextTaskPaths = nextFiles.paths.filter(isRepoTaskPath);
+      // The assignment commit changes one logical task (and may rename its
+      // file). Seed the new HEAD's task query before removing the overlay, so
+      // React never observes a gap and the sheet immediately sees both
+      // `agent` and `in-progress`.
+      const nextTaskContents = { ...previousTaskContents, [task.path]: assignment.content };
+      if (renamedFromPath !== undefined) delete nextTaskContents[renamedFromPath];
+      queryClient.setQueryData<Record<string, string>>(
+        ["itx", "repo-task-files", projectId, repoPath, result.commitOid, nextTaskPaths.join("\n")],
+        nextTaskContents,
+      );
+      if (renamedFromPath !== undefined) {
+        sourceStore.setWorking(renamedFromPath, undefined);
+        sourceStore.setStaged(renamedFromPath, undefined);
+      }
+      sourceStore.setWorking(task.path, undefined);
+      sourceStore.setStaged(task.path, undefined);
+      sourceStore.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
+
+      // Messaging a fresh path births the agent. The task commit intentionally
+      // happens first so its first turn can always read the durable assignment.
+      await itx.agents.get(assignment.agentPath).message(assignment.instructions);
+      toast.success(`Assigned ${task.title} to ${assignment.agentPath}.`);
+      return assignment.agentPath;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error";
+      toast.error(
+        committed
+          ? `The assignment was committed, but the agent did not start: ${detail}`
+          : `Could not assign the task: ${detail}`,
+      );
+      // Once committed, the assignment is durable even if starting the agent
+      // failed. Surface its link immediately and prevent a second assignment.
+      return committed ? assignment.agentPath : undefined;
+    }
+  };
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row">
       {/* vscode-style activity strip: Files / Tasks / Source control / History / GitHub. */}
@@ -332,6 +441,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
         >
           <RepoTasksView
             projectId={projectId}
+            projectSlug={projectSlug}
             repoPath={repoPath}
             headCommitOid={files.commitOid}
             headPaths={headPaths}
@@ -340,6 +450,7 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
             onPatchSearch={patchSearch}
             onSetWorking={(path, entry) => store.setWorking(path, entry)}
             onDelete={removePath}
+            onAssignAgent={assignTaskAgent}
           />
         </Suspense>
       ) : (

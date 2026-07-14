@@ -33,6 +33,7 @@ function newRepoProcessor(stream: MemoryStream, path = "/repos/config") {
     stream,
     path,
     projectId: "prj_1",
+    taskChangesForArtifactPush: async () => [],
     createRepoArtifact: async () => {
       throw new Error("not under test");
     },
@@ -295,6 +296,7 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
   function newCreatingRepoProcessor(stream: MemoryStream, createCalls: unknown[]) {
     return new RepoProcessor({
       stream,
+      taskChangesForArtifactPush: async () => [],
       createRepoArtifact: async (input) => {
         createCalls.push(input);
         return createdArtifact;
@@ -360,6 +362,7 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
 
     const refolded = new RepoProcessor({
       stream,
+      taskChangesForArtifactPush: async () => [],
       createRepoArtifact: async () => {
         throw new Error("refold must not re-create an existing repo");
       },
