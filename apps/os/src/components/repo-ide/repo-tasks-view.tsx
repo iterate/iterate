@@ -163,11 +163,18 @@ export function RepoTasksView({
   }, [changes, headContents]);
 
   const effectivePaths = useMemo(() => {
-    return repoTaskCreationPaths(
+    const paths = repoTaskCreationPaths(
       headPaths,
       [...changes].map(([path, change]) => [path, effectiveEntry(change)?.type] as const),
     );
-  }, [changes, headPaths]);
+    // Committed task cards come from `listTaskFiles` (headContents), which can
+    // observe a newer HEAD than `headPaths` (the repo-files listing). Reserve
+    // those committed task paths too, so create/rename collision checks never
+    // hand out a path that already holds a committed task the file listing has
+    // not caught up to.
+    for (const path of Object.keys(headContents)) paths.add(path);
+    return paths;
+  }, [changes, headPaths, headContents]);
 
   const columns = taskStateColumns(tasks);
   const selectedTask = tasks.find((task) => task.path === editorPath);
