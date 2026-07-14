@@ -1225,6 +1225,7 @@ export class StreamSubscribers {
     error: unknown;
     row?: SubscriptionCursorRow;
     attempt?: number;
+    immediateFirstRetry?: boolean;
   }): boolean {
     const { subscriptionKey, configOffset, epoch, error } = args;
     const row = args.row ?? this.#currentDeliveryRow(subscriptionKey, configOffset, epoch);
@@ -1234,8 +1235,25 @@ export class StreamSubscribers {
       this.#park(subscriptionKey, configOffset, epoch, row, attempt, error);
       return true;
     }
+    if (args.immediateFirstRetry === true && attempt === 1) {
+      this.#retryImmediately(subscriptionKey, epoch, attempt, error);
+      return true;
+    }
     this.#backoff(subscriptionKey, epoch, attempt, error);
     return true;
+  }
+
+  #retryImmediately(subscriptionKey: string, epoch: number, attempt: number, error: unknown): void {
+    const nextAttemptAt = this.#hooks.now();
+    this.#hooks.store.nack(subscriptionKey, {
+      attempt,
+      nextAttemptAt,
+      error: errorMessage(error),
+      epoch,
+    });
+    // The close below normally drives this retry. The durable alarm covers an
+    // eviction between persisting the nack and scheduling the replacement poke.
+    this.#hooks.armAlarm(nextAttemptAt);
   }
 
   #backoff(subscriptionKey: string, epoch: number, attempt: number, error: unknown): void {
@@ -1638,17 +1656,17 @@ export class StreamSubscribers {
 
   /**
    * Durable-sink delivery failures arrive here (see subscriber-sinks.ts).
-   * Backoff FIRST, close second: the close's disconnect fact triggers a wake
-   * whose reconcile must already see the nack'd row — otherwise it re-pokes
-   * immediately and a deterministic subscriber failure becomes an RPC-rate
-   * poke→deliver→close hot loop that never parks. The shared failure machine
-   * counts the streak (the poke-success watermark deliberately preserves it;
-   * see #poke) and parks at the same threshold as every other lane.
+   * Persist the failure FIRST, close second: the close's disconnect fact
+   * triggers the replacement poke. Attempt one retries immediately because a
+   * dead callback normally means the processor was evicted; if the replacement
+   * host rejects the same checkpoint, the preserved streak puts attempt two on
+   * the existing exponential backoff. Deterministic failures therefore still
+   * cannot become an RPC-rate loop and still park at the shared threshold.
    */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
-    console.error("stream durable sink delivery failed; backing off before re-poke", {
+    console.error("stream durable sink delivery failed; replacing connection", {
       subscriptionKey,
       error,
     });
@@ -1661,6 +1679,7 @@ export class StreamSubscribers {
         epoch: row.epoch,
         error,
         row,
+        immediateFirstRetry: true,
       });
     }
     connection.close("delivery-failed");

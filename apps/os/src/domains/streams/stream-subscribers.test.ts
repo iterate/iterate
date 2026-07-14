@@ -1967,7 +1967,7 @@ describe("StreamSubscribers", () => {
     expect(h.armedAlarms.length).toBe(armsBefore);
   });
 
-  it("s. wake delivery failures back off, park after sustained failure, and reset on checkpoint progress", async () => {
+  it("s. wake delivery failures redial once, then back off, park, and reset on progress", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 1);
     h.append(evt(1, "a"));
@@ -1978,24 +1978,32 @@ describe("StreamSubscribers", () => {
     await h.settle();
     expect(h.pokes).toHaveLength(1);
 
-    // A post-poke sink delivery failure must run the failure machine: nack'd
-    // row, closed connection, and NO immediate re-poke — the bug this pins is
-    // the close→wake→re-poke hot loop that never backed off and never parked
-    // (each poke's ack used to reset the attempt counter too).
+    // A post-poke sink failure usually means an evicted processor left a dead
+    // callback. Persist attempt one, then replace that connection immediately.
     h.subscribers.onDurableDeliveryError("k", new Error("ingest rejects deterministically"));
     await h.settle();
-    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(h.row("k")?.attempt).toBe(1);
-    expect(h.row("k")?.nextAttemptAt).not.toBeNull();
-    expect(h.pokes).toHaveLength(1); // no hot re-poke
+    expect(h.row("k")?.nextAttemptAt).toBeNull();
+    expect(h.pokes).toHaveLength(2);
 
-    // Alarm-driven retry: the poke succeeds (host reachable, checkpoint
-    // unchanged) but the streak SURVIVES the handshake.
+    // The replacement host is reachable but deterministically rejects the
+    // same checkpoint. The preserved streak makes attempt two back off, so
+    // close→wake cannot become an RPC-rate loop.
+    h.subscribers.onDurableDeliveryError("k", new Error("same checkpoint still fails"));
+    await h.settle();
+    expect(h.pokes).toHaveLength(2);
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.row("k")?.attempt).toBe(2);
+    expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+
+    // The alarm retries once the backoff expires; a successful handshake with
+    // no checkpoint progress keeps the failure streak intact.
     h.advanceTo(h.row("k")!.nextAttemptAt! + 1);
     h.subscribers.onAlarm();
     await h.settle();
-    expect(h.pokes).toHaveLength(2);
-    expect(h.row("k")?.attempt).toBe(1); // preserved, not reset by the poke
+    expect(h.pokes).toHaveLength(3);
+    expect(h.row("k")?.attempt).toBe(2);
 
     // Sustained deterministic failure parks at the shared threshold.
     for (let round = 0; round < 400 && h.factsOfType(PARKED).length === 0; round += 1) {
