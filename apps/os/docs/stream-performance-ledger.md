@@ -3149,3 +3149,79 @@ queue, service, fallback protocol, or traffic to the Stream hot path. All PR
 checks passed, including the full preview deployment and browser E2E suite.
 Production was not deployed or erased. Raw PCM records are
 `/tmp/process-event-preview5-post-reset-r{1..7}.log`.
+
+## 2026-07-14: Tenth Current-Main Cumulative Checkpoint
+
+The tenth checkpoint pinned candidate
+`716728ff7f2d48eb4dac25aee5f48c9c962da6f6` against freshly fetched main
+`7b106d623ca1d814304443c0ad34f8e36ac0b0bb`. Two local workerd servers ran
+those exact revisions. The candidate harness targeted each by an explicit
+loopback URL. Every timer ran on the Node host around awaited network/RPC work
+or host-observed delivery; no result uses elapsed time from a Worker isolate
+while Cloudflare could freeze its clock.
+
+The first provisional collection exposed a benchmark-client defect on both
+candidate and main: after the server had completed every RPC, repeated forced
+reactivation could leave the host Cap'n Web client unsettled. The harness had
+also reused a Stream capability created before the first `kill()` for every
+later kill. Commit `716728ff7` gives each destructive control call a disposable
+session while retaining the existing measured connection for the head read,
+and puts 30-second Node-host deadlines around concurrent append groups and
+cold reads. This is 67 additions and 15 removals in the opt-in benchmark only;
+it changes neither production code nor successful timing boundaries. The
+provisional records were invalidated.
+
+Four corrected interleaved collections each ran five fresh processes per
+revision: the 15-workload cumulative suite, 200-sample storage controls,
+200-sample concurrent append plus 300-sample live-delivery controls, and
+200-sample dense/sparse cross-post controls. All 40 processes passed their
+semantic assertions. The full suite alone showed 14.499% lower p50, 1.013%
+lower p95, and 9.852% lower mean latency.
+
+The headline keeps the checkpoint-eight/nine aggregation rule: replace exactly
+five noisy full-suite rows with their larger existing controls (singleton
+append, 100-event append, concurrent-32 append, one-subscriber delivery, and
+25-subscriber delivery), then take the equal-workload geometric mean. It does
+not substitute the enlarged cross-post controls:
+
+| Equal-workload statistic | Improvement versus current main |
+| ------------------------ | ------------------------------: |
+| p50                      |                     **17.560%** |
+| p95                      |                      **4.226%** |
+| mean                     |                     **14.579%** |
+
+Focused median-of-five-run results were:
+
+| Focused workload                     | P50 change | P95 change | Mean change |
+| ------------------------------------ | ---------: | ---------: | ----------: |
+| Append one 1 KiB event               |     19.66% |     14.98% |      17.65% |
+| Append 100 tiny events               |     40.08% |     26.63% |      36.35% |
+| Append 100 1 KiB events              |     54.71% |     45.38% |      52.70% |
+| Append 1,000 tiny events             |     61.42% |     43.16% |      57.31% |
+| Append 32 concurrent singleton calls |     23.64% |     16.23% |      18.76% |
+| Deliver to one live subscriber       |     12.29% |     10.71% |      12.60% |
+| Deliver to 25 live subscribers       |      6.58% |      7.91% |       6.24% |
+| Head after forced reactivation       |      3.68% |     -9.05% |       2.50% |
+| Dense one-event cross-post           |     16.45% |     12.29% |      15.76% |
+| Sparse cross-post, 1 of 100 events   |     19.74% |     13.20% |      19.04% |
+| Append one inline 768 KiB event      |     52.18% |     38.88% |      42.36% |
+| Append one chunked 1.1 MiB event     |      4.72% |      8.92% |       6.79% |
+
+P50-derived capacity improved 66.89% for 100-event append, 30.95% for 32
+concurrent singleton appends, and 7.05% for 25-subscriber fanout. Substituting
+the enlarged cross-post controls too would produce
+18.650%/12.790%/16.770% p50/p95/mean improvement, but that is not the headline
+because it changes the established aggregation rule.
+
+The meaningful residual tail caveats are forced-reactivation p95 at 9.05%
+slower and the low-sample replay-subscribe p95 at 7.13% slower. Cold-head p50
+and mean still improve, and the enlarged concurrent, live-delivery, and both
+cross-post controls reverse their noisy full-suite p95 rows. These results do
+not justify a tail win for reactivation, but they continue to show broad
+central-latency and throughput gains without a general p95 collapse.
+
+Raw corrected records are
+`/tmp/cumulative-10-{full,storage,tail,crosspost}-{main,candidate}-r{1..5}.log`.
+The collection ended at `2026-07-14T23:34:01Z`; if active optimization
+continues, the next current-main checkpoint is due by
+`2026-07-15T03:34:01Z`. Production was not deployed or erased.
