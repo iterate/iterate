@@ -319,8 +319,13 @@ export function extractMatchSnippet(text: string, query: string, maxChars: numbe
   }
   if (at === -1) return `${flat.slice(0, maxChars)}…`;
   let start = Math.max(0, at - Math.floor(maxChars / 2));
-  const spaceBefore = flat.indexOf(" ", start);
-  if (spaceBefore !== -1 && spaceBefore < at) start = spaceBefore + 1;
+  // Snap forward to a word start ONLY when mid-word: at position 0 or just
+  // after a space there is nothing to trim, and advancing would drop a whole
+  // word (and stamp a phantom leading ellipsis on head-of-document matches).
+  if (start > 0 && flat[start - 1] !== " ") {
+    const spaceBefore = flat.indexOf(" ", start);
+    if (spaceBefore !== -1 && spaceBefore < at) start = spaceBefore + 1;
+  }
   const end = Math.min(flat.length, start + maxChars);
   return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
 }

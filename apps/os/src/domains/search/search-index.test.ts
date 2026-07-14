@@ -187,6 +187,12 @@ describe("extractMatchSnippet", () => {
     expect(snippet).toContain("superfart");
   });
 
+  it("keeps head-of-document matches intact — no phantom ellipsis, no dropped word", () => {
+    const text = "needle found immediately here" + " tail".repeat(100);
+    const snippet = extractMatchSnippet(text, "needle", 80);
+    expect(snippet.startsWith("needle found")).toBe(true);
+  });
+
   it("falls back to the head when no term matches, and passes short text through", () => {
     expect(extractMatchSnippet("short text", "zzz", 100)).toBe("short text");
     const head = extractMatchSnippet("a ".repeat(200), "zzz", 50);
