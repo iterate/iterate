@@ -3,7 +3,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -53,24 +53,41 @@ const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
  */
 export class SecretDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
-  readonly #processorHost = createStreamProcessorHost(this.ctx, {
-    stream: new StreamRpcTarget({
-      auth: trustedInternalAuthContext(),
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
+  readonly #stream = new StreamRpcTarget({
+    auth: trustedInternalAuthContext(),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
+  readonly #registry = createStreamProcessorRegistry(this.ctx, {
+    stream: this.#stream,
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
     // Secret material is write-only: the live state that leaves this DO is the
     // DESCRIPTION (hasMaterial), never the ciphertext — same redaction the
     // processor facade applies via publicState. The explicit return type does
-    // double duty: it makes the host a LiveState<SecretDescription>, and it
-    // breaks the field-initializer inference cycle (this closure reads
-    // #secretProcessor, which is built from this host).
-    getLiveState: (): SecretDescription => describeSecretState(this.#secretProcessor.currentState),
+    // double duty: it makes the registry a LiveState<SecretDescription>, and
+    // it breaks the field-initializer inference cycle (this closure reads
+    // #reads, which is built from this registry).
+    getLiveState: (): SecretDescription => describeSecretState(this.#reads.currentState),
   });
-  readonly #secretProcessor = this.#processorHost.add((deps) => new SecretProcessor(deps));
+  // The DO constructs the processor — no host-injected readState/writeState/
+  // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
+  // recovery on purpose: SecretProcessor is a pure fold (reduce only — no
+  // processEvent, no runInBackground), so an eviction can never lose
+  // consequential background work (see the registry module doc's rule).
+  readonly #secretProcessor = this.#registry.register(
+    new SecretProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+    }),
+  );
+  // Runner-backed reads: under runner drive the runner owns the cursors and
+  // the processor instance's internal checkpoint never advances, so every
+  // read this DO serves (snapshots, the processor facade, live state) must go
+  // through the runner's committed progress.
+  readonly #reads = this.#registry.reads(this.#secretProcessor);
 
   // In-flight refresh, shared across concurrent callers (single-flight): a
   // burst of 401s must not fan out into N token exchanges — duplicate mints
@@ -83,12 +100,12 @@ export class SecretDurableObject extends DurableObject<Env> {
   #updates: Promise<void> = Promise.resolve();
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#processorHost.wakeStreamSubscriber(args);
+    return this.#registry.wakeStreamSubscriber(args);
   }
 
-  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
   alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#processorHost.handleAlarm(alarmInfo);
+    return this.#registry.handleAlarm(alarmInfo);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -97,8 +114,10 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#secretProcessor, {
-      catchUpBeforeSnapshot: () => this.#processorHost.catchUp(SecretProcessorContract.slug),
+    // Runner-backed reads (#reads), never the processor instance — see the
+    // field comment: instance reads are stale forever under runner drive.
+    return new StreamProcessorRpcTarget(this.#reads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(SecretProcessorContract.slug),
       // Secret material is write-only: the live state that leaves this DO is
       // the DESCRIPTION — snapshots and onStateChange pushes must never carry
       // the ciphertext, only the hasMaterial fact.
@@ -108,7 +127,7 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   /** The secret's live state — the DESCRIPTION only, behind `itx.secrets.get(path).liveState`. */
   get liveState() {
-    return new LiveStateRpcTarget<SecretDescription>(this.#processorHost);
+    return new LiveStateRpcTarget<SecretDescription>(this.#registry);
   }
 
   update(input: SecretUpdateInput) {
@@ -485,8 +504,8 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async #snapshotWithOffset(): Promise<SecretSnapshot> {
-    await this.#processorHost.catchUp(SecretProcessorContract.slug);
-    return await this.#secretProcessor.snapshot();
+    await this.#registry.catchUp(SecretProcessorContract.slug);
+    return await this.#reads.snapshot();
   }
 
   async #decrypt(

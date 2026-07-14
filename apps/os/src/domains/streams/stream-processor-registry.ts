@@ -1,9 +1,28 @@
 // The DO-side "thin registry" over per-processor StreamProcessorRunners — the
 // replacement for createStreamProcessorHost (stream-processor-host.ts), built
 // to the same consumed SURFACE so cutover is a mechanical swap per Durable
-// Object. NOT WIRED INTO ANY DO YET — that is the next slice; until then the
-// host and this registry coexist, and only the registry's own harness
-// (stream-processor-registry.test.ts) drives it.
+// Object. WIRED INTO: the secret DO (secret-durable-object.ts — the reference
+// cutover). The remaining processor-hosting DOs (agent, capability-host,
+// project, repo, scheduler) still run the host; the two coexist until the
+// last cutover deletes it.
+//
+// THE CUTOVER RECIPE (established by the secret DO; repeat per DO):
+//   1. `createStreamProcessorRegistry(this.ctx, { stream, path, projectId,
+//      version: workerVersion(this.env), getLiveState? })` replaces
+//      `createStreamProcessorHost(...)` — same options bag.
+//   2. The DO CONSTRUCTS its processor (`new XProcessor({ stream, path,
+//      projectId, ...deps })` — no more host-injected readState/writeState/
+//      keepAliveWhile; the runner owns progress and keepalive) and passes it
+//      to `register`, deciding recovery per the module-doc rule below.
+//   3. READ-YOUR-WRITES REPOINTING: build `#reads = registry.reads(processor)`
+//      and serve every read from it — `new StreamProcessorRpcTarget(this.#reads,
+//      { catchUpBeforeSnapshot: () => registry.catchUp(slug), ... })`, DO verbs
+//      that read their own fold via `#reads.snapshot()`, and `getLiveState`
+//      closures via `#reads.currentState`. Reads against the processor
+//      INSTANCE are stale forever under runner drive (see `reads` below).
+//   4. `alarm()` → `registry.handleAlarm(alarmInfo)`, `wakeStreamSubscriber`
+//      → `registry.wakeStreamSubscriber`, `.liveState` →
+//      `new LiveStateRpcTarget(registry)` — all same shapes as the host.
 //
 // The redesign (docs/stream-processor-runner-redesign.md, "option B") allows
 // the registry exactly these jobs:
@@ -51,7 +70,7 @@ import { tracing } from "cloudflare:workers";
 import type { Stream } from "../../itx-api.generated.ts";
 import { LiveState } from "../../lib/live-state/engine.ts";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
-import type { StreamProcessor } from "./stream-processor.ts";
+import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
 import { StreamProcessorRunner } from "./stream-processor-runner.ts";
 import {
   durableObjectProgressStore,
@@ -76,6 +95,28 @@ import {
  * the class's own private hooks and throws on a structural impostor.
  */
 export type RegisterableProcessor = AnyHostedProcessor;
+
+/**
+ * The folded-state type of a registered processor, derived from its own
+ * `snapshot()` signature — the class's contract parameter is invariant and
+ * cannot be named through {@link RegisterableProcessor}'s structural bound,
+ * but every concrete subclass's `snapshot()` already carries the state type.
+ */
+export type RegisteredProcessorState<P extends RegisterableProcessor> = Awaited<
+  ReturnType<P["snapshot"]>
+>["state"];
+
+/**
+ * What {@link StreamProcessorRegistry.reads} returns: the RPC-facing
+ * {@link ProcessorReads} plus the two synchronous reads a DO's `getLiveState`
+ * closure needs (live-state assembly runs synchronously; see `refreshLive`).
+ */
+export type RegisteredProcessorReads<State> = ProcessorReads<State> & {
+  /** The runner's committed fold, synchronously (schema default until loaded). */
+  readonly currentState: State;
+  /** Whether `currentState` is a real fold — gate live publishing on it. */
+  readonly isLoaded: boolean;
+};
 
 type RegistryEntry = {
   processor: RegisterableProcessor;
@@ -117,6 +158,22 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
     processor: P,
     opts?: { recovery?: { revivedEventType: string } },
   ): P;
+  /**
+   * The runner-backed READ surface for one registered processor — the
+   * read-your-writes repointing every cutover needs. Under runner drive the
+   * runner owns both cursors and the processor's legacy internal checkpoint
+   * never advances, so reads against the INSTANCE (`snapshot` /
+   * `getRuntimeState` / `waitUntilEvent`) would answer the schema default
+   * forever. Hand THIS to `new StreamProcessorRpcTarget(...)` and to every DO
+   * verb that reads its own fold: `snapshot`/`waitUntilEvent` come from the
+   * runner's committed progress; `getRuntimeState` keeps the processor's own
+   * runtime bag but re-pins its snapshot to the runner; `currentState` /
+   * `isLoaded` serve `getLiveState` closures without an async hop. Takes the
+   * registered instance (not a slug) so the state type flows through.
+   */
+  reads<P extends RegisterableProcessor>(
+    processor: P,
+  ): RegisteredProcessorReads<RegisteredProcessorState<P>>;
   /**
    * Wire this to the host DO's wakeStreamSubscriber RPC method. Resolves the
    * poked runner (by the request's `processorSlug`, or the only registered
@@ -376,6 +433,35 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // Any runner's committed-state change reassembles the node's live state.
       runner.observeStateChanges(() => assembleLive());
       return processor;
+    },
+
+    reads(processor) {
+      const entry = requireEntry(processor.contract.slug);
+      if (entry.processor !== processor) {
+        throw new Error(
+          `stream processor "${processor.contract.slug}" is registered on this registry, ` +
+            `but reads() was passed a DIFFERENT instance — build reads from the exact ` +
+            `processor register() returned`,
+        );
+      }
+      const { runner } = entry;
+      return {
+        snapshot: () => runner.snapshot(),
+        getRuntimeState: async () => {
+          // The processor's own runtime bag with the SNAPSHOT re-pinned to
+          // the runner's committed progress — the same repointing the wake
+          // handshake's getRuntimeState performs below.
+          const state = await entry.processor.getRuntimeState();
+          return { ...state, snapshot: await runner.snapshot() };
+        },
+        waitUntilEvent: (input) => runner.waitUntilEvent(input),
+        get currentState() {
+          return runner.currentState;
+        },
+        get isLoaded() {
+          return runner.isLoaded;
+        },
+      };
     },
 
     catchUp,

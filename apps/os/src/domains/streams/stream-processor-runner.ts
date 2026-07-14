@@ -241,6 +241,9 @@ type EventWaiter = {
 type FrameContext<State> = {
   /** The revision every commit in this frame asserts (fixed at frame start). */
   revision: number;
+  /** When this frame's drive began — feeds the per-commit consumption metrics
+   * (the legacy `#ingest` timed the whole batch the same way). */
+  ingestStartedAtMs: number;
   state: State;
   reducedThroughOffset: number;
   completedThroughOffset: number;
@@ -715,6 +718,7 @@ export class StreamProcessorRunner<
   // ---------------------------------------------------------------------------
 
   async #processFrame(frame: SinkFrame): Promise<void> {
+    const ingestStartedAtMs = this.now();
     await this.#load();
     const committed = this.#requireProgress();
 
@@ -741,6 +745,7 @@ export class StreamProcessorRunner<
 
     const ctx: FrameContext<ProcessorState<Contract>> = {
       revision: committed.processing.cursorRevision,
+      ingestStartedAtMs,
       state: committed.reduction.state,
       reducedThroughOffset: committed.reduction.reducedThroughOffset,
       completedThroughOffset: committed.processing.acknowledgedThroughOffset,
@@ -888,6 +893,21 @@ export class StreamProcessorRunner<
     ctx.eventsSinceCommit = 0;
     const committedEvents = ctx.uncommittedEvents.splice(0);
     const committedFailures = ctx.uncommittedParseFailures.splice(0);
+    // The commit is durable and the published cursor advanced — the events
+    // are genuinely CONSUMED, which is the moment self-measured subscriber
+    // metrics report (the legacy #ingest's noteBatchIngested placement,
+    // stream-processor.ts:717-725). Fed through the driver so the wake
+    // capability's consumption-lag samples stay live under runner drive.
+    if (committedEvents.length > 0) {
+      const newestEventCreatedAtMs = Date.parse(committedEvents.at(-1)!.createdAt);
+      this.driver.noteBatchIngested({
+        ingestedThroughOffset: next.processing.acknowledgedThroughOffset,
+        ...(Number.isFinite(newestEventCreatedAtMs) ? { newestEventCreatedAtMs } : {}),
+        eventCount: committedEvents.length,
+        ingestStartedAtMs: ctx.ingestStartedAtMs,
+        atMs: this.now(),
+      });
+    }
     // Observers before waiters, both after the durable commit — the legacy
     // ingest ordering (stream-processor.ts:726-729): by the time either
     // fires, published state already reflects the committed frame.

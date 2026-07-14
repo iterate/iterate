@@ -163,11 +163,7 @@ import {
   openApiCapabilityTypeReference,
 } from "./domains/itx/capability-type-declarations.ts";
 import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
-import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
-import type {
-  StreamProcessor,
-  StreamProcessorContract,
-} from "./domains/streams/stream-processor.ts";
+import type { ProcessorReads } from "./domains/streams/stream-processor.ts";
 import type {
   CapabilityDescription,
   Description,
@@ -5853,27 +5849,33 @@ export class ProjectEgressInterceptRpcTarget extends IterateRpcRelay<"ProjectEgr
  * `ingest` with a fabricated high-offset event and fast-forward the checkpoint
  * past every real event, permanently silencing the processor (and run its side
  * effects for events that were never committed). This facade forwards only the
- * four inspection methods of the public `StreamProcessorRpc` contract, so the
+ * inspection methods of the public `StreamProcessorRpc` contract, so the
  * dangerous surface never crosses the RPC boundary.
+ *
+ * WHO PROVIDES THE READS ({@link ProcessorReads}) depends on the DO's drive
+ * mode: a host-driven DO (createStreamProcessorHost) passes its processor
+ * instance directly — legacy `ingest` advances the instance's checkpoint. A
+ * registry-driven DO (createStreamProcessorRegistry) MUST pass
+ * `registry.reads(processor)` instead: the runner owns the cursors there and
+ * the instance's internal checkpoint never advances, so instance-backed reads
+ * would serve the schema default forever.
  */
-export class StreamProcessorRpcTarget<
-  Contract extends StreamProcessorContract,
-  PublicState = ProcessorState<Contract>,
->
+export class StreamProcessorRpcTarget<State, PublicState = State>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements StreamProcessorRpc<PublicState>
 {
-  readonly #processor: StreamProcessor<Contract, object>;
+  readonly #reads: ProcessorReads<State>;
   readonly #catchUpBeforeSnapshot: (() => Promise<void>) | undefined;
-  readonly #publicState: ((state: ProcessorState<Contract>) => PublicState) | undefined;
+  readonly #publicState: ((state: State) => PublicState) | undefined;
 
   constructor(
-    processor: StreamProcessor<Contract, object>,
+    reads: ProcessorReads<State>,
     options: {
       /**
-       * Host-provided pull-through (`StreamProcessorHost.catchUp`): snapshots
-       * served over this target reflect events the push delivery has not
-       * brought yet, giving remote readers read-your-writes.
+       * Host-provided pull-through (`StreamProcessorHost.catchUp` /
+       * `StreamProcessorRegistry.catchUp`): snapshots served over this target
+       * reflect events the push delivery has not brought yet, giving remote
+       * readers read-your-writes.
        */
       catchUpBeforeSnapshot?: () => Promise<void>;
       /**
@@ -5883,16 +5885,16 @@ export class StreamProcessorRpcTarget<
        * `hasMaterial` instead); the node's `.liveState` applies the SAME
        * redaction through the host's `getLiveState`. Omitted = identity.
        */
-      publicState?: (state: ProcessorState<Contract>) => PublicState;
+      publicState?: (state: State) => PublicState;
     } = {},
   ) {
     super();
-    this.#processor = processor;
+    this.#reads = reads;
     this.#catchUpBeforeSnapshot = options.catchUpBeforeSnapshot;
     this.#publicState = options.publicState;
   }
 
-  #project(state: ProcessorState<Contract>): PublicState {
+  #project(state: State): PublicState {
     return this.#publicState === undefined
       ? (state as unknown as PublicState)
       : this.#publicState(state);
@@ -5900,12 +5902,12 @@ export class StreamProcessorRpcTarget<
 
   async snapshot(): Promise<ProcessorSnapshot<PublicState>> {
     await this.#catchUpBeforeSnapshot?.();
-    const { offset, state } = await this.#processor.snapshot();
+    const { offset, state } = await this.#reads.snapshot();
     return { offset, state: this.#project(state) };
   }
 
   async getRuntimeState() {
-    const runtimeState = await this.#processor.getRuntimeState();
+    const runtimeState = await this.#reads.getRuntimeState();
     return {
       ...runtimeState,
       snapshot: {
@@ -5916,7 +5918,7 @@ export class StreamProcessorRpcTarget<
   }
 
   waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
-    return this.#processor.waitUntilEvent(input);
+    return this.#reads.waitUntilEvent(input);
   }
 }
 

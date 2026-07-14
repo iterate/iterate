@@ -200,6 +200,26 @@ export type StreamProcessorRuntimeState<State> = ProcessorRuntimeState<State> & 
   snapshot: StreamProcessorSnapshot<State>;
 };
 
+/**
+ * The read surface a `StreamProcessorRpcTarget` (rpc-targets.ts) serves — the
+ * three inspection reads of the public `StreamProcessorRpc` contract. Two
+ * providers exist, one per drive mode:
+ *
+ * - a HOST-driven Durable Object passes its {@link StreamProcessor} instance
+ *   directly (legacy `ingest` advances the processor's internal checkpoint,
+ *   so instance reads are current);
+ * - a REGISTRY-driven DO passes `registry.reads(processor)`
+ *   (stream-processor-registry.ts): the runner owns both cursors and never
+ *   advances the processor's internal checkpoint, so instance reads would
+ *   answer the schema default forever — the runner-backed provider is the
+ *   read-your-writes lane.
+ */
+export type ProcessorReads<State> = {
+  snapshot(): Promise<ProcessorSnapshot<State>>;
+  getRuntimeState(): Promise<StreamProcessorRuntimeState<State>>;
+  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
+};
+
 /** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
  *  when a delivered event matches, and an optional timeout handle to clear on
  *  resolution (so a satisfied waiter never later rejects). */
@@ -260,6 +280,21 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
   processEvent(args: ProcessEventArgs<Contract>): undefined;
   /** The at-head hook (virtual); default is a no-op. */
   onCaughtUp(args: OnCaughtUpArgs<Contract>): Promise<void>;
+  /**
+   * Feed the processor's self-measured consumption metrics
+   * (`subscriberMetrics.noteBatchIngested`) after a durably committed frame —
+   * the runner-drive home of the legacy `#ingest` call below. Without it the
+   * wake capability's consumption-lag samples (`runtime.metrics`) go empty
+   * under runner drive: the runner never calls `ingest`, and appends alone
+   * only feed the other half of the loop.
+   */
+  noteBatchIngested(args: {
+    ingestedThroughOffset: number;
+    newestEventCreatedAtMs?: number;
+    eventCount: number;
+    ingestStartedAtMs: number;
+    atMs: number;
+  }): void;
   /** The LEGACY key derivation — `<slug>/<key>[@<path>:<offset>]` — byte-preserved. */
   idempotencyKey(key: string, whileProcessing?: Pick<StreamEvent, "offset" | "path">): string;
   /** The `source.processor` provenance stamp for runner-authored raw appends. */
@@ -387,6 +422,7 @@ export abstract class StreamProcessor<
       reduceRawEvent: (args) => processor.#reduceRawEvent(args),
       processEvent: (args) => processor.processEvent(args),
       onCaughtUp: (args) => processor.onCaughtUp(args),
+      noteBatchIngested: (args) => processor.subscriberMetrics.noteBatchIngested(args),
       idempotencyKey: (key, whileProcessing) => processor.idempotencyKey(key, whileProcessing),
       processorStamp: (whileProcessing) => processor.#processorStamp(whileProcessing),
       append: (opts, input) =>
