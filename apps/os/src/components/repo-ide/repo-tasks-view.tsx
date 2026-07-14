@@ -130,20 +130,19 @@ export function RepoTasksView({
     folderPath: string;
     labels?: readonly string[];
   }>({ state: "todo", folderPath: "/" });
-  const headTaskPaths = useMemo(() => headPaths.filter(isRepoTaskPath), [headPaths]);
+  // All task file contents in ONE clone, keyed by path. The previous approach
+  // (list the whole tree, then a readFile per task) fanned N reads at the repo
+  // DO, and on any repo without the root workspace cache each readFile is its
+  // own full clone — N concurrent clones of a big repo overload the DO. This
+  // scales with the number of tasks, not the repo size. `headCommitOid` alone
+  // keys the cache: the task file set is fully determined by the commit.
   const headContents = useItxQuery({
-    key: ["repo-task-files", projectId, repoPath, headCommitOid, headTaskPaths.join("\n")],
-    query: async (itx) => {
-      const reads = await Promise.all(
-        headTaskPaths.map(async (path) => ({
-          path,
-          read: await itx.repos.get(repoPath).readFile({ path, encoding: "utf8" }),
-        })),
-      );
-      return Object.fromEntries(
-        reads.flatMap(({ path, read }) => (read === null ? [] : [[path, read.content]])),
-      );
-    },
+    key: ["repo-task-files", projectId, repoPath, headCommitOid],
+    query: (itx) =>
+      itx.repos
+        .get(repoPath)
+        .listTaskFiles()
+        .then((result) => result.files),
   });
 
   const tasks = useMemo(() => {
