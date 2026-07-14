@@ -845,16 +845,32 @@ function createStreamRuntime(
   // one again and reschedules), a session-broken
   // rejection reconnects on the spot. Single-flight: the latch holds until the
   // probe settles, so absorbed timeouts trickling in during its window cannot
-  // fan out into a probe storm.
+  // fan out into a probe storm — but a schedule request that lands while the
+  // latch is held is REMEMBERED, not dropped. The probe's own timeout can be
+  // strike one again (late credit reset the count mid-window), and guardedCall
+  // records that strike — and asks for the next follow-up — BEFORE this
+  // function's finally releases the latch; swallowing that request would leave
+  // strike one standing until the paced probe or another caller happens to
+  // call, breaking invariant 3's progress guarantee. The remembered request
+  // re-arms in the finally (fire-time re-checks make it a no-op if the ledger
+  // reset or the connection was replaced meanwhile), so at most one probe is
+  // ever in flight.
   let strikeFollowUpProbeInFlight = false;
+  let strikeFollowUpProbeRearm = false;
   function scheduleStrikeFollowUpProbe(connection: BrowserStreamClient) {
-    if (strikeFollowUpProbeInFlight || disposed || stream !== connection) return;
+    if (disposed || stream !== connection) return;
+    if (strikeFollowUpProbeInFlight) {
+      strikeFollowUpProbeRearm = true;
+      return;
+    }
     strikeFollowUpProbeInFlight = true;
+    strikeFollowUpProbeRearm = false;
     setTimeout(() => {
       // Re-check at fire time: a success may have reset the ledger, or a
       // reconnect may have replaced the connection, between schedule and now.
       if (disposed || stream !== connection || guardedTimeoutStrikes === 0) {
         strikeFollowUpProbeInFlight = false;
+        strikeFollowUpProbeRearm = false;
         return;
       }
       void guardedCall("strike follow-up probe", connection, (rpc) =>
@@ -866,6 +882,10 @@ function createStreamRuntime(
         })
         .finally(() => {
           strikeFollowUpProbeInFlight = false;
+          if (strikeFollowUpProbeRearm) {
+            strikeFollowUpProbeRearm = false;
+            scheduleStrikeFollowUpProbe(connection);
+          }
         });
     }, 0);
   }
@@ -1087,6 +1107,7 @@ function createStreamRuntime(
         guardedTimeoutStrikes = 0;
         ledgerGeneration += 1;
         strikeFollowUpProbeInFlight = false;
+        strikeFollowUpProbeRearm = false;
         pendingIngestEvents = 0;
         lastDeliveryArrivalAt = undefined;
         arrivalBaselineAt = Date.now();
@@ -1636,6 +1657,13 @@ function createStreamRuntime(
       await new Promise((resolve) => setTimeout(resolve, DELIVERY_GRACE_MS));
       if (disposed || stream !== connection) return;
       if (pendingIngestEvents > 0) return; // an arrived batch is still ingesting
+      // Re-check mirror-current AFTER the grace: an ingest that was in flight
+      // when this check began can finish during the wait — clearing the
+      // pending counter and advancing lastDeliveredOffset past the server
+      // offset read above. That mirror is current; judging it by a stale
+      // arrival stamp (the batch may have ARRIVED long before this check)
+      // would reconnect a healthy, caught-up subscription.
+      if (coreProcessorState.maxOffset <= lastDeliveredOffset) return;
       if (
         lastDeliveryArrivalAt !== undefined &&
         checkStartedAt - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS
