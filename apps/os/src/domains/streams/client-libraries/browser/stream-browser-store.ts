@@ -403,7 +403,10 @@ function createStreamRuntime(
   // stopped) reconnects instead of wedging. Arrival — not ingest completion — is the
   // aliveness signal: a large batch can take longer than a check interval to apply, and that
   // must not read as "orphaned"; the stamp is what lets a check see an arrival that PREDATES
-  // it but is still being ingested.
+  // it but is still being ingested. The stamp is per-connection evidence like the strike
+  // ledger: it is rebaselined to "now" where a fresh connection is installed and again when
+  // its liveness probe starts, so an arrival on a previous socket (or a pre-subscribe
+  // catch-up page) never vouches for the current live subscription.
   let reconciledIncarnation: string | undefined;
   let lastDeliveredOffset = -1;
   let deliveryArrivals = 0;
@@ -894,10 +897,16 @@ function createStreamRuntime(
         // The superseded case is disposed by the dial handler above, exactly once.
         if (disposed || epoch !== connectionEpoch) return;
         connectFailuresSinceSuccess = 0;
-        // The strike ledger is per-connection evidence; a leftover strike from
-        // the previous socket must not make this connection's first slow
-        // answer look like strike two.
+        // Per-connection evidence resets. A leftover strike from the previous
+        // socket must not make this connection's first slow answer look like
+        // strike two — and a delivery that arrived on the previous socket must
+        // not vouch for this one: verifyDelivery reads the arrival stamp as
+        // "deliveries flowing", so a stale stamp would let an orphaned fresh
+        // subscription skip its reconnect for up to a full probe interval.
+        // Rebaseline (not zero) so the new connection gets one silent interval
+        // of grace measured from its own install, like the strike ledger.
         guardedTimeoutStrikes = 0;
+        lastDeliveryArrivalAt = Date.now();
         stream = connection;
         // A follower can still append / read runtimeState, so readiness is "connection
         // open", not "leader/subscribed". Unblock anyone awaiting reconnect (B2).
@@ -1319,11 +1328,26 @@ function createStreamRuntime(
   // subscription, so for it the answered read is the whole check.
   const LIVENESS_PROBE_INTERVAL_MS = 10_000;
   const DELIVERY_GRACE_MS = 2_000;
+  // Single-flight latch: two overlapping verifies would race their guarded
+  // reads (one cold DO could double-strike a healthy connection) — but a check
+  // requested while one is in flight must not be silently dropped either. A
+  // probe whose guarded read is waiting out its deadline (twice, with the
+  // retry) holds the latch for up to two GUARDED_CALL_TIMEOUT_MS windows, and
+  // a composer-submit nudge landing in that window is exactly the caller this
+  // check exists for. So the latched request is recorded and the check re-runs
+  // once the in-flight one settles — collapsed to one pending re-run, and a
+  // natural no-op if the settling verify already evicted/reconnected (the
+  // re-run re-reads `stream` and the subscription state from scratch).
   let verifyInFlight = false;
+  let verifyRerunReason: string | undefined;
 
   async function verifyDelivery(reason: string): Promise<void> {
     const connection = stream;
-    if (connection === undefined || verifyInFlight || disposed) return;
+    if (connection === undefined || disposed) return;
+    if (verifyInFlight) {
+      verifyRerunReason = reason;
+      return;
+    }
     verifyInFlight = true;
     try {
       // Every runtime-state read doubles as a transport-RTT sample (timed
@@ -1378,11 +1402,20 @@ function createStreamRuntime(
       reconnectAfterError(`${reason} failed`, error, 250, { suspect: connection });
     } finally {
       verifyInFlight = false;
+      const rerunReason = verifyRerunReason;
+      verifyRerunReason = undefined;
+      if (rerunReason !== undefined && !disposed) void verifyDelivery(rerunReason);
     }
   }
 
   function startLivenessProbe() {
     stopLivenessProbe();
+    // The subscription just went live: rebaseline the arrival stamp so the
+    // orphan check measures silence from THIS subscription's start (one full
+    // interval of grace — the old per-probe detector's arrivals-since-probe-
+    // start semantics), not from a pre-subscribe catch-up page or a delivery
+    // that rode a previous socket.
+    lastDeliveryArrivalAt = Date.now();
     livenessTimer = setInterval(
       () => void verifyDelivery("liveness probe"),
       LIVENESS_PROBE_INTERVAL_MS,
