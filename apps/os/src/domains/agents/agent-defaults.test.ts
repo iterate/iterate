@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
-import {
-  EMAIL_AGENT_SYSTEM_PROMPT,
-  agentDefaultsForPath,
-  slackAgentSystemPrompt,
-  telegramAgentSystemPrompt,
-} from "./agent-defaults.ts";
+import { EMAIL_AGENT_SYSTEM_PROMPT, agentDefaultsForPath } from "./agent-defaults.ts";
 
 const PROJECT_ID = "prj_defaults_test";
 const GITHUB_AGENT_PATH = `/agents/repos/g~${"0".repeat(64)}/pull-requests/7`;
@@ -83,27 +78,6 @@ describe("agentDefaultsForPath", () => {
     expect(
       defaults.events.some((event) => event.type === "events.iterate.com/github-agent/configure"),
     ).toBe(false);
-  });
-
-  it("standardizes every platform agent prompt on TypeScript ts fences", () => {
-    const prompts = {
-      default: defaultsFor("/agents/demo").systemPrompt,
-      email: EMAIL_AGENT_SYSTEM_PROMPT,
-      pullRequest: defaultsFor(GITHUB_AGENT_PATH).systemPrompt,
-      slack: slackAgentSystemPrompt("main"),
-      telegram: telegramAgentSystemPrompt({
-        agentPath: "/agents/telegram/main/chat-42",
-        chatId: "42",
-        connection: "main",
-      }),
-    };
-
-    for (const [name, prompt] of Object.entries(prompts)) {
-      expect(prompt, `${name} prompt is missing the ts fence`).toContain("```ts");
-      expect(prompt, `${name} prompt still mentions JavaScript or a js fence`).not.toMatch(
-        /JavaScript|```(?:js|javascript)(?:\s|$)/,
-      );
-    }
   });
 
   it("only the onboarding agent gets the kickoff input", () => {

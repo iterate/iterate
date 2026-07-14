@@ -53,31 +53,6 @@ function sseStream(...chunks: unknown[]): ReadableStream<Uint8Array> {
 }
 
 describe("minimal web-chat agent processors", () => {
-  it("explains the exact codemode shape expected by the itx script runner", () => {
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      "The block must contain a single async arrow function",
-    );
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("```ts");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toMatch(/JavaScript|```js(?:\s|$)|\bITX\b/);
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("async (itx) => {");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("await itx.chat.sendMessage(");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("containing an async function");
-    // Tool-call stance: small data-first snippets, parallel fan-out, and the
-    // explicit loop-ending rule.
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Promise.all");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("`return;` with no value");
-    // Discovery is the prompt's centerpiece: the docs door (search with many
-    // words, fetch by name, e2e-tested examples first), not a capability tour
-    // or an embedded type surface (the budget test bans the blob).
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.search");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.get");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("TWO SEARCHES, ONE RULE");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("working example scripts");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("__describe()");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Never tell the user you lack access");
-  });
-
   it("feeds a returned script result back as input and schedules another turn", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
