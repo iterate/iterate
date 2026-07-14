@@ -16,10 +16,10 @@ import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
 type RosterRow = {
   path: string;
-  busy: boolean;
+  state: "busy" | "blocked" | "idle";
   title: string;
   /** The expandable secondary line: what the agent is doing right now
-   * (shortStatus, while busy) or its standing note. */
+   * (while busy or blocked) or its standing note. */
   detail: string | undefined;
   lastActivityAt: string;
 };
@@ -47,15 +47,22 @@ function useAgentRoster(projectId: string): RosterRow[] {
     if (roster.value === undefined) return [];
     return Object.values(roster.value)
       .map((row): RosterRow => {
-        const busy = row.status.busy === true;
+        const state =
+          row.status.busy === true ? "busy" : row.status.blocked === true ? "blocked" : "idle";
+        const doing =
+          row.status.shortStatus ??
+          (state === "busy"
+            ? row.status.phase === "script"
+              ? "running a script"
+              : "making an LLM request"
+            : state === "blocked"
+              ? "waiting for input"
+              : undefined);
         return {
           path: row.path,
-          busy,
+          state,
           title: row.status.title ?? agentPathLabel(row.path),
-          detail:
-            busy && row.status.shortStatus !== undefined
-              ? `is ${row.status.shortStatus}…`
-              : row.status.note,
+          detail: state === "idle" ? row.status.note : `is ${doing}…`,
           lastActivityAt: row.updatedAt,
         };
       })
@@ -127,12 +134,14 @@ function AgentRosterMenuItem({ projectSlug, row }: { projectSlug: string; row: R
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex items-center gap-2">
             <Circle
-              aria-label={row.busy ? "busy" : "idle"}
+              aria-label={row.state}
               className={cn(
                 "size-2 shrink-0",
-                row.busy
+                row.state === "busy"
                   ? "animate-pulse fill-green-500 text-green-500"
-                  : "fill-muted-foreground/40 text-muted-foreground/40",
+                  : row.state === "blocked"
+                    ? "fill-amber-500 text-amber-500"
+                    : "fill-muted-foreground/40 text-muted-foreground/40",
               )}
             />
             <span className="min-w-0 flex-1 truncate">{row.title}</span>

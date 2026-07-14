@@ -122,11 +122,15 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // SEARCH THE PROJECT'S PAST (conversations/webhooks/files indexed):",
   '  const memory = await itx.search.query({ q: "what did we decide about deploys" });',
   "",
-  "  // TALK — and run slow work in parallel alongside (your parallel tool calling):",
-  "  const [, page] = await Promise.all([",
+  "  // TALK — set your title early (often alongside your first message), run slow work in parallel:",
+  "  const [, , page] = await Promise.all([",
+  '    itx.agent.setTitle("Workers digest"),',
   '    itx.chat.sendMessage("Reading the docs now..."),',
   '    itx.browser.quickAction("markdown", { url: "https://developers.cloudflare.com/workers/" }),',
   "  ]);",
+  '  // Surfaces complete "<you> is ..." from your status — keep it fresh; ending a turn',
+  "  // waiting on a human? add blocked: true.",
+  '  await itx.agent.setStatus({ shortStatus: "summarizing docs" });',
   "",
   "  // SEARCH THE WEB; read any public repo raw:",
   '  const found = await itx.mcp.exa.web_search_exa({ query: "capnweb promise pipelining", numResults: 5 });',
@@ -304,10 +308,11 @@ const LlmRequestResult = z.discriminatedUnion("status", [
   }),
 ]);
 
-/** One busy/idle flip in the fold: the new value plus which consumed event
+/** One busy/phase flip in the fold: the new value plus which consumed event
  * established it (see the `status` state field). */
 const AgentStatusChange = z.object({
   busy: z.boolean(),
+  phase: z.enum(["llm", "script"]).optional(),
   sinceOffset: z.number().int().nonnegative(),
   since: z.string(),
 });
@@ -320,7 +325,16 @@ const AgentStatusChange = z.object({
  */
 export const AgentStatusRecord = z.object({
   busy: z.boolean().optional(),
+  /** What the busy agent is doing right now, derived by the platform
+   * (deriveAgentPhase): an LLM request or a running script. Rides busy
+   * patches (same sinceOffset guard) and clears with idle. */
+  phase: z.enum(["llm", "script"]).optional(),
   sinceOffset: z.number().int().nonnegative().optional(),
+  /** Agent-authored: the agent ended its turn waiting on a human (an
+   * answer, an approval, a secret). The platform clears it on the next
+   * busy flip — the human responding IS the unblock; still waiting, the
+   * agent sets it again when it ends that turn. */
+  blocked: z.boolean().optional(),
   title: z.string().optional(),
   note: z.string().optional(),
   shortStatus: z.string().optional(),
@@ -348,10 +362,18 @@ export function mergeAgentStatusPatch(
   const next: AgentStatusRecord = {
     ...record,
     ...(busyAccepted ? { busy: patch.busy, sinceOffset: patch.sinceOffset } : {}),
+    ...(patch.blocked === undefined ? {} : { blocked: patch.blocked }),
     ...(patch.title === undefined ? {} : { title: patch.title }),
     ...(patch.note === undefined ? {} : { note: patch.note }),
     ...(patch.shortStatus === undefined ? {} : { shortStatus: patch.shortStatus }),
   };
+  // The phase belongs to the accepted busy value: an idle patch (or a busy
+  // patch without one) clears it rather than leaving a stale "running a
+  // script" against fresher busy truth.
+  if (busyAccepted) {
+    if (patch.phase === undefined) delete next.phase;
+    else next.phase = patch.phase;
+  }
   if (record !== undefined && agentStatusRecordsEqual(record, next)) return record;
   if (record === undefined && Object.keys(next).length === 0) return undefined;
   return next;
@@ -360,7 +382,9 @@ export function mergeAgentStatusPatch(
 function agentStatusRecordsEqual(a: AgentStatusRecord, b: AgentStatusRecord): boolean {
   return (
     a.busy === b.busy &&
+    a.phase === b.phase &&
     a.sinceOffset === b.sinceOffset &&
+    a.blocked === b.blocked &&
     a.title === b.title &&
     a.note === b.note &&
     a.shortStatus === b.shortStatus
@@ -376,6 +400,14 @@ function agentStatusRecordsEqual(a: AgentStatusRecord, b: AgentStatusRecord): bo
  * that re-queues the loop) — which is exactly what the idle announcement
  * debounce papers over.
  */
+/** What a busy agent is doing right now: a running script wins over the LLM
+ * lifecycle around it. Only meaningful while deriveAgentBusy is true. */
+export function deriveAgentPhase(
+  state: Pick<AgentProcessorState, "activeScriptExecutionIds">,
+): "llm" | "script" {
+  return state.activeScriptExecutionIds.length > 0 ? "script" : "llm";
+}
+
 export function deriveAgentBusy(
   state: Pick<
     AgentProcessorState,
@@ -927,9 +959,15 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         /** The derived busy flag; platform-patched, always paired with sinceOffset. */
         busy: z.boolean().optional(),
+        /** What the busy agent is doing (platform-derived): an LLM request or
+         * a running script. Rides busy patches; absent on idle. */
+        phase: z.enum(["llm", "script"]).optional(),
         /** Offset of the consumed event that established the busy value — the
          * announcement's generation guard. Present exactly when `busy` is. */
         sinceOffset: z.number().int().nonnegative().optional(),
+        /** The agent ended its turn waiting on a human. Agent-authored via
+         * setStatus; the platform patches it false on the next busy flip. */
+        blocked: z.boolean().optional(),
         /** Agent-authored display name for this agent/conversation. */
         title: z.string().optional(),
         /** Agent-authored one-or-two-sentence description of what this agent
@@ -942,8 +980,16 @@ export const AgentProcessorContract = defineProcessorContract({
       }),
       examples: [
         {
-          description: "A user message queued a turn; the agent is working.",
-          payload: { busy: true, sinceOffset: 57 },
+          description: "A user message queued a turn; the agent is making an LLM request.",
+          payload: { busy: true, phase: "llm", sinceOffset: 57 },
+        },
+        {
+          description: "The turn's response carried a script, now executing.",
+          payload: { busy: true, phase: "script", sinceOffset: 61 },
+        },
+        {
+          description: "The agent ended its turn waiting on the user (and said so in shortStatus).",
+          payload: { blocked: true, shortStatus: "waiting for your Acme API key" },
         },
         {
           description: "The agent set its title and described its current work mid-script.",

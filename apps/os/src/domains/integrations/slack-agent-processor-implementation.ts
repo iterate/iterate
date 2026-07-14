@@ -290,14 +290,17 @@ export class SlackAgentProcessor extends StreamProcessor<
 
     if (status?.busy) {
       if (!fresh) return;
-      // The agent's own words win: shortStatus completes "<agent> is …".
-      const text = status.shortStatus === undefined ? "thinking" : status.shortStatus;
+      // The agent's own words win; otherwise the platform-derived phase says
+      // what it is doing ("making an LLM request" / "running a script").
+      const text =
+        status.shortStatus ??
+        (status.phase === "script" ? "running a script" : "making an LLM request");
       args.blockProcessorWhile(async () => {
         await this.#callSlackApi("assistant.threads.setStatus", {
           channel_id: channel,
           thread_ts: threadTs,
           status: `is ${text}...`,
-          loading_messages: [text === "thinking" ? "Thinking..." : `${text}...`],
+          loading_messages: [`${text}...`],
         });
         this.#paintedBusyStatus = true;
       });
@@ -308,6 +311,30 @@ export class SlackAgentProcessor extends StreamProcessor<
     // clearing on it would strip the 👀 ack for a message the agent has not
     // even picked up yet.
     if (status?.busy !== false) return;
+    // A blocked turn ended WAITING on the human: say so instead of going
+    // quiet. The 👀 still comes off — the message was handled — and the
+    // next busy flip (the platform clears `blocked` in it) repaints.
+    if (status.blocked === true) {
+      if (!fresh && !this.#paintedBusyStatus) return;
+      const text = status.shortStatus ?? "waiting for input";
+      args.blockProcessorWhile(async () => {
+        await this.#callSlackApi("assistant.threads.setStatus", {
+          channel_id: channel,
+          thread_ts: threadTs,
+          status: `is ${text}...`,
+          loading_messages: [`${text}...`],
+        });
+        if (latestMessageTs != null) {
+          await this.#callSlackApi("reactions.remove", {
+            channel,
+            name: "eyes",
+            timestamp: latestMessageTs,
+          });
+        }
+        this.#paintedBusyStatus = true;
+      });
+      return;
+    }
     if (!fresh && !this.#paintedBusyStatus) return;
     args.blockProcessorWhile(async () => {
       await this.#clearStatus({

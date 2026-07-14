@@ -367,13 +367,23 @@ export interface Agent {
    * Update this agent's status record — the title, note, and shortStatus that
    * project surfaces (the agents list, the Slack thread status) show for it.
    * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag into the same record on its own. `shortStatus` completes
-   * the sentence "<agent> is …" (e.g. "comparing flight prices") and is shown
-   * verbatim while the agent works — update it as your work moves through
-   * phases. `note` is a one-or-two-sentence description of the agent or its
-   * current focus; `title` names the agent/conversation.
+   * busy/idle flag (and what you are doing — LLM request vs running script)
+   * into the same record on its own. `shortStatus` completes the sentence
+   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
+   * while the agent works — update it as your work moves through phases.
+   * `note` is a one-or-two-sentence description of the agent or its current
+   * focus; `title` names the agent/conversation; `blocked: true` marks a
+   * turn that ended waiting on a human.
    */
-  setStatus(input: { title?: string; note?: string; shortStatus?: string }): Promise<StreamEvent>;
+  setStatus(input: {
+    title?: string;
+    note?: string;
+    shortStatus?: string;
+    /** Set true when ending a turn to wait on a human (an answer, an
+     * approval, a secret) — surfaces show the agent as blocked instead of
+     * idle. The platform clears it when the next message wakes you. */
+    blocked?: boolean;
+  }): Promise<StreamEvent>;
   /** Name this agent/conversation — sugar for `setStatus({ title })`. */
   setTitle(title: string): Promise<StreamEvent>;
   /**
@@ -2094,11 +2104,15 @@ export type AgentProcessorState = {
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
   activeScriptExecutionIds: string[];
-  status?: { busy: boolean; sinceOffset: number; since: string } | undefined;
+  status?:
+    | { busy: boolean; phase?: "llm" | "script" | undefined; sinceOffset: number; since: string }
+    | undefined;
   announcedStatus?:
     | {
         busy?: boolean | undefined;
+        phase?: "llm" | "script" | undefined;
         sinceOffset?: number | undefined;
+        blocked?: boolean | undefined;
         title?: string | undefined;
         note?: string | undefined;
         shortStatus?: string | undefined;
@@ -2934,7 +2948,9 @@ export type LiveStatePatch =
 /** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */
 export type AgentStatusRecord = {
   busy?: boolean | undefined;
+  phase?: "llm" | "script" | undefined;
   sinceOffset?: number | undefined;
+  blocked?: boolean | undefined;
   title?: string | undefined;
   note?: string | undefined;
   shortStatus?: string | undefined;

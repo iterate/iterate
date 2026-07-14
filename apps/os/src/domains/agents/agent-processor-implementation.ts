@@ -29,6 +29,7 @@ import {
   DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   deriveAgentBusy,
+  deriveAgentPhase,
   mergeAgentStatusPatch,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
@@ -539,7 +540,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       args.append({
         type: "events.iterate.com/agent/status-changed",
         idempotencyKey: this.idempotencyKey(`status-changed@${flip.sinceOffset}`),
-        payload: { busy: flip.busy, sinceOffset: flip.sinceOffset },
+        payload: {
+          busy: flip.busy,
+          ...(flip.phase === undefined ? {} : { phase: flip.phase }),
+          sinceOffset: flip.sinceOffset,
+          // The human responding IS the unblock: new busy work clears an
+          // agent-authored blocked flag in the same patch. Still waiting,
+          // the agent sets it again when it ends that turn.
+          ...(flip.busy && announced?.blocked === true ? { blocked: false } : {}),
+        },
       });
     const debounceMs = this.deps.statusIdleDebounceMs ?? DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS;
     const delay = flip.busy ? 0 : Math.max(0, Date.parse(flip.since) + debounceMs - this.#now());
@@ -1006,14 +1015,19 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
   const state = reduceAgentEventCore(input);
   const busy = deriveAgentBusy(state);
+  const phase = busy ? deriveAgentPhase(state) : undefined;
   // Genesis idle is not a flip: `status` stays undefined until the agent is
-  // first busy, so a freshly born agent never announces anything.
-  const flipped = state.status === undefined ? busy : state.status.busy !== busy;
+  // first busy, so a freshly born agent never announces anything. A phase
+  // change while busy (LLM turn hands off to a script) IS a flip — surfaces
+  // show what the agent is doing, not just that it is.
+  const flipped =
+    state.status === undefined ? busy : state.status.busy !== busy || state.status.phase !== phase;
   if (!flipped) return state;
   return {
     ...state,
     status: {
       busy,
+      ...(phase === undefined ? {} : { phase }),
       sinceOffset: input.event.offset,
       since: input.event.createdAt,
     },

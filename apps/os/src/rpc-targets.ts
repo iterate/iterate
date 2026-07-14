@@ -4064,16 +4064,22 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * Update this agent's status record — the title, note, and shortStatus that
    * project surfaces (the agents list, the Slack thread status) show for it.
    * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag into the same record on its own. `shortStatus` completes
-   * the sentence "<agent> is …" (e.g. "comparing flight prices") and is shown
-   * verbatim while the agent works — update it as your work moves through
-   * phases. `note` is a one-or-two-sentence description of the agent or its
-   * current focus; `title` names the agent/conversation.
+   * busy/idle flag (and what you are doing — LLM request vs running script)
+   * into the same record on its own. `shortStatus` completes the sentence
+   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
+   * while the agent works — update it as your work moves through phases.
+   * `note` is a one-or-two-sentence description of the agent or its current
+   * focus; `title` names the agent/conversation; `blocked: true` marks a
+   * turn that ended waiting on a human.
    */
   async setStatus(input: {
     title?: string;
     note?: string;
     shortStatus?: string;
+    /** Set true when ending a turn to wait on a human (an answer, an
+     * approval, a secret) — surfaces show the agent as blocked instead of
+     * idle. The platform clears it when the next message wakes you. */
+    blocked?: boolean;
   }): Promise<StreamEvent> {
     // Whitespace-only values are dropped, not journaled: a patch of empty
     // strings would blank titles and notes on every surface.
@@ -4085,10 +4091,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       ...(field(input.title) === undefined ? {} : { title: field(input.title) }),
       ...(field(input.note) === undefined ? {} : { note: field(input.note) }),
       ...(field(input.shortStatus) === undefined ? {} : { shortStatus: field(input.shortStatus) }),
+      ...(input.blocked === undefined ? {} : { blocked: input.blocked }),
     };
     if (Object.keys(patch).length === 0) {
       throw new Error(
-        "agent.setStatus requires at least one non-empty field (title, note, shortStatus).",
+        "agent.setStatus requires at least one non-empty field (title, note, shortStatus, blocked).",
       );
     }
     const [event] = await this.stream.append({

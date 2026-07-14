@@ -796,8 +796,8 @@ describe("SlackAgentProcessor", () => {
         body: {
           channel_id: "C123",
           thread_ts: "111.222",
-          status: "is thinking...",
-          loading_messages: ["Thinking..."],
+          status: "is making an LLM request...",
+          loading_messages: ["making an LLM request..."],
         },
       },
     ]);
@@ -952,6 +952,64 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
+  it("paints the script phase and a blocked wait in the agent's own words", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, phase: "script", sinceOffset: 1 },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is running a script...",
+          loading_messages: ["running a script..."],
+        },
+      },
+    ]);
+
+    // The turn ends BLOCKED on the human: the status says so instead of
+    // clearing, and the 👀 comes off (the message was handled).
+    slackCalls.length = 0;
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { blocked: true, shortStatus: "waiting for your Acme API key" },
+      },
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 2 },
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is waiting for your Acme API key...",
+          loading_messages: ["waiting for your Acme API key..."],
+        },
+      },
+      {
+        method: "reactions.remove",
+        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
   it("an authored-only patch (busy never announced) paints the title but clears nothing", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
@@ -1012,8 +1070,8 @@ describe("SlackAgentProcessor", () => {
         body: {
           channel_id: "C123",
           thread_ts: "111.222",
-          status: "is thinking...",
-          loading_messages: ["Thinking..."],
+          status: "is making an LLM request...",
+          loading_messages: ["making an LLM request..."],
         },
       },
     ]);
