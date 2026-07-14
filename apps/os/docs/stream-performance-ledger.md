@@ -1156,3 +1156,101 @@ Together with the checkpoint and frame-shape results, this closes the current
 micro-optimization queue. The next work should return to profiles and target a
 larger statement, RPC, or lifecycle cost rather than another sub-millisecond
 allocation.
+
+## 2026-07-14: Third Cumulative Main Comparison
+
+### Revisions And Method
+
+- Candidate: `742ff34865f7cad6aec3ee6033e2419148f6463e`
+- Baseline: `2f25f617a9edc46406be6e4827405704d4b795ab`
+  (`origin/main`, fetched immediately before and after collection)
+- Five full rounds per revision in `M,C,C,M,M,C,C,M,M,C` order, restarting
+  between revisions so only one Workers stack was active at a time. One final
+  candidate stack failed to boot and produced no samples; its clean
+  replacement round on a fresh port is the recorded fifth candidate round.
+- Collection ended at `2026-07-14T01:54:37Z`. If this optimization run remains
+  active, the next cumulative comparison is due by `2026-07-14T05:54:37Z`.
+
+The branch-hosted harness again selected equivalent public operations across
+the two API generations. Every measured interval ran in Node around awaited
+RPC, consumed stream output, or host-observed delivery, and every round
+asserted the resulting durable state. No latency depends on a Worker isolate
+clock advancing while workerd has no network I/O in flight. Singleton append
+used 120 samples and the 100-event batch used 30; the other normal lanes kept
+their established sample counts.
+
+### Results
+
+Each value is the median of the five per-round statistics. Positive change
+means the candidate used less wall time.
+
+| Workload                                       |  Main p50 | Candidate p50 | P50 change |  Main p95 | Candidate p95 | P95 change |
+| ---------------------------------------------- | --------: | ------------: | ---------: | --------: | ------------: | ---------: |
+| Append one 1 KiB event, discard result         |  2.590 ms |      2.204 ms |      14.9% |  5.261 ms |      3.602 ms |      31.5% |
+| Append 100 tiny events in one call             |  8.162 ms |      5.193 ms |      36.4% | 12.191 ms |      9.087 ms |      25.5% |
+| Append 32 concurrent singleton calls           | 10.905 ms |      9.344 ms |      14.3% | 15.370 ms |     20.472 ms |     -33.2% |
+| Append one 256 KiB event, discard result       | 10.306 ms |      8.318 ms |      19.3% | 17.869 ms |     12.550 ms |      29.8% |
+| Retry one acknowledged 256 KiB event           |  3.458 ms |      2.322 ms |      32.9% |  5.005 ms |      3.217 ms |      35.7% |
+| Read a hot stream head                         |  0.608 ms |      0.490 ms |      19.4% |  0.853 ms |      0.622 ms |      27.1% |
+| Read 500 dense 4 KiB events                    | 14.534 ms |     12.918 ms |      11.1% | 22.430 ms |     19.350 ms |      13.7% |
+| Read 20 selected events from 2,000             |  0.800 ms |      0.733 ms |       8.5% |  2.312 ms |      2.010 ms |      13.1% |
+| Read latest selected event                     |  0.744 ms |      0.567 ms |      23.8% |  0.989 ms |      0.765 ms |      22.6% |
+| Replay 500 128-byte events into a subscription |  7.303 ms |      5.273 ms |      27.8% | 10.971 ms |      8.375 ms |      23.7% |
+| Append through delivery to one live subscriber |  1.324 ms |      1.067 ms |      19.4% |  3.880 ms |      3.411 ms |      12.1% |
+| Append through delivery to 25 live subscribers |  4.837 ms |      4.402 ms |       9.0% |  5.996 ms |      5.408 ms |       9.8% |
+| Dense one-event durable cross-post             |  3.866 ms |      3.052 ms |      21.1% |  6.414 ms |      4.901 ms |      23.6% |
+| Sparse durable cross-post, 1 of 100 events     |  5.752 ms |      4.432 ms |      23.0% | 10.163 ms |      8.661 ms |      14.8% |
+| Head read after forced reactivation            |  2.322 ms |      2.128 ms |       8.4% |  4.112 ms |      4.663 ms |     -13.4% |
+
+The equal-workload geometric mean is **19.7% lower p50**, **17.3% lower p95**,
+and **21.0% lower mean latency**. All 15 p50s improve by 8.4% to 36.4%, and
+all 15 means improve by at least 6.0%. Thirteen p95s improve by 9.8% to 35.7%.
+The concurrent-append p95 is genuinely noisy across candidate rounds
+(`11.710` to `42.344` ms) and its median regresses 33.2%; cold reactivation p95
+regresses 13.4%. Neither tail cost is hidden by the strong central result.
+
+Median-p50 capacity translates as follows:
+
+- 100-event append rises from 12.3k to 19.3k events/s, **+57.2%**.
+- 32 concurrent singleton appends rise from 2.9k to 3.4k calls/s, **+16.7%**.
+- 500-event replay rises from 68.5k to 94.8k events/s, **+38.5%**.
+- Sparse 1-of-100 cross-post input rises from 17.4k to 22.6k events/s,
+  **+29.8%**.
+
+This is a whole-branch comparison, not a sum of experiment percentages. It
+closely repeats the second comparison's 21.0% p50, 15.4% p95, and 22.8% mean
+result after another main merge and the sparse-read and 1 MiB-inline changes.
+The cumulative gain is therefore stable; the new retained work did not turn
+the branch into a benchmark-specific local maximum.
+
+### Cost And Collapse Assessment
+
+Before this entry, the branch-versus-main diff remained 99 files. Production
+was `+4,724/-1,386` lines (net `+3,338`), tests and e2e were
+`+7,303/-1,049` (net `+6,254`), generated APIs were `+150/-44`, and docs were
+`+1,233/-35`. Relative to the second exact comparison, production net growth
+is only 26 lines; most subsequent growth is benchmark coverage and the durable
+decision record. The four large stateful implementation files now total 3,970
+lines.
+
+The system still collapses operationally: one Stream Durable Object, one
+SQLite database, normal Workers RPC, no additional service, queue, timer,
+coordinator, or storage engine. The retained sparse query and larger inline
+threshold reuse existing schema and frame abstractions. Rejected checkpoint,
+parallel-frame, and text-bind prototypes left no production branches.
+
+It does not yet collapse elegantly at source level. Net 3.3k additional
+production lines and a 6.3k-line test delta encode retry identity, cursor
+epochs, delivery framing, sparse selection, checkpoint recovery, and compact
+RPC projections. Those mechanisms interact and should eventually be
+reorganized behind fewer explicit state transitions. A destructive redesign
+can remove migration and compatibility code, but deleting the mechanisms
+without preserving their crash/retry properties would trade measured speed
+for silent data loss or duplicate side effects.
+
+The pragmatic shipping unit remains the current SQLite design plus its
+executable constraints. Before production it still needs preview workload and
+failure/retry soak, plus explicit destructive rollout and rollback approval.
+The two p95 regressions should be included in that soak gate. Raw records are
+`/tmp/cumulative-3-{main,candidate}.log` and corresponding `-full.log` files
+for the life of this workstation.
