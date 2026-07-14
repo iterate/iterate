@@ -894,6 +894,10 @@ export class RepoDurableObject extends DurableObject<Env> {
         this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
       },
     });
+    // Reads are not serialized with writes: one can mint a token for the old
+    // Artifact while deletion is being polled. Discard that possible refill
+    // after recreation, immediately before this write obtains its token.
+    this.#artifactTokenPromise = undefined;
     await this.#pushGithubHistoryInProcess({
       branch,
       git,
