@@ -3,6 +3,7 @@ import {
   diffRepoTaskFiles,
   isRepoTaskMarkdownPath,
   repoArtifactPushFromEventPayload,
+  repoGithubPushFromWebhookPayload,
 } from "./repo-task-events.ts";
 
 describe("repo task change projection", () => {
@@ -50,6 +51,27 @@ describe("repo task change projection", () => {
           type: "cf.artifacts.repo.pushed",
           payload: { ref: "refs/tags/v1", before: "aaa", after: "bbb" },
         },
+      }),
+    ).toBeNull();
+  });
+
+  it("recognizes GitHub branch pushes without projecting commit facts", () => {
+    expect(
+      repoGithubPushFromWebhookPayload({
+        body: { ref: "refs/heads/main", after: "abc123" },
+        headers: { githubEvent: "push" },
+      }),
+    ).toEqual({ afterCommitOid: "abc123", branch: "main" });
+    expect(
+      repoGithubPushFromWebhookPayload({
+        body: { ref: "refs/heads/main", after: "abc123" },
+        headers: { githubEvent: "pull_request" },
+      }),
+    ).toBeNull();
+    expect(
+      repoGithubPushFromWebhookPayload({
+        body: { ref: "refs/heads/main", after: "0".repeat(40) },
+        headers: { githubEvent: "push" },
       }),
     ).toBeNull();
   });

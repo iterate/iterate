@@ -8,6 +8,7 @@ import {
   repoTaskAssignmentHeadPaths,
   queryRepoTaskBoard,
   repoTaskAgentPath,
+  repoTaskHeadingSelection,
   repoTaskHeadingTitle,
   repoTaskPathForTitle,
   repoTaskPathInDirectory,
@@ -147,6 +148,10 @@ test("derives bounded collision-safe filenames from the first heading", () => {
   expect(repoTaskHeadingTitle("---\nstate: todo\n---\n# A Better Name\n\nBody")).toBe(
     "A Better Name",
   );
+  const content = "---\nstate: todo\n---\n# New task\n\nBody";
+  const selection = repoTaskHeadingSelection(content);
+  expect(selection).toBeDefined();
+  expect(content.slice(selection?.start, selection?.end)).toBe("New task");
   expect(
     repoTaskPathForTitle(
       "apps/os/tasks/new-task.md",

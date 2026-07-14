@@ -59,6 +59,7 @@ import {
   isRepoTaskPath,
   parseRepoTask,
   queryRepoTaskBoard,
+  repoTaskHeadingSelection,
   repoTaskHeadingTitle,
   repoTaskCreationPaths,
   repoTaskPathForTitle,
@@ -129,20 +130,19 @@ export function RepoTasksView({
     folderPath: string;
     labels?: readonly string[];
   }>({ state: "todo", folderPath: "/" });
-  const headTaskPaths = useMemo(() => headPaths.filter(isRepoTaskPath), [headPaths]);
+  // All task file contents in ONE clone, keyed by path. The previous approach
+  // (list the whole tree, then a readFile per task) fanned N reads at the repo
+  // DO, and on any repo without the root workspace cache each readFile is its
+  // own full clone — N concurrent clones of a big repo overload the DO. This
+  // scales with the number of tasks, not the repo size. `headCommitOid` alone
+  // keys the cache: the task file set is fully determined by the commit.
   const headContents = useItxQuery({
-    key: ["repo-task-files", projectId, repoPath, headCommitOid, headTaskPaths.join("\n")],
-    query: async (itx) => {
-      const reads = await Promise.all(
-        headTaskPaths.map(async (path) => ({
-          path,
-          read: await itx.repos.get(repoPath).readFile({ path, encoding: "utf8" }),
-        })),
-      );
-      return Object.fromEntries(
-        reads.flatMap(({ path, read }) => (read === null ? [] : [[path, read.content]])),
-      );
-    },
+    key: ["repo-task-files", projectId, repoPath, headCommitOid],
+    query: (itx) =>
+      itx.repos
+        .get(repoPath)
+        .listTaskFiles()
+        .then((result) => result.files),
   });
 
   const tasks = useMemo(() => {
@@ -163,11 +163,18 @@ export function RepoTasksView({
   }, [changes, headContents]);
 
   const effectivePaths = useMemo(() => {
-    return repoTaskCreationPaths(
+    const paths = repoTaskCreationPaths(
       headPaths,
       [...changes].map(([path, change]) => [path, effectiveEntry(change)?.type] as const),
     );
-  }, [changes, headPaths]);
+    // Committed task cards come from `listTaskFiles` (headContents), which can
+    // observe a newer HEAD than `headPaths` (the repo-files listing). Reserve
+    // those committed task paths too, so create/rename collision checks never
+    // hand out a path that already holds a committed task the file listing has
+    // not caught up to.
+    for (const path of Object.keys(headContents)) paths.add(path);
+    return paths;
+  }, [changes, headPaths, headContents]);
 
   const columns = taskStateColumns(tasks);
   const selectedTask = tasks.find((task) => task.path === editorPath);
@@ -584,7 +591,7 @@ function TaskColumn({
       ref={ref}
       data-task-cell={dropId}
       className={cn(
-        "flex min-h-36 min-w-[calc(100vw-3.5rem)] flex-1 basis-72 snap-start flex-col pb-4 transition-colors sm:min-w-72",
+        "flex min-h-36 w-[calc(100vw-3.5rem)] flex-none snap-start flex-col pb-4 transition-colors sm:w-72",
         isDropTarget && "rounded-lg bg-accent/40",
       )}
     >
@@ -597,15 +604,6 @@ function TaskColumn({
         </header>
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
-        <Button
-          variant="ghost"
-          className="mb-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
-          title={`Add task to ${creationLabel}`}
-          aria-label={`Add task to ${creationLabel}`}
-          onClick={onCreate}
-        >
-          <PlusIcon data-icon="inline-start" />
-        </Button>
         <div className="flex flex-col gap-2">
           {tasks.map((task) => (
             <TaskCard
@@ -617,6 +615,15 @@ function TaskColumn({
             />
           ))}
         </div>
+        <Button
+          variant="ghost"
+          className="mt-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
+          title={`Add task to ${creationLabel}`}
+          aria-label={`Add task to ${creationLabel}`}
+          onClick={onCreate}
+        >
+          <PlusIcon data-icon="inline-start" />
+        </Button>
       </div>
     </section>
   );
@@ -740,25 +747,32 @@ function TaskEditorSheet({
   const [pathWasEdited, setPathWasEdited] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [assignedAgent, setAssignedAgent] = useState<string | undefined>();
+  const editorSessionOpenRef = useRef(false);
   const taskPath = task?.path;
   const visibleAgent = task?.agent ?? assignedAgent;
 
   useEffect(() => {
     if (taskPath === undefined) {
+      editorSessionOpenRef.current = false;
       setPathWasEdited(false);
       return;
     }
     setPathValue(`/${taskPath}`);
+    if (editorSessionOpenRef.current) return;
+    editorSessionOpenRef.current = true;
     setPathWasEdited(false);
     const focusEditor = () => {
       const editor = editorRef.current;
       if (editor === null) return;
       editor.focus();
-      editor.setSelectionRange(editor.value.length, editor.value.length);
+      const titleSelection = isNew ? repoTaskHeadingSelection(editor.value) : undefined;
+      const start = titleSelection?.start ?? editor.value.length;
+      const end = titleSelection?.end ?? editor.value.length;
+      editor.setSelectionRange(start, end);
     };
     const timeout = window.setTimeout(focusEditor, 250);
     return () => window.clearTimeout(timeout);
-  }, [taskPath]);
+  }, [isNew, taskPath]);
 
   useEffect(() => {
     setAssignedAgent(undefined);

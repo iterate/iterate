@@ -45,7 +45,9 @@ baseTest("every catalogue example is either matrix-tested or explicitly excluded
   for (const id of Object.keys(EXAMPLE_CASES)) {
     const example = ITX_EXAMPLES.find((candidate) => candidate.id === id);
     expect(example, `example-cases.ts references missing example "${id}"`).toBeDefined();
-    expect(example!.context, `cased example "${id}" must be project-context`).toBe("project");
+    expect(example!, `cased example "${id}" must be project-context`).toMatchObject({
+      context: "project",
+    });
     expect(
       example!.runtimes.includes("browser"),
       `cased example "${id}" must be browser-runnable (specs/repl-examples.spec.ts)`,

@@ -889,7 +889,7 @@ async function requestRepoCreate(input: {
 class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing) and cross-posts GitHub webhooks about it onto this repo's stream; the repo processor state shows the link and last push outcome.`,
+      instructions: `A git repo (over Cloudflare Artifacts) at path "${this.props.path}": readFile/listFiles/commitFiles/edit, plus create() for first use. For coding-agent file changes that do not need a sandbox, readFile then edit is the default targeted workflow; use commitFiles for new files or batch/full-file writes. Optionally GitHub-backed: linkGithub({ connection, owner, repo }) mirrors every commit to a real GitHub repository (created private if missing), imports fast-forward default-branch pushes from GitHub, and cross-posts GitHub webhooks onto this repo's stream; the repo processor state shows the link and last push outcome.`,
       children: {
         commitDetails:
           "One commit's metadata plus its changed files with +/- line counts, diffed against its first parent ({ commitOid }).",
@@ -899,8 +899,10 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
         kill: "Restart the repo's server-side object; the next request boots it fresh.",
         linkGithub:
-          "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, webhooks cross-post in.",
+          "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, fast-forward default-branch pushes import in, and webhooks cross-post in.",
         listFiles: "List file paths.",
+        listTaskFiles:
+          "Every task markdown file's contents at HEAD ({ commitOid, files }) in one read — the task board's bulk load, cheaper than listFiles + a readFile per task.",
         log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
@@ -909,7 +911,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         resetFromGithub:
           "Destructively replace the Artifacts repo with the linked GitHub branch ({ depth? }); GitHub always wins and big repositories require a shallow depth.",
         syncFromGithub:
-          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } prunes to the newest N commits — required for big repositories, GitHub keeps full history).",
+          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } requests a bounded history window, while fast-forwards always retain the prior Artifacts head for queue diffs).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
@@ -976,6 +978,16 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   }
 
   /**
+   * Every task markdown file's contents at HEAD, keyed by path, in a single
+   * clone — the task board's bulk load. Cheaper than `listFiles()` plus a
+   * `readFile()` per task: the task include mask is applied before contents
+   * are read, so cost scales with the number of tasks, not the repo size.
+   */
+  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }> {
+    return this.#durableObjectStub.listTaskFiles();
+  }
+
+  /**
    * Commit history of a branch, newest first — oid, message, author,
    * timestamp (epoch ms), parent oids. Deliberately without per-commit file
    * stats (those cost tree checkouts per commit); fetch them lazily per
@@ -1011,10 +1023,12 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    * Back this repo with a real GitHub repository through a named GitHub
    * connection. From then on every default-branch commit is mirrored to
    * GitHub best-effort (failures journal on the repo stream and self-heal on
-   * the next commit), and every GitHub webhook about that repository is
-   * cross-posted onto this repo's stream. If the GitHub repository does not
-   * exist and the installation can create org repositories, it is created
-   * private. Re-linking replaces the previous link.
+   * the next commit), fast-forward default-branch pushes made on GitHub are
+   * imported through the Cloudflare Artifacts queue, and every GitHub webhook
+   * about that repository is cross-posted onto this repo's stream. If the
+   * GitHub repository does not exist and the installation can create org
+   * repositories, it is created private. Re-linking replaces the previous
+   * link.
    */
   linkGithub(input: {
     connection: string;
@@ -1053,9 +1067,10 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
    *
-   * The history transfers in-process, so big histories need `depth` — it
-   * prunes to the newest N commits. GitHub retains the full history, and a
-   * later deeper sync can always widen the window.
+   * The history transfers in-process. `depth` requests a bounded history
+   * window, but fast-forward syncs always retain the previous Artifacts head
+   * as well so queue-derived task diffs can read both sides. GitHub retains
+   * the full history, and a later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#durableObjectStub.syncFromGithub(input);

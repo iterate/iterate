@@ -33,78 +33,6 @@ const ADMIN_EMAIL = process.env.E2E_AUTH_ADMIN_EMAIL?.trim() || "admin@nustom.co
 const REDIRECT_URI = "https://iterate-mcp-e2e.example.com/callback";
 const SCOPE = "openid profile email offline_access project";
 
-function authOriginFrom(osBaseUrl: URL) {
-  const issuer = process.env.APP_CONFIG_ITERATE_AUTH__ISSUER?.trim();
-  if (issuer) return new URL(issuer).origin;
-
-  const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(osBaseUrl.hostname);
-  if (previewMatch) return `https://auth.iterate-preview-${previewMatch[1]}.com`;
-  if (osBaseUrl.hostname === "os.iterate.com") return "https://auth.iterate.com";
-  throw new Error(
-    `Cannot derive auth origin from ${osBaseUrl}. Set APP_CONFIG_ITERATE_AUTH__ISSUER.`,
-  );
-}
-
-function mcpOriginFrom(osBaseUrl: URL) {
-  const configured = process.env.APP_CONFIG_MCP__BASE_URL?.trim();
-  if (configured) return configured.replace(/\/+$/, "");
-
-  const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(osBaseUrl.hostname);
-  if (previewMatch) return `https://mcp.iterate-preview-${previewMatch[1]}.com`;
-  if (osBaseUrl.hostname === "os.iterate.com") return "https://mcp.iterate.com";
-  throw new Error(`Cannot derive MCP origin from ${osBaseUrl}. Set APP_CONFIG_MCP__BASE_URL.`);
-}
-
-const b64url = (buf: Buffer) =>
-  buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-
-// A minimal cookie jar + oRPC/better-auth helpers scoped to one auth origin.
-function authClient(authOrigin: string) {
-  const api = `${authOrigin}/api/auth`;
-  const jar = new Map<string, string>();
-
-  function store(res: Response) {
-    for (const cookie of res.headers.getSetCookie?.() ?? []) {
-      const [pair] = cookie.split(";");
-      const idx = pair.indexOf("=");
-      if (idx > 0) jar.set(pair.slice(0, idx), pair.slice(idx + 1));
-    }
-  }
-
-  async function call(url: string, init: RequestInit = {}) {
-    const headers: Record<string, string> = { origin: authOrigin, ...(init.headers as object) };
-    if (jar.size) headers.cookie = [...jar].map(([k, v]) => `${k}=${v}`).join("; ");
-    const res = await fetch(url, { ...init, headers, redirect: "manual" });
-    store(res);
-    return res;
-  }
-
-  // oRPC RPC protocol wraps input/output as { json: ... }.
-  async function orpc<T = unknown>(procedure: string, input: unknown): Promise<T> {
-    const res = await call(`${authOrigin}/api/orpc/${procedure}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ json: input }),
-    });
-    const body = (await res.json().catch(() => null)) as { json?: T } | null;
-    if (res.status !== 200) {
-      throw new Error(`orpc ${procedure} failed: ${res.status} ${JSON.stringify(body)}`);
-    }
-    return (body?.json ?? body) as T;
-  }
-
-  // better-auth returns OAuth redirects in a JSON body ({ url } / { redirect_uri }).
-  const readRedirect = async (res: Response) => {
-    const body = (await res.json().catch(() => null)) as {
-      url?: string;
-      redirect_uri?: string;
-    } | null;
-    return body?.url ?? body?.redirect_uri ?? res.headers.get("location") ?? null;
-  };
-
-  return { api, call, orpc, readRedirect };
-}
-
 test("project MCP OAuth opaque-token flow", async () => {
   const password = process.env.APP_CONFIG_SERVICE_AUTH_TOKEN?.trim() || null;
   if (!password) {
@@ -125,7 +53,7 @@ test("project MCP OAuth opaque-token flow", async () => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: ADMIN_EMAIL, password }),
   });
-  expect(signIn.status, "bootstrap admin sign-in").toBe(200);
+  expect(signIn, "bootstrap admin sign-in").toMatchObject({ status: 200 });
 
   // 2. Ensure an organization + a fresh project to grant the client.
   const orgs = await c.orpc<Array<{ slug: string }>>("user/myOrganizations", {});
@@ -236,7 +164,7 @@ test("project MCP OAuth opaque-token flow", async () => {
     }).toString(),
   });
   const token = (await tokenRes.json()) as { access_token: string; token_type: string };
-  expect(tokenRes.status, "token exchange").toBe(200);
+  expect(tokenRes, "token exchange").toMatchObject({ status: 200 });
   // Lock in that we are exercising the OPAQUE path (the bug was here), not the
   // JWT path: a JWT would be three dot-separated segments.
   expect(token.access_token.split(".").length, "token is opaque, not a JWT").toBe(1);
@@ -270,11 +198,11 @@ test("project MCP OAuth opaque-token flow", async () => {
       clientInfo: { name: "mcp-oauth-e2e", version: "1.0" },
     },
   });
-  expect(init.status, "MCP initialize with opaque bearer").toBe(200);
+  expect(init, "MCP initialize with opaque bearer").toMatchObject({ status: 200 });
   expect(init.parsed.result?.serverInfo?.name).toBe("os");
 
   const tools = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-  expect(tools.status, "MCP tools/list").toBe(200);
+  expect(tools, "MCP tools/list").toMatchObject({ status: 200 });
   const toolNames = tools.parsed.result?.tools?.map((tool) => tool.name) ?? [];
   expect(toolNames, "opaque token grants the project MCP tool surface").toContain(
     "exec_typescript",
@@ -282,7 +210,7 @@ test("project MCP OAuth opaque-token flow", async () => {
   expect(toolNames, "assistant tool is hidden by default").not.toContain("ask_assistant");
 
   const agentTools = await mcp({ jsonrpc: "2.0", id: 3, method: "tools/list" }, "?withAgent=true");
-  expect(agentTools.status, "MCP tools/list with agent opt-in").toBe(200);
+  expect(agentTools, "MCP tools/list with agent opt-in").toMatchObject({ status: 200 });
   const agentToolNames = agentTools.parsed.result?.tools?.map((tool) => tool.name) ?? [];
   expect(agentToolNames, "agent opt-in keeps exec_typescript").toContain("exec_typescript");
   expect(agentToolNames, "agent opt-in exposes assistant tool").toContain("ask_assistant");
@@ -291,3 +219,75 @@ test("project MCP OAuth opaque-token flow", async () => {
     `MCP OAuth e2e passed for ${osBaseUrl.toString()} (opaque token → tools: ${toolNames.join(", ")})`,
   );
 });
+
+function authOriginFrom(osBaseUrl: URL) {
+  const issuer = process.env.APP_CONFIG_ITERATE_AUTH__ISSUER?.trim();
+  if (issuer) return new URL(issuer).origin;
+
+  const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(osBaseUrl.hostname);
+  if (previewMatch) return `https://auth.iterate-preview-${previewMatch[1]}.com`;
+  if (osBaseUrl.hostname === "os.iterate.com") return "https://auth.iterate.com";
+  throw new Error(
+    `Cannot derive auth origin from ${osBaseUrl}. Set APP_CONFIG_ITERATE_AUTH__ISSUER.`,
+  );
+}
+
+function mcpOriginFrom(osBaseUrl: URL) {
+  const configured = process.env.APP_CONFIG_MCP__BASE_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+
+  const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(osBaseUrl.hostname);
+  if (previewMatch) return `https://mcp.iterate-preview-${previewMatch[1]}.com`;
+  if (osBaseUrl.hostname === "os.iterate.com") return "https://mcp.iterate.com";
+  throw new Error(`Cannot derive MCP origin from ${osBaseUrl}. Set APP_CONFIG_MCP__BASE_URL.`);
+}
+
+const b64url = (buf: Buffer) =>
+  buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+// A minimal cookie jar + oRPC/better-auth helpers scoped to one auth origin.
+function authClient(authOrigin: string) {
+  const api = `${authOrigin}/api/auth`;
+  const jar = new Map<string, string>();
+
+  function store(res: Response) {
+    for (const cookie of res.headers.getSetCookie?.() ?? []) {
+      const [pair] = cookie.split(";");
+      const idx = pair.indexOf("=");
+      if (idx > 0) jar.set(pair.slice(0, idx), pair.slice(idx + 1));
+    }
+  }
+
+  async function call(url: string, init: RequestInit = {}) {
+    const headers: Record<string, string> = { origin: authOrigin, ...(init.headers as object) };
+    if (jar.size) headers.cookie = [...jar].map(([k, v]) => `${k}=${v}`).join("; ");
+    const res = await fetch(url, { ...init, headers, redirect: "manual" });
+    store(res);
+    return res;
+  }
+
+  // oRPC RPC protocol wraps input/output as { json: ... }.
+  async function orpc<T = unknown>(procedure: string, input: unknown): Promise<T> {
+    const res = await call(`${authOrigin}/api/orpc/${procedure}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ json: input }),
+    });
+    const body = (await res.json().catch(() => null)) as { json?: T } | null;
+    if (res.status !== 200) {
+      throw new Error(`orpc ${procedure} failed: ${res.status} ${JSON.stringify(body)}`);
+    }
+    return (body?.json ?? body) as T;
+  }
+
+  // better-auth returns OAuth redirects in a JSON body ({ url } / { redirect_uri }).
+  const readRedirect = async (res: Response) => {
+    const body = (await res.json().catch(() => null)) as {
+      url?: string;
+      redirect_uri?: string;
+    } | null;
+    return body?.url ?? body?.redirect_uri ?? res.headers.get("location") ?? null;
+  };
+
+  return { api, call, orpc, readRedirect };
+}

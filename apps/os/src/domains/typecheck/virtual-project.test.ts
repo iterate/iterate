@@ -32,6 +32,7 @@ beforeAll(async () => {
         compiler: compiler as CompileFn,
         fetchImpl: fakeRegistryFetch,
         files: input.files,
+        entrypoint: input.entrypoint,
       }),
   };
 });
@@ -491,7 +492,7 @@ test("execution gate: a near-miss typo on a typed mount blocks; anything else on
   const untyped = await gate("async (itx) => itx.legacy.whatever(1, { deep: true })", [
     { path: ["legacy"], type: "live" },
   ]);
-  expect(untyped).toEqual({ verdict: "clean" });
+  expect(untyped).toMatchObject({ verdict: "clean" });
 });
 
 test("execution gate: only NEAR-MISS proof blocks — bare mismatches are unprovable and run", async () => {
@@ -508,7 +509,7 @@ test("execution gate: only NEAR-MISS proof blocks — bare mismatches are unprov
     "async (itx) => itx.tools.weather.forecast({ city: 42 })",
   ]) {
     const checked = await gate(code, [WEATHER_MOUNT]);
-    expect(checked, code).toEqual({ verdict: "clean" });
+    expect(checked, code).toMatchObject({ verdict: "clean" });
   }
 });
 
@@ -525,7 +526,31 @@ test("execution gate: provide-then-use in one script stays green (dynamic mounts
       return await itx.demoStream.getEvents({ afterOffset: 0, limit: 10 });
     }`,
   );
-  expect(checked).toEqual({ verdict: "clean" });
+  expect(checked).toMatchObject({ verdict: "clean" });
+});
+
+test("execution gate: clean TypeScript scripts come back with runnable emitted JavaScript", async () => {
+  // The 2026-07-14 pirate-thread script: valid TypeScript that used to crash
+  // the plain-JS runtime. The gate's compile now doubles as the emitter —
+  // what runs is the compiler's own type-stripped output.
+  const checked = await gate(
+    `async (itx) => {\n  const hits = [1, 2].map((r: any, i: number) => ({ r, i }));\n  return hits as any;\n}`,
+  );
+  expect(checked.verdict).toBe("clean");
+  const emitted = (checked as { emittedJs?: string }).emittedJs ?? "";
+  expect(emitted).toContain("export default script");
+  expect(emitted).not.toContain(": any");
+  expect(emitted).not.toContain(": number");
+  expect(emitted).not.toContain(" as any");
+
+  // Emit is resilient to errors ELSEWHERE in the program: a broken mount
+  // declaration still yields the script's own emitted module, so a rotten
+  // journal entry can't push execution onto the raw-code fallback.
+  const withBrokenMount = await gate("async (itx) => 1", [
+    { path: ["stale"], type: "live", types: "export type Stale = Goone;" },
+  ]);
+  expect(withBrokenMount).toMatchObject({ verdict: "clean" });
+  expect((withBrokenMount as { emittedJs?: string }).emittedJs).toContain("export default script");
 });
 
 test("execution gate: a stale BROKEN mount never vetoes a script that doesn't deserve it", async () => {
@@ -533,7 +558,7 @@ test("execution gate: a stale BROKEN mount never vetoes a script that doesn't de
     { path: ["stale"], type: "live", types: "export type Stale = Goone;" },
   ];
   // A clean script in a scope with a rotten journaled declaration runs.
-  expect(await gate("async (itx) => itx.stale.anything()", staleMount)).toEqual({
+  expect(await gate("async (itx) => itx.stale.anything()", staleMount)).toMatchObject({
     verdict: "clean",
   });
   // …but the script's OWN provable errors still block in the same scope.
@@ -547,7 +572,7 @@ test("execution gate: unresolved modules never block (acquisition failure ≠ pr
   const checked = await gate('async (itx) => { const m = await import("fake-gone"); return m; }', [
     { path: ["gone"], type: "itx-expression", types: 'export type G = import("fake-gone").X;' },
   ]);
-  expect(checked).toEqual({ verdict: "clean" });
+  expect(checked).toMatchObject({ verdict: "clean" });
 });
 
 test("execution gate: shapes the checker doesn't model run unchecked (raw runScript callers)", async () => {
@@ -656,7 +681,7 @@ test("execution gate: runtime idioms that execute fine stay green", async () => 
   ];
   for (const code of scripts) {
     const checked = await gate(code);
-    expect(checked, code.slice(0, 60)).toEqual({ verdict: "clean" });
+    expect(checked, code.slice(0, 60)).toMatchObject({ verdict: "clean" });
   }
 });
 
@@ -685,11 +710,11 @@ test("execution gate regression: ES2024+ runtime features are not blocked as syn
   // ("only available when targeting es2024 or later") — a 1xxx code the gate
   // blocked as if it were a parse error. matching the runtime target fixes it.
   const vFlag = await gate("async (itx) => { const re = /[\\p{L}]/v; return re.test('x'); }");
-  expect(vFlag).toEqual({ verdict: "clean" });
+  expect(vFlag).toMatchObject({ verdict: "clean" });
   // A sibling target-availability feature: top-level-style await already inside
   // the async body is fine; `using` (ES2026 explicit resource management) too.
   const using = await gate("async (itx) => { using d = { [Symbol.dispose]() {} }; void d; }");
-  expect(using).toEqual({ verdict: "clean" });
+  expect(using).toMatchObject({ verdict: "clean" });
 });
 
 test("execution gate regression: near-miss on the runtime-extensible itx root does NOT block", async () => {
@@ -700,13 +725,13 @@ test("execution gate regression: near-miss on the runtime-extensible itx root do
     await itx.capabilityHost.provideCapability({ type: "itx-expression", path: ["agentz"], expression: ["streams", ["get", "/"]] });
     return typeof itx.agentz;
   }`);
-  expect(provideThenUse).toEqual({ verdict: "clean" });
+  expect(provideThenUse).toMatchObject({ verdict: "clean" });
 
   // A bare root-member typo (`itx.strems`) reads identically to a dynamic
   // provide — indistinguishable statically — so it too must run (the price of
   // a runtime-extensible root; sub-member typos below stay caught).
   const rootTypo = await gate("async (itx) => itx.strems.get('/')");
-  expect(rootTypo).toEqual({ verdict: "clean" });
+  expect(rootTypo).toMatchObject({ verdict: "clean" });
 
   // The refinement must NOT weaken the flagship catches: near-miss on a
   // CONCRETE sub-surface is still provable and still blocks.

@@ -18,12 +18,17 @@ export type TypecheckDiagnostic = import("tswasm").Diagnostic;
 export interface TypecheckResult {
   diagnostics: TypecheckDiagnostic[];
   notes: string[];
+  /** Emitted JavaScript for the request's `entrypoint`, when one was named.
+   * Check and emit are ONE wasm compile — asking for js costs nothing. */
+  js?: string;
 }
 
 /** The slice of a tswasm `Compiler` this module needs. */
 export interface CompileFn {
-  compile(request: { files: Record<string, string> }): {
+  compile(request: { files: Record<string, string>; entrypoint?: string }): {
     diagnostics: TypecheckDiagnostic[];
+    /** Emitted JavaScript for `entrypoint`, when one was named. */
+    js?: string;
   };
 }
 
@@ -62,6 +67,8 @@ export async function runTypecheck(input: {
   compiler: CompileFn;
   fetchImpl: (url: string) => Promise<Response>;
   files: Record<string, string>;
+  /** Virtual path whose emitted JavaScript should come back as result.js. */
+  entrypoint?: string;
 }): Promise<TypecheckResult> {
   const files = { ...input.files };
   const notes: string[] = [];
@@ -107,7 +114,8 @@ export async function runTypecheck(input: {
   notes.push(...openApi.notes);
   if (openApi.moduleText !== "") files["openapi-modules.d.ts"] = openApi.moduleText;
   try {
-    return { diagnostics: input.compiler.compile({ files }).diagnostics, notes };
+    const compiled = input.compiler.compile({ files, entrypoint: input.entrypoint });
+    return { diagnostics: compiled.diagnostics, js: compiled.js, notes };
   } catch (error) {
     return {
       diagnostics: [

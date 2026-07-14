@@ -1,6 +1,65 @@
 import { test } from "vitest";
 import { createAdminOsItx, requireBaseUrl as requireOsBaseUrl } from "../test-support/os-client.ts";
 
+test("OS preview smoke", async () => {
+  const baseUrl = new URL(requireOsBaseUrl());
+
+  // Keep the dashboard checks unauthenticated, then use the admin preview hook to
+  // seed one deterministic project before checking the canonical MCP endpoint.
+  // That makes the preview proof
+  // repeatable without relying on a human Clerk session.
+  await expectStatus({
+    url: new URL("/api/health", baseUrl),
+    status: 200,
+  });
+
+  const rootResponse = await expectStatus({
+    url: new URL("/", baseUrl),
+    status: 307,
+  });
+  const rootLocation = rootResponse.headers.get("location") ?? "";
+  if (!rootLocation.startsWith("/sign-in?redirect_url=")) {
+    throw new Error(`Expected unauthenticated root to redirect to sign-in; got ${rootLocation}.`);
+  }
+
+  const projectMcpUrl =
+    hasAdminApiSecret() && canDeriveProjectMcpUrl({ baseUrl })
+      ? await seedProjectMcpUrl({ baseUrl })
+      : null;
+
+  if (!projectMcpUrl) {
+    console.log(`OS preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);
+    return;
+  }
+
+  const projectMcpResponse = await expectStatus({
+    url: projectMcpUrl,
+    status: 401,
+  });
+  const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
+  const metadataUrl = new URL(
+    ".well-known/oauth-protected-resource",
+    `${projectMcpUrl.toString().replace(/\/+$/, "")}/`,
+  );
+  if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
+    throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
+  }
+
+  const metadataResponse = await expectStatus({
+    url: metadataUrl,
+    status: 200,
+  });
+  const metadata = (await metadataResponse.json()) as { resource?: string };
+  const expectedResource = projectMcpUrl.toString().replace(/\/+$/, "");
+  if (metadata.resource !== expectedResource) {
+    throw new Error(
+      `Expected MCP metadata resource ${expectedResource}; got ${metadata.resource}.`,
+    );
+  }
+
+  console.log(`OS preview smoke passed for ${baseUrl.toString()}`);
+});
+
 /**
  * Seeding goes through the admin itx handle, authenticated with
  * `APP_CONFIG_ADMIN_API_SECRET` (the Doppler-provided deployment secret).
@@ -105,62 +164,3 @@ async function seedProjectMcpUrl(input: { baseUrl: URL }) {
   await seedProject(input);
   return projectMcpUrlFor({ baseUrl: input.baseUrl });
 }
-
-test("OS preview smoke", async () => {
-  const baseUrl = new URL(requireOsBaseUrl());
-
-  // Keep the dashboard checks unauthenticated, then use the admin preview hook to
-  // seed one deterministic project before checking the canonical MCP endpoint.
-  // That makes the preview proof
-  // repeatable without relying on a human Clerk session.
-  await expectStatus({
-    url: new URL("/api/health", baseUrl),
-    status: 200,
-  });
-
-  const rootResponse = await expectStatus({
-    url: new URL("/", baseUrl),
-    status: 307,
-  });
-  const rootLocation = rootResponse.headers.get("location") ?? "";
-  if (!rootLocation.startsWith("/sign-in?redirect_url=")) {
-    throw new Error(`Expected unauthenticated root to redirect to sign-in; got ${rootLocation}.`);
-  }
-
-  const projectMcpUrl =
-    hasAdminApiSecret() && canDeriveProjectMcpUrl({ baseUrl })
-      ? await seedProjectMcpUrl({ baseUrl })
-      : null;
-
-  if (!projectMcpUrl) {
-    console.log(`OS preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);
-    return;
-  }
-
-  const projectMcpResponse = await expectStatus({
-    url: projectMcpUrl,
-    status: 401,
-  });
-  const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
-  const metadataUrl = new URL(
-    ".well-known/oauth-protected-resource",
-    `${projectMcpUrl.toString().replace(/\/+$/, "")}/`,
-  );
-  if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
-    throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
-  }
-
-  const metadataResponse = await expectStatus({
-    url: metadataUrl,
-    status: 200,
-  });
-  const metadata = (await metadataResponse.json()) as { resource?: string };
-  const expectedResource = projectMcpUrl.toString().replace(/\/+$/, "");
-  if (metadata.resource !== expectedResource) {
-    throw new Error(
-      `Expected MCP metadata resource ${expectedResource}; got ${metadata.resource}.`,
-    );
-  }
-
-  console.log(`OS preview smoke passed for ${baseUrl.toString()}`);
-});

@@ -1,8 +1,27 @@
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const LLM_REQUEST_COMPLETED_TYPE = "events.iterate.com/agent/llm-request-completed";
 const WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
+
+test("a second project's onboarding turn replays the first one's answer from the AI Gateway cache", async () => {
+  const marker = crypto.randomUUID().slice(0, 8);
+
+  // First turn seeds the cache (HIT if an earlier run already did).
+  const first = await runOnboardingBirthTurn(`aig-cache-a-${marker}`);
+  // This env runs the BYOK lane with the response cache on (envs.ts /
+  // local-dev vars); evidence missing means the lane regressed.
+  expect(first.cacheStatus).toMatch(/^(HIT|MISS)$/);
+
+  // The second project differs ONLY in minted identity (project id, agent
+  // path) — exactly what cloudflareAiGatewayResponseCacheKey masks — so its
+  // birth turn must replay the first one's response without touching OpenAI.
+  const second = await runOnboardingBirthTurn(`aig-cache-b-${marker}`);
+  expect(second).toMatchObject({ cacheStatus: "HIT" });
+
+  // A replay is byte-identical: same greeting, deterministic e2e for free.
+  expect(second).toMatchObject({ greeting: first.greeting });
+}, 300_000);
 
 type LlmCompletionEvidence = {
   cacheStatus: string | undefined;
@@ -42,24 +61,3 @@ async function runOnboardingBirthTurn(slug: string): Promise<LlmCompletionEviden
     greeting: String((greeting.payload as { message?: unknown } | undefined)?.message ?? ""),
   };
 }
-
-describe("cloudflare AI Gateway response cache", () => {
-  test("a second project's onboarding turn replays the first one's answer from cache", async () => {
-    const marker = crypto.randomUUID().slice(0, 8);
-
-    // First turn seeds the cache (HIT if an earlier run already did).
-    const first = await runOnboardingBirthTurn(`aig-cache-a-${marker}`);
-    // This env runs the BYOK lane with the response cache on (envs.ts /
-    // local-dev vars); evidence missing means the lane regressed.
-    expect(first.cacheStatus).toMatch(/^(HIT|MISS)$/);
-
-    // The second project differs ONLY in minted identity (project id, agent
-    // path) — exactly what cloudflareAiGatewayResponseCacheKey masks — so its
-    // birth turn must replay the first one's response without touching OpenAI.
-    const second = await runOnboardingBirthTurn(`aig-cache-b-${marker}`);
-    expect(second.cacheStatus).toBe("HIT");
-
-    // A replay is byte-identical: same greeting, deterministic e2e for free.
-    expect(second.greeting).toBe(first.greeting);
-  }, 300_000);
-});

@@ -30,9 +30,13 @@ test("flags a package.json schema violation with a red squiggle", async ({
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   await page.locator('[data-item-path="package.json"]').click();
-  await expect(page.locator(".cm-content")).toContainText('"name": 123');
+  await page.locator(".cm-content").filter({ hasText: '"name": 123' }).waitFor();
 
-  // Once the schema loads, the invalid value gets the lint squiggle. Allow
-  // generous time for the one-off schemastore fetch.
+  // Once the schema loads, the invalid value gets the lint squiggle. The
+  // schemastore fetch + lint pass run in the background with no spinner, so
+  // spinner-waiter clamps a locator.waitFor here to its 1ms no-spinner
+  // fail-fast; the web-first assertion is not middleware-instrumented and
+  // keeps the generous 20s budget the one-off fetch needs.
+  // oxlint-disable-next-line iterate/spec-restricted-syntax -- no spinner exists during the background schemastore fetch, so locator.waitFor gets fail-fasted to 1ms; expect().toBeVisible() polls the full 20s.
   await expect(page.locator(".cm-lintRange-error").first()).toBeVisible({ timeout: 20_000 });
 });

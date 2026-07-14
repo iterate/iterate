@@ -29,7 +29,6 @@ import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
 import { RepoTasksView } from "./repo-tasks-view.tsx";
 import {
-  isRepoTaskPath,
   prepareRepoTaskAssignment,
   repoTaskAssignmentFileChanges,
   repoTaskAssignmentHeadPaths,
@@ -232,7 +231,8 @@ export function RepoIde({
         ? pendingRenameFromPath
         : undefined;
     const sourceStore = store;
-    const previousTaskPaths = headPaths.filter(isRepoTaskPath);
+    // Same cache key the task board reads through (see `RepoTasksView`'s
+    // `listTaskFiles` query): keyed by HEAD commit oid, no path-list segment.
     const previousTaskContents =
       queryClient.getQueryData<Record<string, string>>([
         "itx",
@@ -240,7 +240,6 @@ export function RepoIde({
         projectId,
         repoPath,
         files.commitOid,
-        previousTaskPaths.join("\n"),
       ]) ?? {};
     let committed = false;
     try {
@@ -282,15 +281,15 @@ export function RepoIde({
       if (refreshedFiles?.commitOid !== result.commitOid) {
         queryClient.setQueryData(["itx", "repo-files", projectId, repoPath], nextFiles);
       }
-      const nextTaskPaths = nextFiles.paths.filter(isRepoTaskPath);
       // The assignment commit changes one logical task (and may rename its
       // file). Seed the new HEAD's task query before removing the overlay, so
       // React never observes a gap and the sheet immediately sees both
-      // `agent` and `in-progress`.
+      // `agent` and `in-progress`. Keyed by the new commit oid to match the
+      // board's `listTaskFiles` query key exactly.
       const nextTaskContents = { ...previousTaskContents, [task.path]: assignment.content };
       if (renamedFromPath !== undefined) delete nextTaskContents[renamedFromPath];
       queryClient.setQueryData<Record<string, string>>(
-        ["itx", "repo-task-files", projectId, repoPath, result.commitOid, nextTaskPaths.join("\n")],
+        ["itx", "repo-task-files", projectId, repoPath, result.commitOid],
         nextTaskContents,
       );
       if (renamedFromPath !== undefined) {
