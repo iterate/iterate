@@ -24,9 +24,6 @@ export type StreamAppendArguments =
 /** The optional result projection returned by append. */
 export type StreamAppendResult = StreamEvent[] | number[] | void;
 
-/** The public append call signature. */
-export type StreamAppend = (...args: StreamAppendArguments) => Promise<StreamAppendResult>;
-
 export function appendedEvents(result: StreamAppendResult): StreamEvent[] {
   if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
     throw new Error("append did not return committed events");

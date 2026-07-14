@@ -3,7 +3,7 @@ import type { StreamEvent } from "./schemas.ts";
 
 const DEFAULT_HEARTBEAT_MS = 1_000;
 
-export type WaitForStreamEventInput = {
+type WaitForStreamEventInput = {
   afterOffset?: number;
   eventTypes?: readonly string[];
   predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
