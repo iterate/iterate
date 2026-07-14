@@ -1,3 +1,7 @@
+# Product specs
+
+These live at the repo root — not under `apps/os` — because product specs span workers: signup drives the real auth app's UI, not just os. The sibling `apps/os/e2e` lane proves the os engine surface through the itx API; this lane proves what a user actually gets in a browser.
+
 ## Writing playwright tests
 
 Think of these as _specs_ as well as tests. The idea is that a human or agent can read a test and go "I see how this aspect of the product is supposed to work now".
