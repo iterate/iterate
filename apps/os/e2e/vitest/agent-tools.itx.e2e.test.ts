@@ -97,7 +97,7 @@ test(
       // budget is saturated and the retry backoff (10/20/60s) is riding.
       timeoutMs: 180_000,
     });
-    expect(response.type).toBe("events.iterate.com/agents/web-message-sent");
+    expect(response).toMatchObject({ type: "events.iterate.com/agents/web-message-sent" });
 
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
     expect(

@@ -5,14 +5,6 @@ import { appendEvents } from "../test-support/append-events.ts";
 const HISTORY_RESET = "events.iterate.com/agent/history-reset";
 const INPUT_ADDED = "events.iterate.com/agent/input-added";
 
-async function killAgent(agent: { kill(): Promise<void> }): Promise<void> {
-  try {
-    await agent.kill();
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes("kill requested")) throw error;
-  }
-}
-
 test("agent checkpoint reconstructs chunked history after eviction and catches up new writes", async () => {
   await using handle = await createTestProject({ slugPrefix: "agent-checkpoint" });
   using itx = handle.itx();
@@ -30,7 +22,7 @@ test("agent checkpoint reconstructs chunked history after eviction and catches u
   await killAgent(agent);
   const reactivated = await agent.processor.snapshot();
   expect(reactivated.offset).toBeGreaterThanOrEqual(reset!.offset);
-  expect(reactivated.state.history).toEqual(history);
+  expect(reactivated.state).toMatchObject({ history });
 
   const [appended] = await appendEvents(agent.stream, {
     type: INPUT_ADDED,
@@ -44,5 +36,15 @@ test("agent checkpoint reconstructs chunked history after eviction and catches u
   expect(caughtUp.state.history.at(-1)).toEqual({ role: "user", content: "after eviction" });
 
   await killAgent(agent);
-  expect((await agent.processor.snapshot()).state.history).toEqual(caughtUp.state.history);
+  expect((await agent.processor.snapshot()).state).toMatchObject({
+    history: caughtUp.state.history,
+  });
 });
+
+async function killAgent(agent: { kill(): Promise<void> }): Promise<void> {
+  try {
+    await agent.kill();
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("kill requested")) throw error;
+  }
+}

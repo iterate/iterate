@@ -34,7 +34,7 @@ type CompletedPayload = {
 };
 
 type ScriptExecutionEntrypoint = {
-  run(code: string): Promise<unknown>;
+  run(code: string, options?: { emittedJs?: string }): Promise<unknown>;
 };
 
 const INVALID_PATH_SEGMENTS = new Set([
@@ -603,23 +603,33 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
    * verdicts, checker failures): the gate may only ever block on proof.
    * Returns the completion error, or null to proceed.
    */
-  async #typecheckRejection(code: string, records: CapabilityRecord[]): Promise<string | null> {
+  async #typecheckScriptForRun(
+    code: string,
+    records: CapabilityRecord[],
+  ): Promise<{ rejection: string | null; emittedJs?: string }> {
     const typecheckScript = this.#typecheckScript;
-    if (typecheckScript === undefined) return null;
+    if (typecheckScript === undefined) return { rejection: null };
     try {
       const capabilities = await this.#describeCapabilitiesFrom(records);
       const checked = await typecheckScript({ capabilities, code });
-      if (checked.verdict !== "problems") return null;
-      return [
-        "Script was NOT executed: it does not typecheck against this scope's capability types.",
-        ...checked.problems,
-        "Fix the type errors and resend the whole corrected script.",
-      ].join("\n");
+      if (checked.verdict === "clean") {
+        // Check and emit are one compile: what runs IS the compiler's
+        // type-stripped output, so scripts are genuinely TypeScript.
+        return { rejection: null, emittedJs: checked.emittedJs };
+      }
+      if (checked.verdict !== "problems") return { rejection: null };
+      return {
+        rejection: [
+          "Script was NOT executed: it does not typecheck against this scope's capability types.",
+          ...checked.problems,
+          "Fix the type errors and resend the whole corrected script.",
+        ].join("\n"),
+      };
     } catch (error) {
       // The gate must never fail a script for the checker's own failure — an
       // unreachable sidecar or a parent-scope dial error means unchecked.
       console.warn("[capability-host] script typecheck skipped", { error });
-      return null;
+      return { rejection: null };
     }
   }
 
@@ -632,9 +642,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       // The typecheck gate runs BEFORE the started evidence: it has no side
       // effects, so a rejected script provably never ran (requested →
       // completed, no started event) and the reconciler doctrine is untouched.
-      const rejection = await this.#typecheckRejection(input.code, input.capabilities);
-      if (rejection !== null) {
-        await this.#appendCompletion({ executionId: input.executionId, error: rejection });
+      const checked = await this.#typecheckScriptForRun(input.code, input.capabilities);
+      if (checked.rejection !== null) {
+        await this.#appendCompletion({ executionId: input.executionId, error: checked.rejection });
         return;
       }
       // Started-evidence lands durably BEFORE the script body runs, so the
@@ -650,7 +660,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         payload: { executionId: input.executionId },
       });
       try {
-        const result = await this.#scriptExecutionEntrypoint.run(input.code);
+        const result = await this.#scriptExecutionEntrypoint.run(input.code, {
+          emittedJs: checked.emittedJs,
+        });
         await this.#appendCompletion({ executionId: input.executionId, result });
       } catch (error) {
         await this.#appendCompletion({

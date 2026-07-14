@@ -23,7 +23,7 @@ import {
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
-  run(code: string): Promise<unknown>;
+  run(code: string, options?: { emittedJs?: string }): Promise<unknown>;
 };
 
 type ScriptExecutionLoopbackExports = {

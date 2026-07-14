@@ -17,38 +17,6 @@ const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const STREAM_EVENT_TYPE = "events.iterate.test/minimal-v4/stream-e2e";
 const CROSS_POST_EVENT_TYPE = "events.iterate.test/minimal-v4/cross-post";
 
-async function appendEvents(
-  stream: Pick<Stream, "append">,
-  ...events: StreamEventInput[]
-): Promise<StreamEvent[]> {
-  const result = await stream.append({ return: "events" }, ...events);
-  if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
-    throw new Error("append returned no committed events");
-  }
-  return result as StreamEvent[];
-}
-
-async function appendOffsets(
-  stream: Pick<Stream, "append">,
-  ...events: StreamEventInput[]
-): Promise<number[]> {
-  const result = await stream.append({ return: "offsets" }, ...events);
-  if (!Array.isArray(result) || result.some((value) => typeof value !== "number")) {
-    throw new Error("append returned no committed offsets");
-  }
-  return result as number[];
-}
-
-async function acceptCrossPostDirect(stream: Stream, batch: StreamPushEventBatch): Promise<void> {
-  await (
-    stream as unknown as {
-      durableObjectStub: {
-        acceptCrossPost(batch: StreamPushEventBatch): Promise<void> | void;
-      };
-    }
-  ).durableObjectStub.acceptCrossPost(batch);
-}
-
 type CoreStreamState = {
   eventCount: number;
   maxOffset: number;
@@ -102,7 +70,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
     }),
   ).toBeUndefined();
   const headAfterAck = await stream.head();
-  expect(headAfterAck.maxOffset).toBe(appended!.offset + 1);
+  expect(headAfterAck).toMatchObject({ maxOffset: appended!.offset + 1 });
   expect(
     await stream.append({
       type: STREAM_EVENT_TYPE,
@@ -126,7 +94,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
     },
   );
   const headAfterSameBatch = await stream.head();
-  expect(headAfterSameBatch.maxOffset).toBe(headAfterAck.maxOffset + 1);
+  expect(headAfterSameBatch).toMatchObject({ maxOffset: headAfterAck.maxOffset + 1 });
 
   const mixedKey = `stream-e2e-ack-mixed:${ackMarker}`;
   await stream.append(
@@ -142,7 +110,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
     },
   );
   const headAfterMixed = await stream.head();
-  expect(headAfterMixed.maxOffset).toBe(headAfterSameBatch.maxOffset + 1);
+  expect(headAfterMixed).toMatchObject({ maxOffset: headAfterSameBatch.maxOffset + 1 });
 
   const offsetKey = `stream-e2e-offsets:${ackMarker}`;
   expect(
@@ -174,7 +142,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
     headAfterMixed.maxOffset + 1,
     headAfterMixed.maxOffset + 2,
   ]);
-  expect((await stream.head()).maxOffset).toBe(headAfterMixed.maxOffset + 2);
+  expect(await stream.head()).toMatchObject({ maxOffset: headAfterMixed.maxOffset + 2 });
 
   const read = await stream.getEvents({ afterOffset: 0 });
   expect(read).toEqual(
@@ -286,7 +254,7 @@ test("stream getEvents defaults to a bounded page and supports event type filter
       payload: { index, marker },
     })),
   );
-  expect(new Set(appendedEvents.map((event) => event.createdAt)).size).toBe(1);
+  expect(new Set(appendedEvents.map((event) => event.createdAt))).toMatchObject({ size: 1 });
   const firstAppendedOffset = appendedEvents[0]!.offset;
   const afterOffset = firstAppendedOffset - 1;
   const beforeOffset = appendedEvents.at(-1)!.offset + 1;
@@ -362,7 +330,7 @@ test("cold activation catches core state up from the journal tail", async () => 
 
   const state = coreState((await stream.runtimeState()).coreProcessorState);
   expect(state.maxOffset).toBeGreaterThanOrEqual(tailOffset);
-  expect(state.path).toBe(streamPath);
+  expect(state).toMatchObject({ path: streamPath });
 });
 
 test("variadic ordinary appends preserve the exact circuit-breaker trip event", async () => {
@@ -457,8 +425,7 @@ test("stream subscribe replays history, tails live appends, and unsubscribes", a
 
   expect(batchStates.length).toBeGreaterThanOrEqual(1);
   for (const state of batchStates) {
-    expect(state.projectId).toBe(projectDescription.projectId);
-    expect(state.path).toBe(streamPath);
+    expect(state).toMatchObject({ projectId: projectDescription.projectId, path: streamPath });
   }
   expect(batchStates.at(-1)!.eventCount).toBeGreaterThanOrEqual(Math.max(...offsets));
 
@@ -556,9 +523,9 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
 
   // An ordinary commit: consecutive offsets, self-describing flag, and
   // idempotency dedup works (it is a row like any other).
-  expect(chunk!.offset).toBe(before!.offset + 1);
-  expect(singleDeduped).toEqual(chunk);
-  expect(after!.offset).toBe(chunk!.offset + 1);
+  expect(chunk).toMatchObject({ offset: before!.offset + 1 });
+  expect(singleDeduped).toMatchObject({ offset: chunk!.offset });
+  expect(after).toMatchObject({ offset: chunk!.offset + 1 });
   expect(chunk).toMatchObject({ ephemeral: true, type: ephemeralType });
   const [mixedBefore, deduped, mixedAfter] = await appendEvents(
     stream,
@@ -571,9 +538,9 @@ test("ephemeral events are second-class rows: excluded from default reads, deliv
     },
     { type: STREAM_EVENT_TYPE, payload: { marker, position: "mixed-after" } },
   );
-  expect(deduped!.offset).toBe(chunk!.offset);
-  expect(mixedBefore!.offset).toBe(after!.offset + 1);
-  expect(mixedAfter!.offset).toBe(mixedBefore!.offset + 1);
+  expect(deduped).toMatchObject({ offset: chunk!.offset });
+  expect(mixedBefore).toMatchObject({ offset: after!.offset + 1 });
+  expect(mixedAfter).toMatchObject({ offset: mixedBefore!.offset + 1 });
 
   // Default reads skip it; includeEphemeral opts in.
   const readWindow = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };
@@ -1110,4 +1077,36 @@ function waitFor(
   timeoutMs = 10_000,
 ) {
   return waitForCondition(predicate, { description: describe, intervalMs: 100, timeoutMs });
+}
+
+async function appendEvents(
+  stream: Pick<Stream, "append">,
+  ...events: StreamEventInput[]
+): Promise<StreamEvent[]> {
+  const result = await stream.append({ return: "events" }, ...events);
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
+    throw new Error("append returned no committed events");
+  }
+  return result as StreamEvent[];
+}
+
+async function appendOffsets(
+  stream: Pick<Stream, "append">,
+  ...events: StreamEventInput[]
+): Promise<number[]> {
+  const result = await stream.append({ return: "offsets" }, ...events);
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "number")) {
+    throw new Error("append returned no committed offsets");
+  }
+  return result as number[];
+}
+
+async function acceptCrossPostDirect(stream: Stream, batch: StreamPushEventBatch): Promise<void> {
+  await (
+    stream as unknown as {
+      durableObjectStub: {
+        acceptCrossPost(batch: StreamPushEventBatch): Promise<void> | void;
+      };
+    }
+  ).durableObjectStub.acceptCrossPost(batch);
 }

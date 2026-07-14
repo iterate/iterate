@@ -49,7 +49,7 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
     metadata: { suite: "scheduler-e2e" },
   });
   // set() is read-your-writes: the returned view proves ingestion + arming.
-  expect(view.key).toBe(key);
+  expect(view).toMatchObject({ key });
   expect(view.nextTriggerAt).not.toBeNull();
   expect("at" in view.recurrence).toBe(true);
 

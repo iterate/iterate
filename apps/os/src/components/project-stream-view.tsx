@@ -117,6 +117,20 @@ export function ProjectStreamView({
   streamPath: string;
 }) {
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
+  // A stream mirror can spend minutes paging tens of thousands of historical
+  // events and owns an aggressive reconnect loop. Keep that work off the
+  // provider socket used by the page's ordinary queries: resetting this keyed
+  // lane must never reject a concurrent Repo.readFile (the production-scale
+  // failure where opening /repos/iterate blanked the whole task board).
+  const streamConnectionAddress = useMemo(
+    () => ({
+      ...(projectId == null ? {} : { projectId }),
+      // One durable mirror lane per project: navigating between streams reuses
+      // it instead of leaking a persistent WebSocket for every path visited.
+      connectionKey: "browser-stream-mirror",
+    }),
+    [projectId],
+  );
   // Dial itx imperatively (never `useItx()`), and PER CALL: the stream view's
   // shell — header, tabs, composer, panel — must paint before the socket
   // connects (a hook read here would suspend the whole view into the nearest
@@ -128,9 +142,8 @@ export function ProjectStreamView({
   const resolvedStreamSource = useMemo<ItxStreamSource>(
     () =>
       streamSource ??
-      (async (path) =>
-        (await connectItxBrowser(projectId == null ? {} : { projectId })).streams.get(path)),
-    [projectId, streamSource],
+      (async (path) => (await connectItxBrowser(streamConnectionAddress)).streams.get(path)),
+    [streamConnectionAddress, streamSource],
   );
   const streamClientFactory = useMemo(() => {
     if (streamSource !== undefined) {
@@ -144,20 +157,19 @@ export function ProjectStreamView({
         return asBrowserStreamClient(stub, () => (stub as Partial<Disposable>)[Symbol.dispose]?.());
       };
     }
-    const address = projectId == null ? {} : { projectId };
     return async (input: { streamPath: string }) => {
       // The connecting promise IS the socket's identity: binding the evictor
       // to it means a suspicion verdict against THIS connection can only ever
       // evict THIS socket — never a successor another runtime already dialed.
-      const connection = connectItxBrowser(address);
+      const connection = connectItxBrowser(streamConnectionAddress);
       const stub = (await connection).streams.get(input.streamPath);
       return asBrowserStreamClient(
         stub,
         () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),
-        () => evictItxSocketIfCurrent(address, connection),
+        () => evictItxSocketIfCurrent(streamConnectionAddress, connection),
       );
     };
-  }, [streamSource, projectId]);
+  }, [streamConnectionAddress, streamSource]);
   // The half-open lane: a suspended page's socket can die without a close
   // frame, so the socket map keeps handing out the corpse and per-call dialing
   // alone can't recover. When the runtimes' probes/dials time out they call
@@ -167,10 +179,8 @@ export function ProjectStreamView({
   const resetTransport = useMemo(
     () =>
       resetStreamSourceTransport ??
-      (streamSource === undefined
-        ? () => evictItxSocket(projectId == null ? {} : { projectId })
-        : undefined),
-    [resetStreamSourceTransport, streamSource, projectId],
+      (streamSource === undefined ? () => evictItxSocket(streamConnectionAddress) : undefined),
+    [resetStreamSourceTransport, streamConnectionAddress, streamSource],
   );
 
   // Two browser-hosted processors share the stream's per-path SQLite mirror:

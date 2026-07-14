@@ -36,14 +36,15 @@
  * THE SOCKET MODEL — a Map, not a "pool"
  * ───────────────────────────────────────────────────────────────────────────
  *
- *  • ONE WebSocket per CONTEXT (a project slug, or `undefined` for the global
+ *  • ONE WebSocket per CONTEXT by default (a project id, or the global
  *    context), memoized in a module-level `Map` right here in this file. React
  *    19's `use()` needs a STABLE promise across render replays, so the
  *    connecting promise is cached: same context = same socket, different
- *    contexts = different sockets. The Map lives outside React, so a socket
- *    persists across client-side navigation — components mount/unmount, the
- *    socket does not — and every component on a context (project page, repl,
- *    activity tail, admin) shares the one connection.
+ *    contexts = different sockets. A caller can add a `connectionKey` for an
+ *    intentionally isolated transport in the same authenticated context — the
+ *    browser stream mirror does this so its catch-up/reconnect loop cannot
+ *    abort unrelated page reads. The Map lives outside React, so sockets
+ *    persist across client-side navigation.
  *
  *  • On socket death the entry is dropped and mounted readers are woken, so the
  *    next render re-dials and re-suspends on a fresh socket. There is no resume:
@@ -53,8 +54,9 @@
  *    during streaming SSR would hang the response. Render itx consumers under an
  *    `ssr: false` route or `<ClientOnly>` + `<Suspense>`.
  *
- *  • CONNECTIONS are addressed by a plain { projectId?, path?, baseUrl? } tuple.
- *    Only `projectId` keys the socket today; `path`/`baseUrl` are reserved for
+ *  • CONNECTIONS are addressed by a plain
+ *    { projectId?, connectionKey?, path?, baseUrl? } tuple. `projectId` and
+ *    `connectionKey` key the socket today; `path`/`baseUrl` are reserved for
  *    future multi-connection addressing.
  *
  *  • The PROVIDER holds the ADDRESS, not the handle — and is "almost an
@@ -103,9 +105,22 @@ export type { ItxHandle as ItxReactHandle };
 /**
  * How you address an itx connection — a plain, comparable value (that's what lets
  * the provider hold it in context and `useItx` resolve it with `??`). The empty
- * address `{}` is the global context. `projectId` is a project id (`prj_…`); `path`/`baseUrl` are reserved (not yet used to key the socket).
+ * address `{}` is the global context. `projectId` is a project id (`prj_…`);
+ * `connectionKey` opts into an isolated transport within that context;
+ * `path`/`baseUrl` are reserved (not yet used to key the socket).
  */
-type ItxAddress = { projectId?: string; path?: string; baseUrl?: string };
+type ItxAddress = {
+  projectId?: string;
+  path?: string;
+  baseUrl?: string;
+  /**
+   * Keep a long-lived subsystem on its own transport while preserving the
+   * same authenticated project scope. Most callers omit this and share the
+   * provider socket; stream mirrors use it because their reconnect loop must
+   * not abort unrelated page reads on the ordinary project socket.
+   */
+  connectionKey?: string;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The socket: one live WebSocket per context, kept outside React.
@@ -136,6 +151,7 @@ const REDIAL_BACKOFF_MAX_MS = 10_000;
  * handle releases only the derived project stub.
  */
 type SocketEntry = {
+  address: ItxAddress;
   promise: Promise<ItxHandle>;
   ws: WebSocket | undefined;
   dialedAt: number;
@@ -148,9 +164,15 @@ type SocketEntry = {
    */
   ping?: () => Promise<void>;
 };
-const socketEntries = new Map<string | undefined, SocketEntry>();
+type SocketKey = string;
+
+function socketKey(address: ItxAddress): SocketKey {
+  return JSON.stringify([address.projectId ?? null, address.connectionKey ?? null]);
+}
+
+const socketEntries = new Map<SocketKey, SocketEntry>();
 /** Consecutive closed-before-open dials per context — the re-dial backoff input. */
-const dialFailures = new Map<string | undefined, number>();
+const dialFailures = new Map<SocketKey, number>();
 /** Woken on any socket death so mounted readers (useSyncExternalStore) re-dial. */
 const listeners = new Set<() => void>();
 const wake = () => {
@@ -166,14 +188,15 @@ const subscribeSockets = (onChange: () => void) => {
  * until the socket dies — that's what `use()` and useSyncExternalStore need.
  * Browser-only: throws on the server rather than suspending forever.
  */
-function socketFor(context: string | undefined): Promise<ItxHandle> {
+function socketFor(address: ItxAddress): Promise<ItxHandle> {
   if (typeof window === "undefined") {
     throw new Error(
       "itx is browser-only: it dials a WebSocket to /api and never SSRs. " +
         "Render itx consumers under an `ssr: false` route or inside <ClientOnly>.",
     );
   }
-  const existing = socketEntries.get(context);
+  const key = socketKey(address);
+  const existing = socketEntries.get(key);
   if (existing) {
     return existing.promise;
   }
@@ -183,13 +206,13 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
   // reader unmounted, or only the hook ever held it) never surfaces as an
   // unhandledrejection — real `connectItxBrowser()` awaiters still observe it.
   void promise.catch(() => {});
-  const entry: SocketEntry = { promise, ws: undefined, dialedAt: Date.now() };
-  socketEntries.set(context, entry);
+  const entry: SocketEntry = { address, promise, ws: undefined, dialedAt: Date.now() };
+  socketEntries.set(key, entry);
 
   const beginDial = () => {
     // Evicted while waiting out the backoff (a session change, a watchdog):
     // this attempt no longer owns the slot — settle and let the owner dial.
-    if (socketEntries.get(context) !== entry) {
+    if (socketEntries.get(key) !== entry) {
       reject(new Error("itx WebSocket closed before connecting"));
       return;
     }
@@ -207,7 +230,7 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
     ws.addEventListener("open", () => {
       clearTimeout(timeout);
       opened = true;
-      dialFailures.delete(context);
+      dialFailures.delete(key);
       // Pipelined, no extra round trips: authenticate() rides the session cookie
       // on the WebSocket handshake, projects.get narrows to the project context.
       // The session/root stubs live as long as the socket; they are never
@@ -221,7 +244,9 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
         const probe = await unauthenticated.authenticate({ type: "from-server-cookie" });
         (probe as Partial<Disposable>)[Symbol.dispose]?.();
       };
-      resolve((context ? root.projects.get(context) : root) as unknown as ItxHandle);
+      resolve(
+        (address.projectId ? root.projects.get(address.projectId) : root) as unknown as ItxHandle,
+      );
     });
     // `close` fires for a failed dial AND for a later death — either way the socket
     // is gone: drop the entry and wake readers so the next render re-dials.
@@ -236,12 +261,12 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
     // its snapshot to the fresh promise before this rejection is observed.
     ws.addEventListener("close", () => {
       clearTimeout(timeout);
-      if (socketEntries.get(context) === entry) {
+      if (socketEntries.get(key) === entry) {
         // Failure bookkeeping only for the entry that still owns the slot: a
         // stale or intentionally-evicted socket's close must not count
         // against its successor's backoff history.
-        if (!opened) dialFailures.set(context, (dialFailures.get(context) ?? 0) + 1);
-        socketEntries.delete(context);
+        if (!opened) dialFailures.set(key, (dialFailures.get(key) ?? 0) + 1);
+        socketEntries.delete(key);
         wake();
       }
       reject(new Error("itx WebSocket closed before connecting"));
@@ -250,7 +275,7 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
 
   // The FIRST retry is immediate (a one-off blip should recover instantly);
   // pacing kicks in from the second consecutive failure — that's the storm.
-  const failures = dialFailures.get(context) ?? 0;
+  const failures = dialFailures.get(key) ?? 0;
   const delay =
     failures <= 1
       ? 0
@@ -272,8 +297,7 @@ function socketFor(context: string | undefined): Promise<ItxHandle> {
  * would kill the healthy successor the first runtime's eviction just dialed.
  */
 export function evictItxSocket(address?: ItxAddress): void {
-  const context = address?.projectId;
-  const entry = socketEntries.get(context);
+  const entry = socketEntries.get(socketKey(address ?? {}));
   if (entry === undefined || Date.now() - entry.dialedAt < DIAL_TIMEOUT_MS) return;
   reconnectItx(address);
 }
@@ -291,8 +315,7 @@ export function evictItxSocketIfCurrent(
   address: ItxAddress | undefined,
   suspect: Promise<unknown>,
 ): void {
-  const context = address?.projectId;
-  const entry = socketEntries.get(context);
+  const entry = socketEntries.get(socketKey(address ?? {}));
   if (entry === undefined || entry.promise !== suspect) return;
   reconnectItx(address);
 }
@@ -305,8 +328,8 @@ export function evictItxSocketIfCurrent(
  * project until a reload.
  */
 export function reconnectItx(address?: ItxAddress): void {
-  const context = address?.projectId;
-  const entry = socketEntries.get(context);
+  const key = socketKey(address ?? {});
+  const entry = socketEntries.get(key);
   if (!entry) return;
   // Remove the ENTRY first (promise + transport travel together), then wake:
   // useSyncExternalStore's change handler synchronously re-reads getSnapshot →
@@ -314,8 +337,8 @@ export function reconnectItx(address?: ItxAddress): void {
   // (#1894 was eviction closing the fresh successor out of a shared slot).
   // An INTENTIONAL eviction also resets the dial backoff: the successor should
   // dial immediately, not inherit pacing from failures it didn't have.
-  dialFailures.delete(context);
-  socketEntries.delete(context);
+  dialFailures.delete(key);
+  socketEntries.delete(key);
   wake();
   // CLOSE the transport, don't just unmap it: capnweb tears the session down
   // (rejecting every pending and future call) only on transport close.
@@ -346,7 +369,7 @@ function sweepSocketsOnResume(): void {
   const now = Date.now();
   if (now - lastResumeSweepAt < RESUME_SWEEP_SINGLE_FLIGHT_MS) return;
   lastResumeSweepAt = now;
-  for (const [context, entry] of [...socketEntries]) {
+  for (const [key, entry] of [...socketEntries]) {
     const ping = entry.ping;
     if (ping === undefined) continue; // mid-dial: the dial's own timeout owns it
     void (async () => {
@@ -373,12 +396,12 @@ function sweepSocketsOnResume(): void {
         try {
           await pingOnce();
         } catch {
-          if (socketEntries.get(context) !== entry) return;
+          if (socketEntries.get(key) !== entry) return;
           await pingOnce();
         }
       } catch {
         // Identity-bound: only evict if this exact socket still owns the slot.
-        evictItxSocketIfCurrent(context === undefined ? {} : { projectId: context }, entry.promise);
+        evictItxSocketIfCurrent(entry.address, entry.promise);
       }
     })();
   }
@@ -411,8 +434,8 @@ function reconnectAllItx(): void {
   const now = Date.now();
   if (now - lastReconnectAllAt < LIVENESS_PING_TIMEOUT_MS) return;
   lastReconnectAllAt = now;
-  for (const context of [...socketEntries.keys()]) {
-    evictItxSocket({ projectId: context });
+  for (const entry of [...socketEntries.values()]) {
+    evictItxSocket(entry.address);
   }
 }
 
@@ -424,17 +447,17 @@ function reconnectAllItx(): void {
 const ItxAddressContext = createContext<ItxAddress>({});
 
 /** Subscribe to the socket map, suspend until this context's socket connects. */
-function useSocket(context: string | undefined): ItxHandle {
+function useSocket(address: ItxAddress): ItxHandle {
   const promise = useSyncExternalStore(
     subscribeSockets,
-    () => socketFor(context),
-    () => socketFor(context),
+    () => socketFor(address),
+    () => socketFor(address),
   );
   return use(promise);
 }
 
-function ItxPrewarm({ context }: { context: string | undefined }) {
-  useSocket(context);
+function ItxPrewarm({ address }: { address: ItxAddress }) {
+  useSocket(address);
   return null;
 }
 
@@ -458,19 +481,20 @@ export function ItxProvider({
   projectId,
   path,
   baseUrl,
+  connectionKey,
   prewarm = true,
   children,
 }: ItxAddress & { children: ReactNode; prewarm?: boolean }) {
   // Stable value so a fresh object literal each render doesn't thrash consumers.
   const address = useMemo<ItxAddress>(
-    () => ({ projectId, path, baseUrl }),
-    [projectId, path, baseUrl],
+    () => ({ projectId, path, baseUrl, connectionKey }),
+    [projectId, path, baseUrl, connectionKey],
   );
   return (
     <ItxAddressContext value={address}>
       {prewarm ? (
         <Suspense fallback={null}>
-          <ItxPrewarm context={projectId} />
+          <ItxPrewarm address={address} />
         </Suspense>
       ) : null}
       {children}
@@ -493,7 +517,7 @@ export function ItxProvider({
  */
 export function useItx(override?: ItxAddress): ItxHandle {
   const contextAddress = use(ItxAddressContext);
-  return useSocket((override ?? contextAddress).projectId);
+  return useSocket(override ?? contextAddress);
 }
 
 /**
@@ -532,7 +556,7 @@ export function useItx(override?: ItxAddress): ItxHandle {
  * read: pass the address explicitly (defaults to global).
  */
 export function connectItxBrowser(address?: ItxAddress): Promise<ItxHandle> {
-  return socketFor(address?.projectId);
+  return socketFor(address ?? {});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -573,10 +597,9 @@ export function useItxQuery<T>({
   itx?: ItxHandle;
 }): T {
   const contextAddress = use(ItxAddressContext);
-  const context = contextAddress.projectId;
   return useSuspenseQuery({
     queryKey: ["itx", ...(Array.isArray(key) ? key : [key])],
-    queryFn: () => (itx !== undefined ? query(itx) : socketFor(context).then(query)),
+    queryFn: () => (itx !== undefined ? query(itx) : socketFor(contextAddress).then(query)),
   }).data;
 }
 
@@ -640,7 +663,7 @@ function useItxEffect(
   const contextAddress = use(ItxAddressContext);
   const address = opts?.address;
   const enabled = opts?.enabled ?? true;
-  const context = (address ?? contextAddress).projectId;
+  const selectedAddress = address ?? contextAddress;
   // ONE subscription to the socket map, keyed on the connection this effect
   // rides — a socket death re-renders us with a FRESH connecting promise, and
   // that promise in the effect deps is what re-runs the effect on it (the
@@ -649,7 +672,7 @@ function useItxEffect(
   // must not even dial. On the server there is no socket, ever.
   const promise = useSyncExternalStore(
     subscribeSockets,
-    () => (enabled && opts?.itx === undefined ? socketFor(context) : undefined),
+    () => (enabled && opts?.itx === undefined ? socketFor(selectedAddress) : undefined),
     () => undefined,
   );
   // Only the AMBIENT lane unwraps in render — the suspend-OK case (the page IS

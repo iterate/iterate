@@ -58,65 +58,6 @@ type StorageSurfaceSummary = {
   sql: Summary;
 };
 
-function quantile(sorted: readonly number[], fraction: number): number {
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))]!;
-}
-
-function summarize(samples: readonly number[]): Summary {
-  const sorted = [...samples].sort((left, right) => left - right);
-  return {
-    maxMs: sorted.at(-1)!,
-    meanMs: samples.reduce((total, sample) => total + sample, 0) / samples.length,
-    minMs: sorted[0]!,
-    p50Ms: quantile(sorted, 0.5),
-    p95Ms: quantile(sorted, 0.95),
-    samplesMs: [...samples],
-  };
-}
-
-function summarizeSurfaces(samples: Record<Backend, number[]>): StorageSurfaceSummary {
-  const asyncKv = summarize(samples.asyncKv);
-  const kv = summarize(samples.kv);
-  const sql = summarize(samples.sql);
-  return {
-    asyncKv,
-    asyncKvVsSqlMeanPercent: (asyncKv.meanMs / sql.meanMs - 1) * 100,
-    asyncKvVsSqlP50Percent: (asyncKv.p50Ms / sql.p50Ms - 1) * 100,
-    kv,
-    kvVsSqlMeanPercent: (kv.meanMs / sql.meanMs - 1) * 100,
-    kvVsSqlP50Percent: (kv.p50Ms / sql.p50Ms - 1) * 100,
-    sql,
-  };
-}
-
-async function measureSurfaces<T>(
-  iterations: number,
-  operation: (backend: Backend, iteration: number) => Promise<T>,
-  prepare?: (iteration: number) => Promise<void>,
-): Promise<Record<Backend, number[]>> {
-  const warmups = Math.min(3, iterations);
-  const samples: Record<Backend, number[]> = { asyncKv: [], kv: [], sql: [] };
-  for (let iteration = -warmups; iteration < iterations; iteration += 1) {
-    await prepare?.(iteration);
-    const orders: readonly (readonly Backend[])[] = [
-      ["sql", "kv", "asyncKv"],
-      ["kv", "asyncKv", "sql"],
-      ["asyncKv", "sql", "kv"],
-    ];
-    const order = orders[((iteration % orders.length) + orders.length) % orders.length]!;
-    let expected: T | undefined;
-    for (const backend of order) {
-      const startedAt = performance.now();
-      const result = await operation(backend, iteration);
-      const elapsedMs = performance.now() - startedAt;
-      if (expected === undefined) expected = result;
-      else expect(result).toEqual(expected);
-      if (iteration >= 0) samples[backend].push(elapsedMs);
-    }
-  }
-  return samples;
-}
-
 const workerSource = `
   import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 
@@ -569,3 +510,62 @@ test.skipIf(!ENABLED)("SQLite storage surfaces in workerd", async () => {
     }),
   );
 });
+
+function quantile(sorted: readonly number[], fraction: number): number {
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))]!;
+}
+
+function summarize(samples: readonly number[]): Summary {
+  const sorted = [...samples].sort((left, right) => left - right);
+  return {
+    maxMs: sorted.at(-1)!,
+    meanMs: samples.reduce((total, sample) => total + sample, 0) / samples.length,
+    minMs: sorted[0]!,
+    p50Ms: quantile(sorted, 0.5),
+    p95Ms: quantile(sorted, 0.95),
+    samplesMs: [...samples],
+  };
+}
+
+function summarizeSurfaces(samples: Record<Backend, number[]>): StorageSurfaceSummary {
+  const asyncKv = summarize(samples.asyncKv);
+  const kv = summarize(samples.kv);
+  const sql = summarize(samples.sql);
+  return {
+    asyncKv,
+    asyncKvVsSqlMeanPercent: (asyncKv.meanMs / sql.meanMs - 1) * 100,
+    asyncKvVsSqlP50Percent: (asyncKv.p50Ms / sql.p50Ms - 1) * 100,
+    kv,
+    kvVsSqlMeanPercent: (kv.meanMs / sql.meanMs - 1) * 100,
+    kvVsSqlP50Percent: (kv.p50Ms / sql.p50Ms - 1) * 100,
+    sql,
+  };
+}
+
+async function measureSurfaces<T>(
+  iterations: number,
+  operation: (backend: Backend, iteration: number) => Promise<T>,
+  prepare?: (iteration: number) => Promise<void>,
+): Promise<Record<Backend, number[]>> {
+  const warmups = Math.min(3, iterations);
+  const samples: Record<Backend, number[]> = { asyncKv: [], kv: [], sql: [] };
+  for (let iteration = -warmups; iteration < iterations; iteration += 1) {
+    await prepare?.(iteration);
+    const orders: readonly (readonly Backend[])[] = [
+      ["sql", "kv", "asyncKv"],
+      ["kv", "asyncKv", "sql"],
+      ["asyncKv", "sql", "kv"],
+    ];
+    const order = orders[((iteration % orders.length) + orders.length) % orders.length]!;
+    let expected: T | undefined;
+    for (const backend of order) {
+      const startedAt = performance.now();
+      const result = await operation(backend, iteration);
+      const elapsedMs = performance.now() - startedAt;
+      if (expected === undefined) expected = result;
+      else expect(result).toEqual(expected);
+      if (iteration >= 0) samples[backend].push(elapsedMs);
+    }
+  }
+  return samples;
+}

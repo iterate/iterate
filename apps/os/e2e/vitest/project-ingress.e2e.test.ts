@@ -12,54 +12,6 @@ type AppResponse = {
   text(): Promise<string>;
 };
 
-/**
- * The local lane's HTTP client. App hosts are selected by hostname
- * (`hello--<slug>.localhost`), but Node's fetch (undici) silently drops a
- * `host` header override (spec-forbidden) and nothing resolves
- * `*.localhost` — so local requests dial the dev server's address directly
- * and speak the app host via the Host header, which plain node:http allows.
- * Never follows redirects, matching the redirect assertions here.
- */
-function fetchWithHostHeader(
-  target: URL,
-  hostHeader: string,
-  init?: { headers?: HeadersInit; method?: string },
-): Promise<AppResponse> {
-  return new Promise((resolve, reject) => {
-    const headers = new Headers(init?.headers);
-    headers.set("host", hostHeader);
-    const request = httpRequest(
-      {
-        headers: Object.fromEntries(headers),
-        host: target.hostname,
-        method: init?.method ?? "GET",
-        path: `${target.pathname}${target.search}`,
-        port: target.port,
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk: Buffer) => chunks.push(chunk));
-        response.on("end", () => {
-          const body = Buffer.concat(chunks).toString("utf8");
-          const responseHeaders = new Headers();
-          for (const [name, value] of Object.entries(response.headers)) {
-            if (typeof value === "string") responseHeaders.set(name, value);
-            else if (Array.isArray(value)) responseHeaders.set(name, value.join(", "));
-          }
-          resolve({
-            headers: responseHeaders,
-            json: async () => JSON.parse(body) as unknown,
-            status: response.statusCode ?? 0,
-            text: async () => body,
-          });
-        });
-      },
-    );
-    request.on("error", reject);
-    request.end();
-  });
-}
-
 test("project ingress serves the static seeded homepage at the root", async () => {
   const marker = crypto.randomUUID();
 
@@ -72,7 +24,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
   const { projectId } = await project.__describe();
 
   const pageResponse = await fetch(buildUrl({ path: `/${projectId}` }));
-  expect(pageResponse.status).toBe(200);
+  expect(pageResponse).toMatchObject({ status: 200 });
   const homepage = await pageResponse.text();
   expect(homepage).toContain("Hello from your Iterate project worker");
   // The homepage links to each seeded app on its own host: the current host
@@ -141,7 +93,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   const hello = await fetchAppReady(`hello--${slug}`, {
     headers: { "x-iterate-app": "counter" },
   });
-  expect(hello.status).toBe(200);
+  expect(hello).toMatchObject({ status: 200 });
   expect(await hello.json()).toMatchObject({ app: "hello", projectId });
 
   // Stateful app: a mini client-side counter page — the count renders
@@ -152,14 +104,14 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   // needs a second wildcard level and is exercised in the unit tests +
   // reserved for custom hostnames.)
   const page = await fetchAppReady(`counter--${slug}`);
-  expect(page.status).toBe(200);
+  expect(page).toMatchObject({ status: 200 });
   expect(await page.text()).toContain('count: <span id="n">0</span>');
 
   const increment = await fetchApp(`counter--${slug}`, {
     method: "POST",
     path: "/increment",
   });
-  expect(increment.status).toBe(200);
+  expect(increment).toMatchObject({ status: 200 });
   expect(await increment.json()).toEqual({ count: 1 });
 
   await fetchApp(`counter--${slug}`, { method: "POST", path: "/increment" });
@@ -170,7 +122,9 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   const workerSource = await project.repo.readFile({ path: "worker.ts" });
   expect(workerSource?.content).toContain("export default class ProjectWorker");
   const tree = await project.repo.listFiles();
-  expect(tree.paths).toEqual(expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]));
+  expect(tree).toMatchObject({
+    paths: expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]),
+  });
   // The seed is ONE worker file — the example apps are named exports of it.
   expect(tree.paths).not.toContain("sdk.ts");
   expect(tree.paths.some((path: string) => path.startsWith("apps/"))).toBe(false);
@@ -178,7 +132,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
 
   // Unknown apps 404 in the router itself.
   const unknown = await fetchApp(`nope--${slug}`);
-  expect(unknown.status).toBe(404);
+  expect(unknown).toMatchObject({ status: 404 });
   expect(await unknown.text()).toContain("unknown app");
 });
 
@@ -269,7 +223,7 @@ test("counter websockets: upgrade flows through ingress and increments broadcast
       const firstSaw = nextMessage(first);
       const secondSaw = nextMessage(second);
       const incremented = await postIncrement();
-      expect(incremented.status).toBe(200);
+      expect(incremented).toMatchObject({ status: 200 });
       expect(await firstSaw).toBe("1");
       expect(await secondSaw).toBe("1");
     } finally {
@@ -279,3 +233,51 @@ test("counter websockets: upgrade flows through ingress and increments broadcast
     first.close();
   }
 });
+
+/**
+ * The local lane's HTTP client. App hosts are selected by hostname
+ * (`hello--<slug>.localhost`), but Node's fetch (undici) silently drops a
+ * `host` header override (spec-forbidden) and nothing resolves
+ * `*.localhost` — so local requests dial the dev server's address directly
+ * and speak the app host via the Host header, which plain node:http allows.
+ * Never follows redirects, matching the redirect assertions here.
+ */
+function fetchWithHostHeader(
+  target: URL,
+  hostHeader: string,
+  init?: { headers?: HeadersInit; method?: string },
+): Promise<AppResponse> {
+  return new Promise((resolve, reject) => {
+    const headers = new Headers(init?.headers);
+    headers.set("host", hostHeader);
+    const request = httpRequest(
+      {
+        headers: Object.fromEntries(headers),
+        host: target.hostname,
+        method: init?.method ?? "GET",
+        path: `${target.pathname}${target.search}`,
+        port: target.port,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          const responseHeaders = new Headers();
+          for (const [name, value] of Object.entries(response.headers)) {
+            if (typeof value === "string") responseHeaders.set(name, value);
+            else if (Array.isArray(value)) responseHeaders.set(name, value.join(", "));
+          }
+          resolve({
+            headers: responseHeaders,
+            json: async () => JSON.parse(body) as unknown,
+            status: response.statusCode ?? 0,
+            text: async () => body,
+          });
+        });
+      },
+    );
+    request.on("error", reject);
+    request.end();
+  });
+}

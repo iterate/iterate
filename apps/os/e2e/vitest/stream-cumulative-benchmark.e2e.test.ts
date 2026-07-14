@@ -64,156 +64,6 @@ type BenchmarkOutput = {
   timestamp: string;
 };
 
-function quantile(sorted: readonly number[], fraction: number): number {
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))]!;
-}
-
-function summarize(samples: readonly number[], operationsPerSample?: number): Metric {
-  const sorted = [...samples].sort((left, right) => left - right);
-  const meanMs = samples.reduce((total, sample) => total + sample, 0) / samples.length;
-  const metric: Metric = {
-    maxMs: sorted.at(-1)!,
-    meanMs,
-    minMs: sorted[0]!,
-    p50Ms: quantile(sorted, 0.5),
-    p95Ms: quantile(sorted, 0.95),
-    samplesMs: [...samples],
-  };
-  if (operationsPerSample !== undefined) {
-    metric.operationsPerSecond = (operationsPerSample * 1_000) / metric.p50Ms;
-  }
-  return metric;
-}
-
-async function measure(
-  iterations: number,
-  operation: (iteration: number) => Promise<void>,
-  warmups = Math.min(5, iterations),
-): Promise<number[]> {
-  for (let iteration = -warmups; iteration < 0; iteration += 1) await operation(iteration);
-  const samples: number[] = [];
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
-    const startedAt = performance.now();
-    await operation(iteration);
-    samples.push(performance.now() - startedAt);
-  }
-  return samples;
-}
-
-async function waitFor(predicate: () => boolean, label: string, timeoutMs = 15_000): Promise<void> {
-  const deadline = performance.now() + timeoutMs;
-  while (!predicate()) {
-    if (performance.now() > deadline) throw new Error(`Timed out waiting for ${label}.`);
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-}
-
-async function waitForWaiterConnection(stream: StreamHandle, timeoutMs = 15_000): Promise<void> {
-  const deadline = performance.now() + timeoutMs;
-  for (;;) {
-    const connections = (await stream.runtimeState()).runtime.connections;
-    const established = Object.values(connections).some((connection) => {
-      const subscriber = connection.subscriber as { description?: unknown } | undefined;
-      return subscriber?.description === "waitForEvent";
-    });
-    if (established) return;
-    if (performance.now() > deadline) {
-      throw new Error("Timed out waiting for waitForEvent connection.");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-}
-
-function markerOf(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null || !("marker" in payload)) return undefined;
-  const marker = payload.marker;
-  return typeof marker === "string" ? marker : undefined;
-}
-
-function event(input: {
-  idempotencyKey?: string;
-  marker: string;
-  payload?: string;
-  type?: string;
-}): StreamEventInput {
-  return {
-    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
-    payload: { blob: input.payload ?? SMALL_PAYLOAD, marker: input.marker },
-    type: input.type ?? EVENT_TYPE,
-  };
-}
-
-async function commitDiscardingResult(
-  stream: StreamHandle,
-  ...events: StreamEventInput[]
-): Promise<void> {
-  if (IMPLEMENTATION === "candidate") {
-    await stream.append(...events);
-    return;
-  }
-  void (await stream.append(...events));
-}
-
-async function readHead(stream: StreamHandle): Promise<{ maxOffset: number }> {
-  if (IMPLEMENTATION === "candidate") return await stream.head();
-  const state = (await stream.runtimeState()).coreProcessorState as { maxOffset: number };
-  return { maxOffset: state.maxOffset };
-}
-
-async function forceIdleTeardown(stream: StreamHandle): Promise<void> {
-  await (
-    stream as unknown as {
-      durableObjectStub: { runIdleTeardownNow(): Promise<void> | void };
-    }
-  ).durableObjectStub.runIdleTeardownNow();
-}
-
-async function acceptCrossPostDirect(
-  stream: StreamHandle,
-  batch: StreamPushEventBatch,
-): Promise<void> {
-  await (
-    stream as unknown as {
-      durableObjectStub: {
-        acceptCrossPost(batch: StreamPushEventBatch): Promise<void> | void;
-      };
-    }
-  ).durableObjectStub.acceptCrossPost(batch);
-}
-
-async function killProject(project: { kill(): Promise<void> }): Promise<void> {
-  try {
-    await project.kill();
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes("kill requested")) throw error;
-  }
-}
-
-async function measureProcessorCatchup(projectId: string, samples: number): Promise<number[]> {
-  const measured: number[] = [];
-  const auth = { type: "admin-secret" as const, secret: adminSecret() };
-  for (let iteration = -2; iteration < samples; iteration += 1) {
-    {
-      using killer = withItxSession({ auth, projectId });
-      await killProject(killer);
-    }
-
-    using project = withItxSession({ auth, projectId });
-    using stream = project.streams.get("/");
-    const initialHead = (await stream.head()).maxOffset;
-    const startedAt = performance.now();
-    await stream.append(
-      ...Array.from({ length: PROCESSOR_CATCHUP_EVENTS }, (_, index) =>
-        event({ marker: `processor-catchup-${iteration}-${index}`, payload: "x" }),
-      ),
-    );
-    const expectedOffset = initialHead + PROCESSOR_CATCHUP_EVENTS;
-    await project.processor.waitUntilEvent({ offset: expectedOffset, timeoutMs: 30_000 });
-    if (iteration >= 0) measured.push(performance.now() - startedAt);
-  }
-  return measured;
-}
-
 test.skipIf(
   !ENABLED ||
     FOCUS_TAILS ||
@@ -394,7 +244,7 @@ test.skipIf(
       const samples = await measure(
         80,
         async () => {
-          expect((await readHead(stream)).maxOffset).toBe(expectedHead);
+          expect(await readHead(stream)).toMatchObject({ maxOffset: expectedHead });
         },
         10,
       );
@@ -1404,7 +1254,7 @@ test.skipIf(!ENABLED || !FOCUS_CROSSPOST_EXACT_RETRY)(
       using destination = project.streams.get(destinationPath);
       const initialHead = (await destination.head()).maxOffset;
       await acceptCrossPostDirect(destination, batch);
-      expect((await destination.head()).maxOffset).toBe(initialHead + eventCount);
+      expect(await destination.head()).toMatchObject({ maxOffset: initialHead + eventCount });
 
       const samples = await measure(
         sampleCount,
@@ -1412,7 +1262,7 @@ test.skipIf(!ENABLED || !FOCUS_CROSSPOST_EXACT_RETRY)(
         5,
       );
       metrics[`crosspost_exact_retry_${eventCount}`] = summarize(samples, eventCount);
-      expect((await destination.head()).maxOffset).toBe(initialHead + eventCount);
+      expect(await destination.head()).toMatchObject({ maxOffset: initialHead + eventCount });
     }
 
     const output: BenchmarkOutput = {
@@ -1425,3 +1275,153 @@ test.skipIf(!ENABLED || !FOCUS_CROSSPOST_EXACT_RETRY)(
   },
   600_000,
 );
+
+function quantile(sorted: readonly number[], fraction: number): number {
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))]!;
+}
+
+function summarize(samples: readonly number[], operationsPerSample?: number): Metric {
+  const sorted = [...samples].sort((left, right) => left - right);
+  const meanMs = samples.reduce((total, sample) => total + sample, 0) / samples.length;
+  const metric: Metric = {
+    maxMs: sorted.at(-1)!,
+    meanMs,
+    minMs: sorted[0]!,
+    p50Ms: quantile(sorted, 0.5),
+    p95Ms: quantile(sorted, 0.95),
+    samplesMs: [...samples],
+  };
+  if (operationsPerSample !== undefined) {
+    metric.operationsPerSecond = (operationsPerSample * 1_000) / metric.p50Ms;
+  }
+  return metric;
+}
+
+async function measure(
+  iterations: number,
+  operation: (iteration: number) => Promise<void>,
+  warmups = Math.min(5, iterations),
+): Promise<number[]> {
+  for (let iteration = -warmups; iteration < 0; iteration += 1) await operation(iteration);
+  const samples: number[] = [];
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const startedAt = performance.now();
+    await operation(iteration);
+    samples.push(performance.now() - startedAt);
+  }
+  return samples;
+}
+
+async function waitFor(predicate: () => boolean, label: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (!predicate()) {
+    if (performance.now() > deadline) throw new Error(`Timed out waiting for ${label}.`);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+async function waitForWaiterConnection(stream: StreamHandle, timeoutMs = 15_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    const connections = (await stream.runtimeState()).runtime.connections;
+    const established = Object.values(connections).some((connection) => {
+      const subscriber = connection.subscriber as { description?: unknown } | undefined;
+      return subscriber?.description === "waitForEvent";
+    });
+    if (established) return;
+    if (performance.now() > deadline) {
+      throw new Error("Timed out waiting for waitForEvent connection.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+function markerOf(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null || !("marker" in payload)) return undefined;
+  const marker = payload.marker;
+  return typeof marker === "string" ? marker : undefined;
+}
+
+function event(input: {
+  idempotencyKey?: string;
+  marker: string;
+  payload?: string;
+  type?: string;
+}): StreamEventInput {
+  return {
+    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+    payload: { blob: input.payload ?? SMALL_PAYLOAD, marker: input.marker },
+    type: input.type ?? EVENT_TYPE,
+  };
+}
+
+async function commitDiscardingResult(
+  stream: StreamHandle,
+  ...events: StreamEventInput[]
+): Promise<void> {
+  if (IMPLEMENTATION === "candidate") {
+    await stream.append(...events);
+    return;
+  }
+  void (await stream.append(...events));
+}
+
+async function readHead(stream: StreamHandle): Promise<{ maxOffset: number }> {
+  if (IMPLEMENTATION === "candidate") return await stream.head();
+  const state = (await stream.runtimeState()).coreProcessorState as { maxOffset: number };
+  return { maxOffset: state.maxOffset };
+}
+
+async function forceIdleTeardown(stream: StreamHandle): Promise<void> {
+  await (
+    stream as unknown as {
+      durableObjectStub: { runIdleTeardownNow(): Promise<void> | void };
+    }
+  ).durableObjectStub.runIdleTeardownNow();
+}
+
+async function acceptCrossPostDirect(
+  stream: StreamHandle,
+  batch: StreamPushEventBatch,
+): Promise<void> {
+  await (
+    stream as unknown as {
+      durableObjectStub: {
+        acceptCrossPost(batch: StreamPushEventBatch): Promise<void> | void;
+      };
+    }
+  ).durableObjectStub.acceptCrossPost(batch);
+}
+
+async function killProject(project: { kill(): Promise<void> }): Promise<void> {
+  try {
+    await project.kill();
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("kill requested")) throw error;
+  }
+}
+
+async function measureProcessorCatchup(projectId: string, samples: number): Promise<number[]> {
+  const measured: number[] = [];
+  const auth = { type: "admin-secret" as const, secret: adminSecret() };
+  for (let iteration = -2; iteration < samples; iteration += 1) {
+    {
+      using killer = withItxSession({ auth, projectId });
+      await killProject(killer);
+    }
+
+    using project = withItxSession({ auth, projectId });
+    using stream = project.streams.get("/");
+    const initialHead = (await stream.head()).maxOffset;
+    const startedAt = performance.now();
+    await stream.append(
+      ...Array.from({ length: PROCESSOR_CATCHUP_EVENTS }, (_, index) =>
+        event({ marker: `processor-catchup-${iteration}-${index}`, payload: "x" }),
+      ),
+    );
+    const expectedOffset = initialHead + PROCESSOR_CATCHUP_EVENTS;
+    await project.processor.waitUntilEvent({ offset: expectedOffset, timeoutMs: 30_000 });
+    if (iteration >= 0) measured.push(performance.now() - startedAt);
+  }
+  return measured;
+}

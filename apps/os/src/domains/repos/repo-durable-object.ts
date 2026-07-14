@@ -543,6 +543,21 @@ export class RepoDurableObject extends DurableObject<Env> {
     return content === undefined ? null : { commitOid, content, path };
   }
 
+  /**
+   * Every task markdown file's contents at HEAD in ONE clone. The task board
+   * needs the CONTENT of every `tasks/**` markdown file, not the whole tree;
+   * doing that as `listFiles()` + a `readFile()` per task fans N reads at this
+   * object, and on any repo without the root workspace cache (everything but
+   * the config repo) each `readFile` is its own full clone — N concurrent
+   * clones of a big repo is exactly what overloads this DO. The task include
+   * mask is applied BEFORE contents are read (see `getFilesSnapshot`), so this
+   * only ever reads the handful of task files, and its cost scales with the
+   * number of tasks, not the size of the repo.
+   */
+  async listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }> {
+    return this.getFilesSnapshot({ include: TASK_FILE_INCLUDE_PATTERNS });
+  }
+
   /** All committed file paths at HEAD (the project repo serves from the root workspace cache). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     if (this.#hasRootWorkspaceCache()) {

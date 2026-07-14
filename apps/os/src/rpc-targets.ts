@@ -955,6 +955,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, fast-forward default-branch pushes import in, and webhooks cross-post in.",
         listFiles: "List file paths.",
+        listTaskFiles:
+          "Every task markdown file's contents at HEAD ({ commitOid, files }) in one read — the task board's bulk load, cheaper than listFiles + a readFile per task.",
         log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
@@ -1027,6 +1029,16 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     return this.#durableObjectStub.listFiles();
+  }
+
+  /**
+   * Every task markdown file's contents at HEAD, keyed by path, in a single
+   * clone — the task board's bulk load. Cheaper than `listFiles()` plus a
+   * `readFile()` per task: the task include mask is applied before contents
+   * are read, so cost scales with the number of tasks, not the repo size.
+   */
+  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }> {
+    return this.#durableObjectStub.listTaskFiles();
   }
 
   /**

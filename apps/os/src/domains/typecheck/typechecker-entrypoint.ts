@@ -16,6 +16,9 @@ import { createCompilerCache } from "./compiler-cache.ts";
  * names — npm type metadata (jsdelivr) and `openapi:` spec URLs. */
 const CheckInput = z.object({
   files: z.record(z.string(), z.string()),
+  /** Virtual path whose emitted JavaScript should come back as result.js —
+   * check and emit are one wasm compile, so naming it costs nothing. */
+  entrypoint: z.string().optional(),
 });
 
 /** Npm type downloads ride the Cache API (same recipe and cache name as the
@@ -51,13 +54,17 @@ export class TypecheckerEntrypoint extends WorkerEntrypoint {
     return Response.json({ worker: "os-typechecker" }, { status: 404 });
   }
 
-  async check(input: { files: Record<string, string> }): Promise<TypecheckResult> {
-    const { files } = CheckInput.parse(input);
+  async check(input: {
+    files: Record<string, string>;
+    entrypoint?: string;
+  }): Promise<TypecheckResult> {
+    const { files, entrypoint } = CheckInput.parse(input);
     const compilerPromise = compilerCache.get();
     const result = await runTypecheck({
       compiler: await compilerPromise,
       fetchImpl: typmFetch,
       files,
+      entrypoint,
     });
     // runTypecheck turns a mid-compile crash (the wasm program exiting) into a
     // code-0 diagnostic. The compiler instance may now be permanently dead, so

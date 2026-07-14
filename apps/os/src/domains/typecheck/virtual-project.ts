@@ -15,7 +15,11 @@ import type { TypecheckDiagnostic, TypecheckResult } from "./run-typecheck.ts";
 /** The minimal typechecker interface — `env.TYPECHECKER` satisfies it, and
  * tests satisfy it with a local tswasm compiler. */
 export interface Typechecker {
-  check(input: { files: Record<string, string> }): Promise<TypecheckResult>;
+  check(input: {
+    files: Record<string, string>;
+    /** Virtual path whose emitted JavaScript comes back as result.js. */
+    entrypoint?: string;
+  }): Promise<TypecheckResult>;
 }
 
 /** Scripts bigger than this get a clean problem instead of a compile — a
@@ -316,7 +320,10 @@ function assembleScriptProject(
     // fn(itx), extras just stay undefined) stays assignable.
     `const script: (itx: Itx, ...rest: any[]) => unknown = (`,
   ];
-  files["script.ts"] = [...prelude, code, ");"].join("\n");
+  // `export default script` makes the EMITTED JavaScript of this file a
+  // loadable module: the execution harness imports it, so what runs is the
+  // compiler's own type-stripped output — scripts are genuinely TypeScript.
+  files["script.ts"] = [...prelude, code, ");", "export default script;"].join("\n");
   return { files, preludeLineCount: prelude.length };
 }
 
@@ -328,7 +335,14 @@ function assembleScriptProject(
  * never be stopped by what the checker doesn't know.
  */
 export type ScriptExecutionCheck =
-  | { verdict: "clean" }
+  | {
+      verdict: "clean";
+      /** The compiler's emitted JavaScript module for the script (default
+       * export = the script function). Same wasm compile as the check —
+       * emit costs nothing — and it is what the runtime executes, so
+       * TypeScript syntax in scripts genuinely works. */
+      emittedJs?: string;
+    }
   | { verdict: "problems"; problems: string[] }
   | { verdict: "unchecked"; reason: string };
 
@@ -445,7 +459,7 @@ export async function checkItxScriptForExecution(input: {
   let checked: TypecheckResult;
   try {
     checked = await withDeadline(
-      input.typechecker.check({ files: project.files }),
+      input.typechecker.check({ files: project.files, entrypoint: "script.ts" }),
       input.deadlineMs ?? EXECUTION_CHECK_DEADLINE_MS,
     );
   } catch (error) {
@@ -462,7 +476,13 @@ export async function checkItxScriptForExecution(input: {
       diagnostic.fileName === "script.ts" &&
       isProvableBlocker(diagnostic),
   );
-  if (blocking.length === 0) return { verdict: "clean" };
+  if (blocking.length === 0) {
+    // `js` can come back EMPTY when the program has errors anywhere (broken
+    // mount declarations included) — the compiler emits nothing it can't
+    // vouch for. Treat empty as absent: execution falls back to the raw
+    // code, exactly the unchecked path's behavior.
+    return { verdict: "clean", emittedJs: checked.js ? checked.js : undefined };
+  }
   const problems = formatProblems(blocking, {
     label: "script",
     primaryFile: "script.ts",

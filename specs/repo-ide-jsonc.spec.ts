@@ -45,9 +45,14 @@ test("a commented tsconfig still schema-validates (comments are tolerated)", asy
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   await page.locator('[data-item-path="tsconfig.json"]').click();
-  await expect(page.locator(".cm-content")).toContainText("// jsonc: comments are allowed");
+  await page.locator(".cm-content").filter({ hasText: "// jsonc: comments are allowed" }).waitFor();
 
   // Once the tsconfig schema loads, the invalid `strict` value squiggles — which
-  // can only happen if the commented, trailing-comma doc parsed as json5.
+  // can only happen if the commented, trailing-comma doc parsed as json5. The
+  // schemastore fetch + lint pass run in the background with no spinner, so
+  // spinner-waiter clamps a locator.waitFor here to its 1ms no-spinner
+  // fail-fast; the web-first assertion is not middleware-instrumented and
+  // keeps the generous 20s budget the one-off fetch needs.
+  // oxlint-disable-next-line iterate/spec-restricted-syntax -- no spinner exists during the background schemastore fetch, so locator.waitFor gets fail-fasted to 1ms; expect().toBeVisible() polls the full 20s.
   await expect(page.locator(".cm-lintRange-error").first()).toBeVisible({ timeout: 20_000 });
 });

@@ -74,9 +74,10 @@ Before PRs:
 pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
-**Browser testing:** use an isolated `agent-browser` Chrome for Testing session,
-headless by default. "Let me watch" means show that isolated browser with
-`--headed`; it does not mean attach to a developer's actual Chrome. See
+**Browser testing:** use an isolated, headed `agent-browser` Chrome for Testing
+session by default so the developer can watch it. Give every concurrent agent
+a unique session; use headless mode only when explicitly requested or in CI.
+This does not mean attach to a developer's actual Chrome. See
 [Browser testing](docs/browser-testing.md). Keep the CLI and its corresponding
 agent skills up to date.
 
@@ -111,8 +112,8 @@ pnpm test && pnpm typecheck && pnpm lint && pnpm format
 
 How do I…? — **[Dev environments](docs/dev-environments.md)** answers: run
 local dev (fully local, random port, `localhost` plus project
-`<slug>.localhost` hosts), be any user or an admin (minting), point a browser
-(headless golden path) at local dev or a preview, create a preview environment
+`<slug>.localhost` hosts), be any user or an admin (minting), point an isolated
+visible browser at local dev or a preview, create a preview environment
 from your machine, and when you need a public callback URL. Doppler/Cloudflare/deploy details:
 `docs/devops-cloudflare-doppler.md`.
 

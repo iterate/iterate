@@ -20,14 +20,6 @@ import { adminSecret, withItxSession, type ItxWebSocketMessage } from "./test-he
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const EVENT_TYPE = "events.iterate.test/wire/probe";
 
-async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
-
 test("ephemeral live delivery originates zero subscriber-side frames", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/wire/one-way-${marker}`;
@@ -149,3 +141,11 @@ test("warm ephemeral delivery latency: measure and bound append→delivered", as
   // network twice. Catch regressions to seconds-scale, not ms jitter.
   expect(p50).toBeLessThan(1_000);
 });
+
+async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
