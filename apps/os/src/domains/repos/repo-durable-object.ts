@@ -59,6 +59,7 @@ import {
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
+import { SingleFlightValue } from "./single-flight-value.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
 
@@ -190,6 +191,26 @@ export class RepoDurableObject extends DurableObject<Env> {
       include?: string[];
     } = {},
   ): Promise<{ commitOid: string; files: Record<string, string> }> {
+    const branch = input.branch ?? REPO_DEFAULT_BRANCH;
+    const cacheable =
+      branch === REPO_DEFAULT_BRANCH &&
+      input.commitOid === undefined &&
+      input.exclude === undefined &&
+      input.include === undefined;
+    if (cacheable) {
+      return this.#headFilesSnapshot.get(() => this.#loadFilesSnapshot({ ...input, branch }));
+    }
+    return this.#loadFilesSnapshot(input);
+  }
+
+  async #loadFilesSnapshot(
+    input: {
+      branch?: string;
+      commitOid?: string;
+      exclude?: string[];
+      include?: string[];
+    } = {},
+  ): Promise<{ commitOid: string; files: Record<string, string> }> {
     const { filesystem, head } = await this.#checkout(input);
 
     // Mask paths BEFORE reading contents: an excluded tree (a committed
@@ -312,6 +333,15 @@ export class RepoDurableObject extends DurableObject<Env> {
   // success result. All writes funnel through this one DO by design, which
   // is exactly what makes a local chain a sufficient lock.
   #writeChain: Promise<unknown> = Promise.resolve();
+  // Secondary repos have no root-workspace cache. Their HEAD reads otherwise
+  // clone the complete Artifact once per call; a task board opening 42 files
+  // concurrently therefore launched 42 full monorepo clones and reset this
+  // isolate for exceeding memory. Share one immutable HEAD snapshot until a
+  // write or queue-observed external push invalidates it.
+  readonly #headFilesSnapshot = new SingleFlightValue<{
+    commitOid: string;
+    files: Record<string, string>;
+  }>();
 
   #serializeWrite<T>(write: () => Promise<T>): Promise<T> {
     const result = this.#writeChain.then(write, write);
@@ -412,6 +442,11 @@ export class RepoDurableObject extends DurableObject<Env> {
     beforeCommitOid: string | null;
     branch: string;
   }): Promise<RepoCommittedFileChange[]> {
+    // This method is reached from the Cloudflare Artifacts queue for pushes
+    // made outside this DO too (for example from a developer's computer).
+    // Invalidate before pinned diff reads so the next unpinned HEAD read
+    // cannot reuse the pre-push snapshot.
+    this.#headFilesSnapshot.clear();
     const previous =
       input.beforeCommitOid === null
         ? {}
@@ -436,10 +471,12 @@ export class RepoDurableObject extends DurableObject<Env> {
    */
   #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
     if (result.noChanges) return;
+    if (result.branch === REPO_DEFAULT_BRANCH) this.#headFilesSnapshot.clear();
     this.ctx.storage.kv.put(repoPushedHeadStorageKey(result.branch), result.commitOid);
   }
 
   #invalidateArtifactState(branch: string) {
+    if (branch === REPO_DEFAULT_BRANCH) this.#headFilesSnapshot.clear();
     this.#artifactTokenPromise = undefined;
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
@@ -1188,6 +1225,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         token,
       }),
     );
+    this.#headFilesSnapshot.clear();
     this.ctx.storage.kv.put(repoHeadStorageKey(defaultBranch), {
       commitOid: seeded.commitOid,
       contentHash: seeded.contentHash,
