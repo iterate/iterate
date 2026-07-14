@@ -2954,7 +2954,10 @@ export type SearchResultChunk = {
    * relevance.
    */
   score: number;
-  /** The matched text content (the specific matching chunk). */
+  /**
+   * The matched text (capped ~1.2k chars per hit so result sets stay inline;
+   * a truncation marker points at `ref` for the full source).
+   */
   content: string;
   /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
   kind?: string;
