@@ -1335,3 +1335,56 @@ cross-post-only stub cache. Raw records are
 `/tmp/stream-direct-crosspost-{candidate,parent}-r{1,2,3,4,5}.log`,
 `/tmp/stream-direct-crosspost-cached-candidate-r{1,2,3,4,5,6,7}.log`, and
 `/tmp/stream-direct-crosspost-parent-r{6,7,8}.log` locally.
+
+## 2026-07-14: Windowed Hosted-Processor Settlement Retained
+
+Cloudflare, Cap'n Web, and host-source review identified another asymmetric
+RPC cost. The stream pump never awaits delivery, but it pulled every hosted
+processor result to detect a dead callback. The returned processor sink is
+strictly ordered and failure-sticky: one failed ingest poisons every later call
+on that connection, and a replacement connection replays from the durable
+checkpoint. A later pulled result can therefore act as a cumulative fence for
+earlier unpulled calls without weakening ordered processing or replay.
+
+The retained implementation pulls every eighth hosted-processor result and
+always pulls the caught-up head batch. Generic durable callbacks remain
+pull-per-batch. Intermediate result capabilities are disposed unpulled, while
+their deliveries remain counted as pending until the cumulative fence settles;
+idle teardown therefore cannot mistake queued processor work for consumed
+work. The final fence reports its newest event's settle latency. A rejection
+from any intermediate ingest is rethrown by the host's sticky fence and closes
+the stream connection through the existing delivery-failed path.
+
+The focused benchmark kills the project processor, appends 8,000 durable events
+to the root stream in one awaited RPC, then awaits the processor checkpoint.
+The host timer starts after an awaited head read and encloses both append and
+checkpoint network I/O, so it remains valid under Workers' frozen-clock model.
+An early version reused one project capability across repeated `kill()` calls
+and eventually hit a Cap'n Web decode failure after the append had succeeded.
+The final harness uses a disposable control connection for each kill and a new
+post-kill project session for each measured append/wait, removing that
+client-lifecycle race from the workload.
+
+Three rounds per revision ran 15 measured backlogs in `C,M,M,C,C,M` order,
+giving 45 samples per revision against exact parent `7765519ff`:
+
+| 8,000-event processor catch-up |     Parent |   Window 8 | Change |
+| ------------------------------ | ---------: | ---------: | -----: |
+| p50                            | 1,319.4 ms | 1,191.4 ms |   9.7% |
+| p95                            | 1,495.4 ms | 1,425.2 ms |   4.7% |
+| mean                           | 1,228.0 ms | 1,160.4 ms |   5.5% |
+| median throughput              | 6,064 ev/s | 6,715 ev/s |  10.7% |
+
+A second 45-sample tuning pass tried a four-batch fence. It retained only a
+6.5% median-throughput gain (`1,238.5` ms p50), so the second result frame had
+a measurable cost and window eight was restored. The final live smoke passed
+after restoration.
+
+This adds one counter, one pending-delivery accumulator, and one hosted-only
+policy constant; it creates no storage state, migration, service, alarm, or
+new recovery mode. The complexity is local and collapses back to pull-per-call
+by setting the window to one. Focused tests cover periodic success, a quiet
+partial window, and an unpulled intermediate failure reaching the fence. The
+entire 371-test Stream unit surface and OS typecheck pass. Raw records are
+`/tmp/stream-window8-{candidate,parent}-isolated-r{1,2,3}.log` and
+`/tmp/stream-window4-candidate-isolated-r{1,2,3}.log` locally.
