@@ -68,7 +68,7 @@ Fetch logs and diagnostics:
 ```bash
 depot ci logs <attempt-id> --org 0p91s0lz49
 depot ci logs <job-id> --org 0p91s0lz49 --follow
-depot ci metrics <run-id> --org 0p91s0lz49
+depot ci metrics --run <run-id> --org 0p91s0lz49
 depot ci diagnose <run-id> --org 0p91s0lz49
 depot ci summary <attempt-id> --org 0p91s0lz49
 ```
@@ -228,17 +228,52 @@ Use Depot-specific features where they make the workflow clearer:
 - independent checks can use Depot `parallel:` blocks with `fail-fast: false`;
 - workflow runtime logic belongs in `scripts/ci`, not in long YAML strings.
 
+### Reliability defaults
+
+Mainline workflows deliberately separate deployment safety from validation
+freshness:
+
+- A credentialed deploy uses one fixed concurrency group named for its actual
+  destination, such as `deploy-auth-os-production`. It always sets
+  `cancel-in-progress: false`. The checked-out branch is not the destination,
+  so it must not appear in that group name. An active rollout finishes; if
+  several newer commits queue behind it, Depot keeps the newest pending run.
+- Tests, lint/typecheck, and autofix use the source branch (falling back to
+  `ref_name`) and `cancel-in-progress: true`. A newer commit makes an older
+  validation result obsolete, including on `main`.
+- Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
+  jobs fail at the outer edge and an operator decides whether a rerun is safe.
+  Auth + OS gets 45 minutes because its bounded worst case includes both
+  deployments, JWKS propagation, and four sequential smoke probes.
+- Runner size follows observed peak CPU and memory, with headroom. Lint stays
+  on `8x32`; Auth + OS deploy uses `4x16`; short deploy, notification, and
+  autofix jobs use `2x8`. Re-check with `depot ci metrics --run <run-id>` before
+  increasing a size.
+
+These defaults keep a normal all-app main push to 32 requested vCPUs before
+notification jobs, down from 72, without reducing the parallel lint lane that
+uses the larger machine. Path filters avoid deploying iterate.com for unrelated
+monorepo changes.
+
+If an attempt receives a sandbox but produces no logs or metrics before
+failing, inspect `depot ci status`, `logs`, `metrics`, and `diagnose`. When the
+same commit and image pass on rerun, treat that as runner provisioning evidence,
+not an application failure. Do not add automatic workflow retries: deployment
+reruns can repeat external side effects and need an operator decision.
+
 ## Custom Image
 
 The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 `scripts/depot-ci/bake-preview-ci-image.sh`.
 
 It contains Node, pnpm, workspace dependencies, Doppler CLI, and the preview
-browser. Jobs that consume it must keep:
+browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`, or
+`8x32` from measured workload demand. Jobs that consume it must keep the image
+and checkout behavior:
 
 ```yaml
 runs-on:
-  size: 8x32
+  size: 2x8 # workload-specific
   image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
 steps:
   - uses: actions/checkout@v4
