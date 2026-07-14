@@ -90,7 +90,13 @@ import {
   type FileEntry,
   type WorkingTreeChanges,
 } from "./staged-changes.ts";
-import { reconcileEditorPathOverride, type EditorPathOverride } from "./repo-task-editor-state.ts";
+import {
+  editorPathValue,
+  reconcileEditorPathOverride,
+  resolvedEditorPathDraft,
+  type EditorPathDraft,
+  type EditorPathOverride,
+} from "./repo-task-editor-state.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
@@ -767,7 +773,7 @@ function TaskEditorSheet({
 }) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const [deleteTargetPath, setDeleteTargetPath] = useState<string>();
-  const [pathDraft, setPathDraft] = useState<{ source: string; value: string }>();
+  const [pathDraft, setPathDraft] = useState<EditorPathDraft>();
   const [assignment, setAssignment] = useState<{
     taskPath: string;
     assigning: boolean;
@@ -775,7 +781,7 @@ function TaskEditorSheet({
   }>();
   const taskPath = task?.path;
   const pathWasEdited = taskPath !== undefined && pathDraft?.source === taskPath;
-  const pathValue = taskPath === undefined ? "" : pathWasEdited ? pathDraft.value : `/${taskPath}`;
+  const pathValue = editorPathValue(taskPath, pathDraft);
   const currentAssignment = assignment?.taskPath === taskPath ? assignment : undefined;
   const assigning = currentAssignment?.assigning ?? false;
   const visibleAgent = task?.agent ?? currentAssignment?.agent;
@@ -786,7 +792,7 @@ function TaskEditorSheet({
     if (task === undefined) return undefined;
     if (!pathWasEdited) return task;
     const resolved = onResolvePath(pathValue);
-    setPathDraft(undefined);
+    setPathDraft(resolvedEditorPathDraft(task.path, resolved?.path));
     return resolved;
   };
 
