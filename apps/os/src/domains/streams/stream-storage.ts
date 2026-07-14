@@ -18,7 +18,7 @@ import type { StreamEvent } from "./schemas.ts";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const MAX_INLINE_EVENT_BYTES = 1024 * 1024;
-const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 8;
+const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 9;
 // Durable Object SQL currently permits at most 100 bound parameters per query.
 // Keep generated multi-row inserts at that ceiling and bound pending BLOB
 // memory independently: small events fill the row budget, large events flush
@@ -63,6 +63,11 @@ const CHUNK_INSERT_STATEMENTS = createInsertStatements(
   MAX_CHUNK_ROWS_PER_INSERT,
 );
 const textEncoder = new TextEncoder();
+const TYPE_PROPERTY_PREFIX_BYTE_LENGTH = textEncoder.encode(',"type":').byteLength;
+const OFFSET_PROPERTY_PREFIX_BYTE_LENGTH = textEncoder.encode(',"offset":').byteLength;
+const IDEMPOTENCY_KEY_PROPERTY_PREFIX_BYTE_LENGTH =
+  textEncoder.encode(',"idempotencyKey":').byteLength;
+const EPHEMERAL_PROPERTY_BYTE_LENGTH = textEncoder.encode(',"ephemeral":true').byteLength;
 
 /**
  * A committed event paired with its exact full-envelope serialized byte
@@ -93,6 +98,13 @@ type TransactionRunner = { transactionSync<T>(callback: () => T): T };
 const initializedStreamStorage = new WeakSet<SqlStorage>();
 
 type StreamStorageBootstrap = StreamOffsetBounds & { version: number };
+type StoredEventColumns = {
+  offset: number;
+  type: string;
+  idempotencyKey: string | null;
+  ephemeral: number;
+};
+type StoredEventRow = StoredEventColumns & { eventJson: string | null };
 
 function readStreamStorageBootstrap(sqlStorage: SqlStorage): StreamStorageBootstrap | undefined {
   try {
@@ -127,12 +139,12 @@ export function initializeStreamStorage(sqlStorage: SqlStorage): StreamOffsetBou
     throw new Error(`Unsupported stream storage schema version: ${schemaVersion}`);
   }
   sqlStorage.exec(`
-    -- Stream-owned append log metadata. Bounded JSON is inline; oversized JSON is chunked.
+    -- Stream-owned append log metadata. Bounded body JSON is inline; oversized JSON is chunked.
     -- offset is the replay cursor; the partial index below owns keyed dedup/lookups.
-    -- createdAt stays solely in event_json: no query filters or orders on it, so a
-    -- duplicate column would consume one binding and one SQLite field per append.
-    -- path is omitted because every row belongs to this Durable Object's one path.
-    -- Chunked rows retain their raw serialized length beside null event_json so
+    -- event_json stores only createdAt plus user payload/metadata/source. Indexed
+    -- envelope fields live once in their authoritative columns and are restored on
+    -- reads. path is omitted because every row belongs to this DO's one path.
+    -- Chunked rows retain their serialized body length beside null event_json so
     -- delivery sizing never reads chunks it may exclude at the frame boundary.
     -- ephemeral marks second-class rows: range reads exclude them unless asked, and
     -- the stream may evict them in the future. Eviction keeps offsets consumed
@@ -155,7 +167,7 @@ export function initializeStreamStorage(sqlStorage: SqlStorage): StreamOffsetBou
     where idempotency_key is not null
   `);
   sqlStorage.exec(`
-    -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
+    -- Committed event body JSON split into ordered byte chunks. The WITHOUT ROWID
     -- primary key is the lookup index used by point reads and range replay.
     create table event_chunks (
       offset integer not null,
@@ -203,6 +215,7 @@ export class StreamEventLog {
   #bootstrapOffsetBounds: StreamOffsetBounds | undefined;
   readonly #path: string;
   readonly #pathPropertyByteLength: number;
+  readonly #typeJsonByteLengths = new Map<string, number>();
 
   constructor(
     readonly sql: SqlStorage,
@@ -339,7 +352,7 @@ export class StreamEventLog {
     let serializedPrefix: Uint8Array[] | undefined;
     if (events.length === 1) {
       const event = events[0]!;
-      const bytes = this.#serializeEvent(event);
+      const bytes = this.#serializeEventBody(event);
       if (bytes.byteLength <= MAX_INLINE_EVENT_BYTES) {
         // This is the entire commit in one atomic SQLite statement. An
         // explicit transaction would add begin/commit work without widening
@@ -357,7 +370,7 @@ export class StreamEventLog {
             eventJson,
           );
         }
-        return [{ event, byteLength: this.#serializedEventByteLength(bytes.byteLength) }];
+        return [{ event, byteLength: this.#serializedEventByteLength(bytes.byteLength, event) }];
       }
       // Preserve the large-event path's single-serialization guarantee.
       carriedSerialization = { eventIndex: 0, bytes };
@@ -365,7 +378,7 @@ export class StreamEventLog {
       const candidate = [] as Uint8Array[];
       let candidateByteLength = 0;
       for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
-        const bytes = this.#serializeEvent(events[eventIndex]!);
+        const bytes = this.#serializeEventBody(events[eventIndex]!);
         if (
           bytes.byteLength > MAX_INLINE_EVENT_BYTES ||
           candidateByteLength + bytes.byteLength > MAX_PENDING_INSERT_BYTES
@@ -402,7 +415,7 @@ export class StreamEventLog {
           }
           sizedEvents.push({
             event,
-            byteLength: this.#serializedEventByteLength(bytes.byteLength),
+            byteLength: this.#serializedEventByteLength(bytes.byteLength, event),
           });
         }
         this.sql.exec(eventInsertStatements[events.length]!, ...eventBindings);
@@ -429,7 +442,7 @@ export class StreamEventLog {
           const carried =
             carriedSerialization?.eventIndex === batchEnd ? carriedSerialization : null;
           const bytes =
-            serializedPrefix?.[batchEnd] ?? carried?.bytes ?? this.#serializeEvent(event);
+            serializedPrefix?.[batchEnd] ?? carried?.bytes ?? this.#serializeEventBody(event);
           if (carried !== null) carriedSerialization = undefined;
           if (
             serializedEvents.length > 0 &&
@@ -464,7 +477,7 @@ export class StreamEventLog {
           }
           sizedEvents.push({
             event,
-            byteLength: this.#serializedEventByteLength(bytes.byteLength),
+            byteLength: this.#serializedEventByteLength(bytes.byteLength, event),
           });
           serializedByteLength += bytes.byteLength;
           batchEnd += 1;
@@ -528,28 +541,36 @@ export class StreamEventLog {
 
   getByOffset(offset: number): StreamEvent | undefined {
     const row = this.sql
-      .exec<{ eventJson: string | null }>(
-        "select cast(event_json as text) as eventJson from events where offset = ?",
+      .exec<StoredEventRow>(
+        `select offset, type, idempotency_key as idempotencyKey, ephemeral,
+                cast(event_json as text) as eventJson
+         from events where offset = ?`,
         offset,
       )
       .toArray()[0];
     if (row === undefined) return undefined;
-    if (row.eventJson !== null) return this.#parseEvent(row.eventJson, 0);
+    if (row.eventJson !== null) return this.#parseEvent(row.eventJson, 0, row);
     const chunked = this.#readChunkedEvents([offset]).get(offset);
-    return chunked === undefined ? undefined : this.#parseEvent(chunked.chunks, chunked.byteLength);
+    return chunked === undefined
+      ? undefined
+      : this.#parseEvent(chunked.chunks, chunked.byteLength, row);
   }
 
   getByIdempotencyKey(idempotencyKey: string): StreamEvent | undefined {
     const row = this.sql
-      .exec<{ offset: number; eventJson: string | null }>(
-        "select offset, cast(event_json as text) as eventJson from events where idempotency_key = ?",
+      .exec<StoredEventRow>(
+        `select offset, type, idempotency_key as idempotencyKey, ephemeral,
+                cast(event_json as text) as eventJson
+         from events where idempotency_key = ?`,
         idempotencyKey,
       )
       .toArray()[0];
     if (row === undefined) return undefined;
-    if (row.eventJson !== null) return this.#parseEvent(row.eventJson, 0);
+    if (row.eventJson !== null) return this.#parseEvent(row.eventJson, 0, row);
     const chunked = this.#readChunkedEvents([row.offset]).get(row.offset);
-    return chunked === undefined ? undefined : this.#parseEvent(chunked.chunks, chunked.byteLength);
+    return chunked === undefined
+      ? undefined
+      : this.#parseEvent(chunked.chunks, chunked.byteLength, row);
   }
 
   /** Resolve a void append's duplicate without materializing its stored event. */
@@ -602,35 +623,39 @@ export class StreamEventLog {
     const events = new Map<string, StreamEvent | undefined>();
     for (let start = 0; start < idempotencyKeys.length; start += MAX_SQL_BINDINGS) {
       const keys = idempotencyKeys.slice(start, start + MAX_SQL_BINDINGS);
-      let chunkedRows: Array<[number, string]> | undefined;
+      let chunkedRows: StoredEventColumns[] | undefined;
       for (const row of this.sql
         .exec(
           `
-            select offset, idempotency_key as idempotencyKey,
+            select offset, type, idempotency_key as idempotencyKey, ephemeral,
               cast(event_json as text) as eventJson
             from events
             where idempotency_key in (${keys.map(() => "?").join(", ")})
           `,
           ...keys,
         )
-        .raw<[number, string, string | null]>()) {
-        const [offset, idempotencyKey, eventJson] = row;
+        .raw<[number, string, string, number, string | null]>()) {
+        const [offset, type, idempotencyKey, ephemeral, eventJson] = row;
+        const columns = { offset, type, idempotencyKey, ephemeral };
         if (eventJson === null) {
           // Reserve the key now so chunk hydration can replace it in place.
           events.set(idempotencyKey, undefined);
-          (chunkedRows ??= []).push([offset, idempotencyKey]);
+          (chunkedRows ??= []).push(columns);
         } else {
-          events.set(idempotencyKey, this.#parseEvent(eventJson, 0));
+          events.set(idempotencyKey, this.#parseEvent(eventJson, 0, columns));
         }
       }
       if (chunkedRows !== undefined) {
-        const chunkedEvents = this.#readChunkedEvents(chunkedRows.map(([offset]) => offset));
-        for (const [offset, idempotencyKey] of chunkedRows) {
-          const stored = chunkedEvents.get(offset);
+        const chunkedEvents = this.#readChunkedEvents(chunkedRows.map((row) => row.offset));
+        for (const row of chunkedRows) {
+          const stored = chunkedEvents.get(row.offset);
           if (stored === undefined) {
-            events.delete(idempotencyKey);
+            events.delete(row.idempotencyKey!);
           } else {
-            events.set(idempotencyKey, this.#parseEvent(stored.chunks, stored.byteLength));
+            events.set(
+              row.idempotencyKey!,
+              this.#parseEvent(stored.chunks, stored.byteLength, row),
+            );
           }
         }
       }
@@ -689,7 +714,21 @@ export class StreamEventLog {
           ),
           selected as not materialized (
             select events.offset,
-                   coalesce(length(event_json), chunked_json_byte_length) + ? as byte_length
+                   coalesce(length(event_json), chunked_json_byte_length)
+                     + ${TYPE_PROPERTY_PREFIX_BYTE_LENGTH}
+                     + length(cast(json_quote(type) as blob))
+                     + ${OFFSET_PROPERTY_PREFIX_BYTE_LENGTH}
+                     + length(cast(offset as text))
+                     + case
+                         when idempotency_key is null then 0
+                         else ${IDEMPOTENCY_KEY_PROPERTY_PREFIX_BYTE_LENGTH}
+                           + length(cast(json_quote(idempotency_key) as blob))
+                       end
+                     + case
+                         when ephemeral = 1 then ${EPHEMERAL_PROPERTY_BYTE_LENGTH}
+                         else 0
+                       end
+                     + ? as byte_length
             from events
             cross join boundary
             where events.offset > ?
@@ -739,6 +778,9 @@ export class StreamEventLog {
                  raw_through_offset as row_offset,
                  scanned_raw_rows,
                  stopped_by_byte_limit,
+                 null as event_type,
+                 null as idempotency_key,
+                 null as ephemeral,
                  null as event_json_or_offset,
                  null as byte_length
           from scan
@@ -747,6 +789,9 @@ export class StreamEventLog {
                  ranked.offset,
                  null,
                  null,
+                 events.type,
+                 events.idempotency_key,
+                 events.ephemeral,
                  coalesce(cast(events.event_json as text), ranked.offset),
                  ranked.byte_length
           from ranked
@@ -769,26 +814,58 @@ export class StreamEventLog {
         args.afterOffset,
         args.afterOffset,
       )
-      .raw<[number, number, number | null, number | null, string | number | null, number | null]>();
+      .raw<
+        [
+          number,
+          number,
+          number | null,
+          number | null,
+          string | null,
+          string | null,
+          number | null,
+          string | number | null,
+          number | null,
+        ]
+      >();
 
     const events: Array<SizedStreamEvent | undefined> = [];
-    let chunkedRows: number[] | undefined;
+    let chunkedRows:
+      | Array<{ resultIndex: number; columns: StoredEventColumns; byteLength: number }>
+      | undefined;
     let rawThroughOffset: number | undefined;
     let scannedRawRows: number | undefined;
     let stoppedByByteLimit: boolean | undefined;
-    for (const [kind, offset, rawRows, stopped, eventJsonOrOffset, byteLength] of rows) {
+    for (const [
+      kind,
+      offset,
+      rawRows,
+      stopped,
+      type,
+      idempotencyKey,
+      ephemeral,
+      eventJsonOrOffset,
+      byteLength,
+    ] of rows) {
       if (kind === 0) {
         rawThroughOffset = offset;
         scannedRawRows = rawRows ?? 0;
         stoppedByByteLimit = stopped === 1;
         continue;
       }
-      if (eventJsonOrOffset === null || byteLength === null) continue;
+      if (
+        type === null ||
+        ephemeral === null ||
+        eventJsonOrOffset === null ||
+        byteLength === null
+      ) {
+        continue;
+      }
+      const columns = { offset, type, idempotencyKey, ephemeral };
       if (typeof eventJsonOrOffset === "number") {
-        (chunkedRows ??= []).push(events.length, eventJsonOrOffset, byteLength);
+        (chunkedRows ??= []).push({ resultIndex: events.length, columns, byteLength });
         events.push(undefined);
       } else {
-        events.push({ event: this.#parseEvent(eventJsonOrOffset, 0), byteLength });
+        events.push({ event: this.#parseEvent(eventJsonOrOffset, 0, columns), byteLength });
       }
     }
     if (
@@ -800,18 +877,14 @@ export class StreamEventLog {
     }
 
     if (chunkedRows !== undefined) {
-      const chunkedOffsets = new Array<number>(chunkedRows.length / 3);
-      for (let index = 1; index < chunkedRows.length; index += 3) {
-        chunkedOffsets[Math.floor(index / 3)] = chunkedRows[index]!;
-      }
+      const chunkedOffsets = chunkedRows.map((row) => row.columns.offset);
       const chunkedEvents = this.#readChunkedEvents(chunkedOffsets);
-      for (let index = 0; index < chunkedRows.length; index += 3) {
-        const resultIndex = chunkedRows[index]!;
-        const stored = chunkedEvents.get(chunkedRows[index + 1]!);
+      for (const row of chunkedRows) {
+        const stored = chunkedEvents.get(row.columns.offset);
         if (stored === undefined) continue;
-        events[resultIndex] = {
-          event: this.#parseEvent(stored.chunks, stored.byteLength),
-          byteLength: chunkedRows[index + 2]!,
+        events[row.resultIndex] = {
+          event: this.#parseEvent(stored.chunks, stored.byteLength, row.columns),
+          byteLength: row.byteLength,
         };
       }
     }
@@ -845,7 +918,8 @@ export class StreamEventLog {
     const rows = this.sql
       .exec(
         `
-          select coalesce(cast(event_json as text), offset) as eventJsonOrOffset${byteLengthColumn}
+          select offset, type, idempotency_key, ephemeral,
+                 coalesce(cast(event_json as text), offset) as eventJsonOrOffset${byteLengthColumn}
           from events
           where offset > ?
             and offset < ?
@@ -859,21 +933,29 @@ export class StreamEventLog {
         ...(eventTypes ?? []),
         args.limit,
       )
-      .raw<[string | number, number | null]>();
+      .raw<[number, string, string | null, number, string | number, number | null]>();
     const events: Array<SizedStreamEvent | StreamEvent | undefined> = [];
-    let chunkedRows: number[] | undefined;
-    for (const [eventJsonOrOffset, inlineByteLength] of rows) {
+    let chunkedRows: Array<{ resultIndex: number; columns: StoredEventColumns }> | undefined;
+    for (const [
+      offset,
+      type,
+      idempotencyKey,
+      ephemeral,
+      eventJsonOrOffset,
+      inlineByteLength,
+    ] of rows) {
+      const columns = { offset, type, idempotencyKey, ephemeral };
       if (typeof eventJsonOrOffset === "number") {
-        (chunkedRows ??= []).push(events.length, eventJsonOrOffset);
+        (chunkedRows ??= []).push({ resultIndex: events.length, columns });
         events.push(undefined);
         continue;
       }
-      const event = this.#parseEvent(eventJsonOrOffset, 0);
+      const event = this.#parseEvent(eventJsonOrOffset, 0, columns);
       events.push(
         includeByteLength
           ? {
               event,
-              byteLength: this.#serializedEventByteLength(inlineByteLength ?? 0),
+              byteLength: this.#serializedEventByteLength(inlineByteLength ?? 0, event),
             }
           : event,
       );
@@ -882,22 +964,18 @@ export class StreamEventLog {
       return events as Array<SizedStreamEvent | StreamEvent>;
     }
 
-    const chunkedOffsets = new Array<number>(chunkedRows.length / 2);
-    for (let index = 1; index < chunkedRows.length; index += 2) {
-      chunkedOffsets[index >> 1] = chunkedRows[index]!;
-    }
+    const chunkedOffsets = chunkedRows.map((row) => row.columns.offset);
     const chunkedEvents = this.#readChunkedEvents(chunkedOffsets);
     let hasMissingChunks = false;
-    for (let index = 0; index < chunkedRows.length; index += 2) {
-      const resultIndex = chunkedRows[index]!;
-      const stored = chunkedEvents.get(chunkedRows[index + 1]!);
+    for (const row of chunkedRows) {
+      const stored = chunkedEvents.get(row.columns.offset);
       if (stored === undefined) {
         hasMissingChunks = true;
         continue;
       }
-      const event = this.#parseEvent(stored.chunks, stored.byteLength);
-      events[resultIndex] = includeByteLength
-        ? { event, byteLength: this.#serializedEventByteLength(stored.byteLength) }
+      const event = this.#parseEvent(stored.chunks, stored.byteLength, row.columns);
+      events[row.resultIndex] = includeByteLength
+        ? { event, byteLength: this.#serializedEventByteLength(stored.byteLength, event) }
         : event;
     }
     return hasMissingChunks
@@ -932,22 +1010,69 @@ export class StreamEventLog {
     return events;
   }
 
-  /** Decode exact rows produced by append; JSON syntax corruption still fails loudly. */
-  #parseEvent(storedJson: string | EventChunks, byteLength: number): StreamEvent {
+  /** Decode body JSON, then restore the authoritative indexed envelope columns. */
+  #parseEvent(
+    storedJson: string | EventChunks,
+    byteLength: number,
+    columns: StoredEventColumns,
+  ): StreamEvent {
     const json = typeof storedJson === "string" ? storedJson : decodeChunks(storedJson, byteLength);
-    return { ...(JSON.parse(json) as Omit<StreamEvent, "path">), path: this.#path };
+    const parsed = JSON.parse(json) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("Stored stream event body must be an object");
+    }
+    const event = parsed as Partial<StreamEvent>;
+    event.type = columns.type;
+    event.offset = columns.offset;
+    event.path = this.#path;
+    if (columns.idempotencyKey === null) {
+      delete event.idempotencyKey;
+    } else {
+      event.idempotencyKey = columns.idempotencyKey;
+    }
+    if (columns.ephemeral === 1) {
+      event.ephemeral = true;
+    } else {
+      delete event.ephemeral;
+    }
+    return event as StreamEvent;
   }
 
-  #serializeEvent(event: StreamEvent): Uint8Array {
+  #serializeEventBody(event: StreamEvent): Uint8Array {
     if (event.path !== this.#path) {
       throw new Error(`Cannot store event for path ${event.path} in stream ${this.#path}`);
     }
-    const { path: _path, ...storedEvent } = event;
-    return textEncoder.encode(JSON.stringify(storedEvent));
+    const {
+      path: _path,
+      type: _type,
+      offset: _offset,
+      idempotencyKey: _idempotencyKey,
+      ephemeral: _ephemeral,
+      ...storedBody
+    } = event;
+    return textEncoder.encode(JSON.stringify(storedBody));
   }
 
-  #serializedEventByteLength(storedByteLength: number): number {
-    return storedByteLength + this.#pathPropertyByteLength;
+  #serializedEventByteLength(storedBodyByteLength: number, event: StreamEvent): number {
+    let typeJsonByteLength = this.#typeJsonByteLengths.get(event.type);
+    if (typeJsonByteLength === undefined) {
+      typeJsonByteLength = textEncoder.encode(JSON.stringify(event.type)).byteLength;
+      if (this.#typeJsonByteLengths.size >= 128) this.#typeJsonByteLengths.clear();
+      this.#typeJsonByteLengths.set(event.type, typeJsonByteLength);
+    }
+    return (
+      storedBodyByteLength +
+      TYPE_PROPERTY_PREFIX_BYTE_LENGTH +
+      typeJsonByteLength +
+      OFFSET_PROPERTY_PREFIX_BYTE_LENGTH +
+      String(event.offset).length +
+      (event.idempotencyKey === undefined
+        ? 0
+        : IDEMPOTENCY_KEY_PROPERTY_PREFIX_BYTE_LENGTH +
+          textEncoder.encode(JSON.stringify(event.idempotencyKey)).byteLength) +
+      (event.ephemeral === true ? EPHEMERAL_PROPERTY_BYTE_LENGTH : 0) +
+      this.#pathPropertyByteLength
+    );
   }
 }
 

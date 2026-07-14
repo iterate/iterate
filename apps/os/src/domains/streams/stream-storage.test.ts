@@ -220,11 +220,17 @@ describe("StreamEventLog.getRange", () => {
 
   it("insert reports serialized byte lengths and getRangeSized reads the same sizes back", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
-    const committedEvents = [
+    const committedEvents: StreamEvent[] = [
       event(1, "events.iterate.com/test/sized"),
       {
-        ...event(2, "events.iterate.com/test/sized"),
+        ...event(2, "events.iterate.com/test/sized/音声/🌍"),
         payload: { text: "héllo 🌍 Καλημέρα こんにちは" },
+        idempotencyKey: 'clé-"-🔑',
+      },
+      {
+        ...event(3, "events.iterate.com/test/sized/ephemeral"),
+        payload: { text: "temporary" },
+        ephemeral: true,
       },
     ];
 
@@ -241,9 +247,20 @@ describe("StreamEventLog.getRange", () => {
       afterOffset: 0,
       beforeOffset: Number.MAX_SAFE_INTEGER,
       limit: 10,
+      includeEphemeral: true,
     });
     expect(sized.map((entry) => entry.byteLength)).toEqual(insertedByteLengths);
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
+
+    const selected = log.scanPushEventTypesFrame({
+      afterOffset: 0,
+      throughOffset: 3,
+      eventTypes: [committedEvents[1]!.type],
+      rawLimit: 3,
+      selectedByteLimit: Number.MAX_SAFE_INTEGER,
+    });
+    expect(selected.events).toEqual([inserted[1]]);
+    expect(selected.byteLength).toBe(insertedByteLengths[1]);
   });
 
   it("scans exact raw progress while materializing only selected event types", () => {
@@ -586,12 +603,18 @@ describe("StreamEventLog.getRange", () => {
       ),
     ) as Record<string, unknown>;
     expect(stored).not.toHaveProperty("path");
+    expect(stored).not.toHaveProperty("type");
+    expect(stored).not.toHaveProperty("offset");
+    expect(stored).not.toHaveProperty("idempotencyKey");
+    expect(stored).not.toHaveProperty("ephemeral");
+    expect(stored).toEqual({ payload: committed.payload, createdAt: committed.createdAt });
     const storedByteLength = db.prepare("select length(event_json) as value from events").get()!
       .value as number;
     const textEncoder = new TextEncoder();
     expect(storedByteLength).toBe(
-      textEncoder.encode(JSON.stringify(committed)).byteLength -
-        textEncoder.encode(`,"path":${JSON.stringify(committed.path)}`).byteLength,
+      textEncoder.encode(
+        JSON.stringify({ payload: committed.payload, createdAt: committed.createdAt }),
+      ).byteLength,
     );
     expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 0 });
     expect(inserted).toEqual([
@@ -768,11 +791,7 @@ describe("StreamEventLog.getRange", () => {
     let rangeQuery: { statement: string; bindings: readonly SqlStorageValue[] } | undefined;
     const log = new StreamEventLog(
       wrapSqlStorage(db, (statement, bindings) => {
-        if (
-          statement.includes(
-            "select coalesce(cast(event_json as text), offset) as eventJsonOrOffset\n          from events",
-          )
-        ) {
+        if (statement.includes("coalesce(cast(event_json as text), offset) as eventJsonOrOffset")) {
           rangeQuery = { statement, bindings };
         }
       }),
@@ -1251,9 +1270,8 @@ describe("StreamEventLog.getRange", () => {
     const pointReadBindings: SqlStorageValue[][] = [];
     const sql = wrapSqlStorage(new DatabaseSync(":memory:"), (statement, bindings) => {
       if (
-        statement.includes(
-          "select cast(event_json as text) as eventJson from events where offset = ?",
-        )
+        statement.includes("cast(event_json as text) as eventJson") &&
+        statement.includes("where offset = ?")
       ) {
         pointReadBindings.push([...bindings]);
       }
@@ -1399,7 +1417,7 @@ describe("StreamEventLog.getRange", () => {
     );
     expect(
       db.prepare("select version, evicted_offset_floor as floor from stream_storage_schema").get(),
-    ).toEqual({ version: 8, floor: 0 });
+    ).toEqual({ version: 9, floor: 0 });
     expect(
       db
         .prepare(
@@ -1633,7 +1651,7 @@ describe("SqliteSubscriptionCursorStore schema", () => {
       "pending_recovery_at",
     ]);
     expect(db.prepare("select version from stream_storage_schema").get()).toEqual({
-      version: 8,
+      version: 9,
     });
     db.exec("insert into subscriptions (subscription_key, acked_offset, epoch) values ('k', 0, 1)");
     expect(() =>
