@@ -444,9 +444,15 @@ export class RepoDurableObject extends DurableObject<Env> {
   }): Promise<RepoCommittedFileChange[]> {
     // This method is reached from the Cloudflare Artifacts queue for pushes
     // made outside this DO too (for example from a developer's computer).
-    // Invalidate before pinned diff reads so the next unpinned HEAD read
-    // cannot reuse the pre-push snapshot.
-    this.#headFilesSnapshot.clear();
+    // Record the queue-observed head before pinned diff reads. Artifacts can
+    // briefly clone the previous tip even after emitting its push event; the
+    // recorded oid makes #checkout retry that stale clone instead of letting
+    // it repopulate the just-cleared unpinned HEAD snapshot.
+    if (input.afterCommitOid === null) {
+      this.#headFilesSnapshot.clear();
+    } else {
+      this.#recordPushedHead({ branch: input.branch, commitOid: input.afterCommitOid });
+    }
     const previous =
       input.beforeCommitOid === null
         ? {}
