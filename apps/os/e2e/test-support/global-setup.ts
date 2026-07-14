@@ -16,9 +16,9 @@
  *   suites keep failing with their existing clear "APP_CONFIG_BASE_URL is
  *   required" error.
  *
- * Runs once per vitest run: listed on both projects (vitest reads
- * `globalSetup` per project, like `retry`), deduped via a globalThis promise
- * because each project loads its own instance of this module.
+ * Runs once per vitest run: vitest reads `globalSetup` per project (like
+ * `retry`), and the globalThis-promise dedupe keeps this a single run even
+ * if more projects list it (today only the `node` project does).
  */
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -28,9 +28,9 @@ import { devServerLogPath } from "../../scripts/lib/dev-server-info.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-// Symbol.for-keyed globalThis stashes: vitest.config.ts (vite's bundled
-// config eval) and this setup file (vite-node) get separate module
-// instances, but share the process.
+// Symbol.for-keyed globalThis stashes: config eval (vite's bundled config)
+// and setup files (vite-node) can get separate module instances in one
+// process, so the stash — not module state — is the dedupe.
 const TARGET_KEY: unique symbol = Symbol.for("iterate.osE2e.localDevTarget");
 const ENSURE_KEY: unique symbol = Symbol.for("iterate.osE2e.ensureDevServer");
 const stash = globalThis as typeof globalThis & {
@@ -41,12 +41,11 @@ const stash = globalThis as typeof globalThis & {
 /**
  * The local target `pnpm e2e` uses when `APP_CONFIG_BASE_URL` is unset: the
  * live dev server, or the port a to-be-started one will listen on. Resolved
- * once per process so vitest.config.ts (the browser project's `define`) and
- * the globalSetup below agree on the port even when nothing is running yet —
- * the same way playwright.config.ts bakes `--port N` into its webServer
- * command.
+ * once per process — the same way playwright.config.ts bakes `--port N` into
+ * its webServer command — so every consumer in the run agrees on one port
+ * even when nothing is running yet.
  */
-export function resolveLocalOsDevTargetOnce(): ReturnType<typeof localOsDevServer.resolveTarget> {
+function resolveLocalOsDevTargetOnce(): ReturnType<typeof localOsDevServer.resolveTarget> {
   return (stash[TARGET_KEY] ??= localOsDevServer.resolveTarget());
 }
 
@@ -69,9 +68,8 @@ async function ensureOsUnderTest(): Promise<void> {
     return;
   }
 
-  // The stashed target is what the browser project's `define` already baked
-  // in at config eval — reuse is only sound against exactly that URL, the
-  // same way Playwright's reuseExistingServer probes its one predetermined
+  // Reuse is only sound against exactly the resolved target URL, the same
+  // way Playwright's reuseExistingServer probes its one predetermined
   // target. A live server on any other port is split-brain, not a reuse.
   const target = await resolveLocalOsDevTargetOnce();
   const live = localOsDevServer.readLive();

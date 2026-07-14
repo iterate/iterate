@@ -2,7 +2,6 @@ import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
-import { playwright } from "@vitest/browser-playwright";
 import {
   appendConsoleLineSync,
   createVitestRunRoot,
@@ -17,7 +16,6 @@ import {
 } from "@iterate-com/shared/test-support/e2e-policy";
 import { E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./test-support/provide-keys.ts";
 import { createVitestRunSlug } from "./test-support/vitest-naming.ts";
-import { resolveLocalOsDevTargetOnce } from "./test-support/global-setup.ts";
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url));
 const e2eRoot = fileURLToPath(new URL(".", import.meta.url));
@@ -25,14 +23,6 @@ const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
 const vitestRunSlug = createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("os-e2e-");
-// The deployed target wins; otherwise resolve the local dev target ONCE —
-// the live dev server, or the exact port the globalSetup will start one on —
-// mirroring how playwright.config.ts bakes `--port N` into its webServer
-// command. CI never targets a local dev server (see global-setup.ts).
-const configuredOsBaseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
-const localOsTarget =
-  configuredOsBaseUrl || process.env.CI ? null : await resolveLocalOsDevTargetOnce();
-const baseUrl = configuredOsBaseUrl || localOsTarget?.baseUrl || "";
 
 console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
 console.log(`[vitest] run slug: ${vitestRunSlug}`);
@@ -101,11 +91,11 @@ const sharedResolve = {
   },
 };
 
-// One e2e suite, two projects. Both drive a real deployed OS
-// (APP_CONFIG_BASE_URL — local dev, preview, or prod); the split is only the
-// runtime the test code executes in. `pnpm e2e` runs everything; preview CI
-// runs `pnpm e2e --project node` (the browser catalogue is also covered by the
-// root Playwright REPL specs, so it stays out of the preview lane).
+// One e2e suite, one project (`node`), driving a real deployed OS
+// (APP_CONFIG_BASE_URL — local dev, preview, or prod). Browser-side catalogue
+// coverage lives in specs/repl-examples.spec.ts, which runs the examples
+// through the real REPL. Preview CI invokes `pnpm e2e --project node`; the
+// project keeps that name so the invocation stays valid.
 export default defineConfig({
   test: {
     // Run-scheduler options live at the ROOT test level — this is where vitest
@@ -146,9 +136,9 @@ export default defineConfig({
           // Ensure the target exists before any test runs: no-op against a
           // deployed APP_CONFIG_BASE_URL, otherwise reuse-or-start the local
           // dev server — the `pnpm spec` webServer contract (see
-          // global-setup.ts). Listed on each project because vitest reads
-          // globalSetup per project (like `retry` below); the setup dedupes
-          // itself, so it still runs once per `pnpm e2e`.
+          // global-setup.ts). Vitest reads globalSetup per project (like
+          // `retry` below), and the setup dedupes itself — harmless if more
+          // projects ever list it again.
           // Absolute so vitest (project-root-relative) and knip
           // (config-dir-relative) agree on where this file lives.
           globalSetup: [resolve(e2eRoot, "test-support/global-setup.ts")],
@@ -171,63 +161,6 @@ export default defineConfig({
           // applied (verified: a CI-profile run showed a failed test with
           // zero retry attempts).
           retry: ci ? { count: E2E_CI_RETRIES, delay: E2E_CI_RETRY_DELAY_MS } : 0,
-        },
-      },
-      {
-        define: {
-          __ITX_BROWSER_E2E__: JSON.stringify({
-            baseUrl,
-          }),
-        },
-        resolve: sharedResolve,
-        test: {
-          name: "browser",
-          include: ["./e2e/examples/examples-browser.test.ts"],
-          // See the node project: per-project on purpose, dedupes itself.
-          // Absolute so vitest (project-root-relative) and knip
-          // (config-dir-relative) agree on where this file lives.
-          globalSetup: [resolve(e2eRoot, "test-support/global-setup.ts")],
-          provide: sharedProvide,
-          testTimeout: 45_000,
-          hookTimeout: 45_000,
-          // See the node project: `retry` must live on each project config,
-          // and one retry is the policy.
-          retry: ci ? { count: E2E_CI_RETRIES, delay: E2E_CI_RETRY_DELAY_MS } : 0,
-          browser: {
-            commands: {
-              // The test page deliberately lives on Vitest's origin. Mint an
-              // explicit short-lived grant server-side instead of exposing
-              // the deployment admin secret to that browser bundle.
-              async mintItxOperatorToken(_context: any, input: { url: string }) {
-                const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
-                if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
-                const response = await fetch(new URL("/api/operator-sessions", input.url), {
-                  body: JSON.stringify({
-                    kind: "admin",
-                    operatorId: "itx-browser-e2e",
-                    ttlSeconds: 900,
-                  }),
-                  headers: {
-                    authorization: `Bearer ${secret}`,
-                    "content-type": "application/json",
-                  },
-                  method: "POST",
-                });
-                if (!response.ok) {
-                  throw new Error(
-                    `operator session issuance failed (${response.status}): ${await response.text()}`,
-                  );
-                }
-                const result = (await response.json()) as { token?: unknown };
-                if (typeof result.token !== "string") throw new Error("issuer returned no token");
-                return { token: result.token };
-              },
-            },
-            enabled: true,
-            headless: true,
-            instances: [{ browser: "chromium" }],
-            provider: playwright(),
-          },
         },
       },
     ],

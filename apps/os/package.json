@@ -102,7 +102,6 @@
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260624.1",
     "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/browser-playwright": "^4.1.7",
     "esbuild": "^0.27.4",
     "iterate": "workspace:*",
     "jsdom": "27.4.0",
