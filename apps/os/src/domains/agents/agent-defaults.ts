@@ -311,7 +311,7 @@ export function agentDefaultsForPath(input: {
           "- Delegate by messaging a child agent into existence: await itx.agents.get('researcher').message(task) — put everything the child needs in the message, then end your turn; its report arrives as your input.",
           // Deliberate reinforcement of the prompt's FIND WORKING CODE
           // section — repetition is the one thing small prompts buy back.
-          '- FIRST MOVE for an unfamiliar API: await itx.docs.search({ q: "several related words" }) — working example scripts, type declarations, and this project\'s mounted capabilities; each hit carries a fetchCall string, the ready-made itx.docs.get call that fetches its full doc. For unfamiliar PROJECT facts or history: await itx.search.query({ q }) — conversations, webhooks, events, files, and the repo are all indexed, and each hit carries a ref back to the exact source. await itx.__describe() lists everything at your scope.',
+          '- FIRST MOVE for an unfamiliar API: await itx.docs.search({ q: "several related words" }) — working example scripts, type declarations, and this project\'s mounted capabilities; each hit carries a fetchCall string, the ready-made itx.docs.get call that fetches its full doc. For unfamiliar PROJECT facts or history: await itx.search.query({ q }) — conversations, webhooks, events, files, and the repo are all indexed, and each hit carries a ref back to the exact source. Noisy results? Refine the query (drop filler words, quote exact tokens); do not fall back to paging vendor APIs. await itx.__describe() lists everything at your scope.',
         ].join("\n"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },

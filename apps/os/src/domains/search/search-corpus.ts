@@ -127,10 +127,12 @@ export type SearchResultChunk = {
    */
   score: number;
   /**
-   * The matched text (capped ~1.2k chars per hit so result sets stay inline;
-   * a truncation marker points at `ref` for the full source).
+   * A SHORT snippet around the matching text (~2 sentences). Judge relevance
+   * here; evaluate `ref` for the whole thing.
    */
   content: string;
+  /** When the source object was last written (ISO), where the index knows. */
+  date?: string;
   /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
   kind?: string;
   /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
@@ -278,6 +280,33 @@ export function narrowStreamRefToChunk(storedRef: ItxExpression, chunkText: stri
     firstOffset: Math.min(...offsets),
     lastOffset: Math.max(...offsets),
   });
+}
+
+/**
+ * A short window of `text` centered on the first query-term match — the
+ * "matching couple of sentences" a result row shows. Terms under 3 chars and
+ * generic filler are skipped when locating the match; no term found = the
+ * head of the text. Boundaries snap to whitespace, ellipses mark the cuts.
+ */
+export function extractMatchSnippet(text: string, query: string, maxChars: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= maxChars) return flat;
+  const terms = query
+    .toLowerCase()
+    .split(/[^a-z0-9_-]+/)
+    .filter((term) => term.length >= 3);
+  const lower = flat.toLowerCase();
+  let at = -1;
+  for (const term of terms) {
+    const i = lower.indexOf(term);
+    if (i !== -1 && (at === -1 || i < at)) at = i;
+  }
+  if (at === -1) return `${flat.slice(0, maxChars)}…`;
+  let start = Math.max(0, at - Math.floor(maxChars / 2));
+  const spaceBefore = flat.indexOf(" ", start);
+  if (spaceBefore !== -1 && spaceBefore < at) start = spaceBefore + 1;
+  const end = Math.min(flat.length, start + maxChars);
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
 }
 
 /** The ref expression for an itx.files path — evaluates to the file handle. */

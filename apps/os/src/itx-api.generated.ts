@@ -881,10 +881,10 @@ export interface Search {
    * with federated itx.docs, each result tagged with its `kind` and `context`
    * so callers can contextualize a hit. ONE row per MATCH — distinct event
    * windows within one stream segment stay distinct rows (full-text-search
-   * semantics); only same-location re-scores collapse. Content capped so a
-   * full default result is ~3-4k tokens —
-   * about two queries fit one inline script return; fanning out more, return
-   * selected fields (kind/context/ref), not whole results. Docs hits carry
+   * semantics); only same-location re-scores collapse. Rows are TINY: kind,
+   * date, context, a ~2-sentence snippet around the match, and the ref that
+   * fetches the whole thing — so the default 30 rows read at a glance and a
+   * result set stays well inside one inline script return. Docs hits carry
    * synthetic 0.5-band
    * scores (not comparable to corpus relevance), ride on top of `limit`
    * corpus chunks (their own cap: min(limit, 5)), and ignore
@@ -896,7 +896,7 @@ export interface Search {
    */
   query(input: {
     q: string;
-    /** Max chunks to return (1–50, default 20 — tuned for recall). */
+    /** Max result rows (1–50, default 30 — rows are tiny snippets; go wide). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
@@ -2977,10 +2977,12 @@ export type SearchResultChunk = {
    */
   score: number;
   /**
-   * The matched text (capped ~1.2k chars per hit so result sets stay inline;
-   * a truncation marker points at `ref` for the full source).
+   * A SHORT snippet around the matching text (~2 sentences). Judge relevance
+   * here; evaluate `ref` for the whole thing.
    */
   content: string;
+  /** When the source object was last written (ISO), where the index knows. */
+  date?: string;
   /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
   kind?: string;
   /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */

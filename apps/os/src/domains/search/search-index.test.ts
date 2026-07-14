@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
+  extractMatchSnippet,
   fileRef,
   fileSearchKey,
   narrowStreamRefToChunk,
@@ -166,6 +167,22 @@ describe("renderStreamSegmentDocument", () => {
     });
     expect(document).toContain("… (truncated)");
     expect(document!.length).toBeLessThan(20_000);
+  });
+});
+
+describe("extractMatchSnippet", () => {
+  it("centers the snippet on the first query-term match", () => {
+    const text = "x ".repeat(400) + "the needle in the haystack sits here" + " y".repeat(400);
+    const snippet = extractMatchSnippet(text, "needle haystack", 120);
+    expect(snippet).toContain("needle");
+    expect(snippet.length).toBeLessThanOrEqual(124); // ellipses included
+    expect(snippet.startsWith("…")).toBe(true);
+  });
+
+  it("falls back to the head when no term matches, and passes short text through", () => {
+    expect(extractMatchSnippet("short text", "zzz", 100)).toBe("short text");
+    const head = extractMatchSnippet("a ".repeat(200), "zzz", 50);
+    expect(head.endsWith("…")).toBe(true);
   });
 });
 
