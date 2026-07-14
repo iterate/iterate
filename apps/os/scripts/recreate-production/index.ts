@@ -5,6 +5,7 @@ import process from "node:process";
 import type { RpcStub } from "capnweb";
 
 import type {
+  BuiltinIntegrationSlug,
   IntegrationConnectionListEntry,
   Project,
   ProjectListEntry,
@@ -29,9 +30,12 @@ import {
 } from "./package.ts";
 
 const CONFIG_REPO_PATH = "/repos/config";
+const EMAIL_INTEGRATION_PATH = "/integrations/email";
 const INTEGRATION_DIRECTORY_PATH = "/integrations/_directory";
 const PROJECT_ROOT_PATH = "/";
+const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
 const MAX_RECOVERY_STREAM_BYTES = 8 * 1024 * 1024;
+const READY_WAIT_TIMEOUT_MS = 60_000;
 
 type ConnectionOptions = { baseUrl?: string };
 
@@ -65,16 +69,14 @@ export async function exportProjects(options: ExportProjectsOptions) {
   const directory = await exportCompleteStream(
     session.streamRecovery.get({ projectId: null, path: INTEGRATION_DIRECTORY_PATH }),
   );
-  const selectedIds = new Set(selected.map((project) => project.id));
   const filteredDirectory = StreamRecoveryRestoreInput.parse({
     format: STREAM_RECOVERY_FORMAT,
     version: STREAM_RECOVERY_VERSION,
     stream: directory.stream,
     highestAssignedOffset: directory.highestAssignedOffset,
-    events: directory.events.filter(
-      (event) =>
-        event.type === "events.iterate.com/stream/created" ||
-        (typeof event.payload?.projectId === "string" && selectedIds.has(event.payload.projectId)),
+    events: integrationDirectoryRecoveryEvents(
+      directory.events,
+      new Set(selected.map((project) => project.id)),
     ),
   });
 
@@ -93,7 +95,7 @@ export async function exportProjects(options: ExportProjectsOptions) {
     globalStreams: [filteredDirectory],
   };
   const parsed = ProductionRecoveryPackage.parse(recoveryPackage);
-  assertRecoveryPackageRestorable(parsed);
+  assertRecoveryPackageRestorable(parsed, { allowProvidedIntegrations: true });
   const outputPath = await recoveryOutputPath(options.out);
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
@@ -110,14 +112,6 @@ export async function exportProjects(options: ExportProjectsOptions) {
 export async function preflight(options: { file: string }) {
   const recoveryPackage = await readPackage(options.file);
   const problems = recoveryPackageProblems(recoveryPackage);
-  const cautions = recoveryPackage.projects.flatMap((project) =>
-    project.integrationInventory
-      .filter((integration) => integration.source === "provided")
-      .map(
-        (integration) =>
-          `${project.identity.slug}: provided integration ${integration.path} must be recreated by config-repo code or checked manually`,
-      ),
-  );
 
   if (problems.length > 0) {
     throw new Error(`Recovery preflight failed:\n- ${problems.join("\n- ")}`);
@@ -126,7 +120,6 @@ export async function preflight(options: { file: string }) {
     ok: true,
     breakingChange: recoveryPackage.breakingChange ?? null,
     projects: recoveryPackage.projects.map(projectSummary),
-    cautions,
     agentReviewRequired:
       "Inspect the breaking-change diff against these event payloads before cutover; transform a copy of the JSON package or stop and consult the user if the target code cannot consume them.",
     restoreConfirmation: expectedRestoreConfirmation(recoveryPackage),
@@ -214,6 +207,8 @@ export async function restore(options: RestoreOptions) {
     // GitHub is authoritative. No depth means all history; if that exceeds the
     // DO limit, the command fails and the skill asks the user about a depth.
     const sync = await project.repo.syncFromGithub({ force: true });
+    const workerResponse = await project.worker.fetch(new Request(PROJECT_WORKER_READY_URL));
+    disposeRpcResult(workerResponse);
     configRepos.push({
       projectId: saved.identity.id,
       github: `${github.owner}/${github.repo}`,
@@ -240,7 +235,7 @@ async function exportProject(
   project: RpcStub<Project>,
   identity: ProjectListEntry,
 ): Promise<ProductionRecoveryPackageType["projects"][number]> {
-  const [secretList, integrationInventory, repoSnapshot, repoLog] = await Promise.all([
+  const [secretList, rawIntegrationInventory, repoSnapshot, repoLog] = await Promise.all([
     project.secrets.list(),
     project.integrations.list(),
     project.repo.processor.snapshot(),
@@ -266,12 +261,26 @@ async function exportProject(
       return publicSecretInventory(path, description);
     }),
   );
+  const integrationInventory = await Promise.all(
+    rawIntegrationInventory.map(async (entry) => {
+      if (entry.source !== "builtin" || entry.connection === null) {
+        return { ...normalizeIntegrationInventory(entry), status: null };
+      }
+      const status = await project.integrations.getConnection({
+        connection: entry.connection,
+        provider: integrationProvider(entry.integration),
+      });
+      return {
+        ...normalizeIntegrationInventory(entry),
+        status: { connected: status.connected, externalId: status.externalId },
+      };
+    }),
+  );
   const paths = new Set<string>([
     PROJECT_ROOT_PATH,
+    EMAIL_INTEGRATION_PATH,
     ...secretList.map((secret) => secret.path),
-    ...integrationInventory
-      .filter((integration) => integration.source === "builtin")
-      .map((integration) => integration.path),
+    ...integrationInventory.filter(integrationHasJournal).map((integration) => integration.path),
   ]);
   const streams: StreamRecoveryRestoreInput[] = [];
   for (const path of [...paths].sort()) {
@@ -288,9 +297,11 @@ async function exportProject(
         events:
           path === PROJECT_ROOT_PATH
             ? projectBackboneEvents(exported.events)
-            : integration?.source === "builtin"
-              ? exported.events.filter(isBuiltinIntegrationControlEvent)
-              : exported.events,
+            : path === EMAIL_INTEGRATION_PATH
+              ? emailRecoveryEvents(exported.events)
+              : integration?.source === "builtin"
+                ? exported.events.filter(isBuiltinIntegrationControlEvent)
+                : exported.events,
       }),
     );
   }
@@ -304,7 +315,7 @@ async function exportProject(
       organizationSlug: identity.organizationSlug,
     },
     streams,
-    integrationInventory: integrationInventory.map(normalizeIntegrationInventory),
+    integrationInventory,
     secretInventory,
     configRepo: {
       path: CONFIG_REPO_PATH,
@@ -366,16 +377,21 @@ async function verifyPackage(
     const secrets = await Promise.all(
       saved.secretInventory.map(async (expected) => {
         const actual = await project.secrets.get(expected.path).__describe();
+        const material = await session.streamRecovery
+          .get({ projectId: saved.identity.id, path: expected.path })
+          .verifySecretMaterial();
         const materialOk = actual.hasMaterial === expected.hasMaterial;
+        const decryptable = material.hasMaterial === expected.hasMaterial;
         const egressOk =
           [...actual.egress.urls].sort().join("\0") === [...expected.egressUrls].sort().join("\0");
         const refreshOk = actual.refresh === expected.refresh;
-        const ok = materialOk && egressOk && refreshOk;
+        const ok = materialOk && decryptable && egressOk && refreshOk;
         if (!ok) failures.push(`${saved.identity.slug}: secret ${expected.path} metadata mismatch`);
         return {
           path: expected.path,
           expectedHasMaterial: expected.hasMaterial,
           hasMaterial: actual.hasMaterial,
+          decryptable,
           egressOk,
           refreshOk,
           ok,
@@ -393,6 +409,41 @@ async function verifyPackage(
     for (const missing of missingIntegrations) {
       failures.push(`${saved.identity.slug}: integration ${missing.path} is missing`);
     }
+    const integrationStatuses = await Promise.all(
+      saved.integrationInventory.flatMap((expected) => {
+        if (
+          expected.source !== "builtin" ||
+          expected.connection === null ||
+          expected.status === null
+        ) {
+          return [];
+        }
+        const expectedStatus = expected.status;
+        return [
+          project.integrations
+            .getConnection({
+              connection: expected.connection,
+              provider: integrationProvider(expected.integration),
+            })
+            .then((actual) => {
+              const ok =
+                actual.connected === expectedStatus.connected &&
+                actual.externalId === expectedStatus.externalId;
+              if (!ok) {
+                failures.push(
+                  `${saved.identity.slug}: integration ${expected.path} status/external id mismatch`,
+                );
+              }
+              return {
+                path: expected.path,
+                connected: actual.connected,
+                externalId: actual.externalId,
+                ok,
+              };
+            }),
+        ];
+      }),
+    );
     const repoLog = await project.repo.log({ limit: 1 });
     const configRepoHead = repoLog.commits[0]?.oid ?? null;
     if (configRepoHead !== saved.configRepo.exportedHead) {
@@ -400,17 +451,53 @@ async function verifyPackage(
         `${saved.identity.slug}: config repo head ${configRepoHead ?? "missing"} does not match exported head ${saved.configRepo.exportedHead}`,
       );
     }
+    const repoSnapshot = await project.repo.processor.snapshot();
+    const restoredGithub = repoSnapshot.state.github;
+    const githubOk =
+      restoredGithub !== null &&
+      restoredGithub.connection === saved.configRepo.github.connection &&
+      restoredGithub.owner === saved.configRepo.github.owner &&
+      restoredGithub.repo === saved.configRepo.github.repo;
+    if (!githubOk) failures.push(`${saved.identity.slug}: config repo GitHub link mismatch`);
+    const workerResponse = await project.worker.fetch(new Request(PROJECT_WORKER_READY_URL));
+    disposeRpcResult(workerResponse);
     projects.push({
       projectId: saved.identity.id,
       deploymentStatus: deploymentProject?.deploymentStatus ?? "absent",
       slug: saved.identity.slug,
       secrets,
       missingIntegrations,
+      integrationStatuses,
       configRepoHead,
+      githubLinkOk: githubOk,
       github: `${saved.configRepo.github.owner}/${saved.configRepo.github.repo}`,
     });
   }
-  return { ok: failures.length === 0, failures, projects };
+  const expectedDirectory = recoveryPackage.globalStreams.find(
+    (stream) => stream.stream.path === INTEGRATION_DIRECTORY_PATH,
+  );
+  if (expectedDirectory === undefined) {
+    failures.push("deployment: saved integration directory is absent");
+  }
+  const actualDirectory = await exportCompleteStream(
+    session.streamRecovery.get({ projectId: null, path: INTEGRATION_DIRECTORY_PATH }),
+  );
+  const expectedClaims = foldActiveIntegrationClaims(expectedDirectory?.events ?? []);
+  const actualClaims = foldActiveIntegrationClaims(actualDirectory.events);
+  const integrationDirectoryOk = JSON.stringify(actualClaims) === JSON.stringify(expectedClaims);
+  if (!integrationDirectoryOk) {
+    failures.push("deployment: active integration webhook routing claims differ from the package");
+  }
+  return {
+    ok: failures.length === 0,
+    failures,
+    projects,
+    integrationDirectory: {
+      ok: integrationDirectoryOk,
+      expectedClaims,
+      actualClaims,
+    },
+  };
 }
 
 async function waitForIntegrationInventory(
@@ -419,12 +506,13 @@ async function waitForIntegrationInventory(
 ) {
   let latest: IntegrationConnectionListEntry[] = [];
   const expectedKeys = new Set(expected.map(integrationKey));
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  const deadline = Date.now() + READY_WAIT_TIMEOUT_MS;
+  do {
     latest = await project.integrations.list();
     const actualKeys = new Set(latest.map(integrationKey));
     if ([...expectedKeys].every((key) => actualKeys.has(key))) return latest;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
-  }
+  } while (Date.now() < deadline);
   return latest;
 }
 
@@ -444,6 +532,27 @@ function normalizeIntegrationInventory(entry: IntegrationConnectionListEntry) {
     path: entry.path,
     source: entry.source,
   };
+}
+
+function integrationProvider(integration: string): BuiltinIntegrationSlug {
+  const provider = integration === "gmail" ? "google" : integration;
+  if (
+    provider !== "github" &&
+    provider !== "google" &&
+    provider !== "slack" &&
+    provider !== "telegram" &&
+    provider !== "waitrose"
+  ) {
+    throw new Error(`Unknown built-in integration provider: ${integration}`);
+  }
+  return provider;
+}
+
+function integrationHasJournal(integration: {
+  integration: string;
+  source: "builtin" | "provided";
+}) {
+  return integration.source === "builtin" && integration.integration !== "waitrose";
 }
 
 function integrationKey(entry: {
@@ -471,20 +580,25 @@ function restoreRank(path: string) {
 }
 
 export function projectBackboneEvents(events: StreamRecoveryRestoreInput["events"]) {
-  let keptProjectWorkerSubscription = false;
-  let keptProjectProcessorSubscription = false;
+  const projectWorkerOffset = events.findLast(
+    (event) =>
+      event.type === "events.iterate.com/stream/subscription-configured" &&
+      event.payload?.subscriptionKey === "project-worker",
+  )?.offset;
+  const projectProcessorOffset = events.findLast(isProjectProcessorSubscription)?.offset;
   return events
     .filter((event) => {
       if (event.type === "events.iterate.com/stream/created") return true;
       if (event.type === "events.iterate.com/stream/subscription-configured") {
-        if (event.payload?.subscriptionKey === "project-worker" && !keptProjectWorkerSubscription) {
-          keptProjectWorkerSubscription = true;
+        if (event.offset === projectWorkerOffset || event.offset === projectProcessorOffset)
           return true;
-        }
-        if (isProjectProcessorSubscription(event) && !keptProjectProcessorSubscription) {
-          keptProjectProcessorSubscription = true;
-          return true;
-        }
+      }
+      if (
+        event.type === "events.iterate.com/project/egress-rules-configured" ||
+        event.type === "events.iterate.com/project/human-approval-key-added" ||
+        event.type === "events.iterate.com/project/human-approval-key-revoked"
+      ) {
+        return true;
       }
       // Deliberately discard the old project/created completion. Replaying
       // create-requested through the retained ProjectProcessor subscription
@@ -502,6 +616,84 @@ export function projectBackboneEvents(events: StreamRecoveryRestoreInput["events
           }
         : event,
     );
+}
+
+export function emailRecoveryEvents(events: StreamRecoveryRestoreInput["events"]) {
+  return events.filter(
+    (event) =>
+      event.type === "events.iterate.com/stream/created" ||
+      event.type === "events.iterate.com/stream/subscription-configured" ||
+      event.type === "events.iterate.com/stream/subscription-removed" ||
+      event.type === "events.iterate.com/email/sender-allowed",
+  );
+}
+
+type ActiveIntegrationClaim = {
+  connection: string;
+  externalId: string;
+  projectId: string;
+  slug: string;
+};
+
+export function foldActiveIntegrationClaims(
+  events: StreamRecoveryRestoreInput["events"],
+): ActiveIntegrationClaim[] {
+  const claims = new Map<string, ActiveIntegrationClaim>();
+  for (const event of events) {
+    const connection = event.payload?.connection;
+    const externalId = event.payload?.externalId;
+    const projectId = event.payload?.projectId;
+    const slug = event.payload?.slug;
+    if (
+      typeof connection !== "string" ||
+      typeof externalId !== "string" ||
+      typeof projectId !== "string" ||
+      typeof slug !== "string"
+    ) {
+      continue;
+    }
+    const key = `${slug}\0${externalId}`;
+    const existing = claims.get(key);
+    if (event.type === "events.iterate.com/integration/connection-claimed") {
+      if (existing === undefined || existing.projectId === projectId) {
+        claims.set(key, { connection, externalId, projectId, slug });
+      }
+    } else if (
+      event.type === "events.iterate.com/integration/connection-unclaimed" &&
+      existing?.projectId === projectId &&
+      existing.connection === connection
+    ) {
+      claims.delete(key);
+    }
+  }
+  return [...claims.values()].sort(
+    (left, right) =>
+      left.slug.localeCompare(right.slug) || left.externalId.localeCompare(right.externalId),
+  );
+}
+
+export function integrationDirectoryRecoveryEvents(
+  events: StreamRecoveryRestoreInput["events"],
+  selectedProjectIds: Set<string>,
+) {
+  const latestOffsets = new Set<number>();
+  for (const claim of foldActiveIntegrationClaims(events)) {
+    if (!selectedProjectIds.has(claim.projectId)) continue;
+    const latest = events.findLast(
+      (event) =>
+        event.type === "events.iterate.com/integration/connection-claimed" &&
+        integrationClaimKey(event.payload) === integrationClaimKey(claim),
+    );
+    if (latest !== undefined) latestOffsets.add(latest.offset);
+  }
+  return events.filter(
+    (event) =>
+      event.type === "events.iterate.com/stream/created" || latestOffsets.has(event.offset),
+  );
+}
+
+function integrationClaimKey(value: Record<string, unknown> | ActiveIntegrationClaim | undefined) {
+  return `${String(value?.slug)}\0${String(value?.externalId)}\0${String(value?.projectId)}\0${String(value?.connection)}`;
 }
 
 function isProjectProcessorSubscription(event: StreamRecoveryRestoreInput["events"][number]) {
@@ -533,7 +725,8 @@ function isBuiltinIntegrationControlEvent(event: StreamRecoveryRestoreInput["eve
 
 async function waitForReadyProjects(session: RpcStub<Session>, expectedIds: Set<string>) {
   let latest: ProjectListEntry[] = [];
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  const deadline = Date.now() + READY_WAIT_TIMEOUT_MS;
+  do {
     latest = await session.projects.list({ scope: "deployment" });
     if (
       [...expectedIds].every(
@@ -543,7 +736,7 @@ async function waitForReadyProjects(session: RpcStub<Session>, expectedIds: Set<
       return latest;
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
-  }
+  } while (Date.now() < deadline);
   return latest;
 }
 
@@ -556,20 +749,29 @@ function assertVerification<T extends { failures: string[]; ok: boolean }>(verif
   return verification;
 }
 
-function assertRecoveryPackageRestorable(recoveryPackage: ProductionRecoveryPackageType): void {
-  const problems = recoveryPackageProblems(recoveryPackage);
+function assertRecoveryPackageRestorable(
+  recoveryPackage: ProductionRecoveryPackageType,
+  options: { allowProvidedIntegrations?: boolean } = {},
+): void {
+  const problems = recoveryPackageProblems(recoveryPackage, options);
   if (problems.length > 0) {
     throw new Error(`Recovery package cannot be restored:\n- ${problems.join("\n- ")}`);
   }
 }
 
-function recoveryPackageProblems(recoveryPackage: ProductionRecoveryPackageType): string[] {
+function recoveryPackageProblems(
+  recoveryPackage: ProductionRecoveryPackageType,
+  options: { allowProvidedIntegrations?: boolean } = {},
+): string[] {
   const problems: string[] = [];
 
   for (const project of recoveryPackage.projects) {
     const streamPaths = new Set(project.streams.map((stream) => stream.stream.path));
     if (!streamPaths.has(PROJECT_ROOT_PATH)) {
       problems.push(`${project.identity.slug}: minimal project-root stream is absent`);
+    }
+    if (!streamPaths.has(EMAIL_INTEGRATION_PATH)) {
+      problems.push(`${project.identity.slug}: email sender-policy stream is absent`);
     }
     const duplicatePaths = duplicateValues(project.streams.map((stream) => stream.stream.path));
     if (duplicatePaths.length > 0) {
@@ -619,9 +821,19 @@ function recoveryPackageProblems(recoveryPackage: ProductionRecoveryPackageType)
       }
     }
     for (const integration of project.integrationInventory) {
-      if (integration.source === "builtin" && !streamPaths.has(integration.path)) {
+      if (integrationHasJournal(integration) && !streamPaths.has(integration.path)) {
         problems.push(
           `${project.identity.slug}: integration connection stream ${integration.path} is absent`,
+        );
+      }
+      if (integration.source === "builtin" && integration.status === null) {
+        problems.push(
+          `${project.identity.slug}: integration ${integration.path} has no saved status`,
+        );
+      }
+      if (integration.source === "provided" && !options.allowProvidedIntegrations) {
+        problems.push(
+          `${project.identity.slug}: provided integration ${integration.path} is outside this narrow MVP; the breaking PR needs an explicit rehydrator or the user must remove it from the recovery scope`,
         );
       }
     }
@@ -689,6 +901,11 @@ function duplicateValues(values: string[]) {
     seen.add(value);
   }
   return [...duplicates].sort();
+}
+
+function disposeRpcResult(value: unknown): void {
+  const dispose = (value as { [Symbol.dispose]?: () => void } | null | undefined)?.[Symbol.dispose];
+  dispose?.call(value);
 }
 
 function resolveSelectedProjects(raw: string, deployment: ProjectListEntry[]) {

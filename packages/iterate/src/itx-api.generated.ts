@@ -1375,6 +1375,8 @@ export interface StreamRecovery {
     lastImportedOffset: number;
     currentMaxOffset: number;
   }>;
+  /** Prove restored secret ciphertext still decrypts at this exact coordinate. */
+  verifySecretMaterial(): Promise<{ hasMaterial: boolean }>;
 }
 
 /**

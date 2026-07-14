@@ -420,7 +420,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     return {
       format: STREAM_RECOVERY_FORMAT,
       version: STREAM_RECOVERY_VERSION,
-      stream: this.name,
+      stream: { projectId: this.name.projectId, path: this.name.path },
       events,
       throughOffset,
       complete: events.length < limit || events.at(-1)?.offset === throughOffset,
@@ -442,12 +442,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     assertValidStreamRecoveryLog(parsed, this.name);
     const recoveredCoreState = this.#foldRecoveryCoreProcessorState(parsed);
 
-    this.#subscribers.resetForRecovery();
     this.ctx.storage.transactionSync(() => {
       this.#log.replaceAll(parsed.events, parsed.highestAssignedOffset);
       this.ctx.storage.sql.exec("delete from subscriptions");
-      this.#writeCoreProcessorState(recoveredCoreState);
+      this.ctx.storage.kv.put("state", recoveredCoreState);
+      this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
     });
+    // Do not tear down the live runtime until the atomic storage replacement
+    // succeeds. A failed transaction leaves both the old journal and its
+    // in-memory delivery machinery usable.
+    this.#subscribers.resetForRecovery();
+    this.#recordCoreProcessorCheckpointWritten();
     this.#coreProcessorState = recoveredCoreState;
 
     // The imported incarnation's live connections are gone. A fresh woken
@@ -466,7 +471,30 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** Validate and fold the import completely before any live/storage mutation. */
   #foldRecoveryCoreProcessorState(input: StreamRecoveryRestoreInput): CoreProcessorState {
     let next = CoreProcessorContract.stateSchema.parse({});
-    for (const event of input.events) next = this.#reduce({ event, state: next }, "replay");
+    for (const event of input.events) {
+      try {
+        if (
+          event.source?.crossPostedFrom === undefined &&
+          event.type === "events.iterate.com/stream/subscription-configured"
+        ) {
+          const configured = CoreProcessorContract.parseEvent(
+            "events.iterate.com/stream/subscription-configured",
+            event,
+          );
+          this.#validateSubscriptionConfiguration(configured.payload);
+        }
+        // Recovery is a deliberate replacement, unlike constructor replay of
+        // an old journal. Any current core-contract incompatibility must stop
+        // before storage changes so the cutover agent can migrate the package
+        // or ask the human what to do.
+        next = this.#reduceCore({ event, state: next });
+      } catch (error) {
+        throw new Error(
+          `recovery event at offset ${event.offset} (${event.type}) is incompatible with the current stream contract`,
+          { cause: error },
+        );
+      }
+    }
     if (input.highestAssignedOffset > next.maxOffset) {
       next = { ...next, maxOffset: input.highestAssignedOffset };
     }
@@ -523,14 +551,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         "events.iterate.com/stream/subscription-configured",
         args.event,
       );
-      if (event.payload.delivery.mode === "webhook" && this.name.projectId === null) {
-        // Webhook POSTs ride the project egress lane (attribution +
-        // interception); a global stream has no project to attribute them to.
-        throw new Error("webhook subscriptions require a project-scoped stream");
-      }
-      // An unparseable selector condition must be rejected before it commits,
-      // not discovered as a per-event error forever after. (compile throws.)
-      compileEventSelector(event.payload.selector);
+      this.#validateSubscriptionConfiguration(event.payload);
     }
 
     if (!args.state.paused) return;
@@ -550,6 +571,17 @@ export class StreamDurableObject extends DurableObject<Env> {
       default:
         throw new Error(`stream paused: ${args.state.pauseReason ?? "unknown reason"}`);
     }
+  }
+
+  #validateSubscriptionConfiguration(payload: SubscriptionConfiguredPayload): void {
+    if (payload.delivery.mode === "webhook" && this.name.projectId === null) {
+      // Webhook POSTs ride the project egress lane (attribution +
+      // interception); a global stream has no project to attribute them to.
+      throw new Error("webhook subscriptions require a project-scoped stream");
+    }
+    // An unparseable selector condition must be rejected before it commits,
+    // not discovered as a per-event error forever after. (compile throws.)
+    compileEventSelector(payload.selector);
   }
 
   // Pure fold of one committed event into the next core state. Runs per event
@@ -1077,15 +1109,19 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #writeCoreProcessorState(state: CoreProcessorState): void {
     this.ctx.storage.kv.put("state", state);
-    this.#checkpointDirty = false;
-    this.#eventsSinceCheckpoint = 0;
-    this.#checkpointWrittenAtMs = Date.now();
     // The version is a constant per deploy; re-putting it on every append is
     // pure write amplification. Once per incarnation is exactly as durable.
     if (!this.#stateVersionWritten) {
       this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
-      this.#stateVersionWritten = true;
     }
+    this.#recordCoreProcessorCheckpointWritten();
+  }
+
+  #recordCoreProcessorCheckpointWritten(): void {
+    this.#checkpointDirty = false;
+    this.#eventsSinceCheckpoint = 0;
+    this.#checkpointWrittenAtMs = Date.now();
+    this.#stateVersionWritten = true;
   }
 
   /** Fold any event-log rows past the checkpoint into the state (no side effects). */

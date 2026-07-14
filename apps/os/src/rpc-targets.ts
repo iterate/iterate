@@ -744,6 +744,7 @@ class StreamRecoveryRpcTarget extends IterateRpcTarget<"StreamRecovery"> {
       children: {
         exportForRecovery: "Export one bounded page, including surviving ephemeral rows.",
         restoreFromRecovery: "Replace the complete log and rebuild stream delivery from it.",
+        verifySecretMaterial: "Decrypt secret material in place without returning it.",
       },
       parent: "session.streamRecovery.get({ projectId, path })",
     });
@@ -779,6 +780,19 @@ class StreamRecoveryRpcTarget extends IterateRpcTarget<"StreamRecovery"> {
     currentMaxOffset: number;
   }> {
     return this.#durableObjectStub.restoreFromRecovery(input);
+  }
+
+  /** Prove restored secret ciphertext still decrypts at this exact coordinate. */
+  verifySecretMaterial(): Promise<{ hasMaterial: boolean }> {
+    if (this.props.projectId === null || !this.props.path.startsWith("/secrets/")) {
+      throw new Error("secret material verification requires a project-scoped /secrets/ path");
+    }
+    return env.SECRET.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: this.props.path,
+      }),
+    ).verifyMaterial();
   }
 }
 

@@ -111,6 +111,14 @@ export class SecretDurableObject extends DurableObject<Env> {
     return new LiveStateRpcTarget<SecretDescription>(this.#processorHost);
   }
 
+  /** Recovery-only integrity probe: decrypt in place and disclose no material. */
+  async verifyMaterial(): Promise<{ hasMaterial: boolean }> {
+    const state = await this.#snapshot();
+    if (state.encryptedMaterial === null) return { hasMaterial: false };
+    await this.#decrypt(state.encryptedMaterial, state.egress);
+    return { hasMaterial: true };
+  }
+
   update(input: SecretUpdateInput) {
     const result = this.#updates.then(() => this.#update(input));
     this.#updates = result.then(

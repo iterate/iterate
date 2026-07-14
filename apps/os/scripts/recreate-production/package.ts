@@ -20,6 +20,13 @@ const IntegrationInventoryEntry = z
     integration: z.string(),
     path: z.string(),
     source: z.enum(["builtin", "provided"]),
+    status: z
+      .object({
+        connected: z.boolean(),
+        externalId: z.string().nullable(),
+      })
+      .strict()
+      .nullable(),
   })
   .strict();
 

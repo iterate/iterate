@@ -747,11 +747,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamRecovery",
     kind: "interface",
     sourceText:
-      "/** Admin-only storage-level export/restore handle backed by one Stream Durable Object. */\nexport interface StreamRecovery {\n  __describe(): Promise<Description>;\n  /** Export a bounded page of the normalized surviving stream log. */\n  exportForRecovery(args?: {\n    afterOffset?: number;\n    limit?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportPage>;\n  /** Replace the complete stream log and rebuild its core delivery state. */\n  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{\n    restoredEventCount: number;\n    lastImportedOffset: number;\n    currentMaxOffset: number;\n  }>;\n}",
+      "/** Admin-only storage-level export/restore handle backed by one Stream Durable Object. */\nexport interface StreamRecovery {\n  __describe(): Promise<Description>;\n  /** Export a bounded page of the normalized surviving stream log. */\n  exportForRecovery(args?: {\n    afterOffset?: number;\n    limit?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportPage>;\n  /** Replace the complete stream log and rebuild its core delivery state. */\n  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{\n    restoredEventCount: number;\n    lastImportedOffset: number;\n    currentMaxOffset: number;\n  }>;\n  /** Prove restored secret ciphertext still decrypts at this exact coordinate. */\n  verifySecretMaterial(): Promise<{ hasMaterial: boolean }>;\n}",
     summary: "Admin-only storage-level export/restore handle backed by one Stream Durable Object.",
     memberSummaries: {
       exportForRecovery: "Export a bounded page of the normalized surviving stream log.",
       restoreFromRecovery: "Replace the complete stream log and rebuild its core delivery state.",
+      verifySecretMaterial:
+        "Prove restored secret ciphertext still decrypts at this exact coordinate.",
     },
     referencedTypeNames: ["Description", "StreamRecoveryExportPage", "StreamRecoveryRestoreInput"],
   },
