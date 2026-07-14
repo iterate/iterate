@@ -365,11 +365,14 @@ invariants:
   `pnpm preview deploy --allow-draft`; the next push re-applies the policy).
   A draft that holds a slot without asking — e.g. a ready PR converted back
   to draft — gives it back on the next lifecycle run.
-- **Nothing steals a live lease without a human `--force`.** Before running
-  tests or destroying anything, the tooling re-asserts that the PR still
-  holds the slot, and refuses (with an explanation naming the current holder)
-  if it doesn't. So a stale PR's cleanup can never destroy another PR's
-  preview, and e2e never runs against someone else's deployment.
+- **The semaphore is the single source of lease truth.** The PR body's
+  managed section only _displays_ the slot (and per-app results); it is never
+  consulted for ownership and never a reason to skip. Before running tests or
+  destroying anything, the tooling asks the semaphore which slot the PR holds
+  right now, and refuses (with an explanation naming the current holder) if
+  the answer is "not that one". So a stale PR's cleanup can never destroy
+  another PR's preview, e2e never runs against someone else's deployment, and
+  nothing steals a live lease without a human `--force`.
 - **Contention queues instead of exploding.** When all nine slots are leased,
   `preview deploy` waits in line (logging who holds what every few minutes)
   for up to 6 minutes before failing with the full holder table and
