@@ -3027,3 +3027,65 @@ Raw records are `/tmp/process-event-local-{main,candidate}-r{1..5}.log`,
 `/tmp/process-event-preview5-ephemeral-shared-r{1..7}.log`. The final
 actual-helper soak is
 `/tmp/process-event-preview5-ephemeral-helper-shared-r{1..12}.log`.
+
+## 2026-07-14: Ninth Current-Main Cumulative Checkpoint
+
+The ninth checkpoint pinned candidate
+`c8b29eab6f69669bc9cfd1ae4b16f193f35cee3f` against freshly fetched main
+`7b106d623ca1d814304443c0ad34f8e36ac0b0bb`. Two local workerd servers ran
+those immutable revisions. The candidate harness targeted each server by its
+explicit loopback URL, and every timer ran on the Node host around awaited RPC,
+network work, or host-observed delivery. No result uses elapsed time from a
+Worker isolate while Cloudflare could freeze its clock.
+
+Four interleaved collections each ran five fresh processes per revision: the
+15-workload cumulative suite, enlarged storage controls, enlarged concurrent
+append/live-delivery controls, and 200-sample dense/sparse cross-post controls.
+All 40 processes passed their semantic assertions. The full suite alone showed
+13.514% lower p50, 3.847% lower p95, and 10.253% lower mean latency.
+
+As in checkpoint eight, the headline replaces exactly five noisy full-suite
+rows with their pre-existing larger controls: singleton append, 100-event
+append, concurrent-32 append, one-subscriber delivery, and 25-subscriber
+delivery. It does not substitute the new cross-post controls into the
+geometric mean:
+
+| Equal-workload statistic | Improvement versus current main |
+| ------------------------ | ------------------------------: |
+| p50                      |                     **21.363%** |
+| p95                      |                     **11.649%** |
+| mean                     |                     **18.571%** |
+
+Focused results were materially stronger than their low-sample rows:
+
+| Focused workload                     | P50 change | P95 change | Mean change |
+| ------------------------------------ | ---------: | ---------: | ----------: |
+| Append one 1 KiB event               |      8.49% |      1.76% |       3.06% |
+| Append 100 tiny events               |     37.01% |     15.85% |      33.69% |
+| Append 100 1 KiB events              |     50.43% |     40.13% |      49.23% |
+| Append 1,000 tiny events             |     62.42% |     36.84% |      56.56% |
+| Append 32 concurrent singleton calls |     38.23% |     29.64% |      37.01% |
+| Deliver to one live subscriber       |     25.72% |     19.26% |      22.41% |
+| Deliver to 25 live subscribers       |     13.40% |     25.45% |      15.60% |
+| Head after forced reactivation       |     36.17% |     29.34% |      36.28% |
+| Dense one-event cross-post           |     35.76% |     36.52% |      34.12% |
+| Sparse cross-post, 1 of 100 events   |     42.14% |     35.68% |      39.42% |
+
+P50-derived capacity improved 58.76% for 100-event append, 61.90% for 32
+concurrent singleton appends, and 15.48% for 25-subscriber fanout. The original
+20-sample sparse cross-post row had shown a 77.82% p95 regression; at 200
+samples per run, both cross-post controls improved p50 and p95 in all five
+candidate runs. Substituting those two controls as well would produce
+23.769%/17.077%/21.036% p50/p95/mean improvement, but that number is not the
+headline because it changes the prior aggregation rule.
+
+The remaining full-suite tail caveats are warm sparse read and latest-match
+read p95 at -5.10% and -5.34%, while their p50s improve 17.85% and 14.03%.
+Hot-head mean is 6.91% worse despite a 9.64% p50 win. Those rows have only 30,
+30, and 80 observations per process respectively and are not claimed as
+regressions or wins without focused confirmation. No code changed during this
+checkpoint. Raw records are
+`/tmp/cumulative-9-{full,focus,tail,crosspost}-{main,candidate}-r{1..5}.log`.
+The collection ended at `2026-07-14T22:04:40Z`; if active optimization
+continues, the next current-main checkpoint is due by
+`2026-07-15T02:04:40Z`.
