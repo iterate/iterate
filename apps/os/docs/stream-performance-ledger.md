@@ -1388,3 +1388,69 @@ partial window, and an unpulled intermediate failure reaching the fence. The
 entire 371-test Stream unit surface and OS typecheck pass. Raw records are
 `/tmp/stream-window8-{candidate,parent}-isolated-r{1,2,3}.log` and
 `/tmp/stream-window4-candidate-isolated-r{1,2,3}.log` locally.
+
+## 2026-07-14: Legacy KV Event Store Rejected Before Rewrite
+
+The suggested lower-level storage experiment has two distinct meanings that
+must not be conflated. `ctx.storage.kv` is the synchronous structured-clone
+facade over the same SQLite database as `ctx.storage.sql`; it has no manual
+flush control. True legacy Durable Object KV is a different namespace backend
+using the asynchronous `ctx.storage.get/put/list/delete` API. Only that async
+API exposes `allowUnconfirmed` and `storage.sync()`.
+
+For a correct append acknowledgement, `allowUnconfirmed` cannot be used: it
+allows the RPC result to escape before persistence. The benchmark therefore
+discards the async write promises to preserve automatic write coalescing but
+keeps the default output gate. The host's awaited RPC still returns only after
+the writes are durable. Adding `await storage.sync()` would only yield and wait
+for already-scheduled writes, not expose a separate lower-level flush primitive.
+
+An opt-in dynamic-worker benchmark now compares three production-shaped
+representations in exact installed workerd `1.20260701.1`:
+
+- batched SQL rows using the Stream log's 98-row derived keyless insert shape;
+- synchronous `storage.kv`, one structured-clone upsert per event;
+- the async KV API, using up to 128 entries per `put()` and no intervening
+  await, which is the application path a legacy-KV class would use.
+
+All methods return counts/checksums. Node timers enclose complete RPCs, backend
+order rotates per sample, and setup/reset stays outside measured intervals.
+Five rounds contributed 100 samples per normal lane and 40 eviction samples.
+Positive percentages below mean KV was slower than SQL.
+
+| Workload                     |  SQL p50 | Sync KV vs SQL | Async KV vs SQL | Async KV p95 change |
+| ---------------------------- | -------: | -------------: | --------------: | ------------------: |
+| Append one 1 KiB event       | 0.978 ms |          +4.7% |           +5.1% |              +25.2% |
+| Append 100 tiny events       | 1.156 ms |          +9.6% |          +10.7% |              -16.0% |
+| Append 1,000 tiny events     | 2.425 ms |         +15.9% |          +32.3% |               +4.8% |
+| Append 100 1 KiB events      | 1.300 ms |         +28.5% |          +35.0% |              +31.3% |
+| Append 100 keyed tiny events | 1.517 ms |         -17.8% |          -14.3% |              -25.7% |
+| Read 1,000 events            | 1.390 ms |          +3.7% |          +11.0% |              +12.4% |
+| Select 10 of 1,000 events    | 1.097 ms |         +25.3% |          +34.3% |              +33.1% |
+| Evict 1,000 events           | 1.924 ms |         +56.9% |          +22.5% |             +102.3% |
+
+The async path's one real win is fully keyed batch append: p50 is 14.3% lower,
+p95 25.7% lower, and mean 13.0% lower because a multi-key put efficiently
+coalesces event and secondary-index keys. That does not offset regressions on
+ordinary keyless ingestion, replay, sparse selection, and eviction. Point
+offset/idempotency reads and 100-row dense reads are effectively tied.
+
+Local workerd uses SQLite to emulate every Durable Object backend and merely
+controls whether SQL is exposed, so this cannot predict Cloudflare's production
+legacy-KV persistence latency. It is still a valid rejection gate for JS
+serialization, RPC, API, index-layout, and algorithm costs, and it fails that
+gate before a production preview is warranted.
+
+A literal legacy rewrite also fails the collapse test. Its 128 KiB value limit
+would force a new chunk format for the existing 256 KiB and 768 KiB workloads;
+idempotency and type selection need application-maintained secondary keys;
+sparse replay must deserialize raw rows in JS; and floor advancement, cursor
+updates, and set deletion lose SQL's atomic set operations. It requires a new
+`legacy-kv` class/namespace rather than a local implementation switch. Even
+with production erasure allowed, this is substantially more machinery for a
+measured ordinary-path regression, so no rewrite was built.
+
+The retained harness is
+`e2e/vitest/storage-kv-sql-benchmark.e2e.test.ts`. Raw 100-sample records are
+`/tmp/stream-storage-surfaces-r{1,2,3,4,5}.log`; the earlier sync-only
+calibration is `/tmp/stream-storage-kv-sql-r{1,2,3}.log` locally.
