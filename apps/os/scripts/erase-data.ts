@@ -156,8 +156,11 @@ export default async function eraseData(options: {
   // user data under this script's contract. (The sandboxes bucket is left
   // alone deliberately — container teardown is broken upstream, see the DO
   // section, and its backups expire on a lifecycle rule.)
-  const bucketDeadline = Date.now() + 180_000;
   for (const bucket of [`${env.osWorkerName}-search-index`, `${env.osWorkerName}-files`]) {
+    // Per-bucket budget: a churn-refilled search-index must not starve the
+    // files pass (Bugbot). 90s each + 90s instances stays well inside the
+    // cleanup job's 10-minute ceiling alongside the DO/D1/KV work.
+    const bucketDeadline = Date.now() + 90_000;
     try {
       let objectsDeleted = 0;
       for (;;) {
