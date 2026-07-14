@@ -50,7 +50,13 @@ test("itx-api.generated.ts resolves its exact vendor types from iterate's depend
   const script = `
     import type { Project, StreamEvent } from "./itx-api.generated.ts";
     export async function run(itx: Project): Promise<StreamEvent> {
-      const [event] = await itx.streams.get("/demo").append({ type: "demo/ping" });
+      const result = await itx.streams
+        .get("/demo")
+        .append({ return: "events" }, { type: "demo/ping" });
+      if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
+        throw new Error("append did not return events");
+      }
+      const [event] = result as StreamEvent[];
       await itx.repo.edit({ message: "m", path: "a.ts", oldString: "x", newString: "y" });
       return event;
     }

@@ -9,6 +9,7 @@ import {
 } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
+import { appendedEvents } from "~/domains/streams/rpc-types.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
   staticData: streamPageStaticData(),
@@ -51,8 +52,7 @@ function ProjectStreamDetailContent() {
         payload: { content: message, from: { kind: "user", origin: "web" } },
       },
     );
-    if (result?.return !== "events") throw new Error("message append returned no event");
-    const [event] = result.events;
+    const [event] = appendedEvents(result);
     // Feeds the composer's consume-own-append metric (see StreamMessageComposer).
     return event;
   }

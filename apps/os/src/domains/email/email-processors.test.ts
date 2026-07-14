@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import { EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
-import { createMemoryStreamAppend, emptyStreamRuntimeState } from "../streams/test-helpers.ts";
+import {
+  appendTestEvents,
+  createMemoryStreamAppend,
+  emptyStreamRuntimeState,
+} from "../streams/test-helpers.ts";
 import { EmailProcessor } from "./email-processor-implementation.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
@@ -417,7 +421,7 @@ describe("EmailProcessor (thread router)", () => {
       return originalRoutedAppend(...inputs);
     };
     const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
-    const [received] = await stream.append({
+    const [received] = await appendTestEvents(stream, {
       type: "events.iterate.com/email/received",
       payload: receivedPayload({}),
     });

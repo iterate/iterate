@@ -12,8 +12,9 @@
 // vendor fake that hasn't resolved yet. Every state a test exercises is
 // therefore a reachable state, and the test doubles as the existence proof.
 
-import type { Stream, StreamAppendResultOptions } from "../../itx-api.generated.ts";
+import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamAppendResultOptions } from "./rpc-types.ts";
 import type { AnyHostedProcessor } from "./processor-host-capabilities.ts";
 import { createStreamProcessorHost, type StreamProcessorHost } from "./stream-processor-host.ts";
 
@@ -58,10 +59,8 @@ export function createMemoryStreamAppend(
         : undefined;
     const inputs = (options === undefined ? args : args.slice(1)) as StreamEventInput[];
     const events = await commit(...inputs);
-    if (options?.return === "events") return { return: "events", events };
-    if (options?.return === "offsets") {
-      return { return: "offsets", offsets: events.map((event) => event.offset) };
-    }
+    if (options?.return === "events") return events;
+    if (options?.return === "offsets") return events.map((event) => event.offset);
     return undefined;
   };
 }
@@ -71,8 +70,10 @@ export async function appendTestEvents(
   ...events: StreamEventInput[]
 ): Promise<StreamEvent[]> {
   const result = await stream.append({ return: "events" }, ...events);
-  if (result?.return !== "events") throw new Error("append did not return events");
-  return result.events;
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
+    throw new Error("append did not return events");
+  }
+  return result as StreamEvent[];
 }
 
 export async function appendTestOffsets(
@@ -80,8 +81,10 @@ export async function appendTestOffsets(
   ...events: StreamEventInput[]
 ): Promise<number[]> {
   const result = await stream.append({ return: "offsets" }, ...events);
-  if (result?.return !== "offsets") throw new Error("append did not return offsets");
-  return result.offsets;
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "number")) {
+    throw new Error("append did not return offsets");
+  }
+  return result as number[];
 }
 
 export class MemoryStream implements Stream {

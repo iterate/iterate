@@ -923,7 +923,7 @@ test.skipIf(!ENABLED || !FOCUS_STORAGE_JOURNAL)(
         await measure(
           samples * 2,
           async (iteration) => {
-            await stream.appendAck(event({ marker: `single-${iteration}-${runId}` }));
+            await stream.append(event({ marker: `single-${iteration}-${runId}` }));
           },
           10,
         ),
@@ -941,7 +941,7 @@ test.skipIf(!ENABLED || !FOCUS_STORAGE_JOURNAL)(
         await measure(
           batchSamples,
           async (iteration) => {
-            await stream.appendAck(
+            await stream.append(
               ...Array.from({ length: batchSize }, (_, index) =>
                 event({ marker: `${label}-${iteration}-${index}`, payload }),
               ),
@@ -959,7 +959,7 @@ test.skipIf(!ENABLED || !FOCUS_STORAGE_JOURNAL)(
         await measure(
           samples,
           async (iteration) => {
-            await stream.appendAck(
+            await stream.append(
               ...Array.from({ length: 100 }, (_, index) =>
                 event({
                   idempotencyKey: `keyed-${runId}-${iteration}-${index}`,
@@ -978,7 +978,7 @@ test.skipIf(!ENABLED || !FOCUS_STORAGE_JOURNAL)(
     {
       const path = `/bench/${runId}/read-dense`;
       using stream = project.streams.get(path);
-      await stream.appendAck(
+      await stream.append(
         ...Array.from({ length: 500 }, (_, index) =>
           event({ marker: `dense-${index}`, payload: SMALL_PAYLOAD }),
         ),
@@ -1001,7 +1001,7 @@ test.skipIf(!ENABLED || !FOCUS_STORAGE_JOURNAL)(
       const path = `/bench/${runId}/read-sparse`;
       using stream = project.streams.get(path);
       for (let start = 0; start < 2_000; start += 500) {
-        await stream.appendAck(
+        await stream.append(
           ...Array.from({ length: 500 }, (_, index) => {
             const absoluteIndex = start + index;
             return event({
@@ -1039,7 +1039,7 @@ test.skipIf(!ENABLED || !FOCUS_STORAGE_JOURNAL)(
         await measure(
           Math.max(10, Math.floor(samples / sampleDivisor)),
           async (iteration) => {
-            await stream.appendAck(event({ marker: `${label}-${iteration}`, payload }));
+            await stream.append(event({ marker: `${label}-${iteration}`, payload }));
           },
           3,
         ),

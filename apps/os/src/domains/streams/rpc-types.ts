@@ -22,22 +22,23 @@ export type StreamAppendArguments =
   | [options: StreamAppendResultOptions, ...events: StreamEventInput[]];
 
 /** The optional result projection returned by append. */
-export type StreamAppendResult =
-  | { return: "events"; events: StreamEvent[] }
-  | { return: "offsets"; offsets: number[] }
-  | undefined;
+export type StreamAppendResult = StreamEvent[] | number[] | void;
 
 /** The public append call signature. */
 export type StreamAppend = (...args: StreamAppendArguments) => Promise<StreamAppendResult>;
 
 export function appendedEvents(result: StreamAppendResult): StreamEvent[] {
-  if (result?.return !== "events") throw new Error("append did not return committed events");
-  return result.events;
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
+    throw new Error("append did not return committed events");
+  }
+  return result as StreamEvent[];
 }
 
 export function appendedOffsets(result: StreamAppendResult): number[] {
-  if (result?.return !== "offsets") throw new Error("append did not return committed offsets");
-  return result.offsets;
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "number")) {
+    throw new Error("append did not return committed offsets");
+  }
+  return result as number[];
 }
 
 /** Stable identity for one stream subscription connection. */

@@ -22,8 +22,10 @@ async function appendEvents(
   ...events: StreamEventInput[]
 ): Promise<StreamEvent[]> {
   const result = await stream.append({ return: "events" }, ...events);
-  if (result?.return !== "events") throw new Error("append returned no committed events");
-  return result.events;
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
+    throw new Error("append returned no committed events");
+  }
+  return result as StreamEvent[];
 }
 
 async function appendOffsets(
@@ -31,8 +33,10 @@ async function appendOffsets(
   ...events: StreamEventInput[]
 ): Promise<number[]> {
   const result = await stream.append({ return: "offsets" }, ...events);
-  if (result?.return !== "offsets") throw new Error("append returned no committed offsets");
-  return result.offsets;
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "number")) {
+    throw new Error("append returned no committed offsets");
+  }
+  return result as number[];
 }
 
 async function acceptCrossPostDirect(stream: Stream, batch: StreamPushEventBatch): Promise<void> {

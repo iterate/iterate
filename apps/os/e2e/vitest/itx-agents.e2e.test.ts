@@ -100,17 +100,10 @@ describe("itx", () => {
         await itx.chat.sendMessage(${JSON.stringify(marker)});
       }
     `);
-    const historicalOutputResult = await agent.stream.append(
-      { return: "events" },
-      {
-        type: AGENT_OUTPUT_ADDED_TYPE,
-        payload: { content },
-      },
-    );
-    if (historicalOutputResult?.return !== "events") {
-      throw new Error("append did not return events");
-    }
-    const [historicalOutput] = historicalOutputResult.events;
+    const [historicalOutput] = await appendEvents(agent.stream, {
+      type: AGENT_OUTPUT_ADDED_TYPE,
+      payload: { content },
+    });
 
     const providerSelected = agent.stream.waitForEvent({
       afterOffset: historicalOutput.offset,

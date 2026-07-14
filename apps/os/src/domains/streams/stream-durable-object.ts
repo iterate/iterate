@@ -20,9 +20,6 @@ import {
 import { CoreCheckpointSchedule } from "./stream-core-checkpoint.ts";
 import type {
   ProcessorRuntimeState,
-  StreamAppendArguments,
-  StreamAppendResult,
-  StreamAppendResultOptions,
   StreamHead,
   StreamPushEventBatch,
   StreamSubscriptionHandle,
@@ -55,13 +52,6 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
-
-function isAppendResultOptions(value: unknown): value is StreamAppendResultOptions {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  if ("type" in value) return false;
-  const requested = (value as { return?: unknown }).return;
-  return requested === "events" || requested === "offsets";
-}
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -264,21 +254,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    *    connection's pump is woken, configured subscriptions without a live
    *    connection are re-woken. None of this can fail the append.
    *
-   * With no result option this returns only a durability acknowledgement. Pass
-   * `{ return: "offsets" }` or `{ return: "events" }` before the events when
-   * the caller needs an input-aligned result projection.
+   * Returns the persisted events (including offsets + `createdAt`) in input order.
    */
-  append(...args: StreamAppendArguments): StreamAppendResult {
-    const first = args[0];
-    if (isAppendResultOptions(first)) {
-      const eventInputs = args.slice(1) as StreamEventInput[];
-      if (first.return === "events") {
-        return { return: "events", events: this.#append(eventInputs, "events") };
-      }
-      return { return: "offsets", offsets: this.#append(eventInputs, "offsets") };
-    }
-    this.#append(args as StreamEventInput[], "void");
-    return undefined;
+  append(...eventInputs: StreamEventInput[]): StreamEvent[] {
+    return this.#append(eventInputs, "events");
   }
 
   #append(eventInputs: readonly StreamEventInput[], result: "events"): StreamEvent[];
@@ -511,6 +490,16 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     if (result === "events") return events;
     if (result === "offsets") return offsets!;
+  }
+
+  /** Commit events without serializing their committed envelopes back to the caller. */
+  appendAck(...eventInputs: StreamEventInput[]): void {
+    this.#append(eventInputs, "void");
+  }
+
+  /** Commit events and return only their input-aligned offsets. */
+  appendOffsets(...eventInputs: StreamEventInput[]): number[] {
+    return this.#append(eventInputs, "offsets");
   }
 
   /**
@@ -1161,7 +1150,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       projectId: this.name.projectId,
       path: this.name.path,
     });
-    if (inputs.length > 0) this.append(...inputs);
+    if (inputs.length > 0) this.appendAck(...inputs);
     if (cacheCompleteDelivery) {
       (this.#acknowledgedCrossPostDeliveries ??= new AcknowledgedCrossPostDeliveryCache()).remember(
         batch,
@@ -1173,11 +1162,9 @@ export class StreamDurableObject extends DurableObject<Env> {
     coordinate: { projectId: string | null; path: string },
     ...events: StreamEventInput[]
   ) {
-    const stream = this.env.STREAM.getByName(
+    return this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify(coordinate, { allowNullProjectId: true }),
-    );
-    const append = stream.append as (...inputs: StreamEventInput[]) => Promise<void>;
-    return append(...events);
+    ).appendAck(...events);
   }
 
   #appendToStreamPath(path: string, ...events: StreamEventInput[]) {

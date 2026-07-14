@@ -66,16 +66,13 @@ test("ephemeral live delivery originates zero subscriber-side frames", async () 
   await new Promise((resolve) => setTimeout(resolve, 250));
   const liveDeliveryStartsAt = frames.length;
 
-  const appended = await project.streams
-    .get(streamPath)
-    .append(
-      { return: "events" },
-      { type: EVENT_TYPE, payload: { n: 1 } },
-      { type: EVENT_TYPE, payload: { n: 2 } },
-      { type: EVENT_TYPE, payload: { n: 3 } },
-    );
-  if (appended?.return !== "events") throw new Error("append returned no events");
-  const lastOffset = appended.events.at(-1)!.offset;
+  const appended = await appendEvents(
+    project.streams.get(streamPath),
+    { type: EVENT_TYPE, payload: { n: 1 } },
+    { type: EVENT_TYPE, payload: { n: 2 } },
+    { type: EVENT_TYPE, payload: { n: 3 } },
+  );
+  const lastOffset = appended.at(-1)!.offset;
   await waitFor(() => receivedOffsets.includes(lastOffset), 15_000, "live batch delivery");
 
   const liveFrames = frames.slice(liveDeliveryStartsAt);

@@ -140,7 +140,10 @@ describe("script execution reconciliation", () => {
     // events this processor does not consume) retries the whole attempt from
     // the fold.
     failStartedAppends = false;
-    const [nudge] = await realAppend({ type: "events.iterate.com/test/nudge", payload: {} });
+    const [nudge] = await appendTestEvents(stream, {
+      type: "events.iterate.com/test/nudge",
+      payload: {},
+    });
     await processor.ingest({ events: [nudge!], streamMaxOffset: nudge!.offset });
     await vi.waitFor(() => {
       const completed = stream.events.find(

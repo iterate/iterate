@@ -6,6 +6,8 @@ export async function appendEvents(
   ...events: StreamEventInput[]
 ): Promise<StreamEvent[]> {
   const result = await stream.append({ return: "events" }, ...events);
-  if (result?.return !== "events") throw new Error("append did not return events");
-  return result.events;
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
+    throw new Error("append did not return events");
+  }
+  return result as StreamEvent[];
 }

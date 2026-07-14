@@ -6,6 +6,7 @@
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
+import { appendEvents } from "../test-support/append-events.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 
@@ -28,15 +29,10 @@ test("creates a disposable project and uses project streams through itx", async 
   });
 
   // append creates the stream on first write and can project committed events.
-  const appendResult = await stream.append(
-    { return: "events" },
-    {
-      type: eventType,
-      payload: { marker },
-    },
-  );
-  if (appendResult?.return !== "events") throw new Error("append returned no event");
-  const [appended] = appendResult.events;
+  const [appended] = await appendEvents(stream, {
+    type: eventType,
+    payload: { marker },
+  });
   expect(appended).toMatchObject({
     offset: expect.any(Number),
     type: eventType,

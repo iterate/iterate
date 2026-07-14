@@ -162,12 +162,15 @@ return {
     runtimes: ALL_RUNTIMES,
     code: `
 // A stream is addressed by a path within the project. append() commits the
-// events and returns them with their assigned offsets.
+// events; request committed envelopes only when their offsets are needed.
 const stream = itx.streams.get(vars.path ?? "/repl/demo");
-const [appended] = await stream.append({
-  type: "events.iterate.repl/demo",
-  payload: { note: vars.note ?? "hello from the REPL" },
-});
+const [appended] = await stream.append(
+  { return: "events" },
+  {
+    type: "events.iterate.repl/demo",
+    payload: { note: vars.note ?? "hello from the REPL" },
+  },
+);
 
 // Read the whole path back. Streams also carry platform lifecycle events
 // (stream/created, stream/woken, ...), so real code filters by type.
@@ -185,17 +188,23 @@ return { appended, count: events.length };
     code: `
 // Transient signal: live subscribers see it; nothing durable ever will.
 const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
-const [tick] = await stream.append({
-  type: "events.iterate.repl/progress-ticked",
-  ephemeral: true,
-  payload: { percent: 50 },
-});
+const [tick] = await stream.append(
+  { return: "events" },
+  {
+    type: "events.iterate.repl/progress-ticked",
+    ephemeral: true,
+    payload: { percent: 50 },
+  },
+);
 
 // The durable truth is its own ordinary event — THIS is what processors fold.
-const [done] = await stream.append({
-  type: "events.iterate.repl/work-completed",
-  payload: { result: "ok" },
-});
+const [done] = await stream.append(
+  { return: "events" },
+  {
+    type: "events.iterate.repl/work-completed",
+    payload: { result: "ok" },
+  },
+);
 
 const defaults = await stream.getEvents({ afterOffset: tick.offset - 1 });
 const raw = await stream.getEvents({ afterOffset: tick.offset - 1, includeEphemeral: true });
@@ -311,10 +320,13 @@ await itx.provideCapability({
 });
 
 // The alias IS the stream capability.
-const [event] = await itx.demoStream.append({
-  type: "events.iterate.repl/expression-demo",
-  payload: { note: vars.note ?? "hello through an expression" },
-});
+const [event] = await itx.demoStream.append(
+  { return: "events" },
+  {
+    type: "events.iterate.repl/expression-demo",
+    payload: { note: vars.note ?? "hello through an expression" },
+  },
+);
 const described = await itx.__describe();
 const mount = described.capabilities.find(
   (capability) => capability.path.join(".") === "demoStream",

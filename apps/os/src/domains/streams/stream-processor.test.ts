@@ -406,11 +406,11 @@ describe("StreamProcessor provenance stamping", () => {
           const committed = commit(events);
           if (options?.return === "events") {
             resultProjections.push("events");
-            return { return: "events", events: committed };
+            return committed;
           }
           if (options?.return === "offsets") {
             resultProjections.push("offsets");
-            return { return: "offsets", offsets: committed.map((event) => event.offset) };
+            return committed.map((event) => event.offset);
           }
           return undefined;
         },

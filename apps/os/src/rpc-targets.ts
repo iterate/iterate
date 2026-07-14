@@ -274,6 +274,7 @@ import type {
   StreamAppend,
   StreamAppendArguments,
   StreamAppendResult,
+  StreamAppendResultOptions,
   StreamEventReadInput,
   StreamHead,
   StreamProcessorRpc,
@@ -415,6 +416,13 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
   );
 }
 
+function isStreamAppendResultOptions(value: unknown): value is StreamAppendResultOptions {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if ("type" in value) return false;
+  const result = (value as { return?: unknown }).return;
+  return result === "events" || result === "offsets";
+}
+
 /**
  * Durable event stream capability.
  *
@@ -468,12 +476,21 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // TypeScript infers through the generated DurableObjectStub<StreamDurableObject>
   // type and would publish the DO's internal core-processor/runtime-state
   // implementation instead of the RPC API.
-  /** Commit events and resolve with only the requested result projection. */
+  /**
+   * Commit events. The default result is a durability acknowledgement; pass
+   * `{ return: "events" }` or `{ return: "offsets" }` first only when needed.
+   */
   append(...args: StreamAppendArguments): Promise<StreamAppendResult> {
-    const append = this.durableObjectStub.append as unknown as (
-      ...inputs: StreamAppendArguments
-    ) => Promise<StreamAppendResult>;
-    return append(...args);
+    const first = args[0];
+    if (isStreamAppendResultOptions(first)) {
+      const events = args.slice(1) as StreamEventInput[];
+      const result =
+        first.return === "events"
+          ? this.durableObjectStub.append(...events)
+          : this.durableObjectStub.appendOffsets(...events);
+      return result;
+    }
+    return this.durableObjectStub.appendAck(...(args as StreamEventInput[]));
   }
 
   /** The stream at a sub-path, resolved relative to this stream's path. */
@@ -1431,24 +1448,22 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     const catalogue = this.#catalogue as unknown as {
       append: StreamAppend;
     };
-    const outcome = await catalogue.append(
-      { return: "events" },
-      SandboxProcessorContract.buildEvent({
-        type: "events.iterate.com/sandbox/create-requested",
-        idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
-        payload: {
-          path,
-          instanceType,
-          sleepAfter: input.sleepAfter,
-          keepAlive: input.keepAlive,
-          env: input.env,
-        },
-      }),
+    const [claim] = appendedEvents(
+      await catalogue.append(
+        { return: "events" },
+        SandboxProcessorContract.buildEvent({
+          type: "events.iterate.com/sandbox/create-requested",
+          idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
+          payload: {
+            path,
+            instanceType,
+            sleepAfter: input.sleepAfter,
+            keepAlive: input.keepAlive,
+            env: input.env,
+          },
+        }),
+      ),
     );
-    if (outcome?.return !== "events") {
-      throw new Error(`sandbox "${path}": the catalogue append returned no events`);
-    }
-    const [claim] = outcome.events;
     if (claim === undefined) {
       throw new Error(`sandbox "${path}": the catalogue append returned no event`);
     }
@@ -4051,17 +4066,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         type: "events.iterate.com/agent/llm-provider-selected",
         payload: { model: defaults.model },
       });
-    }
-    if (input.githubAgent !== undefined) {
-      const configured = defaults.events.find(
-        (event) => event.type === "events.iterate.com/github-agent/configure",
-      );
-      if (configured !== undefined) {
-        events.push({
-          type: configured.type,
-          payload: configured.payload,
-        });
-      }
     }
     await this.stream.append(...events);
   }

@@ -1220,7 +1220,10 @@ export interface ProjectWorker {
  */
 export interface Stream {
   __describe(): Promise<Description>;
-  /** Commit events and resolve with only the requested result projection. */
+  /**
+   * Commit events. The default result is a durability acknowledgement; pass
+   * `{ return: "events" }` or `{ return: "offsets" }` first only when needed.
+   */
   append(...args: StreamAppendArguments): Promise<StreamAppendResult>;
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
@@ -2680,10 +2683,7 @@ export type StreamAppendArguments =
   | [options: StreamAppendResultOptions, ...events: StreamEventInput[]];
 
 /** The optional result projection returned by append. */
-export type StreamAppendResult =
-  | { return: "events"; events: StreamEvent[] }
-  | { return: "offsets"; offsets: number[] }
-  | undefined;
+export type StreamAppendResult = StreamEvent[] | number[] | void;
 
 /** The read window accepted by `Stream.getEvents` / `Stream.readEvents`. */
 export type StreamEventReadInput = {

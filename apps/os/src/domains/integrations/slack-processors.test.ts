@@ -1371,9 +1371,10 @@ describe("SlackAgentProcessor", () => {
     // receipt to the user.
     const calls: string[] = [];
     const originalAppend = stream.append.bind(stream);
-    stream.append = async (...inputs: StreamEventInput[]) => {
+    stream.append = async (...args: Parameters<Stream["append"]>) => {
+      const inputs = ("return" in args[0]! ? args.slice(1) : args) as StreamEventInput[];
       calls.push(...inputs.map((input) => `append:${input.type}`));
-      return originalAppend(...inputs);
+      return originalAppend(...args);
     };
     const processor = new SlackAgentProcessor({
       stream,
