@@ -31,6 +31,7 @@ const network = vi.hoisted(() => {
         };
         return {
           append,
+          appendAck: append,
           getEvents(input: { afterOffset?: number; limit?: number } = {}) {
             const { afterOffset = 0, limit = 500 } = input;
             return stored.filter((event) => event.offset > afterOffset).slice(0, limit);

@@ -2360,9 +2360,9 @@ at one boundary. The main lasting complexity is the result union imposed by
 Cap'n Web's method typing, not runtime control flow. Dispatch records are
 `/tmp/stream-append-dispatch-r{1..5}.log`.
 
-## 2026-07-14: Radical Storage And Pump Prototypes Rejected
+## 2026-07-14: Radical Redesign Outcomes
 
-Three wider prototypes were kept on isolated branches long enough to test and
+Five wider prototypes were kept on isolated branches long enough to test and
 then excluded from the shipping branch:
 
 - A normalized/segmented journal improved only very large chunked writes.
@@ -2375,6 +2375,63 @@ then excluded from the shipping branch:
   `experiment/stream-radical-session-pump` and is rejected.
 - A `waitForEvent` micro-fast-path was slower than the existing subscriber
   route and was deleted rather than retained behind a branch.
+- A second segmented-journal prototype (`c7907f45e`) packed 100-1,000
+  homogeneous keyless events into a bounded SQLite row. It improved the
+  100 x 1 KiB append p50 by 6.7%, but regressed 100 tiny events by 4.3%, 1,000
+  tiny events by 2.6%, dense replay by 4.9%, and large singleton writes. It
+  added 512 lines while requiring two-table scans, JavaScript merge logic,
+  whole-segment parsing for some point reads, and application-enforced
+  cross-table offset uniqueness. All 380 Stream unit tests and 30 active
+  Workers checks passed, but the implementation is rejected because the one
+  narrow gain does not justify a second journal format.
+- An actor-resident acknowledgement queue (`f00ce40ee`) used one real
+  `scheduler.wait(0)` turn to combine up to 128 concurrent requests or 1,024
+  events before the existing synchronous SQLite commit. Five matched Workers
+  rounds improved 32-way and 128-way throughput by 30.9% and 35.5%, with p50
+  latency 23.6% and 26.2% lower. The same mandatory collection turn regressed
+  singleton p50/p95 by 14.8%/16.3%. It also required volatile request queues
+  and ordering barriers on every read, subscription, lifecycle, alarm, and
+  result-bearing write path. It is rejected as the default policy. Callers
+  with real bursts should use the existing variadic append boundary, which
+  retains explicit batching without taxing every singleton.
+
+The actor experiment also pinned the frozen-clock constraint directly. A
+detached leading-write timer was stranded after the output gate closed and
+produced 13.697 ms singleton p50. Only the unresolved RPC-backed
+`scheduler.wait(0)` variant made the batching turn reliable, and that real I/O
+boundary is exactly the source of the singleton tax. A forced
+`storage.sync()` pipeline was also slower. Raw actor records are
+`/tmp/stream-actor-{baseline,candidate}-r{1..5}.log`.
+
+One smaller result survived the subscription redesign. The original resident
+wakeup prototype combined shared wake snapshots, a direct `waitForEvent`
+route, and new ephemeral-lifecycle handling. The combined branch improved
+25-subscriber fanout but regressed the already-present-event `waitForEvent`
+path, so it was not integrated wholesale. The shared-snapshot pump was then
+isolated as a 29-line patch with no timer, queue, persistence, schema, or
+external API change. One wake now constructs one immutable read state for all
+resident connections. Each connection keeps only its newest monotonic
+notification while a pump is active, so reentrant wakes collapse instead of
+repeating state construction and redundant pump passes.
+
+Five matched local Workers rounds alternated baseline `32dcff566` and the
+isolated candidate `4db0e0236`, with 300 host-timed append-to-observed-delivery
+samples per workload per round. Median-of-round results were:
+
+| Live delivery  |          p50 |          p95 |         Mean |   Throughput |
+| -------------- | -----------: | -----------: | -----------: | -----------: |
+| One subscriber | 18.10% lower | 12.21% lower | 13.87% lower |          n/a |
+| 25 subscribers |  3.21% lower | 15.03% lower |  2.64% lower | 3.31% higher |
+
+The pooled 1,500 samples per implementation agreed with both directions. The
+measurements surround awaited RPC and observed delivery on the host and consume
+the returned marker; they do not use isolate CPU time as wall time. Raw records
+are `/tmp/stream-coalesced-wakeup-{baseline,candidate}-r{1..5}.log`. This
+extracted pump is included in the shipping branch; the direct `waitForEvent`
+and ephemeral-lifecycle variants remain rejected. Final integration checks
+passed all 381 Stream unit tests, the full 1,603-test OS unit suite, and all 35
+active Stream Workers tests, including teardown/reactivation and live wire
+delivery.
 
 These results reinforce the earlier legacy-KV decision. Owning flush timing is
 attractive in theory, but it also means recreating SQLite's transaction and

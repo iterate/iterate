@@ -83,12 +83,18 @@ describe("itx REPL TypeScript declarations", () => {
     const code = [
       // itx is Session & Project; pin the project overload of __describe.
       "const description = await (itx as Project).__describe();",
-      'const events = await itx.streams.get("/x").append({ type: "demo", payload: { a: 1 } });',
+      'const appendResult = await itx.streams.get("/x").append(',
+      '  { return: "events" },',
+      '  { type: "demo", payload: { a: 1 } },',
+      ");",
+      'if (!Array.isArray(appendResult)) throw new Error("expected committed events");',
+      "const appended = appendResult[0];",
+      'if (typeof appended !== "object") throw new Error("expected a committed event");',
       "const commit = await itx.repo.commitFiles({",
       '  changes: [{ content: "hi", path: "notes/hi.md" }],',
       '  message: "note",',
       "});",
-      "[description.projectId, events[0]?.offset, commit.commitOid];",
+      "[description.projectId, appended?.offset, commit.commitOid];",
     ].join("\n");
     const env = createReplTypeScriptEnv(code);
 

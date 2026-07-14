@@ -69,26 +69,35 @@ test("append accepts an offset assertion on a subscription-configured core event
   // `Stream` type, so it is cast in here exactly as a concurrency-sensitive
   // caller would.
   const appendWithOffset = stream.append as unknown as (
+    options: { return: "events" },
     event: Record<string, unknown>,
-  ) => Promise<{ offset: number }[]>;
-  const [configured] = await appendWithOffset({
-    type: "events.iterate.com/stream/subscription-configured",
-    offset: 4,
-    payload: {
-      subscriptionKey: `cross-post-${marker}`,
-      delivery: {
-        mode: "push",
-        expression: [
-          "streams",
-          ["get", `/e2e/security/offset-assert-target/${marker}`],
-          "acceptCrossPost",
-        ],
+  ) => Promise<unknown>;
+  const result = await appendWithOffset(
+    { return: "events" },
+    {
+      type: "events.iterate.com/stream/subscription-configured",
+      offset: 4,
+      payload: {
+        subscriptionKey: `cross-post-${marker}`,
+        delivery: {
+          mode: "push",
+          expression: [
+            "streams",
+            ["get", `/e2e/security/offset-assert-target/${marker}`],
+            "acceptCrossPost",
+          ],
+        },
+        selector: { eventTypes: [STREAM_EVENT_TYPE] },
       },
-      selector: { eventTypes: [STREAM_EVENT_TYPE] },
     },
-  });
+  );
+  if (!Array.isArray(result)) throw new Error("expected committed events");
+  const configured: unknown = result[0];
+  if (typeof configured !== "object" || configured === null || !("offset" in configured)) {
+    throw new Error("expected a committed event");
+  }
 
-  expect(configured!.offset).toBe(4);
+  expect(configured.offset).toBe(4);
 });
 
 // B6: the subscriber descriptor supplied to subscribe() must be validated at the
