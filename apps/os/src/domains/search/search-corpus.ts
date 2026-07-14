@@ -306,13 +306,13 @@ export function extractMatchSnippet(text: string, query: string, maxChars: numbe
   // Whole-token matches only ("app" must not center the window on "happy" or
   // "offset"); a term that never appears as a whole token falls back to a
   // substring hit — better an approximate center than the document head.
-  const escapeTerm = (term: string) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let at = -1;
   let bestRarity = Infinity;
   let bestLength = 0;
   let substringFallback = -1;
   for (const term of terms) {
-    const wordPattern = new RegExp(`(?<![a-z0-9_-])${escapeTerm(term)}(?![a-z0-9_-])`, "g");
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const wordPattern = new RegExp(`(?<![a-z0-9_-])${escaped}(?![a-z0-9_-])`, "g");
     let first = -1;
     let count = 0;
     for (const match of lower.matchAll(wordPattern)) {
