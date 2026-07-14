@@ -7,7 +7,6 @@ import {
 
 describe("computeSecWebSocketAccept", () => {
   test("matches RFC 6455 example key", async () => {
-    // RFC 6455 §1.3 / §4.2.2 example.
     await expect(computeSecWebSocketAccept("dGhlIHNhbXBsZSBub25jZQ==")).resolves.toBe(
       "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
     );
@@ -26,8 +25,6 @@ describe("withWebSocketHandshakeHeaders", () => {
           "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
         },
       });
-      // Upstream Accept is for a different key — must be replaced; Upgrade/
-      // Connection are stripped so intercept can inject them once.
       const source = new Response(null, {
         status: 101,
         headers: {

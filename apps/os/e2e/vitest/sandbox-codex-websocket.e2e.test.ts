@@ -1,14 +1,9 @@
-// Exact released-binary, whole-turn proof for Codex's normal Responses
-// WebSocket client. This is explicitly opt-in and billable: @openai/codex
-// includes a ~350 MB platform package and the test uses Doppler's real OpenAI
-// key only to write an OS project secret. The sandbox receives the placeholder.
-
 import type { RpcStub } from "capnweb";
 import { describe, expect, test } from "vitest";
 import type { SandboxLiteDurableObject } from "../../src/domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { CODEX_VERSION } from "./sandbox-websocket-proof-programs.ts";
-import { adminSecret, withItxSession } from "./test-helpers.ts";
+import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
 
 const COMPLETION_MARKER = "ITERATE_WEBSOCKET_SMOKE_OK";
 
@@ -18,19 +13,6 @@ type CodexEvent = {
   type?: string;
   usage?: { input_tokens?: number; output_tokens?: number };
 };
-
-function deployedBaseUrl(): string | null {
-  const raw = process.env.APP_CONFIG_BASE_URL?.trim();
-  if (!raw) return null;
-  const url = new URL(raw);
-  if (
-    ["localhost", "127.0.0.1", "::1"].includes(url.hostname) ||
-    url.hostname.endsWith(".localhost")
-  ) {
-    return null;
-  }
-  return url.toString();
-}
 
 function liveOpenAiKey(): string {
   const key = process.env.APP_CONFIG_OPEN_AI_API_KEY?.trim();
@@ -112,9 +94,7 @@ describe("sandbox stock Codex WebSocket egress", () => {
           output_tokens: expect.any(Number),
         });
 
-        // Codex logs this exact warning when a WebSocket attempt is replayed
-        // over HTTP. A fresh secret also records exactly one upstream use for
-        // the successful single-socket turn.
+        // A successful single-socket turn neither falls back nor uses the secret twice.
         expect(turn.stderr).not.toContain("falling back to HTTP");
         await waitForCondition(async () => (await secret.__describe()).audit.usedCount === 1, {
           description: "one Codex Responses WebSocket secret use",
@@ -128,8 +108,6 @@ describe("sandbox stock Codex WebSocket egress", () => {
           ),
         ).toBe(false);
       } finally {
-        // A timed-out npm/Codex process must not turn this opt-in proof into a
-        // 25-minute cleanup wait. Give the remote destroy a bounded chance.
         await new Promise<void>((resolve) => {
           const timeout = setTimeout(resolve, 20_000);
           void sandbox

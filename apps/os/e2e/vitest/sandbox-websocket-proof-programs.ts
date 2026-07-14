@@ -6,57 +6,34 @@ export const GLOBAL_WEBSOCKET_MESSAGE = "global-websocket-echo";
 export const WS_TEXT_MESSAGE = "ws-text-echo";
 export const WS_BINARY_HEX = "000102ff";
 
-/**
- * An ordinary zero-configuration WebSocket program: no proxy agent, custom CA,
- * headers, or Iterate-specific code. It proves bare WSS egress, a server-first
- * frame, and a client frame through container intercept.
- */
+/** Ordinary built-in client: no proxy, custom CA, headers, or Iterate code. */
 export function globalWebSocketProbeScript(url: string): string {
   return `
+const messages = [];
+let closeObserved = null;
+const socket = new WebSocket(${JSON.stringify(url)});
 const result = await new Promise((resolve) => {
-  const messages = [];
-  let closeObserved = null;
-  let opened = false;
-  let settled = false;
-  const socket = new WebSocket(${JSON.stringify(url)});
-  const finish = (value) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timeout);
-    resolve(value);
-  };
-  const timeout = setTimeout(() => {
-    socket.close();
-    finish({ ok: false, stage: "timeout", messages, opened });
-  }, 30_000);
-  socket.addEventListener("open", () => {
-    opened = true;
-    socket.send(${JSON.stringify(GLOBAL_WEBSOCKET_MESSAGE)});
-  });
+  const timeout = setTimeout(() => resolve({ error: "timeout", messages }), 30_000);
+  socket.addEventListener("open", () =>
+    socket.send(${JSON.stringify(GLOBAL_WEBSOCKET_MESSAGE)}),
+  );
   socket.addEventListener("message", (event) => {
     messages.push(String(event.data));
     if (messages.includes(${JSON.stringify(GLOBAL_WEBSOCKET_MESSAGE)})) {
       socket.close(1000, "global-proof-complete");
-      setTimeout(() =>
-        finish({
-          closeAttempted: true,
-          closeObserved,
-          duplexOk: true,
-          messages,
-          nodeVersion: process.version,
-          opened,
-          protocol: socket.protocol,
-          stage: "messages",
-        }),
-      2_000);
+      setTimeout(() => {
+        clearTimeout(timeout);
+        resolve({ closeObserved, messages, nodeVersion: process.version });
+      }, 2_000);
     }
   });
   socket.addEventListener("close", (event) => {
     closeObserved = { code: event.code, reason: event.reason };
   });
-  socket.addEventListener("error", () =>
-    finish({ ok: false, stage: "error", messages, opened }),
-  );
+  socket.addEventListener("error", () => {
+    clearTimeout(timeout);
+    resolve({ error: "websocket error", messages });
+  });
 });
 
 console.log(JSON.stringify(result));
@@ -64,40 +41,31 @@ process.exit(0);
 `.trim();
 }
 
-/**
- * The unmodified npm `ws` client with its normal API. This covers request
- * headers (the Codex-shaped bearer token), subprotocol negotiation, text and
- * binary frames, server-first delivery, and an exact reciprocal close after
- * receiving both echoes.
- */
+/** Released `ws` client covering auth, protocol, text, binary, and close. */
 export function wsProbeScript(url: string, includeAuthorization = true): string {
   return `
 import WebSocket from "/tmp/websocket-proof/node_modules/ws/index.js";
 
+const messages = [];
+let binaryHex = null;
+let exchangeComplete = false;
+const socket = new WebSocket(
+  ${JSON.stringify(url)},
+  ${JSON.stringify(WEBSOCKET_ECHO_PROTOCOL)},
+  ${
+    includeAuthorization
+      ? '{ headers: { Authorization: `Bearer ${process.env.CODEX_API_KEY ?? ""}` } }'
+      : "undefined"
+  },
+);
 const result = await new Promise((resolve) => {
-  const messages = [];
-  let binaryHex = null;
-  let closeObserved = null;
-  let exchangeComplete = false;
-  let settled = false;
-  const socket = new WebSocket(
-    ${JSON.stringify(url)},
-    ${JSON.stringify(WEBSOCKET_ECHO_PROTOCOL)},
-    ${
-      includeAuthorization
-        ? '{ headers: { Authorization: `Bearer ${process.env.CODEX_API_KEY ?? ""}` } }'
-        : "undefined"
-    },
-  );
   const finish = (value) => {
-    if (settled) return;
-    settled = true;
     clearTimeout(timeout);
     resolve(value);
   };
   const timeout = setTimeout(() => {
     socket.terminate();
-    finish({ ok: false, stage: "timeout", messages, binaryHex });
+    finish({ error: "timeout", messages, binaryHex });
   }, 30_000);
   socket.on("open", () => {
     socket.send(${JSON.stringify(WS_TEXT_MESSAGE)});
@@ -106,31 +74,21 @@ const result = await new Promise((resolve) => {
   socket.on("message", (data, isBinary) => {
     if (isBinary) binaryHex = Buffer.from(data).toString("hex");
     else messages.push(data.toString());
-    if (
-      !exchangeComplete &&
-      messages.includes(${JSON.stringify(WS_TEXT_MESSAGE)}) &&
-      binaryHex !== null
-    ) {
+    if (!exchangeComplete && messages.includes(${JSON.stringify(WS_TEXT_MESSAGE)}) && binaryHex) {
       exchangeComplete = true;
       socket.close(4001, "ws-proof-complete");
     }
   });
-  socket.on("close", (code, reason) => {
-    closeObserved = { code, reason: reason.toString() };
+  socket.on("close", (code, reason) =>
     finish({
       binaryHex,
-      closeAttempted: exchangeComplete,
-      closeObserved,
+      closeObserved: { code, reason: reason.toString() },
       messages,
       nodeVersion: process.version,
-      ok: exchangeComplete,
       protocol: socket.protocol,
-      stage: exchangeComplete ? "close" : "early-close",
-    });
-  });
-  socket.on("error", (error) =>
-    finish({ ok: false, stage: "error", error: String(error) }),
+    }),
   );
+  socket.on("error", (error) => finish({ error: String(error) }));
 });
 
 console.log(JSON.stringify(result));
