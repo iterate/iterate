@@ -10,7 +10,7 @@
 // command mints a short-lived explicit operator grant server-side, keeping the
 // deployment admin secret out of the browser bundle entirely.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import { commands } from "vitest/browser";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type {
@@ -44,7 +44,7 @@ const BROWSER_EXAMPLES = ITX_EXAMPLES.filter(
 );
 
 describe.skipIf(!hasTarget)("itx browser execution mode", () => {
-  it("runs the default browser REPL snippet against a live session", async () => {
+  test("runs the default browser REPL snippet against a live session", async () => {
     using session = await connectFromBrowser();
     const result = await evalBrowserReplSessionCode({
       code: DEFAULT_BROWSER_REPL_CODE,
@@ -71,7 +71,7 @@ describe.skipIf(!hasTarget)("itx browser execution mode", () => {
 
   for (const example of BROWSER_EXAMPLES) {
     const exampleCase = EXAMPLE_CASES[example.id]!;
-    it.skipIf(localTarget && example.id === "sandbox-exec")(
+    test.skipIf(localTarget && example.id === "sandbox-exec")(
       `runs catalogue example "${example.id}" in the REPL pipeline`,
       async () => {
         const projectId = await ensureBrowserMatrixProject();
@@ -96,7 +96,7 @@ describe.skipIf(!hasTarget)("itx browser execution mode", () => {
   // closures live in this tab, so the asserted values can only have been
   // computed by calls travelling back over the open session.
 
-  it("provides a browser live capability with a flattened SDK-shaped surface", async () => {
+  test("provides a browser live capability with a flattened SDK-shaped surface", async () => {
     const projectId = await ensureBrowserMatrixProject();
     using session = await connectFromBrowser();
     using project = session.projects.get(projectId);

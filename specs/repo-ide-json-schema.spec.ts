@@ -1,4 +1,3 @@
-import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -30,9 +29,9 @@ test("flags a package.json schema violation with a red squiggle", async ({
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   await page.locator('[data-item-path="package.json"]').click();
-  await expect(page.locator(".cm-content")).toContainText('"name": 123');
+  await page.locator(".cm-content").filter({ hasText: '"name": 123' }).waitFor();
 
   // Once the schema loads, the invalid value gets the lint squiggle. Allow
-  // generous time for the one-off schemastore fetch.
-  await expect(page.locator(".cm-lintRange-error").first()).toBeVisible({ timeout: 20_000 });
+  // generous time (20s) for the one-off schemastore fetch.
+  await page.locator(".cm-lintRange-error").first().waitFor({ timeout: 20_000 });
 });

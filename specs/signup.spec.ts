@@ -1,3 +1,4 @@
+import { expect } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
 import {
   signUpWithEmailOtp,
@@ -26,9 +27,13 @@ test("can sign up with an email one-time passcode", async ({ page }) => {
   // OAuth-callback straggle traced back to zombie worker routes, which the
   // deploy now verifies + heals (tasks/os-cold-create-latency.md).
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    await page.waitForURL(`**/projects/${slug}/agents/streams/agents/onboarding`, {
-      timeout: 60_000,
-    });
+    // The composer is the destination route's structural chrome — it renders
+    // on mount, independent of any LLM output. 60s (carried over from the
+    // waitForURL this replaced) covers the cold-slot bootstrap + redirect
+    // straggle described above.
     await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
   });
+  // The composer only renders under an agent-stream route, so the URL has
+  // settled — assert the redirect landed on the new project's onboarding agent.
+  expect(page.url()).toContain(`/projects/${slug}/agents/streams/agents/onboarding`);
 });

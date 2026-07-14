@@ -1,4 +1,3 @@
-import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -33,13 +32,13 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({
 
   // Code view shows the svg source.
   await page.locator('[data-item-path="icon.svg"]').click();
-  await expect(page.locator(".cm-content")).toContainText("<circle");
+  await page.locator(".cm-content").filter({ hasText: "<circle" }).waitFor();
 
   // Preview renders the svg in the sandboxed iframe (same srcdoc lane as html).
   await page.getByRole("tab", { name: "Preview" }).click({ timeout: 10_000 });
   const preview = page.locator('iframe[title="HTML preview"]');
-  await expect(preview).toBeVisible();
-  await expect(preview).toHaveAttribute("srcdoc", /<circle/);
+  await preview.waitFor();
+  await preview.and(page.locator('[srcdoc*="<circle"]')).waitFor();
 });
 
 test("preview a staged snapshot from the readonly Index view", async ({
@@ -67,14 +66,11 @@ test("preview a staged snapshot from the readonly Index view", async ({
   await page.getByRole("button", { name: "Stage" }).click();
   await page.getByRole("button", { name: "Source control" }).click();
   await page.getByRole("button", { name: "page.html" }).first().click();
-  await expect(page.getByText("page.html (Index)")).toBeVisible();
+  await page.getByText("page.html (Index)").waitFor();
 
   // The Code | Preview toggle rides into the Index view: previewing renders the
   // STAGED snapshot and the header reads "(Index Preview)".
   await page.getByRole("tab", { name: "Preview" }).click({ timeout: 10_000 });
-  await expect(page.getByText("page.html (Index Preview)")).toBeVisible();
-  await expect(page.locator('iframe[title="HTML preview"]')).toHaveAttribute(
-    "srcdoc",
-    /Staged edit/,
-  );
+  await page.getByText("page.html (Index Preview)").waitFor();
+  await page.locator('iframe[title="HTML preview"][srcdoc*="Staged edit"]').waitFor();
 });

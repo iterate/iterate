@@ -1,4 +1,3 @@
-import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -45,9 +44,10 @@ test("a commented tsconfig still schema-validates (comments are tolerated)", asy
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   await page.locator('[data-item-path="tsconfig.json"]').click();
-  await expect(page.locator(".cm-content")).toContainText("// jsonc: comments are allowed");
+  await page.locator(".cm-content").filter({ hasText: "// jsonc: comments are allowed" }).waitFor();
 
   // Once the tsconfig schema loads, the invalid `strict` value squiggles — which
   // can only happen if the commented, trailing-comma doc parsed as json5.
-  await expect(page.locator(".cm-lintRange-error").first()).toBeVisible({ timeout: 20_000 });
+  // 20s: generous room for the one-off schemastore fetch.
+  await page.locator(".cm-lintRange-error").first().waitFor({ timeout: 20_000 });
 });

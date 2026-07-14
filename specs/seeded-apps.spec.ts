@@ -1,24 +1,4 @@
-import { expect } from "@playwright/test";
 import { test } from "./test-support/test.ts";
-
-/**
- * App hosts are `<app>--<project>.<base>`, one origin per app. Locally the
- * base is the dev server's `.localhost` port (Chromium resolves `*.localhost`
- * to loopback natively — no Host-header tricks needed, unlike Node fetch);
- * deployed runs read the wildcard base from APP_CONFIG_PROJECT_HOSTNAME_BASES
- * with the same preview-hostname fallback as the ingress e2e.
- */
-function appUrl(appSlug: string, projectSlug: string, baseURL: string) {
-  const base = new URL(baseURL);
-  if (base.hostname === "localhost" || base.hostname.endsWith(".localhost")) {
-    return `${base.protocol}//${appSlug}--${projectSlug}.localhost${base.port ? `:${base.port}` : ""}/`;
-  }
-  const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
-  const configuredBase = raw ? String((JSON.parse(raw) as string[])[0]) : undefined;
-  const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
-  const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
-  return `${base.protocol}//${appSlug}--${projectSlug}.${projectBase}/`;
-}
 
 // The seeded config repo's example apps genuinely serve after a project is
 // created: the hello app (stateless WorkerEntrypoint) answers JSON on its own
@@ -51,5 +31,24 @@ test("the seeded hello and counter apps work after creating a project", async ({
   // this click also proves the live socket lane; the repaint below comes from
   // the ws broadcast, not the HTTP response.
   await page.getByRole("button", { name: "increment" }).click();
-  await expect(page.locator("#n")).toHaveText("1");
+  await page.locator("#n").filter({ hasText: /^1$/ }).waitFor();
 });
+
+/**
+ * App hosts are `<app>--<project>.<base>`, one origin per app. Locally the
+ * base is the dev server's `.localhost` port (Chromium resolves `*.localhost`
+ * to loopback natively — no Host-header tricks needed, unlike Node fetch);
+ * deployed runs read the wildcard base from APP_CONFIG_PROJECT_HOSTNAME_BASES
+ * with the same preview-hostname fallback as the ingress e2e.
+ */
+function appUrl(appSlug: string, projectSlug: string, baseURL: string) {
+  const base = new URL(baseURL);
+  if (base.hostname === "localhost" || base.hostname.endsWith(".localhost")) {
+    return `${base.protocol}//${appSlug}--${projectSlug}.localhost${base.port ? `:${base.port}` : ""}/`;
+  }
+  const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
+  const configuredBase = raw ? String((JSON.parse(raw) as string[])[0]) : undefined;
+  const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
+  const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
+  return `${base.protocol}//${appSlug}--${projectSlug}.${projectBase}/`;
+}
