@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
-import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
+import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -57,6 +57,7 @@ import {
   classifyRepoAccessError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
+import { REPO_REVIVED_EVENT_TYPE, RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
@@ -90,37 +91,54 @@ type RepoHead = {
 
 export class RepoDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!, { allowNullProjectId: true });
-  readonly #host = createStreamProcessorHost(this.ctx, {
-    stream: new StreamRpcTarget({
-      auth: trustedInternalAuthContext(),
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
+  readonly #stream = new StreamRpcTarget({
+    auth: trustedInternalAuthContext(),
+    path: this.#name.path,
+    projectId: this.#name.projectId,
+  });
+  readonly #registry = createStreamProcessorRegistry(this.ctx, {
+    stream: this.#stream,
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
   });
-  readonly #repoProcessor = this.#host.add(
-    (deps) =>
-      new RepoProcessor({
-        ...deps,
-        createRepoArtifact: (input) => this.createArtifactRepo(input),
-        // Sync the current GitHub head, not necessarily the delivery's SHA:
-        // GitHub webhooks may arrive out of order, and adopting a newer head
-        // also satisfies every older push delivery. syncFromGithub derives a
-        // bounded depth that still retains the previous Artifacts head.
-        syncFromGithubPush: async () => await this.syncFromGithub(),
-        taskChangesForArtifactPush: (input) => this.#taskChangesForArtifactPush(input),
-      }),
+  // The DO constructs the processor — no host-injected readState/writeState/
+  // keepAliveWhile deps; the runner owns durable progress and keepalive.
+  // Registered WITH recovery: GitHub imports are consequential
+  // `runInBackground` work (journaled requested/started obligations whose
+  // OUTCOME matters), and repo creation is a blocking at-head obligation — an
+  // incarnation that dies owing either must be revived. The keepalive alarm
+  // appends `repo/revived`, whose ordinary delivery drives the runner to head
+  // and `onCaughtUp` re-drives the obligations (see the registry module doc's
+  // recovery rule).
+  readonly #repoProcessor = this.#registry.register(
+    new RepoProcessor({
+      stream: this.#stream,
+      path: this.#name.path,
+      projectId: this.#name.projectId,
+      createRepoArtifact: (input) => this.createArtifactRepo(input),
+      // Sync the current GitHub head, not necessarily the delivery's SHA:
+      // GitHub webhooks may arrive out of order, and adopting a newer head
+      // also satisfies every older push delivery. syncFromGithub derives a
+      // bounded depth that still retains the previous Artifacts head.
+      syncFromGithubPush: async () => await this.syncFromGithub(),
+      taskChangesForArtifactPush: (input) => this.#taskChangesForArtifactPush(input),
+    }),
+    { recovery: { revivedEventType: REPO_REVIVED_EVENT_TYPE } },
   );
+  // Runner-backed reads: under runner drive the runner owns the cursors and
+  // the processor instance's internal checkpoint never advances, so every
+  // read this DO serves (the processor facade, live state) goes through the
+  // runner's committed progress.
+  readonly #reads = this.#registry.reads(this.#repoProcessor);
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#host.wakeStreamSubscriber(args);
+    return this.#registry.wakeStreamSubscriber(args);
   }
 
-  /** The keepalive's revival alarm — see stream-processor-host.ts. */
+  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
   alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#host.handleAlarm(alarmInfo);
+    return this.#registry.handleAlarm(alarmInfo);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -129,12 +147,16 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#repoProcessor);
+    // Runner-backed reads (#reads), never the processor instance — see the
+    // field comment: instance reads are stale forever under runner drive.
+    return new StreamProcessorRpcTarget(this.#reads, {
+      catchUpBeforeSnapshot: () => this.#registry.catchUp(RepoProcessorContract.slug),
+    });
   }
 
   /** The repo's live state — the get/set/assign/subscribe surface behind `itx.repos.get(path).liveState`. */
   get liveState() {
-    return new LiveStateRpcTarget(this.#host);
+    return new LiveStateRpcTarget(this.#registry);
   }
 
   /**
@@ -711,7 +733,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   /** Record the GitHub link durably and journal the fact on the repo stream. */
   async configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink> {
-    await this.#host.stream.append({
+    await this.#stream.append({
       type: "events.iterate.com/repo/github-link-configured",
       payload: { ...link },
     });
@@ -723,7 +745,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   async removeGithubLink(): Promise<GithubRepoLink | null> {
     const link = this.getGithubLink();
     if (link === null) return null;
-    await this.#host.stream.append({
+    await this.#stream.append({
       type: "events.iterate.com/repo/github-unlinked",
       payload: { connection: link.connection, owner: link.owner, repo: link.repo },
     });
@@ -802,14 +824,14 @@ export class RepoDurableObject extends DurableObject<Env> {
         );
       }
 
-      await this.#host.stream.append({
+      await this.#stream.append({
         type: "events.iterate.com/repo/github-push-completed",
         idempotencyKey: `github-push-completed:${link.owner}/${link.repo}:${head.oid}`,
         payload: { branch, commitOid: head.oid, owner: link.owner, repo: link.repo },
       });
       return { branch, commitOid: head.oid };
     } catch (error) {
-      await this.#host.stream
+      await this.#stream
         .append({
           type: "events.iterate.com/repo/github-push-failed",
           idempotencyKey: `github-push-failed:${link.owner}/${link.repo}:${commitOid ?? "pre-clone"}:${String(error).slice(0, 80)}`,
@@ -919,7 +941,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     await this.getHead({ branch });
 
-    await this.#host.stream.append({
+    await this.#stream.append({
       type: "events.iterate.com/repo/github-synced",
       idempotencyKey: `github-synced:${link.owner}/${link.repo}:${headOid}`,
       payload: {
@@ -996,7 +1018,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
     await this.getHead({ branch });
 
-    await this.#host.stream.append({
+    await this.#stream.append({
       type: "events.iterate.com/repo/github-synced",
       idempotencyKey: `github-reset:${link.owner}/${link.repo}:${headOid}:${crypto.randomUUID()}`,
       payload: {

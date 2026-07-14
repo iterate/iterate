@@ -268,43 +268,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (event.type !== "events.iterate.com/repo/create-requested") return;
     // Address validation stays per-event (a mis-addressed request is a loud
     // error); the creation itself is reconciled from the at-head fold in
-    // processEventBatch.
+    // onCaughtUp.
     this.#assertOwnCreateRequest(event);
-  }
-
-  /**
-   * Creation is an OBLIGATION reconciled from the at-head fold, never a
-   * per-event reaction: a journal refold (the normal aftermath of a
-   * state-schema deploy) replays `create-requested` with event-time state in
-   * which `created` is still false, but the at-head fold has already absorbed
-   * the journaled `repo/created` fact — so `createRepoArtifact`, whose seeding
-   * force-pushes the seed commit and would clobber user commits, provably
-   * never re-runs. No expiry on purpose: "this repo should exist" does not go
-   * stale, and the vendor call is idempotent (get-or-create + re-seed of a
-   * fresh repo folds to a no-op), so a create-succeeded/append-failed retry is
-   * safe.
-   */
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<RepoProcessorContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    await super.processEventBatch(args);
-    if (args.checkpointOffset < args.streamMaxOffset) return;
-    if (!args.state.createRequested || args.state.created) return;
-    args.blockProcessorWhile(async () => {
-      const payload = await this.deps.createRepoArtifact({
-        path: this.path,
-        projectId: this.projectId,
-      });
-      await args.append({
-        type: "events.iterate.com/repo/created",
-        idempotencyKey: this.idempotencyKey("created"),
-        payload: {
-          ...payload,
-          path: this.path,
-          projectId: this.projectId,
-        },
-      });
-    });
   }
 
   /** GitHub imports can involve two network services and a git transfer, so
@@ -315,9 +280,51 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * attempt instead of wedging every later repo event. */
   readonly #liveGithubImports = new Set<string>();
 
-  protected override async reconcile(
-    args: Parameters<StreamProcessor<RepoProcessorContract>["reconcile"]>[0],
+  /**
+   * At-head reconciliation of the repo's two durable obligations against the
+   * final fold. The runner calls this only when the processing cursor reaches
+   * the observed stream head (the `checkpointOffset >= streamMaxOffset` gate
+   * the legacy `processEventBatch` override carried lives in the runner now);
+   * the refold path runs reduce-only — no onCaughtUp, no effects. RECOVERY
+   * rides this same hook: `events.iterate.com/repo/revived` — the fact the
+   * keepalive's revival pass journals after an eviction took in-flight work —
+   * is consumed by the contract, so its ordinary delivery is a guaranteed
+   * turn that drives the runner to head and lands here, where the undriven
+   * obligations are re-driven. No `processEvent` arm for it exists or is
+   * needed.
+   *
+   * CREATION is an OBLIGATION driven from the at-head fold, never a per-event
+   * reaction: a journal refold (the normal aftermath of a state-schema
+   * deploy) replays `create-requested` with event-time state in which
+   * `created` is still false, but the at-head fold has already absorbed the
+   * journaled `repo/created` fact — so `createRepoArtifact`, whose seeding
+   * force-pushes the seed commit and would clobber user commits, provably
+   * never re-runs. No expiry on purpose: "this repo should exist" does not go
+   * stale, and the vendor call is idempotent (get-or-create + re-seed of a
+   * fresh repo folds to a no-op), so a create-succeeded/append-failed retry
+   * is safe.
+   */
+  protected override async onCaughtUp(
+    args: Parameters<StreamProcessor<RepoProcessorContract>["onCaughtUp"]>[0],
   ): Promise<void> {
+    if (args.state.createRequested && !args.state.created) {
+      args.blockProcessorWhile(async () => {
+        const payload = await this.deps.createRepoArtifact({
+          path: this.path,
+          projectId: this.projectId,
+        });
+        await args.append({
+          type: "events.iterate.com/repo/created",
+          idempotencyKey: this.idempotencyKey("created"),
+          payload: {
+            ...payload,
+            path: this.path,
+            projectId: this.projectId,
+          },
+        });
+      });
+    }
+
     const request = args.state.githubImport;
     if (request === null || this.#liveGithubImports.has(request.requestId)) return;
 

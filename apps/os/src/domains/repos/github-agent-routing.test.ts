@@ -1,12 +1,14 @@
-// The repo-side GitHub router, path codec, and existing repo creation lane.
+// The repo-side GitHub router and path codec. The repo CREATION lane (the
+// at-head obligation) and eviction recovery live in repo-recovery.test.ts,
+// driven through the real registry + durableObjectRecovery path.
 
 import { describe, expect, it } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import {
   GITHUB_LINK,
   MemoryStream,
   MemoryStreamNetwork,
-  deliverNewEvents,
   pullRequestBody,
   webhookPayload,
 } from "./github-agent-test-helpers.ts";
@@ -28,8 +30,11 @@ const OTHER_INSTALLATION_PR_7 = await githubAgentPath(
   7,
 );
 
+/** REAL runner drive (the production registry's driver): PR forwards launch
+ * from per-event `processEvent` under the runner exactly as deployed; one
+ * `catchUp()` is one delivery pass to the current head. */
 function newRepoProcessor(stream: MemoryStream, path = "/repos/config") {
-  return new RepoProcessor({
+  const processor = new RepoProcessor({
     stream,
     path,
     projectId: "prj_1",
@@ -39,6 +44,8 @@ function newRepoProcessor(stream: MemoryStream, path = "/repos/config") {
       throw new Error("not under test");
     },
   });
+  const runner = new StreamProcessorRunner({ processor, stream });
+  return { processor, runner };
 }
 
 describe("github-agent path scheme", () => {
@@ -107,8 +114,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
   it("forwards PR webhooks to the per-PR agent stream, route fact first", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");
-    const processor = newRepoProcessor(stream);
-    const cursors = new Map<object, number>();
+    const repo = newRepoProcessor(stream);
 
     await stream.append(
       { type: "events.iterate.com/repo/github-link-configured", payload: GITHUB_LINK },
@@ -117,7 +123,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         payload: webhookPayload(pullRequestBody({ number: 7 })),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await repo.runner.catchUp();
 
     const routed = network.eventsAt(WIDGETS_PR_7);
     expect(routed.map((event) => event.type)).toEqual([
@@ -141,8 +147,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
   it("routes each PR to its own stream and dedupes the route fact per PR", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");
-    const processor = newRepoProcessor(stream);
-    const cursors = new Map<object, number>();
+    const repo = newRepoProcessor(stream);
 
     await stream.append(
       { type: "events.iterate.com/repo/github-link-configured", payload: GITHUB_LINK },
@@ -159,7 +164,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         payload: webhookPayload(pullRequestBody({ number: 8 })),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await repo.runner.catchUp();
 
     expect(network.eventsAt(WIDGETS_PR_7).map((event) => event.type)).toEqual([
       "events.iterate.com/github-agent/route-configured",
@@ -177,8 +182,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
   it("relinking GitHub coordinates, including installation only, emits a fresh route fact", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");
-    const processor = newRepoProcessor(stream);
-    const cursors = new Map<object, number>();
+    const repo = newRepoProcessor(stream);
 
     await stream.append(
       { type: "events.iterate.com/repo/github-link-configured", payload: GITHUB_LINK },
@@ -203,7 +207,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         payload: { ...webhookPayload(pullRequestBody({ number: 7 })), installationId: "999" },
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await repo.runner.catchUp();
 
     const routePayload = (path: string) =>
       network
@@ -227,8 +231,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
   it("routes one CI delivery to every associated pull request", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");
-    const processor = newRepoProcessor(stream);
-    const cursors = new Map<object, number>();
+    const repo = newRepoProcessor(stream);
     const checkRun = {
       action: "completed",
       check_run: {
@@ -245,7 +248,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         payload: webhookPayload(checkRun, "check_run"),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await repo.runner.catchUp();
 
     for (const number of [7, 8]) {
       expect(
@@ -263,8 +266,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
   it("ignores non-PR webhooks and webhooks on unlinked repos", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");
-    const processor = newRepoProcessor(stream);
-    const cursors = new Map<object, number>();
+    const repo = newRepoProcessor(stream);
 
     await stream.append(
       {
@@ -277,104 +279,8 @@ describe("RepoProcessor PR webhook forward (router)", () => {
         payload: webhookPayload({ ref: "refs/heads/main", after: "abc123" }),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await repo.runner.catchUp();
 
     expect(network.streams.size).toBe(1);
-  });
-});
-
-describe("RepoProcessor create lane (creation as an at-head obligation)", () => {
-  const createdArtifact = {
-    artifactName: "prj_1--L3JlcG9zL2NvbmZpZw",
-    defaultBranch: "main",
-    remote: "https://example.artifacts.cloudflare.net/git/ns/prj_1--L3JlcG9zL2NvbmZpZw.git",
-  };
-  const createRequested = {
-    type: "events.iterate.com/repo/create-requested" as const,
-    payload: { projectId: "prj_1", path: "/repos/config" },
-  };
-
-  function newCreatingRepoProcessor(stream: MemoryStream, createCalls: unknown[]) {
-    return new RepoProcessor({
-      stream,
-      taskChangesForArtifactPush: async () => [],
-      syncFromGithubPush: async () => ({ commitOid: "github-head" }),
-      createRepoArtifact: async (input) => {
-        createCalls.push(input);
-        return createdArtifact;
-      },
-      path: "/repos/config",
-      projectId: "prj_1",
-    });
-  }
-
-  it("creates the artifact once at head and journals repo/created", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/repos/config");
-    const createCalls: unknown[] = [];
-    const processor = newCreatingRepoProcessor(stream, createCalls);
-    const cursors = new Map<object, number>();
-
-    await stream.append(createRequested);
-    await deliverNewEvents({ cursors, processor, stream });
-
-    expect(createCalls).toEqual([{ path: "/repos/config", projectId: "prj_1" }]);
-    const created = stream.events.filter(
-      (event) => event.type === "events.iterate.com/repo/created",
-    );
-    expect(created).toHaveLength(1);
-    expect(created[0]).toMatchObject({
-      idempotencyKey: "repo/created",
-      payload: { ...createdArtifact, path: "/repos/config", projectId: "prj_1" },
-    });
-
-    await deliverNewEvents({ cursors, processor, stream });
-    expect(processor.state).toMatchObject({ createRequested: true, created: true });
-    expect(createCalls).toHaveLength(1);
-  });
-
-  it("defers creation while the fold is behind the head, then creates once caught up", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/repos/config");
-    const createCalls: unknown[] = [];
-    const processor = newCreatingRepoProcessor(stream, createCalls);
-    const [requested, linked] = await stream.append(createRequested, {
-      type: "events.iterate.com/repo/github-link-configured",
-      payload: GITHUB_LINK,
-    });
-
-    await processor.ingest({ events: [requested!], streamMaxOffset: 2 });
-    expect(createCalls).toHaveLength(0);
-    await processor.ingest({ events: [linked!], streamMaxOffset: 2 });
-    expect(createCalls).toHaveLength(1);
-  });
-
-  it("refold: a journal that already contains repo/created never re-creates", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/repos/config");
-    const createCalls: unknown[] = [];
-    const processor = newCreatingRepoProcessor(stream, createCalls);
-    const cursors = new Map<object, number>();
-
-    await stream.append(createRequested);
-    await deliverNewEvents({ cursors, processor, stream });
-    await deliverNewEvents({ cursors, processor, stream });
-    expect(createCalls).toHaveLength(1);
-    const journalBeforeRefold = stream.events.length;
-
-    const refolded = new RepoProcessor({
-      stream,
-      taskChangesForArtifactPush: async () => [],
-      syncFromGithubPush: async () => ({ commitOid: "github-head" }),
-      createRepoArtifact: async () => {
-        throw new Error("refold must not re-create an existing repo");
-      },
-      path: "/repos/config",
-      projectId: "prj_1",
-    });
-    await deliverNewEvents({ cursors, processor: refolded, stream });
-
-    expect(stream.events).toHaveLength(journalBeforeRefold);
-    expect(refolded.state).toEqual(processor.state);
   });
 });
