@@ -179,17 +179,17 @@ only on genuine infra wedges).
 
 ### The ladder
 
-| What it bounds             | Knob                                  | Where                                                                | Value                          | On expiry                   |
-| -------------------------- | ------------------------------------- | -------------------------------------------------------------------- | ------------------------------ | --------------------------- |
-| One UI action              | `actionTimeout` + spinner-waiter      | `playwright.config.ts` ← `SPEC_ACTION_TIMEOUT_MS`                    | 750ms (→ ~30s with spinner)    | fail the attempt            |
-| One assertion              | `expect.timeout`                      | `playwright.config.ts` ← `SPEC_EXPECT_TIMEOUT_MS`                    | 15s                            | fail the attempt            |
-| One Playwright spec        | `timeout`                             | `playwright.config.ts` ← `SPEC_TEST_TIMEOUT_MS`                      | 90s                            | retry once (CI)             |
-| One vitest e2e test/hook   | `testTimeout` / `hookTimeout`         | `apps/os/e2e/vitest.config.ts` ← `E2E_TEST_TIMEOUT_MS`               | 120s                           | retry once (CI)             |
-| A container-cold-boot test | per-test `{ timeout }`                | individual tests, capped at `E2E_HEAVY_TEST_TIMEOUT_MS`              | ≤ 240s                         | retry once (CI)             |
-| The onboarding smoke gate  | attempt loop                          | `apps/os/e2e/vitest/onboarding-smoke.ts`                             | 90s greeting wait              | one more attempt, then fail |
-| The preview vitest lane    | `timeout N pnpm e2e`                  | `scripts/preview/preview.ts` ← `OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS` | 360s                           | **fail — never retry**      |
-| One whole preview run      | `RUN_TIMEOUT_SECS` kill-tree watchdog | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS`   | 600s                           | **kill — never retry**      |
-| The Depot CI job           | `timeout-minutes`                     | `.depot/workflows/*.yml`                                             | 30 (previews) / 300 (marathon) | outer edge: re-run button   |
+| What it bounds             | Knob                                  | Where                                                                | Value                                     | On expiry                   |
+| -------------------------- | ------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------- | --------------------------- |
+| One UI action              | `actionTimeout` + spinner-waiter      | `playwright.config.ts` ← `SPEC_ACTION_TIMEOUT_MS`                    | 750ms (→ ~30s with spinner)               | fail the attempt            |
+| One assertion              | `expect.timeout`                      | `playwright.config.ts` ← `SPEC_EXPECT_TIMEOUT_MS`                    | 15s                                       | fail the attempt            |
+| One Playwright spec        | `timeout`                             | `playwright.config.ts` ← `SPEC_TEST_TIMEOUT_MS`                      | 90s                                       | retry once (CI)             |
+| One vitest e2e test/hook   | `testTimeout` / `hookTimeout`         | `apps/os/e2e/vitest.config.ts` ← `E2E_TEST_TIMEOUT_MS`               | 120s                                      | retry once (CI)             |
+| A container-cold-boot test | per-test `{ timeout }`                | individual tests, capped at `E2E_HEAVY_TEST_TIMEOUT_MS`              | ≤ 240s                                    | retry once (CI)             |
+| The onboarding smoke gate  | attempt loop                          | `apps/os/e2e/vitest/onboarding-smoke.ts`                             | 90s greeting wait                         | one more attempt, then fail |
+| The preview vitest lane    | `timeout N pnpm e2e`                  | `scripts/preview/preview.ts` ← `OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS` | 360s                                      | **fail — never retry**      |
+| One whole preview run      | `RUN_TIMEOUT_SECS` kill-tree watchdog | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS`   | 600s                                      | **kill — never retry**      |
+| The Depot CI job           | `timeout-minutes`                     | `.depot/workflows/*.yml`                                             | 10–45 (mainline/preview) / 300 (marathon) | outer edge: re-run button   |
 
 The ladder is strictly ordered and the guard test asserts it stays that way.
 Note the deliberate rule-3 consequence: the 360s lane watchdog does _not_
