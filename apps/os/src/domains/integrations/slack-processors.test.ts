@@ -431,6 +431,7 @@ describe("SlackProcessor (webhook router)", () => {
 describe("SlackAgentProcessor", () => {
   function setup(deps?: {
     callSlackApi?: (method: string, body: Record<string, unknown>) => Promise<void>;
+    fetchSlackChannelName?: (channel: string) => Promise<string | null>;
     storeSlackFiles?: ConstructorParameters<typeof SlackAgentProcessor>[0]["storeSlackFiles"];
   }) {
     const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
@@ -446,6 +447,9 @@ describe("SlackAgentProcessor", () => {
         await deps?.callSlackApi?.(method, body);
       },
       now: () => clock.now,
+      ...(deps?.fetchSlackChannelName === undefined
+        ? {}
+        : { fetchSlackChannelName: deps.fetchSlackChannelName }),
       ...(deps?.storeSlackFiles === undefined ? {} : { storeSlackFiles: deps.storeSlackFiles }),
     });
     const cursors = new Map<object, number>();
@@ -1081,8 +1085,10 @@ describe("SlackAgentProcessor", () => {
     expect(refolded.state).toEqual(processor.state);
   });
 
-  it("captures route context (including streamPath) in state without announcing anything", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  it("captures route context and stamps the thread's roster identity once", async () => {
+    const { cursors, processor, slackCalls, stream } = setup({
+      fetchSlackChannelName: async () => "trip-planning",
+    });
 
     await stream.append({
       type: "events.iterate.com/slack/thread-route-configured",
@@ -1099,10 +1105,19 @@ describe("SlackAgentProcessor", () => {
       streamPath: "/agents/slack/nustom/c123/ts-111-222",
       threadTs: "111.222",
     });
-    // The `slack` capability is provided on the agent's own itx context
-    // (provideCapability), not announced from here — the route event only
-    // folds into state, with no appends and no Slack API calls.
-    expect(stream.events).toHaveLength(1);
+    // The route stamps the slack icon and "#channel" identity for the roster
+    // (idempotency-keyed: a re-configured route never re-stamps, and the
+    // agent's own setStatus patches win later by journal order). No Slack
+    // API calls ride this lane beyond the name lookup dep.
+    const identity = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/status-changed",
+    );
+    expect(identity).toHaveLength(1);
+    expect(identity[0]!.payload).toEqual({
+      icon: "slack",
+      title: "#trip-planning thread",
+      note: "Slack thread in #trip-planning",
+    });
     expect(slackCalls).toHaveLength(0);
   });
 

@@ -52,6 +52,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   emits: [
     "events.iterate.com/agents/message-received",
     "events.iterate.com/capability-host/script-execution-requested",
+    "events.iterate.com/agent/status-changed",
   ],
 });
 

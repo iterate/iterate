@@ -50,6 +50,9 @@ export class SlackAgentProcessor extends StreamProcessor<
   SlackAgentProcessorContract,
   {
     callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
+    /** Resolves a channel id to its display name (conversations.info) for the
+     * birth identity patch; null on any failure — the id then stands in. */
+    fetchSlackChannelName?(channel: string): Promise<string | null>;
     /** Injectable clock for the acknowledgement freshness gates. */
     now?: () => number;
     /** Downloads Slack-shared files into project file storage (see
@@ -111,9 +114,27 @@ export class SlackAgentProcessor extends StreamProcessor<
     state,
   }: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0]): undefined {
     switch (event.type) {
-      case "events.iterate.com/slack/thread-route-configured":
-        // Route context (channel/thread_ts/streamPath) is captured in reduce().
+      case "events.iterate.com/slack/thread-route-configured": {
+        // Route context (channel/thread_ts/streamPath) is captured in
+        // reduce(). The route additionally stamps the thread's roster
+        // identity ONCE: the slack icon and a "#channel" title/note (the
+        // agent's own setStatus patches win later by journal order).
+        const channel = event.payload.channel;
+        blockProcessorWhile(async () => {
+          const name = (await this.deps.fetchSlackChannelName?.(channel).catch(() => null)) ?? null;
+          const label = name === null ? channel : `#${name}`;
+          await append({
+            type: "events.iterate.com/agent/status-changed",
+            idempotencyKey: this.idempotencyKey("status-identity"),
+            payload: {
+              icon: "slack",
+              title: `${label} thread`,
+              note: `Slack thread in ${label}`,
+            },
+          });
+        });
         return;
+      }
       case "events.iterate.com/slack/webhook-received": {
         // The webhook transcribes into the unified inbound message event —
         // Slack messages are messages FROM a user, `from` carries the facts.

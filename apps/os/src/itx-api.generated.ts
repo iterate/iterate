@@ -383,6 +383,10 @@ export interface Agent {
      * approval, a secret) — surfaces show the agent as blocked instead of
      * idle. The platform clears it when the next message wakes you. */
     blocked?: boolean;
+    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
+     * "web") or an https image URL, shown next to this agent on roster
+     * surfaces. */
+    icon?: string;
   }): Promise<StreamEvent>;
   /** Name this agent/conversation — sugar for `setStatus({ title })`. */
   setTitle(title: string): Promise<StreamEvent>;
@@ -2122,6 +2126,7 @@ export type AgentProcessorState = {
         title?: string | undefined;
         note?: string | undefined;
         shortStatus?: string | undefined;
+        icon?: string | undefined;
       }
     | undefined;
   tokenUsage: {
@@ -2960,6 +2965,7 @@ export type AgentStatusRecord = {
   title?: string | undefined;
   note?: string | undefined;
   shortStatus?: string | undefined;
+  icon?: string | undefined;
 };
 
 /** One input document for Workers AI markdown conversion (`ai.toMarkdown`):

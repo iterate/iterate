@@ -4134,6 +4134,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
      * approval, a secret) — surfaces show the agent as blocked instead of
      * idle. The platform clears it when the next message wakes you. */
     blocked?: boolean;
+    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
+     * "web") or an https image URL, shown next to this agent on roster
+     * surfaces. */
+    icon?: string;
   }): Promise<StreamEvent> {
     // Whitespace-only values are dropped, not journaled: a patch of empty
     // strings would blank titles and notes on every surface.
@@ -4145,11 +4149,12 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       ...(field(input.title) === undefined ? {} : { title: field(input.title) }),
       ...(field(input.note) === undefined ? {} : { note: field(input.note) }),
       ...(field(input.shortStatus) === undefined ? {} : { shortStatus: field(input.shortStatus) }),
+      ...(field(input.icon) === undefined ? {} : { icon: field(input.icon) }),
       ...(input.blocked === undefined ? {} : { blocked: input.blocked }),
     };
     if (Object.keys(patch).length === 0) {
       throw new Error(
-        "agent.setStatus requires at least one non-empty field (title, note, shortStatus, blocked).",
+        "agent.setStatus requires at least one non-empty field (title, note, shortStatus, icon, blocked).",
       );
     }
     const [event] = await this.stream.append({

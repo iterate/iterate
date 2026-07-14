@@ -1,6 +1,16 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, ChevronUp, Circle } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Circle,
+  Github,
+  Globe,
+  Mail,
+  Send,
+  Slack,
+  type LucideIcon,
+} from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -17,6 +27,8 @@ import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 type RosterRow = {
   path: string;
   state: "busy" | "blocked" | "idle";
+  /** A builtin icon name or an https image URL (see AgentStatusRecord.icon). */
+  icon: string | undefined;
   title: string;
   /** The expandable secondary line: what the agent is doing right now
    * (while busy or blocked) or its standing note. */
@@ -61,6 +73,7 @@ function useAgentRoster(projectId: string): RosterRow[] {
         return {
           path: row.path,
           state,
+          icon: row.status.icon,
           title: row.status.title ?? agentPathLabel(row.path),
           detail: state === "idle" ? row.status.note : `is ${doing}…`,
           lastActivityAt: row.updatedAt,
@@ -144,6 +157,7 @@ function AgentRosterMenuItem({ projectSlug, row }: { projectSlug: string; row: R
                     : "fill-muted-foreground/40 text-muted-foreground/40",
               )}
             />
+            <RosterIcon icon={row.icon} />
             <span className="min-w-0 flex-1 truncate">{row.title}</span>
           </div>
           {row.detail === undefined ? null : (
@@ -164,6 +178,29 @@ function AgentRosterMenuItem({ projectSlug, row }: { projectSlug: string; row: R
       )}
     </SidebarMenuItem>
   );
+}
+
+const BUILTIN_ROSTER_ICONS: Record<string, LucideIcon> = {
+  email: Mail,
+  github: Github,
+  slack: Slack,
+  telegram: Send,
+  web: Globe,
+};
+
+/** The agent's identity mark: a builtin lucide icon by name, an https image
+ * URL as a tiny img, or nothing (unknown names render nothing rather than a
+ * broken glyph). */
+function RosterIcon({ icon }: { icon: string | undefined }) {
+  if (icon === undefined) return null;
+  const Builtin = BUILTIN_ROSTER_ICONS[icon];
+  if (Builtin !== undefined) {
+    return <Builtin aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (icon.startsWith("https://")) {
+    return <img alt="" src={icon} className="size-3.5 shrink-0 rounded-sm object-cover" />;
+  }
+  return null;
 }
 
 /** "/agents/slack/nustom/c123/ts-1" → "slack/nustom/c123/ts-1" — the path sans its /agents/ prefix. */

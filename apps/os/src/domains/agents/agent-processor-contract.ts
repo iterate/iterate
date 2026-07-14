@@ -338,6 +338,11 @@ export const AgentStatusRecord = z.object({
   title: z.string().optional(),
   note: z.string().optional(),
   shortStatus: z.string().optional(),
+  /** A small identity mark for roster/list surfaces: a builtin name
+   * ("slack" | "github" | "email" | "telegram" | "web") or an https image
+   * URL. Integration processors stamp their builtin at birth; the agent may
+   * override via setStatus. */
+  icon: z.string().optional(),
 });
 /** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */
 export type AgentStatusRecord = z.infer<typeof AgentStatusRecord>;
@@ -366,6 +371,7 @@ export function mergeAgentStatusPatch(
     ...(patch.title === undefined ? {} : { title: patch.title }),
     ...(patch.note === undefined ? {} : { note: patch.note }),
     ...(patch.shortStatus === undefined ? {} : { shortStatus: patch.shortStatus }),
+    ...(patch.icon === undefined ? {} : { icon: patch.icon }),
   };
   // The phase belongs to the accepted busy value: an idle patch (or a busy
   // patch without one) clears it rather than leaving a stale "running a
@@ -387,7 +393,8 @@ function agentStatusRecordsEqual(a: AgentStatusRecord, b: AgentStatusRecord): bo
     a.blocked === b.blocked &&
     a.title === b.title &&
     a.note === b.note &&
-    a.shortStatus === b.shortStatus
+    a.shortStatus === b.shortStatus &&
+    a.icon === b.icon
   );
 }
 
@@ -977,6 +984,9 @@ export const AgentProcessorContract = defineProcessorContract({
          * e.g. "booking your flight to Lisbon". Painted verbatim into thread
          * statuses while the agent is busy. */
         shortStatus: z.string().optional(),
+        /** A builtin icon name (slack | github | email | telegram | web) or
+         * an https image URL, shown on roster/list surfaces. */
+        icon: z.string().optional(),
       }),
       examples: [
         {
@@ -990,6 +1000,14 @@ export const AgentProcessorContract = defineProcessorContract({
         {
           description: "The agent ended its turn waiting on the user (and said so in shortStatus).",
           payload: { blocked: true, shortStatus: "waiting for your Acme API key" },
+        },
+        {
+          description: "The Slack thread processor stamped the thread's identity at birth.",
+          payload: {
+            icon: "slack",
+            title: "#trip-planning",
+            note: "Slack thread in #trip-planning",
+          },
         },
         {
           description: "The agent set its title and described its current work mid-script.",
