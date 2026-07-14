@@ -14,6 +14,17 @@ function disposableResult() {
   };
 }
 
+function processorBatch(deliveryThroughOffset: number, streamMaxOffset: number): StreamEventBatch {
+  return {
+    projectId: "prj_test",
+    path: "/processor-test",
+    events: [],
+    deliveryThroughOffset,
+    streamMaxOffset,
+    state: {},
+  };
+}
+
 describe("retainProcessEventBatch", () => {
   it("settles and disposes a successful durable result", async () => {
     const pending = disposableResult();
@@ -135,5 +146,82 @@ describe("retainStreamProcessorEventBatch", () => {
       deliveryThroughOffset: 42,
       streamMaxOffset: 42,
     });
+  });
+
+  it("pulls one cumulative result per eight-batch catch-up window", async () => {
+    const results = Array.from({ length: 8 }, () => disposableResult());
+    const received = vi.fn(() => results[received.mock.calls.length - 1]!.result);
+    const onSettled = vi.fn();
+    const sink = retainStreamProcessorEventBatch(received, { onDeliveryError: vi.fn() });
+
+    for (let offset = 1; offset <= 8; offset += 1) {
+      sink(processorBatch(offset, 9), offset, onSettled);
+    }
+
+    expect(sink.pendingDeliveries?.()).toBe(8);
+    for (const result of results.slice(0, 7)) expect(result.dispose).toHaveBeenCalledOnce();
+    expect(results[7]!.dispose).not.toHaveBeenCalled();
+
+    results[7]!.deferred.resolve();
+    await results[7]!.result;
+    await Promise.resolve();
+
+    expect(sink.pendingDeliveries?.()).toBe(0);
+    expect(results[7]!.dispose).toHaveBeenCalledOnce();
+    expect(onSettled).toHaveBeenCalledOnce();
+    expect(onSettled).toHaveBeenCalledWith("ok", 8);
+  });
+
+  it("pulls a quiet tail before the settlement window fills", async () => {
+    const results = Array.from({ length: 2 }, () => disposableResult());
+    const received = vi.fn(() => results[received.mock.calls.length - 1]!.result);
+    const onSettled = vi.fn();
+    const sink = retainStreamProcessorEventBatch(received, { onDeliveryError: vi.fn() });
+
+    sink(processorBatch(1, 2), 1, onSettled);
+    sink(processorBatch(2, 2), 2, onSettled);
+
+    expect(sink.pendingDeliveries?.()).toBe(2);
+    expect(results[0]!.dispose).toHaveBeenCalledOnce();
+    expect(results[1]!.dispose).not.toHaveBeenCalled();
+
+    results[1]!.deferred.resolve();
+    await results[1]!.result;
+    await Promise.resolve();
+
+    expect(sink.pendingDeliveries?.()).toBe(0);
+    expect(onSettled).toHaveBeenCalledWith("ok", 2);
+  });
+
+  it("surfaces an unpulled intermediate failure through the cumulative fence", async () => {
+    const error = new Error("intermediate ingest failed");
+    let chain = Promise.resolve();
+    let deliveryFailure: unknown;
+    const received = vi.fn(() => {
+      const call = received.mock.calls.length;
+      const attempt = chain.then(() => {
+        if (deliveryFailure !== undefined) throw deliveryFailure;
+        if (call === 2) throw error;
+      });
+      chain = attempt.catch((caught: unknown) => {
+        deliveryFailure ??= caught;
+      });
+      return Object.assign(attempt, { [Symbol.dispose]: vi.fn() });
+    });
+    const onDeliveryError = vi.fn();
+    const onSettled = vi.fn();
+    const sink = retainStreamProcessorEventBatch(received, { onDeliveryError });
+
+    for (let offset = 1; offset <= 8; offset += 1) {
+      sink(processorBatch(offset, 9), offset, onSettled);
+    }
+    await chain;
+    await Promise.resolve();
+
+    expect(onDeliveryError).toHaveBeenCalledOnce();
+    expect(onDeliveryError).toHaveBeenCalledWith(error);
+    expect(onSettled).toHaveBeenCalledOnce();
+    expect(onSettled).toHaveBeenCalledWith("error", 8);
+    expect(sink.pendingDeliveries?.()).toBe(0);
   });
 });

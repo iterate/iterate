@@ -1532,10 +1532,10 @@ export class StreamSubscribers {
               "Cannot deliver stream batch before stream coordinates are initialized.",
             );
           }
-          // Wake-lane batches have their results pulled anyway (corpse
-          // detection), so the settle doubles as a free commit→consumed
-          // sample on the stream's own clock. Ephemeral results stay
-          // unpulled: no onSettled ever fires there (see subscriber-sinks.ts).
+          // Wake-lane cumulative fences are pulled for corpse detection, so a
+          // fence's settle doubles as a free commit→consumed sample on the
+          // stream's own clock. Ephemeral results stay unpulled: no onSettled
+          // ever fires there (see subscriber-sinks.ts).
           const newestCreatedAtMs =
             subscriptionType !== "configured" || events.length === 0
               ? undefined

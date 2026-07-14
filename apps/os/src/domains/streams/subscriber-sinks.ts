@@ -22,8 +22,8 @@
 // Delivery is fire-and-forget by design (the pump never awaits a batch); the
 // asymmetry between ephemeral and durable subscribers is WHO PULLS THE RESULT:
 // ephemeral batch results are disposed unpulled — zero subscriber-originated
-// return frames on the wire — while durable batch results are pulled (never
-// awaited) purely as the prompt dead-connection signal. See
+// return frames on the wire — while durable batch results are periodically
+// pulled (never awaited) as cumulative dead-connection fences. See
 // `retainProcessEventBatch` below and the wire tests in
 // stream-wire.e2e.test.ts.
 
@@ -63,6 +63,12 @@ type RetainProcessEventBatchOptions = {
   onDisposed?: () => void;
 };
 
+// Hosted processor sinks are ordered and failure-sticky (stream-processor-host.ts),
+// so one later result settles every earlier call on that connection. Eight
+// bounds catch-up corpse detection while removing seven of eight return frames;
+// the caught-up tail is always pulled, so trickle delivery remains prompt.
+const PROCESSOR_SETTLEMENT_WINDOW = 8;
+
 /** The pump-facing delivery callback: fire-and-forget, disposable, broken-transport aware. */
 export type RetainedProcessEventBatch = ((
   batch: Parameters<ProcessEventBatch>[0],
@@ -72,8 +78,8 @@ export type RetainedProcessEventBatch = ((
   Disposable & {
     onRpcBroken?(callback: (error: unknown) => void): void;
     /**
-     * Dispatched-but-unsettled deliveries (durable lane only, where results
-     * are pulled). Idle teardown consults this: a sink with an unsettled
+     * Dispatched-but-not-cumulatively-settled deliveries (durable lane only).
+     * Idle teardown consults this: a sink with an unsettled
      * batch belongs to a wedged subscriber, and its watermark must not be
      * advanced as if the batch were digested.
      */
@@ -91,7 +97,7 @@ export type RetainedProcessEventBatch = ((
  * rejects every call, and observing that rejection is the only reliable,
  * PROMPT "this connection is a corpse" signal (`onRpcBroken` is best-effort
  * and can be a pipelined fake). One resolve frame per batch is the price of
- * millisecond-grade dead-connection detection on the lane voice rides.
+ * millisecond-grade dead-connection detection on generic durable callbacks.
  */
 export function retainProcessEventBatch(
   processEventBatch: ProcessEventBatch,
@@ -115,13 +121,19 @@ export function retainStreamProcessorEventBatch(
   processEventBatch: ProcessStreamProcessorEventBatch,
   opts: RetainProcessEventBatchOptions = {},
 ): RetainedProcessEventBatch {
-  return retainProjectedProcessEventBatch(processEventBatch, opts, compactProcessorBatch);
+  return retainProjectedProcessEventBatch(
+    processEventBatch,
+    opts,
+    compactProcessorBatch,
+    PROCESSOR_SETTLEMENT_WINDOW,
+  );
 }
 
 function retainProjectedProcessEventBatch<WireBatch>(
   processEventBatch: (batch: WireBatch) => unknown,
   opts: RetainProcessEventBatchOptions,
   projectBatch: (batch: StreamEventBatch) => WireBatch,
+  settlementWindow = 1,
 ): RetainedProcessEventBatch {
   // `retainCallback` owns the transport dance (dup, idempotent dispose, and
   // the defensive onRpcBroken wiring — see lib/rpc/retain.ts for why that
@@ -129,6 +141,7 @@ function retainProjectedProcessEventBatch<WireBatch>(
   const retained = retainCallback<WireBatch>(processEventBatch);
   const onDeliveryError = opts.onDeliveryError;
   let pendingDeliveries = 0;
+  let unfencedDeliveries = 0;
   const callback: RetainedProcessEventBatch = Object.assign(
     (
       batch: Parameters<ProcessEventBatch>[0],
@@ -145,18 +158,32 @@ function retainProjectedProcessEventBatch<WireBatch>(
         return;
       }
       if (onDeliveryError !== undefined && isThenable(result)) {
+        pendingDeliveries += 1;
+        unfencedDeliveries += 1;
+        const pullResult =
+          unfencedDeliveries >= settlementWindow ||
+          batch.deliveryThroughOffset >= batch.streamMaxOffset;
+        if (!pullResult) {
+          // The processor host's ordered, failure-sticky sink makes the next
+          // pulled result cumulative. Disposal here prevents this individual
+          // resolution from crossing the wire; pendingDeliveries deliberately
+          // remains raised until that cumulative fence settles.
+          disposeIgnoredRpcResult(result);
+          return;
+        }
+        const deliveriesSettledByResult = unfencedDeliveries;
+        unfencedDeliveries = 0;
         // Delivery stays fire-and-forget (the pump never awaits the remote
         // result), but the rejection must be observed: a dead stub rejects
         // every call, and swallowing that left broken connections in place
         // forever. Dispose only after settle; disposing before the result is
         // pulled opts out of observing the rejection signal this path needs.
-        pendingDeliveries += 1;
         void Promise.resolve(result).then(
           () => {
             try {
               if (newestCreatedAtMs !== undefined) onSettled?.("ok", newestCreatedAtMs);
             } finally {
-              pendingDeliveries -= 1;
+              pendingDeliveries -= deliveriesSettledByResult;
               disposeIgnoredRpcResult(result);
             }
           },
@@ -165,7 +192,7 @@ function retainProjectedProcessEventBatch<WireBatch>(
               onDeliveryError(error);
               if (newestCreatedAtMs !== undefined) onSettled?.("error", newestCreatedAtMs);
             } finally {
-              pendingDeliveries -= 1;
+              pendingDeliveries -= deliveriesSettledByResult;
               disposeIgnoredRpcResult(result);
             }
           },
