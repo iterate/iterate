@@ -396,15 +396,18 @@ function createStreamRuntime(
   // connection is replaced (the superseded-election guard discards the queue with it).
   let pendingIngestEvents = 0;
   // The server incarnation this connection reconciled against, how far deliveries have
-  // progressed, and a counter bumped every time a delivery ARRIVES (before the possibly-slow
-  // ingest). The delivery check (verifyDelivery) compares these against fresh runtimeState()
-  // so an orphaned-but-healthy-looking subscription (the stream was recreated underneath us,
-  // or the server moved ahead while deliveries silently stopped) reconnects instead of
-  // wedging. Arrival — not ingest completion — is the aliveness signal: a large replay batch
-  // can take longer than a check interval to apply, and that must not read as "orphaned".
+  // progressed, and a counter + wall-clock stamp bumped every time a delivery ARRIVES
+  // (before the possibly-slow ingest). The delivery check (verifyDelivery) compares these
+  // against fresh runtimeState() so an orphaned-but-healthy-looking subscription (the stream
+  // was recreated underneath us, or the server moved ahead while deliveries silently
+  // stopped) reconnects instead of wedging. Arrival — not ingest completion — is the
+  // aliveness signal: a large batch can take longer than a check interval to apply, and that
+  // must not read as "orphaned"; the stamp is what lets a check see an arrival that PREDATES
+  // it but is still being ingested.
   let reconciledIncarnation: string | undefined;
   let lastDeliveredOffset = -1;
   let deliveryArrivals = 0;
+  let lastDeliveryArrivalAt = 0;
   // Debug counters (surfaced via __streamRuntimeDebug): how many EVENTS the
   // deliveries actually carried — distinguishes "no deliveries" from
   // "deliveries arrive but carry no events" from "events arrive but writes
@@ -568,7 +571,6 @@ function createStreamRuntime(
     if (disposed) return;
     connectionEpoch += 1;
     pendingIngestEvents = 0;
-    guardedTimeoutStrikes = 0;
     stopLivenessProbe();
     stopSubscriptionElection();
     stream?.[Symbol.dispose]();
@@ -650,7 +652,12 @@ function createStreamRuntime(
   // retries it, the probe waits for its next tick, one-shot reads surface it.
   const GUARDED_CALL_TIMEOUT_MS = 10_000;
   // Consecutive timed-out guarded calls against the CURRENT connection; reset
-  // by any successful guarded call and on reconnect.
+  // by any successful guarded call, and zeroed where every fresh connection is
+  // installed (connect()'s stream assignment) — a strike is evidence against
+  // one socket and must never carry over to the next, whichever path redialed
+  // (scheduleReconnect, clearLocalDatabase's reconnectNow, a direct call's
+  // connect()). Increments are already identity-bound (stream === connection),
+  // so the installation-time reset is the complete set.
   let guardedTimeoutStrikes = 0;
 
   function isSessionBrokenError(error: unknown) {
@@ -887,6 +894,10 @@ function createStreamRuntime(
         // The superseded case is disposed by the dial handler above, exactly once.
         if (disposed || epoch !== connectionEpoch) return;
         connectFailuresSinceSuccess = 0;
+        // The strike ledger is per-connection evidence; a leftover strike from
+        // the previous socket must not make this connection's first slow
+        // answer look like strike two.
+        guardedTimeoutStrikes = 0;
         stream = connection;
         // A follower can still append / read runtimeState, so readiness is "connection
         // open", not "leader/subscribed". Unblock anyone awaiting reconnect (B2).
@@ -939,10 +950,20 @@ function createStreamRuntime(
     // lazily-created agent stream and the agent machinery recreated it, killing the Stream DO
     // behind the proxy hop without a close frame reaching the browser — those calls park
     // forever and the page wedges on "connecting" with no error anywhere. Each
-    // server-touching step rides the guarded lane; a rejection it did not already act on
-    // lands in the catch below, which reconnects on a fresh socket to the live instance.
-    const withDeadline = <T>(step: string, promise: Promise<T> | T): Promise<T> =>
-      guardedCall(step, election.connection, () => promise);
+    // server-touching step rides the guarded lane AND follows its two-strike policy: one
+    // struck timeout is retried immediately against the same connection (the underlying call
+    // is still in flight, so a cold DO's late answer resolves inside the retry window
+    // without duplicating work), and the retry's timeout is the lane's second strike —
+    // guardedCall evicts the half-open transport and reconnects, so the wedge above still
+    // converges. A rejection the lane did not already act on lands in the catch below,
+    // which reconnects on a fresh socket to the live instance.
+    const withDeadline = <T>(step: string, promise: Promise<T> | T): Promise<T> => {
+      const attempt = () => guardedCall(step, election.connection, () => promise);
+      return attempt().catch((error: unknown) => {
+        if (!(error instanceof StepTimeoutError) || !ownsRuntime()) throw error;
+        return attempt();
+      });
+    };
 
     void writerRole.whenWriter
       .then(async () => {
@@ -1011,6 +1032,7 @@ function createStreamRuntime(
             if (!ownsRuntime()) return undefined;
             if (page.length === 0) break; // server truth moved (reset?); subscribe reconciles
             deliveryArrivals += 1;
+            lastDeliveryArrivalAt = Date.now();
             lastBatchEvents = page.length;
             totalDeliveredEvents += page.length;
             // Deliberately NOT deadlined, unlike the read-only steps above: a
@@ -1103,12 +1125,16 @@ function createStreamRuntime(
         // landed us elsewhere) must not tear down the healthy current subscription (B1).
         if (disposed || !ownsRuntime()) return;
         console.error(`[stream ${args.streamPath} ${slug}] subscribe failed`, error);
-        // Deadline timeouts here MUST evict (reconnectAfterError does): when
-        // the socket went half-open while we were not yet subscribed, the dial
-        // "succeeds" instantly off the cached corpse and THIS chain is the
-        // first place the death manifests — without eviction it would loop
-        // dial → 15s park → reconnect forever, the wedge's residual form.
-        reconnectAfterError("subscribe failed", error, 1_000, { suspect: election.connection });
+        // Timeout verdicts (including the half-open-corpse eviction) are the
+        // guarded lane's business, made inside withDeadline's retry: a
+        // two-strike eviction already reconnected (so ownsRuntime() bailed
+        // above), and a StepTimeoutError still reaching here means the ledger
+        // never hit two — another lane's success proved the transport answers
+        // mid-chain — so one strike is not evidence enough to evict. Restart
+        // the election without collateral damage; non-timeout rejections the
+        // lane didn't act on are app-level failures and get the same
+        // no-eviction reconnect they always did.
+        scheduleReconnect(`subscribe failed: ${errorMessage(error)}`, 1_000);
       });
   }
 
@@ -1155,6 +1181,7 @@ function createStreamRuntime(
     // as "deliveries are flowing", so a long ingest must not look stalled,
     // while a dropped stale batch (returned above) must not look like progress.
     deliveryArrivals += 1;
+    lastDeliveryArrivalAt = Date.now();
     lastBatchEvents = batch.events.length;
     totalDeliveredEvents += batch.events.length;
     // Serialize the apply and RE-CHECK ownership inside the slot. The entry
@@ -1284,8 +1311,10 @@ function createStreamRuntime(
   // the socket stays perfectly healthy. If the stream was recreated underneath
   // us (incarnation changed — e.g. the browser subscribed to a lazily-created
   // empty stream and the agent machinery then created it for real), or the
-  // server's maxOffset is ahead and no delivery arrives within the grace
-  // window, the subscription is gone server-side — reconnect, and the
+  // server's maxOffset is ahead and deliveries have been SILENT for a full
+  // check interval (no batch in flight, none arrived recently — a batch that
+  // arrived before the check and is still ingesting is proof of life, not a
+  // stall), the subscription is gone server-side — reconnect, and the
   // resubscribe replays from the persisted checkpoint. A follower holds no
   // subscription, so for it the answered read is the whole check.
   const LIVENESS_PROBE_INTERVAL_MS = 10_000;
@@ -1297,7 +1326,6 @@ function createStreamRuntime(
     if (connection === undefined || verifyInFlight || disposed) return;
     verifyInFlight = true;
     try {
-      const arrivalsBefore = deliveryArrivals;
       // Every runtime-state read doubles as a transport-RTT sample (timed
       // guards against recording abandoned late resolutions itself).
       const read = () =>
@@ -1322,13 +1350,20 @@ function createStreamRuntime(
         );
       }
       if (coreProcessorState.maxOffset <= lastDeliveredOffset) return; // mirror is current
-      // Server is ahead — give the in-flight delivery a moment before
-      // declaring the subscription dead.
+      // Server is ahead — give an in-flight delivery a moment, then require
+      // SILENCE across a full check interval before declaring the
+      // subscription orphaned. lastDeliveredOffset lagging is NOT the stall
+      // signal: a batch that arrived before this check and is still ingesting
+      // (or several, queued) adds no new arrival during the grace window, and
+      // reconnecting under it would abandon a healthy mid-apply mirror.
+      // Arrival — the ledger's counter/stamp, bumped before the possibly-slow
+      // ingest — is what proves the delivery lane is alive.
       await new Promise((resolve) => setTimeout(resolve, DELIVERY_GRACE_MS));
       if (disposed || stream !== connection) return;
-      if (deliveryArrivals !== arrivalsBefore) return; // deliveries flowing
+      if (pendingIngestEvents > 0) return; // an arrived batch is still ingesting
+      if (Date.now() - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS) return; // recent arrival — deliveries flowing
       throw new Error(
-        `server is at offset ${coreProcessorState.maxOffset} but no delivery arrived within ${DELIVERY_GRACE_MS}ms (applied through ${lastDeliveredOffset}); subscription is orphaned`,
+        `server is at offset ${coreProcessorState.maxOffset} but no delivery arrived within the last ${LIVENESS_PROBE_INTERVAL_MS}ms (applied through ${lastDeliveredOffset}); subscription is orphaned`,
       );
     } catch (error) {
       if (disposed || stream !== connection) return;
@@ -1412,6 +1447,7 @@ function createStreamRuntime(
     connectionError: snapshot.connectionError,
     lastDeliveredOffset,
     deliveryArrivals,
+    lastDeliveryArrivalAt,
     totalDeliveredEvents,
     lastBatchEvents,
     ingestFailures,
