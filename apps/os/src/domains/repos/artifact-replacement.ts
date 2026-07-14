@@ -11,11 +11,16 @@ export async function replaceArtifactWithEmptyRepo(
   artifacts: Pick<Artifacts, "create" | "delete" | "get">,
   name: string,
   options: {
+    beforeDelete?: () => void;
     pollAttempts?: number;
     pollIntervalMs?: number;
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<void> {
+  // Callers must invalidate any cached view of the old repository before the
+  // remote deletion begins. Keep this inside the helper's boundary so a
+  // future refactor cannot accidentally move invalidation after the delete.
+  options.beforeDelete?.();
   const deleted = await artifacts.delete(name);
   if (deleted) {
     const pollAttempts = options.pollAttempts ?? DELETE_POLL_ATTEMPTS;

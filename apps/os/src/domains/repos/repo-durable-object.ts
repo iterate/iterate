@@ -166,7 +166,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // the branch while this clone was in flight) may be SERVED once, but must
     // never be CACHED — an un-invalidatable cache entry would pin builds to
     // the pre-sync head forever.
-    const pushed = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
+    const pushed = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
     if (typeof pushed === "string" && pushed !== head.commitOid) return { branch, ...head };
     this.ctx.storage.kv.put(repoHeadStorageKey(branch), head);
     return { branch, ...head };
@@ -232,7 +232,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // pinned read of a just-pushed commit (the History diff pane's flow:
     // commit → expand → click a file) fails its checkout on a stale clone for
     // exactly the same reason a branch read serves the previous head.
-    const expected = this.ctx.storage.kv.get<string>(`repo-pushed-head:${branch}`);
+    const expected = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
 
     if (input.commitOid !== undefined) {
       for (let attempt = 1; ; attempt++) {
@@ -436,7 +436,7 @@ export class RepoDurableObject extends DurableObject<Env> {
    */
   #recordPushedHead(result: { branch: string; commitOid: string; noChanges?: boolean }) {
     if (result.noChanges) return;
-    this.ctx.storage.kv.put(`repo-pushed-head:${result.branch}`, result.commitOid);
+    this.ctx.storage.kv.put(repoPushedHeadStorageKey(result.branch), result.commitOid);
   }
 
   /**
@@ -885,8 +885,15 @@ export class RepoDurableObject extends DurableObject<Env> {
       token,
     });
     const artifactName = this.artifactName();
-    await replaceArtifactWithEmptyRepo(this.requireArtifacts(), artifactName);
-    this.#artifactTokenPromise = undefined;
+    await replaceArtifactWithEmptyRepo(this.requireArtifacts(), artifactName, {
+      beforeDelete: () => {
+        // From this destructive boundary onward, neither a concurrent read nor
+        // a failed replacement push may observe/cache the old Artifact head.
+        this.#artifactTokenPromise = undefined;
+        this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+        this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
+      },
+    });
     await this.#pushGithubHistoryInProcess({
       branch,
       git,
@@ -1475,6 +1482,10 @@ function repoHeadStorageKey(branch: string) {
   // segment makes a contentHash recipe change a clean cache flush instead of
   // old and new hashes silently mixing in build keys.
   return `repo-head:v1:${branch}`;
+}
+
+function repoPushedHeadStorageKey(branch: string) {
+  return `repo-pushed-head:${branch}`;
 }
 
 /** The git-over-HTTPS remote of a linked GitHub repository. */

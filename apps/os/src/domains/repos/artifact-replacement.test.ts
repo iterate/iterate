@@ -30,12 +30,33 @@ describe("replaceArtifactWithEmptyRepo", () => {
     };
 
     await replaceArtifactWithEmptyRepo(artifacts, "repo", {
+      beforeDelete: () => {
+        calls.push("invalidate");
+      },
       pollIntervalMs: 0,
       sleep: async () => {},
     });
 
-    expect(calls).toEqual(["delete", "get:present", "get:missing", "create"]);
+    expect(calls).toEqual(["invalidate", "delete", "get:present", "get:missing", "create"]);
     expect(artifacts.create).toHaveBeenCalledWith("repo", { setDefaultBranch: "main" });
+  });
+
+  it("invalidates the caller's old-repository state even when deletion fails", async () => {
+    const beforeDelete = vi.fn();
+    const artifacts = {
+      create: vi.fn(async () => ({}) as ArtifactsCreateRepoResult),
+      delete: vi.fn(async () => {
+        throw artifactsError("INTERNAL_ERROR");
+      }),
+      get: vi.fn<Artifacts["get"]>(),
+    };
+
+    await expect(
+      replaceArtifactWithEmptyRepo(artifacts, "repo", { beforeDelete }),
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+
+    expect(beforeDelete).toHaveBeenCalledOnce();
+    expect(artifacts.create).not.toHaveBeenCalled();
   });
 
   it("creates immediately when the artifact was already absent", async () => {
