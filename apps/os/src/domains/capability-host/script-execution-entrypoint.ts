@@ -1,9 +1,9 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { transform } from "sucrase";
 import type { Env } from "../../env.ts";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { stripScriptTypes } from "./script-type-stripping.ts";
 
 /**
  * Stateless loopback executor for capability-host runScript.
@@ -34,22 +34,6 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
       traceRole: "run_script",
     });
     return result === undefined ? undefined : (JSON.parse(JSON.stringify(result)) as JsonValue);
-  }
-}
-
-/**
- * Scripts are PROMISED as TypeScript (the agent prompt demands "one fenced
- * TypeScript code block"), but the bundle-free fast path below loads plain
- * JavaScript — so type syntax must be stripped here, not rejected. Sucrase's
- * type-only transform is a few milliseconds and changes no runtime semantics.
- * If the code doesn't even parse, embed it raw: the loader's own syntax error
- * feeds the existing corrective-retry lane, same as before.
- */
-export function stripScriptTypes(code: string): string {
-  try {
-    return transform(code, { transforms: ["typescript"] }).code;
-  } catch {
-    return code;
   }
 }
 

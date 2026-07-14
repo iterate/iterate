@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripScriptTypes } from "./script-execution-entrypoint.ts";
+import { stripScriptTypes } from "./script-type-stripping.ts";
 
 // Scripts are promised as TypeScript but the bundle-free fast path loads
 // plain JavaScript — stripScriptTypes is the seam that honors the promise.
