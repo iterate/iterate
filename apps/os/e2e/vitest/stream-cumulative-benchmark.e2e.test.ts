@@ -1248,7 +1248,6 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
 
     const runId = crypto.randomUUID().slice(0, 8);
     const sourcePath = `/bench/${runId}/worker-consumer-source`;
-    const candidateSourcePath = `${sourcePath}-candidate`;
     const outputPath = `/bench/${runId}/worker-consumer-output`;
     const triggerType = `${EVENT_TYPE}/worker-consumer-trigger`;
     const forwardedType = `${EVENT_TYPE}/worker-consumer-forwarded`;
@@ -1336,10 +1335,9 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     `;
 
     const ephemeralProcessEventWorkerSource = `
-      import { IterateWorkerEntrypoint, subscribe } from "iterate/sdk";
+      import { IterateWorkerEntrypoint } from "iterate/sdk";
 
-      const BASELINE_SOURCE_PATH = ${JSON.stringify(sourcePath)};
-      const CANDIDATE_SOURCE_PATH = ${JSON.stringify(candidateSourcePath)};
+      const SOURCE_PATH = ${JSON.stringify(sourcePath)};
       const OUTPUT_PATH = ${JSON.stringify(outputPath)};
       const TRIGGER_TYPE = ${JSON.stringify(triggerType)};
       const COMPLETED_TYPE = ${JSON.stringify(completedType)};
@@ -1366,24 +1364,26 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
             this.#finish = resolve;
           });
           this.#project = await this.env.ITX.get();
-          const baseline = this.#project.streams.get(BASELINE_SOURCE_PATH);
-          const candidate = this.#project.streams.get(CANDIDATE_SOURCE_PATH);
+          const source = this.#project.streams.get(SOURCE_PATH);
           this.#handles.push(
-            await baseline.subscribe({
+            await source.subscribe({
               eventTypes: [TRIGGER_TYPE],
               processEventBatch: async (batch) => {
-                let finalEvent;
-                for (const event of batch.events) {
-                  if (this.#accept(event, "baseline")) finalEvent = event;
+                const mode = batch.events[0]?.payload.mode;
+                if (mode === "baseline") {
+                  let finalEvent;
+                  for (const event of batch.events) {
+                    if (this.#accept(event, mode)) finalEvent = event;
+                  }
+                  if (finalEvent !== undefined) await this.#complete(finalEvent, mode);
+                  return;
                 }
-                if (finalEvent !== undefined) await this.#complete(finalEvent, "baseline");
-              },
-            }),
-            await subscribe(candidate, {
-              eventTypes: [TRIGGER_TYPE],
-              processEvent: (event) => {
-                if (this.#accept(event, "candidate")) {
-                  return this.#complete(event, "candidate");
+                if (mode !== "candidate") {
+                  throw new Error(\`Unknown ephemeral processEvent mode: \${mode}.\`);
+                }
+                for (const event of batch.events) {
+                  const result = this.#processEvent(event);
+                  if (result !== undefined) await result;
                 }
               },
             }),
@@ -1396,8 +1396,7 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
         }
 
         #accept(event, mode) {
-          const expectedPath = mode === "baseline" ? BASELINE_SOURCE_PATH : CANDIDATE_SOURCE_PATH;
-          if (event.path !== expectedPath || event.type !== TRIGGER_TYPE) {
+          if (event.path !== SOURCE_PATH || event.type !== TRIGGER_TYPE) {
             throw new Error(\`Unexpected \${mode} event \${event.path} \${event.type}.\`);
           }
           const { count, index, iteration } = event.payload;
@@ -1419,6 +1418,12 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           state.iteration = undefined;
           state.receivedCount = 0;
           return true;
+        }
+
+        #processEvent(event) {
+          if (this.#accept(event, "candidate")) {
+            return this.#complete(event, "candidate");
+          }
         }
 
         async #complete(event, mode) {
@@ -1498,7 +1503,6 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     });
 
     using source = project.streams.get(sourcePath);
-    using candidateSource = project.streams.get(candidateSourcePath);
     using outputStream = project.streams.get(outputPath);
     const expectedCompletions = 2 * (2 + WORKER_CONSUMER_SAMPLES + WORKER_CONSUMER_BATCH_SAMPLES);
     let outputOffset = 0;
@@ -1536,9 +1540,7 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
       });
       await waitForWaiterConnection(outputStream, 60_000);
       const startedAt = performance.now();
-      const inputStream =
-        WORKER_CONSUMER_EPHEMERAL && mode === "candidate" ? candidateSource : source;
-      await inputStream.append(
+      await source.append(
         ...Array.from({ length: count }, (_, index) => ({
           type: triggerType,
           payload: {
@@ -1607,7 +1609,7 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     const metrics: Record<string, Metric> = {};
     for (const mode of modes) {
       const metricPrefix = WORKER_CONSUMER_EPHEMERAL
-        ? `worker_consumer_ephemeral_process_event_paired_${mode}`
+        ? `worker_consumer_ephemeral_process_event_shared_transport_paired_${mode}`
         : WORKER_CONSUMER_PAIRED
           ? `worker_consumer_process_event_paired_${mode}`
           : WORKER_CONSUMER_PROCESS_EVENT
