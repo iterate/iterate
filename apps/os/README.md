@@ -65,7 +65,6 @@ pnpm dev                 # local OS dev with Doppler-backed env (all workers in 
 pnpm typecheck           # TypeScript (includes route-tree freshness check)
 pnpm test                # unit tests
 pnpm e2e                 # real-worker e2e against a live deployment (engine suites + itx example matrix)
-pnpm e2e --project node  # just the node lane (skip the browser example matrix)
 pnpm cli itx run --eval 'return await itx.whoami()'
                          # run an itx script against the deployment in your Doppler config
 pnpm cli claude-mcp      # open Claude against the OS MCP server in your local Doppler config
@@ -82,11 +81,11 @@ Use `pnpm run deploy`, not `pnpm deploy`; `deploy` is also a pnpm built-in.
 ## Running Real-Worker Tests
 
 The e2e suite runs against a real OS deployment, not the Workers Vitest pool:
-`pnpm e2e` (config `e2e/vitest.config.ts`, one config with two projects — a
-`node` project covering the engine suites in `e2e/vitest/**` and the itx
-example matrix in `e2e/examples/**`, and a `browser` project running the
-matrix in a real browser). Start the worker in one terminal, then run tests
-from another
+`pnpm e2e` (config `e2e/vitest.config.ts`, one project named `node` covering
+the engine suites in `e2e/vitest/**` and the itx example matrix in
+`e2e/examples/**`; browser catalogue coverage is the root Playwright spec
+`specs/repl-examples.spec.ts`). Start the worker in one terminal, then run
+tests from another
 through the matching Doppler config. For local dev configs, test helpers read
 `.dev-server/dev-server.json` to find the selected port; deployed configs get
 `APP_CONFIG_BASE_URL` from Doppler. All lanes, targets, and the canonical env
@@ -209,6 +208,7 @@ test coverage removed without replacement is
 - [Cloudflare Sandboxes & Containers](./docs/cloudflare-sandboxes.md) — platform guide: namespace layout, **SSH into an instance**, feature inventory, deprecations, ops
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)
+- [Smoke-Testing A Deployment](../../docs/smoke-testing.md) — deploy-inline probes + manual recipes
 - [Agent Smoke Testing](./docs/agent-smoke-testing.md)
 - [Doppler-Backed Scripts](./docs/doppler-backed-scripts.md)
 - [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)

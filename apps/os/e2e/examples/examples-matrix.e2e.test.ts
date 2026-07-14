@@ -2,8 +2,8 @@
 // same entries the Examples panel shows) against a REAL deployed worker
 // (local dev server, preview, or production — whatever APP_CONFIG_BASE_URL
 // points at), through every server-side runtime of the itx
-// (/api). The browser runtime runs the same catalogue in
-// examples-browser.test.ts; itx behavior itself is proven by
+// (/api). The browser runtime runs the same catalogue through the real REPL
+// in specs/repl-examples.spec.ts; itx behavior itself is proven by
 // apps/os/e2e/itx/*.
 //
 // KNOWN CAVEAT (local vite dev only): repo-sourced project worker dials can

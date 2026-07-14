@@ -1,7 +1,7 @@
 // The execution-runtime matrix for catalogue examples: ONE script body (an
 // example's `code`, with `itx` + `vars` in scope and a trailing `return`)
-// runs through every server-side runtime. The browser runtime lives in
-// examples-browser.test.ts (vitest's browser project); everything else is here.
+// runs through every server-side runtime. The browser runtime is proven by
+// specs/repl-examples.spec.ts (the real REPL); everything else is here.
 //
 //   node            AsyncFunction over an itx Cap'n Web stub in this process
 //   cli             spawned `tsx scripts/cli.ts itx run --eval … --context …`
