@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
+import { MemoryStream, deliverNewEvents, type ProcessorLike } from "../streams/test-helpers.ts";
 import {
   AgentProcessor,
   buildAgentCompactionRequestBody,
@@ -17,7 +18,6 @@ import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
   deriveAgentBusy,
 } from "./agent-processor-contract.ts";
-import { MemoryStream, deliverNewEvents, type ProcessorLike } from "./test-helpers.ts";
 
 function agentRequestEvents(content: string, model = DEFAULT_AGENT_MODEL): StreamEventInput[] {
   return [
