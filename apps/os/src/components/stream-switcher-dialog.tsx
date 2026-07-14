@@ -17,8 +17,9 @@ import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { useLiveState } from "~/itx/itx-react.tsx";
 
 // A full canonical StreamPath of at least one segment: leading slash, lowercase
-// segments separated by single slashes, no trailing slash.
-const STREAM_PATH_PATTERN = /^(?:\/[a-z0-9_-]+)+$/;
+// segments separated by single slashes, no trailing slash. `~` is legal — GitHub
+// agent paths use g~<hex> (must stay aligned with StreamPath in stream-links).
+const STREAM_PATH_PATTERN = /^(?:\/[a-z0-9_~-]+)+$/;
 
 // The "what's happening right now" window for the default ⌘K list.
 const RECENT_WINDOW_MS = 5 * 60_000;
