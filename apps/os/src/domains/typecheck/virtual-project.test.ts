@@ -481,31 +481,6 @@ test("execution gate: a wrong call into the typed surface blocks with the caller
   expect(problems[0]).toContain("Did you mean 'get'");
 });
 
-test("execution gate: TypeScript-only syntax blocks with the plain-JavaScript corrective (live prd incident)", async () => {
-  // The exact script shape from the 2026-07-14 pirate-search thread: valid
-  // TypeScript (the script.ts check is green) that crashes the plain-JS
-  // runtime with a bare "Unexpected token ':'".
-  const checked = await gate(
-    `async (itx) => {\n  const hits = [1, 2].map((r: any, i: number) => ({ r, i }));\n  return hits;\n}`,
-  );
-  expect(checked.verdict).toBe("problems");
-  const problems = (checked as { problems: string[] }).problems;
-  expect(problems.join("\n")).toContain("can only be used in TypeScript files");
-  expect(problems.join("\n")).toContain("plain JavaScript");
-  // Line numbers point at the caller's code, not the twin's prelude.
-  expect(problems[0]).toContain("script:2");
-
-  // `as` casts and generics are the same class.
-  const cast = await gate(`async (itx) => {\n  return (globalThis as any).x;\n}`);
-  expect(cast.verdict).toBe("problems");
-
-  // Plain JavaScript with none of that stays green.
-  const clean = await gate(
-    `async (itx) => {\n  const hits = [1, 2].map((r, i) => ({ r, i }));\n  return hits;\n}`,
-  );
-  expect(clean).toEqual({ verdict: "clean" });
-});
-
 test("execution gate: a near-miss typo on a typed mount blocks; anything else on mounts runs", async () => {
   const typo = await gate("async (itx) => itx.tools.weather.forecastt({ city: 'Berlin' })", [
     WEATHER_MOUNT,

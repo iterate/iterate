@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { transform } from "sucrase";
 import type { Env } from "../../env.ts";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { normalizePath } from "../durable-object-names.ts";
@@ -36,10 +37,26 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
   }
 }
 
+/**
+ * Scripts are PROMISED as TypeScript (the agent prompt demands "one fenced
+ * TypeScript code block"), but the bundle-free fast path below loads plain
+ * JavaScript — so type syntax must be stripped here, not rejected. Sucrase's
+ * type-only transform is a few milliseconds and changes no runtime semantics.
+ * If the code doesn't even parse, embed it raw: the loader's own syntax error
+ * feeds the existing corrective-retry lane, same as before.
+ */
+export function stripScriptTypes(code: string): string {
+  try {
+    return transform(code, { transforms: ["typescript"] }).code;
+  } catch {
+    return code;
+  }
+}
+
 function scriptWorkerRef(input: { code: string; scopePath: string }): StatelessDynamicWorkerRef {
   const source = `
     import { WorkerEntrypoint } from "cloudflare:workers";
-    const fn = ${input.code};
+    const fn = ${stripScriptTypes(input.code)};
     export class ScriptEntrypoint extends WorkerEntrypoint {
       async run() {
         // \`using\`: the itx root is an RPC stub this isolate owns for the
