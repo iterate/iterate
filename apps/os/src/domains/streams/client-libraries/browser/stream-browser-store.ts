@@ -403,14 +403,27 @@ function createStreamRuntime(
   // stopped) reconnects instead of wedging. Arrival — not ingest completion — is the
   // aliveness signal: a large batch can take longer than a check interval to apply, and that
   // must not read as "orphaned"; the stamp is what lets a check see an arrival that PREDATES
-  // it but is still being ingested. The stamp is per-connection evidence like the strike
-  // ledger: it is rebaselined to "now" where a fresh connection is installed and again when
-  // its liveness probe starts, so an arrival on a previous socket (or a pre-subscribe
-  // catch-up page) never vouches for the current live subscription.
+  // it but is still being ingested.
+  //
+  // Contract of the two arrival stamps (both per-connection evidence, like the strike
+  // ledger; both reset where a fresh connection is installed and again when its liveness
+  // probe starts, so an arrival on a previous socket — or a pre-subscribe catch-up page —
+  // never vouches for the current live subscription):
+  //   - lastDeliveryArrivalAt: REAL arrivals only. `undefined` means no delivery has
+  //     arrived on the current connection since its probe started. A recent real arrival
+  //     is liveness for EVERY caller of verifyDelivery.
+  //   - arrivalBaselineAt: when the current connection started counting. It is grace, not
+  //     liveness: only the paced probe (and resume checks) treat a fresh, arrival-less
+  //     subscription within one interval of this baseline as "too early to judge" — that
+  //     keeps the first paced probe after subscribe from false-positiving. A nudge does
+  //     NOT honor it: a nudge carries caller evidence that the server just appended, so a
+  //     server-ahead subscription with ZERO real arrivals is escalated right after the
+  //     delivery grace instead of no-oping for up to a full probe interval.
   let reconciledIncarnation: string | undefined;
   let lastDeliveredOffset = -1;
   let deliveryArrivals = 0;
-  let lastDeliveryArrivalAt = 0;
+  let lastDeliveryArrivalAt: number | undefined;
+  let arrivalBaselineAt = 0;
   // Debug counters (surfaced via __streamRuntimeDebug): how many EVENTS the
   // deliveries actually carried — distinguishes "no deliveries" from
   // "deliveries arrive but carry no events" from "events arrive but writes
@@ -903,10 +916,12 @@ function createStreamRuntime(
         // not vouch for this one: verifyDelivery reads the arrival stamp as
         // "deliveries flowing", so a stale stamp would let an orphaned fresh
         // subscription skip its reconnect for up to a full probe interval.
-        // Rebaseline (not zero) so the new connection gets one silent interval
-        // of grace measured from its own install, like the strike ledger.
+        // Clear the real-arrival stamp and restart the baseline so the paced
+        // probe's grace is measured from this connection's own install, like
+        // the strike ledger (see the stamps' contract at their declaration).
         guardedTimeoutStrikes = 0;
-        lastDeliveryArrivalAt = Date.now();
+        lastDeliveryArrivalAt = undefined;
+        arrivalBaselineAt = Date.now();
         stream = connection;
         // A follower can still append / read runtimeState, so readiness is "connection
         // open", not "leader/subscribed". Unblock anyone awaiting reconnect (B2).
@@ -1335,17 +1350,31 @@ function createStreamRuntime(
   // retry) holds the latch for up to two GUARDED_CALL_TIMEOUT_MS windows, and
   // a composer-submit nudge landing in that window is exactly the caller this
   // check exists for. So the latched request is recorded and the check re-runs
-  // once the in-flight one settles — collapsed to one pending re-run, and a
-  // natural no-op if the settling verify already evicted/reconnected (the
-  // re-run re-reads `stream` and the subscription state from scratch).
+  // once the in-flight one settles — collapsed to one pending re-run that keeps
+  // the strictest requested semantics (a latched nudge's requireRealArrival
+  // survives a later-latched probe), and a natural no-op if the settling verify
+  // already evicted/reconnected (the re-run re-reads `stream` and the
+  // subscription state from scratch).
   let verifyInFlight = false;
-  let verifyRerunReason: string | undefined;
+  let verifyRerun: { reason: string; requireRealArrival: boolean } | undefined;
 
-  async function verifyDelivery(reason: string): Promise<void> {
+  // `requireRealArrival` (the nudge's mode): the caller has evidence the server
+  // just appended, so a server-ahead subscription with no REAL arrival since
+  // its probe started is judged orphaned right after the delivery grace — the
+  // artificial baseline that shields the paced probe's first interval does not
+  // apply. See the arrival stamps' contract at their declaration.
+  async function verifyDelivery(
+    reason: string,
+    opts?: { requireRealArrival?: boolean },
+  ): Promise<void> {
+    const requireRealArrival = opts?.requireRealArrival ?? false;
     const connection = stream;
     if (connection === undefined || disposed) return;
     if (verifyInFlight) {
-      verifyRerunReason = reason;
+      verifyRerun = {
+        reason,
+        requireRealArrival: requireRealArrival || (verifyRerun?.requireRealArrival ?? false),
+      };
       return;
     }
     verifyInFlight = true;
@@ -1385,9 +1414,29 @@ function createStreamRuntime(
       await new Promise((resolve) => setTimeout(resolve, DELIVERY_GRACE_MS));
       if (disposed || stream !== connection) return;
       if (pendingIngestEvents > 0) return; // an arrived batch is still ingesting
-      if (Date.now() - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS) return; // recent arrival — deliveries flowing
+      const now = Date.now();
+      if (
+        lastDeliveryArrivalAt !== undefined &&
+        now - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS
+      ) {
+        return; // recent REAL arrival — deliveries flowing (liveness for every caller)
+      }
+      if (
+        !requireRealArrival &&
+        lastDeliveryArrivalAt === undefined &&
+        now - arrivalBaselineAt <= LIVENESS_PROBE_INTERVAL_MS
+      ) {
+        // Fresh, arrival-less subscription within one interval of its own
+        // start: too early for the paced probe (or a resume check) to judge.
+        // A nudge (requireRealArrival) skips this grace — see above.
+        return;
+      }
       throw new Error(
-        `server is at offset ${coreProcessorState.maxOffset} but no delivery arrived within the last ${LIVENESS_PROBE_INTERVAL_MS}ms (applied through ${lastDeliveredOffset}); subscription is orphaned`,
+        `server is at offset ${coreProcessorState.maxOffset} but ${
+          lastDeliveryArrivalAt === undefined
+            ? `no delivery has arrived since the subscription went live ${now - arrivalBaselineAt}ms ago`
+            : `no delivery arrived within the last ${LIVENESS_PROBE_INTERVAL_MS}ms`
+        } (applied through ${lastDeliveredOffset}); subscription is orphaned`,
       );
     } catch (error) {
       if (disposed || stream !== connection) return;
@@ -1402,20 +1451,26 @@ function createStreamRuntime(
       reconnectAfterError(`${reason} failed`, error, 250, { suspect: connection });
     } finally {
       verifyInFlight = false;
-      const rerunReason = verifyRerunReason;
-      verifyRerunReason = undefined;
-      if (rerunReason !== undefined && !disposed) void verifyDelivery(rerunReason);
+      const rerun = verifyRerun;
+      verifyRerun = undefined;
+      if (rerun !== undefined && !disposed) {
+        void verifyDelivery(rerun.reason, { requireRealArrival: rerun.requireRealArrival });
+      }
     }
   }
 
   function startLivenessProbe() {
     stopLivenessProbe();
-    // The subscription just went live: rebaseline the arrival stamp so the
-    // orphan check measures silence from THIS subscription's start (one full
-    // interval of grace — the old per-probe detector's arrivals-since-probe-
-    // start semantics), not from a pre-subscribe catch-up page or a delivery
-    // that rode a previous socket.
-    lastDeliveryArrivalAt = Date.now();
+    // The subscription just went live: clear the real-arrival stamp and restart
+    // the baseline so the orphan check measures silence from THIS
+    // subscription's start, not from a pre-subscribe catch-up page or a
+    // delivery that rode a previous socket. The paced probe grants one full
+    // interval of grace from this baseline (the old per-probe detector's
+    // arrivals-since-probe-start semantics); a nudge does not — zero real
+    // arrivals plus server-ahead evidence escalates right after the delivery
+    // grace (see the stamps' contract at their declaration).
+    lastDeliveryArrivalAt = undefined;
+    arrivalBaselineAt = Date.now();
     livenessTimer = setInterval(
       () => void verifyDelivery("liveness probe"),
       LIVENESS_PROBE_INTERVAL_MS,
@@ -1452,7 +1507,12 @@ function createStreamRuntime(
       }
       return;
     }
-    await verifyDelivery("delivery nudge");
+    // requireRealArrival: the nudge's caller-side evidence (the server is
+    // about to be / was just appended to) means a server-ahead subscription
+    // with zero real arrivals is orphaned NOW — it must not ride the fresh-
+    // subscription grace the paced probe gets, or the fast heal this check
+    // exists for degrades back to a full probe interval.
+    await verifyDelivery("delivery nudge", { requireRealArrival: true });
   }
 
   function teardown() {
@@ -1480,7 +1540,8 @@ function createStreamRuntime(
     connectionError: snapshot.connectionError,
     lastDeliveredOffset,
     deliveryArrivals,
-    lastDeliveryArrivalAt,
+    lastDeliveryArrivalAt: lastDeliveryArrivalAt ?? null,
+    arrivalBaselineAt,
     totalDeliveredEvents,
     lastBatchEvents,
     ingestFailures,
