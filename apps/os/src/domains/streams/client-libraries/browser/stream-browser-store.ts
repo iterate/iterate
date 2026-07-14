@@ -398,16 +398,53 @@ function createStreamRuntime(
   // connection is replaced (the superseded-election guard discards the queue with it).
   let pendingIngestEvents = 0;
   // The server incarnation this connection reconciled against, how far deliveries have
-  // progressed, and a counter bumped every time a delivery ARRIVES (before the possibly-slow
-  // ingest). The liveness probe compares these against fresh head() reads so an
-  // orphaned-but-healthy-looking subscription (the stream was recreated underneath us, or the
-  // server moved ahead while deliveries silently stopped) reconnects instead of wedging.
-  // Arrival — not ingest completion — is the aliveness signal: a large replay batch can take
-  // longer than a probe interval to apply, and that must not read as "orphaned".
+  // progressed, and a counter + wall-clock stamp bumped every time a delivery ARRIVES
+  // (before the possibly-slow ingest). The delivery check (verifyDelivery) compares these
+  // against fresh runtimeState() so an orphaned-but-healthy-looking subscription (the stream
+  // was recreated underneath us, or the server moved ahead while deliveries silently
+  // stopped) reconnects instead of wedging. Arrival — not ingest completion — is the
+  // aliveness signal: a large batch can take longer than a check interval to apply, and that
+  // must not read as "orphaned"; the stamp is what lets a check see an arrival that PREDATES
+  // it but is still being ingested.
+  //
+  // Contract of the two arrival stamps (both per-connection evidence, like the strike
+  // ledger; both reset where a fresh connection is installed and again when its liveness
+  // probe starts, so an arrival on a previous socket — or a pre-subscribe catch-up page —
+  // never vouches for the current live subscription).
+  //
+  // Exact window semantics: verifyDelivery anchors BOTH windows at checkStartedAt — the
+  // moment the check acquired its single-flight latch, BEFORE its guarded read (up to two
+  // GUARDED_CALL_TIMEOUT_MS windows with the retry) and BEFORE its delivery grace. The
+  // stamps themselves are re-read at judgment time (after the grace), so an arrival during
+  // the read or the grace is newer than the anchor and always counts; what the early anchor
+  // guarantees is that read latency and the grace wait can never shift a window LATE and
+  // silently shrink it (judging against a post-grace `now` disqualified arrivals from early
+  // in the current probe interval and revoked the first paced probe's baseline grace):
+  //   - lastDeliveryArrivalAt: REAL arrivals only. `undefined` means no delivery has
+  //     arrived on the current connection since its probe started. Liveness for EVERY
+  //     caller of verifyDelivery, exactly when
+  //       checkStartedAt - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS
+  //     — an arrival within the probe interval ending when the check began counts, and so
+  //     does anything newer.
+  //   - arrivalBaselineAt: when the current connection started counting. It is grace, not
+  //     liveness: only the paced probe (and resume checks) treat a fresh, arrival-less
+  //     subscription as "too early to judge", exactly when
+  //       checkStartedAt - arrivalBaselineAt <= LIVENESS_PROBE_INTERVAL_MS + DELIVERY_GRACE_MS.
+  //     The + DELIVERY_GRACE_MS slack is what makes the promised grace real: the first
+  //     paced probe fires exactly one interval after the baseline is stamped (the same
+  //     startLivenessProbe stamps it and starts the setInterval), so a bare-interval bound
+  //     would leave the first probe's grace to timer lag. With the slack the first probe
+  //     always starts inside the window and the second (two intervals after the baseline)
+  //     always starts outside — the second paced probe is the earliest that can declare an
+  //     arrival-less subscription orphaned. A nudge does NOT honor this baseline: a nudge
+  //     carries caller evidence that the server just appended, so a server-ahead
+  //     subscription with ZERO real arrivals is escalated right after the delivery grace
+  //     instead of no-oping for up to a full probe interval.
   let reconciledIncarnation: string | undefined;
   let lastDeliveredOffset = -1;
   let deliveryArrivals = 0;
-  let probePreviousArrivals = 0;
+  let lastDeliveryArrivalAt: number | undefined;
+  let arrivalBaselineAt = 0;
   // Debug counters (surfaced via __streamRuntimeDebug): how many EVENTS the
   // deliveries actually carried — distinguishes "no deliveries" from
   // "deliveries arrive but carry no events" from "events arrive but writes
@@ -440,13 +477,13 @@ function createStreamRuntime(
    * abandoned can still resolve much later (a half-open socket healing).
    * Recording that late duration would poison the ring with a sample the
    * user never experienced as a success, so anything slower than the
-   * liveness probe's own deadline is treated as a failure, not a sample.
+   * guarded lane's own deadline is treated as a failure, not a sample.
    */
   function timed<T>(promise: Promise<T>): Promise<T> {
     const t0 = Date.now();
     return promise.then((value) => {
       const elapsed = Date.now() - t0;
-      if (elapsed <= LIVENESS_PROBE_TIMEOUT_MS) transportRtt.record(elapsed, Date.now());
+      if (elapsed <= GUARDED_CALL_TIMEOUT_MS) transportRtt.record(elapsed, Date.now());
       return value;
     });
   }
@@ -625,6 +662,254 @@ function createStreamRuntime(
       evict?.();
     }
     scheduleReconnect(`${step}: ${errorMessage(error)}`, delayMs);
+  }
+
+  // --- The one guarded-call lane ----------------------------------------------
+  // Every RPC on an established connection goes through guardedCall. The
+  // dead-connection detectors are just triggers that make a call through this
+  // lane — the paced liveness probe, the caller's nudge, resume events, direct
+  // calls (appends, state reads), and the subscribe chain's server-touching
+  // steps. One deadline, one strike ledger, one error classification, every
+  // verdict routed through reconnectAfterError:
+  //
+  //   - A call that TIMES OUT is a strike: one slow answer is a cold or busy
+  //     DO, not a dead socket. Two consecutive strikes against the same
+  //     connection mean the transport is swallowing calls (the post-suspend
+  //     half-open socket) — evict it and reconnect so the redial is fresh.
+  //     Strikes are shared across lanes on purpose: an unanswered append and
+  //     an unanswered probe are evidence against the same socket. "Consecutive"
+  //     is episode-scoped, though — overlapping timeouts are ONE strike (the
+  //     episode rules at the ledger's declaration below).
+  //   - A session-broken REJECTION ("Peer closed WebSocket" — capnweb throws
+  //     plain Errors, so the shapes are message-matched of necessity) is
+  //     definitive on the first hit: the transport observably died or already
+  //     self-evicted — reconnect without collateral eviction.
+  //   - Anything else is an app-level failure on a working transport
+  //     (validation and friends): not a connection problem.
+  //
+  // The error always rethrows so the caller sees its own failure — appendBatch
+  // retries it, the probe waits for its next tick, one-shot reads surface it.
+  const GUARDED_CALL_TIMEOUT_MS = 10_000;
+  // Consecutive timed-out guarded EPISODES against the CURRENT connection.
+  // Ledger invariants:
+  //   1. GENERATIONS, not wall clocks, order the episode boundary: every
+  //      guarded call captures `ledgerGeneration` when it starts, and a
+  //      timeout is NEW evidence (a strike) only if that captured generation
+  //      is still current. Recording a strike advances the generation, so
+  //      every call already in flight at that instant — including one that
+  //      started in the same millisecond — is the same cold episode and is
+  //      absorbed. (Millisecond stamps cannot order overlapping calls; a
+  //      monotonic generation can.) The generation advances exactly when a
+  //      strike is recorded and when a fresh connection installs; a success
+  //      resets the COUNT but not the generation (see 4).
+  //   2. TWO STRIKES EVICT: strike two means a call that STARTED after strike
+  //      one was recorded still got no answer — the transport is swallowing
+  //      calls (the post-suspend half-open socket). reconnectAfterError
+  //      evicts the suspect connection and reconnects fresh. Strikes are
+  //      shared across lanes on purpose: an unanswered append and an
+  //      unanswered probe are evidence against the same socket.
+  //   3. PROGRESS GUARANTEE: recording strike one — and every ABSORBED
+  //      timeout while a strike stands — schedules one immediate follow-up
+  //      guarded probe (a cheap runtimeState read; single-flight, never a
+  //      storm). The follow-up starts in the post-strike generation, so a
+  //      genuinely dead socket converges in ~one guarded timeout after
+  //      strike one — deterministically, without waiting for the 10s paced
+  //      probe, a latched verify, or a caller's own retry — while a merely
+  //      cold DO survives (the follow-up's answer resets the ledger). This
+  //      is what keeps episode absorption from delaying eviction below the
+  //      old per-detector two-read cadence.
+  //   4. Any completed round-trip on the current connection resets the count
+  //      — the socket is alive NOW, the only question the ledger asks. The
+  //      generation does not advance: a call that started after the last
+  //      strike and times out after the success is strike one again, exactly
+  //      like the pre-consolidation detectors. A late success from a
+  //      superseded connection resets nothing. LATE CREDIT: "completed
+  //      round-trip" includes a timed-out call's ABANDONED promise resolving
+  //      after its window — the answer still proves the socket carries calls,
+  //      so every timeout leaves a reset-on-success continuation on the
+  //      abandoned promise (identity-bound to its connection, like every
+  //      other reset). Without it, a cold DO answering just after the 10s
+  //      deadline would leave strike one standing while the follow-up probe
+  //      or a caller's fresh retry times out into a false strike two. For
+  //      the same reason, retry-once lanes (withDeadline, verifyDelivery)
+  //      REUSE the in-flight promise for the retry instead of issuing a
+  //      fresh read: the late answer then resolves the retry window itself.
+  //      A late REJECTION earns no credit and takes no action — the timeout
+  //      verdict already stood in for it, and session-broken classification
+  //      belongs to calls the lane still owns.
+  //   5. PER-CONNECTION EVIDENCE: count, generation, and the follow-up latch
+  //      reset where every fresh connection is installed (connect()'s stream
+  //      assignment) — a strike is evidence against one socket and must never
+  //      carry over to the next, whichever path redialed (scheduleReconnect,
+  //      clearLocalDatabase's reconnectNow, a direct call's connect()).
+  //      Every MUTATION is identity-bound too: strike increments check
+  //      stream === connection, and the follow-up latch's handlers release
+  //      only the latch object they armed — so a superseded connection's
+  //      still-pending timer or settling probe can neither clear the
+  //      successor's latch (overlapping probes) nor consume its re-arm
+  //      (dropped follow-up). Installation-time reset + identity-bound
+  //      mutation is the complete set.
+  // Interleavings this must get right:
+  //   - Probe read + appendBatch overlapping on a cold DO: the first timeout
+  //     is strike one; the second captured the pre-strike generation →
+  //     absorbed (even same-millisecond), no false eviction of a
+  //     healthy-but-cold socket — it schedules the follow-up probe instead.
+  //   - Three (or N) calls overlapping: still one strike — every later
+  //     timeout captured the pre-strike generation.
+  //   - The subscribe chain's deliberate retry-then-evict (withDeadline): the
+  //     retry's guarded window opens inside the first attempt's catch, after
+  //     the strike advanced the generation — so its timeout is genuinely
+  //     consecutive evidence and the eviction that comment promises still
+  //     happens, with no wall-clock tie-break needed.
+  //   - All-lanes-in-flight after a thaw: every pre-thaw call's timeout
+  //     collapses into strike one; the follow-up probe (invariant 3) is the
+  //     deterministic post-strike call, so eviction lands ~one timeout later
+  //     even if no lane retries and the paced probe is seconds out.
+  //   - Cold DO answers at 11s: the read times out at 10s (strike one,
+  //     follow-up probe scheduled). The 11s answer resolves the reused-
+  //     promise retry (verifyDelivery/withDeadline) AND the late credit
+  //     resets the count, so the follow-up probe's verdict — success from a
+  //     now-warm DO, or even its own timeout — can no longer be strike two.
+  //     A genuinely dead socket never settles the shared promise, so the
+  //     retry and the follow-up probe still time out in the post-strike
+  //     generation and eviction still lands ~two guarded windows after the
+  //     first call started (invariant 3's progress guarantee, unchanged).
+  let guardedTimeoutStrikes = 0;
+  // The episode boundary (invariant 1). Monotonic per runtime; compared, never
+  // interpreted — only equality with a call's captured value matters.
+  let ledgerGeneration = 0;
+
+  function isSessionBrokenError(error: unknown) {
+    const message = errorMessage(error).toLowerCase();
+    return message.includes("websocket") || message.includes("rpc session");
+  }
+
+  async function guardedCall<T>(
+    step: string,
+    connection: BrowserStreamClient,
+    call: (rpc: BrowserStreamClient) => Promise<T> | T,
+  ): Promise<T> {
+    const startedGeneration = ledgerGeneration;
+    let pending: Promise<T> | undefined;
+    try {
+      pending = Promise.resolve(call(connection));
+      const result = await raceWithTimeout(
+        pending,
+        GUARDED_CALL_TIMEOUT_MS,
+        `${step} timed out after ${GUARDED_CALL_TIMEOUT_MS}ms`,
+      );
+      // A late success from an abandoned call on a superseded connection says
+      // nothing about the current one.
+      if (stream === connection) guardedTimeoutStrikes = 0;
+      return result;
+    } catch (error) {
+      if (disposed || stream !== connection) throw error;
+      if (error instanceof StepTimeoutError) {
+        // Late credit (ledger invariant 4): the abandoned call is still in
+        // flight, and if it ever SUCCEEDS that's a completed round-trip on
+        // this connection — reset the count so a cold DO answering after the
+        // deadline cannot eat strike two from a later fresh read. Identity-
+        // bound like every reset; a late rejection earns nothing (the
+        // timeout verdict already stood in for it).
+        void pending?.then(
+          () => {
+            if (!disposed && stream === connection) guardedTimeoutStrikes = 0;
+          },
+          () => {},
+        );
+        // Episode rule (ledger invariant 1): a timeout whose window was
+        // already open when the previous strike landed captured an older
+        // generation — same cold episode, not new evidence.
+        if (startedGeneration === ledgerGeneration) {
+          guardedTimeoutStrikes += 1;
+          ledgerGeneration += 1;
+          if (guardedTimeoutStrikes >= 2) {
+            // reconnectAfterError evicts on StepTimeoutError.
+            reconnectAfterError(step, error, 0, { suspect: connection });
+          } else {
+            // Invariant 3: strike one must deterministically produce the
+            // next probing call — never leave convergence to the paced timer.
+            scheduleStrikeFollowUpProbe(connection);
+          }
+        } else if (guardedTimeoutStrikes > 0) {
+          // Absorbed same-episode timeout: no new evidence, but it must not
+          // stall progress either — make sure one follow-up probe is running.
+          scheduleStrikeFollowUpProbe(connection);
+        }
+      } else if (isSessionBrokenError(error)) {
+        reconnectAfterError(step, error, 0, { suspect: connection });
+      }
+      throw error;
+    }
+  }
+
+  // The ledger's progress guarantee (invariant 3): one cheap guarded read,
+  // started strictly AFTER a strike advanced the generation, so its verdict is
+  // decisive — success resets the ledger (the socket was merely cold), a
+  // timeout is strike two (guardedCall evicts) unless the struck call's own
+  // late answer already credited the ledger (invariant 4 — then it is strike
+  // one again and reschedules), a session-broken
+  // rejection reconnects on the spot. Single-flight: the latch holds until the
+  // probe settles, so absorbed timeouts trickling in during its window cannot
+  // fan out into a probe storm — but a schedule request that lands while the
+  // latch is held is REMEMBERED, not dropped. The probe's own timeout can be
+  // strike one again (late credit reset the count mid-window), and guardedCall
+  // records that strike — and asks for the next follow-up — BEFORE this
+  // function's finally releases the latch; swallowing that request would leave
+  // strike one standing until the paced probe or another caller happens to
+  // call, breaking invariant 3's progress guarantee. The remembered request
+  // re-arms in the finally (fire-time re-checks make it a no-op if the ledger
+  // reset or the connection was replaced meanwhile), so at most one probe is
+  // ever in flight.
+  //
+  // The latch is IDENTITY-BOUND like the ledger it serves: it carries the
+  // connection it was armed for, and its handlers release only the exact latch
+  // object they armed. Without that, the old connection's still-pending timer
+  // or settling probe could release the latch AFTER a fresh connection
+  // installed and armed its own — permitting an overlapping probe against the
+  // new connection (two concurrent reads striking a merely-cold DO into a
+  // false eviction) — or consume the new latch's remembered re-arm and
+  // "re-arm" with the superseded connection (an immediate no-op), dropping the
+  // follow-up invariant 3 promised. A stale handler now touches nothing: the
+  // install-time reset (and any newer schedule) replaces the latch object, so
+  // the identity check fails.
+  let strikeFollowUpProbe: { readonly owner: BrowserStreamClient; rearm: boolean } | undefined;
+  function scheduleStrikeFollowUpProbe(connection: BrowserStreamClient) {
+    if (disposed || stream !== connection) return;
+    if (strikeFollowUpProbe?.owner === connection) {
+      strikeFollowUpProbe.rearm = true;
+      return;
+    }
+    // A latch left by a superseded connection is dead weight (its handlers are
+    // identity-checked no-ops); install-time reset already cleared it, so this
+    // arms a fresh latch for the current connection.
+    const latch = { owner: connection, rearm: false };
+    strikeFollowUpProbe = latch;
+    setTimeout(() => {
+      // Only the latch this timer armed is its to release — a reconnect's
+      // install reset (or a successor's schedule) replaced it, and the new
+      // owner's own handlers manage it now.
+      if (strikeFollowUpProbe !== latch) return;
+      // Re-check at fire time: a success may have reset the ledger, or a
+      // reconnect may have replaced the connection, between schedule and now.
+      if (disposed || stream !== connection || guardedTimeoutStrikes === 0) {
+        strikeFollowUpProbe = undefined;
+        return;
+      }
+      void guardedCall("strike follow-up probe", connection, (rpc) =>
+        timed(Promise.resolve(rpc.runtimeState())),
+      )
+        .catch(() => {
+          // Verdicts (strike two → evict, session broken → reconnect) are the
+          // guarded lane's own; the probe has nothing to add.
+        })
+        .finally(() => {
+          if (strikeFollowUpProbe !== latch) return;
+          const rearm = latch.rearm;
+          strikeFollowUpProbe = undefined;
+          if (rearm) scheduleStrikeFollowUpProbe(connection);
+        });
+    }, 0);
   }
 
   async function discardLocalMirror() {
@@ -826,6 +1111,29 @@ function createStreamRuntime(
         // The superseded case is disposed by the dial handler above, exactly once.
         if (disposed || epoch !== connectionEpoch) return;
         connectFailuresSinceSuccess = 0;
+        // Per-connection evidence resets. A leftover strike from the previous
+        // socket must not make this connection's first slow answer look like
+        // strike two — and a delivery that arrived on the previous socket must
+        // not vouch for this one: verifyDelivery reads the arrival stamp as
+        // "deliveries flowing", so a stale stamp would let an orphaned fresh
+        // subscription skip its reconnect for up to a full probe interval.
+        // Clear the real-arrival stamp and restart the baseline so the paced
+        // probe's grace is measured from this connection's own install, like
+        // the strike ledger (see the stamps' contract at their declaration).
+        // pendingIngestEvents is per-connection evidence too — verifyDelivery
+        // treats a positive backlog as proof of life, so a count stranded by a
+        // path that replaced the connection without scheduleReconnect
+        // (clearLocalDatabase) must never blind the new connection's orphan
+        // check. The follow-up latch resets with the ledger it serves; its
+        // handlers are latch-identity-bound, so the previous connection's
+        // still-pending timer or settling probe cannot release (or consume the
+        // re-arm of) the latch this connection arms next.
+        guardedTimeoutStrikes = 0;
+        ledgerGeneration += 1;
+        strikeFollowUpProbe = undefined;
+        pendingIngestEvents = 0;
+        lastDeliveryArrivalAt = undefined;
+        arrivalBaselineAt = Date.now();
         stream = connection;
         // A follower can still append / read runtimeState, so readiness is "connection
         // open", not "leader/subscribed". Unblock anyone awaiting reconnect (B2).
@@ -877,16 +1185,22 @@ function createStreamRuntime(
     // far leg of a proxied connection dies mid-call — e.g. the page subscribed to a
     // lazily-created agent stream and the agent machinery recreated it, killing the Stream DO
     // behind the proxy hop without a close frame reaching the browser — those calls park
-    // forever and the page wedges on "connecting" with no error anywhere. Race each
-    // server-touching step against a deadline; the rejection lands in the catch below, which
-    // reconnects on a fresh socket to the live instance.
-    const SUBSCRIBE_STEP_TIMEOUT_MS = 15_000;
-    const withDeadline = <T>(step: string, promise: Promise<T> | T): Promise<T> =>
-      raceWithTimeout(
-        Promise.resolve(promise),
-        SUBSCRIBE_STEP_TIMEOUT_MS,
-        `${step} timed out after ${SUBSCRIBE_STEP_TIMEOUT_MS}ms`,
-      );
+    // forever and the page wedges on "connecting" with no error anywhere. Each
+    // server-touching step rides the guarded lane AND follows its two-strike policy: one
+    // struck timeout is retried immediately against the same connection (the underlying call
+    // is still in flight, so a cold DO's late answer resolves inside the retry window
+    // without duplicating work), and the retry's timeout is the lane's second strike:
+    // the retry's guarded window opens after strike one was recorded, so the ledger's
+    // episode rule counts it as genuinely consecutive evidence — guardedCall evicts the
+    // half-open transport and reconnects, so the wedge above still converges. A rejection the lane did not already act on lands in the catch below,
+    // which reconnects on a fresh socket to the live instance.
+    const withDeadline = <T>(step: string, promise: Promise<T> | T): Promise<T> => {
+      const attempt = () => guardedCall(step, election.connection, () => promise);
+      return attempt().catch((error: unknown) => {
+        if (!(error instanceof StepTimeoutError) || !ownsRuntime()) throw error;
+        return attempt();
+      });
+    };
 
     void writerRole.whenWriter
       .then(async () => {
@@ -967,6 +1281,7 @@ function createStreamRuntime(
             if (!ownsRuntime()) return undefined;
             if (page.length === 0) break; // server truth moved (reset?); subscribe reconciles
             deliveryArrivals += 1;
+            lastDeliveryArrivalAt = Date.now();
             lastBatchEvents = page.length;
             totalDeliveredEvents += page.length;
             // Deliberately NOT deadlined, unlike the read-only steps above: a
@@ -1046,7 +1361,7 @@ function createStreamRuntime(
         nudgeSkipWarned = false;
         snapshot = { ...snapshot, connectionError: undefined, connectionStatus: "subscribed" };
         emitSnapshot();
-        startLivenessProbe(election.connection);
+        startLivenessProbe();
         // Note: we deliberately do NOT reset ingestFailureCount here. A clean resubscribe does
         // not mean the batch that failed will now succeed, so resetting would let a poison
         // batch busy-loop at the floor delay. ingestFailureCount only resets on a successful
@@ -1059,12 +1374,16 @@ function createStreamRuntime(
         // landed us elsewhere) must not tear down the healthy current subscription (B1).
         if (disposed || !ownsRuntime()) return;
         console.error(`[stream ${args.streamPath} ${slug}] subscribe failed`, error);
-        // Deadline timeouts here MUST evict (reconnectAfterError does): when
-        // the socket went half-open while we were not yet subscribed, the dial
-        // "succeeds" instantly off the cached corpse and THIS chain is the
-        // first place the death manifests — without eviction it would loop
-        // dial → 15s park → reconnect forever, the wedge's residual form.
-        reconnectAfterError("subscribe failed", error, 1_000, { suspect: election.connection });
+        // Timeout verdicts (including the half-open-corpse eviction) are the
+        // guarded lane's business, made inside withDeadline's retry: a
+        // two-strike eviction already reconnected (so ownsRuntime() bailed
+        // above), and a StepTimeoutError still reaching here means the ledger
+        // never hit two — another lane's success proved the transport answers
+        // mid-chain — so one strike is not evidence enough to evict. Restart
+        // the election without collateral damage; non-timeout rejections the
+        // lane didn't act on are app-level failures and get the same
+        // no-eviction reconnect they always did.
+        scheduleReconnect(`subscribe failed: ${errorMessage(error)}`, 1_000);
       });
   }
 
@@ -1097,56 +1416,70 @@ function createStreamRuntime(
     // otherwise accumulate in JS memory without bound. Cutting the connection
     // discards the queue (every queued ingest bails on the superseded-election
     // guard above) and the fresh election pull-pages from the checkpoint.
+    //
+    // The counter is per-connection evidence (verifyDelivery reads a positive
+    // backlog as proof of life), so its lifecycle must be leak-free: the
+    // finally below releases exactly this batch's contribution on EVERY exit —
+    // applied, valve-cut, failed, or bailed in a superseded slot — but only
+    // while this batch's connection is still current. Once a fresh connection
+    // installs (which zeroes the counter for its own evidence), a stale
+    // batch's late settle must not subtract from the successor's backlog.
     pendingIngestEvents += batch.events.length;
-    if (pendingIngestEvents > MAX_PENDING_INGEST_EVENTS) {
-      pendingIngestEvents = 0;
-      console.warn(
-        `[stream ${args.streamPath} ${slug}] delivery outran the local mirror (> ${MAX_PENDING_INGEST_EVENTS} events queued); reconnecting to catch up at the mirror's pace`,
-      );
-      scheduleReconnect("delivery outran the local mirror", 0);
-      return;
-    }
-    // Count the arrival HERE, for the current election only, and BEFORE the
-    // (possibly slow) ingest await: the liveness probe reads a bumped counter
-    // as "deliveries are flowing", so a long ingest must not look stalled,
-    // while a dropped stale batch (returned above) must not look like progress.
-    deliveryArrivals += 1;
-    lastBatchEvents = batch.events.length;
-    totalDeliveredEvents += batch.events.length;
-    // Serialize the apply and RE-CHECK ownership inside the slot. The entry
-    // guard above is not enough: two rapid batches both pass it, then batch
-    // A's failure schedules a reconnect while batch B already holds the next
-    // slot in the processor's own chain — B would apply over the failure,
-    // advancing the checkpoint PAST A's rows. The relaxed (gap-tolerant)
-    // mirror trigger accepts that hole, so nothing would ever repair it; the
-    // strict trigger used to fail B loudly by accident. `scheduleReconnect`
-    // clears `stream` synchronously, so a re-check inside the slot sees it.
-    const run = ingestChain.then(async () => {
-      if (disposed || stream !== election.connection) return;
-      await processor.ingest(batch);
-      pendingIngestEvents = Math.max(0, pendingIngestEvents - batch.events.length);
-      ingestFailureCount = 0;
-      lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.streamMaxOffset);
-    });
-    ingestChain = run.catch(() => undefined);
     try {
-      await run;
-    } catch (error) {
-      // Only the connection that is still current self-heals; a stale callback bails.
-      if (disposed || stream !== election.connection) throw error;
-      ingestFailureCount += 1;
-      ingestFailures += 1;
-      console.error(
-        `[stream ${args.streamPath} ${slug}] local mirror ingest failed (attempt ${ingestFailureCount}); resubscribing from last applied offset`,
-        error,
-      );
-      // Drop the connection and reconnect with bounded exponential backoff (capped 30s). The
-      // fresh election re-reads the persisted checkpoint, so the server replays after the last
-      // applied offset. Routed through the shared scheduleReconnect so a concurrent socket
-      // close can't race a second reconnect timer.
-      const delay = Math.min(30_000, 250 * 2 ** Math.min(ingestFailureCount - 1, 7));
-      scheduleReconnect(`mirror ingest failed: ${errorMessage(error)}`, delay);
-      throw error;
+      if (pendingIngestEvents > MAX_PENDING_INGEST_EVENTS) {
+        console.warn(
+          `[stream ${args.streamPath} ${slug}] delivery outran the local mirror (> ${MAX_PENDING_INGEST_EVENTS} events queued); reconnecting to catch up at the mirror's pace`,
+        );
+        // scheduleReconnect zeroes pendingIngestEvents with the connection.
+        scheduleReconnect("delivery outran the local mirror", 0);
+        return;
+      }
+      // Count the arrival HERE, for the current election only, and BEFORE the
+      // (possibly slow) ingest await: the liveness probe reads a bumped counter
+      // as "deliveries are flowing", so a long ingest must not look stalled,
+      // while a dropped stale batch (returned above) must not look like progress.
+      deliveryArrivals += 1;
+      lastDeliveryArrivalAt = Date.now();
+      lastBatchEvents = batch.events.length;
+      totalDeliveredEvents += batch.events.length;
+      // Serialize the apply and RE-CHECK ownership inside the slot. The entry
+      // guard above is not enough: two rapid batches both pass it, then batch
+      // A's failure schedules a reconnect while batch B already holds the next
+      // slot in the processor's own chain — B would apply over the failure,
+      // advancing the checkpoint PAST A's rows. The relaxed (gap-tolerant)
+      // mirror trigger accepts that hole, so nothing would ever repair it; the
+      // strict trigger used to fail B loudly by accident. `scheduleReconnect`
+      // clears `stream` synchronously, so a re-check inside the slot sees it.
+      const run = ingestChain.then(async () => {
+        if (disposed || stream !== election.connection) return;
+        await processor.ingest(batch);
+        ingestFailureCount = 0;
+        lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.streamMaxOffset);
+      });
+      ingestChain = run.catch(() => undefined);
+      try {
+        await run;
+      } catch (error) {
+        // Only the connection that is still current self-heals; a stale callback bails.
+        if (disposed || stream !== election.connection) throw error;
+        ingestFailureCount += 1;
+        ingestFailures += 1;
+        console.error(
+          `[stream ${args.streamPath} ${slug}] local mirror ingest failed (attempt ${ingestFailureCount}); resubscribing from last applied offset`,
+          error,
+        );
+        // Drop the connection and reconnect with bounded exponential backoff (capped 30s). The
+        // fresh election re-reads the persisted checkpoint, so the server replays after the last
+        // applied offset. Routed through the shared scheduleReconnect so a concurrent socket
+        // close can't race a second reconnect timer.
+        const delay = Math.min(30_000, 250 * 2 ** Math.min(ingestFailureCount - 1, 7));
+        scheduleReconnect(`mirror ingest failed: ${errorMessage(error)}`, delay);
+        throw error;
+      }
+    } finally {
+      if (stream === election.connection) {
+        pendingIngestEvents = Math.max(0, pendingIngestEvents - batch.events.length);
+      }
     }
   }
 
@@ -1180,68 +1513,36 @@ function createStreamRuntime(
   // Resume is exactly when transports die (mobile suspend killed the TCP
   // connection, the radio dropped, the laptop slept) AND when the paced probe
   // has been frozen for the whole absence — so waiting for its next interval
-  // costs the user 10-35 visible seconds of a stale feed. Check immediately
-  // instead: a pending reconnect fires now, a live subscription gets nudged
-  // (which detects staleness server-side and reconnects with zero delay), and
-  // a FOLLOWER gets a transport check — it has no probe (probes are the
-  // leader's, post-subscribe) and nothing else would ever notice its dead
-  // connection: its feed keeps updating off the leader tab's shared mirror
-  // while its own appends fail, which looks exactly like a healthy page.
+  // costs the user 10-35 visible seconds of a stale feed. The resume contract,
+  // by evidence strength:
+  //   - Known-dead (the close event reached us: `stream` already cleared, or a
+  //     reconnect backoff is armed): reconnect NOW, no probing, no strikes —
+  //     the pre-consolidation resume behavior, unchanged.
+  //   - Unknown (socket still installed): run the one delivery check
+  //     immediately. A cleanly-closed session REJECTS its guarded read on the
+  //     spot ("Peer closed WebSocket") and reconnects first-hit; only the
+  //     half-open corpse needs the ledger's strikes, and the follow-up probe
+  //     (ledger invariant 3) bounds that at two guarded windows from the
+  //     resume check's start.
+  // A live subscription and a settled FOLLOWER both run the check. The
+  // follower matters — it has no probe (probes are the leader's,
+  // post-subscribe) and nothing else would ever notice its dead connection:
+  // its feed keeps updating off the leader tab's shared mirror while its own
+  // appends fail, which looks exactly like a healthy page. An election in
+  // flight ("electing", or "leader" before subscribe resolves) is left alone:
+  // its own guarded steps already bound a dead transport, and a resume-time
+  // check racing a cold DO would strike a healthy attempt.
   function onResume() {
     if (disposed || !started) return;
-    const connection = stream;
-    if (connection === undefined || reconnectTimer !== undefined) {
+    if (stream === undefined || reconnectTimer !== undefined) {
       // pageshow fires on every NORMAL load too, right after start() began the
       // first dial — leave a young in-flight attempt alone instead of bumping
       // its epoch and re-dialing (one wasted round trip per page load).
       if (stream === undefined && Date.now() - connectStartedAt < 5_000) return;
       reconnectNow();
-    } else if (subscriptionHandle !== undefined) {
-      void nudge();
-    } else if (snapshot.subscriptionStatus === "follower") {
-      // Settled followers ONLY — an election in flight ("electing", or
-      // "leader" before subscribe resolves) also has no handle yet, but its
-      // own step deadlines already bound a dead transport, and a resume-time
-      // probe racing a cold DO would tear down that healthy attempt.
-      void (async () => {
-        try {
-          await readHeadTwoStrike(connection, "follower resume check");
-        } catch (error) {
-          if (disposed || stream !== connection) return;
-          console.warn(
-            `[stream ${args.streamPath} ${slug}] follower connection failed its resume check; reconnecting`,
-            error,
-          );
-          reconnectAfterError("follower resume check failed", error, 0, { suspect: connection });
-        }
-      })();
+    } else if (subscriptionHandle !== undefined || snapshot.subscriptionStatus === "follower") {
+      void verifyDelivery("resume check");
     }
-  }
-
-  // Read the connection's core state under the probe deadline, retrying ONE
-  // timeout — the shared two-strike standard: a single slow head()
-  // answer is a cold or busy DO, not a dead socket, and a timeout verdict
-  // ultimately evicts the transport the whole page shares. Returns undefined
-  // when ownership was lost mid-check; a second timeout (or any rejection)
-  // throws into the caller's reconnect lane.
-  async function readHeadTwoStrike(connection: BrowserStreamClient, step: string) {
-    const read = () =>
-      raceWithTimeout(
-        // Every head read doubles as a transport-RTT sample (timed
-        // guards against recording abandoned late resolutions itself).
-        timed(Promise.resolve(connection.head())),
-        LIVENESS_PROBE_TIMEOUT_MS,
-        `${step} timed out`,
-      );
-    let result;
-    try {
-      result = await read();
-    } catch (error) {
-      if (!(error instanceof StepTimeoutError)) throw error;
-      if (disposed || stream !== connection) return undefined;
-      result = await read();
-    }
-    return parseBrowserCoreProcessorState(result);
   }
   const onVisibilityChange = () => {
     if (document.visibilityState === "visible") onResume();
@@ -1264,83 +1565,196 @@ function createStreamRuntime(
     }, 0);
   }
 
-  // A dead-but-open WebSocket (the worker behind a dev proxy restarted, a
-  // Durable Object was evicted mid-connection) hangs silently: the browser
-  // never gets a close frame, deliveries just stop, and the UI stays
-  // "subscribed" forever. Probe the live connection with a cheap RPC; a
-  // probe that cannot answer within the deadline means the socket is dead —
-  // reconnect, and the resubscribe replays from the persisted checkpoint.
+  // --- The one delivery check --------------------------------------------------
+  // The paced probe, the caller's nudge, and resume events all run THIS check;
+  // none of them owns its own timeout or verdict logic.
   //
-  // The probe's answer matters too: a subscription can be orphaned while the
-  // socket stays perfectly healthy. If the stream was recreated underneath us
-  // (incarnation changed — e.g. the browser subscribed to a lazily-created
+  // The read itself is the transport check. A dead-but-open WebSocket (the
+  // worker behind a dev proxy restarted, a Durable Object was evicted
+  // mid-connection) hangs silently: the browser never gets a close frame,
+  // deliveries just stop, and the UI stays "subscribed" forever — the guarded
+  // lane strikes (and, on the second strike, evicts) that connection. One
+  // struck timeout is retried immediately so a one-shot trigger (nudge,
+  // resume) is not silently swallowed by a single slow answer; the retry
+  // REUSES the in-flight read (a cold DO's late answer resolves it — see the
+  // ledger's late-credit rule), and only a still-unanswered read makes the
+  // retry's timeout the lane's second strike.
+  //
+  // The ANSWER matters for the leader: a subscription can be orphaned while
+  // the socket stays perfectly healthy. If the stream was recreated underneath
+  // us (incarnation changed — e.g. the browser subscribed to a lazily-created
   // empty stream and the agent machinery then created it for real), or the
-  // server's maxOffset moved ahead while deliveries made no progress for a
-  // whole probe interval, the subscription is gone server-side — resubscribe.
+  // server's maxOffset is ahead and deliveries have been SILENT for a full
+  // check interval (no batch in flight, none arrived recently — a batch that
+  // arrived before the check and is still ingesting is proof of life, not a
+  // stall), the subscription is gone server-side — reconnect, and the
+  // resubscribe replays from the persisted checkpoint. A follower holds no
+  // subscription, so for it the answered read is the whole check.
   const LIVENESS_PROBE_INTERVAL_MS = 10_000;
-  const LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+  const DELIVERY_GRACE_MS = 2_000;
+  // Single-flight latch: two overlapping verifies would burn concurrent reads
+  // to answer one question (the ledger's episode rule already keeps their
+  // overlapping timeouts to one strike) — but a check requested while one is
+  // in flight must not be silently dropped either. A
+  // probe whose guarded read is waiting out its deadline (twice, with the
+  // retry) holds the latch for up to two GUARDED_CALL_TIMEOUT_MS windows, and
+  // a composer-submit nudge landing in that window is exactly the caller this
+  // check exists for. So the latched request is recorded and the check re-runs
+  // once the in-flight one settles — collapsed to one pending re-run that keeps
+  // the strictest requested semantics (a latched nudge's requireRealArrival
+  // survives a later-latched probe), and a natural no-op if the settling verify
+  // already evicted/reconnected (the re-run re-reads `stream` and the
+  // subscription state from scratch).
+  let verifyInFlight = false;
+  let verifyRerun: { reason: string; requireRealArrival: boolean } | undefined;
 
-  function startLivenessProbe(connection: NonNullable<typeof stream>) {
+  // `requireRealArrival` (the nudge's mode): the caller has evidence the server
+  // just appended, so a server-ahead subscription with no REAL arrival since
+  // its probe started is judged orphaned right after the delivery grace — the
+  // artificial baseline that shields the paced probe's first interval does not
+  // apply. See the arrival stamps' contract at their declaration.
+  async function verifyDelivery(
+    reason: string,
+    opts?: { requireRealArrival?: boolean },
+  ): Promise<void> {
+    const requireRealArrival = opts?.requireRealArrival ?? false;
+    const connection = stream;
+    if (connection === undefined || disposed) return;
+    if (verifyInFlight) {
+      verifyRerun = {
+        reason,
+        requireRealArrival: requireRealArrival || (verifyRerun?.requireRealArrival ?? false),
+      };
+      return;
+    }
+    verifyInFlight = true;
+    // The anchor for every silence window below (see the arrival stamps'
+    // contract at their declaration): captured before the guarded read and the
+    // delivery grace, so neither a slow read (10s timeout, retried once) nor
+    // the grace wait shifts a window late and shrinks it. Stamps are re-read
+    // at judgment time — an arrival during the read or the grace is newer than
+    // this anchor and counts as liveness.
+    const checkStartedAt = Date.now();
+    try {
+      // Every runtime-state read doubles as a transport-RTT sample (timed
+      // guards against recording abandoned late resolutions itself). ONE
+      // underlying RPC, shared with the retry (the withDeadline pattern +
+      // ledger invariant 4's late-credit rule): the first window's timeout
+      // abandons the guarded call but the RPC stays in flight, so racing the
+      // retry's window over the SAME promise lets a cold DO's late answer
+      // (say 11s in) resolve the retry as a success — ledger reset — instead
+      // of demanding a second answer inside the post-strike window and
+      // striking a merely-slow DO into eviction. A genuinely dead socket
+      // never settles this promise, so the retry still times out as genuine
+      // strike two and guardedCall evicts.
+      const underlying = timed(Promise.resolve(connection.runtimeState()));
+      const read = () => guardedCall(reason, connection, () => underlying);
+      let result;
+      try {
+        result = await read();
+      } catch (error) {
+        if (disposed || stream !== connection) return;
+        if (!(error instanceof StepTimeoutError)) throw error;
+        result = await read();
+      }
+      // A parse failure is definitive (the server answered, with a shape we
+      // cannot reconcile against) — it lands in the catch below and reconnects
+      // on the first hit.
+      const coreProcessorState = parseBrowserCoreProcessorState(result.coreProcessorState);
+      if (disposed || stream !== connection) return;
+      if (subscriptionHandle === undefined) return; // transport answered — all a follower needs
+      if (coreProcessorState.createdAt !== reconciledIncarnation) {
+        throw new Error(
+          `stream incarnation changed (${reconciledIncarnation} -> ${coreProcessorState.createdAt}); subscription is orphaned`,
+        );
+      }
+      if (coreProcessorState.maxOffset <= lastDeliveredOffset) return; // mirror is current
+      // Server is ahead — give an in-flight delivery a moment, then require
+      // SILENCE across the full check interval ENDING AT checkStartedAt before
+      // declaring the subscription orphaned. lastDeliveredOffset lagging is
+      // NOT the stall signal: a batch that arrived before this check and is
+      // still ingesting (or several, queued) adds no new arrival during the
+      // grace window, and reconnecting under it would abandon a healthy
+      // mid-apply mirror. Arrival — the ledger's counter/stamp, bumped before
+      // the possibly-slow ingest — is what proves the delivery lane is alive.
+      await new Promise((resolve) => setTimeout(resolve, DELIVERY_GRACE_MS));
+      if (disposed || stream !== connection) return;
+      if (pendingIngestEvents > 0) return; // an arrived batch is still ingesting
+      // Re-check mirror-current AFTER the grace: an ingest that was in flight
+      // when this check began can finish during the wait — clearing the
+      // pending counter and advancing lastDeliveredOffset past the server
+      // offset read above. That mirror is current; judging it by a stale
+      // arrival stamp (the batch may have ARRIVED long before this check)
+      // would reconnect a healthy, caught-up subscription.
+      if (coreProcessorState.maxOffset <= lastDeliveredOffset) return;
+      if (
+        lastDeliveryArrivalAt !== undefined &&
+        checkStartedAt - lastDeliveryArrivalAt <= LIVENESS_PROBE_INTERVAL_MS
+      ) {
+        // REAL arrival within the probe interval ending when this check began
+        // — or newer (the stamp is re-read here, so an arrival during the read
+        // or the grace makes this difference negative). Deliveries flowing;
+        // liveness for every caller.
+        return;
+      }
+      if (
+        !requireRealArrival &&
+        lastDeliveryArrivalAt === undefined &&
+        checkStartedAt - arrivalBaselineAt <= LIVENESS_PROBE_INTERVAL_MS + DELIVERY_GRACE_MS
+      ) {
+        // Fresh, arrival-less subscription: too early for the paced probe (or
+        // a resume check) to judge. The bound is interval + grace so the first
+        // paced probe — which fires exactly one interval after the baseline —
+        // is reliably inside it (exact semantics at the stamps' declaration).
+        // A nudge (requireRealArrival) skips this grace — see above.
+        return;
+      }
+      throw new Error(
+        `server is at offset ${coreProcessorState.maxOffset} but ${
+          lastDeliveryArrivalAt === undefined
+            ? `no delivery has arrived since the subscription went live ${Date.now() - arrivalBaselineAt}ms ago`
+            : `no delivery arrived in the ${LIVENESS_PROBE_INTERVAL_MS}ms before this check began (last arrival ${Date.now() - lastDeliveryArrivalAt}ms ago)`
+        } (applied through ${lastDeliveredOffset}); subscription is orphaned`,
+      );
+    } catch (error) {
+      if (disposed || stream !== connection) return;
+      // Timeouts are entirely the guarded lane's business: a strike that has
+      // not reached its verdict must not reconnect here (much less evict — the
+      // ledger may have been reset by a success on another lane mid-check).
+      if (error instanceof StepTimeoutError) return;
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] ${reason} found a dead or stale subscription; reconnecting`,
+        error,
+      );
+      reconnectAfterError(`${reason} failed`, error, 250, { suspect: connection });
+    } finally {
+      verifyInFlight = false;
+      const rerun = verifyRerun;
+      verifyRerun = undefined;
+      if (rerun !== undefined && !disposed) {
+        void verifyDelivery(rerun.reason, { requireRealArrival: rerun.requireRealArrival });
+      }
+    }
+  }
+
+  function startLivenessProbe() {
     stopLivenessProbe();
-    probePreviousArrivals = deliveryArrivals;
-    // A single SLOW head() answer (cold DO, busy worker) is not a dead
-    // socket — only consecutive timeouts are, and two of them mean the
-    // transport itself is swallowing calls (half-open socket): evict it so the
-    // reconnect dials fresh. A REJECTION is definitive on the first hit — the
-    // session is observably broken (e.g. "Peer closed WebSocket"), waiting a
-    // second interval just doubles the user's stuck time. Definitive signals
-    // (incarnation change, stalled deliveries) also reconnect on the first hit.
-    let timeoutStrikes = 0;
-    livenessTimer = setInterval(() => {
-      void (async () => {
-        try {
-          let rawCoreProcessorState: unknown;
-          try {
-            rawCoreProcessorState = await raceWithTimeout(
-              timed(Promise.resolve(connection.head())),
-              LIVENESS_PROBE_TIMEOUT_MS,
-              "liveness probe timed out",
-            );
-          } catch (error) {
-            // Strike bookkeeping only; the second strike rethrows the
-            // StepTimeoutError and reconnectAfterError below evicts on it.
-            if (error instanceof StepTimeoutError) {
-              timeoutStrikes += 1;
-              if (timeoutStrikes < 2) return;
-            }
-            throw error;
-          }
-          timeoutStrikes = 0;
-          // A parse failure is definitive (the server answered, with a shape we
-          // cannot reconcile against), so it lands in the outer catch and
-          // reconnects on the first hit rather than counting as a timeout strike.
-          const coreProcessorState = parseBrowserCoreProcessorState(rawCoreProcessorState);
-          if (disposed || stream !== connection) return;
-          if (coreProcessorState.createdAt !== reconciledIncarnation) {
-            throw new Error(
-              `stream incarnation changed (${reconciledIncarnation} -> ${coreProcessorState.createdAt}); subscription is orphaned`,
-            );
-          }
-          const stalled =
-            coreProcessorState.maxOffset > lastDeliveredOffset &&
-            deliveryArrivals === probePreviousArrivals;
-          probePreviousArrivals = deliveryArrivals;
-          if (stalled) {
-            throw new Error(
-              `server is at offset ${coreProcessorState.maxOffset} but no delivery arrived since the last probe (applied through ${lastDeliveredOffset}); subscription is orphaned`,
-            );
-          }
-        } catch (error) {
-          if (disposed || stream !== connection) return;
-          stopLivenessProbe();
-          console.warn(
-            `[stream ${args.streamPath} ${slug}] connection failed its liveness probe; reconnecting`,
-            error,
-          );
-          reconnectAfterError("liveness probe failed", error, 250, { suspect: connection });
-        }
-      })();
-    }, LIVENESS_PROBE_INTERVAL_MS);
+    // The subscription just went live: clear the real-arrival stamp and restart
+    // the baseline so the orphan check measures silence from THIS
+    // subscription's start, not from a pre-subscribe catch-up page or a
+    // delivery that rode a previous socket. Checks starting within
+    // interval + grace of this baseline treat an arrival-less subscription as
+    // too early to judge — the first paced probe (one interval from here) is
+    // always inside that window, so the second is the earliest that can
+    // declare it orphaned. A nudge gets no such grace — zero real arrivals
+    // plus server-ahead evidence escalates right after the delivery grace
+    // (exact window semantics at the stamps' declaration).
+    lastDeliveryArrivalAt = undefined;
+    arrivalBaselineAt = Date.now();
+    livenessTimer = setInterval(
+      () => void verifyDelivery("liveness probe"),
+      LIVENESS_PROBE_INTERVAL_MS,
+    );
   }
 
   function stopLivenessProbe() {
@@ -1350,20 +1764,17 @@ function createStreamRuntime(
     }
   }
 
-  // On-demand delivery check for moments the CALLER knows the server is about
-  // to (or just did) append — e.g. right after a composer submit. The paced
-  // probe takes up to an interval to notice an orphaned subscription; this
-  // collapses that to ~seconds exactly when a human is watching. One nudge at
-  // a time; nudging while disconnected is a no-op (reconnect is already the
-  // path that heals that state).
-  const NUDGE_GRACE_MS = 2_000;
-  let nudgeInFlight = false;
   // Once-per-state latch for the skipped-nudge warning; reset on subscribe.
   let nudgeSkipWarned = false;
 
+  // On-demand delivery check for moments the CALLER knows the server is about
+  // to (or just did) append — e.g. right after a composer submit. The paced
+  // probe takes up to an interval to notice an orphaned subscription; this
+  // collapses that to ~seconds exactly when a human is watching. Nudging while
+  // disconnected is a no-op (reconnect is already the path that heals that
+  // state).
   async function nudge(): Promise<void> {
-    const connection = stream;
-    if (connection === undefined || subscriptionHandle === undefined) {
+    if (stream === undefined || subscriptionHandle === undefined) {
       // Not the writer (or not connected): we can't resubscribe, but say so —
       // a silently inert nudge made follower-side stalls undiagnosable. Once
       // per state though: a follower tab nudges on EVERY composer submit, and
@@ -1371,47 +1782,17 @@ function createStreamRuntime(
       if (!nudgeSkipWarned) {
         nudgeSkipWarned = true;
         console.warn(
-          `[stream ${args.streamPath} ${slug}] nudge skipped: ${connection === undefined ? "no connection" : `no subscription (status ${snapshot.subscriptionStatus})`}`,
+          `[stream ${args.streamPath} ${slug}] nudge skipped: ${stream === undefined ? "no connection" : `no subscription (status ${snapshot.subscriptionStatus})`}`,
         );
       }
       return;
     }
-    if (nudgeInFlight || disposed) return;
-    nudgeInFlight = true;
-    try {
-      const arrivalsBefore = deliveryArrivals;
-      const coreProcessorState = await readHeadTwoStrike(connection, "delivery nudge");
-      if (coreProcessorState === undefined) return; // ownership lost mid-check
-      if (disposed || stream !== connection) return;
-      if (
-        coreProcessorState.createdAt === reconciledIncarnation &&
-        coreProcessorState.maxOffset <= lastDeliveredOffset
-      ) {
-        return; // mirror is current
-      }
-      if (coreProcessorState.createdAt === reconciledIncarnation) {
-        // Server is ahead — give the in-flight delivery a moment before
-        // declaring the subscription dead.
-        await new Promise((resolve) => setTimeout(resolve, NUDGE_GRACE_MS));
-        if (disposed || stream !== connection) return;
-        if (deliveryArrivals !== arrivalsBefore) return; // deliveries flowing
-      }
-      stopLivenessProbe();
-      console.warn(
-        `[stream ${args.streamPath} ${slug}] delivery nudge found a stale subscription; reconnecting`,
-      );
-      scheduleReconnect("delivery nudge found a stale subscription", 0);
-    } catch (error) {
-      if (disposed || stream !== connection) return;
-      stopLivenessProbe();
-      console.warn(
-        `[stream ${args.streamPath} ${slug}] delivery nudge failed; reconnecting`,
-        error,
-      );
-      reconnectAfterError("delivery nudge failed", error, 0, { suspect: connection });
-    } finally {
-      nudgeInFlight = false;
-    }
+    // requireRealArrival: the nudge's caller-side evidence (the server is
+    // about to be / was just appended to) means a server-ahead subscription
+    // with zero real arrivals is orphaned NOW — it must not ride the fresh-
+    // subscription grace the paced probe gets, or the fast heal this check
+    // exists for degrades back to a full probe interval.
+    await verifyDelivery("delivery nudge", { requireRealArrival: true });
   }
 
   function teardown() {
@@ -1439,11 +1820,16 @@ function createStreamRuntime(
     connectionError: snapshot.connectionError,
     lastDeliveredOffset,
     deliveryArrivals,
+    lastDeliveryArrivalAt: lastDeliveryArrivalAt ?? null,
+    arrivalBaselineAt,
     totalDeliveredEvents,
     lastBatchEvents,
     ingestFailures,
     pendingIngestEvents,
     connectFailuresSinceSuccess,
+    guardedTimeoutStrikes,
+    ledgerGeneration,
+    strikeFollowUpProbeInFlight: strikeFollowUpProbe !== undefined,
     reconciledIncarnation,
     started,
     disposed,
@@ -1468,46 +1854,16 @@ function createStreamRuntime(
     rejectReadyWaiters(new Error("stream runtime is disposed"));
   }
 
-  // Direct calls (appends, state reads) can be the FIRST place a dead
-  // connection manifests: a follower has no liveness probe, and nothing else
-  // ever clears its corpse `stream` — before this guard, its appendBatch
-  // retries looped through the same dead stub forever (connect() no-ops while
-  // `stream` is set), which read as "the feed updates but my sends fail". A
-  // deadline bounds the half-open hang; a broken-session rejection (capnweb's
-  // signatures are message-matched of necessity — it throws plain Errors) is
-  // the clean-close shape. Both clear the corpse via the shared reconnect
-  // lane so the CALLER's retry finds a fresh connection; app-level failures
+  // Run `call` against the live stream stub. Direct calls (appends, state
+  // reads) can be the FIRST place a dead connection manifests: a follower has
+  // no liveness probe, and nothing else ever clears its corpse `stream` —
+  // before the guarded lane, its appendBatch retries looped through the same
+  // dead stub forever (connect() no-ops while `stream` is set), which read as
+  // "the feed updates but my sends fail". The lane's strikes clear the corpse
+  // so the CALLER's retry finds a fresh connection; app-level failures
   // (validation and friends) pass through untouched.
-  const DIRECT_CALL_TIMEOUT_MS = 20_000;
-
-  function isSessionBrokenError(error: unknown) {
-    const message = errorMessage(error).toLowerCase();
-    return message.includes("websocket") || message.includes("rpc session");
-  }
-
-  async function callGuarded<T>(
-    connection: BrowserStreamClient,
-    call: (rpc: BrowserStreamClient) => Promise<T>,
-  ): Promise<T> {
-    try {
-      return await raceWithTimeout(
-        Promise.resolve(call(connection)),
-        DIRECT_CALL_TIMEOUT_MS,
-        `stream call timed out after ${DIRECT_CALL_TIMEOUT_MS}ms`,
-      );
-    } catch (error) {
-      if (
-        !disposed &&
-        stream === connection &&
-        (error instanceof StepTimeoutError || isSessionBrokenError(error))
-      ) {
-        reconnectAfterError("stream call failed", error, 0, { suspect: connection });
-      }
-      throw error;
-    }
-  }
-
-  // Run `call` against the live stream stub. When the connection is transiently
+  //
+  // When the connection is transiently
   // reconnecting we kick a reconnect and await readiness instead of throwing —
   // only a disposed runtime (or a reconnect that never lands within the bound)
   // rejects (B2). The awaitable carries a no-op [Symbol.dispose] so callers
@@ -1524,13 +1880,13 @@ function createStreamRuntime(
     }
     const ready = stream;
     if (ready !== undefined) {
-      return Object.assign(callGuarded(ready, call), { [Symbol.dispose]() {} });
+      return Object.assign(guardedCall("stream call", ready, call), { [Symbol.dispose]() {} });
     }
     const promise = (async () => {
       await whenStreamReady();
       const reconnected = stream;
       if (reconnected === undefined) throw new Error("stream runtime is disposed");
-      return await callGuarded(reconnected, call);
+      return await guardedCall("stream call", reconnected, call);
     })();
     return Object.assign(promise, { [Symbol.dispose]() {} });
   }
