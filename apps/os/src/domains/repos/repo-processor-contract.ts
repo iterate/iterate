@@ -41,6 +41,18 @@ export const RepoProcessorContract = defineProcessorContract({
     created: z.boolean().default(false),
     defaultBranch: z.string().nullable().default(null),
     github: GithubLinkPayload.nullable().default(null),
+    /** A GitHub default-branch import obligation. The webhook is first
+     * normalized into `github-import-requested`; the at-head reconciler then
+     * drives the vendor sync without holding the stream checkpoint. */
+    githubImport: z
+      .object({
+        branch: z.string(),
+        requestId: z.string(),
+        requestedCommitOid: z.string(),
+        status: z.enum(["requested", "started"]),
+      })
+      .nullable()
+      .default(null),
     initialized: z.boolean().default(false),
     lastGithubPush: z
       .object({
@@ -312,6 +324,84 @@ export const RepoProcessorContract = defineProcessorContract({
         },
       ],
     },
+    "events.iterate.com/repo/github-import-requested": {
+      description: "A linked GitHub default-branch push opened a durable import obligation.",
+      payloadSchema: z.object({
+        branch: z.string().trim().min(1),
+        requestId: z.string().trim().min(1),
+        requestedCommitOid: z.string().trim().min(1),
+      }),
+      examples: [
+        {
+          description: "A GitHub push requested that main be adopted into Artifacts.",
+          payload: {
+            branch: "main",
+            requestId: "/repos/config:42",
+            requestedCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repo/github-import-started": {
+      description: "The repo processor started a GitHub import attempt.",
+      payloadSchema: z.object({
+        branch: z.string().trim().min(1),
+        requestId: z.string().trim().min(1),
+        requestedCommitOid: z.string().trim().min(1),
+      }),
+      examples: [
+        {
+          description: "The durable GitHub import attempt began.",
+          payload: {
+            branch: "main",
+            requestId: "/repos/config:42",
+            requestedCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repo/github-import-completed": {
+      description:
+        "A GitHub import obligation completed, including when Artifacts was already at the current GitHub head.",
+      payloadSchema: z.object({
+        branch: z.string().trim().min(1),
+        commitOid: z.string().trim().min(1),
+        requestId: z.string().trim().min(1),
+        requestedCommitOid: z.string().trim().min(1),
+      }),
+      examples: [
+        {
+          description: "Artifacts now contains the current GitHub main head.",
+          payload: {
+            branch: "main",
+            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+            requestId: "/repos/config:42",
+            requestedCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repo/github-import-failed": {
+      description:
+        "A GitHub import obligation failed without blocking later repo events; a later push or explicit sync can retry.",
+      payloadSchema: z.object({
+        branch: z.string().trim().min(1),
+        error: z.string(),
+        requestId: z.string().trim().min(1),
+        requestedCommitOid: z.string().trim().min(1),
+      }),
+      examples: [
+        {
+          description: "GitHub and Artifacts had diverged, so the automatic import failed closed.",
+          payload: {
+            branch: "main",
+            error: 'Error: syncFromGithub is not a fast-forward (GitHub says "diverged").',
+            requestId: "/repos/config:42",
+            requestedCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+          },
+        },
+      ],
+    },
     "events.iterate.com/github/webhook-received": {
       description:
         "One GitHub webhook delivery, captured verbatim on the connection stream and cross-posted here by the repo's linkGithub rule. Maximally loose: bodies are GitHub's, stored rows must always re-parse.",
@@ -388,6 +478,10 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/github-push-completed",
     "events.iterate.com/repo/github-push-failed",
     "events.iterate.com/repo/github-synced",
+    "events.iterate.com/repo/github-import-requested",
+    "events.iterate.com/repo/github-import-started",
+    "events.iterate.com/repo/github-import-completed",
+    "events.iterate.com/repo/github-import-failed",
     "events.iterate.com/github/webhook-received",
     "events.iterate.com/stream/created",
   ],
@@ -397,6 +491,10 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/task-created",
     "events.iterate.com/repo/task-updated",
     "events.iterate.com/repo/task-deleted",
+    "events.iterate.com/repo/github-import-requested",
+    "events.iterate.com/repo/github-import-started",
+    "events.iterate.com/repo/github-import-completed",
+    "events.iterate.com/repo/github-import-failed",
     "events.iterate.com/github/webhook-received",
     "events.iterate.com/github-agent/route-configured",
     "events.iterate.com/stream/subscription-configured",

@@ -26,7 +26,10 @@ type RepoProcessorDeps = {
     beforeCommitOid: string | null;
     branch: string;
   }): Promise<RepoCommittedFileChange[]>;
-  syncFromGithubPush(input: { afterCommitOid: string; branch: string }): Promise<void>;
+  syncFromGithubPush(input: {
+    afterCommitOid: string;
+    branch: string;
+  }): Promise<{ commitOid: string }>;
 };
 
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
@@ -48,9 +51,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
           remote: event.payload.remote,
         };
       case "events.iterate.com/repo/github-link-configured":
-        return { ...state, github: event.payload, lastGithubPush: null };
+        return { ...state, github: event.payload, githubImport: null, lastGithubPush: null };
       case "events.iterate.com/repo/github-unlinked":
-        return { ...state, github: null, lastGithubPush: null };
+        return { ...state, github: null, githubImport: null, lastGithubPush: null };
       case "events.iterate.com/repo/github-push-completed":
         return {
           ...state,
@@ -84,6 +87,23 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
             ok: true,
           },
         };
+      case "events.iterate.com/repo/github-import-requested":
+        return {
+          ...state,
+          githubImport: { ...event.payload, status: "requested" as const },
+        };
+      case "events.iterate.com/repo/github-import-started":
+        return state.githubImport?.requestId === event.payload.requestId
+          ? {
+              ...state,
+              githubImport: { ...state.githubImport, status: "started" as const },
+            }
+          : state;
+      case "events.iterate.com/repo/github-import-completed":
+      case "events.iterate.com/repo/github-import-failed":
+        return state.githubImport?.requestId === event.payload.requestId
+          ? { ...state, githubImport: null }
+          : state;
       case "events.iterate.com/stream/created":
         return { ...state, initialized: true };
       default:
@@ -163,11 +183,21 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         state.defaultBranch !== null &&
         push.branch === state.defaultBranch
       ) {
-        // GitHub is an ingress lane, not a second source of commit facts. Pull
-        // its new default-branch head into Artifacts; the resulting Artifacts
-        // queue event is the only thing allowed to emit commit-completed and
-        // task changes, including for merges made directly on GitHub.
-        blockProcessorWhile(() => this.deps.syncFromGithubPush(push));
+        // GitHub is an ingress lane, not a second source of commit facts. The
+        // webhook opens an obligation; the at-head reconciler imports GitHub
+        // without holding the stream checkpoint. The resulting Artifacts
+        // queue event remains the ONLY source of commit-completed/task facts.
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/repo/github-import-requested",
+            idempotencyKey: this.idempotencyKey("github-import-requested", event),
+            payload: {
+              branch: push.branch,
+              requestId: `${event.path}:${event.offset}`,
+              requestedCommitOid: push.afterCommitOid,
+            },
+          }),
+        );
       }
 
       // PR webhooks route to a per-PR agent stream, everything else (pushes,
@@ -274,6 +304,72 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
           projectId: this.projectId,
         },
       });
+    });
+  }
+
+  /** GitHub imports can involve two network services and a git transfer, so
+   * they are durable obligations rather than checkpoint-blocking webhook
+   * reactions. A refold sees the terminal event and does nothing; an eviction
+   * that leaves a requested/started obligation open safely re-drives the
+   * idempotent current-head sync. A vendor failure is journaled and closes the
+   * attempt instead of wedging every later repo event. */
+  readonly #liveGithubImports = new Set<string>();
+
+  protected override async reconcile(
+    args: Parameters<StreamProcessor<RepoProcessorContract>["reconcile"]>[0],
+  ): Promise<void> {
+    const request = args.state.githubImport;
+    if (request === null || this.#liveGithubImports.has(request.requestId)) return;
+
+    this.#liveGithubImports.add(request.requestId);
+    args.runInBackground(async () => {
+      try {
+        // The started fact must land before the vendor body runs. If this
+        // append fails, the open requested obligation remains retryable and
+        // the sync is deliberately not called.
+        await args.append({
+          type: "events.iterate.com/repo/github-import-started",
+          idempotencyKey: this.idempotencyKey(`github-import-started:${request.requestId}`),
+          payload: {
+            branch: request.branch,
+            requestId: request.requestId,
+            requestedCommitOid: request.requestedCommitOid,
+          },
+        });
+
+        let result: { commitOid: string };
+        try {
+          result = await this.deps.syncFromGithubPush({
+            afterCommitOid: request.requestedCommitOid,
+            branch: request.branch,
+          });
+        } catch (error) {
+          await args.append({
+            type: "events.iterate.com/repo/github-import-failed",
+            idempotencyKey: this.idempotencyKey(`github-import-failed:${request.requestId}`),
+            payload: {
+              branch: request.branch,
+              error: String(error),
+              requestId: request.requestId,
+              requestedCommitOid: request.requestedCommitOid,
+            },
+          });
+          return;
+        }
+
+        await args.append({
+          type: "events.iterate.com/repo/github-import-completed",
+          idempotencyKey: this.idempotencyKey(`github-import-completed:${request.requestId}`),
+          payload: {
+            branch: request.branch,
+            commitOid: result.commitOid,
+            requestId: request.requestId,
+            requestedCommitOid: request.requestedCommitOid,
+          },
+        });
+      } finally {
+        this.#liveGithubImports.delete(request.requestId);
+      }
     });
   }
 

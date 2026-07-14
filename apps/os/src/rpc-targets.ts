@@ -908,7 +908,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         resetFromGithub:
           "Destructively replace the Artifacts repo with the linked GitHub branch ({ depth? }); GitHub always wins and big repositories require a shallow depth.",
         syncFromGithub:
-          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } prunes to the newest N commits — required for big repositories, GitHub keeps full history).",
+          "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } requests a bounded history window, while fast-forwards always retain the prior Artifacts head for queue diffs).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
         whoami: "Repo identity string (debug).",
       },
@@ -1054,9 +1054,10 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    * unless `force: true` discards them. The synced head is immediately live
    * for worker builds.
    *
-   * The history transfers in-process, so big histories need `depth` — it
-   * prunes to the newest N commits. GitHub retains the full history, and a
-   * later deeper sync can always widen the window.
+   * The history transfers in-process. `depth` requests a bounded history
+   * window, but fast-forward syncs always retain the previous Artifacts head
+   * as well so queue-derived task diffs can read both sides. GitHub retains
+   * the full history, and a later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#durableObjectStub.syncFromGithub(input);
