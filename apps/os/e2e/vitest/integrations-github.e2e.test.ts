@@ -24,7 +24,7 @@
 // (PETSHOP_BASE_URL, or derived). See petshop-support.ts.
 
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 import { petshopBaseUrl, petshopExpireTokens, petshopRegisterApp } from "./petshop-support.ts";
@@ -51,8 +51,9 @@ async function callThroughConnection(
 }
 
 // Opt-in: talks to a deployed dummy-petshop (see integrations-petshop.e2e.test).
-describe.skipIf(!process.env.PETSHOP_BASE_URL)("GitHub App installation lane", () => {
-  test("bring-your-own App: mint installation token in the Secret DO, act as the installation, re-mint on expiry", async () => {
+test.skipIf(!process.env.PETSHOP_BASE_URL)(
+  "bring-your-own App: mint installation token in the Secret DO, act as the installation, re-mint on expiry",
+  async () => {
     const petshop = petshopBaseUrl();
     const appId = `gh-app-${RUN}`;
     const installationId = `gh-inst-${RUN}`;
@@ -119,5 +120,5 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("GitHub App installation lane", (
     await waitForCondition(async () => (await connectionSecret.__describe()).audit.usedCount >= 1, {
       description: "github connection egress use to audit",
     });
-  });
-});
+  },
+);

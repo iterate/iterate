@@ -10,7 +10,7 @@
 // command mints a short-lived explicit operator grant server-side, keeping the
 // deployment admin secret out of the browser bundle entirely.
 
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { commands } from "vitest/browser";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type {
@@ -43,8 +43,9 @@ const BROWSER_EXAMPLES = ITX_EXAMPLES.filter(
     EXAMPLE_CASES[example.id] !== undefined,
 );
 
-describe.skipIf(!hasTarget)("itx browser execution mode", () => {
-  test("runs the default browser REPL snippet against a live session", async () => {
+test.skipIf(!hasTarget)(
+  "runs the default browser REPL snippet against a live session",
+  async () => {
     using session = await connectFromBrowser();
     const result = await evalBrowserReplSessionCode({
       code: DEFAULT_BROWSER_REPL_CODE,
@@ -52,51 +53,55 @@ describe.skipIf(!hasTarget)("itx browser execution mode", () => {
       scope: createBrowserReplScope(),
     });
     expect(Array.isArray(result)).toBe(true);
-  }, 45_000);
+  },
+  45_000,
+);
 
-  // The catalogue, through the real REPL pipeline, against a project-scoped
-  // session — the browser leg of the cross-runtime matrix. One shared project
-  // (created lazily by the first example) mirrors the node-side matrix.
-  let sharedProjectId: Promise<string> | null = null;
-  function ensureBrowserMatrixProject(): Promise<string> {
-    sharedProjectId ??= (async () => {
+// The catalogue, through the real REPL pipeline, against a project-scoped
+// session — the browser leg of the cross-runtime matrix. One shared project
+// (created lazily by the first example) mirrors the node-side matrix.
+let sharedProjectId: Promise<string> | null = null;
+function ensureBrowserMatrixProject(): Promise<string> {
+  sharedProjectId ??= (async () => {
+    using session = await connectFromBrowser();
+    using project = session.projects.create({
+      slug: `itx-browser-${uniqueSuffix()}`.slice(0, 40),
+    });
+    return (await project.__describe()).projectId;
+  })();
+  return sharedProjectId;
+}
+
+for (const example of BROWSER_EXAMPLES) {
+  const exampleCase = EXAMPLE_CASES[example.id]!;
+  test.skipIf(!hasTarget || (localTarget && example.id === "sandbox-exec"))(
+    `runs catalogue example "${example.id}" in the REPL pipeline`,
+    async () => {
+      const projectId = await ensureBrowserMatrixProject();
       using session = await connectFromBrowser();
-      using project = session.projects.create({
-        slug: `itx-browser-${uniqueSuffix()}`.slice(0, 40),
+      using project = session.projects.get(projectId);
+
+      const ctx = { attemptSalt: uniqueSuffix(), marker: `browser-${uniqueSuffix()}`, projectId };
+      const vars = exampleCase.vars?.(ctx) ?? {};
+      const result = await evalBrowserReplSessionCode({
+        code: example.code,
+        itx: project,
+        scope: createBrowserReplScope({ projectId, vars }),
       });
-      return (await project.__describe()).projectId;
-    })();
-    return sharedProjectId;
-  }
+      exampleCase.assert(result, ctx, expect);
+    },
+    120_000,
+  );
+}
 
-  for (const example of BROWSER_EXAMPLES) {
-    const exampleCase = EXAMPLE_CASES[example.id]!;
-    test.skipIf(localTarget && example.id === "sandbox-exec")(
-      `runs catalogue example "${example.id}" in the REPL pipeline`,
-      async () => {
-        const projectId = await ensureBrowserMatrixProject();
-        using session = await connectFromBrowser();
-        using project = session.projects.get(projectId);
+// The browser-as-provider story (a tab mounting live, browser-owned
+// objects) is covered by the matrix run of "provide-live-capability": its
+// closures live in this tab, so the asserted values can only have been
+// computed by calls travelling back over the open session.
 
-        const ctx = { attemptSalt: uniqueSuffix(), marker: `browser-${uniqueSuffix()}`, projectId };
-        const vars = exampleCase.vars?.(ctx) ?? {};
-        const result = await evalBrowserReplSessionCode({
-          code: example.code,
-          itx: project,
-          scope: createBrowserReplScope({ projectId, vars }),
-        });
-        exampleCase.assert(result, ctx, expect);
-      },
-      120_000,
-    );
-  }
-
-  // The browser-as-provider story (a tab mounting live, browser-owned
-  // objects) is covered by the matrix run of "provide-live-capability": its
-  // closures live in this tab, so the asserted values can only have been
-  // computed by calls travelling back over the open session.
-
-  test("provides a browser live capability with a flattened SDK-shaped surface", async () => {
+test.skipIf(!hasTarget)(
+  "provides a browser live capability with a flattened SDK-shaped surface",
+  async () => {
     const projectId = await ensureBrowserMatrixProject();
     using session = await connectFromBrowser();
     using project = session.projects.get(projectId);
@@ -118,8 +123,9 @@ describe.skipIf(!hasTarget)("itx browser execution mode", () => {
     })) as { method: string; provider: string };
     expect(result).toMatchObject({ method: "chat.postMessage", provider: "browser-tab" });
     await provision.revoke();
-  }, 45_000);
-});
+  },
+  45_000,
+);
 
 // ---- connection -------------------------------------------------------------
 

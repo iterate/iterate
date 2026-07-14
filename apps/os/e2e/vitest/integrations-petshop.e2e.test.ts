@@ -15,7 +15,7 @@
 // Requires a deployed OS (APP_CONFIG_BASE_URL) and a reachable dummy-petshop
 // (PETSHOP_BASE_URL, or derived). See petshop-support.ts.
 
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 import {
@@ -52,8 +52,9 @@ async function callThroughConnection(
 // slots where it was deployed. Point PETSHOP_BASE_URL at one to run it;
 // otherwise it skips, so the shared CI e2e lane (whose preview slot has no
 // petshop) stays green.
-describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () => {
-  test("two OAuth clients, two connections: connect, call, forced-expiry refresh", async () => {
+test.skipIf(!process.env.PETSHOP_BASE_URL)(
+  "two OAuth clients, two connections: connect, call, forced-expiry refresh",
+  async () => {
     const petshop = petshopBaseUrl();
     // Instance A uses the seeded client; instance B a freshly minted one — the
     // two-client proof. Both are project-owned (userspace) clients: the client
@@ -132,14 +133,17 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
         },
       );
     }
-  });
+  },
+);
 
-  // The first-party lane: the EXACT SAME shared refresh strategy, but its
-  // client credential is a platform config reference (integrations.petshop —
-  // APP_CONFIG_INTEGRATIONS__PETSHOP) resolved from typed AppConfig by the
-  // Secret DO's trusted code. No project app secret, no platform bytes in
-  // project material. Only `clientCreds` differs from the userspace lane.
-  test("first-party lane: client credential resolves from platform config, same strategy", async () => {
+// The first-party lane: the EXACT SAME shared refresh strategy, but its
+// client credential is a platform config reference (integrations.petshop —
+// APP_CONFIG_INTEGRATIONS__PETSHOP) resolved from typed AppConfig by the
+// Secret DO's trusted code. No project app secret, no platform bytes in
+// project material. Only `clientCreds` differs from the userspace lane.
+test.skipIf(!process.env.PETSHOP_BASE_URL)(
+  "first-party lane: client credential resolves from platform config, same strategy",
+  async () => {
     const petshop = petshopBaseUrl();
     const slug = `petshop-firstparty-${RUN}`;
     const connectionPath = `/secrets/integrations/${slug}/acme`;
@@ -183,5 +187,5 @@ describe.skipIf(!process.env.PETSHOP_BASE_URL)("dummy-petshop integration", () =
     const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
     expect(afterExpiry.status).toBe(200);
     expect(afterExpiry.body).toMatchObject({ clientId });
-  });
-});
+  },
+);

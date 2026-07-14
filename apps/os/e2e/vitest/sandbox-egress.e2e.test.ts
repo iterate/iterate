@@ -19,7 +19,7 @@
 // If a sandbox reached the internet directly (bypassing the proxy), the cert
 // would be the origin's and the placeholder would arrive unsubstituted.
 
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -49,85 +49,83 @@ function shellDoubleQuote(value: string): string {
 
 const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 
-describe("sandbox egress", () => {
-  test.skipIf(deployedBaseUrl() === null)(
-    "is MITM-intercepted and routed through project egress with secret substitution",
-    { timeout: 240_000 },
-    async () => {
-      const echo = await startEgressEcho();
-      const echoUrl = new URL(echo.url);
-      const echoOrigin = echoUrl.origin;
+test.skipIf(deployedBaseUrl() === null)(
+  "is MITM-intercepted and routed through project egress with secret substitution",
+  { timeout: 240_000 },
+  async () => {
+    const echo = await startEgressEcho();
+    const echoUrl = new URL(echo.url);
+    const echoOrigin = echoUrl.origin;
 
-      using session = withItxSession();
-      using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-      using project = itx.projects.create({ slug: `sandbox-egress-${crypto.randomUUID()}` });
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({ slug: `sandbox-egress-${crypto.randomUUID()}` });
 
-      // A secret whose material may be substituted into requests to the echo
-      // origin. The container only ever holds the placeholder below; this
-      // material lives server-side and must never transit the sandbox.
-      const material = `sandbox-egress-material-${crypto.randomUUID()}`;
-      const secretPath = `/secrets/sandbox-egress/${crypto.randomUUID()}`;
-      using secret = project.secrets.get(secretPath);
-      await secret.update({ egress: { urls: [echoOrigin] }, material });
-      await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
-        description: "secret processor to fold the material",
+    // A secret whose material may be substituted into requests to the echo
+    // origin. The container only ever holds the placeholder below; this
+    // material lives server-side and must never transit the sandbox.
+    const material = `sandbox-egress-material-${crypto.randomUUID()}`;
+    const secretPath = `/secrets/sandbox-egress/${crypto.randomUUID()}`;
+    using secret = project.secrets.get(secretPath);
+    await secret.update({ egress: { urls: [echoOrigin] }, material });
+    await waitForCondition(async () => (await secret.__describe()).hasMaterial, {
+      description: "secret processor to fold the material",
+    });
+
+    // Sandboxes are pets: created explicitly, then addressed by the path
+    // create returns (names are one path segment). Creating needs no
+    // container; the curl below boots one.
+    const sandboxName = `egress-proof-${crypto.randomUUID()}`;
+    const sandboxPath = `/sandboxes/${sandboxName}`;
+    const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret({ path: "${secretPath}" })`;
+    const curlCommand = `curl -sS --max-time 60 ${shellDoubleQuote(echo.url)} -H ${shellDoubleQuote(proofHeader)}`;
+    // The issuer of the cert the container is presented for the echo host:
+    // the interception CA when HTTPS is MITM'd, the origin's real CA if not.
+    const issuerCommand = `echo | openssl s_client -connect ${echoUrl.hostname}:443 -servername ${echoUrl.hostname} 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null || echo no-openssl`;
+
+    const script = [
+      "async (itx) => {",
+      `  const { path } = await itx.sandboxes.create({ name: ${JSON.stringify(sandboxName)}, instanceType: "lite" });`,
+      "  const sandbox = await itx.sandboxes.get(path);",
+      `  const echo = await sandbox.exec(${JSON.stringify(curlCommand)});`,
+      `  const issuer = await sandbox.exec(${JSON.stringify(issuerCommand)});`,
+      "  return { body: echo.stdout, exitCode: echo.exitCode, certIssuer: issuer.stdout.trim() };",
+      "}",
+    ].join("\n");
+
+    try {
+      const { result } = await project.capabilityHost.runScript(script);
+      const proof = result as { body: string; certIssuer: string; exitCode: number };
+
+      expect(proof.exitCode).toBe(0);
+
+      // (1) MITM: the container was handed the interception CA's cert, proving
+      // the TLS session was terminated by the container proxy, not the origin.
+      expect(proof.certIssuer).toMatch(/Cloudflare/i);
+      expect(proof.certIssuer).toMatch(/Intercept CA/i);
+
+      // (2)+(3) Routing + substitution: the echo — reached only via the
+      // Project DO egress path — saw the real material where the container
+      // sent a `getSecret(...)` placeholder.
+      const echoed = JSON.parse(proof.body) as { headers?: Record<string, string> };
+      expect(echoed.headers?.[EGRESS_PROOF_HEADER]).toBe(`Bearer ${material}`);
+
+      // The material never transited the sandbox: the script and its egress
+      // carried only the placeholder, and describe() still hides the value.
+      expect(proof.body).not.toContain(`path: "${secretPath}"`);
+      const described = await secret.__describe();
+      expect(JSON.stringify(described)).not.toContain(material);
+      await waitForCondition(async () => (await secret.__describe()).audit.usedCount >= 1, {
+        description: "secret usage audit to record the substitution",
       });
-
-      // Sandboxes are pets: created explicitly, then addressed by the path
-      // create returns (names are one path segment). Creating needs no
-      // container; the curl below boots one.
-      const sandboxName = `egress-proof-${crypto.randomUUID()}`;
-      const sandboxPath = `/sandboxes/${sandboxName}`;
-      const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret({ path: "${secretPath}" })`;
-      const curlCommand = `curl -sS --max-time 60 ${shellDoubleQuote(echo.url)} -H ${shellDoubleQuote(proofHeader)}`;
-      // The issuer of the cert the container is presented for the echo host:
-      // the interception CA when HTTPS is MITM'd, the origin's real CA if not.
-      const issuerCommand = `echo | openssl s_client -connect ${echoUrl.hostname}:443 -servername ${echoUrl.hostname} 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null || echo no-openssl`;
-
-      const script = [
-        "async (itx) => {",
-        `  const { path } = await itx.sandboxes.create({ name: ${JSON.stringify(sandboxName)}, instanceType: "lite" });`,
-        "  const sandbox = await itx.sandboxes.get(path);",
-        `  const echo = await sandbox.exec(${JSON.stringify(curlCommand)});`,
-        `  const issuer = await sandbox.exec(${JSON.stringify(issuerCommand)});`,
-        "  return { body: echo.stdout, exitCode: echo.exitCode, certIssuer: issuer.stdout.trim() };",
-        "}",
-      ].join("\n");
-
-      try {
-        const { result } = await project.capabilityHost.runScript(script);
-        const proof = result as { body: string; certIssuer: string; exitCode: number };
-
-        expect(proof.exitCode).toBe(0);
-
-        // (1) MITM: the container was handed the interception CA's cert, proving
-        // the TLS session was terminated by the container proxy, not the origin.
-        expect(proof.certIssuer).toMatch(/Cloudflare/i);
-        expect(proof.certIssuer).toMatch(/Intercept CA/i);
-
-        // (2)+(3) Routing + substitution: the echo — reached only via the
-        // Project DO egress path — saw the real material where the container
-        // sent a `getSecret(...)` placeholder.
-        const echoed = JSON.parse(proof.body) as { headers?: Record<string, string> };
-        expect(echoed.headers?.[EGRESS_PROOF_HEADER]).toBe(`Bearer ${material}`);
-
-        // The material never transited the sandbox: the script and its egress
-        // carried only the placeholder, and describe() still hides the value.
-        expect(proof.body).not.toContain(`path: "${secretPath}"`);
-        const described = await secret.__describe();
-        expect(JSON.stringify(described)).not.toContain(material);
-        await waitForCondition(async () => (await secret.__describe()).audit.usedCount >= 1, {
-          description: "secret usage audit to record the substitution",
-        });
-      } finally {
-        // Return the container's instance slot instead of waiting out sleepAfter.
-        await project.capabilityHost
-          .runScript(
-            `async (itx) => { await (await itx.sandboxes.get(${JSON.stringify(sandboxPath)})).destroy(); }`,
-          )
-          .catch(() => {});
-        await echo.close();
-      }
-    },
-  );
-});
+    } finally {
+      // Return the container's instance slot instead of waiting out sleepAfter.
+      await project.capabilityHost
+        .runScript(
+          `async (itx) => { await (await itx.sandboxes.get(${JSON.stringify(sandboxPath)})).destroy(); }`,
+        )
+        .catch(() => {});
+      await echo.close();
+    }
+  },
+);
