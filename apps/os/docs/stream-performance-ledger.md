@@ -1497,3 +1497,70 @@ reverted. Raw successful records are
 `/tmp/stream-frame8000-candidate-r3b.log`, parent round three is
 `/tmp/stream-frame8000-parent-r3.log`, and the failed candidate attempt is
 `/tmp/stream-frame8000-candidate-r3.log`.
+
+## 2026-07-14: Immediate Processor Redial Retained
+
+The rejected request-frame experiment localized the remaining processor
+catch-up delay away from event serialization and request dispatch. Appending
+8,000 tiny events took tens of milliseconds, yet the processor checkpoint
+usually landed about 1.2 seconds later regardless of whether delivery used one
+or eight request frames. Server logs showed the first call reaching the stale
+processor callback left by `project.kill()`, failing with `The execution context
+which hosts this callback is no longer running`, and then waiting for the
+shared one-second first-failure backoff before dialing the replacement host.
+
+Implementation commit `acfeb4678` removes that eviction tax without classifying
+errors by message. A durable wake-sink failure persists attempt one with
+`nextAttemptAt = now`, arms that same timestamp as a crash-safe durable alarm,
+then closes the dead connection. The close's ordinary reconciliation can dial
+a replacement immediately. A successful handshake does not reset the failure
+streak unless its checkpoint progressed, so a replacement host that rejects
+the same event records attempt two and enters the existing jittered exponential
+backoff. Poke failures, push and webhook failures, later wake failures, the
+15-attempt parking threshold, resume, and checkpoint-progress reset are
+unchanged.
+
+That ordering matters for correctness. Persisting the nack before close stops
+the replacement handshake from erasing the attempt. Arming the zero-delay alarm
+means an eviction between the write and close cannot strand the retry. Multiple
+result rejections from the old settlement window cannot multiply redials: the
+first closes and removes that connection; later callbacks find no current
+connection. A deterministic application failure can therefore cause at most
+one optimistic redial before backoff, rather than an unbounded RPC-rate loop.
+
+The same host-timed benchmark killed the project processor, read the root head,
+appended 8,000 durable events, and awaited the processor checkpoint. Its Node
+timer enclosed awaited append and wait RPCs, so no result depends on a Worker
+clock advancing without network I/O. Three interleaved rounds per revision ran
+15 measured backlogs each, for 45 samples against exact parent `0c653366b`:
+
+| 8,000-event processor catch-up | Backoff parent | Immediate redial | Change |
+| ------------------------------ | -------------: | ---------------: | -----: |
+| p50                            |     1,248.4 ms |         309.7 ms |  75.2% |
+| p95                            |     1,459.7 ms |         341.2 ms |  76.6% |
+| mean                           |     1,208.7 ms |         309.3 ms |  74.4% |
+| median throughput              |     6,408 ev/s |      25,830 ev/s |  +303% |
+
+The candidate distribution was tight (`272.4-351.6` ms); the parent remained
+bimodal because a few stale callbacks were detected before the backoff became
+observable. The pooled median is a 4.03x throughput increase. This result also
+explains why larger request frames did not help: after removing the artificial
+retry plateau, actual append, redial, replay, processor state write, and
+checkpoint observation together cost about 310 ms.
+
+One attempted third parent round failed in Cap'n Web decoding after repeated
+kill/reactivate cycles, as one frame experiment round had earlier. It produced
+no samples, was excluded, and a complete replacement round passed after a clean
+parent-server restart. The recurrence is a separate transport/lifecycle
+correctness lead; it does not alter the immediate-redial comparison.
+
+The production delta is one optional branch in the existing shared failure
+machine and one zero-delay retry helper. It adds no schema, storage record,
+timer kind, service, queue, coordinator, error taxonomy, or recovery mode, and
+collapses by removing `immediateFirstRetry: true`. The 371-test Stream unit
+surface, focused lint and format, and full OS TypeScript check pass. The wake
+failure test proves immediate attempt one, delayed attempt two, parking under
+sustained deterministic failure, and reset only after checkpoint progress.
+Raw records are `/tmp/stream-immediate-redial-candidate-r{1,2,3}.log` and
+`/tmp/stream-immediate-redial-parent-r{1,2,3b}.log`; the invalid parent attempt
+is `/tmp/stream-immediate-redial-parent-r3.log` locally.
