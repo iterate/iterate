@@ -179,6 +179,14 @@ describe("extractMatchSnippet", () => {
     expect(snippet.startsWith("…")).toBe(true);
   });
 
+  it("centers on the RAREST term — filler that saturates the text cannot drag the window", () => {
+    // "slack message" appears constantly (headers); "superfart" once, late.
+    const filler = "slack message from slack channel message slack. ".repeat(30);
+    const text = filler + "then someone said superfart loudly" + " tail".repeat(60);
+    const snippet = extractMatchSnippet(text, "slack message superfart", 120);
+    expect(snippet).toContain("superfart");
+  });
+
   it("falls back to the head when no term matches, and passes short text through", () => {
     expect(extractMatchSnippet("short text", "zzz", 100)).toBe("short text");
     const head = extractMatchSnippet("a ".repeat(200), "zzz", 50);

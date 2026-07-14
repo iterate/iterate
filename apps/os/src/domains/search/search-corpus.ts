@@ -283,23 +283,39 @@ export function narrowStreamRefToChunk(storedRef: ItxExpression, chunkText: stri
 }
 
 /**
- * A short window of `text` centered on the first query-term match — the
- * "matching couple of sentences" a result row shows. Terms under 3 chars and
- * generic filler are skipped when locating the match; no term found = the
- * head of the text. Boundaries snap to whitespace, ellipses mark the cuts.
+ * A short window of `text` centered on the most DISTINCTIVE query-term match
+ * — the "matching couple of sentences" a result row shows. Distinctive =
+ * rarest in this text (frequent terms like "slack"/"message" appear in every
+ * stream header and would drag the window to boilerplate; the term that
+ * appears once is the one the searcher meant), ties broken by term length.
+ * No term found = the head of the text. Boundaries snap to whitespace,
+ * ellipses mark the cuts.
  */
 export function extractMatchSnippet(text: string, query: string, maxChars: number): string {
   const flat = text.replace(/\s+/g, " ").trim();
   if (flat.length <= maxChars) return flat;
-  const terms = query
-    .toLowerCase()
-    .split(/[^a-z0-9_-]+/)
-    .filter((term) => term.length >= 3);
+  const terms = [
+    ...new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9_-]+/)
+        .filter((term) => term.length >= 3),
+    ),
+  ];
   const lower = flat.toLowerCase();
   let at = -1;
+  let bestRarity = Infinity;
+  let bestLength = 0;
   for (const term of terms) {
-    const i = lower.indexOf(term);
-    if (i !== -1 && (at === -1 || i < at)) at = i;
+    const first = lower.indexOf(term);
+    if (first === -1) continue;
+    let count = 0;
+    for (let i = first; i !== -1 && count < 50; i = lower.indexOf(term, i + term.length)) count++;
+    if (count < bestRarity || (count === bestRarity && term.length > bestLength)) {
+      bestRarity = count;
+      bestLength = term.length;
+      at = first;
+    }
   }
   if (at === -1) return `${flat.slice(0, maxChars)}…`;
   let start = Math.max(0, at - Math.floor(maxChars / 2));
