@@ -26,8 +26,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import startDevServer, { localOsDevServer } from "../../scripts/dev.ts";
 import { devServerLogPath } from "../../scripts/lib/dev-server-info.ts";
 
-type LocalOsDevTarget = Awaited<ReturnType<typeof localOsDevServer.resolveTarget>>;
-
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 // Symbol.for-keyed globalThis stashes: vitest.config.ts (vite's bundled
@@ -36,7 +34,7 @@ const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const TARGET_KEY: unique symbol = Symbol.for("iterate.osE2e.localDevTarget");
 const ENSURE_KEY: unique symbol = Symbol.for("iterate.osE2e.ensureDevServer");
 const stash = globalThis as typeof globalThis & {
-  [TARGET_KEY]?: Promise<LocalOsDevTarget>;
+  [TARGET_KEY]?: ReturnType<typeof localOsDevServer.resolveTarget>;
   [ENSURE_KEY]?: Promise<void>;
 };
 
@@ -48,7 +46,7 @@ const stash = globalThis as typeof globalThis & {
  * the same way playwright.config.ts bakes `--port N` into its webServer
  * command.
  */
-export function resolveLocalOsDevTargetOnce(): Promise<LocalOsDevTarget> {
+export function resolveLocalOsDevTargetOnce(): ReturnType<typeof localOsDevServer.resolveTarget> {
   return (stash[TARGET_KEY] ??= localOsDevServer.resolveTarget());
 }
 
