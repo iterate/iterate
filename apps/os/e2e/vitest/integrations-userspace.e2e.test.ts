@@ -20,62 +20,6 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 
-function ocadoWorkerSource(echoUrl: string): string {
-  return `
-    import { WorkerEntrypoint } from "cloudflare:workers";
-
-    const OCADO_API_URL = ${JSON.stringify(echoUrl)};
-
-    // The session secret is addressed per connection and NEVER read here: the
-    // authorization header carries a getSecret placeholder that project egress
-    // substitutes inside the secret Durable Object. The integration's own code
-    // cannot see its tokens.
-    function ocadoSdk(connection) {
-      const authorization =
-        'getSecret({ path: "/secrets/integrations/ocado/' + connection + '/session" })';
-      const call = async (operation, payload) => {
-        const response = await fetch(OCADO_API_URL, {
-          method: "POST",
-          headers: { authorization, "x-ocado-operation": operation },
-          body: JSON.stringify(payload),
-        });
-        const echoed = await response.json();
-        return {
-          operation,
-          payload,
-          sentAuthorization: authorization,
-          receivedAuthorization: echoed.headers.authorization,
-        };
-      };
-      return {
-        searchProducts: (term) => call("search-products", { term }),
-        basket: { add: (itemId) => call("basket-add", { itemId }) },
-      };
-    }
-
-    // Mounted at ["integrations", "ocado"], so get(connection) supplies
-    // the first remaining path segment and the rest is the SDK method path — the same
-    // /integrations/<slug>/<connection> address shape as built-ins.
-    export class OcadoIntegration extends WorkerEntrypoint {
-      invokeCapability({ path, args }) {
-        const [connection, ...rest] = path;
-        if (!connection || rest.length === 0) {
-          throw new Error(
-            'ocado expects <connection>.<method>, e.g. itx.integrations.ocado.get("family").searchProducts(...)',
-          );
-        }
-        let receiver = ocadoSdk(connection);
-        for (const segment of rest.slice(0, -1)) receiver = receiver?.[segment];
-        const method = receiver?.[rest[rest.length - 1]];
-        if (typeof method !== "function") {
-          throw new Error("ocado sdk has no method " + rest.join("."));
-        }
-        return method.apply(receiver, args);
-      }
-    }
-  `;
-}
-
 test("a project mounts ocado into the collection; connections + secret confinement hold", async () => {
   const echo = await startEgressEcho();
   try {
@@ -352,3 +296,59 @@ test.skipIf(!process.env.PETSHOP_BASE_URL)(
     });
   },
 );
+
+function ocadoWorkerSource(echoUrl: string): string {
+  return `
+    import { WorkerEntrypoint } from "cloudflare:workers";
+
+    const OCADO_API_URL = ${JSON.stringify(echoUrl)};
+
+    // The session secret is addressed per connection and NEVER read here: the
+    // authorization header carries a getSecret placeholder that project egress
+    // substitutes inside the secret Durable Object. The integration's own code
+    // cannot see its tokens.
+    function ocadoSdk(connection) {
+      const authorization =
+        'getSecret({ path: "/secrets/integrations/ocado/' + connection + '/session" })';
+      const call = async (operation, payload) => {
+        const response = await fetch(OCADO_API_URL, {
+          method: "POST",
+          headers: { authorization, "x-ocado-operation": operation },
+          body: JSON.stringify(payload),
+        });
+        const echoed = await response.json();
+        return {
+          operation,
+          payload,
+          sentAuthorization: authorization,
+          receivedAuthorization: echoed.headers.authorization,
+        };
+      };
+      return {
+        searchProducts: (term) => call("search-products", { term }),
+        basket: { add: (itemId) => call("basket-add", { itemId }) },
+      };
+    }
+
+    // Mounted at ["integrations", "ocado"], so get(connection) supplies
+    // the first remaining path segment and the rest is the SDK method path — the same
+    // /integrations/<slug>/<connection> address shape as built-ins.
+    export class OcadoIntegration extends WorkerEntrypoint {
+      invokeCapability({ path, args }) {
+        const [connection, ...rest] = path;
+        if (!connection || rest.length === 0) {
+          throw new Error(
+            'ocado expects <connection>.<method>, e.g. itx.integrations.ocado.get("family").searchProducts(...)',
+          );
+        }
+        let receiver = ocadoSdk(connection);
+        for (const segment of rest.slice(0, -1)) receiver = receiver?.[segment];
+        const method = receiver?.[rest[rest.length - 1]];
+        if (typeof method !== "function") {
+          throw new Error("ocado sdk has no method " + rest.join("."));
+        }
+        return method.apply(receiver, args);
+      }
+    }
+  `;
+}

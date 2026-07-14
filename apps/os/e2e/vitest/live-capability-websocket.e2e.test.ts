@@ -43,72 +43,6 @@ type ShimEnd = {
   peer: ShimEnd | undefined;
 };
 
-function socketPairShim(): [ShimSocket, ShimSocket] {
-  const makeEnd = (): ShimEnd => ({
-    buffered: [],
-    closed: false,
-    listeners: new Map(),
-    open: false,
-    peer: undefined,
-  });
-  const a = makeEnd();
-  const b = makeEnd();
-  a.peer = b;
-  b.peer = a;
-
-  const deliver = (end: ShimEnd, type: "message" | "close", event: MessageOrCloseEvent) => {
-    if (!end.open) {
-      end.buffered.push({ event, type });
-      return;
-    }
-    for (const listener of end.listeners.get(type) ?? []) listener(event);
-  };
-
-  const api = (end: ShimEnd): ShimSocket => ({
-    accept: () => {
-      end.open = true;
-      for (const { event, type } of end.buffered.splice(0)) {
-        for (const listener of end.listeners.get(type) ?? []) listener(event);
-      }
-    },
-    addEventListener: (type, listener) => {
-      const list = end.listeners.get(type) ?? [];
-      list.push(listener);
-      end.listeners.set(type, list);
-    },
-    close: (code, reason) => {
-      if (end.closed) return;
-      end.closed = true;
-      deliver(end.peer!, "close", { code: code ?? 1000, reason: reason ?? "" });
-    },
-    send: (data) => {
-      if (end.closed) return;
-      deliver(end.peer!, "message", { data });
-    },
-  });
-
-  return [api(a), api(b)];
-}
-
-/** A genuine upgrading fetch handler running in this process: echoes frames
- * back prefixed. Written exactly like a workerd handler, modulo the shim
- * standing in for WebSocketPair and the 200 status (undici refuses 1xx; the
- * fork keys on `webSocket` presence, mirroring its own makeUpgradeResponse
- * non-workerd branch). */
-function nodeWebSocketFetchHandler(request: Request): Promise<Response> {
-  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-    return Promise.resolve(new Response("expected websocket", { status: 426 }));
-  }
-  const [clientEnd, serverEnd] = socketPairShim();
-  serverEnd.accept();
-  serverEnd.addEventListener("message", (event) => {
-    serverEnd.send(`node-echo:${event.data ?? ""}`);
-  });
-  const response = new Response(null, { status: 200 });
-  Object.defineProperty(response, "webSocket", { configurable: true, value: clientEnd });
-  return Promise.resolve(response);
-}
-
 /** The app a user would naturally write: forward to the capability. One
  * real-fetch-lane hop terminates at this class's `fetch`; the socket would
  * have to come back through capability dispatch. */
@@ -264,3 +198,69 @@ ${anchor}`,
     }
   },
 );
+
+function socketPairShim(): [ShimSocket, ShimSocket] {
+  const makeEnd = (): ShimEnd => ({
+    buffered: [],
+    closed: false,
+    listeners: new Map(),
+    open: false,
+    peer: undefined,
+  });
+  const a = makeEnd();
+  const b = makeEnd();
+  a.peer = b;
+  b.peer = a;
+
+  const deliver = (end: ShimEnd, type: "message" | "close", event: MessageOrCloseEvent) => {
+    if (!end.open) {
+      end.buffered.push({ event, type });
+      return;
+    }
+    for (const listener of end.listeners.get(type) ?? []) listener(event);
+  };
+
+  const api = (end: ShimEnd): ShimSocket => ({
+    accept: () => {
+      end.open = true;
+      for (const { event, type } of end.buffered.splice(0)) {
+        for (const listener of end.listeners.get(type) ?? []) listener(event);
+      }
+    },
+    addEventListener: (type, listener) => {
+      const list = end.listeners.get(type) ?? [];
+      list.push(listener);
+      end.listeners.set(type, list);
+    },
+    close: (code, reason) => {
+      if (end.closed) return;
+      end.closed = true;
+      deliver(end.peer!, "close", { code: code ?? 1000, reason: reason ?? "" });
+    },
+    send: (data) => {
+      if (end.closed) return;
+      deliver(end.peer!, "message", { data });
+    },
+  });
+
+  return [api(a), api(b)];
+}
+
+/** A genuine upgrading fetch handler running in this process: echoes frames
+ * back prefixed. Written exactly like a workerd handler, modulo the shim
+ * standing in for WebSocketPair and the 200 status (undici refuses 1xx; the
+ * fork keys on `webSocket` presence, mirroring its own makeUpgradeResponse
+ * non-workerd branch). */
+function nodeWebSocketFetchHandler(request: Request): Promise<Response> {
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    return Promise.resolve(new Response("expected websocket", { status: 426 }));
+  }
+  const [clientEnd, serverEnd] = socketPairShim();
+  serverEnd.accept();
+  serverEnd.addEventListener("message", (event) => {
+    serverEnd.send(`node-echo:${event.data ?? ""}`);
+  });
+  const response = new Response(null, { status: 200 });
+  Object.defineProperty(response, "webSocket", { configurable: true, value: clientEnd });
+  return Promise.resolve(response);
+}

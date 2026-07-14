@@ -59,19 +59,8 @@ test.skipIf(!hasTarget)(
 
 // The catalogue, through the real REPL pipeline, against a project-scoped
 // session — the browser leg of the cross-runtime matrix. One shared project
-// (created lazily by the first example) mirrors the node-side matrix.
-let sharedProjectId: Promise<string> | null = null;
-function ensureBrowserMatrixProject(): Promise<string> {
-  sharedProjectId ??= (async () => {
-    using session = await connectFromBrowser();
-    using project = session.projects.create({
-      slug: `itx-browser-${uniqueSuffix()}`.slice(0, 40),
-    });
-    return (await project.__describe()).projectId;
-  })();
-  return sharedProjectId;
-}
-
+// (created lazily by the first example, via ensureBrowserMatrixProject below)
+// mirrors the node-side matrix.
 for (const example of BROWSER_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
   test.skipIf(!hasTarget || (localTarget && example.id === "sandbox-exec"))(
@@ -164,4 +153,18 @@ function baseUrl() {
 
 function uniqueSuffix() {
   return `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+// One shared project for the catalogue matrix, created lazily by the first
+// example that runs.
+let sharedProjectId: Promise<string> | null = null;
+function ensureBrowserMatrixProject(): Promise<string> {
+  sharedProjectId ??= (async () => {
+    using session = await connectFromBrowser();
+    using project = session.projects.create({
+      slug: `itx-browser-${uniqueSuffix()}`.slice(0, 40),
+    });
+    return (await project.__describe()).projectId;
+  })();
+  return sharedProjectId;
 }

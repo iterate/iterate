@@ -13,27 +13,6 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 
-/** Reassemble a live subscription the way `useLiveState` does: snapshot, then patches. */
-function trackLiveState<State>(): {
-  onUpdate: (update: LiveUpdate<State>) => void;
-  state: () => State | undefined;
-  patchCount: () => number;
-} {
-  let state: State | undefined;
-  let patches = 0;
-  return {
-    onUpdate: (update) => {
-      if (update.type === "snapshot") state = update.state;
-      else {
-        patches += 1;
-        state = applyPatch(state as State, update.patch);
-      }
-    },
-    state: () => state,
-    patchCount: () => patches,
-  };
-}
-
 test("itx.liveState pushes a snapshot then a minimal diff; the DO-backed counter is shared", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
@@ -128,3 +107,24 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
   });
   expect(await subscription.ping()).toBe(true);
 });
+
+/** Reassemble a live subscription the way `useLiveState` does: snapshot, then patches. */
+function trackLiveState<State>(): {
+  onUpdate: (update: LiveUpdate<State>) => void;
+  state: () => State | undefined;
+  patchCount: () => number;
+} {
+  let state: State | undefined;
+  let patches = 0;
+  return {
+    onUpdate: (update) => {
+      if (update.type === "snapshot") state = update.state;
+      else {
+        patches += 1;
+        state = applyPatch(state as State, update.patch);
+      }
+    },
+    state: () => state,
+    patchCount: () => patches,
+  };
+}

@@ -26,63 +26,6 @@ const CONNECTION = "main-slack";
 const SLACK_BOT_TOKEN_SECRET_PATH = `/secrets/integrations/slack/${CONNECTION}/bot-token`;
 const SLACK_INTEGRATION_STREAM_PATH = `/integrations/slack/${CONNECTION}`;
 
-function slackSigningSecret(): string | null {
-  const raw = process.env.APP_CONFIG_INTEGRATIONS__SLACK;
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as { webhookSigningSecret?: string };
-    return parsed.webhookSigningSecret?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-async function signedSlackWebhookRequest(body: string, signingSecret: string): Promise<Request> {
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(signingSecret),
-    { hash: "SHA-256", name: "HMAC" },
-    false,
-    ["sign"],
-  );
-  const mac = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`v0:${timestamp}:${body}`)),
-  );
-  const signature = `v0=${Array.from(mac, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-  return new Request(buildUrl({ path: "/api/integrations/slack/webhook" }), {
-    body,
-    headers: {
-      "content-type": "application/json",
-      "x-slack-request-timestamp": timestamp,
-      "x-slack-signature": signature,
-      "x-slack-event-id": `Ev${RUN_SUFFIX}`,
-    },
-    method: "POST",
-  });
-}
-
-async function waitFor<T>(
-  read: () => Promise<T>,
-  predicate: (value: T) => boolean,
-  message: () => string,
-  timeoutMs = 60_000,
-): Promise<T> {
-  let last: T | undefined;
-  await waitForCondition(
-    async () => {
-      last = await read();
-      return predicate(last);
-    },
-    {
-      description: () => `${message()}; last=${JSON.stringify(last)}`,
-      intervalMs: 1_000,
-      timeoutMs,
-    },
-  );
-  return last as T;
-}
-
 const signingSecret = slackSigningSecret();
 
 test.skipIf(signingSecret === null)(
@@ -239,3 +182,60 @@ test.skipIf(signingSecret === null)(
     );
   },
 );
+
+function slackSigningSecret(): string | null {
+  const raw = process.env.APP_CONFIG_INTEGRATIONS__SLACK;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { webhookSigningSecret?: string };
+    return parsed.webhookSigningSecret?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function signedSlackWebhookRequest(body: string, signingSecret: string): Promise<Request> {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(signingSecret),
+    { hash: "SHA-256", name: "HMAC" },
+    false,
+    ["sign"],
+  );
+  const mac = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`v0:${timestamp}:${body}`)),
+  );
+  const signature = `v0=${Array.from(mac, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  return new Request(buildUrl({ path: "/api/integrations/slack/webhook" }), {
+    body,
+    headers: {
+      "content-type": "application/json",
+      "x-slack-request-timestamp": timestamp,
+      "x-slack-signature": signature,
+      "x-slack-event-id": `Ev${RUN_SUFFIX}`,
+    },
+    method: "POST",
+  });
+}
+
+async function waitFor<T>(
+  read: () => Promise<T>,
+  predicate: (value: T) => boolean,
+  message: () => string,
+  timeoutMs = 60_000,
+): Promise<T> {
+  let last: T | undefined;
+  await waitForCondition(
+    async () => {
+      last = await read();
+      return predicate(last);
+    },
+    {
+      description: () => `${message()}; last=${JSON.stringify(last)}`,
+      intervalMs: 1_000,
+      timeoutMs,
+    },
+  );
+  return last as T;
+}

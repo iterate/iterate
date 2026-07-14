@@ -31,25 +31,6 @@ import { petshopBaseUrl, petshopExpireTokens, petshopRegisterApp } from "./petsh
 
 const RUN = crypto.randomUUID().slice(0, 8);
 
-/** Call a petshop installation-scoped API through the OS egress door with an
- * access-token placeholder: the request routes to the connection secret, whose
- * strategy mints the installation token (and re-mints on 401) before
- * substituting it and reaching petshop. */
-async function callThroughConnection(
-  project: any,
-  connectionPath: string,
-  path: string,
-): Promise<{ status: number; body: any }> {
-  const response = await project.egress.fetch(
-    new Request(`${petshopBaseUrl()}${path}`, {
-      headers: {
-        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
-      },
-    }),
-  );
-  return { status: response.status, body: await response.json().catch(() => null) };
-}
-
 // Opt-in: talks to a deployed dummy-petshop (see integrations-petshop.e2e.test).
 test.skipIf(!process.env.PETSHOP_BASE_URL)(
   "bring-your-own App: mint installation token in the Secret DO, act as the installation, re-mint on expiry",
@@ -122,3 +103,22 @@ test.skipIf(!process.env.PETSHOP_BASE_URL)(
     });
   },
 );
+
+/** Call a petshop installation-scoped API through the OS egress door with an
+ * access-token placeholder: the request routes to the connection secret, whose
+ * strategy mints the installation token (and re-mints on 401) before
+ * substituting it and reaching petshop. */
+async function callThroughConnection(
+  project: any,
+  connectionPath: string,
+  path: string,
+): Promise<{ status: number; body: any }> {
+  const response = await project.egress.fetch(
+    new Request(`${petshopBaseUrl()}${path}`, {
+      headers: {
+        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
+      },
+    }),
+  );
+  return { status: response.status, body: await response.json().catch(() => null) };
+}

@@ -24,29 +24,6 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// Deployed runs publish egress-echo through apps/tunnels, so a sandbox
-// container can reach it over the public internet. Local dev binds 127.0.0.1
-// on the test runner and is not reachable from the container. Skip local dev.
-function deployedBaseUrl(): string | null {
-  const raw = process.env.APP_CONFIG_BASE_URL?.trim();
-  if (!raw) return null;
-  const url = new URL(raw);
-  if (
-    ["localhost", "127.0.0.1", "::1"].includes(url.hostname) ||
-    url.hostname.endsWith(".localhost")
-  ) {
-    return null;
-  }
-  return url.toString();
-}
-
-// Wrap a string as a single POSIX-shell double-quoted argument. The header
-// value carries `"` (inside `getSecret({ path: "..." })`), so `"` and the
-// other shell-active characters must be escaped for `exec`'s shell.
-function shellDoubleQuote(value: string): string {
-  return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
-}
-
 const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 
 test.skipIf(deployedBaseUrl() === null)(
@@ -129,3 +106,26 @@ test.skipIf(deployedBaseUrl() === null)(
     }
   },
 );
+
+// Deployed runs publish egress-echo through apps/tunnels, so a sandbox
+// container can reach it over the public internet. Local dev binds 127.0.0.1
+// on the test runner and is not reachable from the container. Skip local dev.
+function deployedBaseUrl(): string | null {
+  const raw = process.env.APP_CONFIG_BASE_URL?.trim();
+  if (!raw) return null;
+  const url = new URL(raw);
+  if (
+    ["localhost", "127.0.0.1", "::1"].includes(url.hostname) ||
+    url.hostname.endsWith(".localhost")
+  ) {
+    return null;
+  }
+  return url.toString();
+}
+
+// Wrap a string as a single POSIX-shell double-quoted argument. The header
+// value carries `"` (inside `getSecret({ path: "..." })`), so `"` and the
+// other shell-active characters must be escaped for `exec`'s shell.
+function shellDoubleQuote(value: string): string {
+  return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
+}

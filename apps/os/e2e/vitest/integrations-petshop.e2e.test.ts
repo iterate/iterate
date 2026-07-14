@@ -30,24 +30,6 @@ import {
 const RUN = crypto.randomUUID().slice(0, 8);
 const REDIRECT_URI = "https://example.com/callback";
 
-/** Read a petshop JSON API through the OS egress door with an access-token
- * placeholder — the request routes to the connection secret, which substitutes
- * the token (and refreshes on 401) before it reaches petshop. */
-async function callThroughConnection(
-  project: any,
-  connectionPath: string,
-  path: string,
-): Promise<{ status: number; body: any }> {
-  const response = await project.egress.fetch(
-    new Request(`${petshopBaseUrl()}${path}`, {
-      headers: {
-        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
-      },
-    }),
-  );
-  return { status: response.status, body: await response.json().catch(() => null) };
-}
-
 // Opt-in: this suite talks to a deployed dummy-petshop, which only exists at
 // slots where it was deployed. Point PETSHOP_BASE_URL at one to run it;
 // otherwise it skips, so the shared CI e2e lane (whose preview slot has no
@@ -189,3 +171,21 @@ test.skipIf(!process.env.PETSHOP_BASE_URL)(
     expect(afterExpiry.body).toMatchObject({ clientId });
   },
 );
+
+/** Read a petshop JSON API through the OS egress door with an access-token
+ * placeholder — the request routes to the connection secret, which substitutes
+ * the token (and refreshes on 401) before it reaches petshop. */
+async function callThroughConnection(
+  project: any,
+  connectionPath: string,
+  path: string,
+): Promise<{ status: number; body: any }> {
+  const response = await project.egress.fetch(
+    new Request(`${petshopBaseUrl()}${path}`, {
+      headers: {
+        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
+      },
+    }),
+  );
+  return { status: response.status, body: await response.json().catch(() => null) };
+}
