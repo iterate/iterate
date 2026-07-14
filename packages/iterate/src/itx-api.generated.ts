@@ -1136,6 +1136,14 @@ export interface Repo {
    * later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
+  /**
+   * Hard recovery: destroy and recreate the Artifacts repository from the
+   * linked GitHub repository's default branch. GitHub always wins and the
+   * operation runs even when the recorded commit oids already match. The
+   * source clone is completed before destruction; `depth` bounds memory for
+   * large histories without changing anything on GitHub.
+   */
+  resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;
   /** The repo stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<RepoProcessorState>;
   /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
@@ -2604,6 +2612,15 @@ export type GithubSyncResult = {
   changed: boolean;
   commitOid: string;
   forced: boolean;
+  previousCommitOid: string | null;
+};
+
+/** What `repo.resetFromGithub` returns after destructively replacing the
+ * Artifacts repository with the linked GitHub repository's branch head. */
+export type GithubResetResult = {
+  artifactReplaced: true;
+  branch: string;
+  commitOid: string;
   previousCommitOid: string | null;
 };
 

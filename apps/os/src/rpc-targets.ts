@@ -180,6 +180,7 @@ import type {
   CommitRepoFilesResult,
   EditRepoFileInput,
   EditRepoFileResult,
+  GithubResetResult,
   GithubSyncResult,
   LinkGithubResult,
   RepoCommitDetails,
@@ -904,6 +905,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
         readFile:
           'Read one file ({ path, encoding?, commitOid? }); encoding "base64" for binary files (images, PDFs), commitOid for a pinned read at a historic commit.',
+        resetFromGithub:
+          "Destructively replace the Artifacts repo with the linked GitHub branch ({ depth? }); GitHub always wins and big repositories require a shallow depth.",
         syncFromGithub:
           "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } prunes to the newest N commits — required for big repositories, GitHub keeps full history).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
@@ -1055,6 +1058,17 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#durableObjectStub.syncFromGithub(input);
+  }
+
+  /**
+   * Hard recovery: destroy and recreate the Artifacts repository from the
+   * linked GitHub repository's default branch. GitHub always wins and the
+   * operation runs even when the recorded commit oids already match. The
+   * source clone is completed before destruction; `depth` bounds memory for
+   * large histories without changing anything on GitHub.
+   */
+  resetFromGithub(input: { depth?: number } = {}): Promise<GithubResetResult> {
+    return this.#durableObjectStub.resetFromGithub(input);
   }
 
   // GitHub connections are project-scoped (their secrets and streams live in
