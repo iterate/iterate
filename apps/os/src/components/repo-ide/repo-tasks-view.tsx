@@ -27,7 +27,14 @@ import {
 } from "@iterate-com/ui/components/alert-dialog";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
+import { Field, FieldGroup, FieldLabel, FieldTitle } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@iterate-com/ui/components/input-group";
+import { Kbd } from "@iterate-com/ui/components/kbd";
 import {
   Popover,
   PopoverContent,
@@ -52,6 +59,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { cn } from "@iterate-com/ui/lib/utils";
 import {
@@ -82,7 +90,15 @@ import {
   type FileEntry,
   type WorkingTreeChanges,
 } from "./staged-changes.ts";
-import { reconcileEditorPathOverride, type EditorPathOverride } from "./repo-task-editor-state.ts";
+import {
+  editorPathDraftApplies,
+  editorPathValue,
+  editorResolvedTaskPath,
+  reconcileEditorPathOverride,
+  resolvedEditorPathDraft,
+  type EditorPathDraft,
+  type EditorPathOverride,
+} from "./repo-task-editor-state.ts";
 import { useItxQuery } from "~/itx/itx-react.tsx";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
@@ -437,19 +453,24 @@ function TaskBoard({
     >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-muted/30">
         <div className="flex shrink-0 items-center gap-2 border-b bg-background px-2 py-2">
-          <div className="relative min-w-0 flex-1 sm:max-w-sm">
-            <SearchIcon
-              aria-hidden
-              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              value={filter}
-              onChange={(event) => setFilter(event.currentTarget.value)}
-              aria-label="Filter tasks"
-              placeholder="Filter tasks"
-              className="h-8 bg-background pl-8"
-            />
-          </div>
+          <FieldGroup className="min-w-0 flex-1 gap-0 sm:max-w-sm">
+            <Field className="gap-0">
+              <FieldLabel htmlFor="task-board-filter" className="sr-only">
+                Filter tasks
+              </FieldLabel>
+              <InputGroup>
+                <InputGroupInput
+                  id="task-board-filter"
+                  value={filter}
+                  onChange={(event) => setFilter(event.currentTarget.value)}
+                  placeholder="Filter tasks"
+                />
+                <InputGroupAddon aria-hidden tabIndex={-1}>
+                  <SearchIcon aria-hidden />
+                </InputGroupAddon>
+              </InputGroup>
+            </Field>
+          </FieldGroup>
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
               {board.taskCount} {board.taskCount === 1 ? "task" : "tasks"}
@@ -532,30 +553,41 @@ function BoardDisplaySettings({
             Choose the two dimensions used to query the tasks.
           </PopoverDescription>
         </PopoverHeader>
-        <div className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-3">
-          <span className="text-muted-foreground">Columns</span>
-          <Badge variant="secondary">Status</Badge>
-          <span className="text-muted-foreground">Rows</span>
-          <Select
-            value={rowField ?? "none"}
-            onValueChange={(value) => {
-              if (value === "none") onChangeRowField(null);
-              else if (value === "folder" || value === "label") onChangeRowField(value);
-            }}
-          >
-            <SelectTrigger aria-label="Task board row grouping" size="sm" className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectLabel>Group rows by</SelectLabel>
-                <SelectItem value="none">No grouping</SelectItem>
-                <SelectItem value="folder">Folder</SelectItem>
-                <SelectItem value="label">Label</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
+        <FieldGroup className="gap-3">
+          <Field orientation="horizontal">
+            <FieldTitle>Columns</FieldTitle>
+            <Badge variant="secondary" className="ml-auto">
+              Status
+            </Badge>
+          </Field>
+          <Field orientation="horizontal">
+            <FieldLabel htmlFor="task-board-row-grouping">Rows</FieldLabel>
+            <Select
+              items={[
+                { label: "No grouping", value: "none" },
+                { label: "Folder", value: "folder" },
+                { label: "Label", value: "label" },
+              ]}
+              value={rowField ?? "none"}
+              onValueChange={(value) => {
+                if (value === "none") onChangeRowField(null);
+                else if (value === "folder" || value === "label") onChangeRowField(value);
+              }}
+            >
+              <SelectTrigger id="task-board-row-grouping" size="sm" className="ml-auto w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel>Group rows by</SelectLabel>
+                  <SelectItem value="none">No grouping</SelectItem>
+                  <SelectItem value="folder">Folder</SelectItem>
+                  <SelectItem value="label">Label</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+        </FieldGroup>
       </PopoverContent>
     </Popover>
   );
@@ -615,8 +647,8 @@ export function TaskColumn({
           ))}
         </div>
         <Button
-          variant="ghost"
-          className="mt-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
+          variant="outline"
+          className="mt-2 h-10 w-full border-dashed text-muted-foreground"
           title={`Add task to ${creationLabel}`}
           aria-label={`Add task to ${creationLabel}`}
           onClick={onCreate}
@@ -741,72 +773,66 @@ function TaskEditorSheet({
   onAssignAgent: (task: RepoTask) => Promise<string | undefined>;
 }) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [pathValue, setPathValue] = useState("");
-  const pathWasEditedRef = useRef(false);
-  const [assigning, setAssigning] = useState(false);
-  const [assignedAgent, setAssignedAgent] = useState<string | undefined>();
-  const editorSessionOpenRef = useRef(false);
+  const [deleteTargetPath, setDeleteTargetPath] = useState<string>();
+  const [pathDraft, setPathDraft] = useState<EditorPathDraft>();
+  const [assignment, setAssignment] = useState<{
+    taskPath: string;
+    assigning: boolean;
+    agent?: string;
+  }>();
   const taskPath = task?.path;
-  const visibleAgent = task?.agent ?? assignedAgent;
-
-  useEffect(() => {
-    if (taskPath === undefined) {
-      editorSessionOpenRef.current = false;
-      pathWasEditedRef.current = false;
-      return;
-    }
-    setPathValue(`/${taskPath}`);
-    if (editorSessionOpenRef.current) return;
-    editorSessionOpenRef.current = true;
-    pathWasEditedRef.current = false;
-    const focusEditor = () => {
-      const editor = editorRef.current;
-      if (editor === null) return;
-      editor.focus();
-      const titleSelection = isNew ? repoTaskHeadingSelection(editor.value) : undefined;
-      const start = titleSelection?.start ?? editor.value.length;
-      const end = titleSelection?.end ?? editor.value.length;
-      editor.setSelectionRange(start, end);
-    };
-    const timeout = window.setTimeout(focusEditor, 250);
-    return () => window.clearTimeout(timeout);
-  }, [isNew, taskPath]);
-
-  useEffect(() => {
-    setAssignedAgent(undefined);
-    setAssigning(false);
-  }, [taskPath]);
+  const pathWasEdited = editorPathDraftApplies(taskPath, pathDraft);
+  const pathValue = editorPathValue(taskPath, pathDraft);
+  const resolvedTaskPath = editorResolvedTaskPath(taskPath, pathDraft);
+  const currentAssignment = assignment?.taskPath === resolvedTaskPath ? assignment : undefined;
+  const assigning = currentAssignment?.assigning ?? false;
+  const visibleAgent = task?.agent ?? currentAssignment?.agent;
+  const deleteOpen = resolvedTaskPath !== undefined && deleteTargetPath === resolvedTaskPath;
 
   const resolvePath = () => {
     if (task === undefined) return undefined;
-    if (!pathWasEditedRef.current) return task;
+    if (!pathWasEdited) return task;
     const resolved = onResolvePath(pathValue);
-    if (resolved === undefined) {
-      setPathValue(`/${task.path}`);
-      pathWasEditedRef.current = false;
-      return undefined;
-    }
-    setPathValue(`/${resolved.path}`);
-    pathWasEditedRef.current = false;
+    setPathDraft(resolvedEditorPathDraft(task.path, resolved?.path));
     return resolved;
+  };
+
+  const resetTransientState = () => {
+    setPathDraft(undefined);
+    setDeleteTargetPath(undefined);
+    setAssignment(undefined);
   };
 
   const withResolvedPath = (action: (resolved: RepoTask) => void) => {
     const resolved = resolvePath();
-    if (resolved !== undefined) action(resolved);
+    if (resolved !== undefined) {
+      resetTransientState();
+      action(resolved);
+    }
   };
 
   return (
     <Sheet
       open={task !== undefined}
       onOpenChange={(open) => {
-        if (!open && task !== undefined) onDismiss(resolvePath() ?? task);
+        if (!open && task !== undefined) {
+          const resolved = resolvePath() ?? task;
+          resetTransientState();
+          onDismiss(resolved);
+        }
       }}
     >
       {task === undefined ? null : (
         <SheetContent
-          initialFocus={false}
+          initialFocus={() => {
+            const editor = editorRef.current;
+            if (editor === null) return null;
+            const titleSelection = isNew ? repoTaskHeadingSelection(editor.value) : undefined;
+            const start = titleSelection?.start ?? editor.value.length;
+            const end = titleSelection?.end ?? editor.value.length;
+            editor.setSelectionRange(start, end);
+            return editor;
+          }}
           className="w-full gap-0 p-0 data-[side=right]:sm:w-[60vw] data-[side=right]:sm:max-w-[60vw]"
         >
           <SheetHeader className="shrink-0 border-b pr-14">
@@ -814,29 +840,35 @@ function TaskEditorSheet({
             <SheetDescription className="sr-only">
               Edit the task Markdown and file metadata.
             </SheetDescription>
-            <Input
-              value={pathValue}
-              aria-label="Task file path"
-              className="h-6 rounded-none border-0 px-0 font-mono text-xs text-muted-foreground shadow-none focus-visible:ring-0"
-              onChange={(event) => {
-                pathWasEditedRef.current = true;
-                setPathValue(event.currentTarget.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  resolvePath();
-                  event.currentTarget.blur();
-                } else if (event.key === "Escape") {
-                  setPathValue(`/${task.path}`);
-                  pathWasEditedRef.current = false;
-                  event.currentTarget.blur();
-                }
-              }}
-            />
+            <FieldGroup className="contents">
+              <Field className="contents">
+                <FieldLabel htmlFor="task-file-path" className="sr-only">
+                  Task file path
+                </FieldLabel>
+                <Input
+                  id="task-file-path"
+                  value={pathValue}
+                  className="h-6 rounded-none border-0 px-0 font-mono text-xs text-muted-foreground shadow-none focus-visible:ring-0"
+                  onChange={(event) =>
+                    setPathDraft({ source: task.path, value: event.currentTarget.value })
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      resolvePath();
+                      event.currentTarget.blur();
+                    } else if (event.key === "Escape") {
+                      setPathDraft(undefined);
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </Field>
+            </FieldGroup>
           </SheetHeader>
           <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
             <Select
+              items={columns.map((state) => ({ label: taskStateLabel(state), value: state }))}
               value={taskColumnState(task)}
               onValueChange={(value) => value && onChangeState(value)}
             >
@@ -858,7 +890,7 @@ function TaskEditorSheet({
               {isNew ? (
                 <Button size="sm" onClick={() => withResolvedPath(onSubmit)}>
                   Create task
-                  <kbd className="ml-1 hidden font-sans text-[10px] opacity-70 sm:inline">⌘↵</kbd>
+                  <Kbd className="ml-1 hidden sm:inline-flex">⌘↵</Kbd>
                 </Button>
               ) : (
                 <>
@@ -870,30 +902,44 @@ function TaskEditorSheet({
                       onClick={async () => {
                         const resolved = resolvePath();
                         if (resolved === undefined) return;
-                        setAssigning(true);
-                        const agent = await onAssignAgent(resolved);
-                        if (agent !== undefined) setAssignedAgent(agent);
-                        setAssigning(false);
+                        setAssignment({ taskPath: resolved.path, assigning: true });
+                        try {
+                          const agent = await onAssignAgent(resolved);
+                          setAssignment({
+                            taskPath: resolved.path,
+                            assigning: false,
+                            ...(agent === undefined ? {} : { agent }),
+                          });
+                        } catch (error) {
+                          setAssignment(undefined);
+                          throw error;
+                        }
                       }}
                     >
-                      <BotIcon data-icon="inline-start" />
+                      {assigning ? (
+                        <Spinner data-icon="inline-start" />
+                      ) : (
+                        <BotIcon data-icon="inline-start" />
+                      )}
                       {assigning ? "Assigning…" : "Assign agent"}
                     </Button>
                   ) : (
-                    <Link
-                      {...linkOptionsForStreamPath(projectSlug, visibleAgent)}
-                      className="flex min-w-0 max-w-48 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                    <Button
+                      render={<Link {...linkOptionsForStreamPath(projectSlug, visibleAgent)} />}
+                      nativeButton={false}
+                      variant="secondary"
+                      size="sm"
+                      className="min-w-0 max-w-48"
                       title={visibleAgent}
                     >
-                      <BotIcon aria-hidden className="size-3.5 shrink-0" />
+                      <BotIcon data-icon="inline-start" />
                       <span className="sm:hidden">Agent</span>
                       <span className="hidden truncate font-mono sm:block">{visibleAgent}</span>
-                    </Link>
+                    </Button>
                   )}
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="shrink-0 text-muted-foreground"
                     title="Open in editor"
                     onClick={() => withResolvedPath(onOpenInEditor)}
                   >
@@ -903,11 +949,12 @@ function TaskEditorSheet({
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
+                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     title="Delete task"
                     aria-label="Delete task"
                     onClick={() => {
-                      if (resolvePath() !== undefined) setDeleteOpen(true);
+                      const resolved = resolvePath();
+                      if (resolved !== undefined) setDeleteTargetPath(resolved.path);
                     }}
                   >
                     <Trash2Icon data-icon="inline-start" />
@@ -916,26 +963,38 @@ function TaskEditorSheet({
               )}
             </div>
           </div>
-          <Textarea
-            ref={editorRef}
-            aria-label={`Edit ${task.title} Markdown`}
-            value={task.content}
-            onChange={(event) =>
-              onChangeContent(event.currentTarget.value, isNew && !pathWasEditedRef.current)
-            }
-            onKeyDown={(event) => {
-              if (
-                event.key === "Enter" &&
-                (event.metaKey || event.ctrlKey) &&
-                !event.nativeEvent.isComposing
-              ) {
-                event.preventDefault();
-                withResolvedPath(onSubmit);
-              }
+          <FieldGroup className="contents">
+            <Field className="contents">
+              <FieldLabel htmlFor="task-markdown" className="sr-only">
+                Edit {task.title} Markdown
+              </FieldLabel>
+              <Textarea
+                id="task-markdown"
+                ref={editorRef}
+                value={task.content}
+                onChange={(event) =>
+                  onChangeContent(event.currentTarget.value, isNew && !pathWasEdited)
+                }
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    (event.metaKey || event.ctrlKey) &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    withResolvedPath(onSubmit);
+                  }
+                }}
+                className="min-h-0 flex-1 resize-none rounded-none border-0 px-5 py-4 font-mono text-sm leading-relaxed focus-visible:border-transparent focus-visible:ring-0"
+              />
+            </Field>
+          </FieldGroup>
+          <AlertDialog
+            open={deleteOpen}
+            onOpenChange={(open) => {
+              if (!open) setDeleteTargetPath(undefined);
             }}
-            className="min-h-0 flex-1 resize-none rounded-none border-0 px-5 py-4 font-mono text-sm leading-relaxed focus-visible:border-transparent focus-visible:ring-0"
-          />
-          <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+          >
             <AlertDialogContent size="sm">
               <AlertDialogHeader>
                 <AlertDialogTitle>Delete {task.title}?</AlertDialogTitle>
@@ -949,7 +1008,7 @@ function TaskEditorSheet({
                 <AlertDialogAction
                   variant="destructive"
                   onClick={() => {
-                    setDeleteOpen(false);
+                    setDeleteTargetPath(undefined);
                     withResolvedPath(onDelete);
                   }}
                 >

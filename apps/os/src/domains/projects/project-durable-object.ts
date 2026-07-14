@@ -57,6 +57,7 @@ import {
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
+import { AgentStatusDatabase, type AgentStatusTouchInput } from "./agent-status-database.ts";
 import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
@@ -73,6 +74,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // The project's streams index — a materialized view in the DO's own SQLite,
   // touched from the processEventBatch fan-in (see touchStreamActivity).
   readonly #streamDatabase = new StreamDatabase(this.ctx.storage.sql);
+  // The agents roster — every agent stream's merged status record, fed from
+  // the same fan-in (the status-changed patches ride the touch call).
+  readonly #agentStatusDatabase = new AgentStatusDatabase(this.ctx.storage.sql);
   readonly #processorHost = createStreamProcessorHost(this.ctx, {
     stream: new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
@@ -90,7 +94,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
       // Reconcile any catalog stream missing an index row (cheap when none are),
       // so newly-created quiet streams show up in ⌘K without waiting for events.
       this.#streamDatabase.seedMissing(reduced.streams);
-      return { reduced, streamsIndex: this.#streamDatabase.all(), liveDemo: this.#liveDemo };
+      return {
+        reduced,
+        streamsIndex: this.#streamDatabase.all(),
+        agents: this.#agentStatusDatabase.all(),
+        liveDemo: this.#liveDemo,
+      };
     },
   });
   readonly #projectProcessor = this.#processorHost.add(
@@ -228,6 +237,30 @@ export class ProjectDurableObject extends DurableObject<Env> {
   touchStreamActivity(input: TouchInput): void {
     this.#streamDatabase.touch(input);
     this.#processorHost.refreshLive();
+  }
+
+  /**
+   * Fold a batch's agent status-changed patches into the agents roster and
+   * push the change to `itx.liveState` watchers. Same envelope as
+   * touchStreamActivity: called from the processEventBatch fan-in, idempotent
+   * (event offsets guard redelivery), never load-bearing for delivery.
+   */
+  touchAgentStatus(input: AgentStatusTouchInput): void {
+    this.#agentStatusDatabase.touch(input);
+    this.#processorHost.refreshLive();
+  }
+
+  /**
+   * Replace one roster row from the agent journal's full status-changed
+   * history — the recovery lane for a dropped touch (merge patches cannot
+   * reconstruct a lost field from later patches; the journal can). Returns
+   * false when the snapshot lost a race with a newer touch and the caller
+   * must re-read the journal. See AgentStatusDatabase.rebuild.
+   */
+  rebuildAgentStatus(input: AgentStatusTouchInput): boolean {
+    const applied = this.#agentStatusDatabase.rebuild(input);
+    if (applied) this.#processorHost.refreshLive();
+    return applied;
   }
 
   async fetch(request: Request): Promise<Response> {
