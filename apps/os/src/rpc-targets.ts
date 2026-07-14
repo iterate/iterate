@@ -214,6 +214,7 @@ import {
   triggerProjectSearchSyncDebounced,
 } from "./domains/search/search-index.ts";
 import {
+  extractMatchSnippet,
   narrowStreamRefToChunk,
   normalizeSearchExcludeKinds,
   normalizeSearchSource,
@@ -2016,16 +2017,14 @@ function parseStoredRef(serialized: string): ItxExpression | undefined {
 }
 
 /**
- * Total `content` budget across one query's hits, split evenly (clamped to
- * [250, 1000] per hit). Sized from live anatomy (prd, 2026-07-14: a default
- * query was 26.4k chars — at the 30k script-result spill edge): with
- * per-document dedupe and this budget a default query lands ~12-15k chars
- * (~3-4k tokens), so TWO parallel queries fit one inline script return.
- * `content` is for judging relevance; `ref` fetches the full source.
+ * Snippet length per row and the default row count. Rows are deliberately
+ * TINY (kind, date, context, ~2-sentence snippet, ref) so many matches fit
+ * one glance — judge here, evaluate `ref` for the whole thing. 30 rows of
+ * snippet+metadata ≈ 20k chars, safely inside the 30k inline script-result
+ * cap; `limit` accepts up to the API's 50.
  */
-const RESULT_CONTENT_BUDGET_CHARS = 12_000;
-const resultContentCap = (hitCount: number): number =>
-  Math.min(1_000, Math.max(250, Math.floor(RESULT_CONTENT_BUDGET_CHARS / Math.max(1, hitCount))));
+const SNIPPET_CHARS = 200;
+const DEFAULT_RESULT_ROWS = 30;
 
 /**
  * One result row per MATCH LOCATION — full-text-search semantics. The corpus
@@ -2111,7 +2110,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         "indexStream/indexRepo/backfillFiles backfill one unit, reindex() sweeps the whole " +
         "project (all streams + repos + files). Everything indexes automatically except " +
         "ephemeral and stream-housekeeping events. Explicit index verbs are searchable in ~a " +
-        "minute; automatic mirroring can lag up to the hourly sync.",
+        "minute; automatic mirroring can lag up to the hourly sync. Noisy first page? REFINE, " +
+        "don't abandon: drop filler words (slack/message/conversation match every webhook), " +
+        'quote exact tokens ("superfart"), add source/exclude — one refined query beats a ' +
+        "vendor-API detour.",
       children: {
         answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
@@ -2171,7 +2173,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         // set in conversation context, but a hit that never surfaces is gone.
         // Defaults beat the instance's (10 results, 0.4 threshold); explicit
         // caller values still win.
-        max_num_results: input.limit ?? 20,
+        max_num_results: input.limit ?? DEFAULT_RESULT_ROWS,
         match_threshold: input.scoreThreshold ?? 0.2,
         // OR-mode keyword matching: dogfooding showed the default AND-mode
         // misses exact-token queries whose terms don't co-occur in one chunk;
@@ -2189,30 +2191,20 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   }
 
   /** Map one AI Search chunk to a provenance-carrying result. */
-  #toChunk(
-    chunk: AiSearchSearchResponse["chunks"][number],
-    maxContentChars: number,
-  ): SearchResultChunk {
+  #toChunk(chunk: AiSearchSearchResponse["chunks"][number], query: string): SearchResultChunk {
     const metadata = chunk.item.metadata ?? {};
     const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
-    // Cap per-hit content: chunks are ~1024 tokens and context expansion
-    // multiplies them, so 20 generous-default hits of full text blew the 30k
-    // inline script-result cap and forced a workspace spill + parse detour
-    // (live prd incident, 2026-07-14). The content is for judging relevance;
-    // `ref` is the fetch path for the full source — when a ref was too large
-    // to store, the marker points at the source description instead.
-    const truncationMarker =
-      storedRef !== undefined
-        ? "\n… [truncated — evaluate `ref` for the full source]"
-        : "\n… [truncated — no ref stored; locate the source via `context`/`filename`]";
-    const content =
-      chunk.text.length > maxContentChars
-        ? `${chunk.text.slice(0, maxContentChars)}${truncationMarker}`
-        : chunk.text;
+    // Rows carry a short match snippet, never whole chunks (Jonas's design:
+    // "kind, metadata, matching couple of sentences, date" — the ref gets
+    // the whole thing). Chunk text stays server-side.
     return {
       filename: chunk.item.key,
       score: chunk.score,
-      content,
+      content: extractMatchSnippet(chunk.text, query, SNIPPET_CHARS),
+      date:
+        typeof chunk.item.timestamp === "number"
+          ? new Date(chunk.item.timestamp * (chunk.item.timestamp < 1e12 ? 1000 : 1)).toISOString()
+          : undefined,
       kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
       context: typeof metadata.context === "string" ? metadata.context : undefined,
       // Every corpus writer stores `ref` — the serialized itx expression back
@@ -2289,10 +2281,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * with federated itx.docs, each result tagged with its `kind` and `context`
    * so callers can contextualize a hit. ONE row per MATCH — distinct event
    * windows within one stream segment stay distinct rows (full-text-search
-   * semantics); only same-location re-scores collapse. Content capped so a
-   * full default result is ~3-4k tokens —
-   * about two queries fit one inline script return; fanning out more, return
-   * selected fields (kind/context/ref), not whole results. Docs hits carry
+   * semantics); only same-location re-scores collapse. Rows are TINY: kind,
+   * date, context, a ~2-sentence snippet around the match, and the ref that
+   * fetches the whole thing — so the default 30 rows read at a glance and a
+   * result set stays well inside one inline script return. Docs hits carry
    * synthetic 0.5-band
    * scores (not comparable to corpus relevance), ride on top of `limit`
    * corpus chunks (their own cap: min(limit, 5)), and ignore
@@ -2304,7 +2296,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    */
   async query(input: {
     q: string;
-    /** Max chunks to return (1–50, default 20 — tuned for recall). */
+    /** Max result rows (1–50, default 30 — rows are tiny snippets; go wide). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
@@ -2333,10 +2325,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       return { searchQuery: input.q, results: docs.value, warning };
     }
     const deduped = dedupeChunksByMatchLocation(corpus.value.chunks);
-    const results = [
-      ...deduped.map((chunk) => this.#toChunk(chunk, resultContentCap(deduped.length))),
-      ...docs.value,
-    ].sort((a, b) => b.score - a.score);
+    const results = [...deduped.map((chunk) => this.#toChunk(chunk, input.q)), ...docs.value].sort(
+      (a, b) => b.score - a.score,
+    );
     return { searchQuery: corpus.value.search_query, results };
   }
 
@@ -2380,9 +2371,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     return {
       response: response.choices[0]?.message.content ?? "",
       searchQuery: input.q,
-      results: response.chunks.map((chunk) =>
-        this.#toChunk(chunk, resultContentCap(response.chunks.length)),
-      ),
+      results: response.chunks.map((chunk) => this.#toChunk(chunk, input.q)),
     };
   }
 
