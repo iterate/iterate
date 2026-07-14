@@ -1,4 +1,4 @@
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -15,81 +15,14 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@iterate-com/ui
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { useItx, useItxQuery, type ItxReactHandle } from "~/itx/itx-react.tsx";
+import {
+  listGithubConnections,
+  type InstallationRepo,
+} from "~/components/github-installation-repos.ts";
+import { InstallationRepoList } from "~/components/github-installation-repos.tsx";
+import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 const REPO_PATH_PATTERN = /^\/repos\/.+$/;
-
-/** How many 100-repo pages to pull from the installation before cutting off —
- * a picker, not a mirror of the whole org. */
-const MAX_INSTALLATION_REPO_PAGES = 5;
-
-type InstallationRepo = {
-  defaultBranch: string;
-  fullName: string;
-  name: string;
-  owner: string;
-  pushedAt: string | null;
-};
-
-/** The slice of GitHub's installation-repositories page the picker reads. */
-type GithubInstallationReposPage = {
-  data: {
-    repositories: Array<{
-      default_branch: string;
-      full_name: string;
-      name: string;
-      owner: { login: string };
-      pushed_at: string | null;
-    }>;
-    total_count: number;
-  };
-};
-
-/**
- * Every repository the connection's GitHub App installation can see (its
- * "selected repositories" set — an unselected repo simply isn't in this list),
- * most recently pushed first. This deliberately uses the same ordinary
- * Octokit surface exposed to agents. A GitHub failure is returned as data,
- * not thrown: the caller reads through a suspense query, and a throw there
- * would take down the whole repos page instead of one panel of the dialog.
- */
-async function listInstallationRepos(
-  itx: ItxReactHandle,
-  connection: string,
-): Promise<{ error: string | null; repos: InstallationRepo[]; totalCount: number }> {
-  const repos: InstallationRepo[] = [];
-  let totalCount = 0;
-  let error: string | null = null;
-  for (let page = 1; page <= MAX_INSTALLATION_REPO_PAGES; page++) {
-    let response: GithubInstallationReposPage;
-    try {
-      response = (await itx.integrations.github
-        .get(connection)
-        .octokit.rest.apps.listReposAccessibleToInstallation({
-          page,
-          per_page: 100,
-        })) as GithubInstallationReposPage;
-    } catch (caught) {
-      // A later page's failure keeps what earlier pages returned: a partial
-      // list with a warning beats discarding fetched repositories.
-      error = caught instanceof Error ? caught.message : String(caught);
-      break;
-    }
-    totalCount = response.data.total_count;
-    repos.push(
-      ...response.data.repositories.map((repo) => ({
-        defaultBranch: repo.default_branch,
-        fullName: repo.full_name,
-        name: repo.name,
-        owner: repo.owner.login,
-        pushedAt: repo.pushed_at,
-      })),
-    );
-    if (response.data.repositories.length === 0 || repos.length >= totalCount) break;
-  }
-  repos.sort((left, right) => (right.pushedAt ?? "").localeCompare(left.pushedAt ?? ""));
-  return { error, repos, totalCount: Math.max(totalCount, repos.length) };
-}
 
 /**
  * "Add from GitHub" on the repos page: a small wizard that creates a project
@@ -117,22 +50,8 @@ export function AddRepoFromGithub({
 }) {
   const connections = useItxQuery({
     key: ["github-connections", projectId],
-    query: async (itx) => {
-      // Failures come back as data (an empty list, so the row simply doesn't
-      // render): this is optional sugar on the repos page, and a throw from a
-      // suspense query would take down the whole page, not just the button.
-      try {
-        const entries = await itx.integrations.list();
-        // Only builtin GitHub connections can back a repo (they carry the App
-        // installation the mirror pushes authenticate through).
-        return entries.flatMap((entry) =>
-          entry.source === "builtin" && entry.integration === "github" ? [entry.connection] : [],
-        );
-      } catch (error) {
-        console.error("AddRepoFromGithub: listing integrations failed", error);
-        return [];
-      }
-    },
+    // Shared with the repo IDE GitHub panel — must never throw.
+    query: (itx) => listGithubConnections(itx),
   });
   const [open, setOpen] = useState(false);
   if (connections.length === 0) return null;
@@ -388,90 +307,5 @@ function AddRepoFromGithubWizard({
         </Button>
       </DialogFooter>
     </form>
-  );
-}
-
-function InstallationRepoList({
-  connection,
-  projectId,
-  filter,
-  selected,
-  onSelect,
-}: {
-  connection: string;
-  projectId: string;
-  filter: string;
-  selected: InstallationRepo | null;
-  onSelect: (repo: InstallationRepo) => void;
-}) {
-  const { error, repos, totalCount } = useItxQuery({
-    // Keyed by project AND connection: the query cache is app-wide, and two
-    // projects can hold same-named connections to different installations.
-    key: ["github-installation-repos", projectId, connection],
-    query: (itx) => listInstallationRepos(itx, connection),
-  });
-  const visible = useMemo(() => {
-    const query = filter.trim().toLowerCase();
-    if (query === "") return repos;
-    return repos.filter((repo) => repo.fullName.toLowerCase().includes(query));
-  }, [filter, repos]);
-
-  if (error !== null && repos.length === 0) {
-    return (
-      <div className="break-words rounded-md border p-3 text-sm text-red-600">
-        Could not list repositories through connection "{connection}": {error}
-      </div>
-    );
-  }
-
-  if (repos.length === 0) {
-    return (
-      <div className="rounded-md border p-3 text-sm text-muted-foreground">
-        The GitHub App installation on "{connection}" has access to no repositories. Grant it
-        repository access on GitHub, then reopen this dialog.
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="max-h-56 overflow-y-auto rounded-md border p-1">
-        {visible.length === 0 ? (
-          <div className="p-3 text-sm text-muted-foreground">No repositories match.</div>
-        ) : (
-          visible.map((repo) => {
-            const isSelected = selected?.fullName === repo.fullName;
-            return (
-              <button
-                key={repo.fullName}
-                type="button"
-                className={`flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent ${isSelected ? "bg-accent" : ""}`}
-                aria-pressed={isSelected}
-                onClick={() => onSelect(repo)}
-              >
-                <span className="min-w-0 truncate font-mono text-xs">{repo.fullName}</span>
-                {repo.defaultBranch !== "main" ? (
-                  <span
-                    className="shrink-0 text-xs text-muted-foreground"
-                    title={`This repository's default branch is "${repo.defaultBranch}"; iterate pulls and mirrors "main".`}
-                  >
-                    default: {repo.defaultBranch}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })
-        )}
-      </div>
-      {error !== null ? (
-        <p className="break-words text-xs text-red-600">
-          Listing stopped early — showing the {repos.length} repositories fetched so far: {error}
-        </p>
-      ) : repos.length < totalCount ? (
-        <p className="text-xs text-muted-foreground">
-          Showing {repos.length} of {totalCount} repositories the installation can see.
-        </p>
-      ) : null}
-    </div>
   );
 }
