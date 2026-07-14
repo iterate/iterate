@@ -151,11 +151,18 @@ export async function processGithubReviewEvent(input: {
   if (check.status === "completed") return "ignored";
 
   const timeoutScheduleKey = githubReviewTimeoutScheduleKey(check.id);
+  const checkStartedAt = Date.parse(check.started_at ?? "");
+  if (!Number.isFinite(checkStartedAt)) {
+    throw new Error(`GitHub check ${check.id} has no valid start time`);
+  }
+  const timeoutAt = new Date(checkStartedAt + input.config.timeoutSeconds * 1_000).toISOString();
   // Arm the terminalizer before waking the model. A crash after check creation
-  // therefore cannot leave GitHub saying "reviewing" forever.
+  // therefore cannot leave GitHub saying "reviewing" forever. The absolute
+  // Check Run deadline makes webhook redelivery idempotent: resetting this
+  // keyed schedule cannot extend the review's lifetime.
   await input.itx.scheduler.set({
     key: timeoutScheduleKey,
-    recurrence: { in: input.config.timeoutSeconds },
+    recurrence: { at: timeoutAt },
     script: githubReviewTimeoutScript({
       appSlug: target.appSlug,
       checkId: check.id,

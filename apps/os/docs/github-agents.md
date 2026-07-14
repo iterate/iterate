@@ -132,8 +132,8 @@ eligible routed webhook it:
 4. Cancels the previous revision's running App-owned checks, then creates or
    recovers an `Iterate Review` Check Run for the immutable head. Check lookup
    is fully paginated.
-5. Arms a userspace timeout before waking the model, so a crash cannot leave
-   the check spinning forever.
+5. Arms a userspace timeout before waking the model, anchored to the Check
+   Run's absolute start-time deadline so webhook redelivery cannot extend it.
 6. Appends those idempotent defaults and one request-keyed
    `events.iterate.com/agents/message-received` review task in a single batch.
 7. Requests `interrupt-current-request`, so a newer push supersedes obsolete

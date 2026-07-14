@@ -70,15 +70,22 @@ function harness(input?: {
         head_sha: args.head_sha,
         html_url: `https://github.test/checks/${nextCheckId}`,
         id: nextCheckId++,
+        started_at: "2026-07-14T08:00:00.000Z",
         status: "in_progress",
       },
     }),
   );
-  const listForRef = vi
-    .fn()
-    .mockImplementation((args: { page: number; ref: string }) =>
-      Promise.resolve({ data: { check_runs: input?.checkRuns?.(args) ?? [] } }),
-    );
+  const listForRef = vi.fn().mockImplementation((args: { page: number; ref: string }) => {
+    const checks = input?.checkRuns?.(args) ?? [];
+    return Promise.resolve({
+      data: {
+        check_runs: checks.map((check) => ({
+          started_at: "2026-07-14T08:00:00.000Z",
+          ...(check as object),
+        })),
+      },
+    });
+  });
   const update = input?.update ?? vi.fn().mockResolvedValue({ data: {} });
   const octokit = {
     rest: {
@@ -151,7 +158,7 @@ describe("config-repo GitHub reviews", () => {
     expect(h.set).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "github-review-timeout:100",
-        recurrence: { in: 1_800 },
+        recurrence: { at: "2026-07-14T08:30:00.000Z" },
         script: expect.stringContaining('get("install-42").octokit'),
       }),
     );
@@ -166,6 +173,34 @@ describe("config-repo GitHub reviews", () => {
     expect(task.payload.content).toContain("Immediately before publishing");
     expect(task.payload.content).toContain("Promise.all");
     expect(task.payload.llmRequestPolicy).toEqual({ behaviour: "interrupt-current-request" });
+  });
+
+  it("does not extend the Check Run deadline when a webhook is redelivered", async () => {
+    const h = harness({
+      checkRuns: () => [
+        {
+          app: { slug: "iterate-preview" },
+          external_id: "iterate-review:prj_test:42:7:head:head-b",
+          html_url: "https://github.test/checks/44",
+          id: 44,
+          status: "in_progress",
+        },
+      ],
+    });
+
+    await processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx });
+    await processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx });
+
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.set).toHaveBeenCalledTimes(2);
+    expect(h.set.mock.calls.map(([schedule]) => schedule.recurrence)).toEqual([
+      { at: "2026-07-14T08:30:00.000Z" },
+      { at: "2026-07-14T08:30:00.000Z" },
+    ]);
+    expect(h.append.mock.calls.map((call) => call.at(-1).idempotencyKey)).toEqual([
+      "iterate-review:prj_test:42:7:head:head-b",
+      "iterate-review:prj_test:42:7:head:head-b",
+    ]);
   });
 
   it("drops an out-of-order old synchronize before it can create or interrupt", async () => {
