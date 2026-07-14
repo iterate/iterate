@@ -164,6 +164,7 @@ describe("handleIntegrationWebhookApiRequest (slack + routing)", () => {
     const call = routeIntegrationWebhook.mock.calls[0]![0];
     expect(call.slug).toBe("slack");
     expect(call.externalId).toBe("T42");
+    expect(call.routerProcessorSlug).toBe("slack");
     expect(call.event.type).toBe("events.iterate.com/slack/webhook-received");
     expect(call.event.idempotencyKey).toBe("slack-webhook:Ev1");
     expect(call.event.payload).toMatchObject({ slackTeamId: "T42" });
