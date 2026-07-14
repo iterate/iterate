@@ -1,6 +1,7 @@
 import type { StreamPushEventBatch } from "./rpc-types.ts";
 
-const MAX_ENTRIES = 128;
+export const ACKNOWLEDGED_IDEMPOTENCY_OFFSET_CAPACITY = 128;
+const MAX_CROSS_POST_DELIVERIES = 128;
 const MAX_KEY_CODE_UNITS = 512;
 const MAX_DELIVERY_IDENTITY_CODE_UNITS = 2_048;
 
@@ -27,7 +28,7 @@ export class AcknowledgedIdempotencyOffsetCache {
 
   remember(idempotencyKey: string, offset: number): void {
     if (idempotencyKey.length > MAX_KEY_CODE_UNITS || this.#offsets.has(idempotencyKey)) return;
-    if (this.#offsets.size === MAX_ENTRIES) {
+    if (this.#offsets.size === ACKNOWLEDGED_IDEMPOTENCY_OFFSET_CAPACITY) {
       const oldest = this.#offsets.keys().next().value;
       if (oldest !== undefined) this.#offsets.delete(oldest);
     }
@@ -57,7 +58,7 @@ export class AcknowledgedCrossPostDeliveryCache {
   remember(batch: CrossPostDeliveryIdentity): void {
     const identity = this.#identity(batch);
     if (identity === undefined || this.#identities.has(identity)) return;
-    if (this.#identities.size === MAX_ENTRIES) {
+    if (this.#identities.size === MAX_CROSS_POST_DELIVERIES) {
       const oldest = this.#identities.values().next().value;
       if (oldest !== undefined) this.#identities.delete(oldest);
     }

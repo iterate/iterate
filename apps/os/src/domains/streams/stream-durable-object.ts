@@ -4,6 +4,7 @@ import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec, resolveDurableObjectName } from "../durable-object-names.ts";
 import {
+  ACKNOWLEDGED_IDEMPOTENCY_OFFSET_CAPACITY,
   AcknowledgedCrossPostDeliveryCache,
   AcknowledgedIdempotencyOffsetCache,
 } from "./acknowledged-idempotency-offset-cache.ts";
@@ -1130,15 +1131,18 @@ export class StreamDurableObject extends DurableObject<Env> {
    * only appends the built inputs in its own synchronous turn.
    */
   acceptCrossPost(batch: StreamPushEventBatch): void {
-    if (this.#acknowledgedCrossPostDeliveries?.has(batch)) return;
+    const cacheCompleteDelivery = batch.events.length > ACKNOWLEDGED_IDEMPOTENCY_OFFSET_CAPACITY;
+    if (cacheCompleteDelivery && this.#acknowledgedCrossPostDeliveries?.has(batch)) return;
     const inputs = buildAcceptCrossPostAppendInputs(batch, {
       projectId: this.name.projectId,
       path: this.name.path,
     });
     if (inputs.length > 0) this.appendAck(...inputs);
-    (this.#acknowledgedCrossPostDeliveries ??= new AcknowledgedCrossPostDeliveryCache()).remember(
-      batch,
-    );
+    if (cacheCompleteDelivery) {
+      (this.#acknowledgedCrossPostDeliveries ??= new AcknowledgedCrossPostDeliveryCache()).remember(
+        batch,
+      );
+    }
   }
 
   #appendToStreamCoordinate(
