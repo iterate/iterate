@@ -11,7 +11,11 @@ import {
   inferOsDopplerConfigForWorkerName,
 } from "~/lib/cloudflare-containers-dashboard-url.ts";
 import { getPublicRouteConfig, type PublicRouteConfig } from "~/lib/public-route-config.ts";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -19,6 +23,7 @@ import { useItx } from "~/itx/itx-react.tsx";
 const SANDBOXES_ROOT = "/sandboxes";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/sandboxes/")({
+  staticData: streamPageStaticData(),
   // Sandboxes ARE streams (a sandbox lives at /sandboxes/<name>):
   // this page is the /sandboxes catalogue stream's view, with the live
   // sandbox tree in the side panel.
