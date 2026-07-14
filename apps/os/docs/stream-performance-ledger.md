@@ -1919,3 +1919,63 @@ are exactly unchanged; the experiment ended at `2026-07-14T06:00:06Z`. Raw
 records are `/tmp/stream-index-{parent,candidate}-r{1..5}.log`,
 `/tmp/stream-index-sql-{parent,candidate}-r{1..3}.log`, and
 `/tmp/stream-index-rowid-candidate-r{1..3}.log` locally.
+
+## 2026-07-14: Duplicate Offset Was Local Vite HMR, Production Workaround Rejected
+
+An earlier benchmark shutdown emitted one
+`UNIQUE constraint failed: events.offset` while Stream delivery appended an
+idle-teardown fact. The journal allocator, checkpoint catch-up, ephemeral-row
+floor, recursive circuit-breaker append, and teardown close loop were audited
+first. They preserve one synchronous allocation/insert/state-update boundary:
+`#coreProcessorState` advances before any post-commit wake can append again,
+activation replay includes ephemeral rows, and eviction persists the highest
+assigned offset. No in-isolate reuse path was found.
+
+A disposable real-runtime stress then raced forced idle teardown with sixteen
+concurrent appends per round. One hundred rounds (1,600 user appends plus
+connection facts) passed without a constraint error. A 2,000-round run stayed
+monotonic too, but two edits to the Stream module during the run produced two
+immediate, deterministic primary-key collisions. Both were
+`subscriber-connected` facts from a wake poke that had started before HMR;
+there were zero collisions before the module update. The user append RPCs and
+journal head remained monotonic, so the focused test passed despite the two
+best-effort presence facts being dropped.
+
+Cloudflare's Vite runner source explains the exact local-only overlap. Its
+persistent Durable Object wrapper asks the module runner for the current user
+constructor on every RPC. When constructor identity changes, it constructs and
+stores a new user object over the wrapper's same `ctx` and SQLite storage
+(`workers-sdk/packages/vite-plugin-cloudflare/src/workers/runner-worker/index.ts`,
+`kEnsureInstance`, lines 406-429). It does not cancel work retained by the old
+user instance. A pre-update subscriber poke can therefore resolve afterward,
+call old `StreamSubscribers.#open`, and allocate from the old object's stale
+`maxOffset`; meanwhile the replacement constructor has already appended its
+`woken` fact at that offset. This reproduces the original stack exactly at
+`StreamEventLog.insert` -> `appendFact` -> `StreamSubscribers.#open`.
+
+This is not Cloudflare's deployed incarnation model. First-party source states
+that global uniqueness permits only one instance for a class/ID, uniqueness is
+rechecked on storage access, code updates reset the object, and old/new code do
+not access the same storage simultaneously. Gradual deployments likewise pin
+each object to one Worker version. The docs separately acknowledge local hot
+reload lifecycle failures for DO alarms and prescribe restarting local dev
+after edits. Workerd's actor container also waits for active references before
+graceful test eviction; the Vite user-instance swap bypasses that actor
+lifecycle because both user objects live inside one wrapper actor.
+
+A production collision retry, per-append `max(offset)` query, durable generation
+fence, or Stream-specific `import.meta.hot` registry was rejected. The first
+three tax or complicate the production commit point for a condition the
+platform contract excludes. The last leaks a local runner workaround into the
+deployed object and still cannot generically cancel old async capabilities.
+Collision recovery would also let two locally active delivery runtimes
+alternately catch up and continue, hiding duplicate side effects rather than
+restoring one actor. The correct current mitigation is to restart the local dev
+server after changing DO code while it has live async work; a generic fix
+belongs in the Cloudflare Vite runner's DO replacement lifecycle.
+
+All stress code and HMR markers were removed. Production code, schema, public
+types, and persistent-data format are unchanged. The clean no-HMR run, the
+two-collision HMR run, runner source, workerd actor eviction path, and first-party
+uniqueness/deployment docs were all inspected before rejecting a repo runtime
+change.
