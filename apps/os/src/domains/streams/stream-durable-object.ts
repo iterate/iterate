@@ -542,11 +542,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (args.order !== undefined && args.order !== "asc" && args.order !== "desc") {
       throw new Error('getEvents order must be "asc" or "desc".');
     }
+    const afterOffset = args.afterOffset ?? 0;
+    const beforeOffset = args.beforeOffset ?? Number.MAX_SAFE_INTEGER;
+    const resolvedLimit = limit ?? DEFAULT_GET_EVENTS_LIMIT;
+    if (args.order !== "desc") {
+      const fresh = this.#subscribers.tryReadFreshEvents({
+        afterOffset,
+        throughOffset: Math.min(beforeOffset - 1, this.#coreProcessorState.maxOffset),
+        eventTypes: args.eventTypes,
+        includeEphemeral: args.includeEphemeral === true,
+        limit: resolvedLimit,
+      });
+      if (fresh !== undefined) return fresh;
+    }
     return this.#log.getRange({
-      afterOffset: args.afterOffset ?? 0,
-      beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
+      afterOffset,
+      beforeOffset,
       eventTypes: args.eventTypes,
-      limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
+      limit: resolvedLimit,
       includeEphemeral: args.includeEphemeral,
       order: args.order,
     });

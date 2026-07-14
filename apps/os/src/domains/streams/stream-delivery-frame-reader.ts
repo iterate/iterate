@@ -113,6 +113,46 @@ export class StreamDeliveryFrameReader {
     this.#freshTailSizedProjection = undefined;
   }
 
+  /**
+   * Answer an ascending public read only when the retained tail proves the
+   * complete result. A miss is deliberately `undefined`: callers must fall
+   * back to durable storage rather than treating an incomplete tail as EOF.
+   */
+  tryReadFreshEvents(args: {
+    afterOffset: number;
+    throughOffset: number;
+    eventTypes?: readonly string[];
+    includeEphemeral: boolean;
+    limit: number;
+  }): StreamEvent[] | undefined {
+    if (args.eventTypes?.length === 0 || args.throughOffset <= args.afterOffset) return [];
+    const eventTypes =
+      args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
+    const firstFreshOffset = this.#freshTail[0]?.event.offset;
+    if (firstFreshOffset === undefined) return undefined;
+    const start = args.afterOffset + 1 - firstFreshOffset;
+    if (start < 0 || this.#freshTail[start]?.event.offset !== args.afterOffset + 1) {
+      return undefined;
+    }
+
+    const events: StreamEvent[] = [];
+    let expectedOffset = args.afterOffset + 1;
+    for (let index = start; index < this.#freshTail.length; index += 1) {
+      const event = this.#freshTail[index]!.event;
+      if (event.offset !== expectedOffset) return undefined;
+      if (event.offset > args.throughOffset) return events;
+      expectedOffset += 1;
+      if (
+        (args.includeEphemeral || event.ephemeral !== true) &&
+        (eventTypes === undefined || eventTypes.includes(event.type))
+      ) {
+        events.push(event);
+        if (events.length === args.limit) return events;
+      }
+    }
+    return expectedOffset > args.throughOffset ? events : undefined;
+  }
+
   /** Read a row- and byte-capped frame, preferring the contiguous committed tail over SQLite. */
   read(request: DeliveryFrameRequest): DeliveryFrame {
     const {

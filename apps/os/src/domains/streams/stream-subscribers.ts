@@ -508,6 +508,17 @@ export class StreamSubscribers {
     }
   }
 
+  /** Reuse the already-retained append tail when it proves a complete public read. */
+  tryReadFreshEvents(args: {
+    afterOffset: number;
+    throughOffset: number;
+    eventTypes?: readonly string[];
+    includeEphemeral: boolean;
+    limit: number;
+  }): StreamEvent[] | undefined {
+    return this.#deliveryFrameReader.tryReadFreshEvents(args);
+  }
+
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
     this.wake();
