@@ -12,11 +12,7 @@ import {
   SPEC_EXPECT_TIMEOUT_MS,
   SPEC_TEST_TIMEOUT_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
-import {
-  cloudflarePreviewApps,
-  defaultPreviewTestMaxAttempts,
-  previewInternals,
-} from "./preview.ts";
+import { cloudflarePreviewApps, previewInternals } from "./preview.ts";
 
 // Guards the e2e retry/timeout policy (docs/testing.md#retries-and-timeouts):
 // the budget ladder stays ordered, files that cannot import the constants
@@ -95,10 +91,6 @@ describe("retries live in exactly one layer", () => {
     // Exactly one invocation each: a second occurrence means a retry wrapper came back.
     expect(script.split("pnpm e2e --project node")).toHaveLength(2);
     expect(script.split("pnpm --dir ../.. spec")).toHaveLength(2);
-  });
-
-  it("the whole-lane test command machinery stays pinned to a single attempt", () => {
-    expect(defaultPreviewTestMaxAttempts).toBe(1);
   });
 
   it("the onboarding smoke gets one retry, like every other test", () => {

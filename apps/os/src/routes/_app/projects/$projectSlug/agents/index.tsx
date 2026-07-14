@@ -4,7 +4,11 @@ import { buttonVariants } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTree } from "~/components/stream-tree.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -12,6 +16,7 @@ import { useItx } from "~/itx/itx-react.tsx";
 const AGENTS_ROOT = "/agents";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
+  staticData: streamPageStaticData(),
   // Agents ARE streams: this page is the /agents catalogue stream's view, with
   // the live agent tree in the side panel. useItx never SSRs (it throws on the
   // server), and the tree paints from its own live subscriptions once the

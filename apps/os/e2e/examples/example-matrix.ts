@@ -29,22 +29,21 @@ export async function runExampleCode(
   runtime: MatrixRuntime,
   input: { code: string; id?: string; projectId: string; vars: Record<string, unknown> },
 ): Promise<unknown> {
-  // Worker-heavy examples running while other suites load their own dynamic
-  // workers can trip the deployment's loader isolate cap. That's shared-load
-  // contention, not a behavior bug — back off and retry that exact transient;
-  // anything else fails immediately.
-  return await retryOnWorkerStartupContention(async () => {
-    switch (runtime) {
-      case "node":
-        return await runInNode(input);
-      case "cli":
-        return await runInCli(input);
-      case "run-script":
-        return await runInRunScript(input);
-      case "project-worker":
-        return await runInProjectWorker(input);
-    }
-  });
+  // Exactly one attempt: transient absorption is the vitest CI retry's job
+  // (E2E_CI_RETRIES, docs/testing.md#retries-and-timeouts). A retry wrapper
+  // here used to re-roll anything containing "internal error; reference =" —
+  // Cloudflare's redaction of EVERY server-side crash — which could mask
+  // real worker-startup product bugs behind a silent second retry layer.
+  switch (runtime) {
+    case "node":
+      return await runInNode(input);
+    case "cli":
+      return await runInCli(input);
+    case "run-script":
+      return await runInRunScript(input);
+    case "project-worker":
+      return await runInProjectWorker(input);
+  }
 }
 
 const execFileAsync = promisify(execFile);
@@ -77,38 +76,6 @@ async function runInCli(input: {
     { cwd: APP_ROOT, env: process.env, maxBuffer: 10 * 1024 * 1024 },
   );
   return JSON.parse(stdout);
-}
-
-const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
-// itx redacts server-side exceptions to "internal error; reference = …"
-// before they cross Cap'n Web. Mid-suite that shape is overwhelmingly loader
-// isolate saturation (each script execution and inline worker is its own
-// isolate), so treat it as the same retryable transient; a persistent itx
-// bug still fails after the backoff budget.
-const MASKED_INTERNAL_ERROR_MESSAGE = "internal error; reference =";
-// The repo examples commit then immediately read; on a COLD repo Durable
-// Object the read can lag the commit (Artifacts read-after-write), so the
-// example's own "seeded file" precondition throws. Warm repos never hit it —
-// retrying with backoff is exactly right. Underlying capability gap:
-// commitFiles resolving before read-your-write holds.
-const REPO_SEED_LAG_MESSAGE = "Expected seeded file to exist";
-const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
-
-async function retryOnWorkerStartupContention<T>(run: () => Promise<T>): Promise<T> {
-  for (const backoffMs of LOADER_CONTENTION_BACKOFF_MS) {
-    try {
-      return await run();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const retryable =
-        message.includes(LOADER_CONTENTION_MESSAGE) ||
-        message.includes(MASKED_INTERNAL_ERROR_MESSAGE) ||
-        message.includes(REPO_SEED_LAG_MESSAGE);
-      if (!retryable) throw error;
-      await new Promise((resolve) => setTimeout(resolve, backoffMs));
-    }
-  }
-  return await run();
 }
 
 async function runInNode(input: {

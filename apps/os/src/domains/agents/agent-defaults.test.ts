@@ -77,6 +77,8 @@ describe("agentDefaultsForPath", () => {
     expect(prompt).toContain(".graphql(query, variables)");
     expect(prompt).toContain("repo.data.permissions");
     expect(prompt).toContain("Use Promise.all");
+    expect(prompt).toContain("successful GitHub write response");
+    expect(prompt).toContain("octokit.rest.git.getRef");
     expect(prompt).toContain("VISIBLE HANDOFF INVARIANT");
     expect(
       defaults.events.some((event) => event.type === "events.iterate.com/github-agent/configure"),

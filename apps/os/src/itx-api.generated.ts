@@ -1136,6 +1136,14 @@ export interface Repo {
    * later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
+  /**
+   * Hard recovery: destroy and recreate the Artifacts repository from the
+   * linked GitHub repository's default branch. GitHub always wins and the
+   * operation runs even when the recorded commit oids already match. The
+   * source clone is completed before destruction; `depth` bounds memory for
+   * large histories without changing anything on GitHub.
+   */
+  resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;
   /** The repo stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<RepoProcessorState>;
   /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */
@@ -2610,6 +2618,15 @@ export type GithubSyncResult = {
   previousCommitOid: string | null;
 };
 
+/** What `repo.resetFromGithub` returns after destructively replacing the
+ * Artifacts repository with the linked GitHub repository's branch head. */
+export type GithubResetResult = {
+  artifactReplaced: true;
+  branch: string;
+  commitOid: string;
+  previousCommitOid: string | null;
+};
+
 /**
  * The repo processor's reduced state, inferred from the contract's
  * `stateSchema` — the one definition of the shape.
@@ -2940,7 +2957,10 @@ export type SearchResultChunk = {
    * relevance.
    */
   score: number;
-  /** The matched text content (the specific matching chunk). */
+  /**
+   * The matched text (capped ~1.2k chars per hit so result sets stay inline;
+   * a truncation marker points at `ref` for the full source).
+   */
   content: string;
   /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
   kind?: string;

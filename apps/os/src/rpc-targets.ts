@@ -180,6 +180,7 @@ import type {
   CommitRepoFilesResult,
   EditRepoFileInput,
   EditRepoFileResult,
+  GithubResetResult,
   GithubSyncResult,
   LinkGithubResult,
   RepoCommitDetails,
@@ -904,6 +905,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
         readFile:
           'Read one file ({ path, encoding?, commitOid? }); encoding "base64" for binary files (images, PDFs), commitOid for a pinned read at a historic commit.',
+        resetFromGithub:
+          "Destructively replace the Artifacts repo with the linked GitHub branch ({ depth? }); GitHub always wins and big repositories require a shallow depth.",
         syncFromGithub:
           "Adopt GitHub's branch head (fast-forward only; { force } discards local-only commits; { depth } prunes to the newest N commits — required for big repositories, GitHub keeps full history).",
         unlinkGithub: "Remove the GitHub link and its webhook cross-post rule.",
@@ -1055,6 +1058,17 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#durableObjectStub.syncFromGithub(input);
+  }
+
+  /**
+   * Hard recovery: destroy and recreate the Artifacts repository from the
+   * linked GitHub repository's default branch. GitHub always wins and the
+   * operation runs even when the recorded commit oids already match. The
+   * source clone is completed before destruction; `depth` bounds memory for
+   * large histories without changing anything on GitHub.
+   */
+  resetFromGithub(input: { depth?: number } = {}): Promise<GithubResetResult> {
+    return this.#durableObjectStub.resetFromGithub(input);
   }
 
   // GitHub connections are project-scoped (their secrets and streams live in
@@ -1829,7 +1843,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return describeNode({
       instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
-        fetch: "Egress fetch with secret placeholders substituted server-side.",
+        fetch:
+          "Egress fetch with secret placeholders substituted server-side (HTTP headers/URL, including Upgrade handshake).",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
         update:
           "Set the value, egress URLs, and/or refresh strategy. A value requires its complete egress policy in the same update; every update without a value clears stored material.",
@@ -1986,6 +2001,17 @@ function parseStoredRef(serialized: string): ItxExpression | undefined {
 }
 
 /**
+ * Total `content` budget across one query's hits, split evenly (clamped to
+ * [300, 1200] per hit). Sized so the WHOLE stringified result — content plus
+ * per-hit metadata/ref overhead — stays under the 30k script-result spill
+ * threshold at the generous 20-hit default, so a plain query({ q }) never
+ * detours through a workspace file.
+ */
+const RESULT_CONTENT_BUDGET_CHARS = 16_000;
+const resultContentCap = (hitCount: number): number =>
+  Math.min(1_200, Math.max(300, Math.floor(RESULT_CONTENT_BUDGET_CHARS / Math.max(1, hitCount))));
+
+/**
  * Search everything this project has accumulated — every conversation (web
  * chat, Slack threads, email, Telegram), inbound webhook (GitHub, Slack),
  * stream event, itx.files object, repo file, and custom document — with
@@ -2099,13 +2125,30 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   }
 
   /** Map one AI Search chunk to a provenance-carrying result. */
-  #toChunk(chunk: AiSearchSearchResponse["chunks"][number]): SearchResultChunk {
+  #toChunk(
+    chunk: AiSearchSearchResponse["chunks"][number],
+    maxContentChars: number,
+  ): SearchResultChunk {
     const metadata = chunk.item.metadata ?? {};
     const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
+    // Cap per-hit content: chunks are ~1024 tokens and context expansion
+    // multiplies them, so 20 generous-default hits of full text blew the 30k
+    // inline script-result cap and forced a workspace spill + parse detour
+    // (live prd incident, 2026-07-14). The content is for judging relevance;
+    // `ref` is the fetch path for the full source — when a ref was too large
+    // to store, the marker points at the source description instead.
+    const truncationMarker =
+      storedRef !== undefined
+        ? "\n… [truncated — evaluate `ref` for the full source]"
+        : "\n… [truncated — no ref stored; locate the source via `context`/`filename`]";
+    const content =
+      chunk.text.length > maxContentChars
+        ? `${chunk.text.slice(0, maxContentChars)}${truncationMarker}`
+        : chunk.text;
     return {
       filename: chunk.item.key,
       score: chunk.score,
-      content: chunk.text,
+      content,
       kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
       context: typeof metadata.context === "string" ? metadata.context : undefined,
       // Every corpus writer stores `ref` — the serialized itx expression back
@@ -2220,7 +2263,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       return { searchQuery: input.q, results: docs.value, warning };
     }
     const results = [
-      ...corpus.value.chunks.map((chunk) => this.#toChunk(chunk)),
+      ...corpus.value.chunks.map((chunk) =>
+        this.#toChunk(chunk, resultContentCap(corpus.value.chunks.length)),
+      ),
       ...docs.value,
     ].sort((a, b) => b.score - a.score);
     return { searchQuery: corpus.value.search_query, results };
@@ -2266,7 +2311,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     return {
       response: response.choices[0]?.message.content ?? "",
       searchQuery: input.q,
-      results: response.chunks.map((chunk) => this.#toChunk(chunk)),
+      results: response.chunks.map((chunk) =>
+        this.#toChunk(chunk, resultContentCap(response.chunks.length)),
+      ),
     };
   }
 
