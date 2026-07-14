@@ -270,6 +270,29 @@ export class AgentDurableObject extends DurableObject<Env> {
     (deps) =>
       new GithubAgentProcessor({
         ...deps,
+        isRepositoryCollaborator: async ({ connection, login, owner, repo }) => {
+          try {
+            await connectionOctokit({
+              connection,
+              projectId: this.#name.projectId,
+            }).rest.repos.checkCollaborator({ owner, repo, username: login });
+            return true;
+          } catch (error) {
+            const status =
+              typeof error === "object" && error !== null && "status" in error
+                ? (error as { status?: unknown }).status
+                : undefined;
+            if (status === 404) return false;
+            console.error("[github-agent] GitHub collaborator check failed", {
+              error,
+              login,
+              owner,
+              path: this.#name.path,
+              repo,
+            });
+            throw error;
+          }
+        },
         addEyesReaction: async ({ commentId, connection, kind, owner, repo }) => {
           try {
             const reactions = connectionOctokit({

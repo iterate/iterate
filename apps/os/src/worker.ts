@@ -121,7 +121,7 @@ async function fetchWithoutWideLog(request: Request, env: Env, ctx: ExecutionCon
     config,
     headers: request.headers,
     method: request.method,
-    resolvers: directoryResolvers(config, env),
+    resolvers: directoryResolvers(env),
     url: request.url,
   });
   wideLogger.set(ingressLogFields(request, route));
@@ -239,7 +239,7 @@ async function apiFetch(
       resolveProject: async (reference) =>
         reference.startsWith("prj_")
           ? await readProjectById(env.PROJECT_DIRECTORY, reference)
-          : await readProjectBySlug(config, env.PROJECT_DIRECTORY, reference),
+          : await readProjectBySlug(env.PROJECT_DIRECTORY, reference),
     });
   }
 
@@ -294,10 +294,10 @@ function ingressLogFields(request: Request, route: Awaited<ReturnType<typeof dec
   };
 }
 
-function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
+function directoryResolvers(env: Env): IngressResolvers {
   return {
     projectIdBySlug: (identifier) =>
-      resolveProjectIdBySlug({ config, directory: env.PROJECT_DIRECTORY, identifier }),
+      resolveProjectIdBySlug({ directory: env.PROJECT_DIRECTORY, identifier }),
     projectByHostname: async (host) => {
       const found = await readProjectByHostname(env.PROJECT_DIRECTORY, host);
       return found ? { appSlug: found.appSlug, projectId: found.record.id } : null;

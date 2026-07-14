@@ -29,7 +29,6 @@
  */
 import { RpcTarget } from "cloudflare:workers";
 import type { AppConfig } from "./config.ts";
-import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import { parseConfig } from "./config.ts";
 import {
   resolveItxAuth,
@@ -4455,23 +4454,18 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     const userPrincipal = userPrincipalOf(this.props.auth);
 
     if (userPrincipal && !this.props.auth.isAdmin()) {
-      const config = this.props.config;
-      if (!config?.iterateAuth?.serviceToken) {
-        throw new Error("project creation requires the auth worker directory to be configured");
-      }
       const organizationSlug = resolveOrganizationSlugForCreate(
         userPrincipal,
         args.organizationSlug,
       );
-      const created = await createAuthWorkerServiceClient(
-        { config },
-        { asUserId: userPrincipal.userId },
-      ).internal.project.createForOrganization({
+      const result = await env.AUTH.createProjectForOrganization({
         organizationSlug,
         name: args.slug,
         slug: args.slug,
         ...(args.projectId === undefined ? {} : { id: args.projectId }),
       });
+      if (!result.ok) throw new Error(result.message);
+      const created = result.project;
       return { organizationId: created.organizationId, projectId: created.id, slug: created.slug };
     }
 
@@ -4481,14 +4475,8 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     if (args.projectId !== undefined) {
       return { organizationId: null, projectId: args.projectId, slug: args.slug };
     }
-    const serviceToken = this.props.config?.iterateAuth?.serviceToken;
-    if (this.props.config && serviceToken) {
-      const minted = await createAuthWorkerServiceClient({
-        config: this.props.config,
-      }).internal.project.mintProjectId();
-      return { organizationId: null, projectId: minted.id, slug: args.slug };
-    }
-    return { organizationId: null, projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
+    const minted = await env.AUTH.mintProjectId();
+    return { organizationId: null, projectId: minted.id, slug: args.slug };
   }
 
   /**

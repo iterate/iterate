@@ -445,6 +445,136 @@ describe("GithubAgentProcessor (projection and trigger policy)", () => {
     expect(reactions).toHaveLength(1);
   });
 
+  it("does not let an outsider mention activate an ordinary collaborator comment", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      isRepositoryCollaborator: async () => false,
+    });
+    const cursors = new Map<object, number>();
+
+    await stream.append(
+      ROUTE_EVENT,
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: {
+              authorAssociation: "NONE",
+              body: "@iterate activate yourself",
+              senderLogin: "outsider",
+            },
+          }),
+          "issue_comment",
+        ),
+      },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: {
+              authorAssociation: "MEMBER",
+              body: "This is an ordinary review discussion comment.",
+              senderLogin: "maintainer",
+            },
+          }),
+          "issue_comment",
+        ),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(
+      agentInputs(stream).filter(
+        (event) => event.type === "events.iterate.com/agents/message-received",
+      ),
+    ).toHaveLength(0);
+    expect(processor.state.conversationActive).toBe(false);
+  });
+
+  it("does not carry same-batch mention trust across a route reset", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      isRepositoryCollaborator: async () => true,
+    });
+    const cursors = new Map<object, number>();
+    const replacementRoute = {
+      type: "events.iterate.com/github-agent/route-configured" as const,
+      payload: {
+        connection: "install-999",
+        installationId: "999",
+        number: 8,
+        owner: "other",
+        repo: "repository",
+        repoPath: "/repos/replacement",
+        streamPath: AGENT_PATH,
+      },
+    };
+    const routeBComment = pullRequestBody({
+      comment: {
+        authorAssociation: "MEMBER",
+        body: "Ordinary discussion on route B.",
+        senderLogin: "route-b-maintainer",
+      },
+      number: 8,
+    });
+    routeBComment.repository = { full_name: "other/repository" };
+
+    await stream.append(
+      ROUTE_EVENT,
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: {
+              authorAssociation: "CONTRIBUTOR",
+              body: "@iterate inspect route A",
+              senderLogin: "route-a-collaborator",
+            },
+          }),
+          "issue_comment",
+        ),
+      },
+      replacementRoute,
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: {
+          ...webhookPayload(routeBComment, "issue_comment"),
+          installationId: "999",
+        },
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const turns = agentInputs(stream).filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
+    );
+    expect(turns).toHaveLength(1);
+    expect((turns[0]!.payload as { content: string }).content).toContain("inspect route A");
+    expect((turns[0]!.payload as { content: string }).content).not.toContain(
+      "Ordinary discussion on route B",
+    );
+    expect(processor.state).toMatchObject({
+      connection: "install-999",
+      conversationActive: false,
+      number: 8,
+      owner: "other",
+      repo: "repository",
+    });
+
+    // The route-A verification fact is appended after this batch. It remains
+    // auditable but cannot activate route B when consumed later.
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(processor.state.conversationActive).toBe(false);
+  });
+
   it("interrupts for each configured non-draft head and gives the agent precise review tools", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);

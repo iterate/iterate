@@ -27,7 +27,8 @@ import {
   updateOrganizationNameById,
 } from "../../db/queries/index.ts";
 import { sendOrganizationInvitationEmail } from "../../email.ts";
-import { generateId, toMembershipRole, toOrganizationRecord, toUserRecord } from "./_shared.ts";
+import { generateId } from "../../id.ts";
+import { toMembershipRole, toOrganizationRecord, toUserRecord } from "./_shared.ts";
 
 const create = os.organization.create
   .use(protectedMiddleware)

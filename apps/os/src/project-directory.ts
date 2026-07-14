@@ -1,9 +1,9 @@
 /**
  * Project directory reads: slug -> project id, and small metadata records by
- * id. The auth worker is the source of truth (internal.project.bySlug, a
- * trusted service-token lookup); a KV cache in front of it makes the positive
- * case fast — ingress resolves EVERY project-host request through this, and
- * server-side reads use it for the stale-claims window right after create.
+ * id. The auth worker is the source of truth through the private AUTH service
+ * binding; a KV cache in front makes the positive case fast — ingress resolves
+ * EVERY project-host request through this, and server-side reads use it for
+ * the stale-claims window right after create.
  *
  * Layering per lookup: KV first (global, no expiry — slugs are immutable,
  * create overwrites its keys, and admin-lane projects have no auth-side row
@@ -13,8 +13,7 @@
  * prime from another isolate). Hits are written back, and `projects.create`
  * primes the cache eagerly so the post-create navigation never misses.
  */
-import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
-import type { AppConfig } from "./config.ts";
+import { itxEnv } from "./env.ts";
 
 export type ProjectDirectoryRecord = {
   id: string;
@@ -37,18 +36,16 @@ function projectKey(projectId: string) {
 
 /** Resolve a slug (or a `prj_` id, passed through) to a project id. */
 export async function resolveProjectIdBySlug(input: {
-  config: AppConfig;
   directory: KVNamespace;
   identifier: string;
 }): Promise<string | null> {
   if (input.identifier.startsWith("prj_")) return input.identifier;
-  const record = await readProjectBySlug(input.config, input.directory, input.identifier);
+  const record = await readProjectBySlug(input.directory, input.identifier);
   return record?.id ?? null;
 }
 
 /** Directory record for a slug, cache-through. Null when no project has it. */
 export async function readProjectBySlug(
-  config: AppConfig,
   directory: KVNamespace,
   slug: string,
 ): Promise<ProjectDirectoryRecord | null> {
@@ -63,15 +60,20 @@ export async function readProjectBySlug(
     return cached;
   }
 
-  const lookup = await lookupAuthWorker(config, slug);
-  if (!lookup.ok) {
-    // Auth worker unreachable is NOT "no such project": don't memoize the
-    // failure, so the next request retries instead of 404ing for 15s.
-    return null;
-  }
-  memoize(slug, lookup.record);
-  if (lookup.record) await writeThrough(directory, lookup.record);
-  return lookup.record;
+  // RPC failures propagate as dependency failures. Only a successful null
+  // response means "no such project" and is eligible for negative caching.
+  const project = await itxEnv.AUTH.getProjectBySlug({ projectSlug: slug });
+  const record = project
+    ? {
+        id: project.id,
+        slug: project.slug,
+        organizationId: project.organizationId,
+        name: project.name,
+      }
+    : null;
+  memoize(slug, record);
+  if (record) await writeThrough(directory, record);
+  return record;
 }
 
 /** Fast existence/metadata check by project id (KV only — no auth fallback:
@@ -136,27 +138,4 @@ async function writeThrough(directory: KVNamespace, record: ProjectDirectoryReco
     directory.put(slugKey(record.slug), body),
     directory.put(projectKey(record.id), body),
   ]);
-}
-
-async function lookupAuthWorker(
-  config: AppConfig,
-  slug: string,
-): Promise<{ ok: true; record: ProjectDirectoryRecord | null } | { ok: false }> {
-  try {
-    const record = await createAuthWorkerServiceClient({ config }).internal.project.bySlug({
-      projectSlug: slug,
-    });
-    if (!record) return { ok: true, record: null };
-    return {
-      ok: true,
-      record: {
-        id: record.id,
-        slug: record.slug,
-        organizationId: record.organizationId ?? null,
-        name: record.name,
-      },
-    };
-  } catch {
-    return { ok: false };
-  }
 }

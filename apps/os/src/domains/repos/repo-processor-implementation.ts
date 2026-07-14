@@ -3,6 +3,10 @@ import { StreamProcessor } from "../streams/stream-processor.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { githubAgentSubscriptionConfiguredEvent } from "./github-agent-mechanics.ts";
 import { githubAgentPath, pullRequestNumbersFromWebhookBody } from "./github-agent-utils.ts";
+import {
+  repoArtifactPushFromEventPayload,
+  type RepoCommittedFileChange,
+} from "./repo-task-events.ts";
 
 /** The one event this processor acts on, narrowed from the contract by its type string. */
 type RepoCreateRequested = ProcessorEvent<
@@ -16,6 +20,11 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
+  taskChangesForArtifactPush(input: {
+    afterCommitOid: string | null;
+    beforeCommitOid: string | null;
+    branch: string;
+  }): Promise<RepoCommittedFileChange[]>;
 };
 
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
@@ -84,8 +93,66 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     blockProcessorWhile,
     event,
     state,
+    append,
     appendTo,
   }: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0]): undefined {
+    if (event.type === "events.iterate.com/repo/cloudflare-artifact-event-received") {
+      const push = repoArtifactPushFromEventPayload(event.payload);
+      const commitOid = push?.afterCommitOid;
+      if (
+        push === null ||
+        commitOid === null ||
+        commitOid === undefined ||
+        state.defaultBranch === null ||
+        push.branch !== state.defaultBranch
+      ) {
+        return;
+      }
+      blockProcessorWhile(async () => {
+        await append({
+          type: "events.iterate.com/repo/commit-completed",
+          idempotencyKey: this.idempotencyKey(
+            `commit-completed:${push.beforeCommitOid ?? "none"}:${commitOid}:${push.branch}`,
+          ),
+          payload: {
+            beforeCommitOid: push.beforeCommitOid,
+            branch: push.branch,
+            commitOid,
+          },
+        });
+      });
+      return;
+    }
+
+    if (event.type === "events.iterate.com/repo/commit-completed") {
+      if (state.defaultBranch === null || event.payload.branch !== state.defaultBranch) return;
+      blockProcessorWhile(async () => {
+        const taskChanges = await this.deps.taskChangesForArtifactPush({
+          afterCommitOid: event.payload.commitOid,
+          beforeCommitOid: event.payload.beforeCommitOid,
+          branch: event.payload.branch,
+        });
+        if (taskChanges.length === 0) return;
+        await append(
+          ...taskChanges.map((change) => ({
+            type: `events.iterate.com/repo/task-${change.kind}` as
+              | "events.iterate.com/repo/task-created"
+              | "events.iterate.com/repo/task-updated"
+              | "events.iterate.com/repo/task-deleted",
+            idempotencyKey: this.idempotencyKey(
+              `task-${change.kind}:${event.payload.beforeCommitOid ?? "none"}:${event.payload.commitOid}:${change.path}`,
+            ),
+            payload: {
+              branch: event.payload.branch,
+              commitOid: event.payload.commitOid,
+              path: change.path,
+            },
+          })),
+        );
+      });
+      return;
+    }
+
     if (event.type === "events.iterate.com/github/webhook-received") {
       // PR webhooks route to a per-PR agent stream, everything else (pushes,
       // stars, plain issues) stays a repo-stream fact. The first forward's

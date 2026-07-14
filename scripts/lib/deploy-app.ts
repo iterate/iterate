@@ -130,7 +130,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
   for (const probe of input.smokes(ctx.env)) {
     await smoke(probe.url, probe.ok, probe.label);
   }
-  console.log(`✅ ${ctx.name} deployed and serving at ${input.servingUrl(ctx.env)}`);
-
   await input.afterDeploy?.(ctx, secretValues);
+
+  console.log(`✅ ${ctx.name} deployed and serving at ${input.servingUrl(ctx.env)}`);
 }

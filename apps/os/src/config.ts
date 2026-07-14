@@ -68,7 +68,6 @@ export const AppConfig = z.object({
       clientId: publicValue(z.string().trim().min(1)),
       clientSecret: redacted(z.string().trim().min(1)),
       jwks: JSONWebKeySet.optional(),
-      serviceToken: redacted(z.string().trim().min(1)).optional(),
       resource: publicValue(z.url()).optional(),
       emailOtpEnabled: publicValue(z.boolean().default(false)),
     })

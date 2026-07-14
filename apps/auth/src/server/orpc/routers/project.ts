@@ -10,12 +10,14 @@ import {
 import { parseProjectMetadata, parseTimestampMs } from "../../db/helpers.ts";
 import {
   deleteProjectById,
-  insertProjectReturning,
   listProjectsByOrganizationId,
   updateProjectReturning,
 } from "../../db/queries/index.ts";
-import { generateId, toProjectRecord, toProjectRecordFromReturnedRow } from "./_shared.ts";
-import { resolveProjectCreateTarget } from "./project-slugs.ts";
+import {
+  createProject,
+  toProjectRecord,
+  toProjectRecordFromReturnedRow,
+} from "../../project-directory.ts";
 
 const list = os.project.list.use(organizationScopedMiddleware).handler(async ({ context }) => {
   const projects = await listProjectsByOrganizationId(context.db, {
@@ -41,36 +43,17 @@ const bySlug = os.project.bySlug.use(projectScopedMiddleware).handler(async ({ c
 const create = os.project.create
   .use(organizationAdminMiddleware)
   .handler(async ({ context, input }) => {
-    const target = await resolveProjectCreateTarget({
-      db: context.db,
+    const result = await createProject(context.db, {
       id: input.id,
       name: input.name,
       organizationId: context.organization.id,
       slug: input.slug,
+      metadata: input.metadata,
     });
-    if (target.kind === "existing") {
-      return toProjectRecordFromReturnedRow(target.project);
+    if (!result.ok) {
+      throw new ORPCError("CONFLICT", { message: result.message });
     }
-
-    const projectId = input.id ?? generateId("prj");
-
-    const now = Date.now();
-    const created = await insertProjectReturning(context.db, {
-      id: projectId,
-      organizationId: context.organization.id,
-      name: input.name,
-      slug: target.slug,
-      metadata: JSON.stringify(input.metadata ?? {}),
-      archivedAt: null,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    if (!created) {
-      throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to create project" });
-    }
-
-    return toProjectRecordFromReturnedRow(created);
+    return result.project;
   });
 
 const update = os.project.update.use(projectAdminMiddleware).handler(async ({ context, input }) => {

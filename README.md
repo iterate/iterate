@@ -148,6 +148,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 ### App-specific
 
 - [OS app](apps/os/AGENTS.md)
+- [Auth app](apps/auth/README.md) — public OIDC/oRPC plus OS-only Workers RPC for the org/project directory
 - [itx](apps/os/src/README.md) — the `/api/itx` surface and its public contract (`types.ts`)
 - [OS worker topology](apps/os/docs/worker-topology.md)
 - [OS architecture & operations](apps/os/docs/architecture-and-operations.md)

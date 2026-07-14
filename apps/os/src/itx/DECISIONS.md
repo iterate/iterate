@@ -388,8 +388,8 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
   platform's trust posture (Law 4 ITERATE scoping, Law 5 egress outbound)
   is wired into loaded isolates; the registry's source caps and the project
   worker both use it.
-- **Auth is the ONLY project-id minter.** Even operator/recovery creates
-  round-trip through auth's `/internal/project/mint-project-id`;
+- **Auth is the ONLY project-id minter.** Even operator/recovery creates call
+  `AUTH.mintProjectId()` on auth's private Workers RPC entrypoint;
   `mintProjectId` is deleted from OS.
 - **Legacy afterAppend/runner shapes are gone** from the agent, slack-agent,
   slack-integration, and repo DOs (delivery has been on the host model for a
