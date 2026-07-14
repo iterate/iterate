@@ -313,7 +313,8 @@ test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP || FOCUS_CROSSPOS
       const appendSamples = await measure(
         INLINE_LARGE_SAMPLES,
         async (iteration) => {
-          await stream.appendAck(
+          await commitDiscardingResult(
+            stream,
             event({
               marker: `inline-large-${iteration}-${crypto.randomUUID()}`,
               payload: INLINE_LARGE_PAYLOAD,
@@ -324,7 +325,7 @@ test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP || FOCUS_CROSSPOS
       );
       metrics.append_single_768k_ack = summarize(appendSamples);
 
-      const head = await stream.head();
+      const head = await readHead(stream);
       const readSamples = await measure(
         INLINE_LARGE_SAMPLES,
         async () => {
