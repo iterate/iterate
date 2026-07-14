@@ -114,7 +114,8 @@ function harness(input?: {
   });
   const readFile = vi.fn().mockResolvedValue({
     commitOid: "rules-commit",
-    content: "mentions of the word fart are forbidden - must say superfart always",
+    content:
+      "If there is no actionable feedback, do not leave a review or comment. Policy definitions and tests are exempt from the word rule.",
     path: CONFIG.rulesPath,
   });
   const set = vi.fn().mockResolvedValue({});
@@ -171,6 +172,8 @@ describe("config-repo GitHub reviews", () => {
     expect(task.payload.content).toContain('"iterate-preview[bot]"');
     expect(task.payload.content).toContain("do not publish another review");
     expect(task.payload.content).toContain("Immediately before publishing");
+    expect(task.payload.content).toContain("do not create a GitHub review or comment");
+    expect(task.payload.content).toContain("The successful Check Run is the complete clean result");
     expect(task.payload.content).toContain("Promise.all");
     expect(task.payload.llmRequestPolicy).toEqual({ behaviour: "interrupt-current-request" });
   });
@@ -201,6 +204,57 @@ describe("config-repo GitHub reviews", () => {
       "iterate-review:prj_test:42:7:head:head-b",
       "iterate-review:prj_test:42:7:head:head-b",
     ]);
+  });
+
+  it("deduplicates a completed successful review of the same automatic head", async () => {
+    const h = harness({
+      checkRuns: () => [
+        {
+          app: { slug: "iterate-preview" },
+          conclusion: "success",
+          external_id: "iterate-review:prj_test:42:7:head:head-b",
+          id: 45,
+          status: "completed",
+        },
+      ],
+    });
+
+    await expect(
+      processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx }),
+    ).resolves.toBe("ignored");
+
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.set).not.toHaveBeenCalled();
+    expect(h.append).not.toHaveBeenCalled();
+  });
+
+  it("retries a cancelled review of the same automatic head", async () => {
+    const h = harness({
+      checkRuns: () => [
+        {
+          app: { slug: "iterate-preview" },
+          conclusion: "cancelled",
+          external_id: "iterate-review:prj_test:42:7:head:head-b",
+          id: 46,
+          status: "completed",
+        },
+      ],
+    });
+
+    await expect(
+      processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx }),
+    ).resolves.toBe("queued");
+
+    expect(h.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        external_id: "iterate-review:prj_test:42:7:head:head-b",
+        head_sha: "head-b",
+      }),
+    );
+    expect(h.set).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "github-review-timeout:100" }),
+    );
+    expect(h.append).toHaveBeenCalledOnce();
   });
 
   it("drops an out-of-order old synchronize before it can create or interrupt", async () => {

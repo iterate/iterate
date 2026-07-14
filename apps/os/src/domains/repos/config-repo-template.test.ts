@@ -28,9 +28,10 @@ test("template keeps policy in worker.ts and tested review mechanics in one loca
   const reviews = templateFile("github-reviews.ts");
   expect(reviews).toContain("itx.integrations.github.get(target.connection).octokit");
   expect(reviews).toContain("github-review-timeout:");
-  expect(templateFile("agents/github-review.md").trim()).toBe(
-    "mentions of the word fart are forbidden - must say superfart always",
-  );
+  const rules = templateFile("agents/github-review.md");
+  expect(rules).toContain("If there is no actionable feedback, do not leave a review or comment.");
+  expect(rules).toContain("policy definitions, documentation, generated fixtures, tests");
+  expect(rules).toContain("explicitly allowed");
   expect(worker).not.toMatch(/slack/i);
   expect(worker).not.toMatch(/waitrose/i);
 
