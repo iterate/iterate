@@ -286,6 +286,12 @@ test("stream getEvents defaults to a bounded page and supports event type filter
   });
   expect(selectedEvents).toHaveLength(253);
   expect(selectedEvents.every((event) => event.type === selectedType)).toBe(true);
+  expect(
+    await stream.getEvents({
+      afterOffset,
+      beforeOffset: firstAppendedOffset + 1.5,
+    }),
+  ).toEqual(appendedEvents.slice(0, 2));
 
   using newestPager = stream.readEvents({
     afterOffset,

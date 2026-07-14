@@ -548,7 +548,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (args.order !== "desc") {
       const fresh = this.#subscribers.tryReadFreshEvents({
         afterOffset,
-        throughOffset: Math.min(beforeOffset - 1, this.#coreProcessorState.maxOffset),
+        throughOffset: Math.min(Math.ceil(beforeOffset) - 1, this.#coreProcessorState.maxOffset),
         eventTypes: args.eventTypes,
         includeEphemeral: args.includeEphemeral === true,
         limit: resolvedLimit,
