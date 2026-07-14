@@ -879,7 +879,11 @@ export interface Search {
    * Retrieve scored chunks matching a query, scoped to this project's own
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
-   * so callers can contextualize a hit. Docs hits carry synthetic 0.5-band
+   * so callers can contextualize a hit. ONE row per source document (best
+   * chunk wins), content capped so a full default result is ~3-4k tokens —
+   * about two queries fit one inline script return; fanning out more, return
+   * selected fields (kind/context/ref), not whole results. Docs hits carry
+   * synthetic 0.5-band
    * scores (not comparable to corpus relevance), ride on top of `limit`
    * corpus chunks (their own cap: min(limit, 5)), and ignore
    * `scoreThreshold`. On a
