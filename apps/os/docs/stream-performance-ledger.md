@@ -2106,3 +2106,38 @@ branch, or extra RPC. Final exact-retry records are
 `/tmp/stream-xpost-exact-gated-{parent,candidate}-r{1..3}.log`; first-delivery
 guards are `/tmp/stream-xpost-first-gated-{parent,candidate}-r{1..5}.log`.
 The experiment ended at `2026-07-14T07:08:48Z`.
+
+## 2026-07-14: Fourth Cumulative Tail Gates Cleared
+
+The fourth cumulative checkpoint's three apparent regressions did not survive
+larger same-worktree controls against current main. Exact candidate
+`70cedd88c` and main `77366936f` alternated in `M,C,C,M,M,C,C,M,M,C` order on
+one port and local state, with the inactive Workers stack stopped before every
+revision switch. The branch-hosted harness timed only awaited RPC/network work
+and host-observed delivery, so Cloudflare's frozen isolate clock cannot hide
+latency.
+
+Five rounds measured 200 dense and 100 sparse cross-post deliveries per
+revision per round:
+
+| Cross-post path | Statistic |     Main | Candidate |          Change |
+| --------------- | --------- | -------: | --------: | --------------: |
+| Dense 1 of 1    | p50       | 4.877 ms |  4.092 ms | **16.1% lower** |
+| Dense 1 of 1    | p95       | 8.086 ms |  7.348 ms |  **9.1% lower** |
+| Dense 1 of 1    | mean      | 5.226 ms |  4.488 ms | **14.1% lower** |
+| Sparse 1 of 100 | p50       | 6.109 ms |  4.713 ms | **22.9% lower** |
+| Sparse 1 of 100 | p95       | 9.588 ms |  7.811 ms | **18.5% lower** |
+| Sparse 1 of 100 | mean      | 6.435 ms |  5.096 ms | **20.8% lower** |
+
+Five additional rounds measured 300 forced reactivations per revision per
+round. Candidate median-of-round p50/p95/mean improved 8.9%/1.1%/5.4%; pooled
+1,500-sample p50/p95/mean improved 12.0%/9.0%/12.1%. This includes the required
+canonical identity read, so its separately measured sub-millisecond cold tax
+is already paid inside an overall faster public operation.
+
+No production change was made. The larger controls reclassify the fourth
+checkpoint's dense p95/mean, sparse p95, and forced-reactivation p95/mean rows
+as small-sample tail noise rather than shipping regressions. Cross-post records
+are `/tmp/stream-crosspost-tail-{main,candidate}-r{1..5}.log`; reactivation
+records are `/tmp/stream-reactivation-tail-{main,candidate}-r{1..5}.log`. The
+controls ended at `2026-07-14T07:28:46Z`.
