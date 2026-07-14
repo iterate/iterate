@@ -604,15 +604,6 @@ function TaskColumn({
         </header>
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
-        <Button
-          variant="ghost"
-          className="mb-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
-          title={`Add task to ${creationLabel}`}
-          aria-label={`Add task to ${creationLabel}`}
-          onClick={onCreate}
-        >
-          <PlusIcon data-icon="inline-start" />
-        </Button>
         <div className="flex flex-col gap-2">
           {tasks.map((task) => (
             <TaskCard
@@ -624,6 +615,15 @@ function TaskColumn({
             />
           ))}
         </div>
+        <Button
+          variant="ghost"
+          className="mt-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
+          title={`Add task to ${creationLabel}`}
+          aria-label={`Add task to ${creationLabel}`}
+          onClick={onCreate}
+        >
+          <PlusIcon data-icon="inline-start" />
+        </Button>
       </div>
     </section>
   );
