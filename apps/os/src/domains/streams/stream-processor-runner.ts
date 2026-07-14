@@ -134,6 +134,11 @@ export type ProcessorProgressStore<State> = {
  *   to {@link StreamProcessorRunner.handleAlarm}, which delegates here.
  */
 export type ProcessorRecovery = {
+  /** The exact `<namespace>/revived` event type `appendRevived` appends. The
+   * runner's construction check validates the contract consumes THIS type —
+   * a processor consuming some OTHER processor's revived event would pass a
+   * shape-only check while its own revival fact never invokes it. */
+  revivedEventType: string;
   keepAliveWhile(work: () => Promise<unknown>): void;
   appendRevived(): MaybePromise<void>;
   handleAlarm(info?: unknown): MaybePromise<void>;
@@ -318,15 +323,17 @@ export class StreamProcessorRunner<
     if (this.durability?.recovery !== undefined) {
       // A revival fact nobody consumes recovers nothing: recovery's whole
       // mechanism is "append `<ns>/revived`, let the ordinary delivery turn
-      // run the processor's own reconciliation handlers".
+      // run the processor's own reconciliation handlers". Exact identity, not
+      // shape: consuming some OTHER processor's `/revived` event recovers
+      // nothing either — the fact THIS adapter appends must be consumed.
+      const revivedEventType = this.durability.recovery.revivedEventType;
       const consumes = this.driver.contract.consumes;
-      const consumesRevived =
-        consumes.includes("*") || consumes.some((type) => type.endsWith("/revived"));
+      const consumesRevived = consumes.includes("*") || consumes.includes(revivedEventType);
       if (!consumesRevived) {
         throw new Error(
-          `stream processor "${this.driver.contract.slug}" wires recovery but consumes ` +
-            `no "<namespace>/revived" event — a revival fact nobody consumes recovers nothing. ` +
-            `Add the processor's revived event to the contract's consumes.`,
+          `stream processor "${this.driver.contract.slug}" wires recovery whose revival fact ` +
+            `is "${revivedEventType}", but the contract does not consume it — a revival fact ` +
+            `nobody consumes recovers nothing. Add that exact event type to the contract's consumes.`,
         );
       }
     }
@@ -363,6 +370,33 @@ export class StreamProcessorRunner<
         // next fire to revival); the transport observes the same rejection
         // through the returned promise and owns the redelivery.
         this.durability?.recovery?.keepAliveWhile(() => attempt);
+        // The production wake lane is consumes-FILTERED but stamped with the
+        // RAW stream head (stream-processor-host.ts:522-555), so a successful
+        // frame can leave the acknowledged cursor behind `streamMaxOffset`
+        // with an unconsumed DURABLE tail nothing else will ever deliver —
+        // the cursor parks below head, `onCaughtUp` never fires, and the
+        // obligation the frame opened wedges. Every behind frame therefore
+        // gets a trailing type-UNFILTERED self-pull that folds the tail up
+        // to head (its final page reports its own tail as the head, so the
+        // at-head pulse fires). It rides the runner's chain — serialized
+        // with frames, reading the freshest cursor — and the keepalive lane,
+        // NOT the promise returned to the transport: a failed trailing pull
+        // reads as FAILURE to the keepalive, blocking the quiet-clean disarm
+        // and routing the next alarm fire to revival, whose unfiltered
+        // catch-up is this pull's retry. A failed main attempt takes the
+        // transport's redelivery lane instead; no trailing pull follows it.
+        this.#runInBackground(() =>
+          attempt.then(
+            () =>
+              this.#enqueue(async () => {
+                const { processing } = this.#requireProgress();
+                if (processing.acknowledgedThroughOffset < batch.streamMaxOffset) {
+                  await this.#selfCatchUp();
+                }
+              }),
+            () => undefined,
+          ),
+        );
         return attempt;
       },
     };
@@ -525,6 +559,12 @@ export class StreamProcessorRunner<
     return this.#enqueue(async () => {
       await this.#load();
       const progress = this.#requireProgress();
+      // Integer guard FIRST: NaN fails every `<=` comparison, so without it a
+      // NaN offset would sail past the already-acknowledged check and persist
+      // NaN cursors.
+      if (!Number.isInteger(args.offset) || args.offset < 1) {
+        throw new Error(`skipThrough offset must be a positive integer, got ${args.offset}`);
+      }
       if (args.offset <= progress.processing.acknowledgedThroughOffset) {
         throw new Error(
           `skipThrough(${args.offset}) is already acknowledged ` +
@@ -535,6 +575,11 @@ export class StreamProcessorRunner<
       const cursorRevision = args.expectedCursorRevision + 1;
 
       let state = progress.reduction.state;
+      // Track the highest journal offset the reduce pass actually READ: a
+      // skip past the durable head must throw, not persist cursors past
+      // events that do not exist (they would read as pre-acknowledged when
+      // they later arrive — silently never processed).
+      let highestReadOffset = progress.reduction.reducedThroughOffset;
       if (progress.reduction.reducedThroughOffset < args.offset) {
         using pager = this.stream.readEvents({
           afterOffset: progress.reduction.reducedThroughOffset,
@@ -545,6 +590,7 @@ export class StreamProcessorRunner<
         while (page.length > 0) {
           for (const event of page) {
             if (event.offset > args.offset) continue;
+            highestReadOffset = Math.max(highestReadOffset, event.offset);
             try {
               const reduction = this.driver.reduceRawEvent({ event, state });
               if (reduction !== undefined && !("parseError" in reduction)) {
@@ -560,6 +606,13 @@ export class StreamProcessorRunner<
           }
           page = await pager.next();
         }
+      }
+      if (highestReadOffset < args.offset) {
+        throw new Error(
+          `skipThrough(${args.offset}) is past the durable head — the journal's highest ` +
+            `readable offset is ${highestReadOffset}; refusing to persist cursors past ` +
+            `events that do not exist`,
+        );
       }
 
       const next: ProcessorProgress<ProcessorState<Contract>> = {
@@ -681,7 +734,16 @@ export class StreamProcessorRunner<
         ctx.eventsSinceCommit += 1;
         ctx.uncommittedEvents.push(event);
 
-        if (this.cadence({ frameEnd: false, eventsSinceCommit: ctx.eventsSinceCommit })) {
+        // The head-reaching event's acknowledgement is DEFERRED to the
+        // frame-end commit, which runs only after `onCaughtUp` and its
+        // awaited blockers: a mid-frame commit of the head event would let
+        // an onCaughtUp blocker failure (or death) strand its work — the
+        // cursor already at head, redelivery empty, the at-head pass never
+        // retried. Holding the commit keeps the whole frame retryable.
+        if (
+          ctx.completedThroughOffset < observedHeadOffset &&
+          this.cadence({ frameEnd: false, eventsSinceCommit: ctx.eventsSinceCommit })
+        ) {
           await this.#commitFrameContext(ctx);
         }
       }
@@ -820,31 +882,69 @@ export class StreamProcessorRunner<
       return;
     }
 
+    const acknowledged = persisted.processing.acknowledgedThroughOffset;
     const parsed = this.driver.parseState(persisted.reduction.state);
-    if (persisted.reduction.reducerVersion === this.driver.contract.version && parsed.success) {
-      this.#progress = {
-        reduction: { ...persisted.reduction, state: parsed.state },
-        processing: persisted.processing,
+    // A persisted reduction AHEAD of the acknowledgement violates the record
+    // invariant (see ProcessorProgress): publishing it would show state
+    // derived from events whose effects are not acknowledged. Treat it as a
+    // cache miss — discard the fold, refold reduce-only through ack (below).
+    const reducedAheadOfAck = persisted.reduction.reducedThroughOffset > acknowledged;
+    if (
+      persisted.reduction.reducerVersion === this.driver.contract.version &&
+      parsed.success &&
+      !reducedAheadOfAck
+    ) {
+      let reduction: ReductionProgress<ProcessorState<Contract>> = {
+        ...persisted.reduction,
+        state: parsed.state,
       };
+      if (reduction.reducedThroughOffset < acknowledged) {
+        // The fold cache validly LAGS the acknowledgement (a commit cadence
+        // may persist them apart) — but publishing the lagging fold as-is
+        // would reduce the NEXT delivery onto state missing the events in
+        // (reducedThrough, acknowledged] and then stamp it as reduced through
+        // head: those events' contributions silently vanish. Catch the fold
+        // up REDUCE-ONLY (their effects are acknowledged; processEvent never
+        // re-runs) and persist the healed cache before publishing.
+        reduction = await this.#rebuildReduction(acknowledged, {
+          state: reduction.state,
+          reducedThroughOffset: reduction.reducedThroughOffset,
+        });
+        const progress: ProcessorProgress<ProcessorState<Contract>> = {
+          reduction,
+          processing: persisted.processing,
+        };
+        await this.#commit(progress, persisted.processing.cursorRevision);
+        this.#progress = progress;
+        this.#hasLoaded = true;
+        return;
+      }
+      this.#progress = { reduction, processing: persisted.processing };
       this.#hasLoaded = true;
       return;
     }
 
     // REDUCE-ONLY REFOLD: the reduction cache is stale (reducer version
-    // changed, or the persisted fold no longer fits the schema — same cache
-    // miss). DISCARD the fold, KEEP the processing acknowledgement — this is
-    // the entire point of the two-cursor split: a routine state-schema deploy
-    // rebuilds the cache by re-running `reduce` ONLY, never `processEvent`,
-    // never effects. The rebuild stages into locals; nothing partial is
-    // observable (every read awaits this load).
+    // changed, the persisted fold no longer fits the schema, or the fold ran
+    // AHEAD of the acknowledgement — all the same cache miss). DISCARD the
+    // fold, KEEP the processing acknowledgement — this is the entire point of
+    // the two-cursor split: a routine state-schema deploy rebuilds the cache
+    // by re-running `reduce` ONLY, never `processEvent`, never effects. The
+    // rebuild stages into locals; nothing partial is observable (every read
+    // awaits this load).
     console.warn(
-      `stream processor "${this.driver.contract.slug}" reduction cache is stale ` +
-        `(persisted reducerVersion "${persisted.reduction.reducerVersion}", ` +
-        `current "${this.driver.contract.version}", state ${parsed.success ? "valid" : "invalid"}); ` +
-        `refolding reduce-only through acknowledged offset ` +
-        `${persisted.processing.acknowledgedThroughOffset}`,
+      reducedAheadOfAck
+        ? `stream processor "${this.driver.contract.slug}" persisted reduction cursor ` +
+            `(${persisted.reduction.reducedThroughOffset}) is AHEAD of the acknowledged cursor ` +
+            `(${acknowledged}) — an invalid record; discarding the fold and refolding ` +
+            `reduce-only through the acknowledgement`
+        : `stream processor "${this.driver.contract.slug}" reduction cache is stale ` +
+            `(persisted reducerVersion "${persisted.reduction.reducerVersion}", ` +
+            `current "${this.driver.contract.version}", state ${parsed.success ? "valid" : "invalid"}); ` +
+            `refolding reduce-only through acknowledged offset ` +
+            `${acknowledged}`,
     );
-    const reduction = await this.#rebuildReduction(persisted.processing.acknowledgedThroughOffset);
+    const reduction = await this.#rebuildReduction(acknowledged);
     const progress: ProcessorProgress<ProcessorState<Contract>> = {
       reduction,
       processing: persisted.processing,
@@ -854,14 +954,18 @@ export class StreamProcessorRunner<
     this.#hasLoaded = true;
   }
 
-  /** Rebuild the fold from offset 0 through `throughOffset`, reduce ONLY, paged. */
+  /** Rebuild the fold through `throughOffset`, reduce ONLY, paged — from
+   * offset 0 by default, or extending `from` (a valid persisted fold that
+   * LAGS the target, so only the gap's events are read). */
   async #rebuildReduction(
     throughOffset: number,
+    from?: { state: ProcessorState<Contract>; reducedThroughOffset: number },
   ): Promise<ReductionProgress<ProcessorState<Contract>>> {
-    let state = this.driver.initialState();
-    if (throughOffset > 0) {
+    let state = from?.state ?? this.driver.initialState();
+    const afterOffset = from?.reducedThroughOffset ?? 0;
+    if (throughOffset > afterOffset) {
       using pager = this.stream.readEvents({
-        afterOffset: 0,
+        afterOffset,
         beforeOffset: throughOffset + 1,
         limit: this.readPageSize,
       });

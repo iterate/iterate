@@ -108,6 +108,24 @@ export function durableObjectProgressStore<State>(args: {
             `a cursor rewind landed after this continuation began`,
         );
       }
+      // MONOTONIC fence: the revision CAS alone cannot stop a stale
+      // incarnation at the SAME revision from rolling acknowledgement (and
+      // state) backward past progress a newer incarnation already committed —
+      // re-running effects that were durably acknowledged. Only an explicit
+      // revision bump (reprocessFrom / skipThrough) may move acked backward.
+      if (
+        persisted !== undefined &&
+        progress.processing.acknowledgedThroughOffset <
+          persisted.processing.acknowledgedThroughOffset &&
+        progress.processing.cursorRevision <= persistedRevision
+      ) {
+        throw new Error(
+          `stream processor "${slug}" progress commit fenced: acknowledgedThroughOffset would ` +
+            `move backward (${persisted.processing.acknowledgedThroughOffset} -> ` +
+            `${progress.processing.acknowledgedThroughOffset}) without a cursorRevision bump — ` +
+            `a stale incarnation is rolling the cursor back`,
+        );
+      }
       storage.kv.put(progressKey, progress);
       // First new-format write: retire the legacy snapshot (one-way — see the
       // factory doc). Only on the FIRST write so the common commit path stays
@@ -173,6 +191,9 @@ export function durableObjectRecovery(args: {
   const readRecord = () => args.storage.kv.get<KeepaliveRecord>(recordKey);
 
   const recovery: ProcessorRecovery = {
+    // Exposed so the runner's construction check can validate the contract
+    // consumes THIS adapter's revival fact (exact identity, not shape).
+    revivedEventType: args.revivedEventType,
     // The host's wiring verbatim (stream-processor-host.ts:445): every
     // registered closure — blocking, background, and the runner's whole-frame
     // attempt — rides the keepalive, so "the DO died owing work" is exactly

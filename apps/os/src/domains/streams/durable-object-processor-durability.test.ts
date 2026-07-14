@@ -34,7 +34,7 @@ const VERSION = "0.0.1";
 // -----------------------------------------------------------------------------
 // Fakes: synchronous KV (structuredClone on both sides, like real
 // serialization), a single-path journal with idempotency-key dedupe, and a
-// deferred/tick pair for async settlement.
+// deferred helper for async settlement.
 // -----------------------------------------------------------------------------
 
 function makeStorage() {
@@ -125,8 +125,6 @@ function deferred<T = void>() {
   });
   return { promise, resolve, reject };
 }
-
-const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 // -----------------------------------------------------------------------------
 // Processor fixture for the runner-integration tests: `requested` folds an id
@@ -288,6 +286,25 @@ describe("durableObjectProgressStore", () => {
     expect(store.read()).toEqual(progressAt(11, 1));
   });
 
+  it("MONOTONIC fence: a same-revision backward acknowledgement is rejected; only a revision bump may rewind", () => {
+    const { store, map } = makeStore();
+    store.commit(progressAt(10), { expectedCursorRevision: 0 });
+
+    // A stale incarnation committing older progress at the SAME revision
+    // passes the revision CAS — the monotonic fence must stop it from
+    // rolling durable acknowledgement (and state) backward.
+    expect(() => store.commit(progressAt(4), { expectedCursorRevision: 0 })).toThrow(
+      /backward.*without a cursorRevision bump/,
+    );
+    expect(store.read()).toEqual(progressAt(10)); // the fenced commit wrote nothing
+    expect(map.get(progressKey)).toEqual(progressAt(10));
+
+    // The sanctioned backward move: a rewind bumps the revision under the
+    // old expected value (reprocessFrom / skipThrough).
+    store.commit(progressAt(4, 1), { expectedCursorRevision: 0 });
+    expect(store.read()).toEqual(progressAt(4, 1));
+  });
+
   it("resumes a real runner from the legacy checkpoint WITHOUT replaying acknowledged effects, then migrates the record", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
@@ -400,6 +417,13 @@ describe("durableObjectRecovery", () => {
     return { clock, alarmCalls, build, readRecord };
   }
 
+  it("exposes its revivedEventType so the runner's construction check can validate exact identity", () => {
+    const journal = makeJournal();
+    const { storage } = makeStorage();
+    const fixture = makeRecoveryFixture({ journal, storage });
+    expect(fixture.build().revivedEventType).toBe(REVIVED);
+  });
+
   it("keepAliveWhile arms the durable alarm ahead of tracked work; a quiet-clean fire disarms through the seam", async () => {
     const journal = makeJournal();
     const { storage } = makeStorage();
@@ -426,7 +450,7 @@ describe("durableObjectRecovery", () => {
 
     // The work settles cleanly; the confirmation fire finds quiet and disarms.
     work.resolve();
-    await tick();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0)); // let the settlement propagate
     fixture.clock.now = fixture.readRecord()!.armedAtMs! + 1;
     await recovery.handleAlarm();
     expect(fixture.alarmCalls.at(-1)).toBeNull();

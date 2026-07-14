@@ -245,6 +245,21 @@ function makeProgressStore() {
             `persisted ${persistedRevision}`,
         );
       }
+      // MONOTONIC fence (mirrors durableObjectProgressStore): a same-revision
+      // backward acknowledgement is a stale incarnation rolling the cursor
+      // back; only a revision bump (reprocessFrom/skipThrough) may rewind.
+      if (
+        record !== undefined &&
+        progress.processing.acknowledgedThroughOffset <
+          record.processing.acknowledgedThroughOffset &&
+        progress.processing.cursorRevision <= persistedRevision
+      ) {
+        throw new Error(
+          `progress commit fenced: acknowledgedThroughOffset would move backward ` +
+            `(${record.processing.acknowledgedThroughOffset} -> ` +
+            `${progress.processing.acknowledgedThroughOffset}) without a cursorRevision bump`,
+        );
+      }
       if (progress.reduction.reducedThroughOffset > progress.processing.acknowledgedThroughOffset) {
         throw new Error(
           "progress invariant violated: reducedThroughOffset > acknowledgedThroughOffset",
@@ -262,6 +277,10 @@ function makeProgressStore() {
     },
     failCommitOnce(error: Error) {
       failNextCommit = error;
+    },
+    /** Plant a record verbatim, bypassing commit's checks — corrupt/foreign-record fixtures. */
+    plant(progress: ProcessorProgress<TaskState>) {
+      record = structuredClone(progress);
     },
   };
 }
@@ -324,6 +343,21 @@ function makeHarness(args: HarnessArgs = {}) {
     async deliverPending() {
       const opened = await runner.openDelivery();
       const events = journal.rows().filter((row) => row.offset > opened.checkpointOffset);
+      if (events.length > 0) {
+        await opened.sink({ events, streamMaxOffset: journal.head() });
+      }
+      return opened.checkpointOffset;
+    },
+    /** The PRODUCTION wake lane's exact shape (stream-processor-host.ts:522):
+     * only CONSUMED types are delivered, but the frame is stamped with the
+     * RAW journal head — an unconsumed durable tail leaves the frame behind
+     * `streamMaxOffset` with nothing else ever delivering the difference. */
+    async deliverConsumesFilteredPending() {
+      const opened = await runner.openDelivery();
+      const consumed = new Set<string>(contract.consumes);
+      const events = journal
+        .rows()
+        .filter((row) => row.offset > opened.checkpointOffset && consumed.has(row.type));
       if (events.length > 0) {
         await opened.sink({ events, streamMaxOffset: journal.head() });
       }
@@ -710,6 +744,101 @@ describe("StreamProcessorRunner reduce-only refold", () => {
 });
 
 // =============================================================================
+// 5b. Load-time reduction/acknowledgement cursor validation (codex bug #3)
+// =============================================================================
+
+describe("StreamProcessorRunner load-time reduction catch-up", () => {
+  it("a persisted fold LAGGING the acknowledgement is caught up reduce-only before publishing", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
+    journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2
+    journal.seed({ type: COMPLETED, payload: { id: "a" } }); // 3
+    const store = makeProgressStore();
+    // A VALID record whose fold cache lags the acknowledgement (the persisted
+    // invariant allows reduction to lag; trusting it verbatim would fold the
+    // next delivery onto state missing events 2..3 and stamp it as current —
+    // their contributions silently dropped forever).
+    store.plant({
+      reduction: {
+        reducerVersion: "0.0.1",
+        reducedThroughOffset: 1,
+        state: { count: 1, open: ["a"] },
+      },
+      processing: { acknowledgedThroughOffset: 3, cursorRevision: 0 },
+    });
+
+    let processEventCalls = 0;
+    const harness = makeHarness({
+      journal,
+      store,
+      readPageSize: 1, // the catch-up fold must page
+      hooks: { onProcess: () => void (processEventCalls += 1) },
+    });
+
+    // The gap events (2, 3) CONTRIBUTE to the published fold...
+    await expect(harness.runner.snapshot()).resolves.toEqual({
+      offset: 3,
+      state: { count: 3, open: ["b"] },
+    });
+    // ...with ZERO processEvent runs (those effects are already acknowledged)...
+    expect(processEventCalls).toBe(0);
+    // ...and the healed cache is persisted under the same revision.
+    expect(store.record).toEqual({
+      reduction: {
+        reducerVersion: "0.0.1",
+        reducedThroughOffset: 3,
+        state: { count: 3, open: ["b"] },
+      },
+      processing: { acknowledgedThroughOffset: 3, cursorRevision: 0 },
+    });
+  });
+
+  it("a persisted fold AHEAD of the acknowledgement (invalid) is discarded and refolded through ack", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const journal = makeJournal();
+      journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
+      journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2
+      const store = makeProgressStore();
+      // INVALID: the fold claims offsets whose effects were never
+      // acknowledged — publishing it would show state an operator rewind is
+      // entitled to re-run. The load must discard it, never publish it.
+      store.plant({
+        reduction: {
+          reducerVersion: "0.0.1",
+          reducedThroughOffset: 9,
+          state: { count: 9, open: ["ghost"] },
+        },
+        processing: { acknowledgedThroughOffset: 2, cursorRevision: 0 },
+      });
+
+      let processEventCalls = 0;
+      const harness = makeHarness({
+        journal,
+        store,
+        hooks: { onProcess: () => void (processEventCalls += 1) },
+      });
+
+      await expect(harness.runner.snapshot()).resolves.toEqual({
+        offset: 2,
+        state: { count: 2, open: ["a", "b"] },
+      });
+      expect(processEventCalls).toBe(0); // reduce-only, like every refold
+      expect(store.record?.reduction).toEqual({
+        reducerVersion: "0.0.1",
+        reducedThroughOffset: 2,
+        state: { count: 2, open: ["a", "b"] },
+      });
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringContaining("AHEAD of the acknowledged cursor"),
+      );
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+});
+
+// =============================================================================
 // 6. Stale-cursorRevision fencing
 // =============================================================================
 
@@ -845,6 +974,114 @@ describe("StreamProcessorRunner cursor-revision fencing", () => {
 });
 
 // =============================================================================
+// 6b. Monotonic progress fence (codex bug #4) — the revision CAS alone cannot
+// stop a stale incarnation at the SAME revision from rolling the cursor back.
+// =============================================================================
+
+describe("StreamProcessorRunner monotonic progress fence", () => {
+  const progressAt = (ack: number, cursorRevision = 0): ProcessorProgress<TaskState> => ({
+    reduction: {
+      reducerVersion: "0.0.1",
+      reducedThroughOffset: ack,
+      state: { count: 0, open: [] },
+    },
+    processing: { acknowledgedThroughOffset: ack, cursorRevision },
+  });
+
+  it("store-level: a same-revision backward commit throws; a revision-bump rewind is allowed", () => {
+    const store = makeProgressStore();
+    store.store.commit(progressAt(10), { expectedCursorRevision: 0 });
+
+    // Same revision, acked moving backward: a stale incarnation — fenced.
+    expect(() => store.store.commit(progressAt(4), { expectedCursorRevision: 0 })).toThrow(
+      /backward.*without a cursorRevision bump/,
+    );
+    expect(store.record).toEqual(progressAt(10)); // the fenced commit wrote nothing
+
+    // A rewind lands under the OLD revision and writes the bumped one
+    // (reprocessFrom/skipThrough) — the ONLY sanctioned backward move.
+    store.store.commit(progressAt(4, 1), { expectedCursorRevision: 0 });
+    expect(store.record).toEqual(progressAt(4, 1));
+  });
+
+  it("a stale incarnation's same-revision commit cannot roll acknowledgement back past a newer one", async () => {
+    const journal = makeJournal();
+    for (const id of ["a", "b"]) journal.seed({ type: REQUESTED, payload: { id } });
+
+    // Incarnation A: per-event cadence, wedges on event 1's blocker BEFORE
+    // any durable commit, holding a frame that will later commit acked=1.
+    const gate = deferred();
+    const a = makeHarness({
+      journal,
+      cadence: ({ eventsSinceCommit }) => eventsSinceCommit >= 1,
+      hooks: {
+        onProcess: (args) => {
+          if (args.event.offset === 1) args.blockProcessorWhile(() => gate.promise);
+        },
+      },
+    });
+    const { sink } = await a.runner.openDelivery();
+    const frameA = sink({ events: journal.rows().slice(), streamMaxOffset: 2 });
+    await tick();
+    expect(a.store.record).toBeUndefined();
+
+    // Incarnation B processes through offset 2 at the SAME revision.
+    const b = a.crash({ hooks: {} });
+    await b.deliverPending();
+    expect(b.store.record?.processing).toEqual({ acknowledgedThroughOffset: 2, cursorRevision: 0 });
+
+    // A resumes: its commit of acked=1 matches the persisted revision (0),
+    // so the revision CAS alone would ACCEPT it and roll durable
+    // acknowledgement and state backward — the monotonic fence rejects it.
+    gate.resolve();
+    await expect(frameA).rejects.toThrow(/backward/);
+    expect(b.store.record?.processing).toEqual({ acknowledgedThroughOffset: 2, cursorRevision: 0 });
+  });
+});
+
+// =============================================================================
+// 6c. skipThrough input validation (codex bug #5)
+// =============================================================================
+
+describe("StreamProcessorRunner skipThrough validation", () => {
+  it("rejects NaN, non-integer, non-positive, and past-the-durable-head offsets, persisting nothing", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
+    journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2
+    const harness = makeHarness({ journal });
+
+    for (const offset of [Number.NaN, 2.5, 0, -3, Number.POSITIVE_INFINITY]) {
+      await expect(
+        harness.runner.skipThrough({ offset, expectedCursorRevision: 0, reason: "typo" }),
+      ).rejects.toThrow(/positive integer/);
+    }
+
+    // Past the durable head (the operator typo: 1000 for 2): the highest
+    // offset the reduce pass actually read bounds the skip — cursors must
+    // never be persisted past events that do not exist, or offsets 3..1000
+    // would read as pre-acknowledged when they later arrive.
+    await expect(
+      harness.runner.skipThrough({ offset: 1000, expectedCursorRevision: 0, reason: "typo" }),
+    ).rejects.toThrow(/past the durable head/);
+
+    // Nothing persisted, no revision burned, published state untouched...
+    expect(harness.store.record).toBeUndefined();
+    await expect(harness.runner.snapshot()).resolves.toEqual({
+      offset: 0,
+      state: { count: 0, open: [] },
+    });
+    // ...and a bounded skip at the same expected revision still lands.
+    await expect(
+      harness.runner.skipThrough({ offset: 2, expectedCursorRevision: 0, reason: "real skip" }),
+    ).resolves.toEqual({ cursorRevision: 1 });
+    expect(harness.store.record?.processing).toEqual({
+      acknowledgedThroughOffset: 2,
+      cursorRevision: 1,
+    });
+  });
+});
+
+// =============================================================================
 // 7. onCaughtUp at head — including the requested-N / unconsumed-N+1 wedge
 // =============================================================================
 
@@ -901,6 +1138,108 @@ describe("StreamProcessorRunner onCaughtUp", () => {
     // not re-fire the pulse; a revival fact is what guarantees later turns.
     await sink({ events: [noiseEvent!], streamMaxOffset: 2 });
     expect(headCalls).toHaveLength(1);
+  });
+
+  it("defers the head event's commit past onCaughtUp: a failing blocker leaves it UNcommitted and retried (codex bug #2)", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
+    journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2 — the head event
+
+    let headAttempts = 0;
+    const processedOffsets: number[] = [];
+    const hooks: TaskHooks = {
+      onProcess: (args) => void processedOffsets.push(args.event.offset),
+      onHead: (args) => {
+        headAttempts += 1;
+        if (headAttempts === 1) {
+          // The at-head pass's own blocking work fails (or the incarnation
+          // dies mid-blocker — same durable outcome).
+          args.blockProcessorWhile(() => Promise.reject(new Error("at-head work failed")));
+          return;
+        }
+        args.blockProcessorWhile(() =>
+          args.appendTo(SIBLING, {
+            type: DRIVEN,
+            idempotencyKey: args.delivery.idempotencyKey("drive:a"),
+            payload: { id: "a" },
+          }),
+        );
+      },
+    };
+    // Per-event cadence is the sharpest version of the bug: without the head
+    // deferral the head event durably commits BEFORE onCaughtUp runs, so a
+    // failed at-head blocker leaves redelivery with zero pending events and
+    // the at-head work is lost forever.
+    const harness = makeHarness({
+      journal,
+      hooks,
+      cadence: ({ eventsSinceCommit }) => eventsSinceCommit >= 1,
+    });
+
+    const { sink } = await harness.runner.openDelivery();
+    const frame = { events: journal.rows().slice(), streamMaxOffset: 2 };
+    await expect(sink(frame)).rejects.toThrow("at-head work failed");
+
+    // Event 1 committed mid-frame; the HEAD event did NOT — frame retryable.
+    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(1);
+    await expect(harness.runner.snapshot()).resolves.toEqual({
+      offset: 1,
+      state: { count: 1, open: ["a"] },
+    });
+
+    // The transport's redelivery re-runs the head event AND the at-head pass.
+    await sink(frame);
+    expect(processedOffsets).toEqual([1, 2, 2]); // at-least-once on the uncommitted head
+    expect(headAttempts).toBe(2);
+    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
+    expect(comparableRows(journal.rows(SIBLING))).toEqual([
+      { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
+    ]);
+  });
+
+  it("closes the filtered-delivery wedge with a trailing unfiltered self-pull (codex bug #1)", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1 — consumed, opens the obligation
+    journal.seed({ type: NOISE, payload: {} }); // 2 — unconsumed durable tail; the wake lane never delivers it
+
+    const headCalls: { open: string[] }[] = [];
+    const hooks: TaskHooks = {
+      onHead: (args) => {
+        headCalls.push({ open: [...args.state.open] });
+        for (const id of args.state.open) {
+          args.blockProcessorWhile(() =>
+            args.appendTo(SIBLING, {
+              type: DRIVEN,
+              idempotencyKey: args.delivery.idempotencyKey(`drive:${id}`),
+              payload: { id },
+            }),
+          );
+        }
+      },
+    };
+    const harness = makeHarness({ journal, hooks });
+
+    // The production wake lane's exact shape: ONLY the consumed event 1 is
+    // delivered, stamped with the RAW head 2. The frame alone leaves the
+    // cursor at 1 < streamMaxOffset with nothing else ever pushing offset 2:
+    // without the trailing pull, onCaughtUp never fires and the obligation
+    // opened by event 1 wedges forever.
+    await harness.deliverConsumesFilteredPending();
+
+    // The trailing type-unfiltered self-pull (keepalive lane, not the
+    // transport's promise) folds the tail, reaches the durable head, and the
+    // at-head pulse drives the obligation.
+    await vi.waitFor(() => {
+      expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
+      expect(headCalls).toEqual([{ open: ["a"] }]);
+    });
+    expect(comparableRows(journal.rows(SIBLING))).toEqual([
+      { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
+    ]);
+    await expect(harness.runner.snapshot()).resolves.toEqual({
+      offset: 2,
+      state: { count: 1, open: ["a"] },
+    });
   });
 });
 
@@ -1054,6 +1393,7 @@ describe("StreamProcessorRunner recovery wiring", () => {
     const revivals: KeepaliveRecord[] = [];
     const build = (): ProcessorRecovery => {
       const recovery: ProcessorRecovery = {
+        revivedEventType: REVIVED,
         keepAliveWhile: (work) => keepalive.track(work()),
         appendRevived: () => void journal.seed({ type: REVIVED, payload: {} }),
         handleAlarm: async () => {
@@ -1105,7 +1445,42 @@ describe("StreamProcessorRunner recovery wiring", () => {
           stream: journal.stream,
           durability: { progress: makeProgressStore().store as never, recovery },
         }),
-    ).toThrow(/consumes no "<namespace>\/revived" event/);
+    ).toThrow(/revival fact is "events\.iterate\.com\/test-task\/revived".*does not consume it/);
+  });
+
+  it("throws at construction when consumes has SOME /revived event but not the recovery adapter's own", () => {
+    // The trap the exact-membership check closes: a shape-only check
+    // (endsWith "/revived") accepts a contract that consumes ANOTHER
+    // processor's revival fact, while the fact THIS adapter appends never
+    // invokes the processor — recovery silently recovers nothing.
+    const OTHER_REVIVED = "events.iterate.com/other-processor/revived";
+    const journal = makeJournal();
+    const recovery = makeRecoveryFixture(journal).build();
+    expect(recovery.revivedEventType).toBe(REVIVED);
+    const wrongRevivedContract = defineProcessorContract({
+      slug: "test-wrong-revived",
+      version: "0.0.1",
+      description: "Consumes a FOREIGN revived event, not its own adapter's.",
+      stateSchema: z.object({ count: z.number().default(0) }),
+      events: {
+        [REQUESTED]: { payloadSchema: z.object({ id: z.string() }) },
+        [OTHER_REVIVED]: { payloadSchema: z.object({}) },
+      },
+      consumes: [REQUESTED, OTHER_REVIVED],
+      emits: [],
+    });
+    const processor = new (class extends StreamProcessor<typeof wrongRevivedContract> {
+      readonly contract = wrongRevivedContract;
+    })({ stream: journal.stream, path: journal.homePath, projectId: null });
+
+    expect(
+      () =>
+        new StreamProcessorRunner({
+          processor,
+          stream: journal.stream,
+          durability: { progress: makeProgressStore().store as never, recovery },
+        }),
+    ).toThrow(/revival fact is "events\.iterate\.com\/test-task\/revived".*does not consume it/);
   });
 
   it("blocking, background, AND whole-frame work ride the keepalive; a quiet-clean alarm disarms", async () => {
