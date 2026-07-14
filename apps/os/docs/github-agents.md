@@ -109,7 +109,12 @@ Rules are ordinary trusted Markdown at `agents/github-review.md`. For example:
 ```md
 # Pull-request review rules
 
-- Mentions of the word fart are forbidden; use superfart instead.
+- If there is no actionable feedback, do not leave a review or comment.
+- Outside this proof of concept's own policy definitions, documentation,
+  generated fixtures, tests, and agent instructions, mentions of the word
+  `fart` are forbidden and must say `superfart` instead.
+- The word `fart` is explicitly allowed when defining, documenting, testing,
+  generating, or instructing this proof-of-concept review rule.
 ```
 
 Changing repository scope, labels, rules, or trigger behavior is one normal
@@ -152,12 +157,13 @@ actor cannot reuse an old check or marker to suppress policy.
 The config worker creates the Check Run and timeout before waking the model.
 On a newer push it cancels the prior head's still-running App-owned check. On a
 skip-label event it cancels live-head checks immediately. Useful review content
-remains agent-owned: the task tells the agent to read the complete diff,
-revalidate the live head and controls immediately before publishing, post
-exactly one `COMMENT` review, and only then terminalize the trusted check and
-cancel its timeout:
+remains agent-owned: the task tells the agent to read the complete diff and
+revalidate the live head and controls immediately before its handoff. A clean
+result posts no review or comment and completes the visible Check Run.
+Actionable findings are posted as exactly one `COMMENT` review before the
+trusted check is terminalized and its timeout cancelled:
 
-- `success`: review completed with no actionable findings;
+- `success`: review completed with no actionable findings and no PR comment;
 - `neutral`: review completed with findings;
 - `cancelled`: a newer head superseded it;
 - `failure`: the review itself failed.
