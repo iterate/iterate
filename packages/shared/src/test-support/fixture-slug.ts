@@ -10,9 +10,7 @@
  * yet, so disposal is a no-op and stages accumulate fixtures until reset.
  */
 export function uniqueFixtureSlug(prefix: string, opts?: { maxPrefixLength?: number }): string {
-  const trimmedPrefix =
-    opts?.maxPrefixLength === undefined ? prefix : prefix.slice(0, opts.maxPrefixLength);
-  return `${trimmedPrefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
+  return `${prefix.slice(0, opts?.maxPrefixLength)}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`
     .toLowerCase()
     .replace(/-{2,}/g, "-");
 }

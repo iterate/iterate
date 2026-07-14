@@ -216,6 +216,14 @@ they ride the next PR out of this branch.)
 
 ### Decisions wanted (each a short conversation)
 
+- [ ] **dummy-petshop unit lane has no retry wiring**: `github-app.test.ts`
+      ("deliver mode POSTs the x-hub-signature-256 header") flaked red with
+      "Error: bad port" on 2026-07-14 (port race binding its local webhook
+      receiver) and there is no `E2E_CI_RETRIES`/retry config on
+      `apps/dummy-petshop/vitest.config.ts` — one flake reds the whole Test
+      lane. Either wire the policy retry like the os configs or fix the
+      port allocation to bind port 0.
+
 - [x] **`prefer-object-property-match` on the e2e lane** — armed, all 91
       sites fixed in PR #1965 commit e9d3500a8 (3 parallel subagents on
       disjoint file sets): 81 rewritten (adjacent asserts on one receiver
