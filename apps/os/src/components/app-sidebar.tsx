@@ -64,6 +64,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
+import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 import type { AppConfig } from "~/config.ts";
@@ -95,6 +96,7 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
   // https://ui.shadcn.com/blocks/sidebar
   return (
     <Sidebar collapsible="icon">
+      <CloseMobileSidebarOnNavigate />
       {/* Collapsed: nudge the logo down 4px (pt-2 → pt-3) so its center lines up
           with the stream path pill in the page header (h-9 pill, pt-2.5 → center 28px).
           Transition padding with Tailwind's default timing — the same curve the

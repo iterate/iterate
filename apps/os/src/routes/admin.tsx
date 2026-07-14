@@ -30,6 +30,7 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
+import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -146,6 +147,7 @@ function AdminSidebar() {
 
   return (
     <Sidebar collapsible="icon">
+      <CloseMobileSidebarOnNavigate />
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
