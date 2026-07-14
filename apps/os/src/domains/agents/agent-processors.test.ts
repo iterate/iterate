@@ -2389,6 +2389,46 @@ describe("busy/idle activity announcements", () => {
     expect(announcements(stream).at(-1)).toEqual({ busy: false, sinceOffset: expect.any(Number) });
   });
 
+  it("a replayed settled turn with no prior announcements stays silent", async () => {
+    // A journal that folds trigger-through-completion to idle in ONE at-head
+    // page with nothing announced yet (a pre-announcement journal refolded
+    // after a contract deploy, or a synthetically seeded lifecycle) announces
+    // NEITHER busy nor idle: no surface ever painted anything, so there is
+    // nothing to clear — and an idle append here would fire once per
+    // historical agent journal on the first refold after a deploy.
+    const stream = new MemoryStream();
+    await stream.append(
+      userMessage(),
+      {
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        payload: { debounceMs: 0, model: "gpt-test", requestId: "llm-request:gen-0" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        // The key the replayed scheduled event's re-armed debounce timer will
+        // re-derive, so its append dedupes into this seeded event.
+        idempotencyKey: "agent/llm-request-requested@2",
+        payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: { durationMs: 10, llmRequestOffset: 3, result: { status: "success" } },
+      },
+    );
+    const agent = new AgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      activityIdleDebounceMs: 0,
+    });
+    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    // Let the replayed scheduled event's re-armed timer fire and dedupe.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(announcements(stream)).toEqual([]);
+    expect(deriveAgentActivity(agent.state)).toEqual({ busy: false });
+  });
+
   it("the fold ignores a stale idle announcement that lost its race", () => {
     const activityEvent = (payload: Record<string, unknown>, offset: number) => ({
       type: "events.iterate.com/agent/activity-changed",
