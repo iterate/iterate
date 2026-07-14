@@ -153,7 +153,10 @@ export default async function eraseData(options: {
       });
       instancesDeleted += deleted;
       if (failed > 0 && deleted === 0) break; // every delete failing = stop churning
-      if (deleted < instances.length) {
+      // Only the DEADLINE ends the pass early: per-item failures with
+      // progress keep relisting, so failed items retry THIS run instead of
+      // waiting for the next release.
+      if (Date.now() > instanceDeadline) {
         console.warn(`AI Search: deadline hit with instances remaining — next release continues`);
         break;
       }
@@ -193,7 +196,9 @@ export default async function eraseData(options: {
         });
         objectsDeleted += deleted;
         if (failed > 0 && deleted === 0) break; // every delete failing = stop churning
-        if (deleted < listing.length) {
+        // Deadline is the only early exit — partial failures with progress
+        // keep relisting so failed objects retry this run.
+        if (Date.now() > bucketDeadline) {
           console.warn(
             `R2 ${bucket}: deadline hit with objects remaining — next release continues`,
           );
