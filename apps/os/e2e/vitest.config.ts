@@ -17,7 +17,7 @@ import {
 } from "@iterate-com/shared/test-support/e2e-policy";
 import { E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./test-support/provide-keys.ts";
 import { createVitestRunSlug } from "./test-support/vitest-naming.ts";
-import { resolveBaseUrl } from "./test-support/dev-server.ts";
+import { resolveLocalOsDevTargetOnce } from "./test-support/global-setup.ts";
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url));
 const e2eRoot = fileURLToPath(new URL(".", import.meta.url));
@@ -25,7 +25,14 @@ const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
 const vitestRunSlug = createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("os-e2e-");
-const baseUrl = resolveBaseUrl(appRoot) ?? "";
+// The deployed target wins; otherwise resolve the local dev target ONCE —
+// the live dev server, or the exact port the globalSetup will start one on —
+// mirroring how playwright.config.ts bakes `--port N` into its webServer
+// command. CI never targets a local dev server (see global-setup.ts).
+const configuredOsBaseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
+const localOsTarget =
+  configuredOsBaseUrl || process.env.CI ? null : await resolveLocalOsDevTargetOnce();
+const baseUrl = configuredOsBaseUrl || localOsTarget?.baseUrl || "";
 
 console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
 console.log(`[vitest] run slug: ${vitestRunSlug}`);
@@ -136,6 +143,13 @@ export default defineConfig({
           // The engine e2e suites and the itx catalogue matrix are both node
           // black boxes against the deployed slot — one lane.
           include: ["./e2e/vitest/**/*.test.ts", "./e2e/examples/*.e2e.test.ts"],
+          // Ensure the target exists before any test runs: no-op against a
+          // deployed APP_CONFIG_BASE_URL, otherwise reuse-or-start the local
+          // dev server — the `pnpm spec` webServer contract (see
+          // global-setup.ts). Listed on each project because vitest reads
+          // globalSetup per project (like `retry` below); the setup dedupes
+          // itself, so it still runs once per `pnpm e2e`.
+          globalSetup: ["./e2e/test-support/global-setup.ts"],
           setupFiles: ["./e2e/vitest/setup.ts"],
           provide: sharedProvide,
           // #1601 fixed cold-slot creates to ~3-5s per saga under 4-way load
@@ -167,6 +181,8 @@ export default defineConfig({
         test: {
           name: "browser",
           include: ["./e2e/examples/examples-browser.test.ts"],
+          // See the node project: per-project on purpose, dedupes itself.
+          globalSetup: ["./e2e/test-support/global-setup.ts"],
           provide: sharedProvide,
           testTimeout: 45_000,
           hookTimeout: 45_000,
