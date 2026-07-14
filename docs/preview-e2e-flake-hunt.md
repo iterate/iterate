@@ -29,7 +29,7 @@ launched with `depot ci run --workflow .depot/workflows/preview-e2e-marathon.yml
 Local runs are for fast iteration while fixing a flake; the 50-consecutive-green
 bar is measured on Depot.
 
-## Round 4 (2026-07-13)
+## Round 4 (2026-07-13/14, PR #1938)
 
 Goal: 25 consecutive green runs on Depot, re-validating the lane after a week
 of heavy merging (subagents/unified messaging, itx.search, stream metrics,
@@ -38,8 +38,43 @@ MCP OAuth, sandbox AI-gateway egress, …). Method unchanged: Depot marathon
 cause + fix every failure, merge main into this branch between marathons so
 the lane is always tested at (or ahead of) main's head.
 
-Run log lives in the PR comments; flakes found get sections here like every
-prior round.
+Result: **96 consecutive green runs in one night, zero test failures, zero
+flakes found** — the goal met on the first marathon and re-proven three more
+times across six merged main heads. Detailed per-run log in the PR comments.
+
+- **marathon r4-1** `r59ccf138r` (head = main 0d53cbc7e): **25/25 green**,
+  21:51–22:53 UTC, ~2.2–2.9 min/run.
+- **marathon r4-2** `dgnsqq9jng` (merged main 9b9f3404d): **21 clean**, then
+  run 22 stopped in 4s — not a flake: the slot's semaphore lease had been
+  claimed by `main-auth-rpc-security-cutover` (the #1940 validation), whose
+  deploy replaced the PR's apps on preview-3. The ownership guard in
+  `preview test` fired exactly as designed. The marathon claimed a fresh slot
+  (preview-1) and moved on.
+- **marathon r4-3** `4xg33k0bf5` (merged main ce18a7d79): **25/25 green**,
+  01:09–02:17 UTC. Runs 24–25 slowed to ~6 min (os lane 372s/355s) with
+  recovered onboarding-stream `liveness probe` WebSocket reconnects — the
+  flake-23 pool-saturation tail signature at cap 150, fully absorbed by the
+  reconnect/retry machinery. The next marathon's preflight redeploy flushed
+  the pool and restored ~2.2 min/run pace from run 1, confirming the
+  mechanism (a rollout resets assigned instances).
+- **marathon r4-4** `6q6j7wlz3z` (merged main d36c2f38d): **25/25 green**,
+  02:24–03:24 UTC, no tail slowdown.
+
+Cost (measured; full breakdown in the PR): ~$54 for 101 lane executions ≈
+$0.53/run — 92% LLM tokens (gpt-5.6-sol BYOK, $49.36 uncached), with the
+AIG response cache absorbing 46.4% of requests (~$42 saved); AI Search
+fixture indexing $0.31; Depot 8-core compute ~275 min ≈ $4.40.
+
+Round-4 lessons (no code changes needed):
+
+- The round-1..3 fixes have held through a week of heavy platform churn; the
+  lane's stability is structural, not a lucky streak.
+- A marathon can lose its slot mid-flight to a legitimate external claim;
+  the guard converts that into a clean fast stop. If this recurs often,
+  marathons could re-claim + redeploy and continue instead of exiting.
+- Sandbox-pool tail pressure at cap 150 is visible (slower runs, recovered
+  liveness reconnects) after ~25 runs but self-heals on redeploy and never
+  failed a run; watch it if marathons grow past ~30 runs per deploy.
 
 ## Run log
 
