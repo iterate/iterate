@@ -33,6 +33,7 @@ import { itxLoopbackStub } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import type {
   GetProcessorRuntimeState,
+  ProcessEvent,
   ProcessEventBatch,
   ProcessStreamProcessorEventBatch,
   ProcessorRuntimeState,
@@ -85,6 +86,37 @@ export type RetainedProcessEventBatch = ((
      */
     pendingDeliveries?(): number;
   };
+
+/** A retained one-way single-event callback for the process-event benchmark. */
+export type RetainedProcessEvent = ((event: Parameters<ProcessEvent>[0]) => void) &
+  Disposable & { onRpcBroken?(callback: (error: unknown) => void): void };
+
+/**
+ * Retains a single-event callback and disposes every ignored RPC result
+ * without pulling it. This is the exact zero-return-frame policy used by an
+ * ephemeral batch sink, with one outbound invocation per event.
+ */
+export function retainProcessEvent(processEvent: ProcessEvent): RetainedProcessEvent {
+  const retained = retainCallback<Parameters<ProcessEvent>[0]>(processEvent);
+  const callback: RetainedProcessEvent = Object.assign(
+    (event: Parameters<ProcessEvent>[0]) => {
+      let result: unknown;
+      try {
+        result = retained(event);
+      } catch {
+        return;
+      }
+      disposeIgnoredRpcResult(result);
+    },
+    {
+      [Symbol.dispose]() {
+        retained[Symbol.dispose]();
+      },
+    },
+  );
+  if (retained.onRpcBroken) callback.onRpcBroken = retained.onRpcBroken;
+  return callback;
+}
 
 /**
  * Retains a delivery sink and wraps it in the pump's fire-and-forget calling

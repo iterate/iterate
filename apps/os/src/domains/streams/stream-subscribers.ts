@@ -200,6 +200,8 @@ type OpenConnectionArgs = {
   subscriptionType: StreamSubscriptionType;
   /** Already-retained sink (subscriber-sinks.ts owns retention semantics). */
   sink: RetainedProcessEventBatch;
+  /** Experimental transport unit for the process-event benchmark. */
+  deliveryUnit?: "batch" | "event";
   replayAfterOffset?: number;
   selector?: CompiledEventSelector;
   /** `false` = state-only batches. Default `true`. */
@@ -692,6 +694,10 @@ export class StreamSubscribers {
           subscriptionKey,
           subscriptionType: "configured",
           sink: response.sink,
+          deliveryUnit:
+            current.latestConfiguredEvent.payload.params?.deliveryUnit === "event"
+              ? "event"
+              : "batch",
           replayAfterOffset: response.checkpointOffset,
           selector:
             consumes === undefined
@@ -952,20 +958,33 @@ export class StreamSubscribers {
                 `webhook ${subscriptionKey}`,
               );
             } else {
-              const batch: StreamPushEventBatch = {
-                projectId: state.projectId,
-                path: state.path,
-                events: matched,
-                streamMaxOffset: pushStreamMaxOffset,
-                subscriptionKey,
-                deliveryId: deliveryId(subscriptionKey, matched[0]!.offset, lastOffset),
-                attempt: pushAttempt,
-                configuredEvent,
-              };
-              await withDeliveryTimeout(
-                this.#hooks.dial.push(config.delivery.expression, batch),
-                `push ${subscriptionKey}`,
-              );
+              const pushExpression = config.delivery.expression;
+              const pushProjectId = state.projectId;
+              const pushPath = state.path;
+              const push = async (events: StreamEvent[], frameDeliveryId: string) =>
+                await withDeliveryTimeout(
+                  this.#hooks.dial.push(pushExpression, {
+                    projectId: pushProjectId,
+                    path: pushPath,
+                    events,
+                    streamMaxOffset: pushStreamMaxOffset,
+                    subscriptionKey,
+                    deliveryId: frameDeliveryId,
+                    attempt: pushAttempt,
+                    configuredEvent,
+                  }),
+                  `push ${subscriptionKey}`,
+                );
+              if (config.params?.deliveryUnit === "event") {
+                // A generic push receiver has no ordered, failure-sticky
+                // queue. Preserve its in-order, at-least-once contract by
+                // awaiting each event before dispatching the next one.
+                for (const event of matched) {
+                  await push([event], deliveryId(subscriptionKey, event.offset, event.offset));
+                }
+              } else {
+                await push(matched, deliveryId(subscriptionKey, matched[0]!.offset, lastOffset));
+              }
             }
           } catch (error) {
             // "continue" = the failure handler already moved the goalposts
@@ -1556,7 +1575,8 @@ export class StreamSubscribers {
             cursor = stateMaxOffset;
           }
           initialBatchPending = false;
-          connection.batchesSent += 1;
+          const singleEventDelivery = args.deliveryUnit === "event" && events.length > 0;
+          connection.batchesSent += singleEventDelivery ? events.length : 1;
           connection.eventsSent += events.length;
           connection.bytesSent += deliveredBytes;
           const dispatchAtMs = this.#hooks.now();
@@ -1571,26 +1591,38 @@ export class StreamSubscribers {
           // fence's settle doubles as a free commit→consumed sample on the
           // stream's own clock. Ephemeral results stay unpulled: no onSettled
           // ever fires there (see subscriber-sinks.ts).
-          const newestCreatedAtMs =
-            subscriptionType !== "configured" || events.length === 0
-              ? undefined
-              : this.#parseCreatedAt(events.at(-1)!.createdAt);
-          sink(
-            {
-              projectId: currentState.projectId,
-              path: currentState.path,
-              events,
-              deliveryThroughOffset: cursor,
-              streamMaxOffset: currentState.maxOffset,
-              // Read in the same synchronous block as streamMaxOffset, so the
-              // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
-              state: currentState,
-            } satisfies StreamEventBatch,
-            newestCreatedAtMs === undefined || !Number.isFinite(newestCreatedAtMs)
-              ? undefined
-              : newestCreatedAtMs,
-            onDeliverySettled,
-          );
+          const deliveryProjectId = currentState.projectId;
+          const deliveryPath = currentState.path;
+          const deliver = (deliveredEvents: StreamEvent[], deliveryThroughOffset: number) => {
+            const newestCreatedAtMs =
+              subscriptionType !== "configured" || deliveredEvents.length === 0
+                ? undefined
+                : this.#parseCreatedAt(deliveredEvents.at(-1)!.createdAt);
+            sink(
+              {
+                projectId: deliveryProjectId,
+                path: deliveryPath,
+                events: deliveredEvents,
+                deliveryThroughOffset,
+                streamMaxOffset: currentState.maxOffset,
+                // Read in the same synchronous block as streamMaxOffset, so the
+                // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
+                state: currentState,
+              } satisfies StreamEventBatch,
+              newestCreatedAtMs === undefined || !Number.isFinite(newestCreatedAtMs)
+                ? undefined
+                : newestCreatedAtMs,
+              onDeliverySettled,
+            );
+          };
+          if (singleEventDelivery) {
+            for (let index = 0; index < events.length; index += 1) {
+              const delivered = events[index]!;
+              deliver([delivered], index === events.length - 1 ? cursor : delivered.offset);
+            }
+          } else {
+            deliver(events, cursor);
+          }
           await Promise.resolve();
           // A notification publishes its immutable state snapshot before it
           // observes `draining`. Keeping only the newest snapshot coalesces an

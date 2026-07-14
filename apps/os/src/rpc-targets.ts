@@ -138,7 +138,7 @@ import type {
   ProjectWorker,
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
-import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
+import { retainProcessEvent, retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -267,6 +267,7 @@ import type {
   GetProcessorRuntimeState,
   LiveStateRpc,
   LiveStateSubscriptionHandle,
+  ProcessEvent,
   ProcessEventBatch,
   StreamPushEventBatch,
   ProcessorRuntimeState,
@@ -598,7 +599,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    */
   subscribe(args: {
     subscriptionKey?: string;
-    processEventBatch: ProcessEventBatch;
+    /** Experimental alternative: exactly one callback shape must be supplied. */
+    processEvent?: ProcessEvent;
+    processEventBatch?: ProcessEventBatch;
     replayAfterOffset?: number;
     /** Sugar for `selector.eventTypes` — one filter shape across every lane. */
     eventTypes?: readonly string[];
@@ -628,10 +631,22 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // synchronous `undefined`. The retained stub is session-owned — Cap'n Web
     // disposes a session's exports when the session ends, which is exactly an
     // ephemeral subscription's lifetime.
-    const forward = retainProcessEventBatch(args.processEventBatch);
+    if ((args.processEvent === undefined) === (args.processEventBatch === undefined)) {
+      throw new Error("subscribe requires exactly one of processEvent or processEventBatch");
+    }
+    const { processEvent, processEventBatch, ...subscription } = args;
+    const forwardEvent = processEvent === undefined ? undefined : retainProcessEvent(processEvent);
+    const forwardBatch =
+      processEventBatch === undefined ? undefined : retainProcessEventBatch(processEventBatch);
     return this.durableObjectStub.subscribe({
-      ...args,
-      processEventBatch: (batch) => void forward(batch),
+      ...subscription,
+      processEventBatch: (batch) => {
+        if (forwardEvent !== undefined) {
+          for (const event of batch.events) forwardEvent(event);
+          return;
+        }
+        forwardBatch!(batch);
+      },
     });
   }
 

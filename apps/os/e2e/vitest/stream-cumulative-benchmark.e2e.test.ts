@@ -16,6 +16,7 @@ const FOCUS_TAILS = process.env.STREAM_BENCH_FOCUS_TAILS === "1";
 const FOCUS_LIVE_TAILS = process.env.STREAM_BENCH_FOCUS_LIVE_TAILS === "1";
 const FOCUS_WAIT_FOR_EVENT = process.env.STREAM_BENCH_FOCUS_WAIT_FOR_EVENT === "1";
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
+const FOCUS_PROCESS_EVENT = process.env.STREAM_BENCH_FOCUS_PROCESS_EVENT === "1";
 const FOCUS_CROSSPOST_EXACT_RETRY = process.env.STREAM_BENCH_FOCUS_CROSSPOST_EXACT_RETRY === "1";
 const FOCUS_STORAGE_JOURNAL = process.env.STREAM_BENCH_FOCUS_STORAGE_JOURNAL === "1";
 const IMPLEMENTATION = process.env.STREAM_BENCH_IMPLEMENTATION;
@@ -44,6 +45,9 @@ const PROCESSOR_CATCHUP_SAMPLES = Number(process.env.STREAM_BENCH_PROCESSOR_CATC
 const PROCESSOR_CATCHUP_EVENTS = Number(
   process.env.STREAM_BENCH_PROCESSOR_CATCHUP_EVENTS ?? "8000",
 );
+const PROCESS_EVENT_SAMPLES = Number(process.env.STREAM_BENCH_PROCESS_EVENT_SAMPLES ?? "30");
+// 20 ms of 48 kHz mono PCM16 is 1,920 raw bytes and 2,560 base64 characters.
+const PCM_FRAME_PAYLOAD = "p".repeat(2_560);
 
 type StreamHandle = Stream & Disposable;
 
@@ -70,6 +74,7 @@ test.skipIf(
     FOCUS_LIVE_TAILS ||
     FOCUS_WAIT_FOR_EVENT ||
     FOCUS_PROCESSOR_CATCHUP ||
+    FOCUS_PROCESS_EVENT ||
     FOCUS_CROSSPOST_EXACT_RETRY ||
     FOCUS_STORAGE_JOURNAL,
 )(
@@ -1168,6 +1173,186 @@ test.skipIf(!ENABLED || !FOCUS_WAIT_FOR_EVENT)(
   600_000,
 );
 
+test.skipIf(!ENABLED || !FOCUS_PROCESS_EVENT)(
+  "focused processEvent versus processEventBatch delivery",
+  async () => {
+    if (IMPLEMENTATION !== "candidate") {
+      throw new Error("The process-event differential runs both modes on one candidate server.");
+    }
+    if (!Number.isInteger(PROCESS_EVENT_SAMPLES) || PROCESS_EVENT_SAMPLES <= 0) {
+      throw new Error("STREAM_BENCH_PROCESS_EVENT_SAMPLES must be a positive integer.");
+    }
+
+    const metrics: Record<string, Metric> = {};
+    const runId = crypto.randomUUID().slice(0, 8);
+    const auth = { type: "admin-secret" as const, secret: adminSecret() };
+
+    using session = withItxSession();
+    using itx = session.authenticate(auth);
+    using project = itx.projects.create({
+      projectId: `prj_${crypto.randomUUID()}`,
+      slug: `stream-process-event-${runId}`,
+    });
+    await project.__describe();
+
+    // Ephemeral: the Stream DO still sends its internal batch to the project
+    // relay. The relay either emits one Cap'n Web callback for that batch or
+    // one callback per event, disposing every result unpulled in both modes.
+    {
+      using batchStream = project.streams.get(`/bench/${runId}/ephemeral-batch`);
+      using eventStream = project.streams.get(`/bench/${runId}/ephemeral-event`);
+      const batchTracker = createDeliveryTracker();
+      const eventTracker = createDeliveryTracker();
+      const batchHandle = await batchStream.subscribe({
+        eventTypes: [EVENT_TYPE],
+        processEventBatch: ({ events }) => {
+          for (const delivered of events) batchTracker.record(delivered);
+        },
+      });
+      const eventHandle = await (
+        eventStream as unknown as {
+          subscribe(args: {
+            eventTypes: readonly string[];
+            processEvent(event: StreamEvent): unknown;
+          }): ReturnType<Stream["subscribe"]>;
+        }
+      ).subscribe({
+        eventTypes: [EVENT_TYPE],
+        processEvent: (delivered) => eventTracker.record(delivered),
+      });
+
+      for (const eventCount of [1, 8, 32, 128]) {
+        const samples = await measureAlternatingDeliveryModes(
+          PROCESS_EVENT_SAMPLES,
+          async (mode, iteration) => {
+            const stream = mode === "batch" ? batchStream : eventStream;
+            const tracker = mode === "batch" ? batchTracker : eventTracker;
+            const markers = Array.from(
+              { length: eventCount },
+              (_, index) => `ephemeral-${eventCount}-${mode}-${iteration}-${index}`,
+            );
+            tracker.begin(markers);
+            const startedAt = performance.now();
+            await stream.append(
+              ...markers.map((marker) => event({ marker, payload: PCM_FRAME_PAYLOAD })),
+            );
+            return await tracker.finish(startedAt, `ephemeral ${mode} ${eventCount}`);
+          },
+        );
+        metrics[`ephemeral_batch_${eventCount}_pcm`] = summarize(samples.batch, eventCount);
+        metrics[`ephemeral_event_${eventCount}_pcm`] = summarize(samples.event, eventCount);
+      }
+
+      await Promise.resolve(batchHandle.unsubscribe());
+      await Promise.resolve(eventHandle.unsubscribe());
+    }
+
+    // Durable push: the stream owns the cursor, so each per-event call must
+    // resolve before the next begins. The destination callback is only the
+    // host-visible completion fence; both modes use the same one.
+    {
+      using batchSource = project.streams.get(`/bench/${runId}/push-batch-source`);
+      using batchDestination = project.streams.get(`/bench/${runId}/push-batch-destination`);
+      using eventSource = project.streams.get(`/bench/${runId}/push-event-source`);
+      using eventDestination = project.streams.get(`/bench/${runId}/push-event-destination`);
+      const batchTracker = createDeliveryTracker();
+      const eventTracker = createDeliveryTracker();
+      const batchHandle = await batchDestination.subscribe({
+        eventTypes: [EVENT_TYPE],
+        processEventBatch: ({ events }) => {
+          for (const delivered of events) batchTracker.record(delivered);
+        },
+      });
+      const eventHandle = await eventDestination.subscribe({
+        eventTypes: [EVENT_TYPE],
+        processEventBatch: ({ events }) => {
+          for (const delivered of events) eventTracker.record(delivered);
+        },
+      });
+      await configureCrossPostDelivery({
+        deliveryUnit: "batch",
+        destinationPath: `/bench/${runId}/push-batch-destination`,
+        key: `push-batch-${runId}`,
+        source: batchSource,
+      });
+      await configureCrossPostDelivery({
+        deliveryUnit: "event",
+        destinationPath: `/bench/${runId}/push-event-destination`,
+        key: `push-event-${runId}`,
+        source: eventSource,
+      });
+
+      const pushSamples = Math.max(10, Math.ceil(PROCESS_EVENT_SAMPLES / 2));
+      for (const eventCount of [1, 8, 32]) {
+        const samples = await measureAlternatingDeliveryModes(
+          pushSamples,
+          async (mode, iteration) => {
+            const source = mode === "batch" ? batchSource : eventSource;
+            const tracker = mode === "batch" ? batchTracker : eventTracker;
+            const markers = Array.from(
+              { length: eventCount },
+              (_, index) => `push-${eventCount}-${mode}-${iteration}-${index}`,
+            );
+            tracker.begin(markers);
+            const startedAt = performance.now();
+            await source.append(
+              ...markers.map((marker) => event({ marker, payload: PCM_FRAME_PAYLOAD })),
+            );
+            return await tracker.finish(startedAt, `durable push ${mode} ${eventCount}`);
+          },
+        );
+        metrics[`push_batch_${eventCount}_pcm`] = summarize(samples.batch, eventCount);
+        metrics[`push_event_${eventCount}_pcm`] = summarize(samples.event, eventCount);
+      }
+
+      await Promise.resolve(batchHandle.unsubscribe());
+      await Promise.resolve(eventHandle.unsubscribe());
+    }
+
+    // Durable wake: configure the project processor's retained sink to receive
+    // either the normal compact batch or one compact single-event call at a
+    // time. The host's waitUntilEvent response is the consumption fence.
+    {
+      const batchProjectId = `prj_${crypto.randomUUID()}`;
+      const eventProjectId = `prj_${crypto.randomUUID()}`;
+      using batchProject = itx.projects.create({
+        projectId: batchProjectId,
+        slug: `stream-process-batch-wake-${runId}`,
+      });
+      using eventProject = itx.projects.create({
+        projectId: eventProjectId,
+        slug: `stream-process-event-wake-${runId}`,
+      });
+      await batchProject.__describe();
+      await eventProject.__describe();
+      await configureProjectProcessorDeliveryUnit(eventProject, "event");
+
+      const wakeEventCount = 512;
+      const wakeSamples = Math.max(5, Math.ceil(PROCESS_EVENT_SAMPLES / 6));
+      const samples = await measureAlternatingDeliveryModes(
+        wakeSamples,
+        async (mode, iteration) =>
+          await measureProcessorPcmCatchup(
+            mode === "batch" ? batchProjectId : eventProjectId,
+            wakeEventCount,
+            `${mode}-${iteration}`,
+          ),
+      );
+      metrics[`wake_batch_${wakeEventCount}_pcm`] = summarize(samples.batch, wakeEventCount);
+      metrics[`wake_event_${wakeEventCount}_pcm`] = summarize(samples.event, wakeEventCount);
+    }
+
+    const output: BenchmarkOutput = {
+      implementation: IMPLEMENTATION,
+      metrics,
+      revision: REVISION,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
+  },
+  600_000,
+);
+
 test.skipIf(!ENABLED || !FOCUS_PROCESSOR_CATCHUP)(
   "focused hosted processor backlog catch-up",
   async () => {
@@ -1275,6 +1460,156 @@ test.skipIf(!ENABLED || !FOCUS_CROSSPOST_EXACT_RETRY)(
   },
   600_000,
 );
+
+type DeliveryMode = "batch" | "event";
+
+async function measureAlternatingDeliveryModes(
+  iterations: number,
+  operation: (mode: DeliveryMode, iteration: number) => Promise<number>,
+): Promise<Record<DeliveryMode, number[]>> {
+  const warmups = Math.min(5, iterations);
+  const samples: Record<DeliveryMode, number[]> = { batch: [], event: [] };
+  for (let iteration = -warmups; iteration < iterations; iteration += 1) {
+    const order: readonly DeliveryMode[] =
+      (iteration + warmups) % 2 === 0 ? ["batch", "event"] : ["event", "batch"];
+    for (const mode of order) {
+      const elapsed = await operation(mode, iteration);
+      if (iteration >= 0) samples[mode].push(elapsed);
+    }
+  }
+  return samples;
+}
+
+function createDeliveryTracker(): {
+  begin(markers: readonly string[]): void;
+  finish(startedAt: number, label: string): Promise<number>;
+  record(event: StreamEvent): void;
+} {
+  let remaining: Set<string> | undefined;
+  let completedAt: number | undefined;
+  return {
+    begin(markers) {
+      if (remaining !== undefined) throw new Error("delivery tracker already has pending events");
+      remaining = new Set(markers);
+      completedAt = undefined;
+    },
+    async finish(startedAt, label) {
+      await waitFor(() => completedAt !== undefined, label, 30_000);
+      const elapsed = completedAt! - startedAt;
+      remaining = undefined;
+      completedAt = undefined;
+      return elapsed;
+    },
+    record(delivered) {
+      if (remaining === undefined || completedAt !== undefined) return;
+      const marker = markerOf(delivered.payload);
+      if (marker === undefined || !remaining.delete(marker)) return;
+      if (remaining.size === 0) completedAt = performance.now();
+    },
+  };
+}
+
+async function configureCrossPostDelivery(args: {
+  deliveryUnit: DeliveryMode;
+  destinationPath: string;
+  key: string;
+  source: StreamHandle;
+}): Promise<void> {
+  const configured = await args.source.crossPostTo({
+    deliver: "new",
+    eventTypes: [EVENT_TYPE],
+    key: args.key,
+    path: args.destinationPath,
+  });
+  if (args.deliveryUnit === "batch") return;
+  if (typeof configured.payload !== "object" || configured.payload === null) {
+    throw new Error("cross-post configuration payload was not an object");
+  }
+  const payload = configured.payload as Record<string, unknown> & {
+    params?: Record<string, unknown>;
+  };
+  await args.source.append({
+    type: configured.type,
+    payload: {
+      ...payload,
+      params: { ...payload.params, deliveryUnit: "event" },
+    },
+  });
+}
+
+async function configureProjectProcessorDeliveryUnit(
+  project: {
+    processor: { waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void> };
+    streams: { get(path: string): Stream };
+  },
+  deliveryUnit: DeliveryMode,
+): Promise<void> {
+  const stream = project.streams.get("/") as StreamHandle;
+  try {
+    const configuredEvents = await stream.getEvents({
+      eventTypes: ["events.iterate.com/stream/subscription-configured"],
+      limit: 500,
+    });
+    const configured = configuredEvents.find((candidate) => {
+      const payload = candidate.payload as
+        | { delivery?: { mode?: unknown; processorSlug?: unknown } }
+        | undefined;
+      return payload?.delivery?.mode === "wake" && payload.delivery.processorSlug === "project";
+    });
+    if (configured === undefined || typeof configured.payload !== "object") {
+      throw new Error("project processor wake subscription was not found");
+    }
+    const payload = configured.payload as Record<string, unknown> & {
+      params?: Record<string, unknown>;
+    };
+    const offsets = await stream.append(
+      { return: "offsets" },
+      {
+        type: configured.type,
+        payload: {
+          ...payload,
+          params: { ...payload.params, deliveryUnit },
+        },
+      },
+    );
+    if (!Array.isArray(offsets) || typeof offsets[0] !== "number") {
+      throw new Error("project processor delivery configuration did not return an offset");
+    }
+    await project.processor.waitUntilEvent({ offset: offsets[0], timeoutMs: 30_000 });
+  } finally {
+    stream[Symbol.dispose]();
+  }
+}
+
+async function measureProcessorPcmCatchup(
+  projectId: string,
+  eventCount: number,
+  markerPrefix: string,
+): Promise<number> {
+  const auth = { type: "admin-secret" as const, secret: adminSecret() };
+  {
+    using killer = withItxSession({ auth, projectId });
+    await killProject(killer);
+  }
+
+  using project = withItxSession({ auth, projectId });
+  using stream = project.streams.get("/");
+  const initialHead = (await stream.head()).maxOffset;
+  const startedAt = performance.now();
+  await stream.append(
+    ...Array.from({ length: eventCount }, (_, index) =>
+      event({
+        marker: `wake-${markerPrefix}-${index}`,
+        payload: PCM_FRAME_PAYLOAD,
+      }),
+    ),
+  );
+  await project.processor.waitUntilEvent({
+    offset: initialHead + eventCount,
+    timeoutMs: 60_000,
+  });
+  return performance.now() - startedAt;
+}
 
 function quantile(sorted: readonly number[], fraction: number): number {
   return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))]!;

@@ -162,6 +162,9 @@ export type StreamEventBatch = {
  */
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
+/** Experimental single-event callback used by the process-event benchmark. */
+export type ProcessEvent = (event: StreamEvent) => unknown;
+
 /**
  * Compact internal batch for a hosted stream processor. The wake handshake
  * already identifies the stream and processor, while the host ingests only
