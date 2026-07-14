@@ -3,8 +3,10 @@ permissions:
   contents: read
   deployments: write
 concurrency:
-  group: auth-dev-global-${{ github.ref_name || 'dev_global' }}
-  cancel-in-progress: true
+  # Every ref deploys to the same dev_global Worker. Never interrupt a
+  # credentialed deployment midway through its rollout.
+  group: deploy-auth-dev-global
+  cancel-in-progress: false
 on:
   push:
     branches:
@@ -28,8 +30,9 @@ on:
 jobs:
   deploy-dev-global:
     runs-on:
-      size: 8x32
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

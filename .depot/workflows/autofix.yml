@@ -6,11 +6,15 @@ on:
       - main
       - "**/*autofix*"
       - "*autofix*"
+concurrency:
+  group: autofix-${{ github.head_ref || github.ref_name || github.run_id }}
+  cancel-in-progress: true
 jobs:
   autofix:
     runs-on:
-      size: 8x32
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

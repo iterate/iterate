@@ -3,8 +3,10 @@ permissions:
   contents: read
   deployments: write
 concurrency:
-  group: semaphore-${{ github.ref_name || 'prd' }}
-  cancel-in-progress: true
+  # Every ref deploys to the same production Worker. Never interrupt a
+  # credentialed deployment midway through its rollout.
+  group: deploy-semaphore-production
+  cancel-in-progress: false
 on:
   push:
     branches:
@@ -13,6 +15,8 @@ on:
       - .depot/workflows/deploy-semaphore.yml
       - envs.ts
       - scripts/lib/**
+      - apps/auth/**
+      - apps/auth-contract/**
       - apps/semaphore/**
       - packages/shared/**
       - packages/ui/**
@@ -26,8 +30,9 @@ on:
 jobs:
   deploy:
     runs-on:
-      size: 8x32
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
     outputs:
       public_url: ${{ steps.metadata.outputs.public_url }}
     steps:
@@ -62,8 +67,9 @@ jobs:
       - deploy
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.deploy.result == 'success' || needs.deploy.result == 'failure')
     runs-on:
-      size: 8x32
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
     steps:

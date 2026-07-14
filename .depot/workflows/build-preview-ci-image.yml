@@ -2,12 +2,11 @@ name: Build Preview CI Image
 
 on:
   schedule:
-    # Weekly (Mondays 04:17 UTC). This image has no consumer today — the
-    # preview workflow runs on Depot CI's standard runners, not this snapshot
-    # — so a daily bake was spending compute on an unused artifact. Weekly
-    # keeps it available and reasonably fresh; make it daily again (or delete
-    # this workflow) only once something actually consumes the image. See
-    # docs/ci-preview-performance.md.
+    # Weekly (Mondays 04:17 UTC). Mainline checks and production deploys use
+    # this snapshot; preview deploy/e2e uses Depot's standard runners. The
+    # reconcile step in each consumer validates the baked workspace against
+    # the checked-out lockfile, so weekly baking keeps startup fast without a
+    # daily image build. See docs/depot-ci.md.
     - cron: "17 4 * * 1"
   workflow_dispatch: {}
 
