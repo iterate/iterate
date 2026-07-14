@@ -53,7 +53,9 @@ times across six merged main heads. Detailed per-run log in the PR comments.
 - **marathon r4-3** `4xg33k0bf5` (merged main ce18a7d79): **25/25 green**,
   01:09–02:17 UTC. Runs 24–25 slowed to ~6 min (os lane 372s/355s) with
   recovered onboarding-stream `liveness probe` WebSocket reconnects — the
-  flake-23 pool-saturation tail signature at cap 150, fully absorbed by the
+  flake-23 pool-saturation tail signature (the pool rides at the per-type
+  `SANDBOX_MAX_INSTANCES` preview cap; #1747 replaced the flat cap-150 with
+  that table), fully absorbed by the
   reconnect/retry machinery. The next marathon's preflight redeploy flushed
   the pool and restored ~2.2 min/run pace from run 1, confirming the
   mechanism (a rollout resets assigned instances).
@@ -65,16 +67,21 @@ $0.53/run — 92% LLM tokens (gpt-5.6-sol BYOK, $49.36 uncached), with the
 AIG response cache absorbing 46.4% of requests (~$42 saved); AI Search
 fixture indexing $0.31; Depot 8-core compute ~275 min ≈ $4.40.
 
-Round-4 lessons (no code changes needed):
+Round-4 lessons (no test-failure fixes needed; the PR carries only the
+slot re-claim above plus a dead-code/doc-drift sweep from the round's
+follow-up reviews):
 
 - The round-1..3 fixes have held through a week of heavy platform churn; the
   lane's stability is structural, not a lucky streak.
 - A marathon can lose its slot mid-flight to a legitimate external claim;
-  the guard converts that into a clean fast stop. If this recurs often,
-  marathons could re-claim + redeploy and continue instead of exiting.
-- Sandbox-pool tail pressure at cap 150 is visible (slower runs, recovered
-  liveness reconnects) after ~25 runs but self-heals on redeploy and never
-  failed a run; watch it if marathons grow past ~30 runs per deploy.
+  the guard converts that into a clean fast stop. The loop now re-claims a
+  slot (full-fleet redeploy) and re-runs the interrupted run number uncounted,
+  capped at `MAX_SLOT_RECLAIMS` (2) per marathon — no tests ran under the
+  refusal, so this is environment re-establishment, not a retry layer.
+- Sandbox-pool tail pressure at the per-type preview caps is visible (slower
+  runs, recovered liveness reconnects) after ~25 runs on one deploy but
+  self-heals on redeploy and never failed a run; watch it if marathons grow
+  past ~30 runs per deploy.
 
 ## Run log
 
@@ -636,9 +643,13 @@ slots at 500 `standard-1` instances exceeded the dev/preview account memory
 quota and blocked deploys; 200 fit the currently populated fleet but did not
 leave room for all nine preview slots to carry OS sandbox apps. Destroy
 remains correct — it is what lets an idle fleet drain back to zero instead of
-holding slots forever. If sustained-churn claim latency reproduces at 150,
-this becomes a Cloudflare Containers escalation (pool-manager degradation
-under DO-binding churn), not an app-side fix.
+holding slots forever. If sustained-churn claim latency reproduces at the
+cap, this becomes a Cloudflare Containers escalation (pool-manager
+degradation under DO-binding churn), not an app-side fix. (Update 2026-07-08:
+#1747 replaced the flat cap with per-instance-type caps —
+`SANDBOX_MAX_INSTANCES` in `apps/os/scripts/generate-wrangler-config.ts` is
+now the source of truth; the saturation mechanics above are unchanged, per DO
+class.)
 
 ### 21. Blank route-pending panel fast-fails the first wait after `goto`
 

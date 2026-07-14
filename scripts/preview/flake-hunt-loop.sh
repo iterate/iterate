@@ -42,6 +42,26 @@ mkdir -p "$LOG_DIR"
 # the constant, so scripts/preview/e2e-policy.test.ts guards the match.
 RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
 
+# Full-fleet deploy, used by the preflight and by slot re-claims below.
+# --allow-draft: the marathon targets an arbitrary PR by number — an explicit
+# ask, so the draft preview policy doesn't apply.
+deploy_full_fleet() {
+  local label=$1 dlog=$2
+  echo "$label: deploying full fleet for PR $PR_NUMBER (log: $dlog)"
+  doppler run --project _shared --config prd -- pnpm preview deploy --all-apps --allow-draft \
+    --pull-request-number "$PR_NUMBER" >"$dlog" 2>&1
+  local deploy_exit=$?
+  if [ "$deploy_exit" -ne 0 ]; then
+    echo "$label: deploy FAILED (exit $deploy_exit) — see $dlog"
+    return 1
+  fi
+  if grep -qE "deploy-failed|claim-failed" "$dlog"; then
+    echo "$label: an app failed to deploy — see $dlog"
+    return 1
+  fi
+  echo "$label: deploy OK"
+}
+
 # Full-fleet preflight. `preview deploy` selects apps by diffing the PR head
 # against the LAST DEPLOYED head (not the PR base), so a mid-branch commit that
 # touches only one app (e.g. an apps/os-only fix) redeploys just that app and
@@ -54,23 +74,18 @@ RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
 # apps come back testable at the current head; set SKIP_PREFLIGHT_DEPLOY=1 to
 # bypass (e.g. resuming a marathon whose fleet is already unified).
 if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
-  preflight="$LOG_DIR/preflight-deploy.log"
-  echo "preflight: deploying full fleet for PR $PR_NUMBER (log: $preflight)"
-  # --allow-draft: the marathon targets an arbitrary PR by number — an
-  # explicit ask, so the draft preview policy doesn't apply.
-  doppler run --project _shared --config prd -- pnpm preview deploy --all-apps --allow-draft \
-    --pull-request-number "$PR_NUMBER" >"$preflight" 2>&1
-  deploy_exit=$?
-  if [ "$deploy_exit" -ne 0 ]; then
-    echo "preflight: deploy FAILED (exit $deploy_exit) — see $preflight"
-    exit 4
-  fi
-  if grep -qE "deploy-failed|claim-failed" "$preflight"; then
-    echo "preflight: an app failed to deploy — see $preflight"
-    exit 4
-  fi
-  echo "preflight: deploy OK"
+  deploy_full_fleet "preflight" "$LOG_DIR/preflight-deploy.log" || exit 4
 fi
+
+# Another PR (or a main validation run) can legitimately claim this PR's
+# preview slot mid-marathon; `preview test`'s ownership guard then refuses to
+# test the replaced fleet ("no longer belongs to"), which round 4 (r4-2,
+# 2026-07-14) hit at 21/25 greens. That refusal means NO tests ran, so
+# re-claiming a slot and re-running the SAME run number is not a retry layer —
+# it re-establishes the environment, exactly like the preflight. Capped so a
+# claim ping-pong with another active PR can't loop the marathon forever.
+MAX_SLOT_RECLAIMS="${MAX_SLOT_RECLAIMS:-2}"
+slot_reclaims=0
 
 # Optional slot warmup: a freshly-deployed slot is cold (os worker + DO chain +
 # sandbox containers all boot on first use), and a cold run 1 can flake on
@@ -86,7 +101,9 @@ for w in $(seq 1 "$WARMUP_RUNS"); do
     --pull-request-number "$PR_NUMBER" >"$wlog" 2>&1 || true
 done
 
-for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
+i="$START_AT"
+last_run=$((START_AT + RUNS - 1))
+while [ "$i" -le "$last_run" ]; do
   log="$LOG_DIR/run-$(printf '%03d' "$i").log"
   started=$(date -u +%H:%M:%S)
   doppler run --project _shared --config prd -- pnpm preview test \
@@ -134,11 +151,21 @@ for i in $(seq "$START_AT" $((START_AT + RUNS - 1))); do
     echo "run $i: PARTIAL — not all apps testable (missing:${missing:- unknown}) ($started-$finished UTC) $log"
     exit 3
   fi
-  if [ "$exit_code" -eq 0 ]; then
-    echo "run $i: PASS ($started-$finished UTC) $log"
-  else
+  if [ "$exit_code" -ne 0 ]; then
+    # "no longer belongs to" is the ownership-guard refusal from preview.ts
+    # (reassertEnvironmentConfigLease) — grep for the dialed-by-name string
+    # there before rewording it.
+    if grep -q "no longer belongs to" "$log" && [ "$slot_reclaims" -lt "$MAX_SLOT_RECLAIMS" ]; then
+      slot_reclaims=$((slot_reclaims + 1))
+      echo "run $i: SLOT CLAIMED EXTERNALLY — re-claiming a slot and re-running run $i uncounted (reclaim $slot_reclaims/$MAX_SLOT_RECLAIMS) ($started-$finished UTC) $log"
+      mv "$log" "$LOG_DIR/run-$(printf '%03d' "$i")-slot-stolen-$slot_reclaims.log"
+      deploy_full_fleet "reclaim $slot_reclaims" "$LOG_DIR/reclaim-$(printf '%02d' "$slot_reclaims")-deploy.log" || exit 4
+      continue
+    fi
     echo "run $i: FAIL exit=$exit_code ($started-$finished UTC) $log"
     exit 1
   fi
+  echo "run $i: PASS ($started-$finished UTC) $log"
+  i=$((i + 1))
 done
 echo "all $RUNS runs green"

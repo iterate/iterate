@@ -230,12 +230,6 @@ describe("auth preview root secrets", () => {
 });
 
 describe("preview test commands", () => {
-  it("uploads Playwright and Vitest artifacts for OS preview failures", () => {
-    expect(cloudflarePreviewApps.os).toMatchObject({
-      previewTestArtifacts: ["test-results", "apps/os/test-results", "/tmp/os-e2e-*"],
-    });
-  });
-
   it("normalizes OS preview artifacts before Depot upload", () => {
     const workflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),

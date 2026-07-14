@@ -41,16 +41,6 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   GITHUB_TOKEN="$(gh auth token)"
 fi
 
-if [[ -z "${WORKFLOW_RUN_URL:-}" ]]; then
-  export WORKFLOW_RUN_URL
-  WORKFLOW_RUN_URL="$(
-    gh pr view "$pr_number" \
-      --repo "${GITHUB_REPOSITORY:-iterate/iterate}" \
-      --json url \
-      --jq .url
-  )"
-fi
-
 echo "[preview:ci] deploy PR #$pr_number"
 pnpm preview deploy \
   --github-token "$GITHUB_TOKEN" \

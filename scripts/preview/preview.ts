@@ -477,7 +477,10 @@ export async function test(options: PullRequestCommandOptions = {}) {
     logPreview(
       `test start: ${app.slug} against ${existingEntry.publicUrl} (doppler config ${environmentConfigLease.dopplerConfig})`,
     );
-    const testResult = await runCommandWithRetries({
+    // One attempt, deliberately: retries live in the individual test
+    // (docs/testing.md#retries-and-timeouts) — everything above only
+    // watches and fails.
+    const testResult = await runCommand({
       args: [
         "run",
         "--project",
@@ -491,8 +494,6 @@ export async function test(options: PullRequestCommandOptions = {}) {
       ],
       command: "doppler",
       environment: runtime.commandEnvironment,
-      maxAttempts: defaultPreviewTestMaxAttempts,
-      retryDelayMs: defaultPreviewTestRetryDelayMs,
       signal: runtime.signal,
       workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
     });
@@ -1007,7 +1008,6 @@ export type CloudflarePreviewApp = {
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
   previewTestBaseUrlEnvVar: string;
-  previewTestArtifacts?: readonly [string, ...string[]];
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
    * Soft wall-clock budgets. When a phase runs slower than its budget we emit
@@ -1234,7 +1234,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // ~60s as of 2026-07-02). Crossing them warns, never fails.
     previewDeployBudgetMs: 55_000,
     previewTestBudgetMs: 80_000,
-    previewTestArtifacts: ["test-results", "apps/os/test-results", "/tmp/os-e2e-*"],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     // The apps/os e2e Vitest suite runs its `node` project (engine + itx
     // catalogue matrix; the `browser` project is skipped here — the root
@@ -1405,14 +1404,6 @@ const defaultPreviewLeaseMs = 24 * 60 * 60 * 1000;
 // returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
-/**
- * Whole-lane attempts for an app's preview test command. Pinned to 1 by the
- * retry policy (docs/testing.md#retries-and-timeouts): retries live in the
- * individual test; everything above only watches and fails. Exported so
- * e2e-policy.test.ts can guard the pin.
- */
-export const defaultPreviewTestMaxAttempts = 1;
-const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
@@ -1440,7 +1431,6 @@ const CloudflarePreviewStatus = z.enum([
   "cleanup-failed",
   "deploy-failed",
   "deployed",
-  "fork-unavailable",
   "released",
   "tests-failed",
 ]);
@@ -1980,8 +1970,6 @@ function renderStatusLabel(status: z.infer<typeof CloudflarePreviewAppEntry>["st
       return "released";
     case "cleanup-failed":
       return "cleanup failed";
-    case "fork-unavailable":
-      return "unavailable for forks";
   }
 }
 
@@ -4478,27 +4466,6 @@ function canRunPreviewTests(entry: z.infer<typeof CloudflarePreviewAppEntry> | u
   return Boolean(
     entry?.publicUrl && ["awaiting-tests", "deployed", "tests-failed"].includes(entry.status),
   );
-}
-
-async function runCommandWithRetries(
-  params: Parameters<typeof runCommand>[0] & {
-    maxAttempts: number;
-    retryDelayMs: number;
-  },
-) {
-  let attempt = 1;
-  let lastResult = await runCommand(params);
-
-  while (attempt < params.maxAttempts && lastResult.exitCode !== 0) {
-    console.error(
-      `Command failed on attempt ${attempt}/${params.maxAttempts}. Retrying in ${params.retryDelayMs}ms...`,
-    );
-    await sleep(params.retryDelayMs, params.signal);
-    attempt += 1;
-    lastResult = await runCommand(params);
-  }
-
-  return lastResult;
 }
 
 async function sleep(ms: number, signal?: AbortSignal) {
