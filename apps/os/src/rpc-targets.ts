@@ -293,6 +293,7 @@ import type { AgentProcessorState } from "./domains/agents/agent-processor-contr
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
+import type { AgentStatusTouchInput } from "./domains/projects/agent-status-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type {
@@ -4103,6 +4104,61 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
+   * Update this agent's status record — the title, note, and shortStatus that
+   * project surfaces (the agents list, the Slack thread status) show for it.
+   * A MERGE: only the fields you pass change; the platform patches the
+   * busy/idle flag (and what you are doing — LLM request vs running script)
+   * into the same record on its own. `shortStatus` completes the sentence
+   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
+   * while the agent works — update it as your work moves through phases.
+   * `note` is a one-or-two-sentence description of the agent or its current
+   * focus; `title` names the agent/conversation; `blocked: true` marks a
+   * turn that ended waiting on a human.
+   */
+  async setStatus(input: {
+    title?: string;
+    note?: string;
+    shortStatus?: string;
+    /** Set true when ending a turn to wait on a human (an answer, an
+     * approval, a secret) — surfaces show the agent as blocked instead of
+     * idle. The platform clears it when the next message wakes you. */
+    blocked?: boolean;
+    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
+     * "web") or an https image URL, shown next to this agent on roster
+     * surfaces. */
+    icon?: string;
+  }): Promise<StreamEvent> {
+    // Whitespace-only values are dropped, not journaled: a patch of empty
+    // strings would blank titles and notes on every surface.
+    const field = (value: string | undefined) => {
+      const trimmed = value?.trim();
+      return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+    };
+    const patch = {
+      ...(field(input.title) === undefined ? {} : { title: field(input.title) }),
+      ...(field(input.note) === undefined ? {} : { note: field(input.note) }),
+      ...(field(input.shortStatus) === undefined ? {} : { shortStatus: field(input.shortStatus) }),
+      ...(field(input.icon) === undefined ? {} : { icon: field(input.icon) }),
+      ...(input.blocked === undefined ? {} : { blocked: input.blocked }),
+    };
+    if (Object.keys(patch).length === 0) {
+      throw new Error(
+        "agent.setStatus requires at least one non-empty field (title, note, shortStatus, icon, blocked).",
+      );
+    }
+    const [event] = await this.stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: patch,
+    });
+    return event;
+  }
+
+  /** Name this agent/conversation — sugar for `setStatus({ title })`. */
+  setTitle(title: string): Promise<StreamEvent> {
+    return this.setStatus({ title });
+  }
+
+  /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
@@ -4190,6 +4246,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         capabilityHost:
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
+        setStatus:
+          'Merge-update this agent\'s title / note / shortStatus (shortStatus completes "<agent> is …" on live surfaces).',
+        setTitle: "Name this agent/conversation (sugar for setStatus({ title })).",
         configure:
           "Set this agent's policy ({ systemPrompt?, model? }); on a never-seen path this births the agent with defaults plus the overrides.",
         kill: "Restart the agent's server-side object; the next request boots it fresh.",
@@ -4936,6 +4995,8 @@ type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
   touchStreamActivity(input: TouchInput): Promise<void>;
+  touchAgentStatus(input: AgentStatusTouchInput): Promise<void>;
+  rebuildAgentStatus(input: AgentStatusTouchInput): Promise<boolean>;
 };
 
 /**
@@ -5312,6 +5373,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
+    this.#indexAgentStatus(batch);
     this.#indexStreamSearch(batch);
     try {
       return await this.worker.processEventBatch(batch);
@@ -5355,6 +5417,80 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     ).catch(() => {
       // Recency self-heals from the next batch; never surface into worker delivery.
     });
+  }
+
+  /**
+   * Platform step: fold an agent batch's status-changed patches into the
+   * project's agents roster (a peer slice of `itx.liveState` — see
+   * AgentStatusDatabase). Same rules as {@link #indexStreamActivity}:
+   * idempotent (event offsets guard redelivery), fire-and-forget, MUST NOT
+   * throw. Unlike recency, a DROPPED patch does not heal on the next one —
+   * these are merge patches, and a later busy patch carries no title with
+   * which to reconstruct a lost rename — so a failed dial falls back to
+   * rebuilding the row from the agent's journal (the authority).
+   */
+  #indexAgentStatus(batch: StreamPushEventBatch): void {
+    if (!batch.path.startsWith("/agents/")) return;
+    const events = batch.events
+      .filter((event) => event.type === "events.iterate.com/agent/status-changed")
+      .map((event) => ({
+        payload: event.payload,
+        offset: event.offset,
+        createdAt: event.createdAt,
+      }));
+    if (events.length === 0) return;
+    void Promise.resolve(this.#projectDo.touchAgentStatus({ path: batch.path, events })).catch(() =>
+      this.#rebuildAgentStatus(batch.path),
+    );
+  }
+
+  /**
+   * Recovery lane for a failed roster dial: re-read the agent journal's FULL
+   * status-changed history and hand it to the DO as a from-scratch rebuild.
+   * The journal read is authoritative at read time; a touch for NEWER events
+   * racing into the gap between read and replace makes the DO REFUSE the
+   * stale snapshot, and the loop re-reads (the newer events are committed to
+   * the journal before their touch could have succeeded, so the next read
+   * has them). Retried with backoff; the terminal failure is logged and the
+   * row stays stale until the agent's next rebuild-triggering drop.
+   */
+  async #rebuildAgentStatus(path: string): Promise<void> {
+    for (const backoffMs of [0, 2_000, 10_000]) {
+      if (backoffMs > 0) await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      try {
+        const stream = new StreamRpcTarget({
+          auth: this.#props.auth,
+          path,
+          projectId: this.projectId,
+        });
+        const events: { payload: unknown; offset: number; createdAt: string }[] = [];
+        let afterOffset = 0;
+        for (;;) {
+          const page = await stream.getEvents({
+            afterOffset,
+            eventTypes: ["events.iterate.com/agent/status-changed"],
+            limit: 500,
+          });
+          for (const event of page) {
+            events.push({
+              payload: event.payload,
+              offset: event.offset,
+              createdAt: event.createdAt,
+            });
+          }
+          if (page.length < 500) break;
+          afterOffset = page.at(-1)!.offset;
+        }
+        const applied = await this.#projectDo.rebuildAgentStatus({ path, events });
+        if (applied) return;
+        console.warn("[agents-roster] rebuild lost a race with a newer touch; re-reading", {
+          path,
+        });
+      } catch (error) {
+        console.warn("[agents-roster] rebuild attempt failed", { path, error });
+      }
+    }
+    console.error("[agents-roster] roster row is stale after failed rebuild", { path });
   }
 
   /**

@@ -364,6 +364,33 @@ export interface Agent {
    */
   configure(input: AgentDefaultsOverrides): Promise<void>;
   /**
+   * Update this agent's status record — the title, note, and shortStatus that
+   * project surfaces (the agents list, the Slack thread status) show for it.
+   * A MERGE: only the fields you pass change; the platform patches the
+   * busy/idle flag (and what you are doing — LLM request vs running script)
+   * into the same record on its own. `shortStatus` completes the sentence
+   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
+   * while the agent works — update it as your work moves through phases.
+   * `note` is a one-or-two-sentence description of the agent or its current
+   * focus; `title` names the agent/conversation; `blocked: true` marks a
+   * turn that ended waiting on a human.
+   */
+  setStatus(input: {
+    title?: string;
+    note?: string;
+    shortStatus?: string;
+    /** Set true when ending a turn to wait on a human (an answer, an
+     * approval, a secret) — surfaces show the agent as blocked instead of
+     * idle. The platform clears it when the next message wakes you. */
+    blocked?: boolean;
+    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
+     * "web") or an https image URL, shown next to this agent on roster
+     * surfaces. */
+    icon?: string;
+  }): Promise<StreamEvent>;
+  /** Name this agent/conversation — sugar for `setStatus({ title })`. */
+  setTitle(title: string): Promise<StreamEvent>;
+  /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
@@ -1759,6 +1786,8 @@ export type ProjectProcessorState = {
  *   catalogs) folded by the project processor. One contributor, not the base.
  * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
  *   its own SQLite (recency, counts). Nothing to do with the processor.
+ * - `agents` — the agents roster: every agent stream's merged status record
+ *   (busy, title, note, shortStatus), same SQLite home as the streams index.
  * - `liveDemo` — plain DO memory, for the live-state playground.
  *
  * A `useLiveState` selector picks whichever slice a component renders, so a
@@ -1769,6 +1798,8 @@ export type ProjectLiveState = {
   reduced: ProjectProcessorState;
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
+  /** The agents roster keyed by agent path — each agent's merged status record, folded from its status-changed patches. */
+  agents: Record<string, AgentStatusRow>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number };
 };
@@ -1977,6 +2008,20 @@ export type StreamIndexRow = {
   eventCount: number;
 };
 
+/** One row of the agents roster: an agent stream and its merged status record. */
+export type AgentStatusRow = {
+  path: string;
+  /** The merged status record (mergeAgentStatusPatch over the agent's own
+   * status-changed patches — same fold as the agent processor and the Slack
+   * painter, so every surface agrees). */
+  status: AgentStatusRecord;
+  /** Offset of the last folded status-changed event — redelivered batches
+   * fold to nothing past it. */
+  lastEventOffset: number;
+  /** createdAt of that event. */
+  updatedAt: string;
+};
+
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
  * published structurally so itx callers can route a call through a specific
  * AI Gateway configuration — e.g. `{ gateway: { id: "default", skipCache: true } }`. */
@@ -2068,6 +2113,22 @@ export type AgentProcessorState = {
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
+  activeScriptExecutionIds: string[];
+  status?:
+    | { busy: boolean; phase?: "llm" | "script" | undefined; sinceOffset: number; since: string }
+    | undefined;
+  announcedStatus?:
+    | {
+        busy?: boolean | undefined;
+        phase?: "llm" | "script" | undefined;
+        sinceOffset?: number | undefined;
+        blocked?: boolean | undefined;
+        title?: string | undefined;
+        note?: string | undefined;
+        shortStatus?: string | undefined;
+        icon?: string | undefined;
+      }
+    | undefined;
   tokenUsage: {
     totalInputTokens: number;
     totalOutputTokens: number;
@@ -2894,6 +2955,18 @@ export type ProcessorSnapshot<State> = {
 export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
+
+/** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */
+export type AgentStatusRecord = {
+  busy?: boolean | undefined;
+  phase?: "llm" | "script" | undefined;
+  sinceOffset?: number | undefined;
+  blocked?: boolean | undefined;
+  title?: string | undefined;
+  note?: string | undefined;
+  shortStatus?: string | undefined;
+  icon?: string | undefined;
+};
 
 /** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
  * a filename plus the raw bytes as a Blob. */

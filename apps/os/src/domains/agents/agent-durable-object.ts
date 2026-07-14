@@ -119,6 +119,27 @@ export class AgentDurableObject extends DurableObject<Env> {
             });
           }
         },
+        fetchSlackChannelName: async (channel) => {
+          const connection = slackConnectionFromAgentPath(this.#name.path);
+          if (connection === null) return null;
+          try {
+            const result = (await callProjectSlackWebApi({
+              body: { channel },
+              connection,
+              method: "conversations.info",
+              projectId: this.#name.projectId,
+            })) as { channel?: { name?: unknown } };
+            const name = result.channel?.name;
+            return typeof name === "string" && name.length > 0 ? name : null;
+          } catch (error) {
+            console.warn("[slack-agent] conversations.info failed; falling back to channel id", {
+              channel,
+              error,
+              path: this.#name.path,
+            });
+            return null;
+          }
+        },
         storeSlackFiles: (input) => {
           // Downloads ride the named connection's bot-token secret, exactly
           // like the side-effect calls above — same no-connection skip rule.

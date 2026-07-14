@@ -35,7 +35,7 @@ export const EmailAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/email/thread-route-configured",
     "events.iterate.com/email/received",
   ],
-  emits: ["events.iterate.com/agents/message-received"],
+  emits: ["events.iterate.com/agents/message-received", "events.iterate.com/agent/status-changed"],
 });
 
 export type EmailAgentProcessorState = z.infer<typeof EmailAgentProcessorContract.stateSchema>;
