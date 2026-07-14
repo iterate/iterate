@@ -2445,13 +2445,16 @@ async function checkCloudflareZoneWithApi(input: {
   const url = new URL("https://api.cloudflare.com/client/v4/zones");
   url.searchParams.set("name", input.domain);
   url.searchParams.set("per_page", "50");
-  const response = await fetchCloudflareWith429Retry(`GET ${url.pathname}`, () =>
-    fetch(url, {
-      headers: {
-        authorization: `Bearer ${input.apiToken}`,
-      },
-      signal: input.signal,
-    }),
+  const response = await fetchCloudflareWith429Retry(
+    `GET ${url.pathname}`,
+    () =>
+      fetch(url, {
+        headers: {
+          authorization: `Bearer ${input.apiToken}`,
+        },
+        signal: input.signal,
+      }),
+    { signal: input.signal },
   );
   const parsed = CloudflareZonesResponse.parse(await response.json());
   if (!response.ok || !parsed.success) {

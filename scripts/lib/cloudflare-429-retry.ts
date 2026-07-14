@@ -37,13 +37,19 @@ export async function fetchCloudflareWith429Retry(
     backoffMs?: readonly number[];
     /** Cap applied to a server-sent Retry-After. */
     maxRetryAfterMs?: number;
+    /**
+     * Aborts the backoff wait as well as being the caller's fetch signal —
+     * without it, a cancelled caller would silently keep waiting (and
+     * re-fetching) for up to the full backoff schedule.
+     */
+    signal?: AbortSignal;
     /** Injectable for tests. */
-    sleep?: (ms: number) => Promise<void>;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   } = {},
 ): Promise<Response> {
   const backoffMs = opts.backoffMs ?? DEFAULT_BACKOFF_MS;
   const maxRetryAfterMs = opts.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS;
-  const sleep = opts.sleep ?? ((ms: number) => new Promise((res) => setTimeout(res, ms)));
+  const sleep = opts.sleep ?? abortableSleep;
 
   let response = await doFetch();
   for (const [index, fallbackMs] of backoffMs.entries()) {
@@ -56,12 +62,36 @@ export async function fetchCloudflareWith429Retry(
       `Cloudflare API rate limited (429) on ${label} (attempt ${index + 1}/${backoffMs.length + 1}); ` +
         `retrying in ${Math.round(delayMs / 1000)}s${retryAfter != null ? " (Retry-After)" : ""}...`,
     );
-    await sleep(delayMs);
+    // Drain the 429 body before waiting: an unread Response pins its
+    // keep-alive connection in undici for as long as it is referenced, and
+    // holding one across a 5-120s backoff (times every concurrent caller in
+    // a rate-limited burst) starves the connection pool.
+    await response.body?.cancel().catch(() => {});
+    await sleep(delayMs, opts.signal);
     response = await doFetch();
   }
   // Still 429 after every attempt: hand the response back so the caller's
   // normal error path reports it (with the exhausted retries visible above).
   return response;
+}
+
+/** setTimeout that rejects with the signal's reason if aborted mid-wait. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error("Aborted"));
+      return;
+    }
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(signal?.reason ?? new Error("Aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** Retry-After is either delta-seconds or an HTTP-date; both become a delay in ms. */

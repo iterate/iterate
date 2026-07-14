@@ -99,17 +99,21 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
     // erase-data scripts), so 429 backoff lives here once instead of at each
     // call site. Request bodies are always strings (see the content-type
     // sniff below), so replaying the same init per attempt is safe.
-    const response = await fetchCloudflareWith429Retry(`${init?.method ?? "GET"} ${path}`, () =>
-      fetch(`https://api.cloudflare.com/client/v4${path}`, {
-        ...init,
-        headers: {
-          authorization: `Bearer ${secrets.CLOUDFLARE_API_TOKEN}`,
-          ...(init?.body && typeof init.body === "string"
-            ? { "content-type": "application/json" }
-            : {}),
-          ...init?.headers,
-        },
-      }),
+    const response = await fetchCloudflareWith429Retry(
+      `${init?.method ?? "GET"} ${path}`,
+      () =>
+        fetch(`https://api.cloudflare.com/client/v4${path}`, {
+          ...init,
+          headers: {
+            authorization: `Bearer ${secrets.CLOUDFLARE_API_TOKEN}`,
+            ...(init?.body && typeof init.body === "string"
+              ? { "content-type": "application/json" }
+              : {}),
+            ...init?.headers,
+          },
+        }),
+      // A caller's abort also cuts the backoff wait short, not just the fetch.
+      { signal: init?.signal ?? undefined },
     );
     const body: any = await response.json().catch(() => null);
     if (!response.ok || body?.success === false) {
