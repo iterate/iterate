@@ -56,7 +56,10 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     expect(payload.content).toContain('itx.integrations.github.get("install-789").octokit');
     expect(payload.content).toContain(".rest.pulls.get");
     expect(payload.content).toContain("sandbox.setEnvVars");
-    expect(payload.content).toContain("AUTHORIZATION: Bearer $GH_TOKEN");
+    expect(payload.content).toContain("AUTHORIZATION: Basic");
+    expect(payload.content).toContain("x-access-token:${GH_TOKEN}");
+    expect(payload.content).toContain("rejects API-style Bearer auth");
+    expect(payload.content).not.toContain('extraheader "AUTHORIZATION: Bearer $GH_TOKEN');
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "dont-trigger-request" });
   });
 
