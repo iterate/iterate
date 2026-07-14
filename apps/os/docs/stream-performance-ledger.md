@@ -1454,3 +1454,46 @@ The retained harness is
 `e2e/vitest/storage-kv-sql-benchmark.e2e.test.ts`. Raw 100-sample records are
 `/tmp/stream-storage-surfaces-r{1,2,3,4,5}.log`; the earlier sync-only
 calibration is `/tmp/stream-storage-kv-sql-r{1,2,3}.log` locally.
+
+## 2026-07-14: Larger Hosted-Processor Request Frames Rejected
+
+The retained eight-batch settlement fence removes seven of eight processor
+return frames, but an 8,000-event catch-up still sends eight 1,000-event
+request frames. A prototype gave configured hosted processors the existing
+internal push envelope of 8,000 rows or 4 MiB while leaving ephemeral/browser
+connections at 1,000 rows or 1 MiB. This needed no new state or recovery path,
+but raised per-connection peak frame memory and moved hosted delivery closer to
+the transport ceiling.
+
+Focused unit coverage proved an 8,000+500 row catch-up became two processor
+calls. Sparse replay remained byte bounded, and its empty-page coalescing tests
+continued to exercise the same eight-page fence. All 124 focused subscriber and
+batch-math tests passed.
+
+The same host-timed workload as the settlement experiment compared the working
+prototype with exact parent `8508179ea`. Three successful rounds per revision
+ran 15 measured 8,000-event kill/reactivate backlogs in reverse order, for 45
+samples per side:
+
+| 8,000-event processor catch-up | 1,000-row parent | 8,000-row frame | Change |
+| ------------------------------ | ---------------: | --------------: | -----: |
+| p50                            |       1,273.1 ms |      1,267.8 ms |   0.4% |
+| p95                            |       1,452.8 ms |      1,434.1 ms |   1.3% |
+| mean                           |       1,233.2 ms |      1,175.9 ms |   4.6% |
+| median throughput              |       6,284 ev/s |      6,310 ev/s |   0.4% |
+
+One additional candidate round failed after several kill/reactivate cycles in
+Cap'n Web decoding while the server reported the expected dead old callback
+and an immediate `waitUntilEvent` error. Restarting the candidate server made
+the complete round pass, so this does not prove a 4 MiB internal frame corrupts
+the transport. It does remove any basis for accepting a memory/risk increase
+whose median effect is otherwise noise.
+
+The result also localizes the retained window-eight gain: after return-frame
+settlement is amortized, the seven remaining request dispatches are not the
+dominant end-to-end catch-up cost. The prototype and its test changes were
+reverted. Raw successful records are
+`/tmp/stream-frame8000-{candidate,parent}-r{1,2}.log`, candidate round three is
+`/tmp/stream-frame8000-candidate-r3b.log`, parent round three is
+`/tmp/stream-frame8000-parent-r3.log`, and the failed candidate attempt is
+`/tmp/stream-frame8000-candidate-r3.log`.
