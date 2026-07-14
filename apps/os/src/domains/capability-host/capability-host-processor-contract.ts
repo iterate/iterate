@@ -180,7 +180,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
         {
           description: "The script threw; the error message is journaled.",
           payload: {
-            error: "TypeError: itx.gmail.listMesages is not a function",
+            error: "TypeError: itx.integrations.gmail.get(...).listMessages is not a function",
             executionId: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
           },
         },

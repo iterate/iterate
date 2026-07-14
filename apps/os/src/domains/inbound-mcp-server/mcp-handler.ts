@@ -22,7 +22,6 @@ import {
 } from "./exec-typescript-description.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
-import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
@@ -114,7 +113,7 @@ function createServer(input: {
   const projects = input.auth.projects;
   const requireProjectInput = input.auth.authType === "admin_api_secret" || projects.length > 1;
   const resolveProject = async (requestedProject: string | undefined) => {
-    const project = await resolveToolProject(input.context, projects, requestedProject, {
+    const project = await resolveToolProject(projects, requestedProject, {
       authType: input.auth.authType,
       requireProjectInput,
     });
@@ -263,8 +262,17 @@ async function resolveMcpAuth(input: {
     });
   }
 
-  const accessToken = await resolveOAuthAccessToken({ ...input, auth, audiences: mcpAudiences });
-  if (!accessToken) return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
+  const resolution = await resolveOAuthAccessToken({ ...input, auth, audiences: mcpAudiences });
+  if (resolution.status === "unavailable") {
+    return new Response("Authentication service unavailable.", {
+      status: 503,
+      headers: { ...mcpCorsHeaders, "Retry-After": "5" },
+    });
+  }
+  if (resolution.status === "invalid") {
+    return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
+  }
+  const accessToken = resolution.accessToken;
   const audiences = Array.isArray(accessToken.aud) ? accessToken.aud : [accessToken.aud];
   if (!audiences.some((audience) => mcpAudiences.includes(audience))) {
     return unauthorizedMcpResponse(input, "Bearer token is not scoped to this MCP resource");
@@ -304,56 +312,69 @@ async function resolveMcpAuth(input: {
 // Iterate Auth issues a JWT access token only when the client requests an RFC
 // 8707 `resource` (audience); clients that omit it — Grok's connector, generic
 // MCP clients — get an OPAQUE token instead. The JWT verifier can't read those,
-// so fall back to the auth worker's introspection endpoint, which validates the
+// so fall back to auth's private RPC introspection method, which validates the
 // opaque token against its (hashed) store and reconstructs the same claims.
 async function resolveOAuthAccessToken(input: {
   auth: ReturnType<typeof createIterateAuth>;
   context: RequestContext;
+  env: Env;
   request: Request;
   audiences: readonly string[];
-}): Promise<AccessTokenClaims | null> {
+}): Promise<
+  | { status: "authenticated"; accessToken: AccessTokenClaims }
+  | { status: "invalid" }
+  | { status: "unavailable" }
+> {
   const jwtAccessToken = await input.auth.authenticateBearer({ headers: input.request.headers });
-  if (jwtAccessToken) return jwtAccessToken;
+  if (jwtAccessToken) return { status: "authenticated", accessToken: jwtAccessToken };
 
   const bearerToken = readBearerToken(input.request.headers.get("authorization"));
-  if (!bearerToken) return null;
+  if (!bearerToken) return { status: "invalid" };
 
   try {
-    const result = await createAuthWorkerServiceClient(
-      input.context,
-    ).internal.oauth.introspectAccessToken({
+    const result = await input.env.AUTH.introspectAccessToken({
       token: bearerToken,
       audiences: [...input.audiences],
     });
     if (!result.active) {
-      input.context.log.info("os.mcp.opaque_token_inactive");
-      input.context.log.set({ mcpAuth: { opaqueIntrospection: result.reason ?? "inactive" } });
-      return null;
+      input.context.log.info("os.mcp.opaque_token_inactive", {
+        mcpAuth: {
+          opaqueIntrospection: diagnosticIdentifier(result.reason) ?? "inactive",
+        },
+      });
+      return { status: "invalid" };
     }
 
     return {
-      sub: result.sub,
-      sid: result.sid,
-      iss: result.iss,
-      aud: result.aud,
-      iat: result.iat,
-      exp: result.exp,
-      scope: result.scope,
-      scopes: result.scopes,
-      [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: result.organizations,
-      [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: result.projects,
-      [ITERATE_IS_ADMIN_CLAIM]: result.isAdmin,
-      [ITERATE_ROLE_CLAIM]: result.role,
+      status: "authenticated",
+      accessToken: {
+        sub: result.sub,
+        sid: result.sid,
+        iss: result.iss,
+        aud: result.aud,
+        iat: result.iat,
+        exp: result.exp,
+        scope: result.scope,
+        scopes: result.scopes,
+        [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: result.organizations,
+        [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: result.projects,
+        [ITERATE_IS_ADMIN_CLAIM]: result.isAdmin,
+        [ITERATE_ROLE_CLAIM]: result.role,
+      },
     };
   } catch (error) {
-    input.context.log.info("os.mcp.opaque_introspection_error");
-    input.context.log.set({
+    input.context.log.info("os.mcp.opaque_introspection_error", {
       mcpAuth: {
-        opaqueIntrospectionError: error instanceof Error ? error.message : String(error),
+        opaqueIntrospectionErrorType: error instanceof Error ? "Error" : "NonErrorThrowable",
       },
     });
-    return null;
+    return { status: "unavailable" };
   }
+}
+
+function diagnosticIdentifier(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/u.test(value) ? value : undefined;
 }
 
 function createMcpIterateAuth(
@@ -381,7 +402,6 @@ function readAccessTokenScopes(accessToken: { scope?: string; scopes?: string[] 
 }
 
 async function resolveToolProject(
-  context: RequestContext,
   projects: ProjectGrant[],
   requestedProject: string | undefined,
   options: { authType: McpAuth["authType"]; requireProjectInput: boolean },
@@ -398,11 +418,7 @@ async function resolveToolProject(
     // KV directory cache in front of the auth worker (also resolves
     // admin-lane projects, which are primed at create but never registered
     // with the auth directory).
-    const record = await readProjectBySlug(
-      context.config,
-      env.PROJECT_DIRECTORY,
-      normalizedRequestedProject,
-    );
+    const record = await readProjectBySlug(env.PROJECT_DIRECTORY, normalizedRequestedProject);
     if (!record) throw new Error(`Project not found: ${normalizedRequestedProject}`);
     return { id: record.id, slug: record.slug };
   }

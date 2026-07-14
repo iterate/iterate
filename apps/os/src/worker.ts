@@ -16,7 +16,6 @@
  */
 import handler from "@tanstack/react-start/server-entry";
 import { newHttpBatchRpcResponse, newWorkersWebSocketRpcResponse } from "capnweb";
-import { withEvlog } from "@iterate-com/shared/evlog";
 import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
@@ -40,6 +39,9 @@ import {
   handleEventQueueBatch,
   isWorkerEventsQueue,
 } from "./domains/events/event-queue-entrypoint.ts";
+import { runHttpWideLog } from "./observability/operation.ts";
+import { wideLogger } from "./observability/wide-log.ts";
+import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
 
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
@@ -82,27 +84,7 @@ export default {
     // set by our own routing below. Strip whatever the outside world sent so
     // downstream code can rely on them.
     const request = stripInternalHeaders(inbound);
-
-    // Parse config per request, not at module scope: workerd may reuse an
-    // isolate across binding-only deploys, so a module-scope copy can serve
-    // stale secrets after a rotation. Parsing is pure and cheap.
-    const config = parseConfig(env);
-
-    const mcpRequest = rewriteMcpHostRequest({ config, request });
-    if (mcpRequest) return await appFetch(mcpRequest, ctx, config, { isEventDocsHost: false });
-
-    const route = await decideIngressRoute({
-      config,
-      headers: request.headers,
-      method: request.method,
-      resolvers: directoryResolvers(config, env),
-      url: request.url,
-    });
-    if (route.lane !== "os") return await apiFetch(request, env, ctx, config, route);
-
-    return await appFetch(request, ctx, config, {
-      isEventDocsHost: route.hostKind === "eventDocs",
-    });
+    return await runHttpWideLog(() => fetchWithoutWideLog(request, env, ctx));
   },
 
   async queue(batch: MessageBatch, env: Env) {
@@ -123,6 +105,33 @@ export default {
   },
 };
 
+async function fetchWithoutWideLog(request: Request, env: Env, ctx: ExecutionContext) {
+  // Parse config per request, not at module scope: workerd may reuse an
+  // isolate across binding-only deploys, so a module-scope copy can serve
+  // stale secrets after a rotation. Parsing is pure and cheap.
+  const config = parseConfig(env);
+
+  const mcpRequest = rewriteMcpHostRequest({ config, request });
+  if (mcpRequest) {
+    wideLogger.set({ ingress: { lane: "mcp" } });
+    return await appFetch(mcpRequest, ctx, config, { isEventDocsHost: false });
+  }
+
+  const route = await decideIngressRoute({
+    config,
+    headers: request.headers,
+    method: request.method,
+    resolvers: directoryResolvers(env),
+    url: request.url,
+  });
+  wideLogger.set(ingressLogFields(request, route));
+  if (route.lane !== "os") return await apiFetch(request, env, ctx, config, route);
+
+  return await appFetch(request, ctx, config, {
+    isEventDocsHost: route.hostKind === "eventDocs",
+  });
+}
+
 /**
  * The dashboard app: TanStack Start SSR, server functions, and the remaining
  * /api routes (inbound MCP, health). Every request emits one structured
@@ -134,28 +143,23 @@ async function appFetch(
   config: AppConfig,
   host: { isEventDocsHost: boolean },
 ) {
-  return withEvlog(
-    { request, app: { name: "@iterate-com/os", slug: "os" }, config, executionCtx: ctx },
-    async ({ log }) => {
-      // When baseUrl is not configured (for example workers.dev previews),
-      // the request origin is the app's own URL. After this, baseUrl is
-      // always set.
-      const requestConfig: AppConfig = config.baseUrl
-        ? config
-        : { ...config, baseUrl: new URL(request.url).origin as AppConfig["baseUrl"] };
+  // When baseUrl is not configured (for example workers.dev previews),
+  // the request origin is the app's own URL. After this, baseUrl is
+  // always set.
+  const requestConfig: AppConfig = config.baseUrl
+    ? config
+    : { ...config, baseUrl: new URL(request.url).origin as AppConfig["baseUrl"] };
 
-      const context: RequestContext = {
-        config: requestConfig,
-        executionCtx: ctx,
-        isEventDocsHost: host.isEventDocsHost,
-        log,
-        rawRequest: request,
-        waitUntil: (promise) => ctx.waitUntil(promise),
-      };
+  const context: RequestContext = {
+    config: requestConfig,
+    executionCtx: ctx,
+    isEventDocsHost: host.isEventDocsHost,
+    log: wideLogger,
+    rawRequest: request,
+    waitUntil: (promise) => ctx.waitUntil(promise),
+  };
 
-      return await handler.fetch(request, { context });
-    },
-  );
+  return await handler.fetch(request, { context });
 }
 
 /**
@@ -210,6 +214,7 @@ async function apiFetch(
         buildBudgetMs: PROJECT_HOST_BUILD_BUDGET_MS,
         ref,
         request: new Request(route.fetch.url, init),
+        traceRole: "project_config",
       });
     } catch (error) {
       // A cold build (first use after a commit) shows a refreshing "building"
@@ -234,7 +239,7 @@ async function apiFetch(
       resolveProject: async (reference) =>
         reference.startsWith("prj_")
           ? await readProjectById(env.PROJECT_DIRECTORY, reference)
-          : await readProjectBySlug(config, env.PROJECT_DIRECTORY, reference),
+          : await readProjectBySlug(env.PROJECT_DIRECTORY, reference),
     });
   }
 
@@ -251,16 +256,48 @@ async function apiFetch(
     headers: request.headers,
     requestUrl: request.url,
   });
+  const itxObservability = (transport: "http" | "websocket") => {
+    const sessionId = `itx_session_${crypto.randomUUID().replaceAll("-", "")}`;
+    wideLogger.set({ itx: { sessionId } });
+    return createItxRpcSessionOptions({
+      transport,
+      sessionId,
+      parentLogId: wideLogger.id(),
+    });
+  };
   if (request.method === "POST") {
-    return newHttpBatchRpcResponse(request, unauthenticated);
+    return newHttpBatchRpcResponse(request, unauthenticated, itxObservability("http"));
   }
-  return newWorkersWebSocketRpcResponse(request, unauthenticated);
+  return newWorkersWebSocketRpcResponse(request, unauthenticated, itxObservability("websocket"));
 }
 
-function directoryResolvers(config: AppConfig, env: Env): IngressResolvers {
+function ingressLogFields(request: Request, route: Awaited<ReturnType<typeof decideIngressRoute>>) {
+  const path = new URL(request.url).pathname;
+  return {
+    ingress: {
+      lane: route.lane,
+      ...((route.lane === "api" && path === "/api") || route.lane === "project"
+        ? {
+            transport:
+              request.headers.get("upgrade")?.toLowerCase() === "websocket"
+                ? ("websocket" as const)
+                : ("http" as const),
+          }
+        : {}),
+      ...(route.lane === "project"
+        ? {
+            projectId: route.resolved.projectId,
+            appSlug: route.resolved.appSlug ?? undefined,
+          }
+        : {}),
+    },
+  };
+}
+
+function directoryResolvers(env: Env): IngressResolvers {
   return {
     projectIdBySlug: (identifier) =>
-      resolveProjectIdBySlug({ config, directory: env.PROJECT_DIRECTORY, identifier }),
+      resolveProjectIdBySlug({ directory: env.PROJECT_DIRECTORY, identifier }),
     projectByHostname: async (host) => {
       const found = await readProjectByHostname(env.PROJECT_DIRECTORY, host);
       return found ? { appSlug: found.appSlug, projectId: found.record.id } : null;

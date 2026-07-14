@@ -136,10 +136,9 @@ export interface Project {
   docs: Docs;
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
   files: Files;
-  /** The integrations collection: built-in integrations as dispatch branches
-   * on the dotted-call surface (`itx.integrations.slack["main-slack"].chat
-   * .postMessage(...)`), provided integrations through the capability table,
-   * management verbs, `list()`. */
+  /** The integrations collection: built-in connection families selected with
+   * `.get()` (first connected) or `.get("slug")` (exact), provided
+   * integrations through the capability table, management verbs, `list()`. */
   integrations: ProjectIntegrations;
   /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */
   mcp: McpClientCollection;
@@ -152,6 +151,8 @@ export interface Project {
   /** The project's sandboxes — explicitly created, sized Linux containers
    * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
+  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */
+  search: Search;
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   scheduler: Scheduler;
   /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */
@@ -651,12 +652,12 @@ export interface Files {
 /**
  * The `itx.integrations` collection.
  *
- * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.
- * Built-in slugs (`slack`, `google`, `github`, `telegram`, `waitrose`)
+ * Connection-yielding calls are `{slug}.get(connection?).{...method}`.
+ * Public built-in families (`slack`, `gmail`, `github`, `telegram`, `waitrose`)
  * dispatch to deployment code —
- * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
- * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
- * the Gmail REST proxy, and `itx.integrations.github["jonas"].octokit` is a
+ * `itx.integrations.slack.get().chat.postMessage({...})` reaches any Slack Web
+ * API method (a real WebClient), `itx.integrations.gmail.get().request({...})`
+ * the Gmail REST proxy, and `itx.integrations.github.get().octokit` is a
  * real Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
  * `.request("GET /repos/{owner}/{repo}")` escape hatch, `.graphql(...)`;
  * there is NO generic `.api.request({ method, path })` shape, and the
@@ -664,32 +665,40 @@ export interface Files {
  * `...ForAuthenticatedUser` endpoints answer 403 — and every other slug
  * resolves through the itx capability table under the `integrations` prefix.
  * The exception is `itx.integrations.parallel`: a first-party API-key RPC
- * target, not a connection and not returned by `list()`. There is no implicit
- * connection: a built-in call without a connection name is an error.
+ * target, not a connection and not returned by `list()`. With no argument,
+ * `get()` selects the first currently connected account in `list()` order.
  *
- * Built-in integrations are plain imperative dispatch branches, not classes,
- * because their only callers are untyped dotted scripts; a project extends
- * the collection with ordinary `provideCapability({ path: ["integrations", ...] })`
- * — data, not deployment. `completeConnect` is called by the app worker's
+ * The SDK connection targets are thin dispatchers over the normal vendor
+ * clients. A project extends the collection with ordinary
+ * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
+ * `completeConnect` is called by the app worker's
  * OAuth callback routes (/api/integrations/<provider>/callback); its
  * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
  * verified itx-side.
  */
 export interface ProjectIntegrations {
+  /** Slack WebClient connections. `get()` selects the first connected workspace. */
+  slack: IntegrationFamily<SlackConnection>;
+  /** Connected Google accounts, exposed as Gmail. `get()` selects the first. */
+  gmail: IntegrationFamily<GmailConnection>;
+  /** GitHub App installations with the normal all-in-one Octokit package. */
+  github: IntegrationFamily<GithubConnection>;
+  /** Telegram Bot API connections. `get()` selects the first connected bot. */
+  telegram: IntegrationFamily<TelegramConnection>;
+  /** Waitrose account connections. */
+  waitrose: IntegrationFamily<WaitroseConnection>;
   /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
   parallel: OpenApiRpc;
   /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
    * Transformations. Like `parallel`, these ride the deployment's own
    * Cloudflare account — not a per-project connection. */
   cf: CloudflareIntegrations;
-  /** The dotted-call surface: built-in slugs dispatch here; unknown slugs
-   * resolve through the project capability table (the provided lane). Slack
-   * methods are unary — one body object:
-   * `itx.integrations.slack["<connection>"].chat.postMessage({ ... })`. */
+  /** Dynamic provided-integration dispatch. The only selector is
+   * `<slug>.get(connection?)`; built-in families are concrete typed getters. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  /** Every connection the project holds: `/integrations/<slug>/<connection>`
-   * journals plus provided mounts from the capability table (deduped by path;
-   * a mount over its own webhook journal is one entry). */
+  /** Every connection the project holds: integration journals,
+   * credential-defined Waitrose accounts, plus provided mounts from the
+   * capability table (deduped by path). */
   list(): Promise<IntegrationConnectionListEntry[]>;
   __describe(): Promise<
     { instructions: string; types: string; children: Record<string, string> } & {
@@ -702,12 +711,13 @@ export interface ProjectIntegrations {
         disconnect: string;
         getConnection: string;
         github: string;
-        google: string;
+        gmail: string;
         list: string;
         parallel: string;
         slack: string;
         startOAuthFlow: string;
         telegram: string;
+        waitrose: string;
       };
       parent: string;
     }
@@ -841,6 +851,147 @@ export interface SandboxCollection {
   /** Every sandbox stream path in the project (`/sandboxes/...`), including
    * destroyed sandboxes' streams — the stream is the history. */
   list(): Promise<StreamListItem[]>;
+}
+
+/**
+ * Project search over everything the project accumulates — stream events,
+ * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
+ * instance over the deployment's search-index bucket
+ * (domains/search/search-index.ts). One instance PER PROJECT, created on
+ * first use, indexing only the project's `{projectId}/**` slice of the
+ * bucket — tenancy is structural, not a query filter. Experimental — the
+ * surface may change.
+ */
+export interface Search {
+  __describe(): Promise<Description>;
+  /**
+   * Ensure this project's search instance exists (idempotent). The project
+   * CREATE SAGA calls this so search is warm from birth; the lazy
+   * query/index paths remain as self-heal for projects that predate it.
+   * Safe to call any time — an existing instance is a no-op.
+   */
+  ensureIndex(): Promise<{ created: boolean }>;
+  /**
+   * Retrieve scored chunks matching a query, scoped to this project's own
+   * search instance. Merges the corpus (streams/files/repos/custom kinds)
+   * with federated itx.docs, each result tagged with its `kind` and `context`
+   * so callers can contextualize a hit. Docs hits carry synthetic 0.5-band
+   * scores (keyword overlap, not comparable to corpus relevance) and are
+   * exempt from `limit`/`scoreThreshold` (separately capped at 5). On a
+   * project whose instance doesn't exist yet, the instance is created and
+   * docs results return with a `warning` — retry once its first index
+   * completes (typically a minute or two). A warning-free empty result means
+   * the index is live and simply has no match.
+   */
+  query(input: {
+    q: string;
+    /** Max chunks to return (1–50, default 20 — tuned for recall). */
+    limit?: number;
+    /** Rewrite the query for retrieval first (extra LLM call). */
+    rewriteQuery?: boolean;
+    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
+    scoreThreshold?: number;
+    /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
+    source?: string;
+    /** Exclude kinds from results (platform or custom), e.g. `["streams"]` to skip the event log. */
+    exclude?: readonly string[];
+  }): Promise<SearchQueryResult>;
+  /**
+   * Retrieve matching chunks AND generate an answer from them (RAG).
+   * Unlike `query`, a project whose instance doesn't exist yet THROWS here
+   * (message: "first index is in progress — retry shortly") — there is no
+   * warning-carrying degraded result. `searchQuery` echoes the input
+   * verbatim (never the rewritten query).
+   */
+  answer(input: {
+    q: string;
+    limit?: number;
+    rewriteQuery?: boolean;
+    scoreThreshold?: number;
+    source?: string;
+    exclude?: readonly string[];
+    /** Optional system prompt for the answer generation. */
+    systemPrompt?: string;
+  }): Promise<SearchAnswerResult>;
+  /**
+   * Add (or replace) one document in the search corpus — the general
+   * mechanism to make derived content (summaries, notes, digests) findable
+   * via `query`. `ref` is REQUIRED: the itx expression leading back to the
+   * domain object the text derives from (e.g. `["streams", ["get", path],
+   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
+   * a search result is never a dead end. `kind` is `[a-z0-9._-]+` and must
+   * not be a reserved platform kind (streams/files/repos/docs); the
+   * serialized ref caps at 500 chars. `id` is stable within
+   * `(project, kind)`, so re-indexing the same id overwrites. `context` is
+   * the one-line descriptor shown on every hit and to the answer model.
+   */
+  index(input: {
+    kind: string;
+    id: string;
+    text: string;
+    /** The itx expression that leads back to the source domain object. */
+    ref: ItxExpression;
+    title?: string;
+    context?: string;
+  }): Promise<{ key: string }>;
+  /**
+   * Pin one stream event into the search corpus by its coordinates — the
+   * domain-object way to make a specific moment findable. The event's content
+   * is read from the stream (never trusted from the caller) and indexed as a
+   * focused document together with the optional `note`; the search hit's
+   * `ref` is the itx expression fetching exactly that event. Note the param
+   * is `stream` (unlike indexStream's `path`). Idempotent per
+   * (stream, offset).
+   */
+  indexEvent(input: {
+    /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+    stream: string;
+    /** The event's offset on that stream. */
+    offset: number;
+    /** Optional annotation, indexed alongside the event ("decision made here"). */
+    note?: string;
+  }): Promise<{ key: string }>;
+  /**
+   * Re-index one stream from the beginning — the repair verb for streams that
+   * predate search indexing, or the rare tail gap a failed per-batch write can
+   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   */
+  indexStream(input: { path: string }): Promise<{ segments: number }>;
+  /**
+   * Snapshot one repo's default-branch HEAD into the search corpus now — the
+   * backfill verb for repos that predate search indexing (writes index
+   * incrementally from here on). Runs on the repo Durable Object's own write
+   * chain so its stale-key sweep can't race post-commit indexing. Returned
+   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key
+   * files, and a nonzero `failed` means re-run.
+   */
+  indexRepo(input: { path: string }): Promise<{
+    deleted: number;
+    indexed: number;
+    skipped: number;
+    failed: number;
+  }>;
+  /**
+   * Re-mirror every existing itx.files object into the search corpus — the
+   * backfill verb for files that predate search indexing (puts mirror
+   * incrementally from here on). Counts reflect the actual mirror outcome:
+   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
+   */
+  backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;
+  /**
+   * Reindex the WHOLE project — every known stream, every repo's default
+   * branch, every itx.files object — in one crude, idempotent sweep. This is
+   * the backfill/repair verb for projects that predate search indexing (new
+   * writes index automatically); every unit overwrites its own corpus keys,
+   * so re-running (including after a timeout on a huge project) only fills
+   * gaps. Streams run a few at a time; expect minutes on large projects. Per
+   * unit failures are counted, never thrown — nonzero `failed` means re-run.
+   */
+  reindex(): Promise<{
+    streams: { indexed: number; segments: number; failed: number };
+    repos: { indexed: number; failed: number };
+    files: { mirrored: number; skipped: number; failed: number };
+  }>;
 }
 
 /**
@@ -2001,18 +2152,90 @@ export type EmailAttachmentInput =
       contentType?: string;
     };
 
+/** A connection family on `itx.integrations`. `get()` selects the first
+ * connected account; pass a slug only when the exact account matters. The
+ * return value is an RPC capability (not a Promise), so calls pipeline in one
+ * expression: `itx.integrations.github.get().octokit.rest.repos.get(...)`. */
+export type IntegrationFamily<Connection> = {
+  get(connection?: string): Connection;
+};
+
+/** A Slack WebClient connection. Web API namespaces and methods are dynamic;
+ * `processor` is the connection's durable webhook router. */
+export type SlackConnection = Record<string, any> & {
+  processor: WakeableStreamProcessorRpc;
+};
+
+/** The Gmail REST API connection exposed by a connected Google account. */
+export type GmailConnection = {
+  request(input: GmailRequestInput): Promise<{
+    data: unknown;
+    headers: Record<string, string>;
+    status: number;
+    statusText: string;
+  }>;
+};
+
+/** The normal all-in-one Octokit package with Iterate supplying GitHub App
+ * installation auth and transport. Both REST and GraphQL are available. */
+export type GithubConnection = { octokit: import("octokit").Octokit };
+
+/** The commonly used Telegram Bot API surface. The runtime accepts every
+ * flat Bot API method with one params object; these members keep the generated
+ * script types useful without maintaining a second copy of Telegram's API. */
+export type TelegramConnection = {
+  getMe(params?: Record<string, unknown>): Promise<Record<string, unknown>>;
+  processor: WakeableStreamProcessorRpc;
+  sendChatAction(params: Record<string, unknown>): Promise<Record<string, unknown>>;
+  sendMessage(
+    params: { chat_id: number | string; text: string } & Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  sendPhoto(params: Record<string, unknown>): Promise<Record<string, unknown>>;
+};
+
+/** Iterate's small, connection-scoped Waitrose client. */
+export type WaitroseConnection = {
+  addToTrolley(lineNumber: string, quantity?: number): Promise<Record<string, unknown>>;
+  removeFromTrolley(lineNumber: string): Promise<Record<string, unknown>>;
+  searchProducts(
+    searchTerm: string,
+    options?: { size?: number; sortBy?: string; start?: number },
+  ): Promise<{
+    products: Array<{ displayPrice?: string; lineNumber: string; name: string; size?: string }>;
+    totalMatches: number;
+  }>;
+  shoppingContext(): Promise<{
+    customerId: string;
+    customerOrderId: string;
+    customerOrderState: string;
+    defaultBranchId: string;
+  }>;
+  trolley(orderId?: string): Promise<Record<string, unknown>>;
+  updateTrolleyItems(
+    items: Array<{
+      canSubstitute?: boolean;
+      lineNumber: string;
+      noteToShopper?: string;
+      quantity: { amount: number; uom: string };
+    }>,
+    orderId?: string,
+  ): Promise<Record<string, unknown>>;
+};
+
 /**
  * One entry of `integrations.list()`. Discriminated on `source`: built-in
- * entries always name a concrete connection (they come from
- * `/integrations/<slug>/<connection>` journals); provided entries may be
+ * entries always name a concrete connection (normally from
+ * `/integrations/<slug>/<connection>` journals; credential-defined Waitrose
+ * connections come from their session-secret paths); provided entries may be
  * integration-level mounts (`connection: null` — one recipe serving every
  * connection name beneath it, path `/integrations/<slug>`).
  */
 export type IntegrationConnectionListEntry =
   | {
       connection: string;
-      integration: BuiltinIntegrationSlug;
-      /** The fully qualified connection path, e.g. `/integrations/slack/main-slack`. */
+      integration: PublicBuiltinIntegrationSlug;
+      /** The internal connection path, e.g. `/integrations/slack/main-slack`;
+       * Gmail entries retain their `/integrations/google/...` journal path. */
       path: string;
       source: "builtin";
     }
@@ -2199,6 +2422,22 @@ export type SandboxInstanceType =
 export type CloudflareSandbox = object & {
   /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
+};
+
+/** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */
+export type SearchQueryResult = {
+  searchQuery: string;
+  results: SearchResultChunk[];
+  /**
+   * Present when the AI Search corpus was unreachable (e.g. the instance is
+   * not created yet) and only federated docs results are returned.
+   */
+  warning?: string;
+};
+
+/** What `itx.search.answer` returns: a generated answer plus the chunks it cited. */
+export type SearchAnswerResult = SearchQueryResult & {
+  response: string;
 };
 
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
@@ -2670,6 +2909,46 @@ export type ProjectFileMetadata = {
   contentType: string;
   path: string;
   size: number;
+};
+
+/** Input to `itx.integrations.gmail.get("<connection>").request(...)` — a
+ * Gmail REST call relative to https://gmail.googleapis.com/gmail/v1; the
+ * response is `{ data, headers, status, statusText }`. */
+export type GmailRequestInput = {
+  body?: unknown;
+  headers?: Record<string, string>;
+  method?: string;
+  path: string;
+  query?: Record<string, boolean | number | string | null | undefined>;
+};
+
+/** Public connection-family names. Google OAuth is presented as the Gmail
+ * capability it actually supplies, while management APIs retain the provider
+ * slug `google`. */
+export type PublicBuiltinIntegrationSlug = "github" | "gmail" | "slack" | "telegram" | "waitrose";
+
+/** One retrieved chunk: the matched index document plus its scored text and provenance. */
+export type SearchResultChunk = {
+  /** The index object key, e.g. `prj_x/streams/agents/…/events-00000001.md`. */
+  filename: string;
+  /** Relevance score in [0, 1]. */
+  score: number;
+  /** The matched text content (the specific matching chunk). */
+  content: string;
+  /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
+  kind?: string;
+  /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
+  context?: string;
+  /**
+   * The itx expression that leads back to the DOMAIN OBJECT this hit mirrors
+   * — evaluate it against the project itx to fetch the real thing instead of
+   * trusting chunk text. E.g. `["streams", ["get", "/agents/x"],
+   * ["getEvents", { afterOffset: 100, beforeOffset: 201 }]]` for a stream
+   * segment, `["files", ["get", "/reports/q3.pdf"]]` for a file, `["repos",
+   * ["get", "/repos/config"], ["readFile", { path: "worker.ts" }]]` for a
+   * repo file, `["docs", ["get", { name }]]` for a docs entry.
+   */
+  ref?: ItxExpression;
 };
 
 /**

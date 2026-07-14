@@ -528,7 +528,7 @@ export function compileBangCommand(input: {
       code: [
         "async (itx) => {",
         "  const debug = await itx.debug();",
-        `  await itx.integrations.slack[${JSON.stringify(input.connection)}].chat.postMessage({`,
+        `  await itx.integrations.slack.get(${JSON.stringify(input.connection)}).chat.postMessage({`,
         `    channel: ${JSON.stringify(input.channel)},`,
         `    thread_ts: ${JSON.stringify(input.threadTs)},`,
         "    text: `Debug info:\\n${debug}`,",

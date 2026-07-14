@@ -63,5 +63,6 @@ default-export worker class: the platform dispatches dotted
 that the base class walks in userland, so a getter can hand back a whole
 vendor SDK (installed from `package.json`) in a single round trip. Built-in
 integrations (Slack, Gmail, GitHub, Telegram, Waitrose) already live at
-`itx.integrations.<slug>["<connection>"]` — reach for a worker getter when
+`itx.integrations.<slug>.get()` (or `.get("<connection>")` when the exact
+account matters) — reach for a worker getter when
 the platform has no built-in for a provider.

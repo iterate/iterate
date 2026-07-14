@@ -52,7 +52,7 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
     message.setReject("No such address.");
     return;
   }
-  const project = await readProjectBySlug(config, itxEnv.PROJECT_DIRECTORY, recipient.slug);
+  const project = await readProjectBySlug(itxEnv.PROJECT_DIRECTORY, recipient.slug);
   if (project === null) {
     message.setReject("No such address.");
     return;

@@ -392,7 +392,7 @@ _Avoid_: Repo service, Artifact client, GitHub client
 The local JavaScript object handed to scripts, browser code, workers, and
 external clients. It holds built-in verbs such as `describe`,
 `provideCapability`, and `extend`, plus dotted capability calls such as
-`itx.slack.chat.postMessage(...)`.
+`itx.integrations.slack.get().chat.postMessage(...)`.
 _Avoid_: ExecutionContext, tools, legacy context tools
 
 **itx Capability**:
@@ -412,7 +412,7 @@ _Avoid_: Static callable, callable JSON helper, descriptor factory
 
 **Path Call**:
 The normalized call envelope produced by the itx path proxy for dotted calls
-such as `itx.slack.chat.postMessage(...)`.
+such as `itx.mcp.exa.web_search_exa(...)`.
 _Avoid_: Function Call, Tool Function Call, direct RPC call
 
 **Script Execution ID**:
@@ -700,7 +700,9 @@ _Avoid_: Project MCP route, inbound MCP
 - `itx.__describe()` is the capability discovery surface. Providers attach instructions and optional types to each capability entry.
 - Dynamic MCP and OpenAPI tools should be exposed as itx capabilities whose exact external tool names or operation IDs remain path segments; use bracket syntax when a segment contains dots.
 - Project default capabilities include `fetch`, `streams`, `secrets`, `integrations`, `repos`, `agents`, `workspace`, `worker`, and `ai` as defined by `PLATFORM_PROJECT_CAPABILITIES`.
-- Agent hosts add channel and agent-local capabilities such as `itx.slack` or `itx.chat`, `itx.debug`, `itx.gmail`, `itx.agents`, and an agent-private `itx.workspace`.
+- Agent hosts add channel and agent-local capabilities such as `itx.chat`,
+  `itx.debug`, `itx.agents`, and an agent-private `itx.workspace`; connected
+  services remain on the project-owned `itx.integrations` collection.
 
 ## Target itx Blocks
 
@@ -712,11 +714,11 @@ await itx.__describe();
 access shape, and the capabilities visible through the context chain.
 
 ```ts
-await itx.slack.chat.postMessage({ channel: "C123", text: "hello" });
+await itx.integrations.slack.get().chat.postMessage({ channel: "C123", text: "hello" });
 ```
 
-Slack is a provided itx capability. `SlackCapability.call` receives the dotted
-path as data and maps it to the Slack Web API method path.
+Slack is a built-in integration family. `get()` resolves the first connected
+workspace and its wrapped WebClient receives the remaining Slack Web API path.
 
 ```ts
 const repo = await itx.repos.get({ path: "/repos/project" });
@@ -737,14 +739,15 @@ the shared project workspace; agent contexts provide their own isolated
 workspace capability.
 
 ```ts
-const messages = await itx.gmail.request({
-  path: "/gmail/v1/users/me/messages",
+const messages = await itx.integrations.gmail.get().request({
+  path: "/users/me/messages",
   query: { maxResults: 5 },
 });
 ```
 
-Gmail is a project capability backed by the connected Google account. It reads
-fresh OAuth access through the secrets domain and proxies Gmail REST requests.
+Gmail is a project integration backed by the first connected Google account
+(or an explicit slug passed to `get`). It reads fresh OAuth access through the
+secrets domain and proxies Gmail REST requests.
 
 ```ts
 const response = await fetch("https://api.example.com/data");

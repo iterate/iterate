@@ -1,4 +1,5 @@
 import { env as workerEnv } from "cloudflare:workers";
+import type { AuthWorker } from "@iterate-com/auth-contract/worker";
 import type { SendEmailBinding } from "./domains/email/utils.ts";
 
 /**
@@ -31,6 +32,14 @@ export interface Env {
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
+  /**
+   * Auth's default Worker binding. Its project-directory and token-
+   * introspection methods are private RPC capabilities; auth's public HTTP
+   * `fetch` remains a separate surface. Possession of this required same-
+   * account binding is the RPC credential; no auth service token is present
+   * in OS runtime configuration.
+   */
+  AUTH: Service<AuthWorker>;
   /**
    * Cloudflare Email Service send binding backing `itx.email`. Bound in every
    * wrangler env block including local dev, where miniflare simulates sends
@@ -133,6 +142,26 @@ export interface Env {
    * per env (`${WORKER_SELF}-files`), created by ensure-resources.ts.
    */
   FILES_BUCKET: R2Bucket;
+  /**
+   * SPIKE: the search-index corpus behind `itx.search`
+   * (domains/search/search-index.ts). Stream event segments, itx.files
+   * mirrors, and repo file snapshots are written here under
+   * `{projectId}/{streams|files|repos}/…` keys; a Cloudflare AI Search
+   * instance (`${WORKER_SELF}-search`, created by ensure-resources.ts)
+   * indexes the bucket and `itx.search` queries it with per-project folder
+   * filters. One bucket per env (`${WORKER_SELF}-search-index`). The whole
+   * bucket is derived data — safe to wipe and rebuild.
+   */
+  SEARCH_BUCKET: R2Bucket;
+  /**
+   * The deployment's AI Search namespace (`ai_search_namespaces` binding,
+   * namespace = `${WORKER_SELF}`). itx.search creates ONE INSTANCE PER
+   * PROJECT in it on first use (domains/search/search-index.ts,
+   * ensureProjectSearchInstance) — each instance indexes only that project's
+   * `{projectId}/**` slice of {@link Env.SEARCH_BUCKET}, so search tenancy is
+   * structural. The namespace itself is created by ensure-resources.ts.
+   */
+  SEARCH_INSTANCES: AiSearchNamespace;
   /**
    * Deploy identity (wrangler `version_metadata` binding). The stream
    * processor hosts' crash-loop breaker keys its backoff budget on the version

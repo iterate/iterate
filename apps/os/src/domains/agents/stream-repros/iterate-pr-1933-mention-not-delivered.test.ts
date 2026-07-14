@@ -1,0 +1,127 @@
+import { describe, expect, it } from "vitest";
+import type { Stream } from "../../../itx-api.generated.ts";
+import { GithubAgentProcessor } from "../../repos/github-agent-processor-implementation.ts";
+import { githubAgentPath } from "../../repos/github-agent-utils.ts";
+import { RepoProcessor } from "../../repos/repo-processor-implementation.ts";
+import type { StreamEvent } from "../../streams/schemas.ts";
+import { deliverNewEvents, MemoryStream } from "../test-helpers.ts";
+import fixture from "./iterate-pr-1933-mention-not-delivered.json";
+
+class MemoryStreamNetwork {
+  readonly streams = new Map<string, NetworkMemoryStream>();
+
+  get(path: string): NetworkMemoryStream {
+    let stream = this.streams.get(path);
+    if (stream === undefined) {
+      stream = new NetworkMemoryStream(path, this);
+      this.streams.set(path, stream);
+    }
+    return stream;
+  }
+}
+
+class NetworkMemoryStream extends MemoryStream {
+  constructor(
+    path: string,
+    private readonly network: MemoryStreamNetwork,
+  ) {
+    super(path);
+  }
+
+  override at(path?: string): Stream {
+    return path === undefined ? this : this.network.get(path);
+  }
+}
+
+describe("production stream repro: iterate PR 1933 mention was never delivered", () => {
+  it("isolates obsolete history and forwards the next webhook to the current agent", async () => {
+    const network = new MemoryStreamNetwork();
+    const repo = network.get(fixture.repoPath);
+    const legacyAgent = network.get(fixture.agentPath);
+    legacyAgent.events = fixture.legacyTargetEvents as StreamEvent[];
+    const agentPath = await githubAgentPath(
+      { ...fixture.githubLink, repoPath: fixture.repoPath },
+      1933,
+    );
+    const agent = network.get(agentPath);
+    repo.events = [
+      {
+        type: "events.iterate.com/repo/github-link-configured",
+        payload: fixture.githubLink,
+        idempotencyKey: "fixture/github-link",
+        offset: 1,
+        createdAt: "2026-07-13T13:42:00.000Z",
+        path: fixture.repoPath,
+      },
+      fixture.sourceWebhook as StreamEvent,
+    ];
+
+    const processor = new RepoProcessor({
+      taskChangesForArtifactPush: async () => [],
+      createRepoArtifact: async () => {
+        throw new Error("not part of this repro");
+      },
+      path: fixture.repoPath,
+      projectId: fixture.projectId,
+      stream: repo,
+    });
+    await deliverNewEvents({ processor, stream: repo, cursors: new Map() });
+
+    const currentRoute = agent.events.find(
+      (event) => event.type === "events.iterate.com/github-agent/route-configured",
+    );
+    const currentSubscription = agent.events.find((event) => {
+      const payload = event.payload as { delivery?: { processorSlug?: unknown } };
+      return (
+        event.type === "events.iterate.com/stream/subscription-configured" &&
+        payload.delivery?.processorSlug === "github-agent"
+      );
+    });
+    const forwardedMention = agent.events.find((event) => {
+      const payload = event.payload as { body?: { comment?: { id?: unknown } } };
+      return (
+        event.type === "events.iterate.com/github/webhook-received" &&
+        payload.body?.comment?.id === 4962404485
+      );
+    });
+
+    expect(currentRoute?.idempotencyKey).not.toBe(
+      "repo/pr-route:install-115079265:iterate/iterate:1933",
+    );
+    expect(currentSubscription?.payload?.subscriptionKey).toMatch(/#github-agent$/);
+    expect(currentRoute!.offset).toBeLessThan(currentSubscription!.offset);
+    expect(currentSubscription!.offset).toBeLessThan(forwardedMention!.offset);
+
+    const reactions: unknown[] = [];
+    const githubAgent = new GithubAgentProcessor({
+      addEyesReaction: async (input) => {
+        reactions.push(input);
+      },
+      path: agentPath,
+      projectId: fixture.projectId,
+      stream: agent,
+    });
+    await deliverNewEvents({ processor: githubAgent, stream: agent, cursors: new Map() });
+
+    const turn = agent.events.find(
+      (event) => event.type === "events.iterate.com/agents/message-received",
+    );
+    expect(turn).toBeDefined();
+    const turnPayload = turn!.payload as {
+      content: string;
+      llmRequestPolicy: { behaviour: string };
+    };
+    expect(turnPayload.content).toContain("@iterate can you see this?");
+    expect(turnPayload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
+    expect(reactions).toEqual([
+      {
+        commentId: 4962404485,
+        connection: "install-115079265",
+        kind: "issue-comment",
+        owner: "iterate",
+        repo: "iterate",
+      },
+    ]);
+    expect(legacyAgent.events).toEqual(fixture.legacyTargetEvents);
+  });
+});

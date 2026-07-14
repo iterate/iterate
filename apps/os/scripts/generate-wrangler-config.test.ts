@@ -1,6 +1,16 @@
 import { expect, it } from "vitest";
 
-import { builderConfig, config } from "./generate-wrangler-config.ts";
+import { envs } from "../../../envs.ts";
+import {
+  builderConfig,
+  config,
+  localAuthServiceBinding,
+  OPTIONAL_SECRETS,
+} from "./generate-wrangler-config.ts";
+
+it("does not ship the retired APP_CONFIG_LOGS secret", () => {
+  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_LOGS");
+});
 
 // Wrangler tags every `--env` deploy with `cf:service=<top-level name>` and
 // `cf:environment=<env>`. The top-level names below are therefore the fleet's
@@ -30,6 +40,78 @@ it("binds the os worker to its own env's builder sidecar", () => {
     const builderNames = Object.values(builderConfig.env).map((builderEnv) => builderEnv.name);
     expect(builderNames, envName).toContain(builder?.service);
   }
+});
+
+it("binds every deployed OS worker to the matching auth worker's default entrypoint", () => {
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    const auth = envBlock.services.find((service) => service.binding === "AUTH");
+    expect(auth, envName).toEqual({
+      binding: "AUTH",
+      service: envs[envName as keyof typeof envs].authWorkerName,
+    });
+  }
+});
+
+it("binds local OS to the selected auth worker's default entrypoint", () => {
+  const selected = localAuthServiceBinding({
+    issuer: process.env.APP_CONFIG_ITERATE_AUTH__ISSUER,
+    allowProductionRemote: process.env.ALLOW_REMOTE_PRODUCTION_AUTH_RPC === "1",
+  });
+  const auth = config.services.find((service) => service.binding === "AUTH");
+
+  expect(auth).toEqual({
+    binding: "AUTH",
+    service: selected.authWorkerName,
+    ...(selected.authRemote ? { remote: true } : {}),
+  });
+});
+
+it("selects the matching remote auth worker for local dev and the local worker for dev-all", () => {
+  expect(localAuthServiceBinding({ issuer: undefined, allowProductionRemote: false })).toEqual({
+    authWorkerName: "auth-dev-global",
+    authRemote: true,
+  });
+  expect(
+    localAuthServiceBinding({
+      issuer: "https://auth.iterate-preview-3.com/api/auth",
+      allowProductionRemote: false,
+    }),
+  ).toEqual({
+    authWorkerName: "auth-preview-3",
+    authRemote: true,
+  });
+  expect(
+    localAuthServiceBinding({
+      issuer: "http://localhost:50123/api/auth",
+      allowProductionRemote: false,
+    }),
+  ).toEqual({
+    authWorkerName: "auth",
+    authRemote: false,
+  });
+  expect(() =>
+    localAuthServiceBinding({
+      issuer: "https://unknown-auth.example/api/auth",
+      allowProductionRemote: false,
+    }),
+  ).toThrow(/does not match a known auth environment/);
+  expect(() =>
+    localAuthServiceBinding({
+      issuer: "https://auth.iterate.com/api/auth",
+      allowProductionRemote: false,
+    }),
+  ).toThrow(/requires ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1/);
+  expect(
+    localAuthServiceBinding({
+      issuer: "https://auth.iterate.com/api/auth",
+      allowProductionRemote: true,
+    }),
+  ).toEqual({ authWorkerName: "auth-prd", authRemote: true });
+});
+
+it("never ships the old shared auth service token to OS", () => {
+  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
+  expect(config.secrets.required).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
 });
 
 it("routes public event docs hosts to the os worker", () => {

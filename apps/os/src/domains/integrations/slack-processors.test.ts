@@ -1033,7 +1033,7 @@ describe("SlackAgentProcessor", () => {
     });
     const code = (scripts[0]!.payload as { code: string }).code;
     expect(code).toContain("const debug = await itx.debug();");
-    expect(code).toContain('await itx.integrations.slack["nustom"].chat.postMessage({');
+    expect(code).toContain('await itx.integrations.slack.get("nustom").chat.postMessage({');
     expect(code).toContain('channel: "C123"');
     expect(code).toContain('thread_ts: "111.222"');
     expect(code).toContain("text: `Debug info:\\n${debug}`");
@@ -1308,9 +1308,9 @@ describe("eyesReactionTargetFromWebhookPayload", () => {
 describe("compileBangCommand", () => {
   it("tells Slack agents to use the Google-backed Gmail capability for inbox requests", () => {
     const prompt = slackAgentSystemPrompt(CONNECTION);
-    expect(prompt).toContain('itx.integrations.slack["nustom"].chat.postMessage');
+    expect(prompt).toContain('itx.integrations.slack.get("nustom").chat.postMessage');
     expect(prompt).toContain("itx.integrations.list()");
-    expect(prompt).toContain('itx.integrations.google["<connection>"].gmail.request');
+    expect(prompt).toContain("itx.integrations.gmail.get().request");
     expect(prompt).toContain('path: "/users/me/messages"');
     expect(prompt).toContain("Do not claim you lack inbox access");
   });

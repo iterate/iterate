@@ -18,12 +18,35 @@ import {
 } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
 import { GithubAgentProcessor } from "../repos/github-agent-processor-implementation.ts";
+import {
+  ensureGithubReviewCheck,
+  expireGithubReviewCheck,
+  type GithubReviewCheckShell,
+} from "../repos/github-review-check.ts";
+import { connectionOctokit } from "../integrations/github-api.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import { parseAgentDurableObjectName } from "./utils.ts";
+
+const GITHUB_REVIEW_WATCHDOG_STORAGE_KEY = "github-review-watchdogs";
+const GITHUB_REVIEW_WATCHDOG_ALARM_SLICE = "github-review-watchdog";
+const GITHUB_REVIEW_TIMEOUT_MS = 30 * 60_000;
+const GITHUB_REVIEW_WATCHDOG_RETRY_MS = 60_000;
+const GITHUB_REVIEW_WATCHDOG_MAX_ATTEMPTS = 3;
+
+type PendingGithubReviewCheck = {
+  appSlug: string;
+  attempts: number;
+  connection: string;
+  expiresAt: number;
+  externalId: string;
+  headSha: string;
+  owner: string;
+  repo: string;
+};
 
 export class AgentDurableObject extends DurableObject<Env> {
   readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
@@ -232,16 +255,242 @@ export class AgentDurableObject extends DurableObject<Env> {
   // Registered on every agent host; it wakes on routed PR agent streams
   // (`/agents/repos/<slug>/pull-requests/<n>`). Replies leave through the
   // linked connection's itx.integrations.github Octokit, called by the agent
-  // itself, so there are no side-effect deps here.
-  readonly githubAgentProcessor = this.#processorHost.add((deps) => new GithubAgentProcessor(deps));
+  // itself. The platform supplies two best-effort pieces of immediate UI
+  // before the LLM turn: a 👀 ack on a fresh mention and an idempotent
+  // head-bound check shell whose useful output the review agent owns.
+  readonly githubAgentProcessor = this.#processorHost.add(
+    (deps) =>
+      new GithubAgentProcessor({
+        ...deps,
+        isRepositoryCollaborator: async ({ connection, login, owner, repo }) => {
+          try {
+            await connectionOctokit({
+              connection,
+              projectId: this.#name.projectId,
+            }).rest.repos.checkCollaborator({ owner, repo, username: login });
+            return true;
+          } catch (error) {
+            const status =
+              typeof error === "object" && error !== null && "status" in error
+                ? (error as { status?: unknown }).status
+                : undefined;
+            if (status === 404) return false;
+            console.error("[github-agent] GitHub collaborator check failed", {
+              error,
+              login,
+              owner,
+              path: this.#name.path,
+              repo,
+            });
+            throw error;
+          }
+        },
+        addEyesReaction: async ({ commentId, connection, kind, owner, repo }) => {
+          try {
+            const reactions = connectionOctokit({
+              connection,
+              projectId: this.#name.projectId,
+            }).rest.reactions;
+            if (kind === "issue-comment") {
+              await reactions.createForIssueComment({
+                comment_id: commentId,
+                content: "eyes",
+                owner,
+                repo,
+              });
+            } else {
+              await reactions.createForPullRequestReviewComment({
+                comment_id: commentId,
+                content: "eyes",
+                owner,
+                repo,
+              });
+            }
+          } catch (error) {
+            // Acknowledgements are cosmetic. A failure must not prevent the
+            // processor from committing and waking the real agent request.
+            console.error("[github-agent] GitHub eyes reaction failed", {
+              commentId,
+              error,
+              kind,
+              path: this.#name.path,
+            });
+          }
+        },
+        beginReviewCheck: async ({
+          connection,
+          externalId,
+          headSha,
+          owner,
+          repo,
+          reviewKey,
+          superseded,
+        }) => {
+          const appSlug = parseConfig(this.env).integrations.github?.appSlug;
+          if (appSlug === undefined) {
+            console.error(
+              "[github-agent] GitHub review check skipped: integrations.github.appSlug is not configured",
+              { path: this.#name.path, reviewKey },
+            );
+            return {
+              externalId,
+              ...(superseded === undefined ? {} : { superseded }),
+            };
+          }
+          // A review-now comment can precede a PR snapshot. Preserve the
+          // trusted App identity so the agent can fetch the live head and do
+          // the same exact lookup-before-create flow itself.
+          if (headSha === undefined) {
+            return {
+              appSlug,
+              externalId,
+              ...(superseded === undefined ? {} : { superseded }),
+            };
+          }
+          let shell: GithubReviewCheckShell;
+          try {
+            const octokit = connectionOctokit({
+              connection,
+              projectId: this.#name.projectId,
+            });
+            const check = await ensureGithubReviewCheck({
+              appSlug,
+              checks: octokit.rest.checks,
+              externalId,
+              headSha,
+              owner,
+              repo,
+              superseded,
+            });
+            shell = {
+              ...check,
+              appSlug,
+              externalId,
+              ...(superseded === undefined ? {} : { superseded }),
+            };
+          } catch (error) {
+            // The review turn is the durable obligation. If GitHub cannot
+            // create the cosmetic shell, the turn prompt tells the agent to
+            // retry through its ordinary Octokit rather than losing review.
+            console.error("[github-agent] GitHub review check failed", {
+              error,
+              headSha,
+              path: this.#name.path,
+              reviewKey,
+            });
+            shell = {
+              appSlug,
+              externalId,
+              ...(superseded === undefined ? {} : { superseded }),
+            };
+          }
+          try {
+            await this.#trackGithubReviewCheck({
+              appSlug,
+              connection,
+              externalId,
+              headSha,
+              owner,
+              repo,
+            });
+          } catch (error) {
+            // The shell prompt still owns normal completion; watchdog setup
+            // is a final safety net and must not suppress the review turn.
+            console.error("[github-agent] GitHub review watchdog setup failed", {
+              error,
+              externalId,
+              path: this.#name.path,
+            });
+          }
+          return shell;
+        },
+      }),
+  );
+
+  async #trackGithubReviewCheck(
+    check: Omit<PendingGithubReviewCheck, "attempts" | "expiresAt">,
+  ): Promise<void> {
+    const pending =
+      this.ctx.storage.kv.get<PendingGithubReviewCheck[]>(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY) ?? [];
+    const existing = pending.find((candidate) => candidate.externalId === check.externalId);
+    const next = [
+      ...pending.filter((candidate) => candidate.externalId !== check.externalId),
+      {
+        ...check,
+        attempts: existing?.attempts ?? 0,
+        expiresAt: existing?.expiresAt ?? Date.now() + GITHUB_REVIEW_TIMEOUT_MS,
+      },
+    ];
+    this.ctx.storage.kv.put(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY, next);
+    await this.#processorHost.setAlarmSlice(
+      GITHUB_REVIEW_WATCHDOG_ALARM_SLICE,
+      Math.min(...next.map((candidate) => candidate.expiresAt)),
+    );
+  }
+
+  async #runGithubReviewWatchdog(): Promise<void> {
+    const pending =
+      this.ctx.storage.kv.get<PendingGithubReviewCheck[]>(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY) ?? [];
+    const now = Date.now();
+    const future = pending.filter((check) => check.expiresAt > now);
+    const retried = (
+      await Promise.all(
+        pending
+          .filter((check) => check.expiresAt <= now)
+          .map(async (check) => {
+            try {
+              const octokit = connectionOctokit({
+                connection: check.connection,
+                projectId: this.#name.projectId,
+              });
+              await expireGithubReviewCheck({
+                appSlug: check.appSlug,
+                checks: octokit.rest.checks,
+                externalId: check.externalId,
+                headSha: check.headSha,
+                owner: check.owner,
+                repo: check.repo,
+              });
+              return null;
+            } catch (error) {
+              const attempts = (check.attempts ?? 0) + 1;
+              console.error("[github-agent] GitHub review watchdog failed", {
+                attempts,
+                error,
+                externalId: check.externalId,
+                path: this.#name.path,
+              });
+              return attempts >= GITHUB_REVIEW_WATCHDOG_MAX_ATTEMPTS
+                ? null
+                : {
+                    ...check,
+                    attempts,
+                    expiresAt: now + GITHUB_REVIEW_WATCHDOG_RETRY_MS,
+                  };
+            }
+          }),
+      )
+    ).filter((check): check is PendingGithubReviewCheck => check !== null);
+    const next = [...future, ...retried];
+    if (next.length === 0) {
+      this.ctx.storage.kv.delete(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY);
+    } else {
+      this.ctx.storage.kv.put(GITHUB_REVIEW_WATCHDOG_STORAGE_KEY, next);
+    }
+    await this.#processorHost.setAlarmSlice(
+      GITHUB_REVIEW_WATCHDOG_ALARM_SLICE,
+      next.length === 0 ? null : Math.min(...next.map((check) => check.expiresAt)),
+    );
+  }
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#processorHost.wakeStreamSubscriber(args);
   }
 
   /** The keepalive's revival alarm — see stream-processor-host.ts. */
-  alarm(): Promise<void> {
-    return this.#processorHost.handleAlarm();
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#processorHost.handleAlarm(alarmInfo);
+    await this.#runGithubReviewWatchdog();
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */

@@ -1,5 +1,4 @@
 import { parseAppConfigFromEnv, publicValue, redacted } from "@iterate-com/shared/config";
-import { AppLogsConfig } from "@iterate-com/shared/evlog/types";
 import { z } from "zod";
 
 const JSONWebKeySet = z.object({
@@ -57,10 +56,6 @@ const DEFAULT_GOOGLE_OAUTH_SCOPES = [
  */
 export const AppConfig = z.object({
   baseUrl: publicValue(z.url().optional()),
-  logs: AppLogsConfig.default({
-    stdoutFormat: "pretty",
-    filtering: { rules: [] },
-  }),
   mcp: z
     .object({
       baseUrl: publicValue(z.url()),
@@ -73,7 +68,6 @@ export const AppConfig = z.object({
       clientId: publicValue(z.string().trim().min(1)),
       clientSecret: redacted(z.string().trim().min(1)),
       jwks: JSONWebKeySet.optional(),
-      serviceToken: redacted(z.string().trim().min(1)).optional(),
       resource: publicValue(z.url()).optional(),
       emailOtpEnabled: publicValue(z.boolean().default(false)),
     })

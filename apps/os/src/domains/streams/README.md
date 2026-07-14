@@ -243,7 +243,7 @@ delivery: {
 
 Every host's processor is a real itx node (`itx.agents.get(path).processor`,
 `itx.repos.get(path).processor`, the project root's own `itx.processor`,
-`itx.email.processor`, `itx.integrations.slack["<conn>"].processor`, …), and
+`itx.email.processor`, `itx.integrations.slack.get("<conn>").processor`, …), and
 `wakeStreamSubscriber` on it is the host's wake door — trusted-internal only,
 because the handshake's sink drives the host's durable checkpoint. The stream
 pokes; the host answers with everything:

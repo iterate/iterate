@@ -1,14 +1,20 @@
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { oc, type ContractRouterClient } from "@orpc/contract";
-import {
-  IterateAuthAccessTokenOrganizationClaim,
-  IterateAuthProjectClaim,
-} from "@iterate-com/shared/auth-claims";
 import { z } from "zod";
 
+// This package describes the auth worker's two private application surfaces:
+//
+// 1. `authContract` is the HTTP oRPC API. Browsers, CLIs, and deploy-time Node
+//    scripts use it because they cannot hold a Workers service binding.
+// 2. `AuthWorker` from the `/worker` export describes the default worker's RPC
+//    API. OS receives it as the required `AUTH` service binding, whose
+//    possession is the credential.
+//
+// OIDC/OAuth under `/api/auth/*` is standards-shaped and lives outside this
+// contract.
+
 export const SERVICE_TOKEN_HEADER = "x-iterate-service-token";
-export const AS_USER_HEADER = "x-iterate-as-user";
 
 export const OrganizationRole = z.enum(["member", "admin", "owner"]);
 export type OrganizationRole = z.infer<typeof OrganizationRole>;
@@ -155,32 +161,6 @@ export const InternalIntrospectOAuthAccessTokenInput = z.object({
 });
 export type InternalIntrospectOAuthAccessTokenInput = z.infer<
   typeof InternalIntrospectOAuthAccessTokenInput
->;
-
-export const InternalIntrospectOAuthAccessTokenOutput = z.discriminatedUnion("active", [
-  z.object({
-    active: z.literal(false),
-    reason: z.string().optional(),
-  }),
-  z.object({
-    active: z.literal(true),
-    sub: z.string(),
-    sid: z.string().optional(),
-    clientId: z.string(),
-    iss: z.string(),
-    aud: z.union([z.string(), z.array(z.string())]),
-    iat: z.number(),
-    exp: z.number(),
-    scope: z.string(),
-    scopes: z.array(z.string()),
-    organizations: z.array(IterateAuthAccessTokenOrganizationClaim),
-    projects: z.array(IterateAuthProjectClaim),
-    isAdmin: z.boolean(),
-    role: z.string().nullable(),
-  }),
-]);
-export type InternalIntrospectOAuthAccessTokenOutput = z.infer<
-  typeof InternalIntrospectOAuthAccessTokenOutput
 >;
 
 export const OAuthProjectSelectionInput = z.object({
@@ -475,15 +455,6 @@ export const authContract = oc.router({
         })
         .input(InternalSetOAuthClientInput)
         .output(OAuthClientRecord),
-      introspectAccessToken: oc
-        .route({
-          method: "POST",
-          path: "/internal/oauth/introspect-access-token",
-          summary: "Introspect an OAuth access token for internal resource servers",
-          tags: ["internal", "oauth"],
-        })
-        .input(InternalIntrospectOAuthAccessTokenInput)
-        .output(InternalIntrospectOAuthAccessTokenOutput),
     },
     user: {
       upsertVerifiedEmail: oc
@@ -515,36 +486,6 @@ export const authContract = oc.router({
         })
         .input(OrgInput)
         .output(z.array(OrganizationMemberRecord)),
-    },
-    project: {
-      createForOrganization: oc
-        .route({
-          method: "POST",
-          path: "/internal/project/create-for-organization",
-          summary: "Create a project for an organization in internal service flows",
-          tags: ["internal", "project"],
-        })
-        .input(InternalCreateProjectForOrganizationInput)
-        .output(ProjectRecord),
-      mintProjectId: oc
-        .route({
-          method: "POST",
-          path: "/internal/project/mint-project-id",
-          summary:
-            "Mint a canonical project id (prj_) without creating an auth-side project — for OS operator/recovery creates with no owning organization",
-          tags: ["internal", "project"],
-        })
-        .output(z.object({ id: z.string() })),
-      bySlug: oc
-        .route({
-          method: "GET",
-          path: "/internal/project/by-slug",
-          summary:
-            "Look up a project by slug in internal service flows — OS ingress slug resolution and claims-miss directory reads. Null when no project has the slug.",
-          tags: ["internal", "project"],
-        })
-        .input(z.object({ projectSlug: z.string().trim().min(1) }))
-        .output(ProjectRecord.nullable()),
     },
     session: {
       createProjectIngressToken: oc
@@ -578,7 +519,6 @@ export type AuthContractClient = ContractRouterClient<typeof authContract>;
 export type AuthContractClientOptions = {
   baseUrl: string;
   serviceToken?: string;
-  asUserId?: string;
   fetch?: typeof fetch;
 };
 
@@ -593,9 +533,6 @@ export function createAuthContractClient(options: AuthContractClientOptions): Au
         const headers = mergeRequestHeaders(request, init?.headers);
         if (options.serviceToken) {
           headers.set(SERVICE_TOKEN_HEADER, options.serviceToken);
-        }
-        if (options.asUserId) {
-          headers.set(AS_USER_HEADER, options.asUserId);
         }
         return fetchImpl(request, { ...init, headers });
       },

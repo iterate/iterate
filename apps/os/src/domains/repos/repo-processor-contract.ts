@@ -14,10 +14,23 @@ const GithubLinkPayload = z.object({
   repo: z.string().trim().min(1),
 });
 
+const RepoTaskChangedPayload = z.object({
+  branch: z.string().trim().min(1),
+  commitOid: z.string().trim().min(1),
+  path: z.string().trim().min(1),
+});
+
+const RepoCommitCompletedPayload = z.object({
+  beforeCommitOid: z.string().trim().min(1).nullable(),
+  branch: z.string().trim().min(1),
+  commitOid: z.string().trim().min(1),
+});
+
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
   version: "0.1.0",
-  description: "Tiny fake repo projection for the itx reference implementation.",
+  description:
+    "Projects repo lifecycle, Git activity, task changes, and GitHub routing onto an addressable repo stream.",
   stateSchema: z.object({
     artifactName: z.string().nullable().default(null),
     /** An open creation OBLIGATION: `create-requested` folded, `created` not
@@ -78,6 +91,94 @@ export const RepoProcessorContract = defineProcessorContract({
             projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
             remote:
               "https://6d7f0e2c4b9a5138f2ce7a1b8d3e4f50.artifacts.cloudflare.net/git/os-prd-repos/prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw.git",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repo/cloudflare-artifact-event-received": {
+      description:
+        "A Cloudflare Artifacts lifecycle or Git event captured from the deployment's event queue and routed to this repo stream.",
+      payloadSchema: z
+        .object({
+          artifactName: z.string(),
+          body: z.object({}).loose(),
+          cloudflareEventType: z.string().optional(),
+          namespace: z.string(),
+        })
+        .loose(),
+      examples: [
+        {
+          description:
+            "Cloudflare Artifacts reported that main advanced; the repo processor compares the before and after task trees.",
+          payload: {
+            artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw",
+            body: {
+              type: "cf.artifacts.repo.pushed",
+              payload: {
+                after: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+                before: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
+                ref: "refs/heads/main",
+              },
+            },
+            cloudflareEventType: "cf.artifacts.repo.pushed",
+            namespace: "os-prd-repos",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repo/commit-completed": {
+      description:
+        "The repo's default branch advanced, normalized from a Cloudflare Artifacts pushed event. This includes pushes made outside OS through Git.",
+      payloadSchema: RepoCommitCompletedPayload,
+      examples: [
+        {
+          description: "An external Git push advanced main by one or more commits.",
+          payload: {
+            beforeCommitOid: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
+            branch: "main",
+            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repo/task-created": {
+      description: "A Markdown task file was created on the repo's default branch.",
+      payloadSchema: RepoTaskChangedPayload,
+      examples: [
+        {
+          description: "A new root task became durable on main.",
+          payload: {
+            branch: "main",
+            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+            path: "tasks/ship-board.md",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repo/task-updated": {
+      description: "A Markdown task file changed on the repo's default branch.",
+      payloadSchema: RepoTaskChangedPayload,
+      examples: [
+        {
+          description: "Moving a board card changed the task's state frontmatter on main.",
+          payload: {
+            branch: "main",
+            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+            path: "apps/os/tasks/ship-board.md",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repo/task-deleted": {
+      description: "A Markdown task file was deleted from the repo's default branch.",
+      payloadSchema: RepoTaskChangedPayload,
+      examples: [
+        {
+          description: "A completed task file was removed from main.",
+          payload: {
+            branch: "main",
+            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
+            path: "tasks/old-task.md",
           },
         },
       ],
@@ -266,7 +367,8 @@ export const RepoProcessorContract = defineProcessorContract({
             owner: "acme-inc",
             repo: "acme-config",
             repoPath: "/repos/config",
-            streamPath: "/agents/repos/config/pull-requests/42",
+            streamPath:
+              "/agents/repos/g~0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/pull-requests/42",
           },
         },
       ],
@@ -276,6 +378,8 @@ export const RepoProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/repo/create-requested",
     "events.iterate.com/repo/created",
+    "events.iterate.com/repo/cloudflare-artifact-event-received",
+    "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repo/github-link-configured",
     "events.iterate.com/repo/github-unlinked",
     "events.iterate.com/repo/github-push-completed",
@@ -286,8 +390,14 @@ export const RepoProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/repo/created",
+    "events.iterate.com/repo/commit-completed",
+    "events.iterate.com/repo/task-created",
+    "events.iterate.com/repo/task-updated",
+    "events.iterate.com/repo/task-deleted",
     "events.iterate.com/github/webhook-received",
     "events.iterate.com/github-agent/route-configured",
+    "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/stream/subscription-removed",
   ],
 });
 

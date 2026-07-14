@@ -51,16 +51,20 @@ const PullRequestProjection = z.object({
 const PullRequestActivity = z.object({
   action: z.string().optional(),
   actor: z.string().optional(),
+  authorAssociation: z.string().optional(),
   at: z.string(),
   kind: z.string(),
   offset: z.number().int().positive(),
+  securityWarning: z.string().optional(),
   summary: z.string(),
+  trustedInstructionSource: z.boolean().default(false),
 });
 
 const ReviewCandidate = z.object({
   draft: z.boolean(),
   headSha: z.string(),
   offset: z.number().int().positive(),
+  supersededHeadSha: z.string().optional(),
 });
 
 /**
@@ -71,17 +75,19 @@ const ReviewCandidate = z.object({
  * PR route context and a bounded projection of its webhook timeline. Raw
  * webhook events remain observable on the stream, but they are not copied one
  * by one into the LLM's permanent history. A turn gets one compact current
- * snapshot when a human mentions the agent, or when project policy asks for
- * an automatic review of a new head. Replies leave through the named GitHub
- * connection's `itx.integrations.github[connection].octokit` capability.
+ * snapshot when a trusted human mentions the agent, on later trusted comments
+ * in that activated PR conversation, or when project policy asks for an automatic
+ * review of a new head. Replies leave through the named GitHub connection's
+ * `itx.integrations.github.get(connection).octokit` capability.
  */
 export const GithubAgentProcessorContract = defineProcessorContract({
   slug: "github-agent",
-  version: "0.1.0",
+  version: "0.2.0",
   description: "Handles GitHub-specific behavior for one routed pull-request agent stream.",
   stateSchema: z.object({
     configuration: GithubAgentConfiguration.prefault({}),
     connection: z.string().optional(),
+    conversationActive: z.boolean().default(false),
     installationId: z.string().optional(),
     number: z.number().optional(),
     owner: z.string().optional(),
@@ -100,7 +106,7 @@ export const GithubAgentProcessorContract = defineProcessorContract({
       examples: [
         {
           description:
-            "Automatic reviews interrupt obsolete work on every non-draft head; human mentions queue.",
+            "Automatic reviews interrupt obsolete work on every non-draft head; trusted human mentions queue.",
           payload: {
             automaticReview: {
               enabled: true,
@@ -111,10 +117,20 @@ export const GithubAgentProcessorContract = defineProcessorContract({
         },
       ],
     },
+    "events.iterate.com/github-agent/repository-collaborator-verified": {
+      description:
+        "Internal audit fact recording that GitHub verified a human trigger source as a repository collaborator when its webhook author_association was inconclusive.",
+      payloadSchema: z.object({
+        actor: z.string().min(1),
+        routeKey: z.string().min(1),
+        sourceOffset: z.number().int().positive(),
+      }),
+    },
   },
   processorDeps: [AgentProcessorContract, RepoProcessorContract],
   consumes: [
     "events.iterate.com/github-agent/configure",
+    "events.iterate.com/github-agent/repository-collaborator-verified",
     "events.iterate.com/github-agent/route-configured",
     "events.iterate.com/github/webhook-received",
   ],
@@ -123,6 +139,7 @@ export const GithubAgentProcessorContract = defineProcessorContract({
     // snapshots are inbound messages from their GitHub sender.
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agents/message-received",
+    "events.iterate.com/github-agent/repository-collaborator-verified",
   ],
 });
 

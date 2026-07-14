@@ -29,7 +29,6 @@
  */
 import { RpcTarget } from "cloudflare:workers";
 import type { AppConfig } from "./config.ts";
-import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
 import { parseConfig } from "./config.ts";
 import {
   resolveItxAuth,
@@ -124,6 +123,7 @@ import {
 } from "./domains/integrations/waitrose-api.ts";
 import {
   deleteProjectFile,
+  listProjectFiles,
   mintProjectFileUrl,
   putProjectFile,
   readProjectFile,
@@ -193,13 +193,42 @@ import type {
   BuiltinIntegrationSlug,
   CompleteConnectResult,
   GmailRequestInput,
+  GithubConnection,
+  GmailConnection,
+  IntegrationFamily,
   IntegrationConnectionStatus,
   IntegrationConnectionListEntry,
   OAuthProviderSlug,
+  SlackConnection,
+  TelegramConnection,
+  WaitroseConnection,
 } from "./domains/integrations/types.ts";
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
+import {
+  ensureProjectSearchInstance,
+  indexDocument,
+  indexPinnedStreamEvent,
+  indexEntireStream,
+  indexStreamEventBatch,
+  mirrorFileToSearchIndex,
+  triggerProjectSearchSync,
+  triggerProjectSearchSyncDebounced,
+} from "./domains/search/search-index.ts";
+import {
+  narrowStreamRefToChunk,
+  normalizeSearchExcludeKinds,
+  normalizeSearchSource,
+  projectSearchInstanceId,
+  searchFilters,
+} from "./domains/search/search-corpus.ts";
+import { ItxExpression } from "./itx/expression.ts";
+import type {
+  SearchAnswerResult,
+  SearchQueryResult,
+  SearchResultChunk,
+} from "./domains/search/search-corpus.ts";
 import type { AgentFileAttachment } from "./domains/agents/agent-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
@@ -276,7 +305,10 @@ import type {
   WorkspaceGitLogEntry,
   WorkspacePublishResult,
 } from "./domains/workspaces/types.ts";
-import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
+import {
+  DynamicWorkerRunner,
+  type DynamicWorkerTraceRole,
+} from "./domains/workers/worker-runner.ts";
 import { integrationStreamStub } from "./domains/integrations/integration-streams.ts";
 import {
   buildProjectEmailMessage,
@@ -1963,6 +1995,483 @@ class FilesRpcTarget extends IterateRpcTarget<"Files"> {
   }
 }
 
+/** Parse a stored ref metadata value; malformed JSON/shape yields undefined, never a throw. */
+function parseStoredRef(serialized: string): ItxExpression | undefined {
+  try {
+    return ItxExpression.parse(JSON.parse(serialized));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Project search over everything the project accumulates — stream events,
+ * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
+ * instance over the deployment's search-index bucket
+ * (domains/search/search-index.ts). One instance PER PROJECT, created on
+ * first use, indexing only the project's `{projectId}/**` slice of the
+ * bucket — tenancy is structural, not a query filter. Experimental — the
+ * surface may change.
+ */
+class SearchRpcTarget extends IterateRpcTarget<"Search"> {
+  constructor(
+    readonly props: { auth: ItxAuth; projectId: string; capabilityHost: CapabilityHostRpcTarget },
+  ) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "One search over everything this project accumulates — stream events, itx.files, repo " +
+        "files, and itx.docs — via this project's own AI Search instance. query({ q }) returns " +
+        "scored chunks; hits carry a `ref` — an itx EXPRESSION ARRAY leading back to the domain " +
+        'object: ["streams", ["get", path], ["getEvents", { afterOffset, beforeOffset }]] for ' +
+        'stream events, ["files", ["get", path]], ["repos", ["get", repoPath], ["readFile", ' +
+        '{ path }]], or ["docs", ["get", { name }]]. Evaluate a ref by walking it: let v = itx; ' +
+        "for (const step of ref) v = typeof step === 'string' ? v[step] : await v[step[0]]" +
+        "(...step.slice(1)); — plus `kind` and a human-readable `context` on every hit. " +
+        "answer({ q }) generates a cited answer. Narrow with source " +
+        '("streams" | "files" | "repos") or exclude kinds; options: limit (1–50), ' +
+        "scoreThreshold, rewriteQuery. indexEvent({ stream, offset, note? }) pins one event by " +
+        "coordinates; index({ kind, id, text, ref, title?, context? }) adds a standalone " +
+        "document (ref REQUIRED — the itx expression back to the source); " +
+        "indexStream/indexRepo/backfillFiles backfill one unit, reindex() sweeps the whole " +
+        "project (all streams + repos + files). Everything indexes automatically except " +
+        "ephemeral and stream-housekeeping events. Explicit index verbs are searchable in ~a " +
+        "minute; automatic mirroring can lag up to the hourly sync.",
+      children: {
+        answer: "RAG answer over the project corpus + docs, with cited source chunks.",
+        backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
+        ensureIndex:
+          "Ensure this project's search instance exists (idempotent; created at project birth).",
+        index:
+          "Add/replace one standalone document ({ kind, id, text, ref, title?, context? }) — " +
+          "ref (itx expression) is required.",
+        indexEvent:
+          "Pin one stream event by coordinates ({ stream, offset, note? }) — ref leads back to it.",
+        indexRepo: "Snapshot one repo's default-branch HEAD into the search corpus now.",
+        indexStream: "Re-index one stream from the beginning (backfill/repair).",
+        reindex:
+          "Reindex the whole project — every stream, repo, and file — crude, idempotent, re-runnable.",
+        query:
+          "Retrieve scored, kind-tagged chunks matching a query (with source/exclude filters).",
+      },
+      parent: "a project itx (itx.search)",
+    });
+  }
+
+  get #instance(): AiSearchInstance {
+    return env.SEARCH_INSTANCES.get(projectSearchInstanceId(this.props.projectId));
+  }
+
+  #searchOptions(input: {
+    limit?: number;
+    rewriteQuery?: boolean;
+    scoreThreshold?: number;
+    source?: string;
+    exclude?: readonly string[];
+  }): AiSearchOptions {
+    return {
+      retrieval: {
+        filters: searchFilters({
+          projectId: this.props.projectId,
+          // Platform kinds pass through; custom kinds are re-normalized by
+          // the same rules index() wrote them under; "docs" throws (it is
+          // federated, never stored).
+          source: input.source === undefined ? undefined : normalizeSearchSource(input.source),
+          // "docs" is federated, never in the R2 corpus, so it can't be an R2
+          // filter; drop it here and let #federatedDocs honour the exclusion.
+          excludeKinds:
+            input.exclude === undefined
+              ? undefined
+              : normalizeSearchExcludeKinds(input.exclude).filter((kind) => kind !== "docs"),
+        }),
+        // Tuned for GENEROUS INCLUSION (Jonas, 2026-07-13): recall over
+        // precision — a downstream fast-LLM pass can always filter the result
+        // set in conversation context, but a hit that never surfaces is gone.
+        // Defaults beat the instance's (10 results, 0.4 threshold); explicit
+        // caller values still win.
+        max_num_results: input.limit ?? 20,
+        match_threshold: input.scoreThreshold ?? 0.2,
+        // OR-mode keyword matching: dogfooding showed the default AND-mode
+        // misses exact-token queries whose terms don't co-occur in one chunk;
+        // hybrid rrf fusion keeps precision.
+        keyword_match_mode: "or",
+        // One neighboring chunk heals JSON payloads split across chunk
+        // boundaries in stream segment documents.
+        context_expansion: 1,
+      },
+      query_rewrite: input.rewriteQuery === undefined ? undefined : { enabled: input.rewriteQuery },
+    };
+  }
+
+  /** Map one AI Search chunk to a provenance-carrying result. */
+  #toChunk(chunk: AiSearchSearchResponse["chunks"][number]): SearchResultChunk {
+    const metadata = chunk.item.metadata ?? {};
+    const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
+    return {
+      filename: chunk.item.key,
+      score: chunk.score,
+      content: chunk.text,
+      kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
+      context: typeof metadata.context === "string" ? metadata.context : undefined,
+      // Every corpus writer stores `ref` — the serialized itx expression back
+      // to the domain object. Parse defensively (a hit without one is still a
+      // valid result), then narrow stream refs to the exact events the chunk
+      // contains — the stored ref covers the whole storage segment.
+      ref: storedRef === undefined ? undefined : narrowStreamRefToChunk(storedRef, chunk.text),
+    };
+  }
+
+  /**
+   * Federated `docs` results: itx.docs is a static in-worker keyword index
+   * (examples + types + this scope's mounted capabilities), not part of the R2
+   * corpus, so query() merges it in unless docs are excluded / a different
+   * source is pinned. Docs scores are keyword-overlap counts, not comparable
+   * to the corpus's relevance scores — a descending band from 0.5 keeps
+   * strong corpus hits on top while docs still surface mid-list.
+   */
+  async #federatedDocs(input: {
+    query: string;
+    source?: string;
+    exclude?: readonly string[];
+    limit?: number;
+  }): Promise<SearchResultChunk[]> {
+    if (input.source !== undefined) return []; // a corpus source was pinned
+    if (
+      input.exclude !== undefined &&
+      normalizeSearchExcludeKinds(input.exclude).includes("docs")
+    ) {
+      return [];
+    }
+    const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
+    const hits = await docs.search({ q: input.query });
+    return hits.slice(0, Math.min(input.limit ?? 5, 5)).map((hit, index) => ({
+      filename: hit.fetchCall,
+      score: 0.5 - index * 0.02,
+      content: hit.summary,
+      kind: "docs",
+      context: `${hit.kind}: ${hit.name} — fetch with ${hit.fetchCall}`,
+      ref: ["docs", ["get", { name: hit.name }]] as ItxExpression,
+    }));
+  }
+
+  /**
+   * A missing instance is the expected first-touch state: create it (its
+   * first sync then indexes the project's existing corpus slice) and tell the
+   * caller the index is warming instead of failing.
+   */
+  async #ensureInstanceAfterMiss(error: unknown): Promise<string> {
+    try {
+      const { created } = await ensureProjectSearchInstance(this.props.projectId);
+      return created
+        ? "Search instance created for this project; the first index is in progress — retry shortly."
+        : `AI Search request failed: ${String(error).slice(0, 200)}`;
+    } catch (provisionError) {
+      return `AI Search instance provisioning failed: ${String(provisionError).slice(0, 200)}`;
+    }
+  }
+
+  /**
+   * Ensure this project's search instance exists (idempotent). The project
+   * CREATE SAGA calls this so search is warm from birth; the lazy
+   * query/index paths remain as self-heal for projects that predate it.
+   * Safe to call any time — an existing instance is a no-op.
+   */
+  async ensureIndex(): Promise<{ created: boolean }> {
+    const { created } = await ensureProjectSearchInstance(this.props.projectId);
+    return { created };
+  }
+
+  /**
+   * Retrieve scored chunks matching a query, scoped to this project's own
+   * search instance. Merges the corpus (streams/files/repos/custom kinds)
+   * with federated itx.docs, each result tagged with its `kind` and `context`
+   * so callers can contextualize a hit. Docs hits carry synthetic 0.5-band
+   * scores (keyword overlap, not comparable to corpus relevance) and are
+   * exempt from `limit`/`scoreThreshold` (separately capped at 5). On a
+   * project whose instance doesn't exist yet, the instance is created and
+   * docs results return with a `warning` — retry once its first index
+   * completes (typically a minute or two). A warning-free empty result means
+   * the index is live and simply has no match.
+   */
+  async query(input: {
+    q: string;
+    /** Max chunks to return (1–50, default 20 — tuned for recall). */
+    limit?: number;
+    /** Rewrite the query for retrieval first (extra LLM call). */
+    rewriteQuery?: boolean;
+    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
+    scoreThreshold?: number;
+    /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
+    source?: string;
+    /** Exclude kinds from results (platform or custom), e.g. `["streams"]` to skip the event log. */
+    exclude?: readonly string[];
+  }): Promise<SearchQueryResult> {
+    const [corpus, docs] = await Promise.allSettled([
+      this.#instance.search({ query: input.q, ai_search_options: this.#searchOptions(input) }),
+      this.#federatedDocs({
+        query: input.q,
+        source: input.source,
+        exclude: input.exclude,
+        limit: input.limit,
+      }),
+    ]);
+    // Docs are in-worker and must not be lost to a corpus outage; the reverse
+    // (docs failing) is a real bug worth surfacing, so it still throws.
+    if (docs.status === "rejected") throw docs.reason;
+    if (corpus.status === "rejected") {
+      const warning = await this.#ensureInstanceAfterMiss(corpus.reason);
+      if (input.source !== undefined) return { searchQuery: input.q, results: [], warning };
+      return { searchQuery: input.q, results: docs.value, warning };
+    }
+    const results = [
+      ...corpus.value.chunks.map((chunk) => this.#toChunk(chunk)),
+      ...docs.value,
+    ].sort((a, b) => b.score - a.score);
+    return { searchQuery: corpus.value.search_query, results };
+  }
+
+  /**
+   * Retrieve matching chunks AND generate an answer from them (RAG).
+   * Unlike `query`, a project whose instance doesn't exist yet THROWS here
+   * (message: "first index is in progress — retry shortly") — there is no
+   * warning-carrying degraded result. `searchQuery` echoes the input
+   * verbatim (never the rewritten query).
+   */
+  async answer(input: {
+    q: string;
+    limit?: number;
+    rewriteQuery?: boolean;
+    scoreThreshold?: number;
+    source?: string;
+    exclude?: readonly string[];
+    /** Optional system prompt for the answer generation. */
+    systemPrompt?: string;
+  }): Promise<SearchAnswerResult> {
+    let response: AiSearchChatCompletionsResponse;
+    try {
+      response = await this.#instance.chatCompletions({
+        messages: [
+          ...(input.systemPrompt === undefined
+            ? []
+            : [{ role: "system" as const, content: input.systemPrompt }]),
+          { role: "user" as const, content: input.q },
+        ],
+        ai_search_options: this.#searchOptions(input),
+      });
+    } catch (error) {
+      throw new Error(await this.#ensureInstanceAfterMiss(error), { cause: error });
+    }
+    return {
+      response: response.choices[0]?.message.content ?? "",
+      searchQuery: input.q,
+      results: response.chunks.map((chunk) => this.#toChunk(chunk)),
+    };
+  }
+
+  /**
+   * Add (or replace) one document in the search corpus — the general
+   * mechanism to make derived content (summaries, notes, digests) findable
+   * via `query`. `ref` is REQUIRED: the itx expression leading back to the
+   * domain object the text derives from (e.g. `["streams", ["get", path],
+   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
+   * a search result is never a dead end. `kind` is `[a-z0-9._-]+` and must
+   * not be a reserved platform kind (streams/files/repos/docs); the
+   * serialized ref caps at 500 chars. `id` is stable within
+   * `(project, kind)`, so re-indexing the same id overwrites. `context` is
+   * the one-line descriptor shown on every hit and to the answer model.
+   */
+  async index(input: {
+    kind: string;
+    id: string;
+    text: string;
+    /** The itx expression that leads back to the source domain object. */
+    ref: ItxExpression;
+    title?: string;
+    context?: string;
+  }): Promise<{ key: string }> {
+    const result = await indexDocument({ ...input, projectId: this.props.projectId });
+    // First index() bootstraps the project's instance; the sync trigger makes
+    // the document searchable in seconds instead of the hourly schedule.
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
+  }
+
+  /**
+   * Pin one stream event into the search corpus by its coordinates — the
+   * domain-object way to make a specific moment findable. The event's content
+   * is read from the stream (never trusted from the caller) and indexed as a
+   * focused document together with the optional `note`; the search hit's
+   * `ref` is the itx expression fetching exactly that event. Note the param
+   * is `stream` (unlike indexStream's `path`). Idempotent per
+   * (stream, offset).
+   */
+  async indexEvent(input: {
+    /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+    stream: string;
+    /** The event's offset on that stream. */
+    offset: number;
+    /** Optional annotation, indexed alongside the event ("decision made here"). */
+    note?: string;
+  }): Promise<{ key: string }> {
+    const path = normalizePath(input.stream);
+    const streamStub = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: this.props.projectId, path },
+        { allowNullProjectId: true },
+      ),
+    );
+    const [event] = await streamStub.getEvents({
+      afterOffset: input.offset - 1,
+      beforeOffset: input.offset + 1,
+      limit: 1,
+    });
+    if (event === undefined) {
+      throw new Error(`no event at offset ${input.offset} on stream ${path}`);
+    }
+    const result = await indexPinnedStreamEvent({
+      projectId: this.props.projectId,
+      event,
+      note: input.note,
+    });
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
+  }
+
+  /**
+   * Re-index one stream from the beginning — the repair verb for streams that
+   * predate search indexing, or the rare tail gap a failed per-batch write can
+   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
+   */
+  async indexStream(input: { path: string }): Promise<{ segments: number }> {
+    const streamStub = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: this.props.projectId, path: normalizePath(input.path) },
+        { allowNullProjectId: true },
+      ),
+    );
+    const result = await indexEntireStream({
+      projectId: this.props.projectId,
+      path: normalizePath(input.path),
+      readEvents: (args) => streamStub.getEvents(args),
+    });
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
+  }
+
+  /**
+   * Snapshot one repo's default-branch HEAD into the search corpus now — the
+   * backfill verb for repos that predate search indexing (writes index
+   * incrementally from here on). Runs on the repo Durable Object's own write
+   * chain so its stale-key sweep can't race post-commit indexing. Returned
+   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key
+   * files, and a nonzero `failed` means re-run.
+   */
+  async indexRepo(input: { path: string }): Promise<{
+    deleted: number;
+    indexed: number;
+    skipped: number;
+    failed: number;
+  }> {
+    const result = await env.REPO.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: normalizePath(input.path),
+      }),
+    ).reindexSearch();
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return result;
+  }
+
+  /**
+   * Re-mirror every existing itx.files object into the search corpus — the
+   * backfill verb for files that predate search indexing (puts mirror
+   * incrementally from here on). Counts reflect the actual mirror outcome:
+   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
+   */
+  async backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }> {
+    const counts = { mirrored: 0, skipped: 0, failed: 0 };
+    for await (const file of listProjectFiles(this.props.projectId)) {
+      const outcome = await mirrorFileToSearchIndex({
+        ...file,
+        projectId: this.props.projectId,
+      });
+      counts[outcome] += 1;
+    }
+    await ensureProjectSearchInstance(this.props.projectId);
+    await triggerProjectSearchSync(this.props.projectId);
+    return counts;
+  }
+
+  /**
+   * Reindex the WHOLE project — every known stream, every repo's default
+   * branch, every itx.files object — in one crude, idempotent sweep. This is
+   * the backfill/repair verb for projects that predate search indexing (new
+   * writes index automatically); every unit overwrites its own corpus keys,
+   * so re-running (including after a timeout on a huge project) only fills
+   * gaps. Streams run a few at a time; expect minutes on large projects. Per
+   * unit failures are counted, never thrown — nonzero `failed` means re-run.
+   */
+  async reindex(): Promise<{
+    streams: { indexed: number; segments: number; failed: number };
+    repos: { indexed: number; failed: number };
+    files: { mirrored: number; skipped: number; failed: number };
+  }> {
+    const state = await projectProcessorState(this.props.projectId);
+    const streams = { indexed: 0, segments: 0, failed: 0 };
+    const queue = [...state.streams];
+    await Promise.all(
+      Array.from({ length: 5 }, async () => {
+        for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
+          const path = normalizePath(item.path);
+          try {
+            const streamStub = env.STREAM.getByName(
+              DurableObjectNameCodec.stringify(
+                { projectId: this.props.projectId, path },
+                { allowNullProjectId: true },
+              ),
+            );
+            const { segments } = await indexEntireStream({
+              projectId: this.props.projectId,
+              path,
+              readEvents: (args) => streamStub.getEvents(args),
+            });
+            streams.indexed += 1;
+            streams.segments += segments;
+          } catch (error) {
+            console.warn(`search reindex: stream ${path} failed: ${String(error)}`);
+            streams.failed += 1;
+          }
+        }
+      }),
+    );
+    const repos = { indexed: 0, failed: 0 };
+    for (const repo of state.repos) {
+      try {
+        await env.REPO.getByName(
+          DurableObjectNameCodec.stringify({
+            projectId: this.props.projectId,
+            path: normalizePath(repo.path),
+          }),
+        ).reindexSearch();
+        repos.indexed += 1;
+      } catch (error) {
+        console.warn(`search reindex: repo ${repo.path} failed: ${String(error)}`);
+        repos.failed += 1;
+      }
+    }
+    const files = await this.backfillFiles(); // also ensures the instance + triggers the sync
+    return { streams, repos, files };
+  }
+}
+
 /** Workers AI binding exposed through itx as a project/agent capability. */
 class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
@@ -2160,7 +2669,7 @@ class CloudflareIntegrationsRpcTarget extends IterateRpcTarget<"CloudflareIntegr
 
 /**
  * The `__describe()` answer for one built-in connection node
- * (`itx.integrations.<slug>["<connection>"]`). The SDK proxies replay dotted
+ * (`itx.integrations.<slug>.get("<connection>")`). The SDK proxies replay dotted
  * paths onto a real vendor SDK, so there is no member map to reflect — the
  * description states what the node IS, one working example, and the calling
  * grammar: exactly what a scripting agent needs to shape its next call.
@@ -2175,7 +2684,7 @@ function describeConnectionSdk(input: {
 }) {
   return describeNode({
     instructions: [
-      `itx.integrations.${input.slug}[${JSON.stringify(input.connection)}] is ${input.sdk}.`,
+      `itx.integrations.${input.slug}.get(${JSON.stringify(input.connection)}) is ${input.sdk}.`,
       `Example: ${input.example}`,
       input.grammar,
     ].join("\n"),
@@ -2184,15 +2693,74 @@ function describeConnectionSdk(input: {
   });
 }
 
+/** A genuine RpcTarget for one selected connection. Keeping this as a real
+ * target (instead of returning a function Proxy) makes
+ * `integrations.github.get().octokit...` pipelinable through Cap'n Web. The
+ * connection lookup is deferred until the first SDK call, so `get()` itself
+ * stays synchronous even when it must discover the first connected account. */
+class IntegrationConnectionRpcTarget extends RpcTarget {
+  #resolvedConnection: Promise<string | null> | undefined;
+
+  constructor(
+    readonly props: {
+      connection?: string;
+      invoke(input: {
+        args: unknown[];
+        connection: string | null;
+        method: string[];
+        slug: string;
+      }): Promise<unknown>;
+      resolve(connection: string | undefined, slug: string): Promise<string | null>;
+      slug: string;
+    },
+  ) {
+    super();
+  }
+
+  async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    this.#resolvedConnection ??= this.props.resolve(this.props.connection, this.props.slug);
+    return await this.props.invoke({
+      args: call.args ?? [],
+      connection: await this.#resolvedConnection,
+      method: call.path,
+      slug: this.props.slug,
+    });
+  }
+}
+
+/** One integration family. `get(connection?)` is the only connection selector;
+ * old bracket/property connection names intentionally are not supported. */
+class IntegrationFamilyRpcTarget extends RpcTarget {
+  constructor(readonly props: ConstructorParameters<typeof IntegrationConnectionRpcTarget>[0]) {
+    super();
+  }
+
+  get(connection?: string): IntegrationConnectionRpcTarget {
+    if (connection !== undefined && connection.trim() === "") {
+      throw new Error(
+        `itx.integrations.${this.props.slug}.get(connection) requires a non-empty slug.`,
+      );
+    }
+    return new IntegrationConnectionRpcTarget({ ...this.props, connection });
+  }
+
+  async __describe(): Promise<unknown> {
+    return describeNode({
+      instructions: `Use itx.integrations.${this.props.slug}.get() for the first connected account, or .get("<connection-slug>") when a specific account matters. The returned connection is a pipelinable RPC capability.`,
+      parent: "the integrations collection (itx.integrations)",
+    });
+  }
+}
+
 /**
  * The `itx.integrations` collection.
  *
- * Connection-yielding dotted calls are `{slug}.{connection}.{...method}`.
- * Built-in slugs (`slack`, `google`, `github`, `telegram`, `waitrose`)
+ * Connection-yielding calls are `{slug}.get(connection?).{...method}`.
+ * Public built-in families (`slack`, `gmail`, `github`, `telegram`, `waitrose`)
  * dispatch to deployment code —
- * `itx.integrations.slack["main-slack"].chat.postMessage({...})` reaches any
- * Slack Web API method (a real WebClient), `itx.integrations.google["jonas"].gmail.request({...})`
- * the Gmail REST proxy, and `itx.integrations.github["jonas"].octokit` is a
+ * `itx.integrations.slack.get().chat.postMessage({...})` reaches any Slack Web
+ * API method (a real WebClient), `itx.integrations.gmail.get().request({...})`
+ * the Gmail REST proxy, and `itx.integrations.github.get().octokit` is a
  * real Octokit — `.rest.apps.listReposAccessibleToInstallation()`, the
  * `.request("GET /repos/{owner}/{repo}")` escape hatch, `.graphql(...)`;
  * there is NO generic `.api.request({ method, path })` shape, and the
@@ -2200,13 +2768,13 @@ function describeConnectionSdk(input: {
  * `...ForAuthenticatedUser` endpoints answer 403 — and every other slug
  * resolves through the itx capability table under the `integrations` prefix.
  * The exception is `itx.integrations.parallel`: a first-party API-key RPC
- * target, not a connection and not returned by `list()`. There is no implicit
- * connection: a built-in call without a connection name is an error.
+ * target, not a connection and not returned by `list()`. With no argument,
+ * `get()` selects the first currently connected account in `list()` order.
  *
- * Built-in integrations are plain imperative dispatch branches, not classes,
- * because their only callers are untyped dotted scripts; a project extends
- * the collection with ordinary `provideCapability({ path: ["integrations", ...] })`
- * — data, not deployment. `completeConnect` is called by the app worker's
+ * The SDK connection targets are thin dispatchers over the normal vendor
+ * clients. A project extends the collection with ordinary
+ * `provideCapability({ path: ["integrations", ...] })` — data, not deployment.
+ * `completeConnect` is called by the app worker's
  * OAuth callback routes (/api/integrations/<provider>/callback); its
  * authority is the HMAC-signed OAuth state minted by startOAuthFlow,
  * verified itx-side.
@@ -2225,6 +2793,39 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     );
   }
 
+  #family(slug: string): IntegrationFamilyRpcTarget {
+    return new IntegrationFamilyRpcTarget({
+      invoke: (input) => this.#invokeConnectionCapability(input),
+      resolve: (connection, familySlug) => this.#resolveConnection(familySlug, connection),
+      slug,
+    });
+  }
+
+  /** Slack WebClient connections. `get()` selects the first connected workspace. */
+  get slack(): IntegrationFamily<SlackConnection> {
+    return this.#family("slack") as unknown as IntegrationFamily<SlackConnection>;
+  }
+
+  /** Connected Google accounts, exposed as Gmail. `get()` selects the first. */
+  get gmail(): IntegrationFamily<GmailConnection> {
+    return this.#family("gmail") as unknown as IntegrationFamily<GmailConnection>;
+  }
+
+  /** GitHub App installations with the normal all-in-one Octokit package. */
+  get github(): IntegrationFamily<GithubConnection> {
+    return this.#family("github") as unknown as IntegrationFamily<GithubConnection>;
+  }
+
+  /** Telegram Bot API connections. `get()` selects the first connected bot. */
+  get telegram(): IntegrationFamily<TelegramConnection> {
+    return this.#family("telegram") as unknown as IntegrationFamily<TelegramConnection>;
+  }
+
+  /** Waitrose account connections. */
+  get waitrose(): IntegrationFamily<WaitroseConnection> {
+    return this.#family("waitrose") as unknown as IntegrationFamily<WaitroseConnection>;
+  }
+
   /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
@@ -2240,13 +2841,68 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     return new CloudflareIntegrationsRpcTarget();
   }
 
-  /** The dotted-call surface: built-in slugs dispatch here; unknown slugs
-   * resolve through the project capability table (the provided lane). Slack
-   * methods are unary — one body object:
-   * `itx.integrations.slack["<connection>"].chat.postMessage({ ... })`. */
+  /** Dynamic provided-integration dispatch. The only selector is
+   * `<slug>.get(connection?)`; built-in families are concrete typed getters. */
   async invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown> {
     const { args = [], path } = call;
-    const [slug, connection, ...method] = path;
+    const [slug, selector, ...rest] = path;
+    if (slug && selector === "__describe" && rest.length === 0 && args.length === 0) {
+      return await this.#capabilityHost.invokeCapability({
+        path: ["integrations", slug, "__describe"],
+      });
+    }
+    if (!slug || selector !== "get" || rest.length !== 0 || args.length > 1) {
+      throw new Error(
+        'Integration connections use `.get(connection?)`, for example `itx.integrations.github.get().octokit.rest.repos.get(...)` or `itx.integrations.github.get("work").octokit...`.',
+      );
+    }
+    const connection = args[0];
+    if (connection !== undefined && typeof connection !== "string") {
+      throw new Error(`itx.integrations.${slug}.get(connection) expects a string connection slug.`);
+    }
+    return this.#family(slug).get(connection);
+  }
+
+  async #resolveConnection(slug: string, requested: string | undefined): Promise<string | null> {
+    if (requested !== undefined) return requested;
+
+    const providerSlug = slug === "gmail" ? "google" : slug;
+    const candidates = (await this.list()).filter((entry) => entry.integration === slug);
+    if (isBuiltinIntegrationSlug(providerSlug)) {
+      // A Waitrose connection is its session secret, not a lifecycle journal;
+      // appearing in list() is therefore the connected-state proof.
+      if (providerSlug === "waitrose") {
+        const first = candidates.find((entry) => entry.connection !== null);
+        if (first) return first.connection;
+      }
+      for (const entry of candidates) {
+        if (entry.connection === null) continue;
+        const status = await getConnectionStatus({
+          connection: entry.connection,
+          projectId: this.props.projectId,
+          provider: providerSlug,
+        });
+        if (status.connected) return entry.connection;
+      }
+      throw new Error(
+        `No connected ${slug} account is available. Connect one or pass an exact slug to itx.integrations.${slug}.get("<connection-slug>").`,
+      );
+    }
+
+    const first = candidates.find((entry) => entry.connection !== null);
+    if (first) return first.connection;
+    throw new Error(
+      `No concrete ${slug} integration connection is available. Mount one under ["integrations", "${slug}", "<connection-slug>"] or pass an exact slug to .get("<connection-slug>").`,
+    );
+  }
+
+  async #invokeConnectionCapability(input: {
+    args: unknown[];
+    connection: string | null;
+    method: string[];
+    slug: string;
+  }): Promise<unknown> {
+    const { args, connection, method, slug } = input;
 
     if (slug === "slack") {
       if (!connection || method.length === 0) {
@@ -2258,7 +2914,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.slack[${JSON.stringify(connection)}].chat.postMessage({ channel, text })`,
+          example: `await itx.integrations.slack.get(${JSON.stringify(connection)}).chat.postMessage({ channel, text })`,
           grammar: SLACK_CALL_GRAMMAR,
           sdk: "a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object argument",
           slug: "slack",
@@ -2267,8 +2923,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // The connection's router processor: the project-class host Durable
       // Object at this connection's stream path. `processor` is a claimed
       // child, not a Web API replay — it is what the connect flow's wake
-      // subscription persists (["integrations", "slack", <connection>,
-      // "processor", "wakeStreamSubscriber"]).
+      // subscription persists (["integrations", "slack",
+      // ["get", <connection>], "processor", "wakeStreamSubscriber"]).
       if (method[0] === "processor") {
         const relay = new ProcessorRelayRpcTarget({
           auth: this.props.auth,
@@ -2295,27 +2951,27 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       }
     }
 
-    if (slug === "google") {
+    if (slug === "gmail") {
       if (connection && method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.google[${JSON.stringify(connection)}].gmail.request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`,
+          example: `await itx.integrations.gmail.get(${JSON.stringify(connection)}).request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } })`,
           grammar:
-            "itx.integrations.google expected `<connection>.gmail.request({...})`; paths are relative to https://gmail.googleapis.com/gmail/v1.",
+            "itx.integrations.gmail.get(connection?).request({...}); paths are relative to https://gmail.googleapis.com/gmail/v1.",
           sdk: "the Gmail REST API behind gmail.request({ path, query, method, headers, body })",
-          slug: "google",
+          slug: "gmail",
         });
       }
       // gmail.request is two segments; fewer after the connection means the
       // caller skipped the connection (the pre-connections itx.gmail shape).
-      if (!connection || method.length < 2) {
+      if (!connection || method.length !== 1) {
         throw new Error(
-          'itx.integrations.google expected `<connection>.gmail.request({...})` (e.g. itx.integrations.google["jonas"].gmail.request({ path: "/users/me/messages" })); use itx.integrations.list() to see connections.',
+          'itx.integrations.gmail.get(connection?).request({...}) is the Gmail surface (e.g. itx.integrations.gmail.get().request({ path: "/users/me/messages" })).',
         );
       }
-      if (method[0] !== "gmail" || method[1] !== "request" || method.length !== 2) {
+      if (method[0] !== "request") {
         throw new Error(
-          `itx.integrations.google["${connection}"] exposes gmail.request(...); got "${method.join(".")}".`,
+          `itx.integrations.gmail.get(${JSON.stringify(connection)}) exposes request(...); got "${method.join(".")}".`,
         );
       }
       // No in-process token fetch — the Gmail call goes through the connection
@@ -2343,11 +2999,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.github[${JSON.stringify(connection)}].octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
+          example: `await itx.integrations.github.get(${JSON.stringify(connection)}).octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
           grammar: GITHUB_CALL_GRAMMAR,
-          sdk: "the ordinary Octokit exported by @octokit/rest, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://octokit.github.io/rest.js/; `.rest` is Octokit's normal property. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Call paginate(...), not paginate.iterator(), because async iterators cannot cross the ITX RPC boundary",
+          sdk: "the all-in-one Octokit exported by octokit, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work. Prefer REST for routine endpoints and GraphQL when its query shape or API coverage is useful. For pagination, RPC arguments must be serializable: call `.paginate(\"GET /...\", params)`; endpoint-function overloads, map callbacks, and `.paginate.iterator()` cannot cross the boundary. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Octokit's retry and throttling plugins are disabled, so it does not replay 5xx, 429, or 408 responses; the secret transport may refresh credentials and repeat once after a 401. Inspect remote state before manually retrying an ambiguous failed write",
           slug: "github",
-          types: 'export type GithubConnection = { octokit: import("@octokit/rest").Octokit };',
+          types: 'export type GithubConnection = { octokit: import("octokit").Octokit };',
         });
       }
       if (method.length < 2 || method[0] !== "octokit") {
@@ -2371,7 +3027,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.telegram[${JSON.stringify(connection)}].sendMessage({ chat_id, text })`,
+          example: `await itx.integrations.telegram.get(${JSON.stringify(connection)}).sendMessage({ chat_id, text })`,
           grammar: TELEGRAM_CALL_GRAMMAR,
           sdk: "the Telegram Bot API (https://core.telegram.org/bots/api): any method name as ONE dotted segment (sendMessage, sendPhoto, getMe, …) with ONE params object; the bot token is substituted at the egress door",
           slug: "telegram",
@@ -2380,7 +3036,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // The connection's router processor: the project-class host Durable
       // Object at this connection's stream path — same relay shape as Slack's.
       // It is what the connect flow's wake subscription persists
-      // (["integrations", "telegram", <connection>, "processor", ...]).
+      // (["integrations", "telegram", ["get", <connection>], "processor", ...]).
       if (method[0] === "processor") {
         const relay = new ProcessorRelayRpcTarget({
           auth: this.props.auth,
@@ -2396,7 +3052,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         return await replayPathCall(relay, { args, path: method.slice(1) });
       }
       // The Bot API is flat — a deeper path means the caller invented a
-      // namespace (telegram["bot"].chat.sendMessage): answer with the grammar.
+      // namespace (telegram.get("bot").chat.sendMessage): answer with the grammar.
       if (method.length !== 1) throw new Error(TELEGRAM_CALL_GRAMMAR);
       return await callProjectTelegramBotApi({
         body: (args[0] ?? {}) as Record<string, unknown>,
@@ -2413,7 +3069,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       if (method.length === 1 && method[0] === "__describe") {
         return describeConnectionSdk({
           connection,
-          example: `await itx.integrations.waitrose[${JSON.stringify(connection)}].searchProducts("oat milk", { size: 5 })`,
+          example: `await itx.integrations.waitrose.get(${JSON.stringify(connection)}).searchProducts("oat milk", { size: 5 })`,
           grammar: WAITROSE_CALL_GRAMMAR,
           sdk: 'the vendored Waitrose client (waitrose-api.ts): shoppingContext(), searchProducts(term, { size, sortBy, start }), trolley(orderId?), addToTrolley(lineNumber, quantity), removeFromTrolley(lineNumber), updateTrolleyItems(items, orderId?). Connect by writing the connection secret: await itx.secrets.get("/secrets/integrations/waitrose/<connection>/session").update({ egress: { urls: ["https://www.waitrose.com"] }, material: { username, password }, refresh: { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql-prod/graph/live" } }) — the Secret DO logs in on first use and re-logins on 401',
           slug: "waitrose",
@@ -2431,36 +3087,51 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       return await replayPathCall(waitrose, { args, path: method });
     }
 
-    if (slug === "parallel") {
-      const [, ...operationPath] = path;
-      return await (
-        this.parallel as unknown as {
-          invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-        }
-      ).invokeCapability({ args, path: operationPath });
-    }
-
-    if (BUILTIN_INTEGRATION_SLUGS.has(slug)) {
+    if (slug === "gmail" || BUILTIN_INTEGRATION_SLUGS.has(slug)) {
       throw new Error(
         `builtin integration "${slug}" has no dispatch branch — add one in ProjectIntegrationsRpcTarget.invokeCapability`,
       );
     }
-    return await this.#capabilityHost.invokeCapability({ args, path: ["integrations", ...path] });
+    return await this.#capabilityHost.invokeCapability({
+      args,
+      path: ["integrations", slug, ...(connection === null ? [] : [connection]), ...method],
+    });
   }
 
-  /** Every connection the project holds: `/integrations/<slug>/<connection>`
-   * journals plus provided mounts from the capability table (deduped by path;
-   * a mount over its own webhook journal is one entry). */
+  /** Every connection the project holds: integration journals,
+   * credential-defined Waitrose accounts, plus provided mounts from the
+   * capability table (deduped by path). */
   async list(): Promise<IntegrationConnectionListEntry[]> {
-    const [journalConnections, mounted] = await Promise.all([
+    const [journalConnections, mounted, projectState] = await Promise.all([
       listIntegrationConnections(this.props.projectId),
       this.#capabilityHost.describeCapabilities(),
+      projectProcessorState(this.props.projectId),
     ]);
+    // Waitrose deliberately has no connect flow or lifecycle journal: its
+    // session secret is the connection. Surface those secret paths in the
+    // same collection so list() and no-argument get() retain one meaning.
+    const waitroseConnections = projectState.secrets.flatMap((secret) => {
+      const match = /^\/secrets\/integrations\/waitrose\/([^/]+)\/session$/.exec(secret.path);
+      return match?.[1] === undefined
+        ? []
+        : [
+            {
+              connection: match[1],
+              integration: "waitrose" as const,
+              path: `/integrations/waitrose/${match[1]}`,
+              source: "builtin" as const,
+            },
+          ];
+    });
     const entries: IntegrationConnectionListEntry[] = [
       ...journalConnections.map((entry): IntegrationConnectionListEntry => {
         const { integration } = entry;
         return isBuiltinIntegrationSlug(integration)
-          ? { ...entry, integration, source: "builtin" }
+          ? {
+              ...entry,
+              integration: integration === "google" ? "gmail" : integration,
+              source: "builtin",
+            }
           : { ...entry, source: "provided" };
       }),
       ...mounted
@@ -2473,6 +3144,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           path: `/${capability.path.join("/")}`,
           source: "provided" as const,
         })),
+      ...waitroseConnections,
     ];
     // A provided integration can have both a mount and journals at the same
     // path (e.g. webhooks landing on /integrations/github/main); one entry.
@@ -2485,11 +3157,12 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       instructions: [
         "The project's integration connections, each at a fully qualified path /integrations/<slug>/<connection>.",
         "await itx.integrations.list() enumerates every connection (built-in and provided).",
-        'Slack: await itx.integrations.slack["<connection>"].chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.',
-        'Gmail: await itx.integrations.google["<connection>"].gmail.request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-        'GitHub: itx.integrations.github["<connection>"].octokit is the ordinary Octokit from @octokit/rest, with Iterate supplying installation auth and transport. Use its package types and https://octokit.github.io/rest.js/; `.rest` is Octokit\'s normal property and the `.octokit` segment is mandatory.',
-        'Telegram: await itx.integrations.telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).',
-        'Waitrose: await itx.integrations.waitrose["<connection>"].searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
+        'For every connection family, get() selects the first connected account; pass get("<connection>") only when a specific account matters.',
+        "Slack: await itx.integrations.slack.get().chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.",
+        'Gmail: await itx.integrations.gmail.get().request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
+        'GitHub: itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying installation auth and transport. Use its package types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work, while pagination uses the RPC-safe `.paginate("GET /...", params)` route-string form. The `.octokit` segment is mandatory.',
+        "Telegram: await itx.integrations.telegram.get().sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).",
+        'Waitrose: await itx.integrations.waitrose.get().searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
         'Other names resolve through the PROJECT capability table: mount at the project root — await itx.capabilityHosts.get("/").provideCapability({ path: ["integrations", "<slug>"], ... }) — to add a project-owned integration with the same address shape. itx.provideCapability mounts on YOUR OWN scope, which itx.integrations.* dispatch does not consult (an agent-scope mount is unreachable here). Copy the known-good recipe from itx.docs.get({ name: "github-mcp-connect" }).',
       ].join("\n"),
@@ -2501,19 +3174,19 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "  path: string;",
         "  query?: Record<string, boolean | number | string | null | undefined>;",
         "};",
-        '// itx.integrations.google["<connection>"] exposes:',
-        "interface GoogleConnection {",
-        "  gmail: { request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }> };",
+        "// itx.integrations.gmail.get() exposes:",
+        "interface GmailConnection {",
+        "  request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }>;",
         "}",
-        "// Exact package type; Iterate supplies auth and transport. See https://octokit.github.io/rest.js/.",
-        'type GithubConnection = { octokit: import("@octokit/rest").Octokit };',
-        '// itx.integrations.slack["<connection>"] IS a wrapped Slack WebClient',
+        "// Exact package type; Iterate supplies auth and transport. See https://github.com/octokit/octokit.js.",
+        'type GithubConnection = { octokit: import("octokit").Octokit };',
+        "// itx.integrations.slack.get() IS a wrapped Slack WebClient",
         "// (@slack/web-api): any Web API method as a dotted path, ONE body arg.",
         "interface SlackConnection {",
         "  chat: { postMessage(body: Record<string, unknown>): Promise<Record<string, unknown>> };",
         "  // ...every other Web API method, same dotted shape",
         "}",
-        '// itx.integrations.telegram["<connection>"] is the Telegram Bot API:',
+        "// itx.integrations.telegram.get() is the Telegram Bot API:",
         "// flat method names (ONE segment), one params object, JSON result.",
         "interface TelegramConnection {",
         "  sendMessage(params: { chat_id: number | string; text: string } & Record<string, unknown>): Promise<Record<string, unknown>>;",
@@ -2531,16 +3204,18 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         disconnect: "Disconnect one connection: { provider, connection }.",
         getConnection: "Connection status for { provider, connection }.",
         github:
-          'Per-connection wrapped Octokit (a GitHub App installation): github["<connection>"].octokit.rest.apps.listReposAccessibleToInstallation(), .octokit.request("GET /..."), .octokit.graphql(...).',
-        google:
-          'Per-connection Gmail: google["<connection>"].gmail.request({ path: "/users/me/messages", query }).',
+          'GitHub App installations: github.get().octokit selects the first; github.get("<connection>").octokit selects an exact installation. Full Octokit REST, GraphQL, request, and route-string pagination are available.',
+        gmail:
+          'Connected Google accounts: gmail.get().request({ path: "/users/me/messages", query }); pass a slug only for an exact account.',
         list: "Every connection the project holds (built-in journals plus provided mounts).",
         parallel: "Parallel API RPC target using Iterate's platform API key.",
         slack:
-          'Per-connection wrapped Slack WebClient: slack["<connection>"].chat.postMessage({ channel, text }) — any Web API method, one body object.',
+          "Wrapped Slack WebClient: slack.get().chat.postMessage({ channel, text }); pass a slug only for an exact workspace.",
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
         telegram:
-          'Per-connection Telegram Bot API: telegram["<connection>"].sendMessage({ chat_id, text }) — any Bot API method, one params object.',
+          "Telegram Bot API: telegram.get().sendMessage({ chat_id, text }); pass a slug only for an exact bot.",
+        waitrose:
+          'Vendored Waitrose client: waitrose.get("<connection>").searchProducts(...); the account is defined by its connection secret.',
       },
       parent: "a project itx (itx.integrations)",
     });
@@ -3486,6 +4161,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   readonly #flattenNestedPaths: boolean;
   readonly #props: { ctx: CfExecutionContext; projectId: string };
   readonly #ref: DynamicWorkerRef;
+  readonly #traceRole: DynamicWorkerTraceRole | undefined;
   #lazyRunner: DynamicWorkerRunner | undefined;
 
   constructor(props: {
@@ -3494,12 +4170,14 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
+    traceRole?: DynamicWorkerTraceRole;
   }) {
     super();
     this.#buildBudgetMs = props.buildBudgetMs;
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
+    this.#traceRole = props.traceRole;
   }
 
   // Lazy: __describe answers from the ref alone and must not mint loopback
@@ -3582,6 +4260,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       flattenNestedPath,
       path,
       ref: this.#ref,
+      traceRole: this.#traceRole,
     });
   }
 
@@ -3784,23 +4463,18 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     const userPrincipal = userPrincipalOf(this.props.auth);
 
     if (userPrincipal && !this.props.auth.isAdmin()) {
-      const config = this.props.config;
-      if (!config?.iterateAuth?.serviceToken) {
-        throw new Error("project creation requires the auth worker directory to be configured");
-      }
       const organizationSlug = resolveOrganizationSlugForCreate(
         userPrincipal,
         args.organizationSlug,
       );
-      const created = await createAuthWorkerServiceClient(
-        { config },
-        { asUserId: userPrincipal.userId },
-      ).internal.project.createForOrganization({
+      const result = await env.AUTH.createProjectForOrganization({
         organizationSlug,
         name: args.slug,
         slug: args.slug,
         ...(args.projectId === undefined ? {} : { id: args.projectId }),
       });
+      if (!result.ok) throw new Error(result.message);
+      const created = result.project;
       return { organizationId: created.organizationId, projectId: created.id, slug: created.slug };
     }
 
@@ -3810,14 +4484,8 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     if (args.projectId !== undefined) {
       return { organizationId: null, projectId: args.projectId, slug: args.slug };
     }
-    const serviceToken = this.props.config?.iterateAuth?.serviceToken;
-    if (this.props.config && serviceToken) {
-      const minted = await createAuthWorkerServiceClient({
-        config: this.props.config,
-      }).internal.project.mintProjectId();
-      return { organizationId: null, projectId: minted.id, slug: args.slug };
-    }
-    return { organizationId: null, projectId: "prj_" + crypto.randomUUID(), slug: args.slug };
+    const minted = await env.AUTH.mintProjectId();
+    return { organizationId: null, projectId: minted.id, slug: args.slug };
   }
 
   /**
@@ -4095,7 +4763,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
-    'Integration connections, each at /integrations/<slug>/<connection>: list() enumerates them; itx.integrations.slack["<connection>"].chat.postMessage({ channel, text }), itx.integrations.google["<connection>"].gmail.request({ path, query }), itx.integrations.github["<connection>"].octokit.rest.repos.get({ owner, repo }) (a wrapped Octokit); other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
+    'Integration connection families: get() selects the first connected account and get("<connection>") selects an exact one; e.g. itx.integrations.slack.get().chat.postMessage(...), gmail.get().request(...), github.get().octokit.rest.repos.get(...). list() enumerates all connections; other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
   kill: "Restart the project's server-side object; the next request boots it fresh.",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
@@ -4406,10 +5074,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** The integrations collection: built-in integrations as dispatch branches
-   * on the dotted-call surface (`itx.integrations.slack["main-slack"].chat
-   * .postMessage(...)`), provided integrations through the capability table,
-   * management verbs, `list()`. */
+  /** The integrations collection: built-in connection families selected with
+   * `.get()` (first connected) or `.get("slug")` (exact), provided
+   * integrations through the capability table, management verbs, `list()`. */
   get integrations(): ProjectIntegrationsRpcTarget {
     return new ProjectIntegrationsRpcTarget({
       auth: this.#props.auth,
@@ -4457,6 +5124,15 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new SandboxCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
+    });
+  }
+
+  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */
+  get search(): SearchRpcTarget {
+    return new SearchRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+      capabilityHost: this.#props.capabilityHost,
     });
   }
 
@@ -4526,6 +5202,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
+    this.#indexStreamSearch(batch);
     try {
       return await this.worker.processEventBatch(batch);
     } catch (error) {
@@ -4571,15 +5248,55 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
+   * SPIKE platform step: mirror the batch's stream events into the itx.search
+   * corpus (domains/search/search-index.ts) as fixed 100-offset segment
+   * documents. Same rules as {@link #indexStreamActivity}: idempotent
+   * (segment docs are deterministic rewrites), fire-and-forget, MUST NOT throw
+   * — only the worker delegation may reject into the spine's retry. It rides
+   * the same ordered, checkpointed delivery, re-reading each touched segment's
+   * full range from the stream so a transient failure self-heals on the next
+   * batch in that segment (see indexStreamEventBatch).
+   */
+  #indexStreamSearch(batch: StreamPushEventBatch): void {
+    if (batch.projectId === null) return;
+    const streamStub = env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(
+        { projectId: batch.projectId, path: batch.path },
+        { allowNullProjectId: true },
+      ),
+    );
+    // waitUntil, not bare fire-and-forget: the segment re-read + R2 puts are a
+    // multi-hop pipeline that outlives this RPC's resolve, and an unanchored
+    // promise can be cancelled when the invocation's I/O context ends.
+    const projectId = batch.projectId;
+    this.#props.ctx.waitUntil(
+      indexStreamEventBatch({
+        batch,
+        readEvents: (args) => streamStub.getEvents(args),
+      })
+        // Freshness: nudge the project's instance (if one exists) so passive
+        // content is searchable in minutes, not on the hourly schedule.
+        .then(() => triggerProjectSearchSyncDebounced(projectId))
+        .catch((error: unknown) => {
+          console.warn("search index stream batch failed", { path: batch.path, error });
+        }),
+    );
+  }
+
+  /**
    * The default repo-backed project worker — a convenience alias; the general
    * API is `workers.get(ref)`. Flattened: the seeded worker implements
    * invokeCapability in userspace, so a dotted call onto any getter the
    * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.
    */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
-    return this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
+    return new DynamicWorkerRpcTarget({
+      ctx: this.#props.ctx,
       flattenNestedPaths: true,
-    });
+      projectId: this.#props.projectId,
+      ref: defaultProjectWorkerRef(),
+      traceRole: "project_config",
+    }) as unknown as DynamicWorkerCapability<ProjectWorker>;
   }
 }
 
@@ -6020,8 +6737,11 @@ installPrototypeInvokeCapabilityFallback(ProjectRpcTarget, {
 // "bar"], args: [x] })`.
 installPrototypeInvokeCapabilityFallback(CapabilityHostRpcTarget);
 // `itx.integrations`: userspace connections mount under provider slugs
-// (`itx.integrations.waitrose.mum.search(...)`).
+// (`itx.integrations.ocado.get("family").search(...)`).
 installPrototypeInvokeCapabilityFallback(ProjectIntegrationsRpcTarget);
+// `itx.integrations.<slug>.get(connection?)`: a genuine connection RpcTarget
+// whose unknown SDK members flatten into its selected integration dispatcher.
+installPrototypeInvokeCapabilityFallback(IntegrationConnectionRpcTarget);
 // `workers.get(ref)`: dotted paths flatten into one invokeCapability against
 // the dynamic worker (the userspace `invokeCapability` walk).
 installPrototypeInvokeCapabilityFallback(DynamicWorkerRpcTarget);

@@ -1,17 +1,33 @@
 // connectionOctokit: the wrapped Octokit's transport must ride the connection
 // secret's fetch with an access-token PLACEHOLDER (never a real token), so the
-// itx caller surface (github["<conn>"].octokit.rest.* / .octokit.request()) keeps the token in
-// its Secret DO. Only the secret stub is mocked; the Octokit is real.
+// itx caller surface (github.get("<conn>").octokit.rest.* / .octokit.graphql()
+// / .octokit.request()) keeps the token in its Secret DO. Only the secret stub
+// is mocked; the all-in-one Octokit is real.
 
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const captured: { request?: Request } = {};
+const captured: { request?: Request; requestCount: number; responseStatus?: number } = {
+  requestCount: 0,
+};
 vi.mock("../../env.ts", () => ({
   itxEnv: {
     SECRET: {
       getByName: () => ({
         fetch: async (request: Request) => {
           captured.request = request;
+          captured.requestCount += 1;
+          if (captured.responseStatus !== undefined) {
+            return Response.json(
+              { message: "transient GitHub failure" },
+              { status: captured.responseStatus },
+            );
+          }
+          if (new URL(request.url).pathname === "/graphql") {
+            return Response.json({ data: { repository: { name: "iterate" } } });
+          }
+          if (new URL(request.url).pathname === "/repos/iterate/os/pulls/42/files") {
+            return Response.json([{ filename: "apps/os/package.json" }]);
+          }
           return Response.json({ id: 1, login: "octocat" });
         },
       }),
@@ -22,10 +38,17 @@ vi.mock("../../env.ts", () => ({
 const { connectionOctokit, normalizeGithubError, GITHUB_CALL_GRAMMAR } =
   await import("./github-api.ts");
 
+beforeEach(() => {
+  captured.request = undefined;
+  captured.requestCount = 0;
+  captured.responseStatus = undefined;
+});
+
 describe("normalizeGithubError", () => {
   test("the public call grammar makes the Octokit namespace mandatory", () => {
-    expect(GITHUB_CALL_GRAMMAR).toContain("<connection>.octokit.<path>");
+    expect(GITHUB_CALL_GRAMMAR).toContain("get(connection?).octokit.<path>");
     expect(GITHUB_CALL_GRAMMAR).toContain(".octokit.rest.apps");
+    expect(GITHUB_CALL_GRAMMAR).toContain(".octokit.graphql(query, variables)");
   });
 
   // Both replayPathCall miss shapes must answer with the grammar: a live
@@ -87,5 +110,49 @@ describe("connectionOctokit", () => {
 
     expect(new URL(captured.request!.url).pathname).toBe("/repos/iterate/os");
     expect(captured.request!.headers.get("authorization")).toContain("getSecret(");
+  });
+
+  test("graphql() hits GitHub's GraphQL endpoint over the same jailed transport", async () => {
+    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+    const data = await octokit.graphql<{ repository: { name: string } }>(
+      "query ($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { name } }",
+      { owner: "iterate", repo: "iterate" },
+    );
+
+    expect(data.repository.name).toBe("iterate");
+    expect(new URL(captured.request!.url).pathname).toBe("/graphql");
+    expect(captured.request!.method).toBe("POST");
+    expect(captured.request!.headers.get("authorization")).toContain("getSecret(");
+    await expect(captured.request!.clone().json()).resolves.toMatchObject({
+      variables: { owner: "iterate", repo: "iterate" },
+    });
+  });
+
+  test("paginate() supports the RPC-safe route-string overload", async () => {
+    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+    const files = await octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+      owner: "iterate",
+      repo: "os",
+      pull_number: 42,
+    });
+
+    expect(files).toEqual([{ filename: "apps/os/package.json" }]);
+    expect(new URL(captured.request!.url).pathname).toBe("/repos/iterate/os/pulls/42/files");
+    expect(captured.request!.headers.get("authorization")).toContain("getSecret(");
+  });
+
+  test("does not automatically replay a write after a 5xx", async () => {
+    captured.responseStatus = 500;
+    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+
+    await expect(
+      octokit.rest.issues.createComment({
+        body: "one comment",
+        issue_number: 42,
+        owner: "iterate",
+        repo: "iterate",
+      }),
+    ).rejects.toMatchObject({ status: 500 });
+    expect(captured.requestCount).toBe(1);
   });
 });

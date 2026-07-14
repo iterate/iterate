@@ -1224,6 +1224,11 @@ const plugin: StrictPlugin = {
 
         const filename = context.filename ?? "";
         const isTestFile = /\.(test|spec)\.[cm]?[jt]sx?$/.test(filename);
+        // A contract package may expose an explicit worker-only subpath whose
+        // shared entrypoint class must extend Cloudflare's WorkerEntrypoint.
+        // Keep this exact so browser-visible contract modules cannot acquire
+        // a Worker runtime dependency accidentally.
+        const isWorkerOnlyContractModule = /\/src\/worker\.ts$/.test(filename);
 
         const allowedListForMessage =
           ALLOWED_RUNTIME_IMPORT_PREFIXES.map((p) => `  • ${p} (and ${p}/…)`).join("\n") +
@@ -1245,6 +1250,8 @@ const plugin: StrictPlugin = {
             if (typeof source !== "string") return;
 
             if (source.startsWith(".") || source.startsWith("/")) return;
+
+            if (source === "cloudflare:workers" && isWorkerOnlyContractModule) return;
 
             if (isAllowedRuntimeImport(source)) return;
 

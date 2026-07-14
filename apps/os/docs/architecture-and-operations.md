@@ -17,8 +17,8 @@ Traffic is dispatched on hostname and path:
 2. The MCP hostname (`mcp.iterate.com`) rewrites to the app's `/api/mcp`
    route.
 3. Everything else on the OS host lands on the TanStack Start dashboard
-   (SSR, server functions, assets) wrapped in one evlog "wide event" per
-   request.
+   (SSR, server functions, assets) wrapped in one typed operation-wide event
+   per request.
 
 The routing decision is one shared function (`src/ingress.ts`). Runtime
 config is parsed from `env` per request, never at module scope — isolates
@@ -46,12 +46,16 @@ claims fallback are described in [src/README.md](../src/README.md).
 ## The Project Directory
 
 OS has no database. The auth worker is the source of truth for which projects
-exist, their slugs, and who can access them; OS fronts it with the
-`PROJECT_DIRECTORY` KV namespace (`src/project-directory.ts`) so hot
-paths — project-host ingress, dashboard slug resolution — never pay an
-auth-worker roundtrip on a cache hit. Project creation registers with the auth
-worker and primes the cache. Everything else durable lives in Durable Object
-SQLite, as event streams.
+exist, their slugs, and who can access them. OS reaches that authority through
+the required `AUTH` Workers RPC service binding and fronts directory reads with
+the `PROJECT_DIRECTORY` KV namespace (`src/project-directory.ts`), so hot paths
+— project-host ingress and dashboard slug resolution — never pay an auth-worker
+roundtrip on a cache hit. Project creation registers through the same binding
+and primes the cache. The binding to auth's default `AuthWorker` is the
+credential; none of these runtime operations has a public HTTP or shared-token
+fallback. Omitting an `entrypoint` selector in Wrangler intentionally targets
+that default export.
+Everything else durable lives in Durable Object SQLite, as event streams.
 
 ## API And Routing
 
@@ -162,7 +166,6 @@ APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET=...
 APP_CONFIG_ADMIN_API_SECRET=...
 APP_CONFIG_OPEN_AI_API_KEY=...
 APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate.app"]
-APP_CONFIG_LOGS__STDOUT_FORMAT=pretty
 ```
 
 Fields marked `redacted(...)` in the schema parse into `Redacted` wrappers

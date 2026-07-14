@@ -20,16 +20,26 @@
  *      steady-state redeploy are all the same single command).
  *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
  *      actually serving.
+ *   5. Force an uncached project-directory lookup through the AUTH binding.
+ *      Only then delete the retired auth service-token binding from the live
+ *      Worker (omitting it from `--secrets-file` does not revoke it), smoke
+ *      the immediately activated version again, and delete its Doppler source.
  *
  * The worker script is never deleted and routes are ensure-only, so a deploy
  * can never strand the env's hostnames (the old zombie-route/522 class).
  */
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { envs } from "../../../envs.ts";
+import { envs, type DeployedEnv } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
-import { run } from "../../../scripts/lib/deploy-helpers.ts";
+import {
+  deleteDopplerSecretIfPresent,
+  deleteWorkerSecretIfPresent,
+  run,
+  smoke,
+  smokeResponse,
+} from "../../../scripts/lib/deploy-helpers.ts";
 import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
 import { parseConfig } from "../src/config.ts";
 import {
@@ -45,6 +55,48 @@ import {
 } from "./generate-wrangler-config.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
+
+const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+
+function osSmokes(env: DeployedEnv) {
+  return [
+    {
+      url: `${env.baseUrl}/`,
+      ok: (status: number) => status === 200 || (status >= 300 && status < 400),
+      label: "dashboard",
+    },
+    {
+      url: `${env.eventDocsBaseUrl}/`,
+      ok: (status: number) => status === 200,
+      label: "event docs",
+    },
+    { url: `${env.baseUrl}/api`, ok: (status: number) => status < 500, label: "os api" },
+  ];
+}
+
+async function smokeAuthRpc(env: DeployedEnv, label: string) {
+  const projectHostnameBase = env.projectHostnameBases[0];
+  if (!projectHostnameBase) {
+    throw new Error(`Cannot smoke AUTH RPC for ${env.osWorkerName}: no project hostname base.`);
+  }
+
+  // A fresh hostname cannot hit KV or the isolate's short negative memo. The
+  // exact OS 404 body therefore proves ingress reached getProjectBySlug() on
+  // auth's default RPC entrypoint; an edge/router 404 is not accepted.
+  const slug = `auth-rpc-smoke-${crypto.randomUUID().replaceAll("-", "")}`;
+  const url = `https://${slug}.${projectHostnameBase}/`;
+  await smokeResponse(
+    url,
+    async (response) => {
+      if (response.status !== 404) return false;
+      const body: unknown = await response.json().catch(() => null);
+      return (
+        typeof body === "object" && body !== null && "error" in body && body.error === "not found"
+      );
+    },
+    label,
+  );
+}
 
 /** Deploy apps/os to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
 export default async function deploy(
@@ -101,6 +153,9 @@ export default async function deploy(
       // created here on their next deploy instead of a manual
       // ensure-resources run per environment.
       await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`);
+      // SEARCH_BUCKET (itx.search corpus, SPIKE) is likewise bound at upload
+      // time, so existing envs need it created on their next deploy too.
+      await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-search-index`);
 
       // Sandbox container classes must exist container-enabled BEFORE the
       // exports deploy — the exports reconciliation can't enable namespaces
@@ -134,15 +189,33 @@ export default async function deploy(
         });
       }
     },
-    smokes: (env) => [
-      {
-        url: `${env.baseUrl}/`,
-        ok: (status) => status === 200 || (status >= 300 && status < 400),
-        label: "dashboard",
-      },
-      { url: `${env.eventDocsBaseUrl}/`, ok: (status) => status === 200, label: "event docs" },
-      { url: `${env.baseUrl}/api`, ok: (status) => status < 500, label: "os api" },
-    ],
+    smokes: osSmokes,
+    afterDeploy: async (ctx) => {
+      await smokeAuthRpc(ctx.env, "auth Workers RPC");
+
+      const deleted = await deleteWorkerSecretIfPresent({
+        cf: ctx.cf,
+        workerName: ctx.env.osWorkerName,
+        secretName: RETIRED_AUTH_SERVICE_TOKEN,
+      });
+      if (deleted) {
+        // Secret deletion immediately deploys another Worker version. Verify
+        // that version too; the first probes covered the code upload, not this
+        // credential-revocation deployment.
+        for (const probe of osSmokes(ctx.env)) {
+          await smoke(probe.url, probe.ok, `${probe.label} after secret revocation`);
+        }
+        await smokeAuthRpc(ctx.env, "auth Workers RPC after secret revocation");
+      }
+
+      // This is intentionally last. A failed code deploy, RPC probe, live
+      // revocation, or post-revocation probe retains the source for diagnosis.
+      deleteDopplerSecretIfPresent({
+        project: "os",
+        config: ctx.env.dopplerConfig,
+        secretName: RETIRED_AUTH_SERVICE_TOKEN,
+      });
+    },
   });
 }
 

@@ -88,6 +88,61 @@ export default async function eraseData(options: {
   }
   console.log(`KV: deleted ${deleted} keys`);
 
+  // ---- AI Search: delete every per-project instance ---------------------------
+  // Instances are born with their project (create saga) and are pure derived
+  // state over the corpus bucket — without this step an e2e-heavy slot
+  // accumulates hundreds of orphaned instances per lease (observed: 162 from
+  // one e2e run). Best-effort: the namespace may not exist on old envs.
+  try {
+    let instancesDeleted = 0;
+    for (;;) {
+      // Explicit page=1 on purpose: cf() fails loudly on implicitly truncated
+      // listings, but this delete-then-relist loop consumes one page at a
+      // time until the namespace is empty — truncation is the design.
+      const instances = await cf<{ id: string }[]>(
+        `/ai-search/namespaces/${env.osWorkerName}/instances?per_page=100&page=1`,
+      );
+      if (instances.length === 0) break;
+      for (const instance of instances) {
+        await cf(`/ai-search/namespaces/${env.osWorkerName}/instances/${instance.id}`, {
+          method: "DELETE",
+        });
+        instancesDeleted += 1;
+      }
+    }
+    console.log(`AI Search: deleted ${instancesDeleted} instances`);
+  } catch (error) {
+    console.warn(`AI Search instance cleanup skipped: ${String(error).slice(0, 200)}`);
+  }
+
+  // ---- R2: wipe the user-content buckets ---------------------------------------
+  // The search-index corpus and itx.files store project content; both are
+  // user data under this script's contract. (The sandboxes bucket is left
+  // alone deliberately — container teardown is broken upstream, see the DO
+  // section, and its backups expire on a lifecycle rule.)
+  for (const bucket of [`${env.osWorkerName}-search-index`, `${env.osWorkerName}-files`]) {
+    try {
+      let objectsDeleted = 0;
+      for (;;) {
+        // Same explicit-page opt-out of cf()'s truncation guard as the
+        // instance loop above: delete-then-relist until the bucket is empty.
+        const listing = await cf<{ key: string }[]>(
+          `/r2/buckets/${bucket}/objects?per_page=1000&page=1`,
+        );
+        if (listing.length === 0) break;
+        for (const object of listing) {
+          await cf(`/r2/buckets/${bucket}/objects/${encodeURIComponent(object.key)}`, {
+            method: "DELETE",
+          });
+          objectsDeleted += 1;
+        }
+      }
+      console.log(`R2 ${bucket}: deleted ${objectsDeleted} objects`);
+    } catch (error) {
+      console.warn(`R2 ${bucket} wipe skipped: ${String(error).slice(0, 200)}`);
+    }
+  }
+
   console.log(
     `✅ ${ctx.name} data erased: Durable Objects destroyed, D1 and KV wiped; infra intact.`,
   );
