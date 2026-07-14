@@ -2048,8 +2048,21 @@ function dedupeChunksByMatchLocation(
     const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
     const narrowed =
       storedRef === undefined ? undefined : narrowStreamRefToChunk(storedRef, chunk.text);
-    const identity =
-      narrowed === undefined ? chunk.item.key : `${chunk.item.key}#${JSON.stringify(narrowed)}`;
+    // narrowStreamRefToChunk returns the stored ref UNCHANGED when the chunk
+    // text carries no offset headers (the continuation slice of one oversized
+    // event) — identical for every such chunk in the segment, though they are
+    // DISTINCT matches (possibly of different giant events). Give those their
+    // own identity via the chunk text: over-keeping beats collapsing real
+    // matches. Non-stream documents narrow to the whole-object ref by design
+    // and keep whole-document identity — every chunk of one file leads to the
+    // same domain object.
+    const narrowedToWindow = narrowed !== undefined && narrowed !== storedRef;
+    const isStreamDocument = metadata.kind === "streams";
+    const identity = narrowedToWindow
+      ? `${chunk.item.key}#${JSON.stringify(narrowed)}`
+      : isStreamDocument
+        ? `${chunk.item.key}#raw:${chunk.text.slice(0, 120)}`
+        : chunk.item.key;
     const existing = best.get(identity);
     if (existing === undefined || chunk.score > existing.score) best.set(identity, chunk);
   }
