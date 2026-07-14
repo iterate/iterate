@@ -1,9 +1,9 @@
-name: Deploy Auth Worker
+name: Deploy Auth Dev Global
 permissions:
   contents: read
   deployments: write
 concurrency:
-  group: auth-${{ github.ref_name || 'prd' }}
+  group: auth-dev-global-${{ github.ref_name || 'dev_global' }}
   cancel-in-progress: true
 on:
   push:
@@ -26,27 +26,6 @@ on:
         type: string
         default: ""
 jobs:
-  deploy:
-    runs-on:
-      size: 8x32
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ inputs.ref || github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config prd --project auth
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Deploy apps/auth
-        working-directory: apps/auth
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run-script deploy
   deploy-dev-global:
     runs-on:
       size: 8x32

@@ -40,6 +40,16 @@ const ITX_API_DECLARATIONS_BY_NAME = declarationsByName(ITX_API_DECLARATIONS);
  * sufficient.
  */
 const RUNTIME_SHIMS = `// Ambient runtime shims — see virtual-project.ts.
+// The published SDK and docs expose the exact import("octokit").Octokit type.
+// Loading that package's large transitive declaration graph into every
+// unrelated in-Worker script check exceeds the Worker memory limit, so this
+// compiler-only structural view preserves Octokit's RPC-safe entry points.
+type IterateTypecheckOctokit = {
+  rest: Record<string, Record<string, (input?: any) => Promise<any>>>;
+  graphql<T = unknown>(query: string, variables?: Record<string, unknown>): Promise<T>;
+  request<T = unknown>(route: string, parameters?: Record<string, unknown>): Promise<T>;
+  paginate<T = unknown>(route: string, parameters?: Record<string, unknown>): Promise<T[]>;
+};
 interface SymbolConstructor {
   readonly dispose: unique symbol;
   readonly asyncDispose: unique symbol;
@@ -109,8 +119,16 @@ ${[
   .join("\n")}
 `;
 
+const TYPECHECKER_ITX_TYPES = itxTypesFileText.replace(
+  'import("octokit").Octokit',
+  "IterateTypecheckOctokit",
+);
+if (TYPECHECKER_ITX_TYPES === itxTypesFileText) {
+  throw new Error("the typechecker Octokit shim no longer matches the generated itx surface");
+}
+
 const SHARED_FILES: Record<string, string> = {
-  "itx-types.ts": itxTypesFileText,
+  "itx-types.ts": TYPECHECKER_ITX_TYPES,
   "runtime.d.ts": RUNTIME_SHIMS,
   "tsconfig.json": JSON.stringify({
     compilerOptions: {

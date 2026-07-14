@@ -80,7 +80,7 @@ describe("ITX observability", () => {
     ]);
   });
 
-  it("records and rethrows the original RPC error without serializing its message", async () => {
+  it("records a safe event and returns an authoritative correlated error", async () => {
     const events: WideLogEvent[] = [];
     const failure = new Error("private customer prompt");
     vi.spyOn(console, "error").mockImplementation(
@@ -92,22 +92,102 @@ describe("ITX observability", () => {
       parentLogId: "log_batch",
     });
 
-    await expect(
-      session.onCall!({ path: ["run"], target: {} }, async () => {
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
+    const correlated = await session.onCall!({ path: ["run"], target: {} }, async () => {
+      throw failure;
+    }).catch((error: unknown) => error);
 
     expect(events[0]).toMatchObject({
       message: "itx_rpc",
       outcome: "error",
       error: { name: "Error" },
     });
+    expect(correlated).toBeInstanceOf(Error);
+    expect(correlated).not.toBe(failure);
+    expect(correlated).toMatchObject({ name: "Error", message: "private customer prompt" });
+    expect((correlated as Error & { itxCallId: string }).itxCallId).toBe(events[0]!.log.id);
+    expect(Object.keys(correlated as object)).toContain("itxCallId");
     expect(JSON.stringify(events[0])).not.toContain("private customer prompt");
     expect(recordedSpans[0]).toMatchObject({
       name: "itx Object.call",
       attributes: { "itx.outcome": "error" },
     });
+  });
+
+  it.each([
+    {
+      label: "a frozen pre-tagged Error",
+      thrown: Object.freeze(Object.assign(new Error("expected failure"), { itxCallId: "spoofed" })),
+    },
+    { label: "a non-Error value", thrown: "private thrown value" },
+    {
+      label: "a hostile Error proxy",
+      thrown: new Proxy(new Error("private proxy message"), {
+        getPrototypeOf: () => {
+          throw new Error("prototype denied");
+        },
+      }),
+    },
+  ])("normalizes $label before transport", async ({ thrown }) => {
+    const events: WideLogEvent[] = [];
+    vi.spyOn(console, "error").mockImplementation(
+      (event) => void events.push(event as WideLogEvent),
+    );
+    const session = createItxRpcSessionOptions({
+      transport: "http",
+      sessionId: "itx_session_normalized_error",
+      parentLogId: "log_batch",
+    });
+
+    const correlated = await session.onCall!({ path: ["run"], target: {} }, async () => {
+      throw thrown;
+    }).catch((error: unknown) => error);
+
+    expect(correlated).toBeInstanceOf(Error);
+    expect((correlated as Error & { itxCallId: string }).itxCallId).toBe(events[0]!.log.id);
+    expect(Object.keys(correlated as object)).toContain("itxCallId");
+    expect((correlated as Error).message).not.toContain("private thrown value");
+  });
+
+  it("delivers the call ID with an error across a real Cap'n Web transport", async () => {
+    const source = Object.assign(new Error("expected test failure", { cause: "private cause" }), {
+      extra: "private property",
+    });
+    source.name = "PrivateError";
+    source.stack = "private server stack";
+    class Main extends RpcTarget {
+      fail() {
+        throw source;
+      }
+    }
+
+    const events: WideLogEvent[] = [];
+    vi.spyOn(console, "error").mockImplementation(
+      (event) => void events.push(event as WideLogEvent),
+    );
+    const options = createItxRpcSessionOptions({
+      transport: "websocket",
+      sessionId: "itx_session_transport_error",
+      parentLogId: "log_handshake",
+    });
+    const channel = new MessageChannel();
+    const server = newMessagePortRpcSession(channel.port1, new Main(), options);
+    const remote = newMessagePortRpcSession<{ fail(): Promise<unknown> }>(channel.port2);
+    try {
+      const failure = await remote.fail().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe("Error");
+      expect((failure as Error).message).toBe("expected test failure");
+      expect((failure as Error & { itxCallId: string }).itxCallId).toBe(events[0]!.log.id);
+      expect(Object.keys(failure as object)).toContain("itxCallId");
+      expect(Reflect.get(failure as object, "cause")).toBeUndefined();
+      expect(Reflect.get(failure as object, "extra")).toBeUndefined();
+      expect((failure as Error).stack).not.toContain("private server stack");
+    } finally {
+      remote[Symbol.dispose]();
+      server[Symbol.dispose]();
+      channel.port1.close();
+      channel.port2.close();
+    }
   });
 
   it("wraps direct and promise-pipelined calls once through a real message transport", async () => {

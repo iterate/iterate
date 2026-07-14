@@ -1,7 +1,7 @@
 // connectionSlackClient: the wrapped WebClient's transport must ride the
 // project egress door with the bot-token PLACEHOLDER (never a real token), so
-// the itx caller surface (slack["<conn>"].chat.postMessage(...) etc.) keeps the
-// token in its Secret DO. Only the egress stub is mocked; the WebClient is real
+// the itx caller surface (slack.get("<conn>").chat.postMessage(...) etc.) keeps
+// the token in its Secret DO. Only the egress stub is mocked; the WebClient is real
 // (proving the custom Axios adapter works end to end).
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

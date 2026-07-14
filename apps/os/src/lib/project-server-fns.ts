@@ -82,7 +82,7 @@ export const getRootProjectRedirectServerFn: (input?: {
 
     try {
       const projects = new ProjectCollectionRpcTarget({
-        auth: itxAuthFromPrincipal(context.config, principal, {
+        auth: itxAuthFromPrincipal(principal, {
           allowDirectoryFallback: context.operatorSession == null,
         }),
         config: context.config,
@@ -170,7 +170,7 @@ export const getProjectBySlugServerFn: (input: {
     const isProjectScopedOperator = context.operatorSession?.grant.kind === "project";
     if (isProjectScopedOperator) throw new Error(`Project ${data.slug} not found`);
 
-    const record = await readProjectBySlug(context.config, env.PROJECT_DIRECTORY, data.slug);
+    const record = await readProjectBySlug(env.PROJECT_DIRECTORY, data.slug);
     if (!record) throw new Error(`Project ${data.slug} not found`);
 
     if (

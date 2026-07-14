@@ -1227,9 +1227,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/auth-contract/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS bakes auth JWKS during deployment, so the slot's auth must deploy
-    // whenever OS does. Deploys run in parallel: the OS deploy polls the
-    // slot's auth worker for JWKS until it responds.
+    // OS bakes auth JWKS and binds auth's default RPC entrypoint, so auth must
+    // finish deploying before OS starts.
     previewDependencies: ["auth"],
     // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
     // ~60s as of 2026-07-02). Crossing them warns, never fails.
@@ -1324,8 +1323,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
     // Semaphore bakes the slot's auth JWKS at deploy time (relying-party
-    // auth, same as OS), so the slot's auth must deploy whenever semaphore
-    // does. Deploys run in parallel: the JWKS fetch polls until auth serves.
+    // auth, same as OS), so auth must finish before semaphore starts.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
@@ -2572,7 +2570,6 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       APP_CONFIG_ITERATE_AUTH__ISSUER: `${authOrigin}/api/auth`,
       APP_CONFIG_ITERATE_AUTH__CLIENT_ID: clientId,
       APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: clientSecret,
-      APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
     });
 
     setDopplerSecrets("semaphore", config, {
@@ -4217,11 +4214,27 @@ function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugTy
 }
 
 function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
-  // One parallel batch. OS bakes auth JWKS during deployment, but its
-  // deploy-time JWKS fetch polls the slot's auth worker until it responds
-  // (apps/os/scripts/deploy.ts fetchJwksWithRetry), so it no longer needs the
-  // auth deploy sequenced before it.
-  return apps.length > 0 ? [[...apps]] : [];
+  const selectedSlugs = new Set(apps.map((app) => app.slug));
+  const pendingSlugs = new Set(selectedSlugs);
+  const batches: PreviewAppRuntime[][] = [];
+
+  while (pendingSlugs.size > 0) {
+    const batch = apps.filter(
+      (app) =>
+        pendingSlugs.has(app.slug) &&
+        (app.previewDependencies ?? []).every(
+          (dependency) => !selectedSlugs.has(dependency) || !pendingSlugs.has(dependency),
+        ),
+    );
+    if (batch.length === 0) {
+      throw new Error(`Preview app dependencies contain a cycle: ${[...pendingSlugs].join(", ")}`);
+    }
+
+    batches.push(batch);
+    for (const app of batch) pendingSlugs.delete(app.slug);
+  }
+
+  return batches;
 }
 
 async function mapWithConcurrency<T, Result>(

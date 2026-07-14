@@ -20,7 +20,7 @@ import {
 import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
-import { GithubAgentProcessorContract } from "../repos/github-agent-processor-contract.ts";
+import { githubAgentSubscriptionConfiguredEvent } from "../repos/github-agent-mechanics.ts";
 import { isGithubAgentPath } from "../repos/github-agent-utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
@@ -130,6 +130,18 @@ export class ProjectProcessor extends StreamProcessor<
           // and birth mechanics + policy follow through the ordinary
           // child-stream-created lanes. Projects whose onboarding chat is
           // never opened (CLI creates, test fixtures) never pay an LLM turn.
+          // The project's AI Search instance is born WITH the project so
+          // itx.search works from the first query instead of warming lazily
+          // (Jonas, 2026-07-13). Fire-and-forget, NOT awaited in the saga:
+          // it's a third-party management API call whose latency must never
+          // gate project creation or block this processor's delivery (e2e
+          // fixture churn showed exactly that). Failure or cancellation is
+          // fine — the query/index paths lazily self-heal.
+          void this.deps.itx.search.ensureIndex().catch((error: unknown) => {
+            console.warn(
+              `project create: search instance ensure failed (lazy self-heal remains): ${String(error).slice(0, 200)}`,
+            );
+          });
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
@@ -377,7 +389,14 @@ function agentSubscriptionEvents(input: {
     ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
     ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug, "agent")] : []),
     ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
-    ...(input.github ? [subscription(GithubAgentProcessorContract.slug, "agent")] : []),
+    ...(input.github
+      ? [
+          githubAgentSubscriptionConfiguredEvent({
+            agentPath: input.childPath,
+            projectId: input.projectId,
+          }),
+        ]
+      : []),
   ];
 }
 

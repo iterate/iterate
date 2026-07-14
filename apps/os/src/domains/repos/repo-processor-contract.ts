@@ -266,7 +266,8 @@ export const RepoProcessorContract = defineProcessorContract({
             owner: "acme-inc",
             repo: "acme-config",
             repoPath: "/repos/config",
-            streamPath: "/agents/repos/config/pull-requests/42",
+            streamPath:
+              "/agents/repos/g~0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/pull-requests/42",
           },
         },
       ],
@@ -288,6 +289,8 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/created",
     "events.iterate.com/github/webhook-received",
     "events.iterate.com/github-agent/route-configured",
+    "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/stream/subscription-removed",
   ],
 });
 

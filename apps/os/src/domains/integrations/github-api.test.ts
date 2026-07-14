@@ -1,7 +1,7 @@
 // connectionOctokit: the wrapped Octokit's transport must ride the connection
 // secret's fetch with an access-token PLACEHOLDER (never a real token), so the
-// itx caller surface (github["<conn>"].octokit.rest.* / .octokit.graphql() /
-// .octokit.request()) keeps the token in its Secret DO. Only the secret stub
+// itx caller surface (github.get("<conn>").octokit.rest.* / .octokit.graphql()
+// / .octokit.request()) keeps the token in its Secret DO. Only the secret stub
 // is mocked; the all-in-one Octokit is real.
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -46,7 +46,7 @@ beforeEach(() => {
 
 describe("normalizeGithubError", () => {
   test("the public call grammar makes the Octokit namespace mandatory", () => {
-    expect(GITHUB_CALL_GRAMMAR).toContain("<connection>.octokit.<path>");
+    expect(GITHUB_CALL_GRAMMAR).toContain("get(connection?).octokit.<path>");
     expect(GITHUB_CALL_GRAMMAR).toContain(".octokit.rest.apps");
     expect(GITHUB_CALL_GRAMMAR).toContain(".octokit.graphql(query, variables)");
   });

@@ -299,16 +299,13 @@ export class SchedulerProcessor extends StreamProcessor<
   #launchExecution(executionId: string, barrierOffset = 0): void {
     if (this.#inflightExecutions.has(executionId)) return;
     this.#inflightExecutions.add(executionId);
-    this.runInBackground(() =>
-      tracing.enterSpan("scheduler action attempt", async (span) => {
-        span.setAttribute("iterate.scheduler.execution_id", executionId);
-        try {
-          await this.#execute(executionId, barrierOffset);
-        } finally {
-          this.#inflightExecutions.delete(executionId);
-        }
-      }),
-    );
+    this.runInBackground(async () => {
+      try {
+        await this.#execute(executionId, barrierOffset);
+      } finally {
+        this.#inflightExecutions.delete(executionId);
+      }
+    });
   }
 
   async #execute(executionId: string, barrierOffset: number): Promise<void> {
@@ -347,25 +344,35 @@ export class SchedulerProcessor extends StreamProcessor<
             `cannot resolve stream path for schedule "${pending.key}" defined at offset ${entry.definedAtOffset}`,
           );
         }
-        const result = await this.deps.dynamicWorkers.invokeCapability({
-          args: [
-            {
-              key: pending.key,
-              ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
-              path: schedulePath,
-              recurrence: entry.recurrence,
-              setAt: entry.setAt,
-            },
-            {
-              executionId,
-              requestedAt: pending.requestedAt,
-              runCount: pending.runCount,
-              scheduledFor: pending.scheduledFor,
-            },
-          ],
-          path: ["run"],
-          ref: scheduleActionWorkerRef(entry.action.script),
-          traceRole: "scheduler_action",
+        const result = await tracing.enterSpan("scheduler action invocation", async (span) => {
+          span.setAttribute("iterate.scheduler.execution_id", executionId);
+          try {
+            const result = await this.deps.dynamicWorkers.invokeCapability({
+              args: [
+                {
+                  key: pending.key,
+                  ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
+                  path: schedulePath,
+                  recurrence: entry.recurrence,
+                  setAt: entry.setAt,
+                },
+                {
+                  executionId,
+                  requestedAt: pending.requestedAt,
+                  runCount: pending.runCount,
+                  scheduledFor: pending.scheduledFor,
+                },
+              ],
+              path: ["run"],
+              ref: scheduleActionWorkerRef(entry.action.script),
+              traceRole: "scheduler_action",
+            });
+            span.setAttribute("iterate.scheduler.action_outcome", "succeeded");
+            return result;
+          } catch (error) {
+            span.setAttribute("iterate.scheduler.action_outcome", "failed");
+            throw error;
+          }
         });
         outcome = {
           definedAtOffset: entry.definedAtOffset,

@@ -1185,17 +1185,13 @@ return {
     e2eProven: false,
     title: "List repositories through the built-in GitHub integration",
     description:
-      'itx.integrations.github["<connection>"].octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying GitHub App installation auth and transport. Its normal `.rest.*`, `.graphql(...)`, and `.request(...)` calls work; pagination uses `.paginate("GET /...", params)` because RPC arguments must be serializable. See https://github.com/octokit/octokit.js/. The `.octokit` segment is mandatory. Resolve the connection with itx.integrations.list() first. Needs a connected GitHub installation — interactive-only.',
+      'itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying GitHub App installation auth and transport. Its normal `.rest.*`, `.graphql(...)`, and `.request(...)` calls work; pagination uses `.paginate("GET /...", params)` because RPC arguments must be serializable. See https://github.com/octokit/octokit.js/. The `.octokit` segment is mandatory. get() selects the first connected installation; pass a slug only when a specific installation matters. Do not use repo.data.permissions to decide whether an installation is read-only: that user-style field can contain all false even when installation writes work. Attempt the requested operation and use GitHub\'s real error if denied. Needs a connected GitHub installation — interactive-only.',
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const connections = await itx.integrations.list();
-const github = connections.find((entry) => entry.integration === "github");
-if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
-
 // The connection is a GitHub App installation: this endpoint (not the
 // user-scoped listForAuthenticatedUser, which 403s) enumerates its repos.
-const repos = await itx.integrations.github[github.connection].octokit.rest.apps.listReposAccessibleToInstallation({
+const repos = await itx.integrations.github.get().octokit.rest.apps.listReposAccessibleToInstallation({
   per_page: Number(vars.count ?? 5),
 });
 
@@ -1211,14 +1207,10 @@ return repos.data.repositories.map((repo) => ({ fullName: repo.full_name, update
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const connections = await itx.integrations.list();
-const github = connections.find((entry) => entry.integration === "github");
-if (!github) return { error: "No GitHub connection — connect one from the dashboard integrations page." };
-
 const owner = vars.owner ?? "octocat";
 const repo = vars.repo ?? "hello-world";
 // README shortcut; use "GET /repos/{owner}/{repo}/contents/{path}" with a path param for any file.
-const readme = await itx.integrations.github[github.connection].octokit.request(
+const readme = await itx.integrations.github.get().octokit.request(
   "GET /repos/{owner}/{repo}/readme",
   { owner, repo, headers: { accept: "application/vnd.github.raw+json" } },
 );
@@ -1292,15 +1284,11 @@ return { copied: copied.payload, provenance: copied.source?.crossPostedFrom };
     e2eProven: false,
     title: "Search the inbox through the built-in Gmail integration",
     description:
-      'itx.integrations.google["<connection>"].gmail.request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail — interactive-only.',
+      "itx.integrations.gmail.get().request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. get() selects the first connected account; pass a slug only for a specific account. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const connections = await itx.integrations.list();
-const google = connections.find((entry) => entry.integration === "google");
-if (!google) return { error: "No Google connection — connect one from the dashboard integrations page." };
-
-const gmail = itx.integrations.google[google.connection].gmail;
+const gmail = itx.integrations.gmail.get();
 const inbox = await gmail.request({
   path: "/users/me/messages",
   query: { maxResults: 5, q: vars.q ?? "in:inbox is:unread" },
@@ -1326,15 +1314,11 @@ return {
     e2eProven: false,
     title: "Post a message through the built-in Slack integration",
     description:
-      'itx.integrations.slack["<connection>"] IS a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object — chat.postMessage({ channel, text }), conversations.list({ limit }), users.info({ user }). Posts to a real workspace — interactive-only.',
+      "itx.integrations.slack.get() IS a real Slack WebClient (@slack/web-api): any Web API method as a dotted path, always ONE body object — chat.postMessage({ channel, text }), conversations.list({ limit }), users.info({ user }). get() selects the first connected workspace; pass a slug only for a specific workspace. Posts to a real workspace — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-const connections = await itx.integrations.list();
-const slack = connections.find((entry) => entry.integration === "slack");
-if (!slack) return { error: "No Slack connection — connect one from the dashboard integrations page." };
-
-const client = itx.integrations.slack[slack.connection];
+const client = itx.integrations.slack.get();
 // Find a channel to talk in; vars.channel (an id like C0123...) skips the lookup.
 const channels = await client.conversations.list({ exclude_archived: true, limit: 20, types: "public_channel" });
 const channel = vars.channel ?? channels.channels?.[0]?.id;
@@ -1349,7 +1333,7 @@ return { channel, ok: posted.ok, ts: posted.ts };
     e2eProven: false,
     title: "GitHub's MCP server as a provided integration",
     description:
-      'The provided-integration lane, using GitHub\'s official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it at the same fully qualified connection address a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github["<connection>"], sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat — interactive-only.',
+      "The provided-integration lane, using GitHub's official MCP server: store a fine-grained PAT as a project secret, mount the server into the collection with one durable provideCapability, and call it through the same `.get(connection?)` selector a builtin uses. The PAT rides as a getSecret placeholder substituted at project egress — no isolate ever holds it. (The BUILT-IN github integration — dashboard connect, the wrapped Octokit at itx.integrations.github.get(), sandbox gh — is separate; this mounts under the github-mcp slug because built-in slugs cannot be shadowed.) Needs a real PAT in vars.githubPat — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1362,11 +1346,6 @@ await secret.update({
   egress: { urls: ["https://api.githubcopilot.com/", "https://api.github.com/"] },
   material: vars.githubPat,
 });
-let described = await secret.__describe();
-for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  described = await secret.__describe();
-}
 
 // 2. One durable mount makes GitHub part of the integrations collection. The
 // itx-expression is a journaled recipe: replayed per call, revocable,
@@ -1390,8 +1369,8 @@ await itx.capabilityHosts.get("/").provideCapability({
   ],
 });
 
-// 3. Same address shape as a builtin — {slug}.{connection}.{method}.
-const me = await itx.integrations["github-mcp"][connection].get_me({});
+// 3. Same selector shape as a builtin — {slug}.get(connection).{method}.
+const me = await itx.integrations["github-mcp"].get(connection).get_me({});
 return { login: me?.login ?? me, listed: await itx.integrations.list() };
 `.trim(),
   },

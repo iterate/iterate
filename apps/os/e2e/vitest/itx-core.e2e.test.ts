@@ -253,7 +253,7 @@ describe("itx", () => {
       expect.arrayContaining(["ai", "integrations"]),
     );
     const integrations = await project.integrations.__describe();
-    expect(integrations.instructions).toContain("gmail.request");
+    expect(integrations.instructions).toContain("itx.integrations.gmail.get().request");
     expect(integrations.instructions).toContain("itx.integrations.list()");
   });
 
