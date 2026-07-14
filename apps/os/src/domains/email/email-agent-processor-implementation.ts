@@ -71,6 +71,8 @@ export class EmailAgentProcessor extends StreamProcessor<
     append,
     blockProcessorWhile,
     event,
+    previousState,
+    state,
   }: Parameters<
     StreamProcessor<typeof EmailAgentProcessorContract>["processEvent"]
   >[0]): undefined {
@@ -80,6 +82,28 @@ export class EmailAgentProcessor extends StreamProcessor<
     // back inbound (e.g. the counterpart auto-forwards to the same inbox)
     // must not wake the agent to talk to itself.
     if (isOwnProjectMail(event.payload)) return;
+
+    // The thread's roster identity, whenever this mail changed it: the email
+    // icon plus the folded subject/counterpart (the agent's own setStatus
+    // patches win later by journal order).
+    if (
+      previousState.subject !== state.subject ||
+      previousState.counterpart !== state.counterpart
+    ) {
+      blockProcessorWhile(() =>
+        append({
+          type: "events.iterate.com/agent/status-changed",
+          idempotencyKey: this.idempotencyKey("status-identity", event),
+          payload: {
+            icon: "email",
+            ...(state.subject === undefined ? {} : { title: state.subject }),
+            ...(state.counterpart === undefined
+              ? {}
+              : { note: `Email thread with ${state.counterpart}` }),
+          },
+        }),
+      );
+    }
 
     // Durable obligation: the agent input is the message's only path to the
     // LLM, so a failed append must hold the checkpoint and replay.
