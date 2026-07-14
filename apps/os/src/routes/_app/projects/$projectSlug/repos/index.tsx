@@ -30,7 +30,11 @@ import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";
 import { buildCloudflareArtifactDashboardUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
@@ -50,6 +54,7 @@ type SortKey = "path" | "createdAt";
 type SortDirection = "asc" | "desc";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
+  staticData: streamPageStaticData(),
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: async ({ context }) =>
