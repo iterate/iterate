@@ -218,6 +218,7 @@ import {
   triggerProjectSearchSyncDebounced,
 } from "./domains/search/search-index.ts";
 import {
+  extractMatchSnippet,
   narrowStreamRefToChunk,
   normalizeSearchExcludeKinds,
   normalizeSearchSource,
@@ -296,6 +297,7 @@ import type { AgentProcessorState } from "./domains/agents/agent-processor-contr
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
+import type { AgentStatusTouchInput } from "./domains/projects/agent-status-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
 import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type {
@@ -990,6 +992,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, fast-forward default-branch pushes import in, and webhooks cross-post in.",
         listFiles: "List file paths.",
+        listTaskFiles:
+          "Every task markdown file's contents at HEAD ({ commitOid, files }) in one read — the task board's bulk load, cheaper than listFiles + a readFile per task.",
         log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
@@ -1062,6 +1066,16 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     return this.#durableObjectStub.listFiles();
+  }
+
+  /**
+   * Every task markdown file's contents at HEAD, keyed by path, in a single
+   * clone — the task board's bulk load. Cheaper than `listFiles()` plus a
+   * `readFile()` per task: the task include mask is applied before contents
+   * are read, so cost scales with the number of tasks, not the repo size.
+   */
+  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }> {
+    return this.#durableObjectStub.listTaskFiles();
   }
 
   /**
@@ -2094,15 +2108,56 @@ function parseStoredRef(serialized: string): ItxExpression | undefined {
 }
 
 /**
- * Total `content` budget across one query's hits, split evenly (clamped to
- * [300, 1200] per hit). Sized so the WHOLE stringified result — content plus
- * per-hit metadata/ref overhead — stays under the 30k script-result spill
- * threshold at the generous 20-hit default, so a plain query({ q }) never
- * detours through a workspace file.
+ * Snippet length per row and the default row count. Rows are deliberately
+ * TINY (kind, date, context, ~2-sentence snippet, ref) so many matches fit
+ * one glance — judge here, evaluate `ref` for the whole thing. 30 rows of
+ * snippet+metadata ≈ 20k chars, safely inside the 30k inline script-result
+ * cap; `limit` accepts up to the API's 50.
  */
-const RESULT_CONTENT_BUDGET_CHARS = 16_000;
-const resultContentCap = (hitCount: number): number =>
-  Math.min(1_200, Math.max(300, Math.floor(RESULT_CONTENT_BUDGET_CHARS / Math.max(1, hitCount))));
+const SNIPPET_CHARS = 200;
+const DEFAULT_RESULT_ROWS = 30;
+
+/**
+ * One result row per MATCH LOCATION — full-text-search semantics. The corpus
+ * stores stream events in 100-offset SEGMENT documents, so ten different
+ * pirate mentions in one segment are ten different chunks of ONE document:
+ * deduping by document would collapse ten real matches to one. The identity
+ * that matches user intuition is the chunk-narrowed ref window (the exact
+ * events a chunk covers): distinct windows stay distinct rows; the SAME
+ * window (context-expansion echoes, re-scored duplicates) collapses to its
+ * best score. Non-stream documents (files, repo files, custom docs) narrow
+ * to the whole-object ref, so their chunks collapse per document — which is
+ * right: every chunk of one file leads to the same domain object.
+ */
+function dedupeChunksByMatchLocation(
+  chunks: AiSearchSearchResponse["chunks"],
+): AiSearchSearchResponse["chunks"] {
+  const best = new Map<string, AiSearchSearchResponse["chunks"][number]>();
+  for (const chunk of chunks) {
+    const metadata = chunk.item.metadata ?? {};
+    const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
+    const narrowed =
+      storedRef === undefined ? undefined : narrowStreamRefToChunk(storedRef, chunk.text);
+    // narrowStreamRefToChunk returns the stored ref UNCHANGED when the chunk
+    // text carries no offset headers (the continuation slice of one oversized
+    // event) — identical for every such chunk in the segment, though they are
+    // DISTINCT matches (possibly of different giant events). Give those their
+    // own identity via the chunk text: over-keeping beats collapsing real
+    // matches. Non-stream documents narrow to the whole-object ref by design
+    // and keep whole-document identity — every chunk of one file leads to the
+    // same domain object.
+    const narrowedToWindow = narrowed !== undefined && narrowed !== storedRef;
+    const isStreamDocument = metadata.kind === "streams";
+    const identity = narrowedToWindow
+      ? `${chunk.item.key}#${JSON.stringify(narrowed)}`
+      : isStreamDocument
+        ? `${chunk.item.key}#raw:${chunk.text.slice(0, 120)}`
+        : chunk.item.key;
+    const existing = best.get(identity);
+    if (existing === undefined || chunk.score > existing.score) best.set(identity, chunk);
+  }
+  return [...best.values()];
+}
 
 /**
  * Search everything this project has accumulated — every conversation (web
@@ -2146,7 +2201,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         "indexStream/indexRepo/backfillFiles backfill one unit, reindex() sweeps the whole " +
         "project (all streams + repos + files). Everything indexes automatically except " +
         "ephemeral and stream-housekeeping events. Explicit index verbs are searchable in ~a " +
-        "minute; automatic mirroring can lag up to the hourly sync.",
+        "minute; automatic mirroring can lag up to the hourly sync. Noisy first page? REFINE, " +
+        "don't abandon: drop filler words (slack/message/conversation match every webhook), " +
+        'quote exact tokens ("superfart"), add source/exclude — one refined query beats a ' +
+        "vendor-API detour.",
       children: {
         answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
@@ -2176,13 +2234,16 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     return env.SEARCH_INSTANCES.get(projectSearchInstanceId(this.props.projectId));
   }
 
-  #searchOptions(input: {
-    limit?: number;
-    rewriteQuery?: boolean;
-    scoreThreshold?: number;
-    source?: string;
-    exclude?: readonly string[];
-  }): AiSearchOptions {
+  #searchOptions(
+    input: {
+      limit?: number;
+      rewriteQuery?: boolean;
+      scoreThreshold?: number;
+      source?: string;
+      exclude?: readonly string[];
+    },
+    options?: { expandContext?: boolean },
+  ): AiSearchOptions {
     return {
       retrieval: {
         filters: searchFilters({
@@ -2203,45 +2264,38 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         // set in conversation context, but a hit that never surfaces is gone.
         // Defaults beat the instance's (10 results, 0.4 threshold); explicit
         // caller values still win.
-        max_num_results: input.limit ?? 20,
+        max_num_results: input.limit ?? DEFAULT_RESULT_ROWS,
         match_threshold: input.scoreThreshold ?? 0.2,
         // OR-mode keyword matching: dogfooding showed the default AND-mode
         // misses exact-token queries whose terms don't co-occur in one chunk;
         // hybrid rrf fusion keeps precision.
         keyword_match_mode: "or",
-        // One neighboring chunk heals JSON payloads split across chunk
-        // boundaries in stream segment documents.
-        context_expansion: 1,
+        // Neighbor expansion triples every chunk's text. Worth it ONLY where
+        // a model reads the chunks server-side (answer's RAG generation);
+        // query() consumers judge relevance and follow `ref` for the full
+        // source, so expansion just bloats the wire (live: it pushed a
+        // default query to the spill edge).
+        context_expansion: options?.expandContext ? 1 : 0,
       },
       query_rewrite: input.rewriteQuery === undefined ? undefined : { enabled: input.rewriteQuery },
     };
   }
 
   /** Map one AI Search chunk to a provenance-carrying result. */
-  #toChunk(
-    chunk: AiSearchSearchResponse["chunks"][number],
-    maxContentChars: number,
-  ): SearchResultChunk {
+  #toChunk(chunk: AiSearchSearchResponse["chunks"][number], query: string): SearchResultChunk {
     const metadata = chunk.item.metadata ?? {};
     const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
-    // Cap per-hit content: chunks are ~1024 tokens and context expansion
-    // multiplies them, so 20 generous-default hits of full text blew the 30k
-    // inline script-result cap and forced a workspace spill + parse detour
-    // (live prd incident, 2026-07-14). The content is for judging relevance;
-    // `ref` is the fetch path for the full source — when a ref was too large
-    // to store, the marker points at the source description instead.
-    const truncationMarker =
-      storedRef !== undefined
-        ? "\n… [truncated — evaluate `ref` for the full source]"
-        : "\n… [truncated — no ref stored; locate the source via `context`/`filename`]";
-    const content =
-      chunk.text.length > maxContentChars
-        ? `${chunk.text.slice(0, maxContentChars)}${truncationMarker}`
-        : chunk.text;
+    // Rows carry a short match snippet, never whole chunks (Jonas's design:
+    // "kind, metadata, matching couple of sentences, date" — the ref gets
+    // the whole thing). Chunk text stays server-side.
     return {
       filename: chunk.item.key,
       score: chunk.score,
-      content,
+      content: extractMatchSnippet(chunk.text, query, SNIPPET_CHARS),
+      date:
+        typeof chunk.item.timestamp === "number"
+          ? new Date(chunk.item.timestamp * (chunk.item.timestamp < 1e12 ? 1000 : 1)).toISOString()
+          : undefined,
       kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
       context: typeof metadata.context === "string" ? metadata.context : undefined,
       // Every corpus writer stores `ref` — the serialized itx expression back
@@ -2316,7 +2370,13 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * Retrieve scored chunks matching a query, scoped to this project's own
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
-   * so callers can contextualize a hit. Docs hits carry synthetic 0.5-band
+   * so callers can contextualize a hit. ONE row per MATCH — distinct event
+   * windows within one stream segment stay distinct rows (full-text-search
+   * semantics); only same-location re-scores collapse. Rows are TINY: kind,
+   * date, context, a ~2-sentence snippet around the match, and the ref that
+   * fetches the whole thing — so the default 30 rows read at a glance and a
+   * result set stays well inside one inline script return. Docs hits carry
+   * synthetic 0.5-band
    * scores (not comparable to corpus relevance), ride on top of `limit`
    * corpus chunks (their own cap: min(limit, 5)), and ignore
    * `scoreThreshold`. On a
@@ -2327,7 +2387,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    */
   async query(input: {
     q: string;
-    /** Max chunks to return (1–50, default 20 — tuned for recall). */
+    /** Max result rows (1–50, default 30 — rows are tiny snippets; go wide). */
     limit?: number;
     /** Rewrite the query for retrieval first (extra LLM call). */
     rewriteQuery?: boolean;
@@ -2355,12 +2415,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       if (input.source !== undefined) return { searchQuery: input.q, results: [], warning };
       return { searchQuery: input.q, results: docs.value, warning };
     }
-    const results = [
-      ...corpus.value.chunks.map((chunk) =>
-        this.#toChunk(chunk, resultContentCap(corpus.value.chunks.length)),
-      ),
-      ...docs.value,
-    ].sort((a, b) => b.score - a.score);
+    const deduped = dedupeChunksByMatchLocation(corpus.value.chunks);
+    const results = [...deduped.map((chunk) => this.#toChunk(chunk, input.q)), ...docs.value].sort(
+      (a, b) => b.score - a.score,
+    );
     return { searchQuery: corpus.value.search_query, results };
   }
 
@@ -2384,7 +2442,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     // Validation (bad source/exclude) throws HERE, outside the degrade path:
     // an invalid request is the caller's bug, never a warning — mirroring
     // query(), whose #searchOptions also runs before any catch.
-    const searchOptions = this.#searchOptions(input);
+    const searchOptions = this.#searchOptions(input, { expandContext: true });
     let response: AiSearchChatCompletionsResponse;
     try {
       response = await this.#instance.chatCompletions({
@@ -2404,9 +2462,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     return {
       response: response.choices[0]?.message.content ?? "",
       searchQuery: input.q,
-      results: response.chunks.map((chunk) =>
-        this.#toChunk(chunk, resultContentCap(response.chunks.length)),
-      ),
+      results: response.chunks.map((chunk) => this.#toChunk(chunk, input.q)),
     };
   }
 
@@ -4138,6 +4194,61 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
+   * Update this agent's status record — the title, note, and shortStatus that
+   * project surfaces (the agents list, the Slack thread status) show for it.
+   * A MERGE: only the fields you pass change; the platform patches the
+   * busy/idle flag (and what you are doing — LLM request vs running script)
+   * into the same record on its own. `shortStatus` completes the sentence
+   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
+   * while the agent works — update it as your work moves through phases.
+   * `note` is a one-or-two-sentence description of the agent or its current
+   * focus; `title` names the agent/conversation; `blocked: true` marks a
+   * turn that ended waiting on a human.
+   */
+  async setStatus(input: {
+    title?: string;
+    note?: string;
+    shortStatus?: string;
+    /** Set true when ending a turn to wait on a human (an answer, an
+     * approval, a secret) — surfaces show the agent as blocked instead of
+     * idle. The platform clears it when the next message wakes you. */
+    blocked?: boolean;
+    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
+     * "web") or an https image URL, shown next to this agent on roster
+     * surfaces. */
+    icon?: string;
+  }): Promise<StreamEvent> {
+    // Whitespace-only values are dropped, not journaled: a patch of empty
+    // strings would blank titles and notes on every surface.
+    const field = (value: string | undefined) => {
+      const trimmed = value?.trim();
+      return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+    };
+    const patch = {
+      ...(field(input.title) === undefined ? {} : { title: field(input.title) }),
+      ...(field(input.note) === undefined ? {} : { note: field(input.note) }),
+      ...(field(input.shortStatus) === undefined ? {} : { shortStatus: field(input.shortStatus) }),
+      ...(field(input.icon) === undefined ? {} : { icon: field(input.icon) }),
+      ...(input.blocked === undefined ? {} : { blocked: input.blocked }),
+    };
+    if (Object.keys(patch).length === 0) {
+      throw new Error(
+        "agent.setStatus requires at least one non-empty field (title, note, shortStatus, icon, blocked).",
+      );
+    }
+    const [event] = await this.stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: patch,
+    });
+    return event;
+  }
+
+  /** Name this agent/conversation — sugar for `setStatus({ title })`. */
+  setTitle(title: string): Promise<StreamEvent> {
+    return this.setStatus({ title });
+  }
+
+  /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
    * correlated per request — concurrent asks on one agent stream interleave
@@ -4225,6 +4336,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         capabilityHost:
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
+        setStatus:
+          'Merge-update this agent\'s title / note / shortStatus (shortStatus completes "<agent> is …" on live surfaces).',
+        setTitle: "Name this agent/conversation (sugar for setStatus({ title })).",
         configure:
           "Set this agent's policy ({ systemPrompt?, model? }); on a never-seen path this births the agent with defaults plus the overrides.",
         kill: "Restart the agent's server-side object; the next request boots it fresh.",
@@ -4971,6 +5085,8 @@ type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
   incrementLiveDemo(): Promise<void>;
   touchStreamActivity(input: TouchInput): Promise<void>;
+  touchAgentStatus(input: AgentStatusTouchInput): Promise<void>;
+  rebuildAgentStatus(input: AgentStatusTouchInput): Promise<boolean>;
 };
 
 /**
@@ -5347,6 +5463,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
+    this.#indexAgentStatus(batch);
     this.#indexStreamSearch(batch);
     try {
       return await this.worker.processEventBatch(batch);
@@ -5390,6 +5507,80 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     ).catch(() => {
       // Recency self-heals from the next batch; never surface into worker delivery.
     });
+  }
+
+  /**
+   * Platform step: fold an agent batch's status-changed patches into the
+   * project's agents roster (a peer slice of `itx.liveState` — see
+   * AgentStatusDatabase). Same rules as {@link #indexStreamActivity}:
+   * idempotent (event offsets guard redelivery), fire-and-forget, MUST NOT
+   * throw. Unlike recency, a DROPPED patch does not heal on the next one —
+   * these are merge patches, and a later busy patch carries no title with
+   * which to reconstruct a lost rename — so a failed dial falls back to
+   * rebuilding the row from the agent's journal (the authority).
+   */
+  #indexAgentStatus(batch: StreamPushEventBatch): void {
+    if (!batch.path.startsWith("/agents/")) return;
+    const events = batch.events
+      .filter((event) => event.type === "events.iterate.com/agent/status-changed")
+      .map((event) => ({
+        payload: event.payload,
+        offset: event.offset,
+        createdAt: event.createdAt,
+      }));
+    if (events.length === 0) return;
+    void Promise.resolve(this.#projectDo.touchAgentStatus({ path: batch.path, events })).catch(() =>
+      this.#rebuildAgentStatus(batch.path),
+    );
+  }
+
+  /**
+   * Recovery lane for a failed roster dial: re-read the agent journal's FULL
+   * status-changed history and hand it to the DO as a from-scratch rebuild.
+   * The journal read is authoritative at read time; a touch for NEWER events
+   * racing into the gap between read and replace makes the DO REFUSE the
+   * stale snapshot, and the loop re-reads (the newer events are committed to
+   * the journal before their touch could have succeeded, so the next read
+   * has them). Retried with backoff; the terminal failure is logged and the
+   * row stays stale until the agent's next rebuild-triggering drop.
+   */
+  async #rebuildAgentStatus(path: string): Promise<void> {
+    for (const backoffMs of [0, 2_000, 10_000]) {
+      if (backoffMs > 0) await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      try {
+        const stream = new StreamRpcTarget({
+          auth: this.#props.auth,
+          path,
+          projectId: this.projectId,
+        });
+        const events: { payload: unknown; offset: number; createdAt: string }[] = [];
+        let afterOffset = 0;
+        for (;;) {
+          const page = await stream.getEvents({
+            afterOffset,
+            eventTypes: ["events.iterate.com/agent/status-changed"],
+            limit: 500,
+          });
+          for (const event of page) {
+            events.push({
+              payload: event.payload,
+              offset: event.offset,
+              createdAt: event.createdAt,
+            });
+          }
+          if (page.length < 500) break;
+          afterOffset = page.at(-1)!.offset;
+        }
+        const applied = await this.#projectDo.rebuildAgentStatus({ path, events });
+        if (applied) return;
+        console.warn("[agents-roster] rebuild lost a race with a newer touch; re-reading", {
+          path,
+        });
+      } catch (error) {
+        console.warn("[agents-roster] rebuild attempt failed", { path, error });
+      }
+    }
+    console.error("[agents-roster] roster row is stale after failed rebuild", { path });
   }
 
   /**

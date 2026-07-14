@@ -127,10 +127,12 @@ export type SearchResultChunk = {
    */
   score: number;
   /**
-   * The matched text (capped ~1.2k chars per hit so result sets stay inline;
-   * a truncation marker points at `ref` for the full source).
+   * A SHORT snippet around the matching text (~2 sentences). Judge relevance
+   * here; evaluate `ref` for the whole thing.
    */
   content: string;
+  /** When the source object was last written (ISO), where the index knows. */
+  date?: string;
   /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
   kind?: string;
   /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
@@ -278,6 +280,68 @@ export function narrowStreamRefToChunk(storedRef: ItxExpression, chunkText: stri
     firstOffset: Math.min(...offsets),
     lastOffset: Math.max(...offsets),
   });
+}
+
+/**
+ * A short window of `text` centered on the most DISTINCTIVE query-term match
+ * — the "matching couple of sentences" a result row shows. Distinctive =
+ * rarest in this text (frequent terms like "slack"/"message" appear in every
+ * stream header and would drag the window to boilerplate; the term that
+ * appears once is the one the searcher meant), ties broken by term length.
+ * No term found = the head of the text. Boundaries snap to whitespace,
+ * ellipses mark the cuts.
+ */
+export function extractMatchSnippet(text: string, query: string, maxChars: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= maxChars) return flat;
+  const terms = [
+    ...new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9_-]+/)
+        .filter((term) => term.length >= 3),
+    ),
+  ];
+  const lower = flat.toLowerCase();
+  // Whole-token matches only ("app" must not center the window on "happy" or
+  // "offset"); a term that never appears as a whole token falls back to a
+  // substring hit — better an approximate center than the document head.
+  let at = -1;
+  let bestRarity = Infinity;
+  let bestLength = 0;
+  let substringFallback = -1;
+  for (const term of terms) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const wordPattern = new RegExp(`(?<![a-z0-9_-])${escaped}(?![a-z0-9_-])`, "g");
+    let first = -1;
+    let count = 0;
+    for (const match of lower.matchAll(wordPattern)) {
+      if (first === -1) first = match.index;
+      if (++count >= 50) break;
+    }
+    if (first === -1) {
+      const loose = lower.indexOf(term);
+      if (loose !== -1 && substringFallback === -1) substringFallback = loose;
+      continue;
+    }
+    if (count < bestRarity || (count === bestRarity && term.length > bestLength)) {
+      bestRarity = count;
+      bestLength = term.length;
+      at = first;
+    }
+  }
+  if (at === -1) at = substringFallback;
+  if (at === -1) return `${flat.slice(0, maxChars)}…`;
+  let start = Math.max(0, at - Math.floor(maxChars / 2));
+  // Snap forward to a word start ONLY when mid-word: at position 0 or just
+  // after a space there is nothing to trim, and advancing would drop a whole
+  // word (and stamp a phantom leading ellipsis on head-of-document matches).
+  if (start > 0 && flat[start - 1] !== " ") {
+    const spaceBefore = flat.indexOf(" ", start);
+    if (spaceBefore !== -1 && spaceBefore < at) start = spaceBefore + 1;
+  }
+  const end = Math.min(flat.length, start + maxChars);
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
 }
 
 /** The ref expression for an itx.files path — evaluates to the file handle. */

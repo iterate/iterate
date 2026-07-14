@@ -1,37 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { Stream } from "../../../itx-api.generated.ts";
 import { GithubAgentProcessor } from "../../repos/github-agent-processor-implementation.ts";
 import { githubAgentPath } from "../../repos/github-agent-utils.ts";
 import { RepoProcessor } from "../../repos/repo-processor-implementation.ts";
 import type { StreamEvent } from "../../streams/schemas.ts";
-import { deliverNewEvents, MemoryStream } from "../test-helpers.ts";
+import { deliverNewEvents, MemoryStreamNetwork } from "../../streams/test-helpers.ts";
 import fixture from "./iterate-pr-1933-mention-not-delivered.json";
-
-class MemoryStreamNetwork {
-  readonly streams = new Map<string, NetworkMemoryStream>();
-
-  get(path: string): NetworkMemoryStream {
-    let stream = this.streams.get(path);
-    if (stream === undefined) {
-      stream = new NetworkMemoryStream(path, this);
-      this.streams.set(path, stream);
-    }
-    return stream;
-  }
-}
-
-class NetworkMemoryStream extends MemoryStream {
-  constructor(
-    path: string,
-    private readonly network: MemoryStreamNetwork,
-  ) {
-    super(path);
-  }
-
-  override at(path?: string): Stream {
-    return path === undefined ? this : this.network.get(path);
-  }
-}
 
 describe("production stream repro: iterate PR 1933 mention was never delivered", () => {
   it("isolates obsolete history and forwards the next webhook to the current agent", async () => {

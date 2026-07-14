@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
+  extractMatchSnippet,
   fileRef,
   fileSearchKey,
   narrowStreamRefToChunk,
@@ -166,6 +167,45 @@ describe("renderStreamSegmentDocument", () => {
     });
     expect(document).toContain("… (truncated)");
     expect(document!.length).toBeLessThan(20_000);
+  });
+});
+
+describe("extractMatchSnippet", () => {
+  it("centers the snippet on the first query-term match", () => {
+    const text = "x ".repeat(400) + "the needle in the haystack sits here" + " y".repeat(400);
+    const snippet = extractMatchSnippet(text, "needle haystack", 120);
+    expect(snippet).toContain("needle");
+    expect(snippet.length).toBeLessThanOrEqual(124); // ellipses included
+    expect(snippet.startsWith("…")).toBe(true);
+  });
+
+  it("centers on the RAREST term — filler that saturates the text cannot drag the window", () => {
+    // "slack message" appears constantly (headers); "superfart" once, late.
+    const filler = "slack message from slack channel message slack. ".repeat(30);
+    const text = filler + "then someone said superfart loudly" + " tail".repeat(60);
+    const snippet = extractMatchSnippet(text, "slack message superfart", 120);
+    expect(snippet).toContain("superfart");
+  });
+
+  it("keeps head-of-document matches intact — no phantom ellipsis, no dropped word", () => {
+    const text = "needle found immediately here" + " tail".repeat(100);
+    const snippet = extractMatchSnippet(text, "needle", 80);
+    expect(snippet.startsWith("needle found")).toBe(true);
+  });
+
+  it("falls back to the head when no term matches, and passes short text through", () => {
+    expect(extractMatchSnippet("short text", "zzz", 100)).toBe("short text");
+    expect(extractMatchSnippet("a ".repeat(200), "zzz", 50).endsWith("…")).toBe(true);
+  });
+
+  it("matches whole tokens only — 'app' cannot center the window on 'happy'", () => {
+    const text =
+      "everyone was happy happy happy " +
+      "pad ".repeat(100) +
+      "the app crashed today" +
+      " tail".repeat(60);
+    const snippet = extractMatchSnippet(text, "app", 100);
+    expect(snippet).toContain("app crashed");
   });
 });
 

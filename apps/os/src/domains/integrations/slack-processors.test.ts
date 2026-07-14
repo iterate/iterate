@@ -1,152 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
-import type { Stream } from "../../itx-api.generated.ts";
+import { describe, expect, it } from "vitest";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { createProcessorHostHarness, emptyStreamRuntimeState } from "../streams/test-helpers.ts";
+import { MemoryStreamNetwork, deliverNewEvents } from "../streams/test-helpers.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,
   compileBangCommand,
   eyesReactionTargetFromWebhookPayload,
 } from "./slack-agent-processor-implementation.ts";
-
-/**
- * In-memory network of streams keyed by path, so router tests can observe the
- * cross-stream forwards (`stream.at(path).append(...)`) next to same-stream
- * appends.
- */
-class MemoryStreamNetwork {
-  readonly streams = new Map<string, MemoryStream>();
-
-  /** Injectable clock for createdAt stamps, so freshness-gated lanes (the 👀
-   * ack, the status repaint) can be tested on both sides of the horizon. */
-  constructor(readonly now: () => number = Date.now) {}
-
-  get(path: string): MemoryStream {
-    let stream = this.streams.get(path);
-    if (stream === undefined) {
-      stream = new MemoryStream(this, path);
-      this.streams.set(path, stream);
-    }
-    return stream;
-  }
-
-  eventsAt(path: string): StreamEvent[] {
-    return this.streams.get(path)?.events ?? [];
-  }
-}
-
-class MemoryStream implements Stream {
-  events: StreamEvent[] = [];
-
-  async __describe() {
-    return { instructions: "in-memory test stream", types: "", children: {} };
-  }
-
-  async kill(): Promise<void> {}
-
-  constructor(
-    readonly network: MemoryStreamNetwork,
-    readonly path: string,
-  ) {}
-
-  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    return inputs.map((input) => {
-      const existing =
-        input.idempotencyKey === undefined
-          ? undefined
-          : this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
-      if (existing !== undefined) return existing;
-      const event: StreamEvent = {
-        ...input,
-        createdAt: new Date(this.network.now()).toISOString(),
-        offset: this.events.length + 1,
-        path: this.path,
-      };
-      this.events.push(event);
-      return event;
-    });
-  }
-
-  at(path: string): Stream {
-    return this.network.get(path);
-  }
-
-  async getEvent(): Promise<StreamEvent | undefined> {
-    return undefined;
-  }
-
-  async getEvents(input: Parameters<Stream["getEvents"]>[0] = {}): Promise<StreamEvent[]> {
-    const { afterOffset = 0, limit = 500 } = input;
-    const beforeOffset = input.beforeOffset ?? Number.MAX_SAFE_INTEGER;
-    return this.events
-      .filter((event) => event.offset > afterOffset)
-      .filter((event) => event.offset < beforeOffset)
-      .filter(
-        (event) =>
-          input.eventTypes === undefined ||
-          input.eventTypes.includes("*") ||
-          input.eventTypes.includes(event.type),
-      )
-      .slice(0, limit);
-  }
-
-  readEvents(input: Parameters<Stream["readEvents"]>[0] = {}) {
-    let afterOffset = input.afterOffset ?? 0;
-    return {
-      next: async () => {
-        const page = await this.getEvents({ ...input, afterOffset });
-        afterOffset = page.at(-1)?.offset ?? afterOffset;
-        return page;
-      },
-      [Symbol.dispose]() {},
-    };
-  }
-
-  async waitForEvent(): Promise<StreamEvent> {
-    throw new Error("MemoryStream does not implement waitForEvent().");
-  }
-
-  async getProcessorRuntimeState(): Promise<null> {
-    return null;
-  }
-
-  async runtimeState() {
-    return emptyStreamRuntimeState();
-  }
-
-  async subscribe(): Promise<never> {
-    throw new Error("MemoryStream does not implement subscribe().");
-  }
-
-  async acceptCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement acceptCrossPost().");
-  }
-
-  async crossPostTo(): Promise<never> {
-    throw new Error("MemoryStream does not implement crossPostTo().");
-  }
-
-  async removeCrossPost(): Promise<never> {
-    throw new Error("MemoryStream does not implement removeCrossPost().");
-  }
-}
-
-type ProcessorLike = {
-  ingest(input: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
-};
-
-async function deliverNewEvents(input: {
-  cursors: Map<object, number>;
-  processor: ProcessorLike;
-  stream: MemoryStream;
-}) {
-  const cursor = input.cursors.get(input.processor) ?? 0;
-  const events = input.stream.events.slice(cursor);
-  input.cursors.set(input.processor, input.stream.events.length);
-  if (events.length === 0) return;
-  await input.processor.ingest({ events, streamMaxOffset: input.stream.events.length });
-}
 
 const TEAM_ID = "T0TEAM";
 const CONNECTION = "nustom";
@@ -570,7 +431,7 @@ describe("SlackProcessor (webhook router)", () => {
 describe("SlackAgentProcessor", () => {
   function setup(deps?: {
     callSlackApi?: (method: string, body: Record<string, unknown>) => Promise<void>;
-    statusClearDebounceMs?: number;
+    fetchSlackChannelName?: (channel: string) => Promise<string | null>;
     storeSlackFiles?: ConstructorParameters<typeof SlackAgentProcessor>[0]["storeSlackFiles"];
   }) {
     const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
@@ -586,7 +447,9 @@ describe("SlackAgentProcessor", () => {
         await deps?.callSlackApi?.(method, body);
       },
       now: () => clock.now,
-      statusClearDebounceMs: deps?.statusClearDebounceMs ?? 0,
+      ...(deps?.fetchSlackChannelName === undefined
+        ? {}
+        : { fetchSlackChannelName: deps.fetchSlackChannelName }),
       ...(deps?.storeSlackFiles === undefined ? {} : { storeSlackFiles: deps.storeSlackFiles }),
     });
     const cursors = new Map<object, number>();
@@ -776,7 +639,7 @@ describe("SlackAgentProcessor", () => {
     });
   });
 
-  it("mirrors the LLM request lifecycle into the Slack assistant status", async () => {
+  it("paints the agent's announced status onto the Slack assistant thread", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
     // Establish thread context first.
@@ -787,9 +650,9 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
     slackCalls.length = 0;
 
-    const [requested] = await stream.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", requestId: "llm-request:1" },
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 1 },
     });
     await deliverNewEvents({ cursors, processor, stream });
     expect(slackCalls).toEqual([
@@ -798,20 +661,16 @@ describe("SlackAgentProcessor", () => {
         body: {
           channel_id: "C123",
           thread_ts: "111.222",
-          status: "is thinking...",
-          loading_messages: ["Thinking..."],
+          status: "is making an LLM request...",
+          loading_messages: ["making an LLM request..."],
         },
       },
     ]);
 
     slackCalls.length = 0;
     await stream.append({
-      type: "events.iterate.com/agent/llm-request-completed",
-      payload: {
-        durationMs: 10,
-        llmRequestOffset: requested!.offset,
-        result: { status: "success" },
-      },
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: false, sinceOffset: 2 },
     });
     await deliverNewEvents({ cursors, processor, stream });
     expect(slackCalls).toEqual([
@@ -826,7 +685,7 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("repaints the status once per batch — the latest lifecycle fact wins", async () => {
+  it("repaints the status once per batch — the latest announcement wins", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
     await stream.append({
@@ -836,22 +695,17 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
     slackCalls.length = 0;
 
-    // Requested and completed land in ONE batch: the status is a repaint of
-    // current truth, so only the final (cleared) status reaches Slack — no
-    // transient "is thinking..." call for a request that already finished.
-    const requestedOffset = (stream.events.at(-1)?.offset ?? 0) + 1;
+    // Busy and idle land in ONE batch: the status is a repaint of current
+    // truth, so only the final (cleared) status reaches Slack — no transient
+    // "is thinking..." call for work that already finished.
     await stream.append(
       {
-        type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", requestId: "llm-request:1" },
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: true, sinceOffset: 1 },
       },
       {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: {
-          durationMs: 10,
-          llmRequestOffset: requestedOffset,
-          result: { status: "success" },
-        },
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 2 },
       },
     );
     await deliverNewEvents({ cursors, processor, stream });
@@ -867,7 +721,7 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("keeps the tools status on while a script is running after its LLM completes", async () => {
+  it("paints the agent's shortStatus verbatim and its title via setTitle", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
     await stream.append({
@@ -877,49 +731,142 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
     slackCalls.length = 0;
 
-    const requestedOffset = (stream.events.at(-1)?.offset ?? 0) + 1;
+    // The agent authored a title and shortStatus mid-work; the busy patch
+    // lands in the same batch. One title paint, one status paint — the
+    // agent's own words complete "<agent> is …".
     await stream.append(
       {
-        type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", requestId: "llm-request:1" },
+        type: "events.iterate.com/agent/status-changed",
+        payload: { title: "Trip planning", shortStatus: "comparing flights" },
       },
       {
-        type: "events.iterate.com/capability-host/script-execution-requested",
-        payload: { code: "async () => {}", executionId: "script-1" },
-      },
-      {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: {
-          durationMs: 10,
-          llmRequestOffset: requestedOffset,
-          result: { status: "success" },
-        },
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: true, sinceOffset: 2 },
       },
     );
     await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setTitle",
+        body: { channel_id: "C123", thread_ts: "111.222", title: "Trip planning" },
+      },
+      {
+        method: "assistant.threads.setStatus",
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is comparing flights...",
+          loading_messages: ["comparing flights..."],
+        },
+      },
+    ]);
 
+    // An unchanged title never repaints; a shortStatus change repaints the status.
+    slackCalls.length = 0;
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { shortStatus: "booking the winner" },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
         body: {
           channel_id: "C123",
           thread_ts: "111.222",
-          status: "is using tools...",
-          loading_messages: ["Using tools..."],
+          status: "is booking the winner...",
+          loading_messages: ["booking the winner..."],
         },
       },
     ]);
+  });
+
+  it("retries a failed title paint on batch redelivery", async () => {
+    let failNext = true;
+    const { cursors, processor, slackCalls, stream } = setup({
+      callSlackApi: async (method) => {
+        if (method !== "assistant.threads.setTitle" || !failNext) return;
+        failNext = false;
+        throw new Error("slack blew up");
+      },
+    });
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    const [patch] = await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { title: "Trip planning" },
+    });
+    // The failed call fails the batch (checkpoint held) — the painted-title
+    // record must NOT be written, or the redelivered batch would see the
+    // rename as already painted and skip it forever.
+    await expect(deliverNewEvents({ cursors, processor, stream })).rejects.toThrow("slack blew up");
 
     slackCalls.length = 0;
+    await processor.ingest({ events: [patch!], streamMaxOffset: patch!.offset });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setTitle",
+        body: { channel_id: "C123", thread_ts: "111.222", title: "Trip planning" },
+      },
+    ]);
+  });
+
+  it("paints the script phase and a blocked wait in the agent's own words", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
     await stream.append({
-      type: "events.iterate.com/capability-host/script-execution-completed",
-      payload: { executionId: "script-1", result: null },
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, phase: "script", sinceOffset: 1 },
     });
     await deliverNewEvents({ cursors, processor, stream });
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
-        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is running a script...",
+          loading_messages: ["running a script..."],
+        },
+      },
+    ]);
+
+    // The turn ends BLOCKED on the human: the status says so instead of
+    // clearing, and the 👀 comes off (the message was handled).
+    slackCalls.length = 0;
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { blocked: true, shortStatus: "waiting for your Acme API key" },
+      },
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 2 },
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is waiting for your Acme API key...",
+          loading_messages: ["waiting for your Acme API key..."],
+        },
       },
       {
         method: "reactions.remove",
@@ -928,238 +875,7 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("debounces idle clears and cancels them when the next LLM starts", async () => {
-    const { cursors, processor, slackCalls, stream } = setup({ statusClearDebounceMs: 30 });
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    slackCalls.length = 0;
-
-    const [requested] = await stream.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", requestId: "llm-request:1" },
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    slackCalls.length = 0;
-
-    await stream.append({
-      type: "events.iterate.com/agent/llm-request-completed",
-      payload: {
-        durationMs: 10,
-        llmRequestOffset: requested!.offset,
-        result: { status: "success" },
-      },
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    expect(slackCalls).toEqual([]);
-
-    await stream.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", requestId: "llm-request:2" },
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: {
-          channel_id: "C123",
-          thread_ts: "111.222",
-          status: "is thinking...",
-          loading_messages: ["Thinking..."],
-        },
-      },
-    ]);
-  });
-
-  it("keeps a newer LLM active when an older cancelled request completes late", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    const [requestA] = await stream.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", requestId: "llm-request:a" },
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    await stream.append({
-      type: "events.iterate.com/agent/llm-request-cancelled",
-      payload: {
-        phase: "requested",
-        reason: "interrupted-by-user-input",
-        llmRequestOffset: requestA!.offset,
-      },
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    const [requestB] = await stream.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", requestId: "llm-request:b" },
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    slackCalls.length = 0;
-
-    await stream.append({
-      type: "events.iterate.com/agent/llm-request-completed",
-      payload: {
-        durationMs: 10,
-        llmRequestOffset: requestA!.offset,
-        result: { status: "success" },
-      },
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-
-    expect(processor.state.activeLlmRequestOffsets).toEqual([requestB!.offset]);
-    expect(processor.state.pendingStatusClear).toBeUndefined();
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: {
-          channel_id: "C123",
-          thread_ts: "111.222",
-          status: "is thinking...",
-          loading_messages: ["Thinking..."],
-        },
-      },
-    ]);
-  });
-
-  it("serializes a due clear before a newer LLM status repaint", async () => {
-    vi.useFakeTimers();
-    try {
-      let clearStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
-        clearStarted = resolve;
-      });
-      let releaseClear!: () => void;
-      const released = new Promise<void>((resolve) => {
-        releaseClear = resolve;
-      });
-      const { cursors, processor, slackCalls, stream } = setup({
-        statusClearDebounceMs: 30,
-        callSlackApi: async (method, body) => {
-          if (method !== "assistant.threads.setStatus" || body.status !== "") return;
-          clearStarted();
-          await released;
-        },
-      });
-
-      await stream.append({
-        type: "events.iterate.com/slack/webhook-received",
-        payload: humanMessageWebhookPayload({}),
-      });
-      await deliverNewEvents({ cursors, processor, stream });
-      const [requestA] = await stream.append({
-        type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", requestId: "llm-request:a" },
-      });
-      await deliverNewEvents({ cursors, processor, stream });
-      await stream.append({
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: {
-          durationMs: 10,
-          llmRequestOffset: requestA!.offset,
-          result: { status: "success" },
-        },
-      });
-      await deliverNewEvents({ cursors, processor, stream });
-      await vi.advanceTimersByTimeAsync(30);
-      expect(
-        stream.events.some(
-          (event) => event.type === "events.iterate.com/slack-agent/status-clear-due",
-        ),
-      ).toBe(true);
-      slackCalls.length = 0;
-
-      const dueDelivery = deliverNewEvents({ cursors, processor, stream });
-      await started;
-      await stream.append({
-        type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", requestId: "llm-request:b" },
-      });
-      const newerRequestDelivery = deliverNewEvents({ cursors, processor, stream });
-      releaseClear();
-      await Promise.all([dueDelivery, newerRequestDelivery]);
-
-      expect(
-        slackCalls
-          .filter((call) => call.method === "assistant.threads.setStatus")
-          .map((call) => call.body.status),
-      ).toEqual(["", "is thinking..."]);
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("recovers an idle status clear after the debounce timer is lost to eviction", async () => {
-    vi.useFakeTimers();
-    try {
-      const slackCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
-      const h = createProcessorHostHarness({
-        path: "/agents/slack/nustom/c123/ts-111-222",
-        build: (host, context) => ({
-          slackAgent: host.add(
-            (deps) =>
-              new SlackAgentProcessor({
-                ...deps,
-                callSlackApi: async (method, body) => {
-                  slackCalls.push({ body, method });
-                },
-                now: () => context.clock.now,
-                statusClearDebounceMs: 1_000,
-              }),
-          ),
-        }),
-      });
-
-      await h.stream.append({
-        type: "events.iterate.com/slack/thread-route-configured",
-        payload: {
-          channel: "C123",
-          threadTs: "111.222",
-          streamPath: "/agents/slack/nustom/c123/ts-111-222",
-        },
-      });
-      await h.deliverAll();
-      const [requested] = await h.stream.append({
-        type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", requestId: "llm-request:1" },
-      });
-      await h.deliverAll();
-      await h.stream.append({
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: {
-          durationMs: 10,
-          llmRequestOffset: requested!.offset,
-          result: { status: "success" },
-        },
-      });
-      await h.deliverAll();
-      expect(slackCalls.at(-1)?.body).toMatchObject({ status: "is thinking..." });
-
-      const revivalAlarmAt = h.store.alarm.at;
-      expect(revivalAlarmAt).not.toBeNull();
-      h.crash();
-      await h.advance(revivalAlarmAt! - h.clock.now);
-
-      expect(slackCalls).toContainEqual({
-        method: "assistant.threads.setStatus",
-        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
-      });
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("carries a behind-batch lifecycle fact to the at-head repaint", async () => {
+  it("an authored-only patch (busy never announced) paints the title but clears nothing", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
     await stream.append({
@@ -1169,19 +885,82 @@ describe("SlackAgentProcessor", () => {
     await deliverNewEvents({ cursors, processor, stream });
     slackCalls.length = 0;
 
-    // The completion lands in a batch stamped BEHIND the head (a render/input
-    // event already followed it — the wake-lane shape), and the trailing
-    // catch-up batch that reaches head contains no lifecycle facts at all.
-    // The repaint must not lose the completion: without the carry, Slack
-    // keeps "is thinking..." and the eyes reaction forever.
-    const [completed, render] = await stream.append(
+    // The agent set its title before any busy flip was announced. That says
+    // nothing about work: no status clear, and the 👀 ack MUST survive.
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { title: "Trip planning" },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(slackCalls).toEqual([
       {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: {
-          durationMs: 10,
-          llmRequestOffset: 1,
-          result: { status: "success" },
+        method: "assistant.threads.setTitle",
+        body: { channel_id: "C123", thread_ts: "111.222", title: "Trip planning" },
+      },
+    ]);
+  });
+
+  it("ignores a stale idle announcement that lost its race with newer work", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 5 },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    // The agent's debounced idle append can land AFTER a newer busy
+    // announcement (the timer races new work by design — see the event's
+    // contract). Its older sinceOffset folds to nothing, and the repaint
+    // keeps the busy status instead of clearing it.
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: false, sinceOffset: 3 },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(processor.state.status).toMatchObject({ busy: true, sinceOffset: 5 });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: {
+          channel_id: "C123",
+          thread_ts: "111.222",
+          status: "is making an LLM request...",
+          loading_messages: ["making an LLM request..."],
         },
+      },
+    ]);
+  });
+
+  it("carries a behind-batch announcement to the at-head repaint", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    // The idle announcement lands in a batch stamped BEHIND the head (a
+    // render/input event already followed it — the wake-lane shape), and the
+    // trailing catch-up batch that reaches head contains no announcements at
+    // all. The repaint must not lose it: without the carry, Slack keeps
+    // "is thinking..." and the eyes reaction forever.
+    const [idle, render] = await stream.append(
+      {
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: false, sinceOffset: 1 },
       },
       {
         // Not consumed by slack-agent: stands in for the renders/inputs that
@@ -1190,10 +969,47 @@ describe("SlackAgentProcessor", () => {
         payload: { content: "render" },
       },
     );
-    await processor.ingest({ events: [completed!], streamMaxOffset: render!.offset });
+    await processor.ingest({ events: [idle!], streamMaxOffset: render!.offset });
     expect(slackCalls).toEqual([]); // behind the head: deferred, not painted
 
     await processor.ingest({ events: [render!], streamMaxOffset: render!.offset });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setStatus",
+        body: { channel_id: "C123", thread_ts: "111.222", status: "" },
+      },
+      {
+        method: "reactions.remove",
+        body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+      },
+    ]);
+  });
+
+  it("clears a status this incarnation painted even when the idle announcement is stale", async () => {
+    const { clock, cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 1 },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    // The idle announcement exists but is only DELIVERED past the freshness
+    // horizon (the host slept through it). A status we ourselves painted must
+    // still come down — the alternative is "is thinking..." forever.
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: false, sinceOffset: 2 },
+    });
+    clock.now += 16 * 60_000;
+    await deliverNewEvents({ cursors, processor, stream });
+
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
@@ -1237,22 +1053,15 @@ describe("SlackAgentProcessor", () => {
       payload: humanMessageWebhookPayload({}),
     });
     await deliverNewEvents({ cursors, processor, stream });
-    const [requested] = await stream.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", requestId: "llm-request:1" },
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 1 },
     });
     await deliverNewEvents({ cursors, processor, stream });
     await stream.append({
-      type: "events.iterate.com/agent/llm-request-completed",
-      payload: {
-        durationMs: 10,
-        llmRequestOffset: requested!.offset,
-        result: { status: "success" },
-      },
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: false, sinceOffset: 2 },
     });
-    await deliverNewEvents({ cursors, processor, stream });
-    // Consume the processor's own status-clear completion so both the live
-    // checkpoint and a from-zero refold cover the same journal prefix.
     await deliverNewEvents({ cursors, processor, stream });
     expect(slackCalls.length).toBeGreaterThan(0);
     const journalBeforeRefold = stream.events.length;
@@ -1276,8 +1085,10 @@ describe("SlackAgentProcessor", () => {
     expect(refolded.state).toEqual(processor.state);
   });
 
-  it("captures route context (including streamPath) in state without announcing anything", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  it("captures route context and stamps the thread's roster identity once", async () => {
+    const { cursors, processor, slackCalls, stream } = setup({
+      fetchSlackChannelName: async () => "trip-planning",
+    });
 
     await stream.append({
       type: "events.iterate.com/slack/thread-route-configured",
@@ -1294,10 +1105,19 @@ describe("SlackAgentProcessor", () => {
       streamPath: "/agents/slack/nustom/c123/ts-111-222",
       threadTs: "111.222",
     });
-    // The `slack` capability is provided on the agent's own itx context
-    // (provideCapability), not announced from here — the route event only
-    // folds into state, with no appends and no Slack API calls.
-    expect(stream.events).toHaveLength(1);
+    // The route stamps the slack icon and "#channel" identity for the roster
+    // (idempotency-keyed: a re-configured route never re-stamps, and the
+    // agent's own setStatus patches win later by journal order). No Slack
+    // API calls ride this lane beyond the name lookup dep.
+    const identity = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agent/status-changed",
+    );
+    expect(identity).toHaveLength(1);
+    expect(identity[0]!.payload).toEqual({
+      icon: "slack",
+      title: "#trip-planning thread",
+      note: "Slack thread in #trip-planning",
+    });
     expect(slackCalls).toHaveLength(0);
   });
 

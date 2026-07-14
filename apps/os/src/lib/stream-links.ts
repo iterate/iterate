@@ -1,12 +1,17 @@
 import { z } from "zod";
 
-// Canonical stream path (leading slash, lowercase kebab segments), formerly
+// Canonical stream path (leading slash, lowercase path segments), formerly
 // the shared streams package's StreamPath. This module owns stream-path URL
 // plumbing, so the schema lives here; other UI modules import it from here.
+//
+// Segment alphabet is `[a-z0-9_-~]`: the tilde is required for GitHub agent
+// paths (`/agents/repos/g~<sha256hex>/pull-requests/<n>`). Without `~`, the
+// project shell's agent roster (which runs StreamPath.parse on every status
+// row) throws and the entire /projects/<slug> page hard-errors.
 const CanonicalStreamPath = z
   .string()
   .max(1023)
-  .regex(/^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/);
+  .regex(/^\/(?:[a-z0-9_~-]+(?:\/[a-z0-9_~-]+)*)?$/);
 
 export const StreamPath = z.preprocess<string, typeof CanonicalStreamPath, string>((value) => {
   if (typeof value !== "string") {

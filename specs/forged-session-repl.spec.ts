@@ -26,5 +26,5 @@ test("project REPL accepts a forged session", async ({ helpers, page }) => {
   });
   // Built-ins live in `children`; `capabilities` holds this scope's dynamic
   // mounts only (none on a fresh fixture project).
-  expect(result.capabilities).toEqual([]);
+  expect(result).toMatchObject({ capabilities: [] });
 });
