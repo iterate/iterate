@@ -20,7 +20,7 @@ import {
 // Class-based stream processor runtime.
 // =============================================================================
 
-type MaybePromise<T> = T | Promise<T>;
+export type MaybePromise<T> = T | Promise<T>;
 
 /**
  * The structural slice of a processor contract that the class needs. Contracts
@@ -409,6 +409,22 @@ export abstract class StreamProcessor<
       payloadSchema: eventDefinition.payloadSchema,
     }).parse(event) as EmittedInput<Contract>;
   }
+
+  /**
+   * OPTIONAL synchronous pre-commit gate. Only an INLINE runner (Phase 2, the
+   * Stream DO's own core processor; see stream-processor-runner.ts) calls
+   * this — it runs during the append turn and THROWS to reject the append.
+   * The post-commit subscriber runner never calls it: by the time a
+   * subscriber sees an event it is already a durable fact, and a fact cannot
+   * be un-appended. Default: accept everything. This is the pre-commit dual
+   * of `blockProcessorWhile` (which holds the cursor post-commit) — the same
+   * "refuse to let this event through until you're satisfied" intent,
+   * expressed at whichever commit position the runner occupies.
+   */
+  protected validate(_args: {
+    event: ConsumedEvent<Contract>;
+    state: ProcessorState<Contract>;
+  }): void {}
 
   /**
    * Pure projection of one consumed event into the next state. Defaults to
