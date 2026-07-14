@@ -216,6 +216,12 @@ they ride the next PR out of this branch.)
 
 ### Decisions wanted (each a short conversation)
 
+- [ ] **operator-session coverage**: `/api/operator-sessions` issue/redeem
+      lost its only automated exercise when runtime-smoke + the vitest
+      browser project were deleted (this PR). Candidate: one ~30-line
+      engine e2e (issue → redeem → cross-origin reject) against the live
+      deployment; docs/smoke-testing.md carries manual probes meanwhile.
+
 - [ ] **dummy-petshop unit lane has no retry wiring**: `github-app.test.ts`
       ("deliver mode POSTs the x-hub-signature-256 header") flaked red with
       "Error: bad port" on 2026-07-14 (port race binding its local webhook
@@ -240,7 +246,7 @@ they ride the next PR out of this branch.)
       unconsumed). Audit CORRECTION: miniflare IS consumed
       (`catalog:cloudflare` dep of os/auth/semaphore) and stays; workerd
       pin left alone. Remaining: Jonas ratifies the doctrine wording.
-- [ ] **Dead lanes**: `apps/os/runtime-smoke.test.ts` (CI-skipped,
+- [x] **Dead lanes** (deleted in this PR — runtime-smoke replaced by docs/smoke-testing.md): `apps/os/runtime-smoke.test.ts` (CI-skipped,
       unwired), `apps/os/e2e/playwright/` + `apps/os/playwright.config.ts`
       (wired into nothing). Wire, mark as manual probes, or delete — each
       individually.
@@ -248,7 +254,7 @@ they ride the next PR out of this branch.)
       (incident class: streams.iterate.com stale registrations); auth's
       preview "e2e" is one curl of the discovery doc. Cheapest fix: one spec
       through the genuine OAuth flow per preview run.
-- [ ] **Prompt/template pinning policy**: budgets + referential integrity
+- [x] **Prompt/template pinning policy** (enforced by deletion in this PR): budgets + referential integrity
       YES (`agent-prompt-budgets.test.ts` is the good version); copy pinning
       NO. Then delete: prompt `toContain` batteries
       (`agent-processors.test.ts:56-79`), most of
@@ -256,9 +262,9 @@ they ride the next PR out of this branch.)
       invariants), the string anchors in `config-repo-template.test.ts`
       (keep structural asserts), constant restatements in
       `subscriber-math.test.ts:19-27`.
-- [ ] **`scripts/deploy.test.ts` mock theater** (9× `vi.mock`): slim to the
+- [x] **`scripts/deploy.test.ts` mock theater** (slimmed in this PR) (9× `vi.mock`): slim to the
       security kernels (forbidden-service-token, exact-project-miss).
-- [ ] **Internal-CLI arg tests** (`cli.test.ts`, `session.test.ts`,
+- [x] **Internal-CLI arg tests** (deleted in this PR) (`cli.test.ts`, `session.test.ts`,
       `itx.test.ts`, ~320 LOC): docs/testing.md explicitly disclaims these;
       delete, keeping `session.ts`'s authority-mode guard.
 - [ ] **Dated-skip convention**: `test.skip` marked "KNOWN GAP" needs an
