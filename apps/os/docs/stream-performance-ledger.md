@@ -2440,3 +2440,84 @@ this branch come from fewer statements, less serialization, retained tails,
 and less duplicate work. A KV rewrite remains an experiment only if it can
 beat those paths end to end while proving eviction and failure semantics; it
 is not a shipping direction on current evidence.
+
+## 2026-07-14: Per-Event Wire Delivery Rejected
+
+### Question And Correctness Boundary
+
+An isolated branch replaced each delivered `processEventBatch(batch)` wire
+call with one `processEvent(event)` call while disposing ignored callback
+results unpulled. The experiment covered 20 ms, 48 kHz mono PCM16 frames
+(1,920 raw bytes represented by a 2,560-character payload) on three actual
+Cloudflare paths:
+
+- ephemeral host subscriber: Stream Durable Object to Worker relay over
+  Workers RPC, then Worker to the Node consumer over Cap'n Web;
+- durable push: source Stream Durable Object to the configured destination,
+  with every per-event result awaited in order because it advances the owned
+  delivery cursor;
+- durable wake: Stream Durable Object to the Project Durable Object's hosted
+  processor sink over Workers RPC, retaining the normal cumulative settlement
+  fences.
+
+Discarding durable-push results would change ordering and at-least-once
+semantics, so that invalid fast variant was not benchmarked as a candidate.
+Every timer ran in Node around append plus observed callback or processor
+completion. Exact marker sets were consumed, and `waitUntilEvent` supplied the
+durable-wake consumption fence. The measurements therefore do not depend on a
+Worker isolate clock advancing without network I/O.
+
+### Deployed Result
+
+Revision `2f564eee0` was deployed to leased Cloudflare preview 4 as Worker
+version `0196bad7-654c-421f-a96e-04636ae17306`. Three independent alternating
+runs produced 60 pooled samples per ephemeral mode, 30 per durable-push mode,
+and 15 per durable-wake mode. The 128-frame ephemeral case received three
+additional 20-sample runs. Positive latency changes are regressions; positive
+capacity changes are improvements.
+
+| PCM delivery workload    | p50 change | p95 change | Capacity change |
+| ------------------------ | ---------: | ---------: | --------------: |
+| Ephemeral, 1 frame       |      -4.7% |     -42.3% |           +4.9% |
+| Ephemeral, 8 frames      |      +2.6% |     -12.4% |           -2.5% |
+| Ephemeral, 32 frames     |      +6.0% |     +37.0% |           -5.6% |
+| Ephemeral, 128 frames    |     +13.5% |     +42.8% |          -11.9% |
+| Durable push, 1 frame    |     +11.1% |    +345.6% |          -10.0% |
+| Durable push, 8 frames   |    +321.3% |     +56.5% |          -76.3% |
+| Durable push, 32 frames  |  +1,298.0% |  +1,329.6% |          -92.8% |
+| Durable wake, 512 frames |     +33.7% |         \* |          -25.2% |
+
+The wake p95 is not claimed: a 3.2-second batch-side preview outlier reversed
+the pooled tail direction. Per-event p50 was slower in all three wake rounds;
+the median round was 54.9% slower. The predeclared non-inferiority margin was
+5%, so even ephemeral delivery fails at 32 and 128 frames. One clean 128-frame
+warmup took 1.74 seconds per-event versus 78 ms batched, and a measured
+per-event sample reached 1.04 seconds. A separate preview-3 run also failed to
+observe all 128 callbacks within 30 seconds; it is excluded from the clean
+preview-4 aggregate but reinforces the backpressure/tail risk.
+
+Local Workers diagnostics pointed in the same direction but were not used as
+the acceptance result. At 32 and 128 ephemeral frames they retained about 59%
+and 42% of batch throughput; durable wake was about 3.1 times slower, and
+correct durable push was about 13 times slower at 32 frames. Deployed records
+are `/tmp/stream-process-event-preview4-r{1..3}.log` and
+`/tmp/stream-process-event-preview4-128-r{2..4}.log`; the complete experiment
+and selectable host harness end on `experiment/stream-process-event` at
+`3eeb4854b`.
+
+### Decision And Collapse Path
+
+Direct per-event transport is rejected. A batch is not merely public API
+ergonomics: it is the amortization, transaction, acknowledgement, and cursor
+checkpoint unit. Multiplying calls removes one visible array while adding
+transport envelopes, backpressure, settlement, and failure-ordering work.
+
+This does not require two fundamental subscription operations. The coherent
+API can still expose `subscribe` with a user-level `processEvent` hook, while a
+receiver-side adapter accepts one internal batch and invokes that hook locally
+for each event. Hosted processors already follow that shape. Ephemeral clients
+would need an SDK/session adapter because a raw remote callback cannot hide N
+wire calls by itself. Keep the batched callback as an internal protocol detail,
+not a second public concept. That collapse preserves the measured performance
+and correctness boundary while simplifying the external model to append,
+subscribe, read, and wait-for-event.
