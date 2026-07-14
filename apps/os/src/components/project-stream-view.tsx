@@ -30,7 +30,7 @@ import {
   BrowserFeedProcessor,
   type BrowserFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
-import { AgentTokenUsageStrip, QueuedMessagesPanel } from "~/components/agent-feed.tsx";
+import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
 import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
@@ -353,9 +353,6 @@ export function ProjectStreamView({
               store={store}
             />
           </div>
-          {caps.agentFeed && agentUiState?.tokenUsage != null ? (
-            <AgentTokenUsageStrip tokenUsage={agentUiState.tokenUsage} />
-          ) : null}
         </div>
       </div>
     </div>
@@ -379,6 +376,7 @@ export function ProjectStreamView({
       getProcessorRuntimeState={getProcessorRuntimeState}
       getStreamRuntimeState={getStreamRuntimeState}
       streamPath={streamPath}
+      tokenUsage={caps.agentFeed ? (agentUiState?.tokenUsage ?? null) : null}
     />
   );
 

@@ -7,11 +7,13 @@ import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/nat
 import type {
   AgentUiPresenceEntry,
   AgentUiProcessorAnnouncement,
+  AgentUiTokenUsage,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { ProcessorRuntimeState } from "../domains/streams/rpc-types.ts";
 import type { Stream } from "../itx-api.generated.ts";
+import { readAgentTokenUsageVitals } from "~/lib/agent-token-usage.ts";
 import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";
 import {
   AgentPrettyState,
@@ -140,6 +142,7 @@ export function StreamStatePanel({
   getProcessorRuntimeState,
   getStreamRuntimeState,
   streamPath,
+  tokenUsage = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -157,6 +160,8 @@ export function StreamStatePanel({
   onClearClientDatabase: () => Promise<void>;
   getProcessorRuntimeState: (subscriptionKey: string) => Promise<ProcessorRuntimeStateResult>;
   getStreamRuntimeState: () => Promise<StreamRuntimeDebugState>;
+  /** Agent context fullness + lifetime totals; shown in vitals when present. */
+  tokenUsage?: AgentUiTokenUsage | null;
 }) {
   // Poll while open: every fetch refreshes the live metrics AND asks the
   // stream for a ping round (its RTT sampling is observer-gated on exactly
@@ -304,6 +309,7 @@ export function StreamStatePanel({
             streamRuntimeFetching={streamRuntimeQuery.isFetching}
             streamRuntimeError={streamRuntimeError}
             streamRuntime={streamRuntime}
+            tokenUsage={tokenUsage}
           />
         ) : (
           <ProcessorDetail
@@ -347,6 +353,7 @@ function ProcessorsOverview({
   streamRuntimeFetching,
   streamRuntimeError,
   streamRuntime,
+  tokenUsage,
 }: {
   entries: readonly ProcessorPanelEntry[];
   metrics: BrowserStreamMetricsView;
@@ -360,6 +367,7 @@ function ProcessorsOverview({
   streamRuntimeFetching: boolean;
   streamRuntimeError: string | undefined;
   streamRuntime: StreamRuntimeDebugState | undefined;
+  tokenUsage: AgentUiTokenUsage | null;
 }) {
   const [clearState, setClearState] = useState<"idle" | "clearing" | "error">("idle");
   const [graphMode, setGraphMode] = useState<"throughput" | "latency">("throughput");
@@ -373,6 +381,7 @@ function ProcessorsOverview({
   const headOffset = readNumber(coreState, "maxOffset");
   const storageSizeBytes = streamRuntime?.runtime.storageSizeBytes;
   const latencyPoints = sparklinePoints(metrics.spark, 368, 44);
+  const agentTokens = tokenUsage == null ? null : readAgentTokenUsageVitals(tokenUsage);
 
   return (
     <>
@@ -455,6 +464,27 @@ function ProcessorsOverview({
               }
               value={throughput === undefined ? "—" : sinceLabel(throughput.measuredSince)}
             />
+            {agentTokens == null ? null : (
+              <>
+                <MetricStat
+                  label="context"
+                  title={agentTokens.breakdown}
+                  value={agentTokens.contextLabel}
+                  valueClassName={agentTokens.contextPercent >= 80 ? "text-destructive" : undefined}
+                />
+                <MetricStat
+                  label="tokens · in"
+                  title={agentTokens.breakdown}
+                  value={agentTokens.inputLabel}
+                />
+                <MetricStat
+                  label="tokens · out"
+                  title={agentTokens.breakdown}
+                  value={agentTokens.outputLabel}
+                />
+                <MetricStat label="model" title={agentTokens.breakdown} value={agentTokens.model} />
+              </>
+            )}
           </div>
 
           <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/60 pt-3">
@@ -1077,11 +1107,21 @@ function sinceLabel(measuredSinceIso: string): string {
   return `${(seconds / 3600).toFixed(1)}h`;
 }
 
-function MetricStat({ label, value, title }: { label: string; value: string; title?: string }) {
+function MetricStat({
+  label,
+  value,
+  title,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+  valueClassName?: string;
+}) {
   return (
     <div {...(title === undefined ? {} : { title })}>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
-      <div className="mt-0.5 font-mono text-sm">{value}</div>
+      <div className={cn("mt-0.5 font-mono text-sm", valueClassName)}>{value}</div>
     </div>
   );
 }
