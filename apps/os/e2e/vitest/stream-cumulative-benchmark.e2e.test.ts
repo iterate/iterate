@@ -1253,6 +1253,7 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     const triggerType = `${EVENT_TYPE}/worker-consumer-trigger`;
     const forwardedType = `${EVENT_TYPE}/worker-consumer-forwarded`;
     const completedType = `${EVENT_TYPE}/worker-consumer-completed`;
+    const readyType = `${EVENT_TYPE}/worker-consumer-ready`;
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -1342,10 +1343,14 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
       const OUTPUT_PATH = ${JSON.stringify(outputPath)};
       const TRIGGER_TYPE = ${JSON.stringify(triggerType)};
       const COMPLETED_TYPE = ${JSON.stringify(completedType)};
+      const READY_TYPE = ${JSON.stringify(readyType)};
 
       export default class ProjectWorker extends IterateWorkerEntrypoint {
         #handles = [];
         #project;
+        #completed = 0;
+        #expectedCompletions = 0;
+        #finish;
         #state = {
           baseline: { iteration: undefined, receivedCount: 0 },
           candidate: { iteration: undefined, receivedCount: 0 },
@@ -1355,7 +1360,11 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           return new Response("stream ephemeral process-event adapter benchmark");
         }
 
-        async startEphemeralBenchmark() {
+        async runEphemeralBenchmark(expectedCompletions) {
+          this.#expectedCompletions = expectedCompletions;
+          const lifetime = new Promise((resolve) => {
+            this.#finish = resolve;
+          });
           this.#project = await this.env.ITX.get();
           const baseline = this.#project.streams.get(BASELINE_SOURCE_PATH);
           const candidate = this.#project.streams.get(CANDIDATE_SOURCE_PATH);
@@ -1379,7 +1388,11 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
               },
             }),
           );
-          return true;
+          await this.#project.streams.get(OUTPUT_PATH).append({
+            type: READY_TYPE,
+            payload: { expectedCompletions },
+          });
+          return await lifetime;
         }
 
         #accept(event, mode) {
@@ -1415,6 +1428,10 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
             idempotencyKey: \`ephemeral-\${mode}-completed:\${event.path}@\${event.offset}\`,
             payload: { count, iteration, mode },
           });
+          this.#completed += 1;
+          if (this.#completed === this.#expectedCompletions) {
+            this.#finish({ completed: this.#completed });
+          }
         }
       }
     `;
@@ -1483,11 +1500,29 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     using source = project.streams.get(sourcePath);
     using candidateSource = project.streams.get(candidateSourcePath);
     using outputStream = project.streams.get(outputPath);
-    if (WORKER_CONSUMER_EPHEMERAL) {
-      // @ts-expect-error - benchmark method comes from worker.ts committed above
-      expect(await project.worker.startEphemeralBenchmark()).toBe(true);
-    }
+    const expectedCompletions = 2 * (2 + WORKER_CONSUMER_SAMPLES + WORKER_CONSUMER_BATCH_SAMPLES);
     let outputOffset = 0;
+    let workerLifetime: Promise<{ completed: number }> | undefined;
+    if (WORKER_CONSUMER_EPHEMERAL) {
+      const ready = outputStream.waitForEvent({
+        afterOffset: outputOffset,
+        eventTypes: [readyType],
+        timeoutMs: 60_000,
+      });
+      await waitForWaiterConnection(outputStream, 60_000);
+      const benchmarkWorker = project.worker as unknown as {
+        runEphemeralBenchmark(expected: number): Promise<{ completed: number }>;
+      };
+      workerLifetime = benchmarkWorker.runEphemeralBenchmark(expectedCompletions);
+      const observedReady = await Promise.race([
+        ready,
+        workerLifetime.then(() => {
+          throw new Error("Ephemeral benchmark Worker completed before it became ready.");
+        }),
+      ]);
+      expect(observedReady.payload?.expectedCompletions).toBe(expectedCompletions);
+      outputOffset = observedReady.offset;
+    }
     type ProcessEventMode = "baseline" | "candidate";
     const forward = async (
       count: number,
@@ -1582,6 +1617,9 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
       metrics[
         `${metricPrefix}_batch_${WORKER_CONSUMER_BATCH_SIZE}x${WORKER_CONSUMER_PAYLOAD_BYTES}`
       ] = summarize(batchSamples.get(mode)!, WORKER_CONSUMER_BATCH_SIZE);
+    }
+    if (workerLifetime) {
+      await expect(workerLifetime).resolves.toEqual({ completed: expectedCompletions });
     }
     const output: BenchmarkOutput = {
       implementation: IMPLEMENTATION,
