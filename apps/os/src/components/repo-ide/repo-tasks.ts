@@ -149,6 +149,21 @@ export function repoTaskHeadingTitle(content: string): string | undefined {
   return firstHeading(parseMarkdownFrontmatter(content).body)?.title;
 }
 
+/** Select the inferred title in the first level-one heading of the full file. */
+export function repoTaskHeadingSelection(
+  content: string,
+): { start: number; end: number } | undefined {
+  const frontmatter = parseMarkdownFrontmatter(content);
+  const heading = firstHeading(frontmatter.body);
+  if (heading === undefined) return undefined;
+  const headingText = frontmatter.body.slice(heading.start, heading.end);
+  const titleOffset = headingText.indexOf(heading.title);
+  if (titleOffset < 0) return undefined;
+  const bodyOffset = content.length - frontmatter.body.length;
+  const start = bodyOffset + heading.start + titleOffset;
+  return { start, end: start + heading.title.length };
+}
+
 /**
  * Rename a task after its first heading while keeping it in the same tasks
  * directory. The filename is bounded for readable URLs and collision-safe.
