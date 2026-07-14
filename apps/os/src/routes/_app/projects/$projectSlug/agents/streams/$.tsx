@@ -4,11 +4,16 @@ import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
+  staticData: streamPageStaticData(),
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),

@@ -4,14 +4,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { cn } from "@iterate-com/ui/lib/utils";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
-import {
-  buildFeedItemsFilter,
-  defaultPresetForMode,
-  FEED_TYPE_EXPRESSION,
-  shortComponent,
-  shortEventType,
-  type StreamFeedPreset,
-} from "~/lib/stream-feed-filters.ts";
+import { FEED_TYPE_EXPRESSION, shortComponent, shortEventType } from "~/lib/stream-feed-filters.ts";
 import {
   modeCapabilities,
   streamViewMode,
@@ -28,24 +21,19 @@ import {
  *   2) Raw event types (`types`)
  */
 export function StreamFeedFilterRow({
-  activePreset,
   eventCount,
   connectionStatus,
   feedDatabase,
-  presets,
   streamPath,
 }: {
-  activePreset: StreamFeedPreset;
   eventCount: number;
   connectionStatus: string;
   feedDatabase: StreamBrowserDatabase;
-  presets: readonly StreamFeedPreset[];
   streamPath: string;
 }) {
   const { search, setSearch } = useStreamViewSearch();
   const mode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
-  const defaultPreset = defaultPresetForMode(streamPath, mode);
   const focusOnMount = useCallback((element: HTMLInputElement | null) => element?.focus(), []);
   const [typesOpen, setTypesOpen] = useState(false);
   const showTypePanel = caps.rawComponents || caps.rawEventTypes;
@@ -59,43 +47,6 @@ export function StreamFeedFilterRow({
   return (
     <div className="flex shrink-0 flex-col gap-2 px-4 pb-1.5 pt-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        {caps.rawPresets && presets.length > 1 ? (
-          <div
-            className="flex flex-wrap items-center gap-1.5"
-            role="radiogroup"
-            aria-label="Feed preset"
-            data-testid="stream-feed-preset"
-          >
-            {presets.map((preset) => {
-              const active = preset.id === activePreset.id;
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  onClick={() =>
-                    setSearch({
-                      preset: preset.id === defaultPreset.id ? undefined : preset.id,
-                      types: undefined,
-                      components: undefined,
-                      from: undefined,
-                      to: undefined,
-                    })
-                  }
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-xs transition-colors",
-                    active
-                      ? "border-transparent bg-foreground text-background"
-                      : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
-                  )}
-                >
-                  {preset.label}
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
         {caps.search ? (
           <div className="flex h-8 min-w-0 max-w-xs flex-1 items-center gap-2 rounded-full bg-muted px-3">
             <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -157,7 +108,6 @@ export function StreamFeedFilterRow({
       {showTypePanel && typesOpen ? (
         <TypeFilterPanel
           database={feedDatabase}
-          eventTypePrefix={activePreset.eventTypePrefix ?? null}
           components={search.components ?? null}
           eventTypes={search.types ?? null}
           onComponentsChange={(components) => setSearch({ components: components ?? undefined })}
@@ -170,21 +120,19 @@ export function StreamFeedFilterRow({
 
 function TypeFilterPanel({
   database,
-  eventTypePrefix,
   components,
   eventTypes,
   onComponentsChange,
   onEventTypesChange,
 }: {
   database: StreamBrowserDatabase;
-  eventTypePrefix: string | null;
   components: readonly string[] | null;
   eventTypes: readonly string[] | null;
   onComponentsChange: (components: string[] | null) => void;
   onEventTypesChange: (eventTypes: string[] | null) => void;
 }) {
   const componentOptions = useComponentOptions(database);
-  const eventTypeOptions = useEventTypeOptions(database, eventTypePrefix);
+  const eventTypeOptions = useEventTypeOptions(database);
 
   return (
     <div className="rounded-xl border bg-muted/20 p-3" data-testid="stream-feed-types-panel">
@@ -353,21 +301,13 @@ function useComponentOptions(database: StreamBrowserDatabase) {
   );
 }
 
-function useEventTypeOptions(database: StreamBrowserDatabase, eventTypePrefix: string | null) {
-  const filter = buildFeedItemsFilter({
-    eventTypePrefix,
-    eventTypes: null,
-    components: null,
-    searchQuery: null,
-    offsetFrom: null,
-    offsetTo: null,
-  });
+function useEventTypeOptions(database: StreamBrowserDatabase) {
   const result = useStreamQuery(
     database,
     `SELECT ${FEED_TYPE_EXPRESSION} AS event_type, SUM(event_count) AS total
-     FROM feed_items WHERE kind LIKE 'raw.%'${filter == null ? "" : ` AND ${filter.whereSql}`}
+     FROM feed_items WHERE kind LIKE 'raw.%'
      GROUP BY event_type ORDER BY event_type`,
-    filter?.params ?? [],
+    [],
   );
   return result.data.flatMap((row) =>
     typeof row.event_type === "string"

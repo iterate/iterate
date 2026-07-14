@@ -9,7 +9,11 @@ import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { ONBOARDING_AGENT_PATH, isOnboardingActive } from "~/lib/onboarding-agent.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useLiveState } from "~/itx/itx-react.tsx";
 
@@ -20,6 +24,7 @@ const HomeSearch = StreamViewSearch.extend({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
+  staticData: streamPageStaticData(),
   validateSearch: HomeSearch,
   ssr: false,
   loader: async ({ context }) =>

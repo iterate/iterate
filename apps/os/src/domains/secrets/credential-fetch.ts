@@ -77,10 +77,28 @@ export async function fetchWithCredentialRedirects(
  * A freshly constructed Response has an empty `url` and `redirected: false`;
  * URL-bearing navigation headers are removed while the status and streaming
  * body remain the provider's response.
+ *
+ * WebSocket upgrades: reconstructing with only `body` drops `webSocket` and
+ * turns a successful upgrade into a broken non-upgrade response. Preserve the
+ * socket via ResponseInit so workerd's **internal** webSocket slot is set —
+ * that is what survives a Durable Object `fetch` hop. A defineProperty
+ * own-property does **not** survive that hop.
+ *
+ * Pinned workerd source for the ResponseInit WebSocket slot:
+ * https://github.com/cloudflare/workerd/blob/e4c3d8b4557f6dc5b63315b45a61a4dd8a92a944/src/workerd/api/http.c%2B%2B#L1088-L1113
  */
 function sanitizeResponse(response: Response): Response {
   const headers = new Headers(response.headers);
   for (const name of RESPONSE_URL_HEADERS) headers.delete(name);
+  const socket = response.webSocket;
+  if (socket != null) {
+    return new Response(null, {
+      headers,
+      status: response.status,
+      statusText: response.statusText,
+      webSocket: socket,
+    });
+  }
   return new Response(response.body, {
     headers,
     status: response.status,

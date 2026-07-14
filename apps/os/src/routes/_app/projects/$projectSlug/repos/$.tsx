@@ -4,7 +4,11 @@ import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoIde } from "~/components/repo-ide/repo-ide.lazy.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useLiveState } from "~/itx/itx-react.tsx";
 
@@ -24,6 +28,7 @@ const RepoDetailSearch = StreamViewSearch.extend({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
+  staticData: streamPageStaticData(),
   validateSearch: RepoDetailSearch,
   ssr: false,
   loader: ({ context, params }) =>

@@ -275,7 +275,8 @@ export const RepoProcessorContract = defineProcessorContract({
       ],
     },
     "events.iterate.com/repo/github-synced": {
-      description: "The repo adopted the linked GitHub repository's branch head (syncFromGithub).",
+      description:
+        "The repo adopted the linked GitHub repository's branch head (syncFromGithub or resetFromGithub).",
       payloadSchema: z.object({
         branch: z.string(),
         commitOid: z.string(),
@@ -283,6 +284,7 @@ export const RepoProcessorContract = defineProcessorContract({
         owner: z.string(),
         previousCommitOid: z.string().nullable(),
         repo: z.string(),
+        reset: z.boolean().optional(),
       }),
       examples: [
         {

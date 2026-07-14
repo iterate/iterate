@@ -175,7 +175,13 @@ describe("config-repo GitHub reviews", () => {
     expect(task.payload.content).toContain("do not publish another review");
     expect(task.payload.content).toContain("Immediately before publishing");
     expect(task.payload.content).toContain("do not create a GitHub review or comment");
-    expect(task.payload.content).toContain("The successful Check Run is the complete clean result");
+    expect(task.payload.content).toContain('clean = conclusion "success"');
+    expect(task.payload.content).toContain('title "Review completed"');
+    expect(task.payload.content).toContain('findings = conclusion "neutral"');
+    expect(task.payload.content).toContain('title "Review completed with actionable findings"');
+    expect(task.payload.content).toContain('cancelled = conclusion "cancelled"');
+    expect(task.payload.content).toContain('title "Review cancelled"');
+    expect(task.payload.content).toContain("The successful Check Run with terminal output");
     expect(task.payload.content).toContain("Promise.all");
     expect(task.payload.llmRequestPolicy).toEqual({ behaviour: "interrupt-current-request" });
   });
