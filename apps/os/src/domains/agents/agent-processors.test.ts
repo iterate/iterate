@@ -71,7 +71,7 @@ describe("minimal web-chat agent processors", () => {
     // or an embedded type surface (the budget test bans the blob).
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.search");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.docs.get");
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("MANY related words");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("TWO SEARCHES, ONE RULE");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("working example scripts");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("itx.mcp.exa.web_search_exa");
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("__describe()");
