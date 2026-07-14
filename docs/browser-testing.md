@@ -1,20 +1,23 @@
 # Browser testing
 
-Use `agent-browser` with its own isolated Chrome for Testing. It is headless by
-default, so normal agent work neither opens windows nor touches a developer's
-Chrome profiles, tabs, cookies, or logins.
+Use `agent-browser` with its own isolated, headed Chrome for Testing. On a local
+interactive machine it is visible by default so the developer can watch each
+agent work. Every concurrent agent uses a unique session and therefore gets a
+distinct browser window and tab-switcher entry without touching a developer's
+Chrome profiles, tabs, cookies, or logins. Use headless mode only when the
+developer explicitly asks for no windows or in a non-interactive/CI environment.
 
-| Request                                                | Browser mode                                  | Permission granted                     |
-| ------------------------------------------------------ | --------------------------------------------- | -------------------------------------- |
-| Normal browser task                                    | Headless Chrome for Testing                   | Isolated agent session only            |
-| "Let me watch", "show me the browser", or "watch mode" | Headed Chrome for Testing                     | Show the isolated agent session        |
-| "Use my Chrome profile/login state"                    | Chrome for Testing with a personal-state copy | Exceptional, current-task-only import  |
-| "Use my actual Chrome"                                 | Existing developer Chrome                     | Exceptional, current-task-only control |
+| Request                             | Browser mode                                  | Permission granted                     |
+| ----------------------------------- | --------------------------------------------- | -------------------------------------- |
+| Normal local browser task           | Headed Chrome for Testing                     | Visible isolated agent session         |
+| "No windows", "run headless", or CI | Headless Chrome for Testing                   | Isolated background agent session      |
+| "Use my Chrome profile/login state" | Chrome for Testing with a personal-state copy | Exceptional, current-task-only import  |
+| "Use my actual Chrome"              | Existing developer Chrome                     | Exceptional, current-task-only control |
 
-Watch mode is still the agent's isolated browser; `--headed` merely gives it a
-visible **Google Chrome for Testing** window. It does not authorize Chrome
-DevTools MCP, `--auto-connect`, `--cdp`, or a named personal profile such as
-`Default` or `Profile 1`.
+Watch mode is the normal local default and creates a visible **Google Chrome
+for Testing** window. It does not authorize Chrome DevTools MCP,
+`--auto-connect`, `--cdp`, or a named personal profile such as `Default` or
+`Profile 1`.
 
 ## Profile and session model
 
@@ -55,15 +58,18 @@ agent-browser --session "$SESSION" snapshot -i
 agent-browser --session "$SESSION" close
 ```
 
-For watch mode, add `--headed` to the command that launches the browser:
+The machine-level `~/.agent-browser/config.json` sets `"headed": true`, so the
+commands above open a visible window without an extra flag. For explicit
+headless operation, override that default:
 
 ```bash
-agent-browser --session "$SESSION" --headed open "$URL"
+agent-browser --session "$SESSION" --headed false open "$URL"
 agent-browser --session "$SESSION" snapshot -i
 ```
 
-An already-running headless browser cannot become a window in place. Close it
-and relaunch the same restored session or dedicated profile with `--headed`.
+An already-running browser cannot switch between headed and headless in place.
+Close it and relaunch the same restored session or dedicated profile with the
+desired setting.
 If a human clicks or types in the watched window, the agent must take a new
 snapshot before continuing because its previous element references may be
 stale.
@@ -91,7 +97,7 @@ SESSION="$(agent-browser session id --scope worktree --prefix iterate-login)"
 agent-browser --session "$SESSION" --profile "$PROFILE" --headed open <login-url>
 agent-browser --session "$SESSION" close
 
-# Later automation reuses that isolated login headlessly.
+# Later automation reuses that isolated login in the normal visible mode.
 agent-browser --session "$SESSION" --profile "$PROFILE" open <url>
 ```
 
