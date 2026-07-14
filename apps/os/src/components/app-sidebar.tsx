@@ -64,9 +64,8 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
-import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
+import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
@@ -75,6 +74,7 @@ import {
   projectsListStaleTime,
 } from "~/lib/projects-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
+import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
