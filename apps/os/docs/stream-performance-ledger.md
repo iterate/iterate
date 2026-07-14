@@ -143,8 +143,8 @@ Runtime costs are bounded but real:
   coalescing, adaptive sparse scans, and activation recovery. The test growth
   is larger than production growth because these branches have crash/retry and
   poison-event matrices.
-- Storage schema v7 deliberately has no legacy migration. Existing stream data
-  must be erased before rollout. A binary rollback after v7 state is created is
+- Storage schema v8 deliberately has no legacy migration. Existing stream data
+  must be erased before rollout. A binary rollback after v8 state is created is
   also destructive; rollback requires erasing stream state again. Deployment
   is therefore operationally simple only because this effort explicitly
   accepts a production wipe.
@@ -153,7 +153,7 @@ The system still collapses operationally into one Stream DO, its SQLite, and
 ordinary Workers RPC; it does not add a service, queue, coordinator, or new
 distributed consistency boundary. It does **not** collapse elegantly at the
 source level yet. A later consolidation should preserve the public semantic
-projections (`append`, `appendOffsets`, `appendAck`), schema-v7 row shape,
+projections (`append`, `appendOffsets`, `appendAck`), schema-v8 row shape,
 frame/cursor correctness tests, and host benchmark, then unify the duplicated
 bounded-range/frame planning inside storage and subscriber delivery. Do not
 trade those measured contracts for legacy KV or a second persistence model.
@@ -164,7 +164,7 @@ The branch is worth advancing as a destructive preview candidate because the
 large wins cover batch ingest, large writes, duplicate retries, replay, latest
 reads, and sparse durable delivery, with no reproduced regression in live
 latency or cold activation. It is not ready for an unqualified production
-merge solely on this local benchmark: schema-v7 wipe/rollback procedure and a
+merge solely on this local benchmark: schema-v8 wipe/rollback procedure and a
 preview workload run still need explicit sign-off, and the source-complexity
 consolidation map should be retained even if consolidation happens after the
 performance branch ships.
@@ -665,7 +665,7 @@ yet elegant: exact retry frames, cursor epochs, sparse scans, checkpoint
 scheduling, and compact RPC result forms remain real branches with a large
 test matrix. They are correctness or measured-performance mechanisms, not
 legacy compatibility paths. A later rewrite can erase production data and
-replace their internal organization, but should retain the schema-v7 row
+replace their internal organization, but should retain the schema-v8 row
 shape, public semantic projections, frozen-clock-safe benchmark, and
 crash/retry tests as executable constraints.
 
@@ -675,7 +675,7 @@ frame with the same delivery ID if the isolate dies before the next claim or
 lifecycle flush. The homogeneous insert specialization has no semantic cost;
 it verifies its narrow preconditions and falls back otherwise. The destructive
 rollout and rollback cost remains unchanged: existing Stream state must be
-erased for schema v7, and rollback after v7 also requires erasing Stream state.
+erased for schema v8, and rollback after v8 also requires erasing Stream state.
 
 The result is strong enough to advance as a destructive preview candidate.
 Production shipping still needs a preview workload run, failure/retry soak,
@@ -783,3 +783,109 @@ semantics over at-least-once delivery.
 
 Raw records are in `/tmp/crosspost-ack-{parent,candidate}-{1..5}.log` for the
 life of this workstation.
+
+## 2026-07-14: Match-Sized Sparse Push Frames
+
+### Change
+
+`scanPushEventTypesFrame()` previously materialized up to 8,000 raw rows with
+nullable byte lengths, scanned that relation to materialize selected ranks,
+then materialized the consumed raw offsets again to recover cursor metadata.
+Sparse historical push and cross-post replay therefore built and rescanned two
+raw-frame-sized temporary relations even when no event matched.
+
+The retained single SQLite statement now derives the raw row count and exact
+offset boundary from an offset-only bounded scan, evaluates byte lengths and
+window ranks only for durable matching rows inside that boundary, and computes
+consumed raw metadata directly from `events` only when a byte cut occurs. The
+match-only CTE is explicitly non-materialized, so dense frames do not pay for
+both a selected-row temporary table and a ranked-row temporary table.
+
+Schema v8 stores the serialized byte length beside each null `event_json` for
+an oversized chunked row. This lets the boundary query size a selected chunked
+event without reading `event_chunks`, and more importantly avoids reading any
+chunk metadata for oversized rows excluded by the byte boundary. The existing
+multi-statement chunk transaction performs one metadata update per chunked
+batch; inline rows and their insert statements are unchanged. There is no
+migration or compatibility path because rollout already requires erasing
+Stream state.
+
+Intermediate versions were rejected inside the experiment. Materializing both
+selected and ranked relations made sparse misses faster but regressed dense
+byte-cut scans by 8.6%. A non-materialized version that retained a scalar
+chunk-table length query made the chunked byte-cut control about 87% slower
+because the planner evaluated the scalar twice. A split inline/chunk relation
+also regressed the chunked control by about 90%. No part of those shapes
+remains.
+
+### Workers Result
+
+- Candidate: final query on exact parent `1168a8b98`.
+- Baseline: exact parent `1168a8b98`.
+- One hundred measured fresh streams and two warmups per revision. Every
+  stream seeded 7,999 durable selector misses outside the timer, then timed an
+  awaited deliver-all cross-post configuration whose own fact became raw row
+  8,000. The synchronous no-match drain acknowledged the configuration before
+  the RPC returned; an untimed runtime-state read proved the cursor reached
+  that offset and an untimed destination read proved no event was copied.
+- Only one Workers stack was active at a time. Collection ended at
+  `2026-07-14T00:45:55Z` after restarting the candidate so every measured
+  Durable Object initialized schema v8.
+
+The Node timer enclosed the awaited configuration RPC, so the result does not
+depend on a Worker isolate clock advancing without network I/O.
+
+| Metric                     |    Parent | Candidate | Change |
+| -------------------------- | --------: | --------: | -----: |
+| p50                        | 15.044 ms | 13.998 ms |   7.0% |
+| p95                        | 30.555 ms | 21.246 ms |  30.5% |
+| mean                       | 16.889 ms | 15.292 ms |   9.5% |
+| p50 scanned-row throughput |  531.8k/s |  571.5k/s |  +7.5% |
+
+Both revisions experienced host/runtime outliers during the extended run;
+the baseline maximum was 104.4 ms and the final candidate maximum was 41.9 ms.
+The larger sample therefore confirms that the normal-path improvement does not
+hide a p95 or mean cost.
+
+### Exact-Method Guard
+
+A disposable `node:sqlite` control invoked the exact production
+`scanPushEventTypesFrame()` implementation against 8,000 stored rows. Five
+alternating processes per revision ran five warmups before each case. Values
+below are medians of the five per-process statistics.
+
+| Frame shape                        | Parent p50 | Candidate p50 | P50 change | Parent p95 | Candidate p95 | P95 change |
+| ---------------------------------- | ---------: | ------------: | ---------: | ---------: | ------------: | ---------: |
+| No selected rows, 500 samples      |   1.892 ms |      0.684 ms |      63.8% |   2.006 ms |      0.768 ms |      61.7% |
+| All inline selected, byte cut, 100 |   4.433 ms |      4.013 ms |       9.5% |   4.643 ms |      4.148 ms |      10.7% |
+| All inline selected, hydrated, 20  |  17.055 ms |     16.391 ms |       3.9% |  19.921 ms |     19.652 ms |       1.4% |
+| 63 chunked selected, byte cut, 50  |   1.276 ms |      0.185 ms |      85.5% |   1.333 ms |      0.199 ms |      85.1% |
+
+The five-round median means improve 63.2%, 9.4%, 3.4%, and 85.6%
+respectively. The query therefore removes sparse work without transferring
+cost to dense frames.
+
+An exact-method append control timed 60 sequential 520 KiB chunked inserts per
+process, including serialization and the SQLite transaction, across the same
+five alternating processes. Median-of-five p50 was 0.708 ms on the parent and
+0.711 ms on schema v8, a 0.4% cost; mean was unchanged at 0.756 ms and p95
+improved from 1.197 ms to 1.137 ms. The added metadata update is neutral within
+host noise while enabling the 85% chunked boundary-scan improvement.
+
+### Correctness And Cost
+
+The method remains synchronous and one-statement, retains the multi-type
+`json_each(?)` predicate, and changes no storage engine, RPC contract, or
+cursor policy. Schema v8 adds one nullable integer and no migration path;
+production code is net +24 lines. A deterministic 100-case model comparison
+covers offset gaps, an eviction floor, unevicted ephemeral rows, one- and
+two-type selectors, raw limits, exact captured-head advancement, and byte cuts.
+Existing tests separately retain oversized first-event hydration, prove the
+cached chunked length equals stored chunk bytes, and cover exact raw limits and
+empty-after-eviction cases.
+
+Raw Workers records are in `/tmp/sparse-frame-parent-long.log` and
+`/tmp/sparse-frame-schema8-candidate-long.log`. The five host controls are in
+`/tmp/frame-schema8-{parent,candidate}-{1..5}.log`; chunked append controls are
+in `/tmp/chunked-append-schema8-{parent,candidate}-{1..5}.log` for the life of
+this workstation.

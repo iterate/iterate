@@ -17,7 +17,7 @@
 import type { StreamEvent } from "./schemas.ts";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
-const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 7;
+const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 8;
 // Durable Object SQL currently permits at most 100 bound parameters per query.
 // Keep generated multi-row inserts at that ceiling and bound pending BLOB
 // memory independently: small events fill the row budget, large events flush
@@ -131,6 +131,8 @@ export function initializeStreamStorage(sqlStorage: SqlStorage): StreamOffsetBou
     -- createdAt stays solely in event_json: no query filters or orders on it, so a
     -- duplicate column would consume one binding and one SQLite field per append.
     -- path is omitted because every row belongs to this Durable Object's one path.
+    -- Chunked rows retain their raw serialized length beside null event_json so
+    -- delivery sizing never reads chunks it may exclude at the frame boundary.
     -- ephemeral marks second-class rows: range reads exclude them unless asked, and
     -- the stream may evict them in the future. Eviction keeps offsets consumed
     -- in stream_storage_schema but forgets their idempotency keys.
@@ -139,7 +141,8 @@ export function initializeStreamStorage(sqlStorage: SqlStorage): StreamOffsetBou
       type text not null,
       idempotency_key text,
       ephemeral integer not null default 0,
-      event_json blob
+      event_json blob,
+      chunked_json_byte_length integer
     )
   `);
   sqlStorage.exec(`
@@ -418,7 +421,7 @@ export class StreamEventLog {
           : [];
         let serializedByteLength = 0;
         let batchEnd = batchStart;
-        let hasChunkedEvents = false;
+        let chunkedEvent: { byteLength: number; offset: number } | undefined;
 
         while (batchEnd < events.length && serializedEvents.length < maxEventRowsPerInsert) {
           const event = events[batchEnd]!;
@@ -451,7 +454,12 @@ export class StreamEventLog {
               eventJson,
             );
           }
-          if (bytes.byteLength > EVENT_CHUNK_SIZE) hasChunkedEvents = true;
+          if (bytes.byteLength > EVENT_CHUNK_SIZE) {
+            if (chunkedEvent !== undefined) {
+              throw new Error("Stream insert batch exceeded one chunked event");
+            }
+            chunkedEvent = { byteLength: bytes.byteLength, offset: event.offset };
+          }
           sizedEvents.push({
             event,
             byteLength: this.#serializedEventByteLength(bytes.byteLength),
@@ -462,10 +470,15 @@ export class StreamEventLog {
 
         this.sql.exec(eventInsertStatements[serializedEvents.length]!, ...eventBindings);
 
-        if (!hasChunkedEvents) {
+        if (chunkedEvent === undefined) {
           batchStart = batchEnd;
           continue;
         }
+        this.sql.exec(
+          "update events set chunked_json_byte_length = ? where offset = ?",
+          chunkedEvent.byteLength,
+          chunkedEvent.offset,
+        );
 
         let chunkBindings: SqlStorageValue[] = [];
         let chunkRows = 0;
@@ -652,25 +665,35 @@ export class StreamEventLog {
     const rows = this.sql
       .exec(
         `
-          with raw as materialized (
-            select events.offset,
+          with raw_bounds as materialized (
+            select count(*) as raw_row_count,
+                   max(offset) as raw_last_offset
+            from (
+              select offset
+              from events
+              where offset > ?
+                and offset <= ?
+              order by offset asc
+              limit ?
+            )
+          ),
+          boundary as materialized (
+            select raw_row_count,
                    case
-                     when ephemeral = 0
-                      and type in (select value from json_each(?))
-                     then coalesce(
-                       length(event_json),
-                       (select chunk_index * ? + length(chunk_bytes)
-                        from event_chunks
-                        where event_chunks.offset = events.offset
-                        order by chunk_index desc
-                        limit 1)
-                     ) + ?
-                   end as byte_length
+                     when raw_row_count < ? then ?
+                     else coalesce(raw_last_offset, ?)
+                   end as raw_through_offset
+            from raw_bounds
+          ),
+          selected as not materialized (
+            select events.offset,
+                   coalesce(length(event_json), chunked_json_byte_length) + ? as byte_length
             from events
+            cross join boundary
             where events.offset > ?
-              and events.offset <= ?
-            order by events.offset asc
-            limit ?
+              and events.offset <= boundary.raw_through_offset
+              and ephemeral = 0
+              and type in (select value from json_each(?))
           ),
           ranked as materialized (
             select offset,
@@ -679,8 +702,7 @@ export class StreamEventLog {
                    sum(byte_length) over (
                      order by offset rows between unbounded preceding and current row
                    ) as cumulative_bytes
-            from raw
-            where byte_length is not null
+            from selected
           ),
           cut as materialized (
             select min(offset) as first_excluded_offset
@@ -688,28 +710,28 @@ export class StreamEventLog {
             where selected_index > 1
               and cumulative_bytes > ?
           ),
-          raw_stats as materialized (
-            select count(*) as raw_row_count
-            from raw
-          ),
-          consumed as materialized (
-            select raw.offset
-            from raw cross join cut
-            where cut.first_excluded_offset is null
-               or raw.offset < cut.first_excluded_offset
+          consumed_stats as materialized (
+            select count(events.offset) as scanned_raw_rows,
+                   max(events.offset) as raw_last_offset
+            from cut
+            left join events
+              on cut.first_excluded_offset is not null
+             and events.offset > ?
+             and events.offset < cut.first_excluded_offset
           ),
           scan as materialized (
             select case
-                     when cut.first_excluded_offset is null
-                      and raw_stats.raw_row_count < ?
-                     then ?
-                     else coalesce(max(consumed.offset), ?)
+                     when cut.first_excluded_offset is null then boundary.raw_through_offset
+                     else coalesce(consumed_stats.raw_last_offset, ?)
                    end as raw_through_offset,
-                   count(consumed.offset) as scanned_raw_rows,
+                   case
+                     when cut.first_excluded_offset is null then boundary.raw_row_count
+                     else consumed_stats.scanned_raw_rows
+                   end as scanned_raw_rows,
                    cut.first_excluded_offset is not null as stopped_by_byte_limit
             from cut
-            cross join raw_stats
-            left join consumed on true
+            cross join boundary
+            cross join consumed_stats
           )
           select 0 as kind,
                  raw_through_offset as row_offset,
@@ -732,15 +754,17 @@ export class StreamEventLog {
              or ranked.offset < cut.first_excluded_offset
           order by kind, row_offset
         `,
-        eventTypesJson,
-        EVENT_CHUNK_SIZE,
-        this.#pathPropertyByteLength,
         args.afterOffset,
         args.throughOffset,
         args.rawLimit,
-        args.selectedByteLimit,
         args.rawLimit,
         args.throughOffset,
+        args.afterOffset,
+        this.#pathPropertyByteLength,
+        args.afterOffset,
+        eventTypesJson,
+        args.selectedByteLimit,
+        args.afterOffset,
         args.afterOffset,
       )
       .raw<[number, number, number | null, number | null, string | number | null, number | null]>();

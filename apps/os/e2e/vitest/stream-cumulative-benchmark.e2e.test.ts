@@ -23,6 +23,7 @@ const DENSE_CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_DENSE_CROSSPOST_
 const SPARSE_CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_SPARSE_CROSSPOST_SAMPLES ?? "0");
 const CROSSPOST_RETRY_EVENTS = Number(process.env.STREAM_BENCH_CROSSPOST_RETRY_EVENTS ?? "0");
 const CROSSPOST_RETRY_SAMPLES = Number(process.env.STREAM_BENCH_CROSSPOST_RETRY_SAMPLES ?? "0");
+const SPARSE_SKIP_SAMPLES = Number(process.env.STREAM_BENCH_SPARSE_SKIP_SAMPLES ?? "0");
 const COLD_SAMPLES = Number(process.env.STREAM_BENCH_COLD_SAMPLES ?? "0");
 
 type StreamHandle = Stream & Disposable;
@@ -585,6 +586,49 @@ test.skipIf(!ENABLED)(
         samples,
         CROSSPOST_RETRY_EVENTS,
       );
+    }
+
+    if (SPARSE_SKIP_SAMPLES > 0) {
+      if (!Number.isInteger(SPARSE_SKIP_SAMPLES)) {
+        throw new Error("STREAM_BENCH_SPARSE_SKIP_SAMPLES must be a positive integer");
+      }
+      const rawRows = 8_000;
+      const samples: number[] = [];
+      for (let iteration = -2; iteration < SPARSE_SKIP_SAMPLES; iteration += 1) {
+        const sourcePath = `/bench/${runId}/sparse-skip-source-${iteration}`;
+        const destinationPath = `/bench/${runId}/sparse-skip-destination-${iteration}`;
+        const subscriptionKey = `sparse-skip-${runId}-${iteration}`;
+        using source = project.streams.get(sourcePath);
+        using destination = project.streams.get(destinationPath);
+        for (let offset = 0; offset < rawRows - 1; offset += 500) {
+          const batchSize = Math.min(500, rawRows - 1 - offset);
+          await commitDiscardingResult(
+            source,
+            ...Array.from({ length: batchSize }, (_, index) =>
+              event({
+                marker: `sparse-skip-${iteration}-${offset + index}`,
+                payload: "x",
+                type: OTHER_TYPE,
+              }),
+            ),
+          );
+        }
+
+        const startedAt = performance.now();
+        const configured = await source.crossPostTo({
+          deliver: "all",
+          eventTypes: [SELECTED_TYPE],
+          key: subscriptionKey,
+          path: destinationPath,
+        });
+        if (iteration >= 0) samples.push(performance.now() - startedAt);
+        const state = await source.runtimeState();
+        expect(state.runtime.subscriptions[subscriptionKey]?.ackedOffset).toBeGreaterThanOrEqual(
+          configured.offset,
+        );
+        expect(await destination.getEvents({ eventTypes: [SELECTED_TYPE], limit: 1 })).toEqual([]);
+      }
+      metrics.crosspost_sparse_skip_8000_rows = summarize(samples, rawRows);
     }
 
     {

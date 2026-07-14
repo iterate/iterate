@@ -251,7 +251,7 @@ describe("StreamEventLog.getRange", () => {
     let selectedQuery: { statement: string; bindings: readonly SqlStorageValue[] } | undefined;
     const log = new StreamEventLog(
       wrapSqlStorage(db, (statement, bindings) => {
-        if (statement.includes("with raw as materialized")) {
+        if (statement.includes("with raw_bounds as materialized")) {
           selectedQuery = { statement, bindings };
         }
       }),
@@ -417,6 +417,86 @@ describe("StreamEventLog.getRange", () => {
       byteLength: 0,
       stoppedByByteLimit: false,
     });
+  });
+
+  it("matches the raw-frame model across gaps, ephemeral rows, selectors, and byte cuts", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    const committed = Array.from(
+      { length: 240 },
+      (_, index): StreamEvent => ({
+        ...event(
+          index + 1,
+          index % 7 === 0 ? "selected" : index % 11 === 0 ? "alternate" : "ignored",
+        ),
+        ...(index % 13 === 0 ? { ephemeral: true } : {}),
+        payload: { text: "x".repeat((index % 9) * 37 + 1) },
+      }),
+    );
+    const inserted = log.insert(committed);
+    const evictedThrough = 120;
+    log.evictEphemeralThrough(evictedThrough, transactionRunner(db));
+    const surviving = inserted.filter(
+      ({ event: stored }) => stored.ephemeral !== true || stored.offset > evictedThrough,
+    );
+    let randomState = 0x6d2b79f5;
+    const random = () => {
+      randomState = Math.imul(randomState ^ (randomState >>> 15), randomState | 1);
+      randomState ^= randomState + Math.imul(randomState ^ (randomState >>> 7), randomState | 61);
+      return ((randomState ^ (randomState >>> 14)) >>> 0) / 4_294_967_296;
+    };
+
+    for (let trial = 0; trial < 100; trial += 1) {
+      const afterOffset = Math.floor(random() * 250);
+      const throughOffset = afterOffset + Math.floor(random() * (260 - afterOffset));
+      const rawLimit = 1 + Math.floor(random() * 32);
+      const eventTypes = random() < 0.5 ? ["selected"] : ["alternate", "selected"];
+      const selectedByteLimit =
+        random() < 0.2 ? Number.MAX_SAFE_INTEGER : 1 + Math.floor(random() * 1_200);
+      const raw = surviving
+        .filter(
+          ({ event: stored }) => stored.offset > afterOffset && stored.offset <= throughOffset,
+        )
+        .slice(0, rawLimit);
+      const selected = raw.filter(
+        ({ event: stored }) => stored.ephemeral !== true && eventTypes.includes(stored.type),
+      );
+      let cumulativeBytes = 0;
+      let firstExcludedOffset: number | undefined;
+      const accepted = selected.filter((entry, index) => {
+        cumulativeBytes += entry.byteLength;
+        if (index > 0 && cumulativeBytes > selectedByteLimit) {
+          firstExcludedOffset ??= entry.event.offset;
+          return false;
+        }
+        return firstExcludedOffset === undefined;
+      });
+      const consumed =
+        firstExcludedOffset === undefined
+          ? raw
+          : raw.filter(({ event: stored }) => stored.offset < firstExcludedOffset!);
+
+      expect(
+        log.scanPushEventTypesFrame({
+          afterOffset,
+          throughOffset,
+          eventTypes,
+          rawLimit,
+          selectedByteLimit,
+        }),
+      ).toEqual({
+        events: accepted,
+        scannedRawRows: consumed.length,
+        rawThroughOffset:
+          firstExcludedOffset !== undefined
+            ? (consumed.at(-1)?.event.offset ?? afterOffset)
+            : raw.length < rawLimit
+              ? throughOffset
+              : raw.at(-1)!.event.offset,
+        byteLength: accepted.reduce((total, entry) => total + entry.byteLength, 0),
+        stoppedByByteLimit: firstExcludedOffset !== undefined,
+      });
+    }
   });
 
   it("binds large exact type sets as one JSON value", () => {
@@ -1087,6 +1167,34 @@ describe("StreamEventLog.getRange", () => {
       { offset: 2, is_inline: 0 },
       { offset: 3, is_inline: 1 },
     ]);
+    expect(
+      db
+        .prepare(
+          `select offset,
+                  chunked_json_byte_length as stored_length,
+                  (select sum(length(chunk_bytes))
+                   from event_chunks
+                   where event_chunks.offset = events.offset) as chunk_length
+           from events
+           order by offset`,
+        )
+        .all(),
+    ).toEqual([
+      { offset: 1, stored_length: null, chunk_length: null },
+      { offset: 2, stored_length: expect.any(Number), chunk_length: expect.any(Number) },
+      { offset: 3, stored_length: null, chunk_length: null },
+    ]);
+    const chunkedLengths = db
+      .prepare(
+        `select chunked_json_byte_length as stored_length,
+                (select sum(length(chunk_bytes))
+                 from event_chunks
+                 where event_chunks.offset = events.offset) as chunk_length
+         from events
+         where offset = 2`,
+      )
+      .get();
+    expect(chunkedLengths!.stored_length).toBe(chunkedLengths!.chunk_length);
     expect(log.getRangeSized({ afterOffset: 0, beforeOffset: 4, limit: 3 })).toEqual(inserted);
     expect(
       log.getRangeSized({
@@ -1247,7 +1355,14 @@ describe("StreamEventLog.getRange", () => {
         .prepare("select name from pragma_table_info('events') order by cid")
         .all()
         .map((column) => column.name),
-    ).toEqual(["offset", "type", "idempotency_key", "ephemeral", "event_json"]);
+    ).toEqual([
+      "offset",
+      "type",
+      "idempotency_key",
+      "ephemeral",
+      "event_json",
+      "chunked_json_byte_length",
+    ]);
     expect(
       db
         .prepare("select name from pragma_table_info('stream_storage_schema') order by cid")
@@ -1262,7 +1377,7 @@ describe("StreamEventLog.getRange", () => {
     );
     expect(
       db.prepare("select version, evicted_offset_floor as floor from stream_storage_schema").get(),
-    ).toEqual({ version: 7, floor: 0 });
+    ).toEqual({ version: 8, floor: 0 });
     expect(
       db
         .prepare(
@@ -1496,7 +1611,7 @@ describe("SqliteSubscriptionCursorStore schema", () => {
       "pending_recovery_at",
     ]);
     expect(db.prepare("select version from stream_storage_schema").get()).toEqual({
-      version: 7,
+      version: 8,
     });
     db.exec("insert into subscriptions (subscription_key, acked_offset, epoch) values ('k', 0, 1)");
     expect(() =>
