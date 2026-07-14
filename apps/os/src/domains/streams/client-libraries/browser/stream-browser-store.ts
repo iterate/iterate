@@ -721,7 +721,20 @@ function createStreamRuntime(
   //      generation does not advance: a call that started after the last
   //      strike and times out after the success is strike one again, exactly
   //      like the pre-consolidation detectors. A late success from a
-  //      superseded connection resets nothing.
+  //      superseded connection resets nothing. LATE CREDIT: "completed
+  //      round-trip" includes a timed-out call's ABANDONED promise resolving
+  //      after its window — the answer still proves the socket carries calls,
+  //      so every timeout leaves a reset-on-success continuation on the
+  //      abandoned promise (identity-bound to its connection, like every
+  //      other reset). Without it, a cold DO answering just after the 10s
+  //      deadline would leave strike one standing while the follow-up probe
+  //      or a caller's fresh retry times out into a false strike two. For
+  //      the same reason, retry-once lanes (withDeadline, verifyDelivery)
+  //      REUSE the in-flight promise for the retry instead of issuing a
+  //      fresh read: the late answer then resolves the retry window itself.
+  //      A late REJECTION earns no credit and takes no action — the timeout
+  //      verdict already stood in for it, and session-broken classification
+  //      belongs to calls the lane still owns.
   //   5. PER-CONNECTION EVIDENCE: count, generation, and the follow-up latch
   //      reset where every fresh connection is installed (connect()'s stream
   //      assignment) — a strike is evidence against one socket and must never
@@ -745,6 +758,15 @@ function createStreamRuntime(
   //     collapses into strike one; the follow-up probe (invariant 3) is the
   //     deterministic post-strike call, so eviction lands ~one timeout later
   //     even if no lane retries and the paced probe is seconds out.
+  //   - Cold DO answers at 11s: the read times out at 10s (strike one,
+  //     follow-up probe scheduled). The 11s answer resolves the reused-
+  //     promise retry (verifyDelivery/withDeadline) AND the late credit
+  //     resets the count, so the follow-up probe's verdict — success from a
+  //     now-warm DO, or even its own timeout — can no longer be strike two.
+  //     A genuinely dead socket never settles the shared promise, so the
+  //     retry and the follow-up probe still time out in the post-strike
+  //     generation and eviction still lands ~two guarded windows after the
+  //     first call started (invariant 3's progress guarantee, unchanged).
   let guardedTimeoutStrikes = 0;
   // The episode boundary (invariant 1). Monotonic per runtime; compared, never
   // interpreted — only equality with a call's captured value matters.
@@ -761,9 +783,11 @@ function createStreamRuntime(
     call: (rpc: BrowserStreamClient) => Promise<T> | T,
   ): Promise<T> {
     const startedGeneration = ledgerGeneration;
+    let pending: Promise<T> | undefined;
     try {
+      pending = Promise.resolve(call(connection));
       const result = await raceWithTimeout(
-        Promise.resolve(call(connection)),
+        pending,
         GUARDED_CALL_TIMEOUT_MS,
         `${step} timed out after ${GUARDED_CALL_TIMEOUT_MS}ms`,
       );
@@ -774,6 +798,18 @@ function createStreamRuntime(
     } catch (error) {
       if (disposed || stream !== connection) throw error;
       if (error instanceof StepTimeoutError) {
+        // Late credit (ledger invariant 4): the abandoned call is still in
+        // flight, and if it ever SUCCEEDS that's a completed round-trip on
+        // this connection — reset the count so a cold DO answering after the
+        // deadline cannot eat strike two from a later fresh read. Identity-
+        // bound like every reset; a late rejection earns nothing (the
+        // timeout verdict already stood in for it).
+        void pending?.then(
+          () => {
+            if (!disposed && stream === connection) guardedTimeoutStrikes = 0;
+          },
+          () => {},
+        );
         // Episode rule (ledger invariant 1): a timeout whose window was
         // already open when the previous strike landed captured an older
         // generation — same cold episode, not new evidence.
@@ -803,7 +839,9 @@ function createStreamRuntime(
   // The ledger's progress guarantee (invariant 3): one cheap guarded read,
   // started strictly AFTER a strike advanced the generation, so its verdict is
   // decisive — success resets the ledger (the socket was merely cold), a
-  // timeout is genuine strike two (guardedCall evicts), a session-broken
+  // timeout is strike two (guardedCall evicts) unless the struck call's own
+  // late answer already credited the ledger (invariant 4 — then it is strike
+  // one again and reschedules), a session-broken
   // rejection reconnects on the spot. Single-flight: the latch holds until the
   // probe settles, so absorbed timeouts trickling in during its window cannot
   // fan out into a probe storm.
@@ -1480,8 +1518,10 @@ function createStreamRuntime(
   // deliveries just stop, and the UI stays "subscribed" forever — the guarded
   // lane strikes (and, on the second strike, evicts) that connection. One
   // struck timeout is retried immediately so a one-shot trigger (nudge,
-  // resume) is not silently swallowed by a single slow answer; the retry's
-  // timeout is the lane's second strike.
+  // resume) is not silently swallowed by a single slow answer; the retry
+  // REUSES the in-flight read (a cold DO's late answer resolves it — see the
+  // ledger's late-credit rule), and only a still-unanswered read makes the
+  // retry's timeout the lane's second strike.
   //
   // The ANSWER matters for the leader: a subscription can be orphaned while
   // the socket stays perfectly healthy. If the stream was recreated underneath
@@ -1540,9 +1580,18 @@ function createStreamRuntime(
     const checkStartedAt = Date.now();
     try {
       // Every runtime-state read doubles as a transport-RTT sample (timed
-      // guards against recording abandoned late resolutions itself).
-      const read = () =>
-        guardedCall(reason, connection, (rpc) => timed(Promise.resolve(rpc.runtimeState())));
+      // guards against recording abandoned late resolutions itself). ONE
+      // underlying RPC, shared with the retry (the withDeadline pattern +
+      // ledger invariant 4's late-credit rule): the first window's timeout
+      // abandons the guarded call but the RPC stays in flight, so racing the
+      // retry's window over the SAME promise lets a cold DO's late answer
+      // (say 11s in) resolve the retry as a success — ledger reset — instead
+      // of demanding a second answer inside the post-strike window and
+      // striking a merely-slow DO into eviction. A genuinely dead socket
+      // never settles this promise, so the retry still times out as genuine
+      // strike two and guardedCall evicts.
+      const underlying = timed(Promise.resolve(connection.runtimeState()));
+      const read = () => guardedCall(reason, connection, () => underlying);
       let result;
       try {
         result = await read();
