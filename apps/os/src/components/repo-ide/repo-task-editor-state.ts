@@ -28,6 +28,13 @@ export function editorPathValue(path: string | undefined, draft: EditorPathDraft
   return draft !== undefined && editorPathDraftApplies(path, draft) ? draft.value : `/${path}`;
 }
 
+export function editorResolvedTaskPath(
+  path: string | undefined,
+  draft: EditorPathDraft | undefined,
+) {
+  return editorPathDraftApplies(path, draft) ? (draft?.target ?? path) : path;
+}
+
 export function resolvedEditorPathDraft(
   source: string,
   resolvedPath: string | undefined,

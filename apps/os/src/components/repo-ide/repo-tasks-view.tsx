@@ -93,6 +93,7 @@ import {
 import {
   editorPathDraftApplies,
   editorPathValue,
+  editorResolvedTaskPath,
   reconcileEditorPathOverride,
   resolvedEditorPathDraft,
   type EditorPathDraft,
@@ -782,11 +783,11 @@ function TaskEditorSheet({
   const taskPath = task?.path;
   const pathWasEdited = editorPathDraftApplies(taskPath, pathDraft);
   const pathValue = editorPathValue(taskPath, pathDraft);
-  const currentAssignment = assignment?.taskPath === taskPath ? assignment : undefined;
+  const resolvedTaskPath = editorResolvedTaskPath(taskPath, pathDraft);
+  const currentAssignment = assignment?.taskPath === resolvedTaskPath ? assignment : undefined;
   const assigning = currentAssignment?.assigning ?? false;
   const visibleAgent = task?.agent ?? currentAssignment?.agent;
-  const deleteOpen = taskPath !== undefined && deleteTargetPath === taskPath;
-  const columnItems = columns.map((state) => ({ label: taskStateLabel(state), value: state }));
+  const deleteOpen = resolvedTaskPath !== undefined && deleteTargetPath === resolvedTaskPath;
 
   const resolvePath = () => {
     if (task === undefined) return undefined;
@@ -867,7 +868,7 @@ function TaskEditorSheet({
           </SheetHeader>
           <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
             <Select
-              items={columnItems}
+              items={columns.map((state) => ({ label: taskStateLabel(state), value: state }))}
               value={taskColumnState(task)}
               onValueChange={(value) => value && onChangeState(value)}
             >
