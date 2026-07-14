@@ -66,21 +66,36 @@ export function acquireWriterRole(args: { lockName: string }): WriterRole {
 }
 
 /**
- * The Web Lock name electing the single writer for one (projectId, path, processor).
- * Versioned by the processor's schema so a deploy that migrates the shared OPFS DB lets a
- * fresh tab take over instead of waiting forever behind an old tab's lock.
- *
- * A deploy that renames the lock (or bumps the schema version) briefly lets an
- * old tab and a fresh tab write concurrently — the same window a schema
- * migration already accepts by design: the fresh tab takes over instead of
- * waiting forever behind the old tab's lock, and the mirror self-heals on
- * reload.
+ * A deterministic compatibility vector over a mirror's member set, baked into
+ * the writer-lock name so a deploy that bumps ANY member's schema changes the
+ * lock and lets a fresh tab re-elect (instead of sitting forever behind an old
+ * tab's lock). Derived from the members — never hand-maintained, so there is no
+ * number to forget to bump. Sorted so member order can't change the identity.
  */
-export function streamWriterLockName(args: {
+export function mirrorLockVersionVector(
+  members: readonly { slug: string; schemaVersion: number }[],
+): string {
+  return members
+    .map((member) => `${member.slug}@${member.schemaVersion}`)
+    .sort()
+    .join("|");
+}
+
+/**
+ * The Web Lock name electing the single writer for one stream MIRROR (the
+ * runtime that downloads once and fans out to the canonical processor set).
+ * Versioned by {@link mirrorLockVersionVector}, so a deploy that migrates any
+ * member's projection lets a fresh tab take over instead of waiting behind an
+ * old tab's lock — the same failover a per-processor lock gave, now per mirror.
+ *
+ * A deploy that changes the lock briefly lets an old tab and a fresh tab write
+ * concurrently — the same window a schema migration already accepts by design:
+ * the fresh tab takes over, and the mirror self-heals on reload.
+ */
+export function streamMirrorWriterLockName(args: {
   projectId: string;
   streamPath: string;
-  slug: string;
-  schemaVersion: number;
+  versionVector: string;
 }): string {
-  return `stream-writer:${args.projectId}:${args.streamPath}:${args.slug}:v${args.schemaVersion}`;
+  return `stream-writer:${args.projectId}:${args.streamPath}:browser-stream-mirror:${args.versionVector}`;
 }
