@@ -103,16 +103,27 @@ export default async function eraseData(options: {
   }) => {
     const queue = [...input.items];
     let deleted = 0;
+    let failed = 0;
     await Promise.all(
       Array.from({ length: 10 }, async () => {
         for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
           if (Date.now() > input.deadline) return;
-          await input.deleteOne(item);
-          deleted += 1;
+          // Per-item isolation: one transient DELETE failure must not abort
+          // the whole wipe (live preview_1 run: a single object error skipped
+          // the entire files bucket). The delete-then-relist loop retries
+          // failures naturally on the next pass.
+          try {
+            await input.deleteOne(item);
+            deleted += 1;
+          } catch (error) {
+            failed += 1;
+            if (failed <= 3)
+              console.warn(`delete failed (will retry next pass): ${String(error).slice(0, 160)}`);
+          }
         }
       }),
     );
-    return deleted;
+    return { deleted, failed };
   };
 
   // ---- AI Search: delete every per-project instance ---------------------------
@@ -131,7 +142,7 @@ export default async function eraseData(options: {
         `/ai-search/namespaces/${env.osWorkerName}/instances?per_page=100&page=1`,
       );
       if (instances.length === 0) break;
-      const deleted = await deleteAll({
+      const { deleted, failed } = await deleteAll({
         items: instances.map((instance) => instance.id),
         deadline: instanceDeadline,
         deleteOne: async (id) => {
@@ -141,7 +152,11 @@ export default async function eraseData(options: {
         },
       });
       instancesDeleted += deleted;
-      if (deleted < instances.length) {
+      if (failed > 0 && deleted === 0) break; // every delete failing = stop churning
+      // Only the DEADLINE ends the pass early: per-item failures with
+      // progress keep relisting, so failed items retry THIS run instead of
+      // waiting for the next release.
+      if (Date.now() > instanceDeadline) {
         console.warn(`AI Search: deadline hit with instances remaining — next release continues`);
         break;
       }
@@ -170,7 +185,7 @@ export default async function eraseData(options: {
           `/r2/buckets/${bucket}/objects?per_page=1000&page=1`,
         );
         if (listing.length === 0) break;
-        const deleted = await deleteAll({
+        const { deleted, failed } = await deleteAll({
           items: listing.map((object) => object.key),
           deadline: bucketDeadline,
           deleteOne: async (key) => {
@@ -180,7 +195,10 @@ export default async function eraseData(options: {
           },
         });
         objectsDeleted += deleted;
-        if (deleted < listing.length) {
+        if (failed > 0 && deleted === 0) break; // every delete failing = stop churning
+        // Deadline is the only early exit — partial failures with progress
+        // keep relisting so failed objects retry this run.
+        if (Date.now() > bucketDeadline) {
           console.warn(
             `R2 ${bucket}: deadline hit with objects remaining — next release continues`,
           );
