@@ -481,9 +481,10 @@ const sidebarMenuButtonVariants = cva(
  * (https://github.com/shadcn-ui/ui/issues/5561). When a menu control is a
  * same-tab link, dismiss the sheet so the destination is visible immediately.
  * Real `<button>` triggers (collapse, dropdown openers) are left alone.
+ * Modifier / middle-click navigation opens another tab and must not dismiss.
  */
 function dismissMobileSidebarOnLinkClick(
-  event: React.SyntheticEvent<HTMLElement>,
+  event: React.MouseEvent<HTMLElement>,
   isMobile: boolean,
   setOpenMobile: (open: boolean) => void,
 ) {
@@ -493,6 +494,10 @@ function dismissMobileSidebarOnLinkClick(
   if (el.hasAttribute("download")) return;
   const target = el.getAttribute("target");
   if (target && target !== "_self") return;
+  // Keep the sheet open when the browser will not navigate this tab.
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+    return;
+  }
   setOpenMobile(false);
 }
 
