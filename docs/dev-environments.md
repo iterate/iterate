@@ -308,9 +308,10 @@ environment). Generate a fresh forge key with
 
 ## Browsers: the golden path for agents
 
-See [Browser testing](browser-testing.md) for the isolated, headless default;
-visible Chrome for Testing watch mode; reusable test logins; and the explicit
-permission required before attaching to a developer's actual Chrome.
+See [Browser testing](browser-testing.md) for the isolated, visible Chrome for
+Testing default; unique concurrent-agent windows; explicit headless operation;
+reusable test logins; and the permission required before attaching to a
+developer's actual Chrome.
 
 ## Preview environments
 
