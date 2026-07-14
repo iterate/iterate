@@ -174,20 +174,17 @@ export async function mintIterateSession(input: {
     email: input.email,
   });
 
+  // The cookie's expiry mirrors the access token's `exp` claim exactly —
+  // the same derivation the session-from-token endpoint does server-side.
+  const { exp } = JSON.parse(
+    Buffer.from(accessToken.split(".")[1]!, "base64url").toString("utf8"),
+  ) as { exp: number };
+
   return {
     accessToken,
-    // The cookie's expiry mirrors the access token's `exp` claim exactly —
-    // the same derivation the session-from-token endpoint does server-side.
-    expiresAtMs: jwtExpirySeconds(accessToken) * 1000,
+    expiresAtMs: exp * 1000,
     idToken,
   };
-}
-
-function jwtExpirySeconds(token: string) {
-  const payload = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")) as {
-    exp: number;
-  };
-  return payload.exp;
 }
 
 async function resolveOsPlaywrightAuthConfig(): Promise<OsPlaywrightAuthConfig> {
