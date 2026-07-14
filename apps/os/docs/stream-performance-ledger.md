@@ -1838,3 +1838,84 @@ persistent data are unchanged. Raw records are
 `/tmp/stream-session-{parent,candidate}-r{1,2,3}.log` for the object shape and
 `/tmp/stream-callable-session-{parent,candidate}-r{1,2,3}.log` for the callable
 shape; `/tmp/stream-callable-session-smoke.log` is the non-counted smoke.
+
+## 2026-07-14: Stream-Index Write Ceiling And Schema Rewrites Rejected
+
+The project worker fan-in launches one best-effort activity RPC per delivered
+Stream batch. The root Project DO merges that batch's path, final event time and
+type, and `streamMaxOffset` into an activation-local projection, then executes
+one `INSERT OR REPLACE` against its `streams` table. The call is deliberately
+not awaited by `ProjectRpcTarget.processEventBatch`; worker delivery can
+checkpoint while the independent Project DO write is still pending. Exact
+redelivery is a projection-level no-op.
+
+A disposable candidate removed only `#indexStreamActivity(batch)`, preserving
+AI Search dispatch, project-worker invocation, and the Stream subscription's
+durable cursor. The host harness installed a no-op project worker and measured
+from append through the `project-worker` subscription's observed
+`ackedOffset`. Every cursor poll was an awaited RPC, so the timer remained
+valid under Cloudflare's frozen-clock behavior. The parent additionally polled
+`project.liveState.get()` outside the measured interval until every index row
+reached its expected offset; this prevented unobserved write backlog from
+contaminating later samples. Each process used a new project and 20 serial / 10
+fan-in warmups.
+
+Five 300-sample serial rounds and five 100-wave, 32-stream fan-in rounds ran in
+`P,C,C,P,P,C,C,C,P,P` order against exact production parent `5b3a1d34d`, with
+only one Workers stack resident. Positive change means the no-index candidate
+used less wall time.
+
+| Complete index removal |     Parent |   No index |           Change |
+| ---------------------- | ---------: | ---------: | ---------------: |
+| Serial p50             |   3.708 ms |   2.790 ms |  **24.8% lower** |
+| Serial p95             |   4.982 ms |   4.618 ms |   **7.3% lower** |
+| Serial mean            |   3.937 ms |   3.167 ms |  **19.5% lower** |
+| 32-stream fan-in p50   |  49.526 ms |  47.685 ms |   **3.7% lower** |
+| 32-stream fan-in p95   |  61.292 ms |  76.061 ms | **24.1% higher** |
+| 32-stream fan-in mean  |  50.862 ms |  50.735 ms |   **0.2% lower** |
+| Fan-in median capacity | 646.1 ev/s | 671.1 ev/s |  **3.9% higher** |
+
+This is an absolute upper bound, not a shipping design: it deletes recency,
+latest-type, event-count, persistence, and live patches. It establishes useful
+serial headroom, but not a coalescing opportunity. In serial traffic every
+delivered batch is already at the exact captured head, so exact-head
+coalescing skips nothing and cannot capture the 19-25% serial result. Under the
+only lane where coalescing could matter, multi-stream fan-in, the complete
+feature deletion moved p50/capacity less than 4%, mean effectively not at all,
+and worsened the noisy tail. The proposed offset-envelope, terminal-scan, and
+deferred-persistence state would cost more complexity than its realistic
+ceiling, so it was not implemented.
+
+Two destructive fresh-schema variants then attempted to reduce the cost of
+every correct touch without dropping updates. Both retained the JS merge and
+single-statement atomicity:
+
+1. `WITHOUT ROWID` plus `INSERT ... ON CONFLICT DO UPDATE`, avoiding the
+   duplicate primary-key B-tree and replacing rows in place.
+2. `WITHOUT ROWID` alone with the original `INSERT OR REPLACE`, isolating the
+   table layout from UPSERT behavior.
+
+Three exact-parent rounds per combined variant ran in `C,P,P,C,C,P` order.
+The `WITHOUT ROWID`-only candidate then ran three rounds against the same
+adjacent parent pool. The combined form regressed serial p50/p95/mean by
+**1.2%/6.3%/1.8%**, fan-in p50/mean by **4.5%/4.6%**, fan-in p95 by **42.7%**,
+and capacity by **4.3%**. `WITHOUT ROWID` alone moved serial p50 only 0.8%
+faster while regressing serial p95/mean by **4.6%/8.2%**, fan-in p50/mean by
+**2.7%/4.5%**, fan-in p95 by **29.6%**, and capacity by **2.7%**. The combined
+result also rules out spending another full pool on UPSERT alone: adding it to
+the already-rejected table layout worsened rather than recovered every median.
+
+The source audit also corrected an overstatement in the existing comment: a
+failed activity RPC self-heals only if another batch later arrives. A quiet
+stream's final failed touch can remain stale indefinitely, and a failed first
+touch can make a later activity timestamp become the index's `createdAt`.
+That is a derived-dashboard consistency limitation, not Stream journal or
+worker-delivery loss, but a future durable-index design must address it without
+making user-worker side effects replay when index persistence fails.
+
+All disposable production edits and the focused harness were removed. The
+production tree, generated API, schema, persistent data, and runtime topology
+are exactly unchanged; the experiment ended at `2026-07-14T06:00:06Z`. Raw
+records are `/tmp/stream-index-{parent,candidate}-r{1..5}.log`,
+`/tmp/stream-index-sql-{parent,candidate}-r{1..3}.log`, and
+`/tmp/stream-index-rowid-candidate-r{1..3}.log` locally.
