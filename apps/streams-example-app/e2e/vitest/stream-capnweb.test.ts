@@ -4,10 +4,21 @@ import { e2eStreamPath, e2eStreamPathLabel, toStreamWebSocketUrl } from "../help
 import { withStreamConnectionFromBrowser } from "../../src/lib/stream-rpc.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import type { WebSocketFrame } from "../../src/lib/stream-connection.ts";
-import type { StreamEvent, StreamEventInput } from "~/itx-api.generated.ts";
+import type { Stream, StreamEvent, StreamEventInput } from "~/itx-api.generated.ts";
 
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 const e2eItFails = process.env.STREAM_STAGING_E2E === "true" ? it.fails : it.skip;
+
+async function appendEvents(
+  stream: Pick<Stream, "append">,
+  ...events: StreamEventInput[]
+): Promise<StreamEvent[]> {
+  const result = await stream.append({ return: "events" }, ...events);
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "object")) {
+    throw new Error("append did not return committed events");
+  }
+  return result as StreamEvent[];
+}
 
 class TestSubscriptionCallback extends RpcTarget {
   readonly batches: StreamEvent[][] = [];
@@ -29,7 +40,7 @@ describe("stream capnweb protocol", () => {
       url: toStreamWebSocketUrl({ path }),
     });
 
-    const [appended] = await stream.stream.append({
+    const [appended] = await appendEvents(stream.stream, {
       type: "test.stream.browser-client",
       payload: { path },
     });
@@ -58,7 +69,7 @@ describe("stream capnweb protocol", () => {
     const dialAndAppend = async () => {
       const path = e2eStreamPathLabel("stream-capnweb-append");
       using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
-      const [appended] = await stream.stream.append({
+      const [appended] = await appendEvents(stream.stream, {
         type: "test.stream.capnweb-append",
         payload: { path },
       });
@@ -96,7 +107,7 @@ describe("stream capnweb protocol", () => {
 
     expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeGreaterThan(2 * 1024 * 1024);
 
-    const [appended] = await stream.stream.append(event);
+    const [appended] = await appendEvents(stream.stream, event);
     if (appended === undefined) throw new Error("append returned no event");
     expect(appended).toMatchObject({
       type: "test.stream.capnweb-large-row",
@@ -115,7 +126,7 @@ describe("stream capnweb protocol", () => {
     expect(events[0]?.offset).toBe(appended.offset);
     expectLargePayload(events[0], body.length);
 
-    const [afterLargeRow] = await stream.stream.append({
+    const [afterLargeRow] = await appendEvents(stream.stream, {
       type: "test.stream.capnweb-after-large-row",
       payload: { path },
     });
@@ -152,12 +163,14 @@ describe("stream capnweb protocol", () => {
     const base = e2eStreamPathLabel("e2e/resolve-child");
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
-    const [viaBare] = await parent.stream
-      .at("child")
-      .append({ type: "test.stream.resolve", payload: { kind: "bare" } });
-    const [viaDot] = await parent.stream
-      .at("./child")
-      .append({ type: "test.stream.resolve", payload: { kind: "dot" } });
+    const [viaBare] = await appendEvents(parent.stream.at("child"), {
+      type: "test.stream.resolve",
+      payload: { kind: "bare" },
+    });
+    const [viaDot] = await appendEvents(parent.stream.at("./child"), {
+      type: "test.stream.resolve",
+      payload: { kind: "dot" },
+    });
 
     // Both forms resolve to the same `${base}/child` stream the reader connects to.
     using child = withStreamConnectionFromNode({
@@ -180,9 +193,10 @@ describe("stream capnweb protocol", () => {
     const target = e2eStreamPath(`/e2e/resolve-abs-target-${unique}`);
     using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path: base }) });
 
-    const [appended] = await parent.stream
-      .at(target)
-      .append({ type: "test.stream.resolve", payload: { kind: "absolute" } });
+    const [appended] = await appendEvents(parent.stream.at(target), {
+      type: "test.stream.resolve",
+      payload: { kind: "absolute" },
+    });
 
     using targetStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: target }),
@@ -201,9 +215,10 @@ describe("stream capnweb protocol", () => {
     });
 
     // ../parent -> {root}/a/b/parent
-    const [toParent] = await current.stream
-      .at("../parent")
-      .append({ type: "test.stream.resolve", payload: { kind: "parent" } });
+    const [toParent] = await appendEvents(current.stream.at("../parent"), {
+      type: "test.stream.resolve",
+      payload: { kind: "parent" },
+    });
     using parentStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/b/parent` }),
     });
@@ -212,18 +227,20 @@ describe("stream capnweb protocol", () => {
     );
 
     // ../../grandparent -> {root}/a/grandparent
-    const [toGrand] = await current.stream
-      .at("../../grandparent")
-      .append({ type: "test.stream.resolve", payload: { kind: "grandparent" } });
+    const [toGrand] = await appendEvents(current.stream.at("../../grandparent"), {
+      type: "test.stream.resolve",
+      payload: { kind: "grandparent" },
+    });
     using grandStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/grandparent` }),
     });
     await expect(grandStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(toGrand);
 
     // ../../grandparent/.././bla normalizes to {root}/a/bla
-    const [toMixed] = await current.stream
-      .at("../../grandparent/.././bla")
-      .append({ type: "test.stream.resolve", payload: { kind: "mixed" } });
+    const [toMixed] = await appendEvents(current.stream.at("../../grandparent/.././bla"), {
+      type: "test.stream.resolve",
+      payload: { kind: "mixed" },
+    });
     using blaStream = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path: `${root}/a/bla` }),
     });
@@ -246,7 +263,7 @@ describe("stream capnweb protocol", () => {
     const path = e2eStreamPathLabel("stream-capnweb-batch");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    const [existing] = await stream.stream.append({
+    const [existing] = await appendEvents(stream.stream, {
       type: "test.stream.capnweb-batch-existing",
       idempotencyKey: "batch-existing",
       payload: { path },
@@ -254,7 +271,8 @@ describe("stream capnweb protocol", () => {
     await expect(stream.stream.getEvent({ idempotencyKey: "batch-existing" })).resolves.toEqual(
       existing,
     );
-    const batch = await stream.stream.append(
+    const batch = await appendEvents(
+      stream.stream,
       {
         type: "test.stream.capnweb-batch-new",
         payload: { n: 1 },
@@ -289,7 +307,8 @@ describe("stream capnweb protocol", () => {
     const path = e2eStreamPathLabel("stream-capnweb-same-batch-idempotency");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    const batch = await stream.stream.append(
+    const batch = await appendEvents(
+      stream.stream,
       {
         type: "test.stream.capnweb-same-batch-idempotency",
         idempotencyKey: "same-batch",
@@ -349,7 +368,7 @@ describe("stream capnweb protocol", () => {
     const path = e2eStreamPathLabel("stream-capnweb-replay");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
-    const [first] = await stream.stream.append({
+    const [first] = await appendEvents(stream.stream, {
       type: "test.stream.capnweb-replay",
       payload: { n: 1 },
     });
@@ -362,7 +381,7 @@ describe("stream capnweb protocol", () => {
     });
     await waitFor(() => callback.batches.length === 1, 1_000);
 
-    const [second] = await stream.stream.append({
+    const [second] = await appendEvents(stream.stream, {
       type: "test.stream.capnweb-replay",
       payload: { n: 2 },
     });
@@ -442,7 +461,7 @@ describe("stream capnweb protocol", () => {
       subscriptionType: "ephemeral",
     });
 
-    const [appended] = await stream.stream.append({
+    const [appended] = await appendEvents(stream.stream, {
       type: "test.stream.capnweb-anon-sub",
       payload: { path },
     });
@@ -461,7 +480,7 @@ describe("stream capnweb protocol", () => {
     const callbackABatchesBeforeUnsubscribe = callbackA.batches.length;
 
     await first.unsubscribe();
-    const [afterUnsubscribe] = await stream.stream.append({
+    const [afterUnsubscribe] = await appendEvents(stream.stream, {
       type: "test.stream.capnweb-anon-sub-after-unsub",
       payload: { path },
     });
@@ -493,7 +512,7 @@ describe("stream capnweb protocol", () => {
       type: "events.iterate.com/stream/resumed",
       payload: { reason: "e2e resume" },
     });
-    const [afterResume] = await stream.stream.append({
+    const [afterResume] = await appendEvents(stream.stream, {
       type: "test.stream.pause-gate.accepted",
       payload: { path },
     });
@@ -520,7 +539,7 @@ describe("stream capnweb protocol", () => {
       type: "test.stream.capnweb-wire",
       payload: { path },
     };
-    const [appended] = await publisher.stream.append(input);
+    const [appended] = await appendEvents(publisher.stream, input);
     if (appended === undefined) throw new Error("append returned no event");
     // Deliveries before the published event: the subscription's initial state
     // push (events: []) and/or the subscriber's own subscriber-connected
