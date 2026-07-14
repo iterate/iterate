@@ -77,7 +77,8 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 **Browser testing:** use an isolated `agent-browser` Chrome for Testing session,
 headless by default. "Let me watch" means show that isolated browser with
 `--headed`; it does not mean attach to a developer's actual Chrome. See
-[Browser testing](docs/browser-testing.md).
+[Browser testing](docs/browser-testing.md). Keep the CLI and its corresponding
+agent skills up to date.
 
 **Draft PRs don't get a preview deployment** (or preview e2e). If you open a
 PR as a draft and want a preview environment, add the `preview` label; marking

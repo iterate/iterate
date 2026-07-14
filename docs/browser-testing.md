@@ -4,16 +4,42 @@ Use `agent-browser` with its own isolated Chrome for Testing. It is headless by
 default, so normal agent work neither opens windows nor touches a developer's
 Chrome profiles, tabs, cookies, or logins.
 
-| Request                                                | Browser mode                | Permission granted                    |
-| ------------------------------------------------------ | --------------------------- | ------------------------------------- |
-| Normal browser task                                    | Headless Chrome for Testing | Isolated agent session only           |
-| "Let me watch", "show me the browser", or "watch mode" | Headed Chrome for Testing   | Show the isolated agent session       |
-| "Use my actual Chrome"                                 | Existing developer Chrome   | Exceptional, current-task-only access |
+| Request                                                | Browser mode                                  | Permission granted                     |
+| ------------------------------------------------------ | --------------------------------------------- | -------------------------------------- |
+| Normal browser task                                    | Headless Chrome for Testing                   | Isolated agent session only            |
+| "Let me watch", "show me the browser", or "watch mode" | Headed Chrome for Testing                     | Show the isolated agent session        |
+| "Use my Chrome profile/login state"                    | Chrome for Testing with a personal-state copy | Exceptional, current-task-only import  |
+| "Use my actual Chrome"                                 | Existing developer Chrome                     | Exceptional, current-task-only control |
 
 Watch mode is still the agent's isolated browser; `--headed` merely gives it a
 visible **Google Chrome for Testing** window. It does not authorize Chrome
 DevTools MCP, `--auto-connect`, `--cdp`, or a named personal profile such as
 `Default` or `Profile 1`.
+
+## Profile and session model
+
+`--session` and `--profile` solve different problems:
+
+| Mechanism                                           | State                                       | Use                                                       |
+| --------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------- |
+| Unique `--session`                                  | Isolated live browser process               | Every agent and concurrent browser task                   |
+| `--session ... --restore`                           | Saved cookies and web storage               | Reuse an ordinary test login across restarts              |
+| `--profile ~/.agent-browser/profiles/iterate-agent` | Full persistent Chrome for Testing profile  | Human login to deliberately selected third-party services |
+| `--profile Default` or `Profile N`                  | Temporary copy of a personal Chrome profile | Never use without explicit permission to import its state |
+
+`agent-browser profiles` inventories profiles from the developer's real Chrome.
+It is not a safe profile picker for normal automation. Use the full path to the
+dedicated automation profile so the boundary is visible in every command.
+When passed a listed profile name, agent-browser copies that personal profile
+to a temporary directory and launches Chrome for Testing against the copy. It
+does not attach to or modify the source profile, but it does import the source
+profile's broad cookies and login state, so explicit current-task permission is
+still required.
+
+Concurrent agents need different session names. They may use separate temporary
+profiles freely, but must never open the same persistent `--profile` directory
+at the same time. One persistent profile belongs to one browser process at a
+time.
 
 ## Disposable sessions
 
@@ -71,6 +97,31 @@ agent-browser --session "$SESSION" --profile "$PROFILE" open <url>
 
 Close the session before switching between headed and headless modes. Never
 open the same persistent profile in two browser processes at once.
+
+## Keep the CLI and skills current
+
+The agent-browser CLI and its corresponding skills must be current before use.
+The CLI bundles the canonical skills for its exact installed version, so agents
+must load `agent-browser skills get core` instead of trusting a cached guide.
+
+```bash
+# Update the CLI and its Chrome for Testing binary.
+agent-browser upgrade
+agent-browser install
+
+# Refresh the global discovery skill for every supported coding agent.
+npx skills add vercel-labs/agent-browser --global --agent '*' --yes
+npx skills check
+
+# Load instructions that exactly match the installed CLI.
+agent-browser skills get core
+```
+
+This repository also vendors the full core skill under
+`.agents/skills/agent-browser`. Its `VERSION` must match
+`agent-browser --version`; refresh and commit the vendored skill whenever the
+CLI changes. Updating only the npm package or only the discovery skill is not
+enough.
 
 ## Actual Chrome is exceptional
 
