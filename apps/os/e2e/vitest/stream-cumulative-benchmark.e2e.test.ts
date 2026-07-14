@@ -46,6 +46,18 @@ const PROCESSOR_CATCHUP_EVENTS = Number(
   process.env.STREAM_BENCH_PROCESSOR_CATCHUP_EVENTS ?? "8000",
 );
 const PROCESS_EVENT_SAMPLES = Number(process.env.STREAM_BENCH_PROCESS_EVENT_SAMPLES ?? "30");
+const PROCESS_EVENT_SCENARIOS = new Set(
+  (process.env.STREAM_BENCH_PROCESS_EVENT_SCENARIOS ?? "ephemeral,push,wake").split(","),
+);
+const PROCESS_EVENT_EPHEMERAL_COUNTS = (
+  process.env.STREAM_BENCH_PROCESS_EVENT_EPHEMERAL_COUNTS ?? "1,8,32,128"
+)
+  .split(",")
+  .map(Number);
+const PROCESS_EVENT_DELIVERY_TIMEOUT_MS = Number(
+  process.env.STREAM_BENCH_PROCESS_EVENT_DELIVERY_TIMEOUT_MS ?? "30000",
+);
+const PROCESS_EVENT_TRACE = process.env.STREAM_BENCH_PROCESS_EVENT_TRACE === "1";
 // 20 ms of 48 kHz mono PCM16 is 1,920 raw bytes and 2,560 base64 characters.
 const PCM_FRAME_PAYLOAD = "p".repeat(2_560);
 
@@ -1198,7 +1210,7 @@ test.skipIf(!ENABLED || !FOCUS_PROCESS_EVENT)(
     // Ephemeral: the Stream DO still sends its internal batch to the project
     // relay. The relay either emits one Cap'n Web callback for that batch or
     // one callback per event, disposing every result unpulled in both modes.
-    {
+    if (PROCESS_EVENT_SCENARIOS.has("ephemeral")) {
       using batchStream = project.streams.get(`/bench/${runId}/ephemeral-batch`);
       using eventStream = project.streams.get(`/bench/${runId}/ephemeral-event`);
       const batchTracker = createDeliveryTracker();
@@ -1221,7 +1233,7 @@ test.skipIf(!ENABLED || !FOCUS_PROCESS_EVENT)(
         processEvent: (delivered) => eventTracker.record(delivered),
       });
 
-      for (const eventCount of [1, 8, 32, 128]) {
+      for (const eventCount of PROCESS_EVENT_EPHEMERAL_COUNTS) {
         const samples = await measureAlternatingDeliveryModes(
           PROCESS_EVENT_SAMPLES,
           async (mode, iteration) => {
@@ -1236,7 +1248,10 @@ test.skipIf(!ENABLED || !FOCUS_PROCESS_EVENT)(
             await stream.append(
               ...markers.map((marker) => event({ marker, payload: PCM_FRAME_PAYLOAD })),
             );
-            return await tracker.finish(startedAt, `ephemeral ${mode} ${eventCount}`);
+            return await tracker.finish(
+              startedAt,
+              `ephemeral ${mode} ${eventCount} iteration ${iteration}`,
+            );
           },
         );
         metrics[`ephemeral_batch_${eventCount}_pcm`] = summarize(samples.batch, eventCount);
@@ -1250,7 +1265,7 @@ test.skipIf(!ENABLED || !FOCUS_PROCESS_EVENT)(
     // Durable push: the stream owns the cursor, so each per-event call must
     // resolve before the next begins. The destination callback is only the
     // host-visible completion fence; both modes use the same one.
-    {
+    if (PROCESS_EVENT_SCENARIOS.has("push")) {
       using batchSource = project.streams.get(`/bench/${runId}/push-batch-source`);
       using batchDestination = project.streams.get(`/bench/${runId}/push-batch-destination`);
       using eventSource = project.streams.get(`/bench/${runId}/push-event-source`);
@@ -1312,7 +1327,7 @@ test.skipIf(!ENABLED || !FOCUS_PROCESS_EVENT)(
     // Durable wake: configure the project processor's retained sink to receive
     // either the normal compact batch or one compact single-event call at a
     // time. The host's waitUntilEvent response is the consumption fence.
-    {
+    if (PROCESS_EVENT_SCENARIOS.has("wake")) {
       const batchProjectId = `prj_${crypto.randomUUID()}`;
       const eventProjectId = `prj_${crypto.randomUUID()}`;
       using batchProject = itx.projects.create({
@@ -1474,6 +1489,11 @@ async function measureAlternatingDeliveryModes(
       (iteration + warmups) % 2 === 0 ? ["batch", "event"] : ["event", "batch"];
     for (const mode of order) {
       const elapsed = await operation(mode, iteration);
+      if (PROCESS_EVENT_TRACE) {
+        console.log(
+          `STREAM_PROCESS_EVENT_SAMPLE ${JSON.stringify({ elapsedMs: elapsed, iteration, mode })}`,
+        );
+      }
       if (iteration >= 0) samples[mode].push(elapsed);
     }
   }
@@ -1494,7 +1514,15 @@ function createDeliveryTracker(): {
       completedAt = undefined;
     },
     async finish(startedAt, label) {
-      await waitFor(() => completedAt !== undefined, label, 30_000);
+      const deadline = performance.now() + PROCESS_EVENT_DELIVERY_TIMEOUT_MS;
+      while (completedAt === undefined) {
+        if (performance.now() > deadline) {
+          throw new Error(
+            `Timed out waiting for ${label}; ${remaining?.size ?? 0} expected event(s) never arrived.`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
       const elapsed = completedAt! - startedAt;
       remaining = undefined;
       completedAt = undefined;
