@@ -5,7 +5,8 @@
 //                  `reduceAgentEvent` below, shared with off-runtime refolds.
 //   processEvent — per-event side effects. One switch, nothing else.
 //   reconcile    — at-head only (base-gated): drive or settle open LLM
-//                  obligations, then derive the next scheduling decision.
+//                  obligations, derive the next scheduling decision, then
+//                  announce busy/idle activity flips.
 //
 // Everything below the class is a pure helper one of the lanes calls: the
 // fold switch, chat-request building, and codemode script-result rendering.
@@ -23,9 +24,11 @@ import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
   AGENT_LLM_RETRY_BACKOFF_BASE_MS,
   AgentProcessorContract,
+  DEFAULT_AGENT_ACTIVITY_IDLE_DEBOUNCE_MS,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
   DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+  deriveAgentActivity,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
 import {
@@ -66,12 +69,16 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
  *   file immediately before a model request. Production hosts provide it;
  *   bare tests without it retain the stored attachment URL.
+ * - `activityIdleDebounceMs` scales the trailing delay before a busy→idle
+ *   flip is announced (default DEFAULT_AGENT_ACTIVITY_IDLE_DEBOUNCE_MS);
+ *   tests shrink it.
  */
 type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
   llmRetryBackoffBaseMs?: number;
+  activityIdleDebounceMs?: number;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
 };
@@ -92,6 +99,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * hands back to the model as its "response so far". Incarnation-local best
    * effort: an eviction loses it, and the crash-cancel path never had it. */
   readonly #partialLlmResponseTexts = new Map<number, string>();
+  /** The armed idle-announcement debounce, keyed by the idle flip's offset;
+   * `cancel()` disarms without firing. A lost timer costs nothing durable:
+   * the flip is still in state and the reconciler re-arms it. */
+  #idleActivityAnnouncement: { cancel: () => void; sinceOffset: number } | undefined;
 
   #now(): number {
     return (this.deps.now ?? Date.now)();
@@ -469,6 +480,99 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   ): Promise<void> {
     await this.#reconcileLlmObligations(args);
     await this.#reconcileLlmScheduling(args);
+    this.#reconcileActivityAnnouncement(args);
+  }
+
+  /**
+   * Announce the fold's busy/idle activity as activity-changed events for
+   * downstream surfaces (Slack assistant status, typing indicators). Desired
+   * is the latest flip (`state.activity`); actual is the last accepted
+   * announcement (`state.announcedActivity`); equal means done.
+   *
+   * A flip to busy announces immediately. The flip to idle waits out a
+   * trailing debounce first, because the fold passes through idle for one
+   * append round-trip at every turn hand-off (see
+   * DEFAULT_AGENT_ACTIVITY_IDLE_DEBOUNCE_MS). The timer is a droppable
+   * attempt: a lost incarnation still holds the unannounced flip in state, so
+   * the revival pass lands here and re-arms (or, past due, appends directly).
+   * A timer whose idle append raced newer work appends a STALE announcement —
+   * neutralized by the sinceOffset guard every consuming fold applies, and
+   * corrected by the busy announcement this pass already made for the newer
+   * flip.
+   */
+  #reconcileActivityAnnouncement(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
+  ): void {
+    const flip = args.state.activity;
+    // Undefined means the agent has never been busy; genesis idle is not news.
+    if (flip === undefined) return;
+    const announced = args.state.announcedActivity;
+    const announcementDue =
+      announced === undefined
+        ? flip.busy
+        : announced.busy !== flip.busy || announced.kind !== flip.kind;
+    if (!announcementDue) {
+      this.#cancelIdleActivityAnnouncement();
+      return;
+    }
+    const appendAnnouncement = () =>
+      args.append({
+        type: "events.iterate.com/agent/activity-changed",
+        idempotencyKey: this.idempotencyKey(`activity-changed@${flip.sinceOffset}`),
+        payload: {
+          busy: flip.busy,
+          ...(flip.kind === undefined ? {} : { kind: flip.kind }),
+          sinceOffset: flip.sinceOffset,
+        },
+      });
+    const debounceMs = this.deps.activityIdleDebounceMs ?? DEFAULT_AGENT_ACTIVITY_IDLE_DEBOUNCE_MS;
+    const delay = flip.busy ? 0 : Math.max(0, Date.parse(flip.since) + debounceMs - this.#now());
+    if (delay === 0) {
+      this.#cancelIdleActivityAnnouncement();
+      args.blockProcessorWhile(appendAnnouncement);
+      return;
+    }
+    if (this.#idleActivityAnnouncement?.sinceOffset === flip.sinceOffset) return;
+    this.#cancelIdleActivityAnnouncement();
+    let settle!: (fire: boolean) => void;
+    let settled = false;
+    const wait = new Promise<boolean>((resolve) => {
+      settle = resolve;
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      settle(true);
+    }, delay);
+    const attempt = {
+      sinceOffset: flip.sinceOffset,
+      cancel: () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        settle(false);
+      },
+    };
+    this.#idleActivityAnnouncement = attempt;
+    args.runInBackground(async () => {
+      try {
+        if (!(await wait)) return;
+        // Best-effort staleness check; the consuming folds' sinceOffset guard
+        // is the real protection when newer work lands inside this gap.
+        const current = this.state.activity;
+        if (current === undefined || current.busy || current.sinceOffset !== attempt.sinceOffset) {
+          return;
+        }
+        await appendAnnouncement();
+      } finally {
+        if (this.#idleActivityAnnouncement === attempt) this.#idleActivityAnnouncement = undefined;
+      }
+    });
+  }
+
+  #cancelIdleActivityAnnouncement() {
+    this.#idleActivityAnnouncement?.cancel();
+    this.#idleActivityAnnouncement = undefined;
   }
 
   /**
@@ -878,10 +982,33 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 }
 
 // =============================================================================
-// The fold: one pure switch per consumed event.
+// The fold: one pure switch per consumed event (reduceAgentEventCore), plus
+// one post-switch stamp that records busy/idle flips of the DERIVED activity
+// so the announcement reconciler can key and time them.
 // =============================================================================
 
 function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
+  const state = reduceAgentEventCore(input);
+  const activity = deriveAgentActivity(state);
+  const previous = state.activity;
+  // Genesis idle is not a flip: `activity` stays undefined until the agent is
+  // first busy, so a freshly born agent never announces anything.
+  const flipped =
+    previous === undefined
+      ? activity.busy
+      : previous.busy !== activity.busy || previous.kind !== activity.kind;
+  if (!flipped) return state;
+  return {
+    ...state,
+    activity: {
+      ...activity,
+      sinceOffset: input.event.offset,
+      since: input.event.createdAt,
+    },
+  };
+}
+
+function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
   const { event, state } = input;
   switch (event.type) {
     case "events.iterate.com/agent/config-updated":
@@ -1104,6 +1231,42 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         ...state,
         pendingTriggerOffset: null,
         pendingTriggerSource: null,
+      };
+    case "events.iterate.com/capability-host/script-execution-requested":
+      return state.activeScriptExecutionIds.includes(event.payload.executionId)
+        ? state
+        : {
+            ...state,
+            activeScriptExecutionIds: [
+              ...state.activeScriptExecutionIds,
+              event.payload.executionId,
+            ],
+          };
+    case "events.iterate.com/capability-host/script-execution-completed":
+      return state.activeScriptExecutionIds.includes(event.payload.executionId)
+        ? {
+            ...state,
+            activeScriptExecutionIds: state.activeScriptExecutionIds.filter(
+              (executionId) => executionId !== event.payload.executionId,
+            ),
+          }
+        : state;
+    case "events.iterate.com/agent/activity-changed":
+      // The stale-announcement guard: a debounced idle append that lost its
+      // race with newer work carries an older sinceOffset and folds to nothing.
+      if (
+        state.announcedActivity !== undefined &&
+        event.payload.sinceOffset < state.announcedActivity.sinceOffset
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        announcedActivity: {
+          busy: event.payload.busy,
+          ...(event.payload.kind === undefined ? {} : { kind: event.payload.kind }),
+          sinceOffset: event.payload.sinceOffset,
+        },
       };
     default:
       return state;

@@ -2044,6 +2044,13 @@ export type AgentProcessorState = {
     string,
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
+  activeScriptExecutionIds: string[];
+  activity?:
+    | { busy: boolean; kind?: "llm" | "script" | undefined; sinceOffset: number; since: string }
+    | undefined;
+  announcedActivity?:
+    | { busy: boolean; kind?: "llm" | "script" | undefined; sinceOffset: number }
+    | undefined;
   tokenUsage: {
     totalInputTokens: number;
     totalOutputTokens: number;
