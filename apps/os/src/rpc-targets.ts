@@ -1214,7 +1214,7 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus path-specific policy and the onboarding kickoff). Pass overrides ({ systemPrompt?, model?, githubAgent? }) to bake customizations into the returned events. githubAgent configures automatic reviews with enabled and instructions; mentions and push interruption use the platform's fixed GitHub-agent semantics. The seeded project worker calls this from its child-stream-created reaction.",
+        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus path-specific policy and the onboarding kickoff). Pass overrides ({ systemPrompt?, model? }) to bake customizations into the returned events. GitHub review selection and rules are userspace reactions in the project config repo, not agent-default options. The seeded project worker calls this from its child-stream-created reaction.",
       children: { forPath: "Default policy (and its event batch) for one agent path." },
       parent: "the agent catalog (itx.agents.defaults)",
     });
@@ -3957,7 +3957,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Set THIS agent's policy: system prompt, model, and/or GitHub behavior. Works on an agent
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
    * that already ran (a plain last-write-wins update) AND on a path that has
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
@@ -3993,17 +3993,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         type: "events.iterate.com/agent/llm-provider-selected",
         payload: { model: defaults.model },
       });
-    }
-    if (input.githubAgent !== undefined) {
-      const configured = defaults.events.find(
-        (event) => event.type === "events.iterate.com/github-agent/configure",
-      );
-      if (configured !== undefined) {
-        events.push({
-          type: configured.type,
-          payload: configured.payload,
-        });
-      }
     }
     await this.stream.append(...events);
   }

@@ -352,7 +352,7 @@ export interface Agent {
         },
   ): Promise<StreamEvent>;
   /**
-   * Set THIS agent's policy: system prompt, model, and/or GitHub behavior. Works on an agent
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
    * that already ran (a plain last-write-wins update) AND on a path that has
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
@@ -2101,9 +2101,6 @@ export type StreamEvent = {
  * systemPrompt override REPLACES the path's platform prompt wholesale — the
  * caller owns the whole contract, including how the agent acts (codemode). */
 export type AgentDefaultsOverrides = {
-  /** GitHub pull-request behavior. The resulting configured fact always
-   * contains the complete materialized policy, including `enabled: false`. */
-  githubAgent?: GithubAgentConfigurationInput;
   systemPrompt?: string;
   model?: string;
 };
@@ -2883,13 +2880,6 @@ export type CfMarkdownConversionOptions = {
       excludeMetadata?: boolean;
     };
   };
-};
-
-/** Partial GitHub pull-request agent policy accepted by agent defaults and configuration calls. */
-export type GithubAgentConfigurationInput = {
-  automaticReview?:
-    | { enabled?: boolean | undefined; instructions?: string | undefined }
-    | undefined;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */

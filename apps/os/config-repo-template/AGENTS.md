@@ -8,12 +8,14 @@ and implementation notes that future agents should inherit. Prefer concise
 markdown files that are easy to scan and update. Commit changes with
 `itx.repo.commitFiles({ message, changes: [{ path, content }] })`.
 
-The whole project worker lives in `worker.ts` (TypeScript) — one file on
-purpose, so reading it is reading the whole system. Its default export handles
-HTTP for the project's hosts, receives every committed event on every stream
-in the project through `processEvent(event)` (checkpointed, at-least-once,
-per-stream order — `event.path` says which stream), and reaches the project's
-capabilities through `await this.env.ITX.get()`. The worker is built by the
+The project worker entrypoint is `worker.ts` (TypeScript). Its default export
+handles HTTP for the project's hosts, receives every committed event on every
+stream in the project through `processEvent(event)` (checkpointed,
+at-least-once, per-stream order — `event.path` says which stream), and reaches
+the project's capabilities through `await this.env.ITX.get()`. Small local
+modules are fine when logic deserves focused tests; the seeded GitHub review
+mechanics live in `github-reviews.ts`, while repository scope and labels stay
+obvious in `worker.ts`. The worker is built by the
 platform's worker build pipeline: multi-file TypeScript works (the bundler
 follows imports), and npm dependencies declared in `package.json` are
 installed at build time. The platform's capability types and worker base

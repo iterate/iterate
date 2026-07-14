@@ -22,6 +22,7 @@ function config() {
       baseUrl: "https://os.example.test",
       integrations: {
         github: {
+          appSlug: "iterate-test",
           oauthClientId: "gh-client",
           oauthClientSecret: "gh-client-secret",
           webhookSecret: GITHUB_WEBHOOK_SECRET,
@@ -74,7 +75,7 @@ describe("handleIntegrationWebhookApiRequest (github)", () => {
     expect(call.externalId).toBe("42");
     expect(call.event.type).toBe("events.iterate.com/github/webhook-received");
     expect(call.event.idempotencyKey).toBe("github-webhook:delivery-1");
-    expect(call.event.payload).toMatchObject({ installationId: "42" });
+    expect(call.event.payload).toMatchObject({ appSlug: "iterate-test", installationId: "42" });
   });
 
   test("bad signature → 401, never routes (the trust boundary)", async () => {
@@ -164,6 +165,7 @@ describe("handleIntegrationWebhookApiRequest (slack + routing)", () => {
     const call = routeIntegrationWebhook.mock.calls[0]![0];
     expect(call.slug).toBe("slack");
     expect(call.externalId).toBe("T42");
+    expect(call.routerProcessorSlug).toBe("slack");
     expect(call.event.type).toBe("events.iterate.com/slack/webhook-received");
     expect(call.event.idempotencyKey).toBe("slack-webhook:Ev1");
     expect(call.event.payload).toMatchObject({ slackTeamId: "T42" });
