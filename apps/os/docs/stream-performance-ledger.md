@@ -152,22 +152,24 @@ Runtime costs are bounded but real:
 The system still collapses operationally into one Stream DO, its SQLite, and
 ordinary Workers RPC; it does not add a service, queue, coordinator, or new
 distributed consistency boundary. It does **not** collapse elegantly at the
-source level yet. A later consolidation should preserve the public semantic
-projections (`append`, `appendOffsets`, `appendAck`), schema-v8 row shape,
-frame/cursor correctness tests, and host benchmark, then unify the duplicated
-bounded-range/frame planning inside storage and subscriber delivery. Do not
-trade those measured contracts for legacy KV or a second persistence model.
+source level yet. A later consolidation should preserve the one public
+`append` operation, the specialized internal no-payload/offset/event storage
+projections, schema-v8 row shape, frame/cursor correctness tests, and host
+benchmark, then unify the duplicated bounded-range/frame planning inside
+storage and subscriber delivery. Do not trade those measured contracts for
+legacy KV or a second persistence model.
 
 ### Shipping Interpretation
 
 The branch is worth advancing as a destructive preview candidate because the
 large wins cover batch ingest, large writes, duplicate retries, replay, latest
 reads, and sparse durable delivery, with no reproduced regression in live
-latency or cold activation. It is not ready for an unqualified production
-merge solely on this local benchmark: schema-v8 wipe/rollback procedure and a
-preview workload run still need explicit sign-off, and the source-complexity
-consolidation map should be retained even if consolidation happens after the
-performance branch ships.
+latency. Forced-cold head is 4.8-10.1% slower because correct canonical-name
+recovery adds one activation KV read. It is not ready for an unqualified
+production merge solely on this local benchmark: schema-v8 wipe/rollback
+procedure and a preview workload run still need explicit sign-off, and the
+source-complexity consolidation map should be retained even if consolidation
+happens after the performance branch ships.
 
 ## 2026-07-13: WebSocket Coalescing Rejected
 
@@ -2251,3 +2253,133 @@ the cost: common batch, large-event, replay, read, and cross-post paths improve
 materially, while isolated p95 validation is still required for concurrent and
 live fanout paths. Raw records are
 `/tmp/cumulative-5-current-{main,candidate}-r{1..5}.log`.
+
+## 2026-07-14: Sixth Cumulative Main Comparison
+
+### Revisions And Final Gate
+
+- Candidate: `68fcfb3620`.
+- Baseline: `ea4b28637b`, freshly fetched `origin/main` before collection.
+- Five complete current-suite rounds per revision, followed by larger focused
+  controls for the noisy concurrent, live-delivery, fanout, and forced-cold
+  rows. Only one Workers stack was active at a time.
+- Every timer ran in Node around an awaited RPC or observed delivery and
+  consumed the result. The comparison does not depend on an isolate clock
+  advancing while workerd is CPU-bound.
+
+The current-suite central values remained broadly positive. Larger focused
+controls replace the four noisy small-sample rows rather than selectively
+discarding them:
+
+| Focused workload                |       p50 change |        p95 change |      mean change | Capacity change |
+| ------------------------------- | ---------------: | ----------------: | ---------------: | --------------: |
+| 32 concurrent singleton appends | **15.76% lower** |   **2.05% lower** | **10.63% lower** |     **+18.70%** |
+| One live delivery               |  **7.23% lower** |  **17.98% lower** |  **5.33% lower** |             n/a |
+| Fanout to 25 subscribers        |  **2.65% lower** |  **16.67% lower** |  **1.30% lower** |             n/a |
+| Forced-reactivation head        | **4.81% higher** | **10.08% higher** | **9.18% higher** |             n/a |
+
+Across all 17 equally weighted workloads after those replacements, geometric
+mean p50 improved **17.442%**, p95 improved **12.146%**, and mean improved
+**16.369%**. This is still a suite summary, not a claim about production
+traffic weights. The most useful capacity results were **+39.7%** for the
+100-event append batch and **+23.0%** for 500-event replay.
+
+The forced-cold regression is accepted as the measured correctness tax for
+canonical name recovery. ID-only RPC reactivation used to lose the canonical
+name needed by the Stream's path/project identity. Recovery now performs one
+KV read on activation, about 0.28 ms in the focused storage measurement. Warm
+operations do not pay it. Removing the read would recover a small cold-only
+number by restoring incorrect reactivation behavior, so it is not an
+optimization candidate.
+
+Current-suite records are
+`/tmp/cumulative-6-current-{main,candidate}-r{1..5}.log`; focused controls are
+`/tmp/cumulative-6-tail-{main,candidate}-r{1..5}.log`.
+
+## 2026-07-14: One Public Append Operation Retained
+
+### API And Internal Boundary
+
+The public Stream surface now has one `append` operation. The default call is
+the cheapest useful contract: commit durably and return no payload. A caller
+that consumes an input-aligned result selects it on the same operation with
+`append({ return: "offsets" }, ...events)` or
+`append({ return: "events" }, ...events)`. `appendAck` and `appendOffsets` are
+no longer public compatibility aliases. The conceptual surface is now append,
+subscribe, read, and wait-for-event.
+
+The Stream Durable Object deliberately retains three specialized internal
+methods. `StreamRpcTarget.append` dispatches once at the public boundary, while
+code holding a raw `env.STREAM` namespace stub calls the specialized method
+directly. This is not a second public API: it keeps result materialization out
+of acknowledgement-only writes and prevents an options object from being
+parsed as an event. A real itx-connect failure exposed one unsafe cast in the
+secret path during the experiment; the final change removed that cast and
+audited every raw namespace call site.
+
+Cap'n Web's generated method type cannot preserve the relationship between an
+argument overload and its option-dependent result. The honest generated type
+is therefore `StreamEvent[] | number[] | void`; internal callers that request a
+projection validate it with `appendedEvents` or `appendedOffsets`. A tagged
+wire wrapper would improve static narrowing but add bytes and allocation to
+every result-bearing append. Keeping the untagged payload is the lower-cost
+choice, with a small and explicit TypeScript ergonomics cost.
+
+### Performance And Verification
+
+A same-server dispatch control alternated the old acknowledgement method and
+the unified default operation for five runs, timing awaited host-visible RPCs.
+Pooled changes were effectively neutral:
+
+| Workload                        |   p50 change |   p95 change |  mean change |
+| ------------------------------- | -----------: | -----------: | -----------: |
+| Singleton append                | 1.55% higher | 2.64% higher |  0.49% lower |
+| 100-event batch                 |  1.23% lower |  6.22% lower |  1.99% lower |
+| 32 concurrent singleton appends | 0.47% higher | 1.87% higher | 4.67% higher |
+
+Singleton p99 was noisy and inconsistent across runs, so no p99 claim is made.
+Two cross-server runs reversed their global direction when run order reversed,
+including unrelated read/head controls, and are rejected as process-order
+bias rather than evidence about dispatch.
+
+Verification on the final commit includes OS typecheck, 263 touched-path unit
+tests from the API migration, a 54-test raw-stub group rerun after the boundary
+fix, all 16 Stream end-to-end tests, and 35 other active Stream/itx end-to-end
+checks. One dynamic-worker test timed out after 60 seconds in the parallel
+matrix and passed in 2.2 seconds alone. Running the kill/reactivation Stream
+suite concurrently with seven other files caused the detached local workerd
+process to exit after its intentional kill; the Stream suite passed 16/16
+alone and the remaining files passed separately. Wire latency in the final
+matrix was p50 1.7 ms and p95 8.7 ms over 20 samples.
+
+The change is broad at call sites and generated API output (`+803/-483` across
+49 files) but shallow architecturally: one public dispatch, two result guards,
+and no schema, migration, timer, queue, cache, storage-format branch, or
+background task. It collapses back to the existing specialized DO operations
+at one boundary. The main lasting complexity is the result union imposed by
+Cap'n Web's method typing, not runtime control flow. Dispatch records are
+`/tmp/stream-append-dispatch-r{1..5}.log`.
+
+## 2026-07-14: Radical Storage And Pump Prototypes Rejected
+
+Three wider prototypes were kept on isolated branches long enough to test and
+then excluded from the shipping branch:
+
+- A normalized/segmented journal improved only very large chunked writes.
+  Ordinary append and read paths regressed, while the extra tables and
+  materialization paths made recovery and rollback harder to audit. It ended
+  on `experiment/stream-radical-journal` and is rejected.
+- A synchronous resident session pump produced mixed medians and materially
+  worse tails. It added another scheduler and re-arm state machine without a
+  stable throughput win. It ended on
+  `experiment/stream-radical-session-pump` and is rejected.
+- A `waitForEvent` micro-fast-path was slower than the existing subscriber
+  route and was deleted rather than retained behind a branch.
+
+These results reinforce the earlier legacy-KV decision. Owning flush timing is
+attractive in theory, but it also means recreating SQLite's transaction and
+output-gate correctness boundary in application code. The measured wins in
+this branch come from fewer statements, less serialization, retained tails,
+and less duplicate work. A KV rewrite remains an experiment only if it can
+beat those paths end to end while proving eviction and failure semantics; it
+is not a shipping direction on current evidence.
