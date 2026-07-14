@@ -126,9 +126,11 @@ export function ProjectStreamView({
   const streamConnectionAddress = useMemo(
     () => ({
       ...(projectId == null ? {} : { projectId }),
-      connectionKey: `stream-mirror:${streamPath}`,
+      // One durable mirror lane per project: navigating between streams reuses
+      // it instead of leaking a persistent WebSocket for every path visited.
+      connectionKey: "browser-stream-mirror",
     }),
-    [projectId, streamPath],
+    [projectId],
   );
   // Dial itx imperatively (never `useItx()`), and PER CALL: the stream view's
   // shell — header, tabs, composer, panel — must paint before the socket
