@@ -1,55 +1,57 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteWorkerSecretIfPresent, smokeResponse } from "./deploy-helpers.ts";
+import { assertWorkerSecretAbsent, smokeResponse } from "./deploy-helpers.ts";
+import { CloudflareApiError } from "./env-context.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
 const workerName = "os-prd";
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 const listPath = `/workers/scripts/${workerName}/secrets`;
-const deletePath = `${listPath}/${secretName}?url_encoded=true`;
 
-describe("deleteWorkerSecretIfPresent", () => {
-  it("does nothing when the retired binding is already absent", async () => {
+describe("assertWorkerSecretAbsent", () => {
+  it("accepts a Worker without the forbidden binding", async () => {
     const cf = vi.fn(async () => []);
 
-    await expect(deleteWorkerSecretIfPresent({ cf, workerName, secretName })).resolves.toBe(false);
+    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).resolves.toBeUndefined();
 
     expect(cf).toHaveBeenCalledOnce();
     expect(cf).toHaveBeenCalledWith(listPath);
   });
 
-  it("deletes an existing binding and verifies its removal", async () => {
-    let listCount = 0;
-    const cf = vi.fn(async (path: string, init?: RequestInit) => {
-      if (path === listPath && !init) {
-        listCount += 1;
-        return listCount === 1 ? [{ name: secretName, type: "secret_text" }] : [];
-      }
-      if (path === deletePath && init?.method === "DELETE") return undefined;
-      throw new Error(`unexpected Cloudflare request: ${init?.method ?? "GET"} ${path}`);
+  it("accepts a Worker that has not been created yet", async () => {
+    const cf = vi.fn(async () => {
+      throw new CloudflareApiError("GET", listPath, 404, [{ code: 10007 }]);
     });
 
-    await expect(deleteWorkerSecretIfPresent({ cf, workerName, secretName })).resolves.toBe(true);
+    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).resolves.toBeUndefined();
 
-    expect(cf.mock.calls).toEqual([[listPath], [deletePath, { method: "DELETE" }], [listPath]]);
+    expect(cf).toHaveBeenCalledExactlyOnceWith(listPath);
   });
 
-  it("fails closed when Cloudflare still reports the binding", async () => {
-    const cf = vi.fn(async (path: string, init?: RequestInit) => {
-      if (path === listPath) return [{ name: secretName, type: "secret_text" }];
-      if (path === deletePath && init?.method === "DELETE") return undefined;
-      throw new Error(`unexpected Cloudflare request: ${init?.method ?? "GET"} ${path}`);
-    });
+  it("fails closed without mutating an existing binding", async () => {
+    const cf = vi.fn(async () => [{ name: secretName, type: "secret_text" }]);
 
-    await expect(deleteWorkerSecretIfPresent({ cf, workerName, secretName })).rejects.toThrow(
-      /retired Worker secret remains/,
+    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).rejects.toThrow(
+      /Forbidden Worker secret is present/,
     );
+    expect(cf).toHaveBeenCalledExactlyOnceWith(listPath);
   });
 
   it("fails closed when Cloudflare returns an unexpected secret-list shape", async () => {
     const cf = vi.fn(async () => ({ secrets: [] }));
 
-    await expect(deleteWorkerSecretIfPresent({ cf, workerName, secretName })).rejects.toThrow();
+    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).rejects.toThrow();
+  });
+
+  it("propagates Cloudflare failures other than a missing Worker", async () => {
+    const cloudflareError = new CloudflareApiError("GET", listPath, 503, [{ code: 10000 }]);
+    const cf = vi.fn(async () => {
+      throw cloudflareError;
+    });
+
+    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).rejects.toBe(
+      cloudflareError,
+    );
   });
 });
 

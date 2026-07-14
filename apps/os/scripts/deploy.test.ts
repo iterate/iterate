@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type CloudflareApi = (path: string, init?: RequestInit) => Promise<unknown>;
-
-interface RetirementEnv {
+interface DeploymentEnv {
+  authBaseUrl: string;
   baseUrl: string;
   dopplerConfig: string;
   eventDocsBaseUrl: string;
@@ -10,13 +9,20 @@ interface RetirementEnv {
   projectHostnameBases: string[];
 }
 
-interface RetirementContext {
-  cf: CloudflareApi;
-  env: RetirementEnv;
+interface DeploymentContext {
+  cf: (path: string, init?: RequestInit) => Promise<unknown>;
+  env: DeploymentEnv;
+  name: string;
+  secrets: Record<string, string>;
 }
 
 interface DeployInput {
-  afterDeploy?: (ctx: RetirementContext) => Promise<void> | void;
+  afterDeploy?: (ctx: DeploymentContext) => Promise<void> | void;
+  prepare?: (
+    ctx: DeploymentContext,
+    secretValues: Record<string, string>,
+    credentials: Record<string, string>,
+  ) => Promise<void> | void;
 }
 
 type SmokeResponse = (
@@ -26,12 +32,18 @@ type SmokeResponse = (
 ) => Promise<void>;
 
 const mocks = vi.hoisted(() => ({
+  assertDopplerSecretAbsent: vi.fn(),
+  assertWorkerSecretAbsent: vi.fn(async () => {}),
+  bakeStaticAuthJwks: vi.fn(async () => "baked-jwks"),
   createCliRun: vi.fn(),
-  deleteDopplerSecretIfPresent:
-    vi.fn<(input: { config: string; project: string; secretName: string }) => boolean>(),
   deployApp: vi.fn<(input: DeployInput) => Promise<void>>(),
-  smoke: vi.fn<(url: string, ok: (status: number) => boolean, label: string) => Promise<void>>(),
+  ensureContainerClasses: vi.fn(async () => {}),
+  ensureR2Bucket: vi.fn(async () => {}),
+  ensureWorkerEventsQueue: vi.fn(async () => {}),
+  parseConfig: vi.fn(),
+  run: vi.fn(),
   smokeResponse: vi.fn<SmokeResponse>(),
+  writeWranglerConfig: vi.fn(),
 }));
 
 vi.mock("trpc-cli", () => ({
@@ -41,42 +53,67 @@ vi.mock("trpc-cli", () => ({
   yamlTableConsoleLogger: {},
 }));
 
+vi.mock("../../../scripts/lib/bake-auth-jwks.ts", () => ({
+  bakeStaticAuthJwks: mocks.bakeStaticAuthJwks,
+}));
 vi.mock("../../../scripts/lib/deploy-app.ts", () => ({ deployApp: mocks.deployApp }));
-
 vi.mock("../../../scripts/lib/deploy-helpers.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../scripts/lib/deploy-helpers.ts")>()),
-  deleteDopplerSecretIfPresent: mocks.deleteDopplerSecretIfPresent,
-  smoke: mocks.smoke,
+  assertDopplerSecretAbsent: mocks.assertDopplerSecretAbsent,
+  assertWorkerSecretAbsent: mocks.assertWorkerSecretAbsent,
+  run: mocks.run,
   smokeResponse: mocks.smokeResponse,
+}));
+vi.mock("../../../scripts/lib/do-reset.ts", () => ({
+  ensureContainerClasses: mocks.ensureContainerClasses,
+}));
+vi.mock("../src/config.ts", () => ({ parseConfig: mocks.parseConfig }));
+vi.mock("./event-queue-resources.ts", () => ({
+  ensureWorkerEventsQueue: mocks.ensureWorkerEventsQueue,
+}));
+vi.mock("./ensure-resources.ts", () => ({ ensureR2Bucket: mocks.ensureR2Bucket }));
+vi.mock("./generate-wrangler-config.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./generate-wrangler-config.ts")>()),
+  writeWranglerConfig: mocks.writeWranglerConfig,
 }));
 
 import deploy from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 const workerName = "os-preview-4";
-const workerSecretsPath = `/workers/scripts/${workerName}/secrets`;
-const workerSecretDeletePath = `${workerSecretsPath}/${secretName}?url_encoded=true`;
-const workerSecretBinding = { name: secretName, type: "secret_text" };
 const env = {
+  authBaseUrl: "https://auth.preview.example.test",
   baseUrl: "https://os.preview.example.test",
   dopplerConfig: "preview_4",
   eventDocsBaseUrl: "https://events.preview.example.test",
   osWorkerName: workerName,
   projectHostnameBases: ["iterate-preview-4.test"],
-} satisfies RetirementEnv;
+} satisfies DeploymentEnv;
 
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.deployApp.mockResolvedValue(undefined);
-  mocks.smoke.mockResolvedValue(undefined);
-  mocks.deleteDopplerSecretIfPresent.mockReturnValue(true);
+  mocks.assertWorkerSecretAbsent.mockResolvedValue(undefined);
+  mocks.bakeStaticAuthJwks.mockResolvedValue("baked-jwks");
+  mocks.ensureContainerClasses.mockResolvedValue(undefined);
+  mocks.ensureR2Bucket.mockResolvedValue(undefined);
+  mocks.ensureWorkerEventsQueue.mockResolvedValue(undefined);
 });
 
-async function getAfterDeploy() {
+async function getDeployInput() {
   await deploy({ env: "preview_4" });
-  const afterDeploy = mocks.deployApp.mock.calls[0]?.[0].afterDeploy;
-  if (!afterDeploy) throw new Error("deploy did not register an afterDeploy hook");
-  return afterDeploy;
+  const input = mocks.deployApp.mock.calls[0]?.[0];
+  if (!input) throw new Error("deploy did not invoke deployApp");
+  return input;
+}
+
+function deploymentContext(secrets: Record<string, string> = {}): DeploymentContext {
+  return {
+    cf: vi.fn(async () => []),
+    env,
+    name: "preview_4",
+    secrets,
+  };
 }
 
 function queueAuthRpc404(body: unknown) {
@@ -86,118 +123,71 @@ function queueAuthRpc404(body: unknown) {
   });
 }
 
-function contextWith(cf: CloudflareApi): RetirementContext {
-  return { cf, env };
-}
+describe("forbidden auth service-token invariants", () => {
+  it("asserts Doppler and Worker absence before any deployment preparation", async () => {
+    const input = await getDeployInput();
+    const context = deploymentContext();
 
-function workerSecretRevocationSucceeds() {
-  let listCount = 0;
-  return vi.fn(async (path: string, init?: RequestInit) => {
-    if (path === workerSecretsPath && !init) {
-      listCount += 1;
-      return listCount === 1 ? [workerSecretBinding] : [];
-    }
-    if (path === workerSecretDeletePath && init?.method === "DELETE") return undefined;
-    throw new Error(`unexpected Cloudflare request: ${init?.method ?? "GET"} ${path}`);
-  });
-}
+    await input.prepare?.(context, {}, {});
 
-describe("retired auth service-token orchestration", () => {
-  it("prevents every deletion when the initial auth RPC smoke gets a wrong-body 404", async () => {
-    queueAuthRpc404({ error: "route not found" });
-    const cf = vi.fn(async () => []);
-    const afterDeploy = await getAfterDeploy();
-
-    await expect(afterDeploy(contextWith(cf))).rejects.toThrow("Smoke failed: auth Workers RPC");
-
-    expect(cf).not.toHaveBeenCalled();
-    expect(mocks.deleteDopplerSecretIfPresent).not.toHaveBeenCalled();
-  });
-
-  it.for([
-    {
-      cf: () =>
-        vi.fn(async (path: string, init?: RequestInit) => {
-          if (path === workerSecretsPath && !init) return [workerSecretBinding];
-          if (path === workerSecretDeletePath && init?.method === "DELETE") {
-            throw new Error("Cloudflare rejected the Worker-secret deletion");
-          }
-          throw new Error(`unexpected Cloudflare request: ${init?.method ?? "GET"} ${path}`);
-        }),
-      failure: "Cloudflare rejected the Worker-secret deletion",
-      name: "Worker-secret deletion",
-    },
-    {
-      cf: () =>
-        vi.fn(async (path: string, init?: RequestInit) => {
-          if (path === workerSecretsPath && !init) return [workerSecretBinding];
-          if (path === workerSecretDeletePath && init?.method === "DELETE") return undefined;
-          throw new Error(`unexpected Cloudflare request: ${init?.method ?? "GET"} ${path}`);
-        }),
-      failure: "Cloudflare reported success but retired Worker secret remains",
-      name: "Worker-secret verification",
-    },
-  ])("preserves the Doppler secret after $name failure", async ({ cf: makeCf, failure }) => {
-    queueAuthRpc404({ error: "not found" });
-    const cf = makeCf();
-    const afterDeploy = await getAfterDeploy();
-
-    await expect(afterDeploy(contextWith(cf))).rejects.toThrow(failure);
-
-    expect(mocks.smoke).not.toHaveBeenCalled();
-    expect(mocks.deleteDopplerSecretIfPresent).not.toHaveBeenCalled();
-  });
-
-  it("preserves the Doppler secret when post-revocation app verification fails", async () => {
-    queueAuthRpc404({ error: "not found" });
-    mocks.smoke.mockRejectedValueOnce(new Error("post-revocation dashboard smoke failed"));
-    const cf = workerSecretRevocationSucceeds();
-    const afterDeploy = await getAfterDeploy();
-
-    await expect(afterDeploy(contextWith(cf))).rejects.toThrow(
-      "post-revocation dashboard smoke failed",
-    );
-
-    expect(cf).toHaveBeenCalledTimes(3);
-    expect(mocks.smokeResponse).toHaveBeenCalledOnce();
-    expect(mocks.deleteDopplerSecretIfPresent).not.toHaveBeenCalled();
-  });
-
-  it("preserves the Doppler secret when the post-revocation auth RPC smoke fails", async () => {
-    queueAuthRpc404({ error: "not found" });
-    queueAuthRpc404({ error: "route not found" });
-    const cf = workerSecretRevocationSucceeds();
-    const afterDeploy = await getAfterDeploy();
-
-    await expect(afterDeploy(contextWith(cf))).rejects.toThrow(
-      "Smoke failed: auth Workers RPC after secret revocation",
-    );
-
-    expect(cf).toHaveBeenCalledTimes(3);
-    expect(mocks.smoke).toHaveBeenCalledTimes(3);
-    expect(mocks.smokeResponse).toHaveBeenCalledTimes(2);
-    expect(mocks.deleteDopplerSecretIfPresent).not.toHaveBeenCalled();
-  });
-
-  it("deletes the Doppler source only after all revocation probes pass", async () => {
-    queueAuthRpc404({ error: "not found" });
-    queueAuthRpc404({ error: "not found" });
-    const cf = workerSecretRevocationSucceeds();
-    const afterDeploy = await getAfterDeploy();
-
-    await expect(afterDeploy(contextWith(cf))).resolves.toBeUndefined();
-
-    expect(cf.mock.calls).toEqual([
-      [workerSecretsPath],
-      [workerSecretDeletePath, { method: "DELETE" }],
-      [workerSecretsPath],
-    ]);
-    expect(mocks.smoke).toHaveBeenCalledTimes(3);
-    expect(mocks.smokeResponse).toHaveBeenCalledTimes(2);
-    expect(mocks.deleteDopplerSecretIfPresent).toHaveBeenCalledWith({
-      config: "preview_4",
+    expect(mocks.assertDopplerSecretAbsent).toHaveBeenCalledWith({
       project: "os",
+      config: "preview_4",
+      secretName,
+      secrets: context.secrets,
+    });
+    expect(mocks.assertWorkerSecretAbsent).toHaveBeenCalledWith({
+      cf: context.cf,
+      workerName,
       secretName,
     });
+    expect(mocks.assertWorkerSecretAbsent.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.bakeStaticAuthJwks.mock.invocationCallOrder[0] as number,
+    );
+  });
+
+  it("stops before Cloudflare or build preparation when Doppler contains the secret", async () => {
+    mocks.assertDopplerSecretAbsent.mockImplementationOnce(() => {
+      throw new Error("forbidden Doppler secret");
+    });
+    const input = await getDeployInput();
+
+    await expect(
+      input.prepare?.(deploymentContext({ [secretName]: "redacted" }), {}, {}),
+    ).rejects.toThrow("forbidden Doppler secret");
+
+    expect(mocks.assertWorkerSecretAbsent).not.toHaveBeenCalled();
+    expect(mocks.bakeStaticAuthJwks).not.toHaveBeenCalled();
+  });
+
+  it("stops before build preparation when the live Worker contains the secret", async () => {
+    mocks.assertWorkerSecretAbsent.mockRejectedValueOnce(new Error("forbidden Worker secret"));
+    const input = await getDeployInput();
+
+    await expect(input.prepare?.(deploymentContext(), {}, {})).rejects.toThrow(
+      "forbidden Worker secret",
+    );
+
+    expect(mocks.bakeStaticAuthJwks).not.toHaveBeenCalled();
+  });
+});
+
+describe("auth Workers RPC deployment proof", () => {
+  it("accepts only the exact OS project-miss response", async () => {
+    queueAuthRpc404({ error: "not found" });
+    const input = await getDeployInput();
+
+    await expect(input.afterDeploy?.(deploymentContext())).resolves.toBeUndefined();
+
+    expect(mocks.smokeResponse).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an unrelated 404 body", async () => {
+    queueAuthRpc404({ error: "route not found" });
+    const input = await getDeployInput();
+
+    await expect(input.afterDeploy?.(deploymentContext())).rejects.toThrow(
+      "Smoke failed: auth Workers RPC",
+    );
   });
 });
