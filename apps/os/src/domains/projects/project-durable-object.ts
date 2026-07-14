@@ -253,12 +253,14 @@ export class ProjectDurableObject extends DurableObject<Env> {
   /**
    * Replace one roster row from the agent journal's full status-changed
    * history — the recovery lane for a dropped touch (merge patches cannot
-   * reconstruct a lost field from later patches; the journal can). See
-   * AgentStatusDatabase.rebuild for the replace-vs-merge reasoning.
+   * reconstruct a lost field from later patches; the journal can). Returns
+   * false when the snapshot lost a race with a newer touch and the caller
+   * must re-read the journal. See AgentStatusDatabase.rebuild.
    */
-  rebuildAgentStatus(input: AgentStatusTouchInput): void {
-    this.#agentStatusDatabase.rebuild(input);
-    this.#processorHost.refreshLive();
+  rebuildAgentStatus(input: AgentStatusTouchInput): boolean {
+    const applied = this.#agentStatusDatabase.rebuild(input);
+    if (applied) this.#processorHost.refreshLive();
+    return applied;
   }
 
   async fetch(request: Request): Promise<Response> {

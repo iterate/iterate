@@ -28,23 +28,21 @@ type RosterRow = {
 };
 
 /**
- * The project's agents roster, merged live from two `itx.liveState` slices:
- * the agent-status view (busy/title/note/shortStatus per agent, folded from
- * each agent's own status-changed patches) and the streams index (recency).
- * Subscribed through `address` — the sidebar lives in the app shell, outside
- * the project's ItxProvider — so it never suspends and paints when the
- * project socket connects.
+ * The project's agents roster, live from the `agents` slice of
+ * `itx.liveState` (each agent's merged status record, folded from its own
+ * status-changed patches; the server pushes a snapshot then minimal diffs —
+ * no polling anywhere). ONE subscription per mounted component, and a
+ * STABLE-slice selector per the useLiveState contract — the sort/shape work
+ * happens in the downstream useMemo. Recency is the row's own `updatedAt`:
+ * every turn flips busy at trigger and settle, so the last status patch IS
+ * the agent's last activity. Subscribed through `address` — the sidebar
+ * lives in the app shell, outside the project's ItxProvider — so it never
+ * suspends and paints when the project socket connects.
  */
 function useAgentRoster(projectId: string): RosterRow[] {
   const roster = useLiveState(
     (itx) => itx.liveState,
     (state) => state.agents,
-    [projectId],
-    { address: { projectId } },
-  );
-  const streamsIndex = useLiveState(
-    (itx) => itx.liveState,
-    (state) => state.streamsIndex,
     [projectId],
     { address: { projectId } },
   );
@@ -61,11 +59,11 @@ function useAgentRoster(projectId: string): RosterRow[] {
             busy && row.status.shortStatus !== undefined
               ? `is ${row.status.shortStatus}…`
               : row.status.note,
-          lastActivityAt: streamsIndex.value?.[row.path]?.lastActivityAt ?? row.updatedAt,
+          lastActivityAt: row.updatedAt,
         };
       })
       .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
-  }, [roster.value, streamsIndex.value]);
+  }, [roster.value]);
 }
 
 /**

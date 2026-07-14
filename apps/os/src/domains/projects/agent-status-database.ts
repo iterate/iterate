@@ -88,12 +88,18 @@ export class AgentStatusDatabase {
    * the recovery lane for a dropped touch. A REPLACE, not a merge: the fold
    * restarts from nothing, because the row may hold a fold that skipped
    * events (its lastEventOffset advanced past patches a dropped dial never
-   * delivered), and the offset guard would wrongly discard them. The given
-   * history is authoritative at read time; patches appended after the read
-   * arrive through later (serialized) touches with higher offsets and merge
-   * on top. An empty history deletes the row.
+   * delivered), and the offset guard would wrongly discard them.
+   *
+   * Compare-and-retry against racing touches: a touch for NEWER events can
+   * land between the caller's journal read and this replace, and a stale
+   * snapshot must not erase them (their touch already succeeded — nothing
+   * would ever re-index them). A rebuild older than the row is REFUSED
+   * (returns false); the caller re-reads the journal, which now contains
+   * every event any successful touch folded, and tries again. An empty
+   * history can therefore only clear a row that never folded anything —
+   * against real state it reads as stale and is refused.
    */
-  rebuild(input: AgentStatusTouchInput): void {
+  rebuild(input: AgentStatusTouchInput): boolean {
     let status: AgentStatusRecord | undefined;
     let lastEventOffset = 0;
     let updatedAt: string | undefined;
@@ -107,16 +113,19 @@ export class AgentStatusDatabase {
       status = merged;
       updatedAt = event.createdAt;
     }
+    const existing: AgentStatusRow | undefined = this.#projection[input.path];
+    if (existing !== undefined && existing.lastEventOffset > lastEventOffset) return false;
     if (status === undefined || updatedAt === undefined) {
-      if (this.#projection[input.path] === undefined) return;
+      if (existing === undefined) return true;
       this.#sql.exec(`DELETE FROM agent_status WHERE path = ?`, input.path);
       const { [input.path]: _removed, ...rest } = this.#projection;
       this.#projection = rest;
-      return;
+      return true;
     }
     const row: AgentStatusRow = { path: input.path, status, lastEventOffset, updatedAt };
     this.#store(row);
     this.#projection = { ...this.#projection, [input.path]: row };
+    return true;
   }
 
   /** Persist one merged row — REPLACE, because the merge already happened in JS. */

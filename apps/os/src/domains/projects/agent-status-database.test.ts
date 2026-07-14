@@ -114,16 +114,59 @@ describe("AgentStatusDatabase", () => {
     });
   });
 
-  it("rebuild with an empty history deletes the row", () => {
+  it("rebuild refuses a snapshot that lost a race with a newer touch", () => {
+    const db = new AgentStatusDatabase(sqlStorage());
+    db.touch({
+      path: "/agents/main",
+      events: [{ payload: { busy: true, sinceOffset: 8 }, offset: 9, createdAt: AT }],
+    });
+    // The journal read happened BEFORE event 12 existed; a touch for it then
+    // landed. Replacing with the stale snapshot would erase event 12 forever
+    // (its touch already succeeded — nothing re-indexes it).
+    db.touch({
+      path: "/agents/main",
+      events: [{ payload: { busy: false, sinceOffset: 11 }, offset: 12, createdAt: AT }],
+    });
+    const stale = db.rebuild({
+      path: "/agents/main",
+      events: [
+        { payload: { title: "Lisbon trip" }, offset: 5, createdAt: AT },
+        { payload: { busy: true, sinceOffset: 8 }, offset: 9, createdAt: AT },
+      ],
+    });
+    expect(stale).toBe(false);
+    expect(db.all()["/agents/main"]).toMatchObject({
+      status: { busy: false, sinceOffset: 11 },
+      lastEventOffset: 12,
+    });
+    // The re-read (now including event 12) applies and heals the dropped title.
+    const applied = db.rebuild({
+      path: "/agents/main",
+      events: [
+        { payload: { title: "Lisbon trip" }, offset: 5, createdAt: AT },
+        { payload: { busy: true, sinceOffset: 8 }, offset: 9, createdAt: AT },
+        { payload: { busy: false, sinceOffset: 11 }, offset: 12, createdAt: AT },
+      ],
+    });
+    expect(applied).toBe(true);
+    expect(db.all()["/agents/main"]).toMatchObject({
+      status: { title: "Lisbon trip", busy: false, sinceOffset: 11 },
+      lastEventOffset: 12,
+    });
+  });
+
+  it("rebuild refuses an empty history against a row that folded events", () => {
+    // An empty read while the row holds folded events is stale by definition
+    // (those events were committed before their touch succeeded); the guard
+    // refuses it rather than deleting real state.
     const sql = sqlStorage();
     const db = new AgentStatusDatabase(sql);
     db.touch({
       path: "/agents/main",
       events: [{ payload: { title: "ghost" }, offset: 1, createdAt: AT }],
     });
-    db.rebuild({ path: "/agents/main", events: [] });
-    expect(db.all()["/agents/main"]).toBeUndefined();
-    expect(new AgentStatusDatabase(sql).all()["/agents/main"]).toBeUndefined();
+    expect(db.rebuild({ path: "/agents/main", events: [] })).toBe(false);
+    expect(db.all()["/agents/main"]).toMatchObject({ status: { title: "ghost" } });
   });
 
   it("swaps only the touched row's reference (copy-on-write) and survives reload", () => {

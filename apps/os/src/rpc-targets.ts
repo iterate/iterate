@@ -4941,7 +4941,7 @@ type ProjectDurableObjectRpc = {
   incrementLiveDemo(): Promise<void>;
   touchStreamActivity(input: TouchInput): Promise<void>;
   touchAgentStatus(input: AgentStatusTouchInput): Promise<void>;
-  rebuildAgentStatus(input: AgentStatusTouchInput): Promise<void>;
+  rebuildAgentStatus(input: AgentStatusTouchInput): Promise<boolean>;
 };
 
 /**
@@ -5392,11 +5392,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * Recovery lane for a failed roster dial: re-read the agent journal's FULL
    * status-changed history and hand it to the DO as a from-scratch rebuild.
-   * The journal read is authoritative — every patch any dial could have
-   * delivered so far is already appended, and patches appended after the read
-   * are delivered after it, so their (DO-serialized) merge lands on top of
-   * the replaced row. Retried with backoff; the terminal failure is logged
-   * and the row stays stale until the agent's next rebuild-triggering drop.
+   * The journal read is authoritative at read time; a touch for NEWER events
+   * racing into the gap between read and replace makes the DO REFUSE the
+   * stale snapshot, and the loop re-reads (the newer events are committed to
+   * the journal before their touch could have succeeded, so the next read
+   * has them). Retried with backoff; the terminal failure is logged and the
+   * row stays stale until the agent's next rebuild-triggering drop.
    */
   async #rebuildAgentStatus(path: string): Promise<void> {
     for (const backoffMs of [0, 2_000, 10_000]) {
@@ -5425,8 +5426,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           if (page.length < 500) break;
           afterOffset = page.at(-1)!.offset;
         }
-        await this.#projectDo.rebuildAgentStatus({ path, events });
-        return;
+        const applied = await this.#projectDo.rebuildAgentStatus({ path, events });
+        if (applied) return;
+        console.warn("[agents-roster] rebuild lost a race with a newer touch; re-reading", {
+          path,
+        });
       } catch (error) {
         console.warn("[agents-roster] rebuild attempt failed", { path, error });
       }
