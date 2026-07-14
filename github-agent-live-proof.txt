@@ -1,3 +1,3 @@
-This ordinary changed file deliberately violates the configured proof rule.
+This ordinary changed file now satisfies the configured proof rule.
 
-fart
+superfart
