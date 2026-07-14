@@ -6,7 +6,7 @@
 //   processEvent — per-event side effects. One switch, nothing else.
 //   reconcile    — at-head only (base-gated): drive or settle open LLM
 //                  obligations, derive the next scheduling decision, then
-//                  announce busy/idle activity flips.
+//                  announce busy/idle status flips.
 //
 // Everything below the class is a pure helper one of the lanes calls: the
 // fold switch, chat-request building, and codemode script-result rendering.
@@ -24,11 +24,11 @@ import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
   AGENT_LLM_RETRY_BACKOFF_BASE_MS,
   AgentProcessorContract,
-  DEFAULT_AGENT_ACTIVITY_IDLE_DEBOUNCE_MS,
+  DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
   DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
-  deriveAgentActivity,
+  deriveAgentBusy,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
 import {
@@ -69,8 +69,8 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
  *   file immediately before a model request. Production hosts provide it;
  *   bare tests without it retain the stored attachment URL.
- * - `activityIdleDebounceMs` scales the trailing delay before a busy→idle
- *   flip is announced (default DEFAULT_AGENT_ACTIVITY_IDLE_DEBOUNCE_MS);
+ * - `statusIdleDebounceMs` scales the trailing delay before a busy→idle
+ *   flip is announced (default DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS);
  *   tests shrink it.
  */
 type AgentProcessorDeps = {
@@ -78,7 +78,7 @@ type AgentProcessorDeps = {
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
   llmRetryBackoffBaseMs?: number;
-  activityIdleDebounceMs?: number;
+  statusIdleDebounceMs?: number;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
 };
@@ -102,7 +102,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   /** The armed idle-announcement debounce, keyed by the idle flip's offset;
    * `cancel()` disarms without firing. A lost timer costs nothing durable:
    * the flip is still in state and the reconciler re-arms it. */
-  #idleActivityAnnouncement: { cancel: () => void; sinceOffset: number } | undefined;
+  #idleStatusAnnouncement: { cancel: () => void; sinceOffset: number } | undefined;
 
   #now(): number {
     return (this.deps.now ?? Date.now)();
@@ -480,19 +480,19 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   ): Promise<void> {
     await this.#reconcileLlmObligations(args);
     await this.#reconcileLlmScheduling(args);
-    this.#reconcileActivityAnnouncement(args);
+    this.#reconcileStatusAnnouncement(args);
   }
 
   /**
-   * Announce the fold's busy/idle activity as activity-changed events for
+   * Announce the fold's busy/idle flips as status-changed events for
    * downstream surfaces (Slack assistant status, typing indicators). Desired
-   * is the latest flip (`state.activity`); actual is the last accepted
-   * announcement (`state.announcedActivity`); equal means done.
+   * is the latest flip (`state.status`); actual is the last accepted
+   * announcement (`state.announcedStatus`); equal means done.
    *
    * A flip to busy announces immediately. The flip to idle waits out a
    * trailing debounce first, because the fold passes through idle for one
    * append round-trip at every turn hand-off (see
-   * DEFAULT_AGENT_ACTIVITY_IDLE_DEBOUNCE_MS). The timer is a droppable
+   * DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS). The timer is a droppable
    * attempt: a lost incarnation still holds the unannounced flip in state, so
    * the revival pass lands here and re-arms (or, past due, appends directly).
    * A timer whose idle append raced newer work appends a STALE announcement —
@@ -500,46 +500,39 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * corrected by the busy announcement this pass already made for the newer
    * flip.
    */
-  #reconcileActivityAnnouncement(
+  #reconcileStatusAnnouncement(
     args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
   ): void {
-    const flip = args.state.activity;
+    const flip = args.state.status;
     // Undefined means the agent has never been busy; genesis idle is not news.
     if (flip === undefined) return;
-    const announced = args.state.announcedActivity;
+    const announced = args.state.announcedStatus;
     // With nothing announced yet, only a BUSY flip is due. An idle flip with
     // no prior announcement means no surface ever painted anything (a whole
     // turn folded in one at-head page — a replayed pre-announcement journal
     // or a synthetically seeded lifecycle), so there is nothing to clear;
     // announcing it would append one idle event to every historical agent
     // journal on the first refold after a contract deploy.
-    const announcementDue =
-      announced === undefined
-        ? flip.busy
-        : announced.busy !== flip.busy || announced.kind !== flip.kind;
+    const announcementDue = announced === undefined ? flip.busy : announced.busy !== flip.busy;
     if (!announcementDue) {
-      this.#cancelIdleActivityAnnouncement();
+      this.#cancelIdleStatusAnnouncement();
       return;
     }
     const appendAnnouncement = () =>
       args.append({
-        type: "events.iterate.com/agent/activity-changed",
-        idempotencyKey: this.idempotencyKey(`activity-changed@${flip.sinceOffset}`),
-        payload: {
-          busy: flip.busy,
-          ...(flip.kind === undefined ? {} : { kind: flip.kind }),
-          sinceOffset: flip.sinceOffset,
-        },
+        type: "events.iterate.com/agent/status-changed",
+        idempotencyKey: this.idempotencyKey(`status-changed@${flip.sinceOffset}`),
+        payload: { busy: flip.busy, sinceOffset: flip.sinceOffset },
       });
-    const debounceMs = this.deps.activityIdleDebounceMs ?? DEFAULT_AGENT_ACTIVITY_IDLE_DEBOUNCE_MS;
+    const debounceMs = this.deps.statusIdleDebounceMs ?? DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS;
     const delay = flip.busy ? 0 : Math.max(0, Date.parse(flip.since) + debounceMs - this.#now());
     if (delay === 0) {
-      this.#cancelIdleActivityAnnouncement();
+      this.#cancelIdleStatusAnnouncement();
       args.blockProcessorWhile(appendAnnouncement);
       return;
     }
-    if (this.#idleActivityAnnouncement?.sinceOffset === flip.sinceOffset) return;
-    this.#cancelIdleActivityAnnouncement();
+    if (this.#idleStatusAnnouncement?.sinceOffset === flip.sinceOffset) return;
+    this.#cancelIdleStatusAnnouncement();
     let settle!: (fire: boolean) => void;
     let settled = false;
     const wait = new Promise<boolean>((resolve) => {
@@ -559,26 +552,26 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         settle(false);
       },
     };
-    this.#idleActivityAnnouncement = attempt;
+    this.#idleStatusAnnouncement = attempt;
     args.runInBackground(async () => {
       try {
         if (!(await wait)) return;
         // Best-effort staleness check; the consuming folds' sinceOffset guard
         // is the real protection when newer work lands inside this gap.
-        const current = this.state.activity;
+        const current = this.state.status;
         if (current === undefined || current.busy || current.sinceOffset !== attempt.sinceOffset) {
           return;
         }
         await appendAnnouncement();
       } finally {
-        if (this.#idleActivityAnnouncement === attempt) this.#idleActivityAnnouncement = undefined;
+        if (this.#idleStatusAnnouncement === attempt) this.#idleStatusAnnouncement = undefined;
       }
     });
   }
 
-  #cancelIdleActivityAnnouncement() {
-    this.#idleActivityAnnouncement?.cancel();
-    this.#idleActivityAnnouncement = undefined;
+  #cancelIdleStatusAnnouncement() {
+    this.#idleStatusAnnouncement?.cancel();
+    this.#idleStatusAnnouncement = undefined;
   }
 
   /**
@@ -989,25 +982,21 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
 // =============================================================================
 // The fold: one pure switch per consumed event (reduceAgentEventCore), plus
-// one post-switch stamp that records busy/idle flips of the DERIVED activity
+// one post-switch stamp that records busy/idle flips of the DERIVED status
 // so the announcement reconciler can key and time them.
 // =============================================================================
 
 function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
   const state = reduceAgentEventCore(input);
-  const activity = deriveAgentActivity(state);
-  const previous = state.activity;
-  // Genesis idle is not a flip: `activity` stays undefined until the agent is
+  const busy = deriveAgentBusy(state);
+  // Genesis idle is not a flip: `status` stays undefined until the agent is
   // first busy, so a freshly born agent never announces anything.
-  const flipped =
-    previous === undefined
-      ? activity.busy
-      : previous.busy !== activity.busy || previous.kind !== activity.kind;
+  const flipped = state.status === undefined ? busy : state.status.busy !== busy;
   if (!flipped) return state;
   return {
     ...state,
-    activity: {
-      ...activity,
+    status: {
+      busy,
       sinceOffset: input.event.offset,
       since: input.event.createdAt,
     },
@@ -1257,20 +1246,19 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
             ),
           }
         : state;
-    case "events.iterate.com/agent/activity-changed":
+    case "events.iterate.com/agent/status-changed":
       // The stale-announcement guard: a debounced idle append that lost its
       // race with newer work carries an older sinceOffset and folds to nothing.
       if (
-        state.announcedActivity !== undefined &&
-        event.payload.sinceOffset < state.announcedActivity.sinceOffset
+        state.announcedStatus !== undefined &&
+        event.payload.sinceOffset < state.announcedStatus.sinceOffset
       ) {
         return state;
       }
       return {
         ...state,
-        announcedActivity: {
+        announcedStatus: {
           busy: event.payload.busy,
-          ...(event.payload.kind === undefined ? {} : { kind: event.payload.kind }),
           sinceOffset: event.payload.sinceOffset,
         },
       };

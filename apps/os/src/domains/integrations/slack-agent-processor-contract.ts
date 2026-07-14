@@ -3,7 +3,7 @@
 //
 // Rewritten new-style for itx from the pre-migration (git history)
 // reference. The processor owns no event types: the assistant status is a
-// pure PAINT of the agent's own activity-changed announcements (which carry
+// pure PAINT of the agent's own status-changed announcements (which carry
 // their debounce at the source), so there is no Slack-side clear obligation
 // left to journal.
 
@@ -20,7 +20,7 @@ import { SlackProcessorContract } from "./slack-processor-contract.ts";
  * stream. This processor owns the Slack-specific in-thread behavior: recording
  * route context, transcribing Slack messages into agent input, generating
  * bang-command codemode scripts, and painting the agent's announced busy/idle
- * activity onto the Slack assistant status through host-provided dependencies.
+ * status onto the Slack assistant status through host-provided dependencies.
  */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",
@@ -28,15 +28,14 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
     /**
-     * The agent's last accepted activity announcement — what the assistant
-     * status should show. Folded from agent/activity-changed with the
+     * The agent's last accepted status announcement — what the assistant
+     * status should show. Folded from agent/status-changed with the
      * contract's sinceOffset guard (an older announcement never overwrites a
      * newer one, whatever order they landed in).
      */
-    activity: z
+    status: z
       .object({
         busy: z.boolean(),
-        kind: z.enum(["llm", "script"]).optional(),
         sinceOffset: z.number().int().nonnegative(),
       })
       .optional(),
@@ -52,7 +51,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
-    "events.iterate.com/agent/activity-changed",
+    "events.iterate.com/agent/status-changed",
   ],
   emits: [
     "events.iterate.com/agents/message-received",

@@ -140,7 +140,7 @@ describe("event docs examples", () => {
 
 describe("event docs cross-references", () => {
   it("links events to the processors that emit and consume them", () => {
-    const event = getEventDocByType("events.iterate.com/agent/activity-changed");
+    const event = getEventDocByType("events.iterate.com/agent/status-changed");
 
     expect(event?.emittedBy.map((processor) => processor.contractSlug)).toEqual(
       expect.arrayContaining(["agent"]),

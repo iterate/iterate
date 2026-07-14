@@ -774,7 +774,7 @@ describe("SlackAgentProcessor", () => {
     });
   });
 
-  it("paints the agent's announced activity into the Slack assistant status", async () => {
+  it("paints the agent's announced status onto the Slack assistant thread", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
     // Establish thread context first.
@@ -786,8 +786,8 @@ describe("SlackAgentProcessor", () => {
     slackCalls.length = 0;
 
     await stream.append({
-      type: "events.iterate.com/agent/activity-changed",
-      payload: { busy: true, kind: "llm", sinceOffset: 1 },
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 1 },
     });
     await deliverNewEvents({ cursors, processor, stream });
     expect(slackCalls).toEqual([
@@ -804,7 +804,7 @@ describe("SlackAgentProcessor", () => {
 
     slackCalls.length = 0;
     await stream.append({
-      type: "events.iterate.com/agent/activity-changed",
+      type: "events.iterate.com/agent/status-changed",
       payload: { busy: false, sinceOffset: 2 },
     });
     await deliverNewEvents({ cursors, processor, stream });
@@ -816,34 +816,6 @@ describe("SlackAgentProcessor", () => {
       {
         method: "reactions.remove",
         body: { channel: "C123", name: "eyes", timestamp: "111.222" },
-      },
-    ]);
-  });
-
-  it("paints a script activity as the tools status", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
-
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload: humanMessageWebhookPayload({}),
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    slackCalls.length = 0;
-
-    await stream.append({
-      type: "events.iterate.com/agent/activity-changed",
-      payload: { busy: true, kind: "script", sinceOffset: 1 },
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-    expect(slackCalls).toEqual([
-      {
-        method: "assistant.threads.setStatus",
-        body: {
-          channel_id: "C123",
-          thread_ts: "111.222",
-          status: "is using tools...",
-          loading_messages: ["Using tools..."],
-        },
       },
     ]);
   });
@@ -863,11 +835,11 @@ describe("SlackAgentProcessor", () => {
     // "is thinking..." call for work that already finished.
     await stream.append(
       {
-        type: "events.iterate.com/agent/activity-changed",
-        payload: { busy: true, kind: "llm", sinceOffset: 1 },
+        type: "events.iterate.com/agent/status-changed",
+        payload: { busy: true, sinceOffset: 1 },
       },
       {
-        type: "events.iterate.com/agent/activity-changed",
+        type: "events.iterate.com/agent/status-changed",
         payload: { busy: false, sinceOffset: 2 },
       },
     );
@@ -895,8 +867,8 @@ describe("SlackAgentProcessor", () => {
     slackCalls.length = 0;
 
     await stream.append({
-      type: "events.iterate.com/agent/activity-changed",
-      payload: { busy: true, kind: "llm", sinceOffset: 5 },
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 5 },
     });
     await deliverNewEvents({ cursors, processor, stream });
     slackCalls.length = 0;
@@ -906,12 +878,12 @@ describe("SlackAgentProcessor", () => {
     // contract). Its older sinceOffset folds to nothing, and the repaint
     // keeps the busy status instead of clearing it.
     await stream.append({
-      type: "events.iterate.com/agent/activity-changed",
+      type: "events.iterate.com/agent/status-changed",
       payload: { busy: false, sinceOffset: 3 },
     });
     await deliverNewEvents({ cursors, processor, stream });
 
-    expect(processor.state.activity).toMatchObject({ busy: true, kind: "llm", sinceOffset: 5 });
+    expect(processor.state.status).toMatchObject({ busy: true, sinceOffset: 5 });
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
@@ -942,7 +914,7 @@ describe("SlackAgentProcessor", () => {
     // "is thinking..." and the eyes reaction forever.
     const [idle, render] = await stream.append(
       {
-        type: "events.iterate.com/agent/activity-changed",
+        type: "events.iterate.com/agent/status-changed",
         payload: { busy: false, sinceOffset: 1 },
       },
       {
@@ -977,8 +949,8 @@ describe("SlackAgentProcessor", () => {
     });
     await deliverNewEvents({ cursors, processor, stream });
     await stream.append({
-      type: "events.iterate.com/agent/activity-changed",
-      payload: { busy: true, kind: "llm", sinceOffset: 1 },
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 1 },
     });
     await deliverNewEvents({ cursors, processor, stream });
     slackCalls.length = 0;
@@ -987,7 +959,7 @@ describe("SlackAgentProcessor", () => {
     // horizon (the host slept through it). A status we ourselves painted must
     // still come down — the alternative is "is thinking..." forever.
     await stream.append({
-      type: "events.iterate.com/agent/activity-changed",
+      type: "events.iterate.com/agent/status-changed",
       payload: { busy: false, sinceOffset: 2 },
     });
     clock.now += 16 * 60_000;
@@ -1037,12 +1009,12 @@ describe("SlackAgentProcessor", () => {
     });
     await deliverNewEvents({ cursors, processor, stream });
     await stream.append({
-      type: "events.iterate.com/agent/activity-changed",
-      payload: { busy: true, kind: "llm", sinceOffset: 1 },
+      type: "events.iterate.com/agent/status-changed",
+      payload: { busy: true, sinceOffset: 1 },
     });
     await deliverNewEvents({ cursors, processor, stream });
     await stream.append({
-      type: "events.iterate.com/agent/activity-changed",
+      type: "events.iterate.com/agent/status-changed",
       payload: { busy: false, sinceOffset: 2 },
     });
     await deliverNewEvents({ cursors, processor, stream });

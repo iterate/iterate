@@ -57,15 +57,15 @@ export const AGENT_LLM_REQUEST_BACKSTOP_MS = 30 * 60_000;
 export const AGENT_COMPACTION_TRIGGER_FRACTION = 0.5;
 
 /**
- * Trailing delay before the fold's busy→idle flip is announced as an
- * activity-changed event. The fold passes through idle for one append
+ * Trailing delay before the fold's busy→idle flip is announced as a
+ * status-changed event. The fold passes through idle for one append
  * round-trip during every hand-off (llm-request-completed lands, THEN the
  * extracted script-execution-requested lands; script-execution-completed
  * lands, THEN the rendered result input lands), and announcing those blips
  * would flicker every "is thinking..." surface downstream. Busy flips
  * announce immediately — only idle waits.
  */
-export const DEFAULT_AGENT_ACTIVITY_IDLE_DEBOUNCE_MS = 1_000;
+export const DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS = 1_000;
 
 /**
  * The default codemode system prompt for web-chat agents (child agents, MCP
@@ -304,51 +304,41 @@ const LlmRequestResult = z.discriminatedUnion("status", [
   }),
 ]);
 
-/** The agent's coarse activity: idle, thinking (an LLM turn anywhere in its
- * lifecycle, trigger through completion), or running a script. */
-const AgentActivityValue = z.object({
+/** One busy/idle flip in the fold: the new value plus which consumed event
+ * established it (see the `status` state field). */
+const AgentStatusChange = z.object({
   busy: z.boolean(),
-  /** What the agent is busy with; a running script wins over an LLM turn
-   * (matching what the statuses mean downstream). Absent when idle. */
-  kind: z.enum(["llm", "script"]).optional(),
-});
-
-/** One activity flip in the fold: the new value plus which consumed event
- * established it (see the `activity` state field). */
-const AgentActivityChange = AgentActivityValue.extend({
   sinceOffset: z.number().int().nonnegative(),
   since: z.string(),
 });
 
-/** An accepted activity announcement (see the `announcedActivity` state field). */
-const AnnouncedAgentActivity = AgentActivityValue.extend({
+/** The last accepted status announcement (see the `announcedStatus` state field). */
+const AnnouncedAgentStatus = z.object({
+  busy: z.boolean(),
   sinceOffset: z.number().int().nonnegative(),
 });
 
 /**
- * Derives the agent's busy/idle activity from folded state. Busy means the
- * loop OWES something: a queued trigger, a scheduled or in-flight LLM
- * request, or a script still running. The derivation is continuous across a
- * whole multi-turn run except for gaps one append wide
- * (llm-request-completed → the extracted script request; script-completed →
- * the rendered result input that re-queues the loop) — which is exactly what
- * the idle announcement debounce papers over.
+ * Derives whether the agent is busy from folded state. Busy means the loop
+ * OWES something: a queued trigger, a scheduled or in-flight LLM request, or
+ * a script still running. The derivation is continuous across a whole
+ * multi-turn run except for gaps one append wide (llm-request-completed →
+ * the extracted script request; script-completed → the rendered result input
+ * that re-queues the loop) — which is exactly what the idle announcement
+ * debounce papers over.
  */
-export function deriveAgentActivity(
+export function deriveAgentBusy(
   state: Pick<
     AgentProcessorState,
     "activeScriptExecutionIds" | "currentRequest" | "llmRequests" | "pendingTriggerOffset"
   >,
-): z.infer<typeof AgentActivityValue> {
-  if (state.activeScriptExecutionIds.length > 0) return { busy: true, kind: "script" };
-  if (
+): boolean {
+  return (
+    state.activeScriptExecutionIds.length > 0 ||
     state.currentRequest !== null ||
     state.pendingTriggerOffset !== null ||
     Object.keys(state.llmRequests).length > 0
-  ) {
-    return { busy: true, kind: "llm" };
-  }
-  return { busy: false };
+  );
 }
 
 export const AgentProcessorContract = defineProcessorContract({
@@ -436,26 +426,26 @@ export const AgentProcessorContract = defineProcessorContract({
      * Scripts the agent's turns spawned that have not completed, folded from
      * the capability host's request/completed lifecycle on this stream. The
      * script OBLIGATION (code, expiry, recovery) belongs to the capability
-     * host processor; this fold exists so the agent's busy/idle activity
-     * (deriveAgentActivity) covers script execution too.
+     * host processor; this fold exists so the agent's busy derivation
+     * (deriveAgentBusy) covers script execution too.
      */
     activeScriptExecutionIds: z.array(z.string()).default([]),
     /**
-     * When the derived busy/idle activity (deriveAgentActivity) last changed:
-     * the consumed event that flipped it, by offset (the announcement's
-     * generation guard and idempotency key) and createdAt (the idle
-     * announcement debounce counts from it). The stored busy/kind always
-     * equal the derived value — kept so the fold can stamp changes without
-     * re-deriving the previous value.
+     * When the derived busy flag (deriveAgentBusy) last flipped: the consumed
+     * event that flipped it, by offset (the announcement's generation guard
+     * and idempotency key) and createdAt (the idle announcement debounce
+     * counts from it). The stored busy always equals the derived value —
+     * kept so the fold can stamp flips without re-deriving the previous
+     * value.
      */
-    activity: AgentActivityChange.optional(),
+    status: AgentStatusChange.optional(),
     /**
-     * The last activity announcement accepted into the journal, folded from
-     * the agent's own activity-changed events. The reconciler compares it
-     * against the derived activity and announces the difference; equality
+     * The last status announcement accepted into the journal, folded from
+     * the agent's own status-changed events. The reconciler compares it
+     * against the derived busy flag and announces the difference; equality
      * here is what makes the announcement loop terminate.
      */
-    announcedActivity: AnnouncedAgentActivity.optional(),
+    announcedStatus: AnnouncedAgentStatus.optional(),
     /**
      * Lifetime token totals, folded from token-usage-reported. Cost/observability
      * data, not loop-control state: nothing in the agent loop branches on it.
@@ -870,33 +860,29 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/agent/activity-changed": {
+    "events.iterate.com/agent/status-changed": {
       description:
-        "The agent's coarse busy/idle activity changed — the journaled form of deriveAgentActivity, " +
-        "for surfaces that show the agent as working (Slack assistant status, typing indicators). " +
-        "Busy flips announce immediately; the busy→idle flip is announced only after a trailing " +
-        "debounce, so the one-append gaps inside a turn hand-off (LLM completion → script request, " +
-        "script completion → rendered result) never surface as flicker. sinceOffset is the " +
-        "lifecycle event that established the value; every fold consuming these MUST ignore an " +
-        "announcement whose sinceOffset is below the last accepted one — that is the whole " +
-        "correctness story for a debounce timer whose idle append lost the race with newer work.",
+        "The agent's status changed — today the derived busy flag (deriveAgentBusy), for surfaces " +
+        "that show the agent as working (Slack assistant status, typing indicators, the agents " +
+        "list). Consumers fold these by MERGING each payload into their status record, so " +
+        "agent-authored fields (title, note, shortStatus) can join as optional patch fields " +
+        "without a contract break. Busy flips announce immediately; the busy→idle flip is " +
+        "announced only after a trailing debounce, so the one-append gaps inside a turn hand-off " +
+        "(LLM completion → script request, script completion → rendered result) never surface as " +
+        "flicker. sinceOffset is the lifecycle event that established the busy value; every fold " +
+        "consuming these MUST ignore a busy patch whose sinceOffset is below the last accepted " +
+        "one — that is the whole correctness story for a debounce timer whose idle append lost " +
+        "the race with newer work.",
       payloadSchema: z.object({
         busy: z.boolean(),
-        /** What the agent is busy with; a running script wins over an LLM
-         * turn. Absent when idle. */
-        kind: z.enum(["llm", "script"]).optional(),
-        /** Offset of the consumed event that established this value — the
+        /** Offset of the consumed event that established the busy value — the
          * announcement's generation guard. */
         sinceOffset: z.number().int().nonnegative(),
       }),
       examples: [
         {
-          description: "A user message queued an LLM turn; the agent is thinking.",
-          payload: { busy: true, kind: "llm", sinceOffset: 57 },
-        },
-        {
-          description: "The turn's response carried a script, now executing.",
-          payload: { busy: true, kind: "script", sinceOffset: 61 },
+          description: "A user message queued a turn; the agent is working.",
+          payload: { busy: true, sinceOffset: 57 },
         },
         {
           description:
@@ -923,7 +909,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/history-reset",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
-    "events.iterate.com/agent/activity-changed",
+    "events.iterate.com/agent/status-changed",
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
   ],
@@ -940,7 +926,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
-    "events.iterate.com/agent/activity-changed",
+    "events.iterate.com/agent/status-changed",
     "events.iterate.com/capability-host/script-execution-requested",
   ],
 });

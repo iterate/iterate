@@ -15,7 +15,7 @@ import {
   DEFAULT_AGENT_MODEL,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   DEFAULT_AGENT_SYSTEM_PROMPT,
-  deriveAgentActivity,
+  deriveAgentBusy,
 } from "./agent-processor-contract.ts";
 import { MemoryStream, deliverNewEvents, type ProcessorLike } from "./test-helpers.ts";
 
@@ -558,7 +558,7 @@ describe("minimal web-chat agent processors", () => {
     expect(stream.events.map((event) => event.type)).toEqual([
       "events.iterate.com/agents/message-received",
       "events.iterate.com/agent/llm-request-scheduled",
-      "events.iterate.com/agent/activity-changed",
+      "events.iterate.com/agent/status-changed",
     ]);
     expect(stream.events[0]!.payload).toMatchObject({
       content: "how many agents does this project have?",
@@ -2246,7 +2246,7 @@ describe("busy/idle activity announcements", () => {
   });
   const announcements = (stream: MemoryStream) =>
     stream.events
-      .filter((event) => event.type === "events.iterate.com/agent/activity-changed")
+      .filter((event) => event.type === "events.iterate.com/agent/status-changed")
       .map((event) => event.payload);
 
   it("announces busy immediately when a trigger queues a turn", async () => {
@@ -2255,9 +2255,7 @@ describe("busy/idle activity announcements", () => {
     const [received] = await stream.append(userMessage());
     await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
 
-    expect(announcements(stream)).toEqual([
-      { busy: true, kind: "llm", sinceOffset: received!.offset },
-    ]);
+    expect(announcements(stream)).toEqual([{ busy: true, sinceOffset: received!.offset }]);
   });
 
   it("announces a debounced idle once the turn settles, then goes quiet", async () => {
@@ -2266,7 +2264,7 @@ describe("busy/idle activity announcements", () => {
       stream,
       path: stream.path,
       projectId: null,
-      activityIdleDebounceMs: 0,
+      statusIdleDebounceMs: 0,
       ai: {
         async run() {
           return { response: "All done." };
@@ -2279,7 +2277,7 @@ describe("busy/idle activity announcements", () => {
       async () => {
         await deliverNewEvents({ processor: agent, stream, cursors });
         expect(announcements(stream)).toEqual([
-          { busy: true, kind: "llm", sinceOffset: expect.any(Number) },
+          { busy: true, sinceOffset: expect.any(Number) },
           { busy: false, sinceOffset: expect.any(Number) },
         ]);
       },
@@ -2300,7 +2298,7 @@ describe("busy/idle activity announcements", () => {
       stream,
       path: stream.path,
       projectId: null,
-      activityIdleDebounceMs: 60_000,
+      statusIdleDebounceMs: 60_000,
       ai: {
         async run() {
           return { response: "Done." };
@@ -2322,18 +2320,14 @@ describe("busy/idle activity announcements", () => {
     );
     // Absorb the completion: the idle flip is folded and its debounce armed.
     await deliverNewEvents({ processor: agent, stream, cursors });
-    expect(announcements(stream)).toEqual([
-      { busy: true, kind: "llm", sinceOffset: expect.any(Number) },
-    ]);
+    expect(announcements(stream)).toEqual([{ busy: true, sinceOffset: expect.any(Number) }]);
 
     // A second message arrives inside the window: derived activity is busy
     // again — equal to what is already announced — so the pending idle is
     // superseded and the journal never records the blip.
     await stream.append(userMessage());
     await deliverNewEvents({ processor: agent, stream, cursors });
-    expect(announcements(stream)).toEqual([
-      { busy: true, kind: "llm", sinceOffset: expect.any(Number) },
-    ]);
+    expect(announcements(stream)).toEqual([{ busy: true, sinceOffset: expect.any(Number) }]);
   });
 
   it("a revived incarnation announces a past-due idle flip immediately", async () => {
@@ -2343,7 +2337,7 @@ describe("busy/idle activity announcements", () => {
       stream,
       path: stream.path,
       projectId: null,
-      activityIdleDebounceMs: 60_000,
+      statusIdleDebounceMs: 60_000,
       ai: {
         async run() {
           return { response: "Done." };
@@ -2364,9 +2358,7 @@ describe("busy/idle activity announcements", () => {
       { timeout: 5_000 },
     );
     await deliverNewEvents({ processor: live, stream, cursors });
-    expect(announcements(stream)).toEqual([
-      { busy: true, kind: "llm", sinceOffset: expect.any(Number) },
-    ]);
+    expect(announcements(stream)).toEqual([{ busy: true, sinceOffset: expect.any(Number) }]);
 
     // The revival folds the journal, finds the idle flip past due, and
     // announces it inline — without dialing the AI for the settled request.
@@ -2374,7 +2366,7 @@ describe("busy/idle activity announcements", () => {
       stream,
       path: stream.path,
       projectId: null,
-      activityIdleDebounceMs: 60_000,
+      statusIdleDebounceMs: 60_000,
       now: () => Date.now() + 120_000,
       ai: {
         async run(): Promise<never> {
@@ -2419,31 +2411,31 @@ describe("busy/idle activity announcements", () => {
       stream,
       path: stream.path,
       projectId: null,
-      activityIdleDebounceMs: 0,
+      statusIdleDebounceMs: 0,
     });
     await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
     // Let the replayed scheduled event's re-armed timer fire and dedupe.
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(announcements(stream)).toEqual([]);
-    expect(deriveAgentActivity(agent.state)).toEqual({ busy: false });
+    expect(deriveAgentBusy(agent.state)).toBe(false);
   });
 
   it("the fold ignores a stale idle announcement that lost its race", () => {
-    const activityEvent = (payload: Record<string, unknown>, offset: number) => ({
-      type: "events.iterate.com/agent/activity-changed",
+    const statusEvent = (payload: Record<string, unknown>, offset: number) => ({
+      type: "events.iterate.com/agent/status-changed",
       payload,
       offset,
       createdAt: "2026-07-09T00:00:00.000Z",
       path: "/agents/test",
     });
     const state = reduceAgentEvents([
-      activityEvent({ busy: true, kind: "llm", sinceOffset: 4 }, 5),
+      statusEvent({ busy: true, sinceOffset: 4 }, 5),
       // The debounce timer's idle append landed after newer busy work; its
       // older sinceOffset must fold to nothing.
-      activityEvent({ busy: false, sinceOffset: 2 }, 6),
+      statusEvent({ busy: false, sinceOffset: 2 }, 6),
     ]);
-    expect(state.announcedActivity).toEqual({ busy: true, kind: "llm", sinceOffset: 4 });
+    expect(state.announcedStatus).toEqual({ busy: true, sinceOffset: 4 });
   });
 
   it("derives script-turn hand-offs as busy, with only one-append idle gaps", () => {
@@ -2475,19 +2467,13 @@ describe("busy/idle activity announcements", () => {
       }),
     ];
     // Trigger through completion: busy, no interruptions.
-    expect(deriveAgentActivity(reduceAgentEvents(journal.slice(0, 1)))).toEqual({
-      busy: true,
-      kind: "llm",
-    });
-    expect(deriveAgentActivity(reduceAgentEvents(journal.slice(0, 3)))).toEqual({
-      busy: true,
-      kind: "llm",
-    });
+    expect(deriveAgentBusy(reduceAgentEvents(journal.slice(0, 1)))).toBe(true);
+    expect(deriveAgentBusy(reduceAgentEvents(journal.slice(0, 3)))).toBe(true);
     // The one-append gap: the completion folds before the extracted script
     // request lands. This is the blip the idle announcement debounce covers.
-    expect(deriveAgentActivity(reduceAgentEvents(journal))).toEqual({ busy: false });
+    expect(deriveAgentBusy(reduceAgentEvents(journal))).toBe(false);
 
-    // The script request arrives: busy again, as a script.
+    // The script request arrives: busy again.
     const withScript = [
       ...journal,
       at(5, "events.iterate.com/capability-host/script-execution-requested", {
@@ -2495,10 +2481,7 @@ describe("busy/idle activity announcements", () => {
         executionId: "script-5",
       }),
     ];
-    expect(deriveAgentActivity(reduceAgentEvents(withScript))).toEqual({
-      busy: true,
-      kind: "script",
-    });
+    expect(deriveAgentBusy(reduceAgentEvents(withScript))).toBe(true);
 
     // Script completion → rendered result input: the same one-append gap,
     // then the re-queued loop turns the activity back to thinking.
@@ -2513,12 +2496,8 @@ describe("busy/idle activity announcements", () => {
         llmRequestPolicy: { behaviour: "after-current-request" },
       }),
     ];
-    expect(deriveAgentActivity(reduceAgentEvents(nextTurn))).toEqual({ busy: true, kind: "llm" });
+    expect(deriveAgentBusy(reduceAgentEvents(nextTurn))).toBe(true);
     // Every flip is stamped with the event that caused it.
-    expect(reduceAgentEvents(nextTurn).activity).toMatchObject({
-      busy: true,
-      kind: "llm",
-      sinceOffset: 7,
-    });
+    expect(reduceAgentEvents(nextTurn).status).toMatchObject({ busy: true, sinceOffset: 7 });
   });
 });

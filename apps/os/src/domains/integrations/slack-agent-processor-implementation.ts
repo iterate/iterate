@@ -15,15 +15,15 @@
 //   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
 //   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
 //   status is repainted once per at-head batch from the latest announced
-//   activity instead of once per event.
+//   status instead of once per event.
 //
-// The "is thinking..." / "is using tools..." status is a pure PAINT of the
-// agent processor's own `agent/activity-changed` announcements. The agent
-// owns the busy/idle derivation (LLM lifecycle, running scripts, queued
-// triggers) AND the trailing idle debounce, so this processor keeps no
-// lifecycle fold and no clear obligation of its own — busy paints the status,
-// idle clears it, and the announcement's sinceOffset guard (see the event's
-// contract) keeps a stale idle from overwriting newer work.
+// The "is thinking..." status is a pure PAINT of the agent processor's own
+// `agent/status-changed` announcements. The agent owns the busy/idle
+// derivation (LLM lifecycle, running scripts, queued triggers) AND the
+// trailing idle debounce, so this processor keeps no lifecycle fold and no
+// clear obligation of its own — busy paints the status, idle clears it, and
+// the announcement's sinceOffset guard (see the event's contract) keeps a
+// stale idle from overwriting newer work.
 
 import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
@@ -67,16 +67,15 @@ export class SlackAgentProcessor extends StreamProcessor<
     StreamProcessor<SlackAgentProcessorContract>["reduce"]
   >[0]): SlackAgentProcessorState {
     switch (event.type) {
-      case "events.iterate.com/agent/activity-changed":
+      case "events.iterate.com/agent/status-changed":
         // The contract's stale-announcement guard: a debounced idle append
         // that lost its race with newer work carries an older sinceOffset.
-        if (state.activity !== undefined && event.payload.sinceOffset < state.activity.sinceOffset)
+        if (state.status !== undefined && event.payload.sinceOffset < state.status.sinceOffset)
           return state;
         return {
           ...state,
-          activity: {
+          status: {
             busy: event.payload.busy,
-            ...(event.payload.kind === undefined ? {} : { kind: event.payload.kind }),
             sinceOffset: event.payload.sinceOffset,
           },
         };
@@ -229,22 +228,22 @@ export class SlackAgentProcessor extends StreamProcessor<
         });
         return;
       }
-      // Activity announcements drive the assistant status, which is repainted
+      // Status announcements drive the assistant status, which is repainted
       // once per batch in processEventBatch — nothing per event.
       default:
         return;
     }
   }
 
-  /** Latest activity announcement deferred until an at-head repaint. */
-  #unpaintedActivityFact: { createdAt: string; type: string } | undefined;
+  /** Latest status announcement deferred until an at-head repaint. */
+  #unpaintedStatusFact: { createdAt: string; type: string } | undefined;
   /** Whether THIS incarnation painted a busy status: a stale idle
    * announcement must still clear what we ourselves put up, while a refold
    * (fresh instance, all facts stale) must repaint nothing at all. */
   #paintedBusyStatus = false;
 
   /**
-   * Paint the agent's announced activity onto the assistant status, once per
+   * Paint the agent's announced status onto the assistant thread, once per
    * at-head batch (never per event, so a refold cannot replay historical
    * flips). Both directions are freshness-gated like every other
    * acknowledgement — a refold's months-old announcements must not burst
@@ -257,30 +256,27 @@ export class SlackAgentProcessor extends StreamProcessor<
     await super.processEventBatch(args);
     const latest =
       args.reducedEvents.findLast(
-        ({ event }) => event.type === "events.iterate.com/agent/activity-changed",
-      )?.event ?? this.#unpaintedActivityFact;
+        ({ event }) => event.type === "events.iterate.com/agent/status-changed",
+      )?.event ?? this.#unpaintedStatusFact;
     if (args.checkpointOffset < args.streamMaxOffset) {
-      this.#unpaintedActivityFact = latest;
+      this.#unpaintedStatusFact = latest;
       return;
     }
-    this.#unpaintedActivityFact = undefined;
+    this.#unpaintedStatusFact = undefined;
     if (latest == null) return;
-    const { activity, channel, latestMessageTs, threadTs } = args.state;
+    const { channel, latestMessageTs, status, threadTs } = args.state;
     if (channel == null || threadTs == null) return;
     const fresh = webhookAckIsFresh(latest, (this.deps.now ?? Date.now)());
 
-    if (activity?.busy) {
+    if (status?.busy) {
       if (!fresh) return;
-      const status =
-        activity.kind === "script"
-          ? { status: "is using tools...", loading_messages: ["Using tools..."] }
-          : { status: "is thinking...", loading_messages: ["Thinking..."] };
       this.#paintedBusyStatus = true;
       args.blockProcessorWhile(() =>
         this.#callSlackApi("assistant.threads.setStatus", {
           channel_id: channel,
           thread_ts: threadTs,
-          ...status,
+          status: "is thinking...",
+          loading_messages: ["Thinking..."],
         }),
       );
       return;
