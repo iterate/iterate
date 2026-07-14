@@ -250,6 +250,17 @@ export class ProjectDurableObject extends DurableObject<Env> {
     this.#processorHost.refreshLive();
   }
 
+  /**
+   * Replace one roster row from the agent journal's full status-changed
+   * history — the recovery lane for a dropped touch (merge patches cannot
+   * reconstruct a lost field from later patches; the journal can). See
+   * AgentStatusDatabase.rebuild for the replace-vs-merge reasoning.
+   */
+  rebuildAgentStatus(input: AgentStatusTouchInput): void {
+    this.#agentStatusDatabase.rebuild(input);
+    this.#processorHost.refreshLive();
+  }
+
   async fetch(request: Request): Promise<Response> {
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never

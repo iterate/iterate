@@ -83,6 +83,42 @@ export class AgentStatusDatabase {
     this.#projection = { ...this.#projection, [input.path]: row };
   }
 
+  /**
+   * Replace one row from the agent journal's FULL status-changed history —
+   * the recovery lane for a dropped touch. A REPLACE, not a merge: the fold
+   * restarts from nothing, because the row may hold a fold that skipped
+   * events (its lastEventOffset advanced past patches a dropped dial never
+   * delivered), and the offset guard would wrongly discard them. The given
+   * history is authoritative at read time; patches appended after the read
+   * arrive through later (serialized) touches with higher offsets and merge
+   * on top. An empty history deletes the row.
+   */
+  rebuild(input: AgentStatusTouchInput): void {
+    let status: AgentStatusRecord | undefined;
+    let lastEventOffset = 0;
+    let updatedAt: string | undefined;
+    for (const event of input.events) {
+      if (event.offset <= lastEventOffset) continue;
+      lastEventOffset = event.offset;
+      const parsed = AgentStatusRecord.safeParse(event.payload);
+      if (!parsed.success) continue;
+      const merged = mergeAgentStatusPatch(status, parsed.data);
+      if (merged === status) continue;
+      status = merged;
+      updatedAt = event.createdAt;
+    }
+    if (status === undefined || updatedAt === undefined) {
+      if (this.#projection[input.path] === undefined) return;
+      this.#sql.exec(`DELETE FROM agent_status WHERE path = ?`, input.path);
+      const { [input.path]: _removed, ...rest } = this.#projection;
+      this.#projection = rest;
+      return;
+    }
+    const row: AgentStatusRow = { path: input.path, status, lastEventOffset, updatedAt };
+    this.#store(row);
+    this.#projection = { ...this.#projection, [input.path]: row };
+  }
+
   /** Persist one merged row — REPLACE, because the merge already happened in JS. */
   #store(row: AgentStatusRow): void {
     this.#sql.exec(

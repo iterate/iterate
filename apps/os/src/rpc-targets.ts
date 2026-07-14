@@ -4941,6 +4941,7 @@ type ProjectDurableObjectRpc = {
   incrementLiveDemo(): Promise<void>;
   touchStreamActivity(input: TouchInput): Promise<void>;
   touchAgentStatus(input: AgentStatusTouchInput): Promise<void>;
+  rebuildAgentStatus(input: AgentStatusTouchInput): Promise<void>;
 };
 
 /**
@@ -5368,7 +5369,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * project's agents roster (a peer slice of `itx.liveState` — see
    * AgentStatusDatabase). Same rules as {@link #indexStreamActivity}:
    * idempotent (event offsets guard redelivery), fire-and-forget, MUST NOT
-   * throw — a dropped dial heals on the agent's next status patch.
+   * throw. Unlike recency, a DROPPED patch does not heal on the next one —
+   * these are merge patches, and a later busy patch carries no title with
+   * which to reconstruct a lost rename — so a failed dial falls back to
+   * rebuilding the row from the agent's journal (the authority).
    */
   #indexAgentStatus(batch: StreamPushEventBatch): void {
     if (!batch.path.startsWith("/agents/")) return;
@@ -5380,11 +5384,54 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         createdAt: event.createdAt,
       }));
     if (events.length === 0) return;
-    void Promise.resolve(this.#projectDo.touchAgentStatus({ path: batch.path, events })).catch(
-      () => {
-        // The roster self-heals from the next status patch; never surface into worker delivery.
-      },
+    void Promise.resolve(this.#projectDo.touchAgentStatus({ path: batch.path, events })).catch(() =>
+      this.#rebuildAgentStatus(batch.path),
     );
+  }
+
+  /**
+   * Recovery lane for a failed roster dial: re-read the agent journal's FULL
+   * status-changed history and hand it to the DO as a from-scratch rebuild.
+   * The journal read is authoritative — every patch any dial could have
+   * delivered so far is already appended, and patches appended after the read
+   * are delivered after it, so their (DO-serialized) merge lands on top of
+   * the replaced row. Retried with backoff; the terminal failure is logged
+   * and the row stays stale until the agent's next rebuild-triggering drop.
+   */
+  async #rebuildAgentStatus(path: string): Promise<void> {
+    for (const backoffMs of [0, 2_000, 10_000]) {
+      if (backoffMs > 0) await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      try {
+        const stream = new StreamRpcTarget({
+          auth: this.#props.auth,
+          path,
+          projectId: this.projectId,
+        });
+        const events: { payload: unknown; offset: number; createdAt: string }[] = [];
+        let afterOffset = 0;
+        for (;;) {
+          const page = await stream.getEvents({
+            afterOffset,
+            eventTypes: ["events.iterate.com/agent/status-changed"],
+            limit: 500,
+          });
+          for (const event of page) {
+            events.push({
+              payload: event.payload,
+              offset: event.offset,
+              createdAt: event.createdAt,
+            });
+          }
+          if (page.length < 500) break;
+          afterOffset = page.at(-1)!.offset;
+        }
+        await this.#projectDo.rebuildAgentStatus({ path, events });
+        return;
+      } catch (error) {
+        console.warn("[agents-roster] rebuild attempt failed", { path, error });
+      }
+    }
+    console.error("[agents-roster] roster row is stale after failed rebuild", { path });
   }
 
   /**

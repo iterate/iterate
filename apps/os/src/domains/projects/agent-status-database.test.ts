@@ -83,6 +83,49 @@ describe("AgentStatusDatabase", () => {
     });
   });
 
+  it("rebuild replaces a row whose fold skipped dropped patches", () => {
+    const db = new AgentStatusDatabase(sqlStorage());
+    // The title patch at offset 5 was DROPPED (its dial failed); the next
+    // touch advanced lastEventOffset past it, so no later merge can recover
+    // the title — the exact hole the journal rebuild exists to fill.
+    db.touch({
+      path: "/agents/main",
+      events: [{ payload: { busy: true, sinceOffset: 8 }, offset: 9, createdAt: AT }],
+    });
+    db.rebuild({
+      path: "/agents/main",
+      events: [
+        { payload: { title: "Lisbon trip" }, offset: 5, createdAt: AT },
+        { payload: { busy: true, sinceOffset: 8 }, offset: 9, createdAt: AT },
+      ],
+    });
+    expect(db.all()["/agents/main"]).toMatchObject({
+      status: { title: "Lisbon trip", busy: true, sinceOffset: 8 },
+      lastEventOffset: 9,
+    });
+    // Patches appended after the journal read merge on top as usual.
+    db.touch({
+      path: "/agents/main",
+      events: [{ payload: { busy: false, sinceOffset: 11 }, offset: 12, createdAt: AT }],
+    });
+    expect(db.all()["/agents/main"]).toMatchObject({
+      status: { title: "Lisbon trip", busy: false, sinceOffset: 11 },
+      lastEventOffset: 12,
+    });
+  });
+
+  it("rebuild with an empty history deletes the row", () => {
+    const sql = sqlStorage();
+    const db = new AgentStatusDatabase(sql);
+    db.touch({
+      path: "/agents/main",
+      events: [{ payload: { title: "ghost" }, offset: 1, createdAt: AT }],
+    });
+    db.rebuild({ path: "/agents/main", events: [] });
+    expect(db.all()["/agents/main"]).toBeUndefined();
+    expect(new AgentStatusDatabase(sql).all()["/agents/main"]).toBeUndefined();
+  });
+
   it("swaps only the touched row's reference (copy-on-write) and survives reload", () => {
     const sql = sqlStorage();
     const db = new AgentStatusDatabase(sql);
