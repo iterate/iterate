@@ -1,17 +1,24 @@
-// Component-owned stream runtime.
+// Component-owned stream mirror runtime.
 //
-// One runtime per (path, processor slug), shared across every React view that mounts that
-// key in a tab (so two views of the same processor share one capnweb connection). The
-// SQLite Browser Mirror is shared one level up, per stream path, so a stream's processors
-// share one OPFS worker. Cross-tab, Web Locks elect a single writer; followers read the
-// same mirror reactively.
+// ONE runtime per (projectId, path), shared across every React view that mounts that
+// stream in a tab, so all of them share ONE capnweb connection and ONE download. Cross-tab,
+// Web Locks elect a single writer; followers read the same OPFS mirror reactively.
 //
-// A view encodes its own processor + resume config (no central registry): it passes the
-// processor, its schema version (for the writer-lock name), the tables to clear on a
-// mirror discard, and how to read its durable checkpoint back. The runtime always opens a
+// A view does not choose processors. The runtime is handed a FIXED set of processors
+// (`args.processors` — the canonical event cache + feed projection; see
+// canonical-mirror-processors.ts) and hosts them as one CompositeBrowserProcessor: it
+// downloads the stream once (paged catch-up then live tail) and fans every batch out to
+// every member. Fan-out is safe because each member skips events at or below its own
+// checkpoint, so the shared replay cursor is just the MINIMUM member checkpoint and a
+// member that is ahead cheaply no-ops.
+//
+// Reconcile and mirror discard are per-member (each member owns its tables, schema
+// version, and durable checkpoint row keyed by its real slug — so unifying the download
+// never invalidates an existing local cache). Everything else the runtime does —
+// connection epochs, catch-up pager, ingest self-heal, liveness — is single-processor and
+// unaware of the member set: it drives the one composite. The runtime always opens a
 // connection (so a follower can still append / read runtimeState) and — only as leader —
-// hosts the processor over a fresh subscription, mirroring the Durable-Object-side
-// stream processor host.
+// hosts the composite over a fresh subscription, mirroring the Durable-Object-side host.
 
 import { appendedEvents } from "../../rpc-types.ts";
 import type { ProcessorRuntimeState, SubscriptionKey } from "../../rpc-types.ts";
@@ -26,13 +33,32 @@ import { LatencyRing, type LatencyStats } from "../../stream-runtime-metrics.ts"
 import type { SubscriberMetricsReport } from "../../subscriber-metrics.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
 import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
-import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
-  StreamBrowserDatabase,
+  acquireWriterRole,
+  mirrorLockVersionVector,
+  streamMirrorWriterLockName,
+  type WriterRole,
+} from "./stream-leader.ts";
+import { CompositeBrowserProcessor } from "./composite-browser-processor.ts";
+import {
   type SqlClient,
+  type StreamBrowserDatabase,
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
 import { readCatchUpPage } from "./catch-up-page.ts";
+import { acquireDatabase } from "./stream-database-registry.ts";
+import {
+  type BrowserStreamClient,
+  type BrowserStreamClientFactory,
+  type BrowserStreamTransport,
+  type StreamBrowserConnectionStatus,
+} from "./stream-transport.ts";
+import {
+  errorMessage,
+  isWriteStatement,
+  raceWithTimeout,
+  StepTimeoutError,
+} from "./stream-runtime-utils.ts";
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 const DEFAULT_STREAM_PROJECT_ID = "default";
@@ -62,7 +88,6 @@ const MAX_PENDING_INGEST_EVENTS = 20_000;
 
 /** Retries for `appendBatch` across reconnects/stream-DO restarts (~30s of backoff). */
 const APPEND_MAX_RETRIES = 8;
-export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /**
  * The slice of `StreamProcessor` the browser runtime drives: read the
@@ -83,7 +108,7 @@ export type StreamBrowserSnapshot = {
 
 /** What a view tells the runtime about the processor it wants hosted. */
 export type BrowserProcessorConfig = {
-  /** Stable processor identity, used for runtime dedupe, locks, and state rows. */
+  /** Stable processor identity, used for this member's checkpoint/state rows and the mirror writer-lock version vector. */
   slug: string;
   /** Bumped into the writer-lock name so a schema migration lets a fresh tab take over. */
   schemaVersion: number;
@@ -157,45 +182,6 @@ export type BrowserStreamMetrics = {
  */
 export type StreamRpcResult<T> = Promise<T> & Disposable;
 
-export type BrowserStreamClient = Disposable &
-  Stream & {
-    /**
-     * Evict the exact transport THIS client rides, bound at creation (see
-     * evictItxSocketIfCurrent) — so a late suspicion verdict against this
-     * connection can never evict a successor socket, and a genuinely-dead
-     * young socket can be evicted without waiting out an age guard. Absent
-     * on clients whose factory can't bind identity; the runtime then falls
-     * back to the config-level resetTransport (age-guarded).
-     */
-    evictTransport?: () => void;
-  };
-
-export type BrowserStreamClientFactory = (args: {
-  projectId: string;
-  streamPath: string;
-  streamUrl?: string | URL;
-  onConnectionStatusChange?: (
-    status: StreamBrowserConnectionStatus,
-    error: string | undefined,
-  ) => void;
-}) => Promise<BrowserStreamClient>;
-
-export function asBrowserStreamClient(
-  stream: Stream,
-  dispose: () => void,
-  evictTransport?: () => void,
-): BrowserStreamClient {
-  return new Proxy(stream, {
-    get(target, property, receiver) {
-      if (property === Symbol.dispose) return dispose;
-      if (property === "evictTransport") return evictTransport;
-      const value = Reflect.get(target, property, receiver);
-      if (typeof value !== "function") return value;
-      return (...args: unknown[]) => Reflect.apply(value, target, args);
-    },
-  }) as BrowserStreamClient;
-}
-
 export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
   appendBatch(args: { events: StreamEventInput[] }): StreamRpcResult<StreamEvent[]>;
@@ -238,43 +224,9 @@ export type StreamBrowserStore = Disposable & {
   isDisposed(): boolean;
 };
 
-/**
- * How a runtime reaches (and, on suspicion, evicts) the server: the dial and
- * its evictor travel as ONE value so they can never come from two different
- * transports (a factory dialing socket A while timeouts evict socket B would
- * re-arm the wedge this store exists to prevent).
- */
-type BrowserStreamTransport = {
-  createStreamClient: BrowserStreamClientFactory;
-  resetTransport: (() => void) | undefined;
-};
-
-// --- Registries: one runtime per (path, slug), one DB per path -------------------------
-// The runtime registry leans on the store's own listener lifecycle as its refcount (it
-// self-removes on dispose); the DB registry counts the runtimes holding it.
-
-const databaseRegistry = new Map<string, { db: StreamBrowserDatabase; refs: number }>();
-
-function acquireDatabase(projectId: string, streamPath: string) {
-  const key = `${projectId}\0${streamPath}`;
-  let entry = databaseRegistry.get(key);
-  if (entry === undefined) {
-    entry = { db: new StreamBrowserDatabase(projectId, streamPath), refs: 0 };
-    databaseRegistry.set(key, entry);
-  }
-  entry.refs += 1;
-  const held = entry;
-  return {
-    db: held.db,
-    release() {
-      held.refs -= 1;
-      if (held.refs === 0) {
-        held.db.dispose();
-        databaseRegistry.delete(key);
-      }
-    },
-  };
-}
+// --- Runtime registry: one runtime per (projectId, path) -------------------------------
+// It leans on the store's own listener lifecycle as its refcount (self-removing on dispose);
+// the shared per-path OPFS database it holds is refcounted separately (stream-database-registry.ts).
 
 const runtimeRegistry = new Map<
   string,
@@ -294,13 +246,15 @@ const debugRegistry = new Map<string, () => Record<string, unknown>>();
 (globalThis as { __streamRuntimeDebug?: () => Record<string, unknown> }).__streamRuntimeDebug =
   () => Object.fromEntries([...debugRegistry].map(([key, read]) => [key, read()]));
 
-/** Get (or lazily create) the shared runtime for one (path, processor). */
+/** Get (or lazily create) the shared mirror runtime for one (projectId, path). */
 export function acquireStreamRuntime(
-  args: { streamPath: string } & BrowserProcessorConfig & BrowserStreamConnectionConfig,
+  args: {
+    streamPath: string;
+    processors: readonly BrowserProcessorConfig[];
+  } & BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
   const projectId = args.projectId ?? DEFAULT_STREAM_PROJECT_ID;
-  const slug = args.slug;
-  const key = `${projectId} ${args.streamPath} ${slug}`;
+  const key = `${projectId} ${args.streamPath}`;
   const existing = runtimeRegistry.get(key);
   if (existing !== undefined) {
     // The runtime outlives the render that created it; a stale factory here is
@@ -330,9 +284,9 @@ function createStreamRuntime(
   args: {
     projectId: string;
     streamPath: string;
+    processors: readonly BrowserProcessorConfig[];
     onDispose?: () => void;
-  } & BrowserProcessorConfig &
-    BrowserStreamConnectionConfig,
+  } & BrowserStreamConnectionConfig,
 ): {
   runtime: StreamBrowserStore;
   refreshTransport: (transport: BrowserStreamTransport) => void;
@@ -345,8 +299,16 @@ function createStreamRuntime(
     createStreamClient: args.createStreamClient,
     resetTransport: args.resetTransport,
   };
-  const { schemaVersion, tables } = args;
-  const slug = args.slug;
+  const members = args.processors;
+  // A single label for log lines, the debug registry key, and the server
+  // subscription key. Each member's OWN slug is used for its storage (tables,
+  // mirror-meta, checkpoint row) — never this label — so unifying the download
+  // leaves every existing local cache addressable.
+  const slug = "browser-stream-mirror";
+  // Deterministic compatibility vector over the member set, baked into the
+  // writer-lock name: a deploy that bumps ANY member's schema changes the lock
+  // so a fresh tab re-elects instead of waiting behind an old tab.
+  const mirrorVersionVector = mirrorLockVersionVector(members);
   const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(
     args.projectId,
     args.streamPath,
@@ -531,8 +493,15 @@ function createStreamRuntime(
   const browserSubscriberId =
     localStorage.getItem(browserSubscriberStorageKey) ?? crypto.randomUUID();
   localStorage.setItem(browserSubscriberStorageKey, browserSubscriberId);
-  // One stream subscription per (browser profile, processor); projectId keeps it distinct.
-  const subscriptionKey = `${args.projectId}:${browserSubscriberId}:${slug}`;
+  // ONE server subscription per (browser profile, mirror); projectId keeps it
+  // distinct. Deliberately schema-agnostic (no version) so a new compatible
+  // runtime REPLACES an old unified subscription for this profile on the server.
+  const serverSubscriptionKey = `${args.projectId}:${browserSubscriberId}:browser-stream-mirror`;
+  // Each member's durable checkpoint row is keyed by its OWN slug — the exact
+  // key it used before unification — so existing local caches resume instead of
+  // re-downloading from offset 0.
+  const memberSubscriptionKey = (memberSlug: string) =>
+    `${args.projectId}:${browserSubscriberId}:${memberSlug}`;
   let snapshot: StreamBrowserSnapshot = {
     clearVersion: 0,
     connectionStatus: "connecting",
@@ -912,13 +881,20 @@ function createStreamRuntime(
     }, 0);
   }
 
-  async function discardLocalMirror() {
-    await streamDatabase.clearTables(tables);
-    // Projection tables are shared by every browser subscription for this
-    // processor slug. If the table is discarded, every checkpoint for that
-    // slug is invalid too; leaving an older subscription_key row behind lets
-    // readers that pick the highest checkpoint resurrect stale reduced state.
-    await deleteBrowserProcessorState({ sql, processorSlug: slug });
+  // Clear ONE member's projection tables and every checkpoint row for its slug.
+  // Split from the snapshot bump + VACUUM (finishDiscard) so reconcile can
+  // discard several members and reclaim space once. A member's tables are shared
+  // across its subscription keys, so a discard must drop every checkpoint row for
+  // the slug too — leaving an older subscription_key row behind lets a reader
+  // that picks the highest checkpoint resurrect stale reduced state.
+  async function discardMemberTables(member: BrowserProcessorConfig) {
+    await streamDatabase.clearTables(member.tables);
+    await deleteBrowserProcessorState({ sql, processorSlug: member.slug });
+  }
+
+  // Bump clearVersion (views keyed on it remount), reclaim space once, and
+  // refresh the database info. Call after one or more discardMemberTables.
+  async function finishDiscard() {
     await streamDatabase.compact();
     snapshot = {
       ...snapshot,
@@ -929,103 +905,125 @@ function createStreamRuntime(
     refreshDatabaseInfo();
   }
 
-  // Record (or backfill) the incarnation the mirror is now reconciled against. A
-  // stream that has not committed its `created` event yet has no incarnation to
-  // record; leaving the row unrecorded means the next reconcile against a
-  // now-created stream rebuilds — always safe for a cache.
-  async function recordServerIncarnation(serverIncarnation: string | undefined) {
-    if (serverIncarnation === undefined) return;
-    await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
+  // Discard EVERY member — the store's clearLocalDatabase lane.
+  async function discardLocalMirror() {
+    for (const member of members) await discardMemberTables(member);
+    await finishDiscard();
   }
 
-  // Decide whether the local mirror can be trusted against the server before subscribing.
-  // The server stream's `createdAt` is its incarnation identity: it is stable for a stream's
-  // lifetime and changes when the stream's storage is deleted and recreated (which re-emits
-  // `created`, restarting offsets from 1) — see core-processor-state.ts for why it beats
-  // core state's per-DO-restart `incarnationId`. If our recorded incarnation differs from
-  // the server's, the offset comparison is meaningless — rebuild the mirror. Otherwise fall
-  // back to the offset check: discard when the server has fewer committed events than we do.
+  // Record (or backfill) the incarnation a member's mirror is now reconciled
+  // against. A stream that has not committed its `created` event yet has no
+  // incarnation to record; leaving the row unrecorded means the next reconcile
+  // against a now-created stream rebuilds — always safe for a cache.
+  async function recordServerIncarnation(
+    memberSlug: string,
+    serverIncarnation: string | undefined,
+  ) {
+    if (serverIncarnation === undefined) return;
+    await streamDatabase.writeMirrorIncarnation(memberSlug, serverIncarnation);
+  }
+
+  // Decide, PER MEMBER, whether its local projection can be trusted against the
+  // server before subscribing. The server stream's `createdAt` is its incarnation
+  // identity: stable for a stream's lifetime, changing when the stream's storage
+  // is deleted and recreated (which re-emits `created`, restarting offsets from
+  // 1) — see core-processor-state.ts for why it beats core state's per-DO-restart
+  // `incarnationId`. The server incarnation + head are read ONCE and applied to
+  // every member; each member is independent, so one member's schema bump or
+  // reincarnation rebuilds only its own tables while the others keep their caches.
   async function reconcileLocalMirrorWithServer(
     rpc: BrowserStreamClient,
   ): Promise<{ serverMaxOffset: number }> {
-    // Deliberately a throwaway instance: processors memoize their checkpoint on
-    // first read, so the real instance must be created after any discard below.
-    const processor = args.createProcessor({
-      stream: rpc,
-      path: args.streamPath,
-      projectId: args.projectId,
-      sql,
-      subscriptionKey,
-    });
-    const checkpoint = await processor.snapshot();
-    const localMaxOffset = checkpoint.offset;
     const coreProcessorState = parseBrowserCoreProcessorState(await rpc.head());
-    const reconciled = { serverMaxOffset: coreProcessorState.maxOffset };
     const serverIncarnation = coreProcessorState.createdAt;
     reconciledIncarnation = serverIncarnation;
-    const localIncarnation = await streamDatabase.readMirrorIncarnation(slug);
-    const localSchemaVersion = args.resetOnSchemaVersionChange
-      ? await streamDatabase.readMirrorSchemaVersion(slug)
-      : schemaVersion;
+    let discardedAny = false;
 
-    // A truly fresh mirror — no schema version ever recorded AND nothing
-    // checkpointed — must never take the rebuild lane: "undefined ≠ current"
-    // is not a schema CHANGE, and discarding would VACUUM an empty database
-    // on every first open (OPFS VACUUM under a sibling connection's open
-    // handles is exactly the contention that wedges the shared per-path
-    // file). A fresh checkpoint with a DIFFERENT recorded version still
-    // rebuilds: the slug's tables are shared across subscription keys, so an
-    // older subscription may have populated them under the old schema.
-    const trulyFreshMirror = localMaxOffset <= 0 && localSchemaVersion === undefined;
+    for (const member of members) {
+      // Deliberately a throwaway instance: processors memoize their checkpoint on
+      // first read, so the real member instance must be created after any discard
+      // below. Its snapshot() also runs prepare() (the member's schema ensurer),
+      // which is where raw-events self-resets via PRAGMA user_version.
+      const processor = member.createProcessor({
+        stream: rpc,
+        path: args.streamPath,
+        projectId: args.projectId,
+        sql,
+        subscriptionKey: memberSubscriptionKey(member.slug),
+      });
+      const checkpoint = await processor.snapshot();
+      const localMaxOffset = checkpoint.offset;
+      const localIncarnation = await streamDatabase.readMirrorIncarnation(member.slug);
+      const localSchemaVersion = member.resetOnSchemaVersionChange
+        ? await streamDatabase.readMirrorSchemaVersion(member.slug)
+        : member.schemaVersion;
 
-    if (!trulyFreshMirror && localSchemaVersion !== schemaVersion) {
-      console.warn(
-        `[stream ${args.streamPath} ${slug}] Local ${slug} schema version changed; rebuilding mirror.`,
-        { localSchemaVersion, schemaVersion },
-      );
-      await discardLocalMirror();
-      await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
-      await recordServerIncarnation(serverIncarnation);
-      return reconciled;
-    }
+      // A truly fresh mirror — no schema version ever recorded AND nothing
+      // checkpointed — must never take the rebuild lane: "undefined ≠ current" is
+      // not a schema CHANGE, and discarding would VACUUM an empty database on
+      // every first open (OPFS VACUUM under a sibling connection's open handles is
+      // exactly the contention that wedges the shared per-path file). A fresh
+      // checkpoint with a DIFFERENT recorded version still rebuilds: the member's
+      // tables are shared across subscription keys, so an older subscription may
+      // have populated them under the old schema.
+      const trulyFreshMirror = localMaxOffset <= 0 && localSchemaVersion === undefined;
 
-    if (localMaxOffset <= 0) {
-      // Fresh mirror: nothing to discard, just record which schema version and
-      // incarnation we are tracking.
-      if (args.resetOnSchemaVersionChange) {
-        await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
+      if (!trulyFreshMirror && localSchemaVersion !== member.schemaVersion) {
+        console.warn(
+          `[stream ${args.streamPath} ${member.slug}] local schema version changed; rebuilding member mirror.`,
+          { localSchemaVersion, schemaVersion: member.schemaVersion },
+        );
+        await discardMemberTables(member);
+        discardedAny = true;
+        await streamDatabase.writeMirrorSchemaVersion(member.slug, member.schemaVersion);
+        await recordServerIncarnation(member.slug, serverIncarnation);
+        continue;
       }
-      await recordServerIncarnation(serverIncarnation);
-      return reconciled;
+
+      if (localMaxOffset <= 0) {
+        // Fresh member mirror: nothing to discard, just record which schema
+        // version and incarnation we are tracking.
+        if (member.resetOnSchemaVersionChange) {
+          await streamDatabase.writeMirrorSchemaVersion(member.slug, member.schemaVersion);
+        }
+        await recordServerIncarnation(member.slug, serverIncarnation);
+        continue;
+      }
+
+      if (localIncarnation !== serverIncarnation) {
+        // Either the incarnation changed (reset/reincarnation) OR we have local
+        // events but no recorded incarnation (a mirror that predates incarnation
+        // tracking). In both cases the offset comparison is meaningless — a reset
+        // that caught back up to the same maxOffset would otherwise be kept with
+        // stale rows — so rebuild this member from scratch.
+        console.warn(
+          `[stream ${args.streamPath} ${member.slug}] cannot verify local mirror against server incarnation (changed or unrecorded); rebuilding.`,
+          { localIncarnation, serverIncarnation, localMaxOffset },
+        );
+        await discardMemberTables(member);
+        discardedAny = true;
+        await recordServerIncarnation(member.slug, serverIncarnation);
+        continue;
+      }
+
+      if (coreProcessorState.maxOffset < localMaxOffset) {
+        console.warn(
+          `[stream ${args.streamPath} ${member.slug}] server has fewer events than the local mirror; discarding member tables.`,
+          { serverMaxOffset: coreProcessorState.maxOffset, localMaxOffset },
+        );
+        await discardMemberTables(member);
+        discardedAny = true;
+      }
+      // Record (or backfill) the schema version + incarnation we are now
+      // reconciled against for this member.
+      if (member.resetOnSchemaVersionChange) {
+        await streamDatabase.writeMirrorSchemaVersion(member.slug, member.schemaVersion);
+      }
+      await recordServerIncarnation(member.slug, serverIncarnation);
     }
 
-    if (localIncarnation !== serverIncarnation) {
-      // Either the incarnation changed (reset/reincarnation) OR we have local events but no
-      // recorded incarnation (a mirror that predates incarnation tracking). In both cases we
-      // can't trust the offset comparison — a reset that caught back up to the same maxOffset
-      // would otherwise be kept with stale rows — so rebuild from scratch.
-      console.warn(
-        `[stream ${args.streamPath} ${slug}] Cannot verify local ${slug} mirror against server incarnation (changed or unrecorded); rebuilding.`,
-        { localIncarnation, serverIncarnation, localMaxOffset },
-      );
-      await discardLocalMirror();
-      await recordServerIncarnation(serverIncarnation);
-      return reconciled;
-    }
-
-    if (coreProcessorState.maxOffset < localMaxOffset) {
-      console.warn(
-        `[stream ${args.streamPath} ${slug}] Server has fewer events than the local mirror; discarding local ${slug} tables.`,
-        { serverMaxOffset: coreProcessorState.maxOffset, localMaxOffset },
-      );
-      await discardLocalMirror();
-    }
-    // Record (or backfill) the incarnation we are now reconciled against.
-    if (args.resetOnSchemaVersionChange) {
-      await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
-    }
-    await recordServerIncarnation(serverIncarnation);
-    return reconciled;
+    if (discardedAny) await finishDiscard();
+    return { serverMaxOffset: coreProcessorState.maxOffset };
   }
 
   // A dial through a half-open transport hangs forever (no close frame ⇒
@@ -1174,11 +1172,10 @@ function createStreamRuntime(
       !disposed && stream === election.connection && election.epoch === connectionEpoch;
 
     writerRole = acquireWriterRole({
-      lockName: streamWriterLockName({
+      lockName: streamMirrorWriterLockName({
         projectId: args.projectId,
         streamPath: args.streamPath,
-        slug,
-        schemaVersion,
+        versionVector: mirrorVersionVector,
       }),
     });
     // The leader chain calls into the server (reconcile's runtimeState, subscribe). When the
@@ -1216,16 +1213,26 @@ function createStreamRuntime(
         // election was superseded) must not write runtime-wide fields like
         // lastDeliveredOffset over the current election's values.
         if (!ownsRuntime()) return undefined;
-        const processor = args.createProcessor({
-          stream: election.connection,
-          path: args.streamPath,
-          projectId: args.projectId,
-          sql,
-          subscriptionKey,
-        });
+        // Build every canonical member over the shared connection + db (each
+        // with its OWN checkpoint key) and host them as one composite. The
+        // catch-up pager, live sink, and metrics below all drive this single
+        // processor; it fans each batch out to its members in canonical order.
+        const processor = new CompositeBrowserProcessor(
+          members.map((member) => ({
+            slug: member.slug,
+            processor: member.createProcessor({
+              stream: election.connection,
+              path: args.streamPath,
+              projectId: args.projectId,
+              sql,
+              subscriptionKey: memberSubscriptionKey(member.slug),
+            }),
+          })),
+        );
         // The checkpoint read goes to the shared db worker; an un-deadlined
         // hang here would park the runtime as a forever-"leader" with no
-        // subscription, no probe, and no error.
+        // subscription, no probe, and no error. The composite reports the
+        // MINIMUM member checkpoint, so replay covers the least-caught-up member.
         const checkpoint = await withDeadline("checkpoint read", processor.snapshot());
         if (!ownsRuntime()) return undefined;
 
@@ -1336,7 +1343,7 @@ function createStreamRuntime(
         const handle = await withDeadline(
           "subscribe",
           election.connection.subscribe({
-            subscriptionKey,
+            subscriptionKey: serverSubscriptionKey,
             processEventBatch: ready.processEventBatch,
             replayAfterOffset: ready.replayAfterOffset,
             subscriber: ready.subscriber,
@@ -2044,37 +2051,6 @@ function createStreamRuntime(
  * connection and OPFS handle promptly.
  */
 const IDLE_DISPOSE_GRACE_MS = 2_000;
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * The deadline lane's own error class, so catch blocks can tell "the far side
- * answered nothing" (transport suspect — a half-open socket swallows calls
- * forever) apart from "the far side answered with a failure" (transport fine,
- * reconnect is enough).
- */
-class StepTimeoutError extends Error {}
-
-/**
- * Promise.race against a deadline, with the loser's timer cleared when the
- * race settles — a bare setTimeout-rejection branch would otherwise fire an
- * unhandled rejection after every SUCCESSFUL call.
- */
-function raceWithTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new StepTimeoutError(message)), ms);
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-
-function isWriteStatement(sql: string) {
-  return /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|REPLACE|PRAGMA\s+user_version)/i.test(sql);
-}
 
 function resolveStreamUrl(args: {
   projectId: string;

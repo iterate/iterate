@@ -114,7 +114,9 @@ test.skipIf(signingSecret === null)(
         type: "message",
         channel,
         user: "UHUMAN",
-        text: "Please reply in this thread with a short greeting.",
+        // Mention-gate: the slack-agent processor only wakes the LLM when the
+        // authorized bot is @mentioned (or on app_mention).
+        text: "<@UBOT> Please reply in this thread with a short greeting.",
         ts: threadTs,
       },
     });
