@@ -7,9 +7,10 @@
 //      installation has permission and it does not;
 //   2. records the link on the Repo Durable Object (KV for the mirror-push hot
 //      path + a `repo/github-link-configured` fact on the repo stream);
-//   3. installs a direct cross-post subscription on the connection stream, so
-//      every GitHub webhook about that repository is copied onto the repo's
-//      own stream, durably and at-least-once. This is still the stream
+//   3. installs a cross-post subscription on the connection stream — a push
+//      subscription whose expression addresses the repo stream's
+//      `acceptCrossPost` sink — so every GitHub webhook about that repository is copied onto
+//      the repo's own stream, durably and at-least-once. The generic stream
 //      subscription primitive, not GitHub-special routing.
 //
 // Unlinking reverses 2 and 3. The mirror pushes themselves live on the Repo
@@ -65,8 +66,8 @@ function githubCrossPostSubscriptionEvent(input: {
         condition: `payload.body.repository.full_name = ${JSON.stringify(`${input.owner}/${input.repo}`)}`,
       },
       delivery: {
-        mode: "cross-post",
-        path: input.repoPath,
+        mode: "push",
+        expression: ["streams", ["get", input.repoPath], "acceptCrossPost"],
       },
       // Live-tail: webhooks that arrived before the link existed are not this
       // repo's history. Explicit (though "new" is the default) because on a

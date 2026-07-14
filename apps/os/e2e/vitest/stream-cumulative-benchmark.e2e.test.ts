@@ -7,7 +7,6 @@ import type { Stream, StreamEventInput } from "../../src/itx-api.generated.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const ENABLED = process.env.STREAM_CUMULATIVE_BENCHMARK === "1";
-const FOCUS_CROSSPOST = process.env.STREAM_BENCH_FOCUS_CROSSPOST === "1";
 const FOCUS_TAILS = process.env.STREAM_BENCH_FOCUS_TAILS === "1";
 const IMPLEMENTATION = process.env.STREAM_BENCH_IMPLEMENTATION;
 const REVISION = process.env.STREAM_BENCH_REVISION ?? "unknown";
@@ -24,9 +23,6 @@ const CONCURRENT_APPEND_SAMPLES = Number(process.env.STREAM_BENCH_CONCURRENT_APP
 const BATCH_SAMPLES = Number(process.env.STREAM_BENCH_BATCH_SAMPLES ?? "0");
 const BATCH_SIZE = Number(process.env.STREAM_BENCH_BATCH_SIZE ?? "100");
 const DENSE_CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_DENSE_CROSSPOST_SAMPLES ?? "0");
-const CONCURRENT_CROSSPOST_SAMPLES = Number(
-  process.env.STREAM_BENCH_CONCURRENT_CROSSPOST_SAMPLES ?? "0",
-);
 const SPARSE_CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_SPARSE_CROSSPOST_SAMPLES ?? "0");
 const CROSSPOST_RETRY_EVENTS = Number(process.env.STREAM_BENCH_CROSSPOST_RETRY_EVENTS ?? "0");
 const CROSSPOST_RETRY_SAMPLES = Number(process.env.STREAM_BENCH_CROSSPOST_RETRY_SAMPLES ?? "0");
@@ -142,7 +138,7 @@ async function forceIdleTeardown(stream: StreamHandle): Promise<void> {
   ).durableObjectStub.runIdleTeardownNow();
 }
 
-test.skipIf(!ENABLED || FOCUS_CROSSPOST || FOCUS_TAILS)(
+test.skipIf(!ENABLED || FOCUS_TAILS)(
   "cumulative Stream latency and throughput",
   async () => {
     if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
@@ -778,101 +774,6 @@ test.skipIf(!ENABLED || FOCUS_CROSSPOST || FOCUS_TAILS)(
       metrics.head_after_forced_reactivation = summarize(samples);
     }
 
-    const output: BenchmarkOutput = {
-      implementation: IMPLEMENTATION,
-      metrics,
-      revision: REVISION,
-      timestamp: new Date().toISOString(),
-    };
-    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
-  },
-  600_000,
-);
-
-test.skipIf(!ENABLED || !FOCUS_CROSSPOST)(
-  "focused direct cross-post latency and throughput",
-  async () => {
-    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
-      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
-    }
-
-    const metrics: Record<string, Metric> = {};
-    const runId = crypto.randomUUID().slice(0, 8);
-
-    using session = withItxSession();
-    using itx = session.authenticate({
-      type: "admin-secret",
-      secret: adminSecret(),
-    });
-    using project = itx.projects.create({
-      projectId: `prj_${crypto.randomUUID()}`,
-      slug: `stream-crosspost-${IMPLEMENTATION}-${runId}`,
-    });
-    await project.__describe();
-
-    const destinationPath = `/bench/${runId}/crosspost-destination`;
-    using source = project.streams.get(`/bench/${runId}/crosspost-source`);
-    using destination = project.streams.get(destinationPath);
-    const arrivedAt = new Map<string, number>();
-    const handle = await destination.subscribe({
-      eventTypes: [SELECTED_TYPE],
-      processEventBatch: (batch) => {
-        const now = performance.now();
-        for (const delivered of batch.events) {
-          const marker = markerOf(delivered.payload);
-          if (marker !== undefined && !arrivedAt.has(marker)) arrivedAt.set(marker, now);
-        }
-      },
-    });
-    await source.crossPostTo({
-      deliver: "new",
-      eventTypes: [SELECTED_TYPE],
-      key: `focused-${runId}`,
-      path: destinationPath,
-    });
-
-    const appendAndWait = async (marker: string) => {
-      const startedAt = performance.now();
-      await source.appendAck(event({ marker, type: SELECTED_TYPE }));
-      await waitFor(() => arrivedAt.has(marker), marker);
-      return arrivedAt.get(marker)! - startedAt;
-    };
-
-    for (let iteration = 0; iteration < 20; iteration += 1) {
-      await appendAndWait(`dense-warmup-${iteration}`);
-    }
-    const denseSamples: number[] = [];
-    for (let iteration = 0; iteration < (DENSE_CROSSPOST_SAMPLES || 500); iteration += 1) {
-      denseSamples.push(await appendAndWait(`dense-${iteration}`));
-    }
-    metrics.crosspost_dense_one_event = summarize(denseSamples);
-
-    const concurrency = 16;
-    const concurrentSamples: number[] = [];
-    for (let iteration = -10; iteration < (CONCURRENT_CROSSPOST_SAMPLES || 200); iteration += 1) {
-      const markers = Array.from(
-        { length: concurrency },
-        (_, index) => `concurrent-${iteration}-${index}`,
-      );
-      const startedAt = performance.now();
-      await Promise.all(
-        markers.map(async (marker) => {
-          await source.appendAck(event({ marker, type: SELECTED_TYPE }));
-        }),
-      );
-      await waitFor(
-        () => markers.every((marker) => arrivedAt.has(marker)),
-        `concurrent cross-post ${iteration}`,
-      );
-      if (iteration >= 0) {
-        concurrentSamples.push(
-          Math.max(...markers.map((marker) => arrivedAt.get(marker)!)) - startedAt,
-        );
-      }
-    }
-    metrics.crosspost_concurrent_16_singletons = summarize(concurrentSamples, concurrency);
-
-    await Promise.resolve(handle.unsubscribe());
     const output: BenchmarkOutput = {
       implementation: IMPLEMENTATION,
       metrics,

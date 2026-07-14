@@ -219,7 +219,6 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
           return { checkpointOffset: log.length, sink };
         },
         push: async () => undefined,
-        crossPost: async () => undefined,
         webhook: async () => undefined,
       },
       appendFact: append,

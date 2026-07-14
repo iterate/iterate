@@ -59,10 +59,7 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 //      Live ephemeral consumers are runtime state (the in-memory connection
 //      table); dead ones used to linger here forever when their disconnect
 //      fact was lost to an eviction or deploy rollover.
-// - 15: sibling-stream cross-posts persist their normalized path directly
-//      instead of a generic itx expression, so delivery can dial the target
-//      Stream Durable Object without two intermediate capability calls.
-export const CORE_STATE_VERSION = 15;
+export const CORE_STATE_VERSION = 14;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -89,11 +86,12 @@ export const StreamSubscriptionType = z.enum(["configured", "ephemeral"]);
 export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
 
 /**
- * How a durable subscription's events reach the subscriber. Wake and generic
- * push persist an {@link ItxExpression itx expression}, evaluated at delivery
- * time against the stream's own authority root (the project itx for project
- * streams, the trusted deployment root for global streams). Cross-post is the
- * sibling-stream specialization of push and persists its normalized path:
+ * How a durable subscription's events reach the subscriber — the three
+ * modalities of the streams README's axes table. Wake and push share ONE
+ * addressing grammar: a persisted {@link ItxExpression itx expression},
+ * evaluated at delivery time against the stream's own authority root (the
+ * project itx for project streams, the trusted deployment root for global
+ * streams). The mode picks the delivery protocol, never the addressing:
  *
  * - `wake`: the subscriber is a stateful fold (a Durable-Object-hosted
  *   processor) that owns its own `{offset, state}` checkpoint. The expression
@@ -106,13 +104,10 @@ export type StreamSubscriptionType = z.infer<typeof StreamSubscriptionType>;
  *   truth.
  * - `push`: the subscriber is a stateless effect named by the expression
  *   (`["processEventBatch"]` — the project root's own dispatch point the
- *   birth-certificate worker feed names, or another named effect). The stream
- *   owns the AUTHORITATIVE cursor, dials the expression fresh per batch, and
- *   advances only on a successful awaited call.
- * - `cross-post`: push semantics for a sibling stream in the same project (or
- *   deployment scope for global streams). The direct Stream DO dial avoids a
- *   generic capability walk; frame claims, retries, cursor ownership, and
- *   destination idempotency remain identical to push.
+ *   birth-certificate worker feed names, `["streams", ["get", path],
+ *   "acceptCrossPost"]`, …). The stream owns the AUTHORITATIVE cursor, dials the
+ *   expression fresh per batch, and advances only on a successful awaited
+ *   call.
  * - `webhook`: push semantics over plain HTTP, one event per POST — the
  *   receiver is outside the itx world, and external webhook consumers expect
  *   individual events, so the cursor advances per event instead of per batch.
@@ -134,15 +129,14 @@ const SubscriptionDelivery = z.discriminatedUnion("mode", [
     processorSlug: z.string().trim().min(1).optional(),
   }),
   z.strictObject({ mode: z.literal("push"), expression: DeliveryExpression }),
-  z.strictObject({ mode: z.literal("cross-post"), path: z.string().startsWith("/") }),
   z.strictObject({ mode: z.literal("webhook"), url: z.url({ protocol: /^https?$/ }) }),
 ]);
 
-/** A durable subscription's delivery lane: wake, push/cross-post batch, or per-event webhook. */
+/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
 export type SubscriptionDelivery = z.infer<typeof SubscriptionDelivery>;
 
 /**
- * Initial cursor for a stream-owned-cursor subscription (push/cross-post/webhook).
+ * Initial cursor for a stream-owned-cursor subscription (push/webhook).
  * `"new"` pins to the configuring event's own offset — deterministic under
  * log replay, no clock — and is the default. `"all"` replays the full history
  * (`afterOffset: 0`).
@@ -156,7 +150,7 @@ const DeliverPolicy = z.union([
 export type DeliverPolicy = z.infer<typeof DeliverPolicy>;
 
 /**
- * What a push/cross-post/webhook subscription does when one specific batch keeps failing
+ * What a push/webhook subscription does when one specific batch keeps failing
  * while the receiver is otherwise alive: `park` (default) stops delivery and
  * records a `subscription-parked` fact — ordered receivers like cross-post
  * must never skip (a skip is a silent gap in the target stream); `skip`
@@ -176,16 +170,16 @@ const SubscriptionConfiguredPayload = z
     delivery: SubscriptionDelivery,
     /** Which events this subscription receives. Absent = everything. */
     selector: EventSelector.optional(),
-    /** Initial cursor for stream-owned-cursor modes. Ignored for wake mode. */
+    /** Initial cursor for push/webhook (see {@link DeliverPolicy}). Ignored for wake mode. */
     deliver: DeliverPolicy.optional(),
-    /** Stream-owned-cursor poison policy. Ignored for wake mode. */
+    /** Push/webhook poison policy (see {@link OnPoisonPolicy}). Ignored for wake mode. */
     onPoison: OnPoisonPolicy.optional(),
     /**
      * Receiver-owned configuration, passed through VERBATIM on every delivery
      * (the frame carries the configured event). The platform never interprets
      * this bag — the generic spine filters and dials, nothing more; a NAMED
      * receiver documents and applies its own params (selectors filter, receivers
-     * transform). The internal cross-post receiver reads `params.transform`, for example.
+     * transform). `Stream.acceptCrossPost` reads `params.transform` here, for example.
      */
     params: z.record(z.string(), z.unknown()).optional(),
   })
@@ -200,7 +194,7 @@ const SubscriptionConfiguredPayload = z
         ctx.addIssue({
           code: "custom",
           path: [field],
-          message: `"${field}" only applies to push/cross-post/webhook subscriptions (wake subscribers own their checkpoint)`,
+          message: `"${field}" only applies to push/webhook subscriptions (wake subscribers own their checkpoint)`,
         });
       }
     }
@@ -439,7 +433,7 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/stream/subscription-configured": {
       description:
-        "Configures or replaces a durable subscription for this stream (wake, push, cross-post, or webhook delivery; latest event per subscriptionKey wins). Re-configuring keeps the existing delivery cursor unless `deliver` is set, and clears any parked state — new config is a fresh chance.",
+        "Configures or replaces a durable subscription for this stream (wake or push delivery; latest event per subscriptionKey wins). Re-configuring keeps the existing delivery cursor unless `deliver` is set, and clears any parked state — new config is a fresh chance.",
       payloadSchema: SubscriptionConfiguredPayload,
       examples: [
         {
@@ -461,7 +455,7 @@ export const CoreProcessorContract = defineProcessorContract({
         },
         {
           description:
-            "Cross-post delivery: copies one repository's GitHub webhooks from a connection stream onto the repo's own stream, live-tailing from now.",
+            "Push delivery: cross-posts one repository's GitHub webhooks from a connection stream onto the repo's own stream, live-tailing from now.",
           payload: {
             subscriptionKey: "github-repo:/repos/root",
             selector: {
@@ -469,8 +463,8 @@ export const CoreProcessorContract = defineProcessorContract({
               condition: 'payload.body.repository.full_name = "acme/widgets"',
             },
             delivery: {
-              mode: "cross-post",
-              path: "/repos/root",
+              mode: "push",
+              expression: ["streams", ["get", "/repos/root"], "acceptCrossPost"],
             },
             deliver: "new",
           },

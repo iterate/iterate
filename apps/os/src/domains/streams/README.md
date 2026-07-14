@@ -37,11 +37,11 @@ await itx.streams.get("/integrations/github/mine").crossPostTo({
 });
 ```
 
-`crossPostTo` is sugar for a **direct cross-post subscription** (below) that
-persists the destination path; the appended `subscription-configured` event is
-the real interface. Delivery dials the sibling Stream DO directly and remains
-durable and at-least-once (cursor + retries + parking). The receiver derives
-idempotency keys from the source coordinate, so retries collapse to
+`crossPostTo` is sugar for a **push subscription** (below) whose expression
+addresses the destination stream's `acceptCrossPost` sink; the appended
+`subscription-configured` event is the real interface. Delivery is durable and
+at-least-once (cursor + retries + parking), and `acceptCrossPost` derives idempotency
+keys from the source coordinate, so at-least-once delivery collapses to
 exactly-once appends.
 
 ## The model
@@ -76,7 +76,7 @@ three-part shape —
 — but it runs inline in the append turn, which grants it the two powers no
 hosted processor can have: it is synchronous with the commit, and
 `#validateAppend` can **reject an event before it becomes a durable fact**
-(pause door, delivery expression/path/URL validation).
+(pause door, delivery expression/URL validation).
 
 ## Subscribers: one axis, one sink
 
@@ -95,28 +95,27 @@ the session?
   them every matching event, forever, across disconnects, deploys, and
   hibernation.
 
-Durable delivery comes in four modes, chosen by one criterion — **the offset
+Durable delivery comes in three modes, chosen by one criterion — **the offset
 lives with whoever owns the state it must be transactionally consistent
-with**. Wake and generic push persist an itx expression naming the method to
-invoke on the ordinary domain surface
+with**. Wake and push share ONE addressing grammar: a persisted itx
+expression naming the method to invoke on the ordinary domain surface
 (`["agents", ["get", path], "processor", "wakeStreamSubscriber"]`,
 `["processEventBatch"]` — the project root's own dispatch point, which
-delegates to the project worker). Cross-post persists a sibling stream path
-and bypasses the generic capability walk. Webhook points the same cursor
-machinery at plain HTTP:
+delegates to the project worker — `["streams", ["get", path], "acceptCrossPost"]`);
+webhook is the same cursor machinery pointed at plain HTTP:
 
-|                         | ephemeral                              | durable `wake`                                                      | durable `push`                                            | durable `cross-post`                                | durable `webhook`                                |
-| ----------------------- | -------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------ |
-| who                     | browsers, tests, `waitForEvent`        | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed                | sibling streams                                     | external HTTP receivers                          |
-| subscription            | `subscribe()` (session)                | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`       | config event, `delivery: {mode:"cross-post", path}` | config event, `delivery: {mode:"webhook", url}`  |
-| offset owner            | client, in-memory                      | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log        | **stream** — same cursor row                        | **stream** — same cursor row, advanced per EVENT |
-| stream-side row         | none                                   | observational watermark (poke coalescing, lag)                      | authoritative cursor                                      | authoritative cursor                                | authoritative cursor                             |
-| sink arrives as         | `subscribe()` parameter                | returned from the expression-named poke                             | named by a persisted itx expression                       | direct sibling Stream DO dial                       | the configured URL                               |
-| warm transport          | retained one-way callback              | retained one-way sink                                               | fresh awaited call per batch                              | fresh awaited call per batch                        | one `fetch` POST per event                       |
-| return frames per batch | **zero** (result disposed unpulled)    | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)       | one, awaited (**the ack**)                          | the 2xx response (**the ack**), per event        |
-| retry / failure         | client's problem                       | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)     | same spine, same machine                            | same spine, same machine, per-event granularity  |
-| replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set` | same as push                                        | same as push                                     |
-| filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config           | same selector shape                                 | same selector shape                              |
+|                         | ephemeral                              | durable `wake`                                                      | durable `push`                                                | durable `webhook`                                |
+| ----------------------- | -------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------ |
+| who                     | browsers, tests, `waitForEvent`        | DO-hosted processors (stateful folds)                               | stateless effects: the project worker feed, `acceptCrossPost` | external HTTP receivers                          |
+| subscription            | `subscribe()` (session)                | config event, `delivery: {mode:"wake", expression, processorSlug?}` | config event, `delivery: {mode:"push", expression}`           | config event, `delivery: {mode:"webhook", url}`  |
+| offset owner            | client, in-memory                      | **subscriber** — `{offset, state}` snapshot, atomic with the fold   | **stream** — spine cursor row, atomic with the log            | **stream** — same cursor row, advanced per EVENT |
+| stream-side row         | none                                   | observational watermark (poke coalescing, lag)                      | authoritative cursor                                          | authoritative cursor                             |
+| sink arrives as         | `subscribe()` parameter                | returned from the expression-named poke                             | named by a persisted itx expression                           | the configured URL                               |
+| warm transport          | retained one-way callback              | retained one-way sink                                               | fresh awaited call per batch                                  | one `fetch` POST per event                       |
+| return frames per batch | **zero** (result disposed unpulled)    | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)           | the 2xx response (**the ack**), per event        |
+| retry / failure         | client's problem                       | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)         | same spine, same machine, per-event granularity  |
+| replay                  | `replayAfterOffset` arg                | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`     | same as push                                     |
+| filter                  | `selector` / `eventTypes` on subscribe | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config               | same selector shape                              |
 
 ### Ephemeral events
 
@@ -211,16 +210,14 @@ Doctrine, worth memorizing:
   code.** A selector (`{eventTypes?, condition?}` — one shape on every lane,
   [JSONata](https://jsonata.org/) conditions must evaluate to exactly `true`)
   may reject events, never construct output. Transforms live in named
-  receivers: the cross-post receiver documents its own `params.transform`. When an effect
+  receivers: `acceptCrossPost` documents its own `params.transform`. When an effect
   needs real code, it goes in the project worker — typed, reviewed, in the
   repo.
-- **Persist names or scoped coordinates, never capabilities.** A delivery expression
-  (`src/itx/expression.ts`) — wake and generic push — is a capability NAME evaluated
+- **Persist the name, re-derive the authority.** A delivery expression
+  (`src/itx/expression.ts`) — wake AND push — is a capability NAME evaluated
   per delivery against the stream's own authority root: the project-scoped
   `env.ITX` root (the identical recipe every dynamic worker gets), or the
-  trusted deployment root for global (`projectId: null`) streams. Cross-post
-  stores only a path and combines it with the source stream's project scope
-  before dialing the destination DO. Deleting
+  trusted deployment root for global (`projectId: null`) streams. Deleting
   the subscription is revocation. A PROJECT root can't name another project,
   so cross-project delivery is unexpressible rather than checked. (The
   deployment root is wider — it is session-shaped and admin-write-only, so a
@@ -318,21 +315,21 @@ announcements and checkpoints.
 
 ## File map
 
-| File                         | Role                                                                                                                                                               |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `stream-durable-object.ts`   | The stream: append commit point, core processor, birth certificate, the dial (pokes, push expressions, direct cross-posts, webhooks), internal cross-post receiver |
-| `core-processor-contract.ts` | Core contract: reduced-state schema (v11) + the `events.iterate.com/stream/*` event catalog                                                                        |
-| `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                                                                 |
-| `stream-subscribers.ts`      | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)                                                        |
-| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                                                                           |
-| `subscriber-math.ts`         | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                                                                     |
-| `event-selector.ts`          | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                                                                     |
-| `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                                                                       |
-| `stream-processor.ts`        | The `StreamProcessor` base class (batch ingest, checkpointing, hooks)                                                                                              |
-| `stream-processor-host.ts`   | Hosts processors in a DO; answers pokes with `{checkpoint, sink, …}`                                                                                               |
-| `schemas.ts`                 | `StreamEvent` / `StreamEventInput` zod schemas (incl. `crossPostedFrom` provenance)                                                                                |
-| `utils.ts`                   | Stream path resolution + wake-subscription event builder                                                                                                           |
-| `client-libraries/`          | Browser mirror host and browser-side processors                                                                                                                    |
+| File                         | Role                                                                                                                                |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `stream-durable-object.ts`   | The stream: append commit point, core processor, birth certificate, the dial (pokes, push expressions, webhooks), `acceptCrossPost` |
+| `core-processor-contract.ts` | Core contract: reduced-state schema (v11) + the `events.iterate.com/stream/*` event catalog                                         |
+| `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                                  |
+| `stream-subscribers.ts`      | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)                         |
+| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                                            |
+| `subscriber-math.ts`         | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                                      |
+| `event-selector.ts`          | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                                      |
+| `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                                        |
+| `stream-processor.ts`        | The `StreamProcessor` base class (batch ingest, checkpointing, hooks)                                                               |
+| `stream-processor-host.ts`   | Hosts processors in a DO; answers pokes with `{checkpoint, sink, …}`                                                                |
+| `schemas.ts`                 | `StreamEvent` / `StreamEventInput` zod schemas (incl. `crossPostedFrom` provenance)                                                 |
+| `utils.ts`                   | Stream path resolution + wake-subscription event builder                                                                            |
+| `client-libraries/`          | Browser mirror host and browser-side processors                                                                                     |
 
 Public capability surface (`Stream`, `StreamEventBatch`, `ProcessEventBatch`,
 …) is defined in `src/domains/streams/rpc-types.ts` (and projected into the

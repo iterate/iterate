@@ -259,21 +259,20 @@ export type RetainedSubscriberPing = ((
 // =============================================================================
 
 /**
- * Builds the spine's {@link SubscriberDial}. Wake and generic push evaluate a
- * persisted itx expression against the stream's authority root — the itx
- * loopback that mints the project-scoped root every dynamic worker sees as
- * `env.ITX`, or the trusted deployment root for a global (`projectId: null`)
- * stream. Cross-post directly dials the sibling Stream DO. Everything
- * transport-shaped lives here, keeping this file the ONLY streams module that
- * knows transports exist.
+ * Builds the spine's {@link SubscriberDial}. Wake and push share ONE lane: the
+ * persisted itx expression is evaluated against the stream's authority root —
+ * the itx loopback that mints the project-scoped root every dynamic worker
+ * sees as `env.ITX`, or the trusted deployment root for a global
+ * (`projectId: null`) stream. Everything transport-shaped — root minting,
+ * retention of returned sinks, per-delivery stub lifecycles, expression
+ * walking over RPC — lives here, keeping this file the ONLY streams module
+ * that knows transports exist.
  */
 export function createSubscriberDial(deps: {
   /** The stream's projectId; `null` = global stream (deployment authority root). */
   projectId: string | null;
   /** The Durable Object's `ctx.exports` (the in-worker loopback registry). */
   exports: unknown;
-  /** Direct sibling Stream lookup, preserving the source stream's project scope. */
-  crossPost(path: string, batch: StreamPushEventBatch): Promise<void>;
   /** Where durable-sink delivery rejections land (spine: close → re-poke). */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void;
 }): SubscriberDial {
@@ -372,11 +371,11 @@ export function createSubscriberDial(deps: {
      * One push delivery: evaluate the expression to a sink and invoke it with
      * the batch — `["processEventBatch"]` reaches the project root's own
      * dispatch point (which delegates to the project worker) and
-     * through exactly the calls ordinary user code would make. The awaited
-     * resolve is the ack; a reject propagates to the spine's retry/park
-     * machine. The authority root is cached across deliveries and dropped on
-     * failure (see `acquirePushRoot`). Sibling cross-posts use `crossPost`
-     * below and never mint this chain.
+     * `["streams", ["get", path], "acceptCrossPost"]` reaches a sibling stream —
+     * through exactly the calls ordinary user code would make. The
+     * awaited resolve is the ack; a reject propagates to the spine's
+     * retry/park machine. The authority root is cached across deliveries and
+     * dropped on failure (see `acquirePushRoot`).
      */
     async push(expression: ItxExpression, batch: StreamPushEventBatch) {
       const chain = acquirePushRoot();
@@ -390,10 +389,6 @@ export function createSubscriberDial(deps: {
         invalidatePushRoot(chain);
         throw error;
       }
-    },
-
-    crossPost(path: string, batch: StreamPushEventBatch) {
-      return deps.crossPost(path, batch);
     },
 
     /**

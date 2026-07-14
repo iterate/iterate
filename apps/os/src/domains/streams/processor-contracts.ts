@@ -28,7 +28,7 @@ import {
  * at module load, so a bad example fails CI instead of bricking a worker boot.
  */
 export type EventExample = {
-  /** What this example shows, e.g. "Direct cross-post delivery to another stream". */
+  /** What this example shows, e.g. "Push delivery to another stream's acceptCrossPost". */
   description: string;
   /** The example payload, in the payload schema's input shape. */
   payload: unknown;

@@ -118,6 +118,10 @@ class MemoryStream implements Stream {
     throw new Error("MemoryStream does not implement subscribe().");
   }
 
+  async acceptCrossPost(): Promise<never> {
+    throw new Error("MemoryStream does not implement acceptCrossPost().");
+  }
+
   async crossPostTo(): Promise<never> {
     throw new Error("MemoryStream does not implement crossPostTo().");
   }
@@ -199,7 +203,7 @@ describe("ProjectProcessor bootstrap", () => {
     // stream `/` — full history, so the saga's repo/created arrives too.
     expect(configRepo[1]!.payload).toMatchObject({
       subscriptionKey: "cross-post:/",
-      delivery: { mode: "cross-post", path: "/" },
+      delivery: { mode: "push", expression: ["streams", ["get", "/"], "acceptCrossPost"] },
       deliver: "all",
     });
     expect(configRepo[2]!.payload).toEqual({ path: "/repos/config", projectId: "prj_test" });
