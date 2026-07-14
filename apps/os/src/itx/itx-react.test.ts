@@ -71,6 +71,28 @@ describe("itx socket map", () => {
     expect(FakeWebSocket.instances[1]!.url).toContain("/api");
   });
 
+  test("an isolated connection lane cannot evict ordinary reads in the same project", async () => {
+    const { connectItxBrowser, evictItxSocketIfCurrent } = await import("./itx-react.tsx");
+    const projectAddress = { projectId: "acme" };
+    const mirrorAddress = { projectId: "acme", connectionKey: "stream-mirror:/repos/iterate" };
+
+    const project = connectItxBrowser(projectAddress);
+    const mirror = connectItxBrowser(mirrorAddress);
+    expect(connectItxBrowser(mirrorAddress)).toBe(mirror);
+    expect(mirror).not.toBe(project);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    FakeWebSocket.instances[0]!.fire("open");
+    FakeWebSocket.instances[1]!.fire("open");
+    await expect(project).resolves.toMatchObject({ url: expect.stringContaining("/api/acme") });
+    await expect(mirror).resolves.toMatchObject({ url: expect.stringContaining("/api/acme") });
+
+    evictItxSocketIfCurrent(mirrorAddress, mirror);
+    expect(connectItxBrowser(projectAddress)).toBe(project);
+    expect(connectItxBrowser(mirrorAddress)).not.toBe(mirror);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+  });
+
   test("a closed socket is dropped; the next connectItxBrowser dials a fresh one", async () => {
     const { connectItxBrowser } = await import("./itx-react.tsx");
     const first = connectItxBrowser({ projectId: "acme" });
