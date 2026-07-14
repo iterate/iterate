@@ -6,6 +6,55 @@ policy](#retries-and-timeouts) every lane follows. For unit-test style (fake
 timers, inline snapshots, `test.for` tables), see
 [Vitest patterns](vitest-patterns.md).
 
+## Philosophy
+
+Six principles carry this system. They are conscious design — most trace
+to specific people and incidents — and should be argued with, not drifted
+away from.
+
+1. **Prove the behavior users actually get.** The default test is e2e from
+   very far away: through the itx surface or a real browser, against a
+   live deployment, with no test-only seams. Local dev already runs the
+   real worker inside vite's workerd, so a live target is always one
+   command away.
+
+2. **Fail fast; fix the product, not the timeout.** (Misha Kaletsky's
+   design — the [middlewright](https://github.com/iterate/middlewright)
+   plugin family, extracted from this repo's test infra.) Playwright
+   actions get a brutal 750ms budget that extends — up to ~30s — only
+   while the app visibly reports progress (`data-spinner`). A slow flow
+   that makes a test flaky is a product bug: add the loading state users
+   wanted anyway. In his words: "it makes your test pass fast, fail fast,
+   and it incentivises agents to improve the product when tests fail,
+   instead of bumping timeouts which makes tests worse and lets your
+   product get away with bad UX." Any explicit timeout override carries a
+   `// comment` saying why.
+
+3. **Every test owns its state.** Each e2e test and spec provisions its
+   own project (unique slug; `projects.create` resolves only after the
+   bootstrap saga commits). No shared fixtures, no ordering, no cleanup
+   coupling — this is what makes parallel workers and rule 4 sound.
+
+4. **One retry, watchdogs above, telemetry always.** Retries live in
+   exactly one layer (the individual test, CI only); everything above is
+   a fail-never-retry watchdog sized to ~2× healthy p99; every absorbed
+   retry surfaces in the PR table. Budgets are evidence, not vibes — see
+   [Retries and timeouts](#retries-and-timeouts) and the marathon audit.
+
+5. **Harnesses must be honest about fidelity.** Where we do unit-test,
+   fakes implement the real interfaces (`MemoryStream` honors idempotency
+   keys and offset gaps; eviction is an operator: `h.crash()`), every
+   vendor-touching processor suite has a refold test, and a harness that
+   structurally cannot catch a bug class says so in its file header (the
+   `stream-subscribers.teardown.test.ts` pattern).
+
+6. **No workerd test runtime.** There is deliberately no
+   `@cloudflare/vitest-pool-workers` lane: unit tests run in plain node
+   with a thin `cloudflare:workers` shim (plus capnweb's real workers
+   build), and real-runtime coverage comes from the e2e lanes against
+   live deployments — production-shaped by construction. Adding a third
+   runtime needs a proven coverage gap, not a preference.
+
 ## Lanes
 
 | Lane             | Command (from `apps/os` unless noted) | Lives in                                | Proves                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -15,17 +64,34 @@ timers, inline snapshots, `test.for` tables), see
 | TUI              | `pnpm exec tsx e2e/tui-test/run.ts`   | `apps/os/e2e/tui-test/`                 | The `iterate chat` TUI through a real PTY (Microsoft TUI Test) against a disposable project.                                                                                                                                                                                                                                                                                                                              |
 | Playwright specs | `pnpm spec` (repo root)               | `specs/` (`playwright.config.ts`)       | Browser-level product flows: signup, project create, dashboard, REPL, agent chat, reactivity.                                                                                                                                                                                                                                                                                                                             |
 
-## Don't over-test
+## What earns a test
 
-We prefer e2e tests from very far away — through the itx surface or the
-browser, against a live deployment — because they prove behavior users
-actually get. Unit tests are for when there's a good reason: typically a
-large number of cases that would be too slow or too expensive to run e2e
-(fold/reduce logic, parsers, pure functions with wide input tables). Stream
-processors are the deliberate example — they get purpose-built node test
-harnesses (see [Writing & testing stream processors](writing-stream-processors.md))
-exactly so their many event-ordering and redelivery cases can run as fast
-unit tests.
+The default is a covering e2e. A **unit test** earns its place in exactly
+two ways:
+
+- **Wide case tables.** Fold/reduce logic, parsers, pure functions — and
+  above all stream processors: many event-ordering and redelivery cases
+  that would be too slow or expensive to run e2e. These get purpose-built
+  node harnesses (see
+  [Writing & testing stream processors](writing-stream-processors.md)) and
+  captured-journal incident repros (`stream-repros/iterate-pr-NNNN-*`).
+- **Tiny kernels.** Zero-maintenance guards for adversarial and security
+  invariants: bad-signature ⇒ 401 before routing, path-escape rejection,
+  ciphertext binding, secret redaction in `inspect()`, tenancy-collision
+  checks. Small, hostile inputs, cheap to keep — these stay even though
+  each one is thin.
+
+### Ship-with rules
+
+New work of these shapes ships WITH these tests. Absence is a review
+blocker, not a style note:
+
+| You built                                           | It ships with                                                                                                                                                                             |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A stream processor, or a new side-effect arm in one | A harness suite including a **refold test** (replay the whole journal ⇒ zero side effects, zero appends); if it holds obligations, an **eviction-recovery** test (`h.crash()` mid-flight) |
+| An itx capability or API surface                    | A catalogue example proven by the examples matrix (and thereby every runtime), plus engine e2e for its failure arms                                                                       |
+| A product flow in the dashboard                     | A Playwright spec under `specs/`, readable as a product spec                                                                                                                              |
+| An incident fix with a journal-shaped cause         | A captured-journal repro named for the PR (`stream-repros/`)                                                                                                                              |
 
 What we do NOT want:
 
@@ -39,6 +105,43 @@ What we do NOT want:
   verbatim couplings, not a guard test.
 - Unit tests for arg parsing of internal scripts, trivial glue, or anything
   a covering e2e already proves by existing.
+
+## Test dimensions (DRAFT — under discussion)
+
+Every test sits somewhere on five axes, and the rule mirrors the env-var
+doctrine: **one control per dimension, no parallel mechanisms**, and the
+vanilla `vitest` / `playwright` CLIs keep working. Dimensions are expressed
+through file names, project selection, and environment presence — never a
+bespoke runner.
+
+| Dimension    | Values                                            | Controlled by                                                                                                         | Status         |
+| ------------ | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------- |
+| Surface      | in-process / itx API / browser / PTY              | which lane you invoke (`pnpm test` / `pnpm e2e` / `pnpm spec` / tui) + vitest `--project`                             | works today    |
+| Speed        | fast / slow-by-contract                           | per-test `{ timeout }` capped at `E2E_HEAVY_TEST_TIMEOUT_MS`; the slowest-first sequencer feeds on observed seconds   | works today    |
+| Determinism  | deterministic / retry-absorbed                    | `E2E_CI_RETRIES = 1` + retry telemetry — a nondeterministic test that retries is visible, never silent                | works today    |
+| Cost         | free / pays for LLM turns                         | **gap** — implicit today (the onboarding smoke and codemode proofs pay; nothing marks them)                           | proposal below |
+| Remote reach | hermetic / hits a deployment / hits a third party | **partial** — `APP_CONFIG_INTEGRATIONS__*` presence gates third-party suites; deployment-reach is implied by the lane | proposal below |
+
+Draft proposal for the two gaps, keeping vanilla CLIs:
+
+- Put the **cost** dimension in the filename, the same way lanes already
+  live there: `*.llm.e2e.test.ts` for tests that pay for model turns.
+  Filename dimensions compose with plain vitest filtering
+  (`pnpm e2e llm`), grep, and the sequencer — no runner machinery. The
+  e2e-policy guard test can then enforce the budget structurally: files
+  NOT tagged `.llm.` must not import the agent-turn helpers.
+- Keep **third-party reach** on environment presence (the doppler-native
+  control we already have); it composes with per-env secrets and skips
+  cleanly when a config lacks the integration.
+- Playwright's native tags (`@slow`, `--grep`) are the escape hatch on the
+  specs side if a spec ever needs a dimension; don't build it until one
+  does.
+
+Open questions for the next grilling round: is the filename the right home
+for cost (vs a lint-enforced import rule alone)? Should third-party reach
+be visible in filenames too, or is env-gating enough? Does "slow" deserve
+a filename marker so the sequencer stops needing hand-maintained observed
+seconds?
 
 ## Running a lane against an environment
 
@@ -235,8 +338,9 @@ only on genuine infra wedges).
    wedged platform _should_ get killed; both historical watchdog kills were
    genuine infra wedges where retrying was hopeless.
 4. **Waits are progress-based; static budgets are backstops.** The
-   Playwright `actionTimeout` is a tight 750ms; the middlewright
-   spinner-waiter (see `patches/`) extends it — up to ~30s — only while the
+   Playwright `actionTimeout` is a tight 750ms; the
+   [middlewright](https://github.com/iterate/middlewright) spinner-waiter
+   extends it — up to ~30s — only while the
    app visibly reports progress. An app that goes blank fails fast instead
    of being slept through: this exact tightness caught a real blank-render
    product bug (flake 21). Don't widen budgets to paper over a missing
@@ -256,7 +360,7 @@ only on genuine infra wedges).
 | One vitest e2e test/hook   | `testTimeout` / `hookTimeout`         | `apps/os/e2e/vitest.config.ts` ← `E2E_TEST_TIMEOUT_MS`             | 120s                                      | retry once (CI)             |
 | A container-cold-boot test | per-test `{ timeout }`                | individual tests, capped at `E2E_HEAVY_TEST_TIMEOUT_MS`            | ≤ 240s                                    | retry once (CI)             |
 | The onboarding smoke gate  | attempt loop                          | `apps/os/e2e/vitest/onboarding-smoke.ts`                           | 90s greeting wait                         | one more attempt, then fail |
-| The preview vitest lane    | `timeout N pnpm e2e`                  | `scripts/preview/preview.ts` ← `OS_PREVIEW_LANE_TIMEOUT_SECS`      | 480s                                      | **fail — never retry**      |
+| Each preview sub-lane      | `timeout N <lane command>`            | `scripts/preview/preview.ts` ← `OS_PREVIEW_LANE_TIMEOUT_SECS`      | 480s                                      | **fail — never retry**      |
 | One whole preview run      | `RUN_TIMEOUT_SECS` kill-tree watchdog | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS` | 600s                                      | **kill — never retry**      |
 | The Depot CI job           | `timeout-minutes`                     | `.depot/workflows/*.yml`                                           | 10–45 (mainline/preview) / 300 (marathon) | outer edge: re-run button   |
 
