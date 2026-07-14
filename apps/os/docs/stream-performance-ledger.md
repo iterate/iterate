@@ -1112,3 +1112,47 @@ through `cast(? as blob)` plus `returning length(event_json)` can remove the
 eager `TextEncoder` allocation without making insertion or returned-row work
 slower. It remains a micro-optimization and will be rejected unless exact
 append controls show a clear gain.
+
+## 2026-07-14: Rejected Inline Text Bind And Returned Length
+
+The prototype avoided `TextEncoder` for singleton event JSON between 16 KiB
+and one third of the 1 MiB inline ceiling. The upper code-unit bound guarantees
+the value remains inline under worst-case UTF-8 expansion. SQLite received the
+string through `cast(? as blob)` and returned `length(event_json)`, preserving
+BLOB storage and exact full-envelope sizing. Tiny, batched, uncertain-size,
+and chunked values retained the existing byte-binding path.
+
+Five exact-method `node:sqlite` processes per revision showed the expected
+allocation crossover:
+
+| Append shape         | Parent p50 | Candidate p50 | Change |
+| -------------------- | ---------: | ------------: | -----: |
+| Singleton 1 KiB      |  0.0057 ms |     0.0060 ms |  -5.1% |
+| Singleton 32 KiB     |  0.0401 ms |     0.0316 ms |  21.1% |
+| Singleton 256 KiB    |  0.2866 ms |     0.1670 ms |  41.7% |
+| Unicode 1 KiB        |  0.0088 ms |     0.0092 ms |  -4.2% |
+| 100-event tiny batch |  0.1253 ms |     0.1225 ms |   2.2% |
+
+The Workers test was decisive. Five full rounds per revision ran against the
+exact production parent in `P,C,C,P,P,C,C,P,P,C` order, with 120 measured 1
+KiB appends and 30 measured 100-event batches per round; the existing 256 KiB
+lane contributed 20 samples per round. Host timers enclosed awaited append
+RPCs.
+
+| Workers append shape | Parent p50 | Candidate p50 | P50 change | Parent p95 | Candidate p95 |
+| -------------------- | ---------: | ------------: | ---------: | ---------: | ------------: |
+| Singleton 1 KiB      |   2.159 ms |      2.215 ms |      -2.6% |   3.121 ms |      3.267 ms |
+| Singleton 256 KiB    |   7.946 ms |      8.346 ms |      -5.0% |  12.124 ms |     12.334 ms |
+| 100-event tiny batch |   5.147 ms |      5.149 ms |       0.0% |   8.548 ms |      9.056 ms |
+
+The 256 KiB mean also regressed 3.9%. Workerd's cast and returned-row cost
+exceeds the removed encoding allocation, so the host win does not transfer to
+the deployed runtime. The entire prototype was removed; production retains one
+serialization representation and no size-dependent SQL branch. Raw host logs
+are `/tmp/inline-cast-{baseline,hybrid}.log`; Workers logs are
+`/tmp/inline-cast-workers-{parent,candidate}.log` locally.
+
+Together with the checkpoint and frame-shape results, this closes the current
+micro-optimization queue. The next work should return to profiles and target a
+larger statement, RPC, or lifecycle cost rather than another sub-millisecond
+allocation.
