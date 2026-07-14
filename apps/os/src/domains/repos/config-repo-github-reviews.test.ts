@@ -8,6 +8,7 @@ import {
 
 const CONFIG: GithubReviewConfig = {
   forceLabel: "iterate:review",
+  osBaseUrl: "https://os.iterate.test",
   repositories: ["acme/widgets"],
   rulesPath: "agents/github-review.md",
   skipLabel: "iterate:skip-review",
@@ -62,6 +63,8 @@ function harness(input?: {
   let nextCheckId = 100;
   const append = vi.fn().mockResolvedValue([]);
   const cancel = vi.fn().mockResolvedValue(undefined);
+  const killAgent = vi.fn().mockResolvedValue(undefined);
+  const killCapabilityHost = vi.fn().mockResolvedValue(undefined);
   const create = vi.fn().mockImplementation((args: { external_id: string; head_sha: string }) =>
     Promise.resolve({
       data: {
@@ -103,6 +106,10 @@ function harness(input?: {
     },
   };
   const getConnection = vi.fn(() => ({ octokit }));
+  const getAgent = vi.fn(() => ({
+    capabilityHost: { kill: killCapabilityHost },
+    kill: killAgent,
+  }));
   const defaultsForPath = vi.fn().mockResolvedValue({
     events: [
       {
@@ -119,15 +126,22 @@ function harness(input?: {
     path: CONFIG.rulesPath,
   });
   const set = vi.fn().mockResolvedValue({});
+  const getStream = vi.fn(() => ({ append }));
   const itx = {
-    agents: { defaults: { forPath: defaultsForPath } },
+    agents: { defaults: { forPath: defaultsForPath }, get: getAgent },
     integrations: { github: { get: getConnection } },
     // Scalar Workers RPC properties are promises at the caller even though
     // the generated project surface describes their resolved value.
     projectId: Promise.resolve("prj_test"),
+    processor: {
+      snapshot: vi.fn().mockResolvedValue({
+        offset: 1,
+        state: { createRequest: { projectId: "prj_test", slug: "widgets-project" } },
+      }),
+    },
     repo: { readFile },
     scheduler: { cancel, set },
-    streams: { get: vi.fn(() => ({ append })) },
+    streams: { get: getStream },
   } as unknown as Project;
   return {
     append,
@@ -135,7 +149,11 @@ function harness(input?: {
     create,
     defaultsForPath,
     getConnection,
+    getAgent,
+    getStream,
     itx,
+    killAgent,
+    killCapabilityHost,
     listForRef,
     readFile,
     set,
@@ -170,7 +188,23 @@ describe("config-repo GitHub reviews", () => {
       payload: { content: string; llmRequestPolicy: object };
     };
     expect(task.idempotencyKey).toBe("iterate-review:prj_test:42:7:head:head-b");
+    expect(h.getStream).toHaveBeenCalledWith(
+      "/agents/repos/route/pull-requests/7/iterate-reviews/100",
+    );
+    expect(h.defaultsForPath).toHaveBeenCalledWith(
+      "/agents/repos/route/pull-requests/7/iterate-reviews/100",
+    );
+    expect(h.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        check_run_id: 100,
+        details_url:
+          "https://os.iterate.test/projects/widgets-project/agents/streams/agents/repos/route/pull-requests/7/iterate-reviews/100",
+      }),
+    );
     expect(task.payload.content).toContain("Everything fetched from GitHub");
+    expect(task.payload.content).toContain("Do not search platform docs");
+    expect(task.payload.content).toContain("do not emit native tool-call syntax");
+    expect(task.payload.content).toContain("On your first turn, fetch only the live pull request");
     expect(task.payload.content).toContain('"iterate-preview[bot]"');
     expect(task.payload.content).toContain("do not publish another review");
     expect(task.payload.content).toContain("Immediately before publishing");
@@ -183,7 +217,7 @@ describe("config-repo GitHub reviews", () => {
     expect(task.payload.content).toContain('title "Review cancelled"');
     expect(task.payload.content).toContain("The successful Check Run with terminal output");
     expect(task.payload.content).toContain("Promise.all");
-    expect(task.payload.llmRequestPolicy).toEqual({ behaviour: "interrupt-current-request" });
+    expect(task.payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
   });
 
   it("does not extend the Check Run deadline when a webhook is redelivered", async () => {
@@ -234,6 +268,13 @@ describe("config-repo GitHub reviews", () => {
     expect(h.create).not.toHaveBeenCalled();
     expect(h.set).not.toHaveBeenCalled();
     expect(h.append).not.toHaveBeenCalled();
+    expect(h.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        check_run_id: 45,
+        details_url:
+          "https://os.iterate.test/projects/widgets-project/agents/streams/agents/repos/route/pull-requests/7/iterate-reviews/45",
+      }),
+    );
   });
 
   it("retries a cancelled review of the same automatic head", async () => {
@@ -334,13 +375,26 @@ describe("config-repo GitHub reviews", () => {
       labels: [CONFIG.forceLabel],
       offset: 10,
     });
+    h.killAgent.mockRejectedValue(new Error("kill requested"));
+    h.killCapabilityHost.mockRejectedValue(new Error("kill requested"));
 
     await processGithubReviewEvent({ config: CONFIG, event, itx: h.itx });
 
-    expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({ check_run_id: 8, conclusion: "cancelled" }),
     );
+    expect(h.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        check_run_id: 9,
+        details_url:
+          "https://os.iterate.test/projects/widgets-project/agents/streams/agents/repos/route/pull-requests/7/iterate-reviews/9",
+      }),
+    );
+    expect(h.getAgent).toHaveBeenCalledWith(
+      "/agents/repos/route/pull-requests/7/iterate-reviews/8",
+    );
+    expect(h.killAgent).toHaveBeenCalledOnce();
+    expect(h.killCapabilityHost).toHaveBeenCalledOnce();
     expect(h.cancel).toHaveBeenCalledWith("github-review-timeout:8");
     expect(h.cancel).not.toHaveBeenCalledWith("github-review-timeout:9");
     expect(h.create).not.toHaveBeenCalled();
@@ -406,6 +460,15 @@ describe("config-repo GitHub reviews", () => {
       expect.objectContaining({ check_run_id: 88, conclusion: "cancelled" }),
     );
     expect(h.cancel).toHaveBeenCalledWith("github-review-timeout:88");
+    expect(h.getAgent).toHaveBeenCalledWith(
+      "/agents/repos/route/pull-requests/7/iterate-reviews/88",
+    );
+    expect(h.killAgent.mock.invocationCallOrder[0]).toBeLessThan(
+      h.update.mock.invocationCallOrder[0]!,
+    );
+    expect(h.killCapabilityHost.mock.invocationCallOrder[0]).toBeLessThan(
+      h.update.mock.invocationCallOrder[0]!,
+    );
     expect(h.append).not.toHaveBeenCalled();
   });
 
@@ -470,6 +533,36 @@ describe("config-repo GitHub reviews", () => {
     );
     expect(h.defaultsForPath).not.toHaveBeenCalled();
     expect(h.append).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel visible review state when agent retirement genuinely fails", async () => {
+    const h = harness({
+      checkRuns: () => [
+        {
+          app: { slug: "iterate-preview" },
+          external_id: "iterate-review:prj_test:42:7:head:head-b",
+          html_url: null,
+          id: 91,
+          status: "in_progress",
+        },
+      ],
+      liveLabels: [CONFIG.skipLabel],
+    });
+    h.killAgent.mockRejectedValue(new Error("GitHub agent retirement unavailable"));
+
+    await expect(
+      processGithubReviewEvent({
+        config: CONFIG,
+        event: webhook({
+          action: "labeled",
+          changedLabel: CONFIG.skipLabel,
+          labels: [CONFIG.skipLabel],
+        }),
+        itx: h.itx,
+      }),
+    ).rejects.toThrow("GitHub agent retirement unavailable");
+
+    expect(h.update).not.toHaveBeenCalled();
   });
 
   it("does not queue a newer review when superseded-check cancellation fails", async () => {

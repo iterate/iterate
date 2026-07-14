@@ -7,6 +7,7 @@ import { processGithubReviewEvent } from "./github-reviews.ts";
 // provide per-PR controls using GitHub's own permissions.
 const GITHUB_REVIEWS = {
   forceLabel: "iterate:review",
+  osBaseUrl: "https://os.iterate.com",
   repositories: [] as string[],
   rulesPath: "agents/github-review.md",
   skipLabel: "iterate:skip-review",
