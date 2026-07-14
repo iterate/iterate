@@ -3,12 +3,18 @@
 // operations because Workers may freeze isolate clocks between I/O events.
 
 import { expect, test } from "vitest";
-import type { Stream, StreamEventInput } from "../../src/itx-api.generated.ts";
+import type {
+  Stream,
+  StreamEvent,
+  StreamEventInput,
+  StreamPushEventBatch,
+} from "../../src/itx-api.generated.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const ENABLED = process.env.STREAM_CUMULATIVE_BENCHMARK === "1";
 const FOCUS_TAILS = process.env.STREAM_BENCH_FOCUS_TAILS === "1";
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
+const FOCUS_CROSSPOST_EXACT_RETRY = process.env.STREAM_BENCH_FOCUS_CROSSPOST_EXACT_RETRY === "1";
 const IMPLEMENTATION = process.env.STREAM_BENCH_IMPLEMENTATION;
 const REVISION = process.env.STREAM_BENCH_REVISION ?? "unknown";
 const EVENT_TYPE = "events.iterate.test/stream-cumulative-benchmark";
@@ -143,6 +149,19 @@ async function forceIdleTeardown(stream: StreamHandle): Promise<void> {
   ).durableObjectStub.runIdleTeardownNow();
 }
 
+async function acceptCrossPostDirect(
+  stream: StreamHandle,
+  batch: StreamPushEventBatch,
+): Promise<void> {
+  await (
+    stream as unknown as {
+      durableObjectStub: {
+        acceptCrossPost(batch: StreamPushEventBatch): Promise<void> | void;
+      };
+    }
+  ).durableObjectStub.acceptCrossPost(batch);
+}
+
 async function killProject(project: { kill(): Promise<void> }): Promise<void> {
   try {
     await project.kill();
@@ -176,7 +195,7 @@ async function measureProcessorCatchup(projectId: string, samples: number): Prom
   return measured;
 }
 
-test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP)(
+test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP || FOCUS_CROSSPOST_EXACT_RETRY)(
   "cumulative Stream latency and throughput",
   async () => {
     if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
@@ -927,6 +946,80 @@ test.skipIf(!ENABLED || !FOCUS_PROCESSOR_CATCHUP)(
       metrics: {
         processor_catchup_after_kill: summarize(samples, PROCESSOR_CATCHUP_EVENTS),
       },
+      revision: REVISION,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
+  },
+  600_000,
+);
+
+test.skipIf(!ENABLED || !FOCUS_CROSSPOST_EXACT_RETRY)(
+  "focused exact cross-post delivery retry",
+  async () => {
+    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
+      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
+    }
+
+    const metrics: Record<string, Metric> = {};
+    const runId = crypto.randomUUID().slice(0, 8);
+    const projectId = `prj_${crypto.randomUUID()}`;
+    const sampleCount = CROSSPOST_RETRY_SAMPLES || 30;
+    const createdAt = new Date(0).toISOString();
+
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({
+      projectId,
+      slug: `stream-crosspost-retry-${IMPLEMENTATION}-${runId}`,
+    });
+    await project.__describe();
+
+    for (const eventCount of [1, 128, 8_000]) {
+      const sourcePath = `/bench/${runId}/exact-retry-source-${eventCount}`;
+      const destinationPath = `/bench/${runId}/exact-retry-destination-${eventCount}`;
+      const subscriptionKey = `exact-retry-${runId}-${eventCount}`;
+      const events: StreamEvent[] = Array.from({ length: eventCount }, (_, index) => ({
+        createdAt,
+        offset: index + 1,
+        path: sourcePath,
+        payload: { marker: `exact-retry-${eventCount}-${index}` },
+        type: SELECTED_TYPE,
+      }));
+      const batch: StreamPushEventBatch = {
+        attempt: 1,
+        configuredEvent: {
+          createdAt,
+          offset: eventCount + 1,
+          path: sourcePath,
+          payload: { params: {} },
+          type: "events.iterate.com/stream/subscription-configured",
+        },
+        deliveryId: `${subscriptionKey}:1-${eventCount}`,
+        events,
+        path: sourcePath,
+        projectId,
+        streamMaxOffset: eventCount + 1,
+        subscriptionKey,
+      };
+
+      using destination = project.streams.get(destinationPath);
+      const initialHead = (await destination.head()).maxOffset;
+      await acceptCrossPostDirect(destination, batch);
+      expect((await destination.head()).maxOffset).toBe(initialHead + eventCount);
+
+      const samples = await measure(
+        sampleCount,
+        async () => await acceptCrossPostDirect(destination, batch),
+        5,
+      );
+      metrics[`crosspost_exact_retry_${eventCount}`] = summarize(samples, eventCount);
+      expect((await destination.head()).maxOffset).toBe(initialHead + eventCount);
+    }
+
+    const output: BenchmarkOutput = {
+      implementation: IMPLEMENTATION,
+      metrics,
       revision: REVISION,
       timestamp: new Date().toISOString(),
     };
