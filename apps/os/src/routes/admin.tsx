@@ -146,85 +146,92 @@ function AdminSidebar() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
 
   return (
-    <Sidebar collapsible="icon">
+    <>
+      {/* Outside <Sidebar>: mobile Sheet remounts its children when opened. */}
       <CloseMobileSidebarOnNavigate />
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" tooltip="Iterate Admin" render={<Link to="/admin" />}>
-              <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-                <ShieldIcon aria-hidden="true" />
-              </div>
-              <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">Iterate Admin</span>
-                <span className="truncate text-xs text-sidebar-foreground/70">Platform tools</span>
-              </div>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Admin</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Streams explorer"
-                  isActive={pathname.startsWith("/admin/streams")}
-                  render={<Link to="/admin/streams" />}
-                >
-                  <WaypointsIcon aria-hidden="true" />
-                  <span>Streams explorer</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Projects"
-                  isActive={pathname.startsWith("/admin/projects")}
-                  render={<Link to="/admin/projects" />}
-                >
-                  <FolderKanbanIcon aria-hidden="true" />
-                  <span>Projects</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Repl"
-                  isActive={pathname.startsWith("/admin/repl")}
-                  render={<Link to="/admin/repl" />}
-                >
-                  <SquareTerminalIcon aria-hidden="true" />
-                  <span>Repl</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel>Shortcuts</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Global streams"
-                  isActive={pathname.startsWith(`/admin/streams/${NULL_DURABLE_OBJECT_PROJECT_ID}`)}
-                  render={
-                    <Link
-                      to="/admin/streams/$projectId"
-                      params={{ projectId: NULL_DURABLE_OBJECT_PROJECT_ID }}
-                    />
-                  }
-                >
-                  <RadioTowerIcon aria-hidden="true" />
-                  <span>Global streams</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarRail />
-    </Sidebar>
+      <Sidebar collapsible="icon">
+        <SidebarHeader>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton size="lg" tooltip="Iterate Admin" render={<Link to="/admin" />}>
+                <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
+                  <ShieldIcon aria-hidden="true" />
+                </div>
+                <div className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">Iterate Admin</span>
+                  <span className="truncate text-xs text-sidebar-foreground/70">
+                    Platform tools
+                  </span>
+                </div>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupLabel>Admin</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Streams explorer"
+                    isActive={pathname.startsWith("/admin/streams")}
+                    render={<Link to="/admin/streams" />}
+                  >
+                    <WaypointsIcon aria-hidden="true" />
+                    <span>Streams explorer</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Projects"
+                    isActive={pathname.startsWith("/admin/projects")}
+                    render={<Link to="/admin/projects" />}
+                  >
+                    <FolderKanbanIcon aria-hidden="true" />
+                    <span>Projects</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Repl"
+                    isActive={pathname.startsWith("/admin/repl")}
+                    render={<Link to="/admin/repl" />}
+                  >
+                    <SquareTerminalIcon aria-hidden="true" />
+                    <span>Repl</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel>Shortcuts</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Global streams"
+                    isActive={pathname.startsWith(
+                      `/admin/streams/${NULL_DURABLE_OBJECT_PROJECT_ID}`,
+                    )}
+                    render={
+                      <Link
+                        to="/admin/streams/$projectId"
+                        params={{ projectId: NULL_DURABLE_OBJECT_PROJECT_ID }}
+                      />
+                    }
+                  >
+                    <RadioTowerIcon aria-hidden="true" />
+                    <span>Global streams</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+        <SidebarRail />
+      </Sidebar>
+    </>
   );
 }

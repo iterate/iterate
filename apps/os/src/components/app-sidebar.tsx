@@ -94,26 +94,30 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
 
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
+  // CloseMobileSidebarOnNavigate must sit outside <Sidebar>: on mobile, Sidebar
+  // children live inside a Sheet that remounts when opened.
   return (
-    <Sidebar collapsible="icon">
+    <>
       <CloseMobileSidebarOnNavigate />
-      {/* Collapsed: nudge the logo down 4px (pt-2 → pt-3) so its center lines up
+      <Sidebar collapsible="icon">
+        {/* Collapsed: nudge the logo down 4px (pt-2 → pt-3) so its center lines up
           with the stream path pill in the page header (h-9 pill, pt-2.5 → center 28px).
           Transition padding with Tailwind's default timing — the same curve the
           SidebarMenuButton uses for its width/height/padding — so the padding offset
           and the button's height change move the logo together instead of drifting. */}
-      <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
-        <AppSidebarHeader projects={projects} />
-      </SidebarHeader>
-      <SidebarContent>
-        <AppSidebarNav routeConfig={routeConfig} />
-      </SidebarContent>
-      <SidebarFooter>
-        <AppSidebarCollapseButton />
-        <AppSidebarUser />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
+        <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
+          <AppSidebarHeader projects={projects} />
+        </SidebarHeader>
+        <SidebarContent>
+          <AppSidebarNav routeConfig={routeConfig} />
+        </SidebarContent>
+        <SidebarFooter>
+          <AppSidebarCollapseButton />
+          <AppSidebarUser />
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
+    </>
   );
 }
 
