@@ -12,6 +12,21 @@ export interface DeployableEnv {
   dopplerConfig: string;
 }
 
+/** Structured Cloudflare API failure so callers can handle specific statuses without parsing text. */
+export class CloudflareApiError extends Error {
+  constructor(
+    readonly method: string,
+    readonly path: string,
+    readonly status: number,
+    details: unknown,
+  ) {
+    super(
+      `Cloudflare API ${method} ${path} failed (${status}): ${String(JSON.stringify(details) ?? details).slice(0, 500)}`,
+    );
+    this.name = "CloudflareApiError";
+  }
+}
+
 /**
  * A resolved `--env <name>` invocation: the app's envs.ts entry plus that
  * env's Doppler secrets. Every deployed-environment script starts here, so
@@ -90,8 +105,11 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
     });
     const body: any = await response.json().catch(() => null);
     if (!response.ok || body?.success === false) {
-      throw new Error(
-        `Cloudflare API ${init?.method ?? "GET"} ${path} failed (${response.status}): ${JSON.stringify(body?.errors ?? body).slice(0, 500)}`,
+      throw new CloudflareApiError(
+        init?.method ?? "GET",
+        path,
+        response.status,
+        body?.errors ?? body,
       );
     }
     // Fail loudly instead of silently acting on a truncated listing.

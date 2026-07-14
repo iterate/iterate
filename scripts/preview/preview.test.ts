@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 import {
   CloudflarePreviewAppEntry,
   EnvironmentConfigLease,
@@ -13,6 +15,16 @@ import {
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 
+const WorkflowConcurrency = z.object({
+  group: z.string(),
+  "cancel-in-progress": z.boolean(),
+});
+
+const PreviewWorkflowConcurrency = z.object({
+  concurrency: WorkflowConcurrency,
+  jobs: z.record(z.string(), z.object({ concurrency: WorkflowConcurrency })),
+});
+
 const {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
@@ -22,6 +34,7 @@ const {
   explainPreviewTestSkip,
   holderPullRequestUrl,
   reassertEnvironmentConfigLease,
+  requireExplicitReclaimForce,
   resolveSlotWaitTotalMs,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
@@ -113,6 +126,37 @@ describe("preview workflow scope", () => {
     expect(workflow.indexOf("Enforce preview deployment epoch")).toBeLessThan(
       workflow.indexOf("pnpm preview deploy"),
     );
+  });
+
+  it("serializes deploy and cleanup per PR without a fleet-wide maintenance gate", () => {
+    const deployWorkflowText = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
+      "utf8",
+    );
+    const cleanupWorkflowText = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-preview-cleanup.yml"),
+      "utf8",
+    );
+    const deployWorkflow = PreviewWorkflowConcurrency.parse(parseYaml(deployWorkflowText));
+    const cleanupWorkflow = PreviewWorkflowConcurrency.parse(parseYaml(cleanupWorkflowText));
+
+    expect(deployWorkflow.concurrency).toEqual({
+      group:
+        "cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}",
+      "cancel-in-progress": true,
+    });
+    expect(cleanupWorkflow.concurrency).toEqual(deployWorkflow.concurrency);
+    expect(deployWorkflow.jobs.preview.concurrency).toEqual({
+      group:
+        "cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}",
+      "cancel-in-progress": false,
+    });
+    expect(cleanupWorkflow.jobs.cleanup.concurrency).toEqual({
+      group: "cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}",
+      "cancel-in-progress": false,
+    });
+    expect(deployWorkflowText).not.toContain("cloudflare-preview-fleet-auth-rpc-cutover");
+    expect(cleanupWorkflowText).not.toContain("cloudflare-preview-fleet-auth-rpc-cutover");
   });
 });
 
@@ -1485,7 +1529,7 @@ describe("lease reclaim verdicts", () => {
     ).toBe("available");
   });
 
-  it("classifies closed-PR holders as orphaned regardless of recency", () => {
+  it("reports closed-PR holders as orphan candidates regardless of recency", () => {
     expect(
       classifyLeaseForReclaim({
         holderPullRequestState: "closed",
@@ -1531,154 +1575,56 @@ describe("lease reclaim verdicts", () => {
   });
 });
 
-describe("orphaned lease garbage collection during acquire", () => {
+describe("destructive lease reclaim", () => {
+  const orphaned = {
+    holder: "pr-1580",
+    lastUsedAgo: "1m ago",
+    leasedUntil: "2026-07-14T12:00:00.000Z",
+    pullRequestUrl: "https://github.com/iterate/iterate/pull/1580",
+    slug: "preview-2",
+    verdict: "orphaned" as const,
+  };
+
+  it("requires explicit force even when the holder PR is closed", () => {
+    expect(() => requireExplicitReclaimForce(orphaned, undefined)).toThrow(
+      /may race its owner's deploy or close-triggered cleanup/,
+    );
+  });
+
+  it("allows a verified operator takeover", () => {
+    expect(() => requireExplicitReclaimForce(orphaned, true)).not.toThrow();
+  });
+});
+
+describe("lease ownership during acquire", () => {
   function conflictError() {
     const error = new Error("No resource is currently available for this type.");
     (error as Error & { code: string }).code = "CONFLICT";
     return error;
   }
 
-  const leasedResource = (slug: string, holder: string) => ({
-    data: { dopplerConfig: slug.replace("-", "_") },
-    holder,
-    lastAcquiredAt: Date.now() - 3_600_000,
-    lastReleasedAt: null,
-    leaseState: "leased" as const,
-    leasedUntil: Date.now() + 3_600_000,
-    slug,
-  });
-
-  it("force-takes a slot whose holder PR is closed", async () => {
-    const acquireSpecific = vi.fn(async (input: { slug: string }) =>
-      fakeLease({ slug: input.slug, holder: "pr-1600" }),
-    );
+  it("never force-acquires a held slot while its owner may be cleaning it up", async () => {
+    const eraseSlotData = vi.fn(async () => {});
+    const acquireSpecific = vi.fn();
     const semaphore = fakeSemaphore({
       acquire: vi.fn(async () => {
         throw conflictError();
       }),
       acquireSpecific,
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
-    });
-
-    const lease = await acquireAnyEnvironmentConfigLease({
-      eraseSlotData: noopEraseSlotData,
-      semaphore,
-      fetchPullRequestState: async () => "closed",
-      holder: "pr-1600",
-      leaseMs: 1000,
-      waitTotalMs: 0,
-    });
-
-    expect(lease.slug).toBe("preview-2");
-    expect(acquireSpecific).toHaveBeenCalledWith(
-      expect.objectContaining({ slug: "preview-2", holder: "pr-1600", force: true }),
-    );
-  });
-
-  it("erases the reclaimed slot's data before handing it over", async () => {
-    // A reclaim only happens because the dead holder's cleanup — which erases
-    // on the way out — never ran, so the slot is dirty by definition. The
-    // deliberately non-conventional dopplerConfig pins that the erase target
-    // comes from the LEASE's data payload, not derived from the slug.
-    const eraseSlotData = vi.fn(async () => {});
-    const semaphore = fakeSemaphore({
-      acquire: vi.fn(async () => {
-        throw conflictError();
-      }),
-      acquireSpecific: vi.fn(async (input: { slug: string }) =>
-        fakeLease({ slug: input.slug, data: { dopplerConfig: "preview_two" }, holder: "pr-1600" }),
-      ),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
-    });
-
-    const lease = await acquireAnyEnvironmentConfigLease({
-      eraseSlotData,
-      semaphore,
-      fetchPullRequestState: async () => "closed",
-      holder: "pr-1600",
-      leaseMs: 1000,
-      waitTotalMs: 0,
-    });
-
-    expect(lease.slug).toBe("preview-2");
-    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
-      dopplerConfig: "preview_two",
-      slug: "preview-2",
-    });
-  });
-
-  it("a failed erase releases the reclaimed lease instead of handing over a dirty slot", async () => {
-    const eraseSlotData = vi.fn(async () => {
-      throw new Error("doppler exploded");
-    });
-    const release = vi.fn(async () => ({ released: true }));
-    const semaphore = fakeSemaphore({
-      acquire: vi.fn(async () => {
-        throw conflictError();
-      }),
-      acquireSpecific: vi.fn(async (input: { slug: string }) =>
-        fakeLease({
-          slug: input.slug,
-          data: { dopplerConfig: "preview_2" },
-          holder: "pr-1600",
-          leaseId: "11111111-2222-3333-4444-555555555555",
-        }),
-      ),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
-      release,
     });
 
     await expect(
       acquireAnyEnvironmentConfigLease({
         eraseSlotData,
         semaphore,
-        fetchPullRequestState: async () => "closed",
         holder: "pr-1600",
         leaseMs: 1000,
         waitTotalMs: 0,
       }),
-    ).rejects.toThrow(/Could not hand pr-1600 a clean slot/);
+    ).rejects.toThrow(/Automation never force-reclaims a held slot/);
 
-    expect(eraseSlotData).toHaveBeenCalled();
-    expect(release).toHaveBeenCalledWith(
-      expect.objectContaining({
-        slug: "preview-2",
-        leaseId: "11111111-2222-3333-4444-555555555555",
-      }),
-    );
-  });
-
-  it("retries after a failed erase until the slot comes back clean", async () => {
-    // The failure path gives the lease back and loops; the next take of the
-    // same slot re-runs the erase. One transient doppler hiccup must not
-    // wedge the claim — and a dirty slot must never be the thing returned.
-    const eraseSlotData = vi
-      .fn(async () => {})
-      .mockRejectedValueOnce(new Error("transient doppler hiccup"));
-    const release = vi.fn(async () => ({ released: true }));
-    const semaphore = fakeSemaphore({
-      acquire: vi.fn(async () => {
-        throw conflictError();
-      }),
-      acquireSpecific: vi.fn(async (input: { slug: string }) =>
-        fakeLease({ slug: input.slug, holder: "pr-1600" }),
-      ),
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
-      release,
-    });
-
-    const lease = await acquireAnyEnvironmentConfigLease({
-      eraseSlotData,
-      semaphore,
-      fetchPullRequestState: async () => "closed",
-      holder: "pr-1600",
-      leaseMs: 1000,
-      waitTotalMs: 60_000,
-    });
-
-    expect(lease.slug).toBe("preview-2");
-    expect(eraseSlotData).toHaveBeenCalledTimes(2);
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(acquireSpecific).not.toHaveBeenCalled();
+    expect(eraseSlotData).not.toHaveBeenCalled();
   });
 
   it("erases a freshly acquired slot too — cleanliness is an entry invariant", async () => {
@@ -1704,54 +1650,6 @@ describe("orphaned lease garbage collection during acquire", () => {
       dopplerConfig: "preview_seven",
       slug: "preview-7",
     });
-  });
-
-  it("never touches slots whose holder PR is open or manual", async () => {
-    const acquireSpecific = vi.fn();
-    const semaphore = fakeSemaphore({
-      acquire: vi.fn(async () => {
-        throw conflictError();
-      }),
-      acquireSpecific,
-      list: vi.fn(async () => [
-        leasedResource("preview-2", "pr-1580"),
-        leasedResource("preview-3", "manual-jonas"),
-      ]),
-    });
-
-    await expect(
-      acquireAnyEnvironmentConfigLease({
-        eraseSlotData: noopEraseSlotData,
-        semaphore,
-        fetchPullRequestState: async () => "open",
-        holder: "pr-1600",
-        leaseMs: 1000,
-        waitTotalMs: 0,
-      }),
-    ).rejects.toThrow(/preview reclaim/);
-    expect(acquireSpecific).not.toHaveBeenCalled();
-  });
-
-  it("skips reclamation entirely without a PR-state fetcher", async () => {
-    const acquireSpecific = vi.fn();
-    const semaphore = fakeSemaphore({
-      acquire: vi.fn(async () => {
-        throw conflictError();
-      }),
-      acquireSpecific,
-      list: vi.fn(async () => [leasedResource("preview-2", "pr-1580")]),
-    });
-
-    await expect(
-      acquireAnyEnvironmentConfigLease({
-        eraseSlotData: noopEraseSlotData,
-        semaphore,
-        holder: "pr-1600",
-        leaseMs: 1000,
-        waitTotalMs: 0,
-      }),
-    ).rejects.toThrow(/No preview slot became available/);
-    expect(acquireSpecific).not.toHaveBeenCalled();
   });
 });
 
