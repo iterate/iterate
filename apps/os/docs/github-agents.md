@@ -1,6 +1,7 @@
 # GitHub pull-request agents
 
-Every pull request on a linked repository gets one durable agent stream:
+Every pull request on a linked repository gets one durable conversational
+agent stream:
 
 ```text
 /agents/repos/<github-link-identity>/pull-requests/<number>
@@ -10,7 +11,8 @@ GitHub deliveries remain raw `events.iterate.com/github/webhook-received`
 facts on that stream. The platform `github-agent` processor has one narrow
 job: it folds current PR metadata plus twelve recent activity summaries and
 turns trusted PR conversation into agent messages. It does **not** decide
-whether code review runs.
+whether code review runs. Userspace review automation creates a separate child
+agent stream per Check Run under `<pr-path>/iterate-reviews/<check-id>`.
 
 Each activity summary carries its raw stream offset. When the bounded summary
 omits something, the agent point-reads that delivery instead of dumping the
@@ -35,7 +37,7 @@ ordinary events whether or not they trigger an LLM turn.
 | Trusted PR edit that newly adds `@iterate` to title or description | Add 👀 to the PR and queue; later edits do not retrigger it |
 | Later trusted comment or submitted review after activation         | Queue like a message in an active Slack thread              |
 | Push, CI, unmentioned discussion before activation, bot input      | Record and project only                                     |
-| Project config worker appends a review task                        | Follow that task's explicit request policy                  |
+| Project config worker appends a review task                        | Run independently on its dedicated review stream            |
 
 A submitted review summary has no reaction endpoint of its own, so its 👀 is
 attached to the pull request. Inline review comments use their native reaction
@@ -86,6 +88,7 @@ The seeded config repo contains a complete userspace reaction and these knobs:
 ```ts
 const GITHUB_REVIEWS = {
   forceLabel: "iterate:review",
+  osBaseUrl: "https://os.iterate.com",
   repositories: [] as string[], // empty means reviews are off
   rulesPath: "agents/github-review.md",
   skipLabel: "iterate:skip-review",
@@ -132,17 +135,23 @@ eligible routed webhook it:
 1. Uses the exact routed GitHub connection and signed-webhook App identity;
    automatic policy never guesses the first installation.
 2. Fetches the live PR and drops stale, closed, draft, or disabled deliveries
-   before they can create a check or interrupt an agent.
-3. Reads the Markdown rules and stock agent defaults in parallel.
-4. Cancels the previous revision's running App-owned checks, then creates or
+   before they can create a check or queue an agent turn.
+3. Reads the Markdown rules from the config repo.
+4. Retires the previous revision's model and code-execution workers, cancels
+   its running App-owned checks, then creates or
    recovers an `Iterate Review` Check Run for the immutable head. Check lookup
    is fully paginated.
-5. Arms a userspace timeout before waking the model, anchored to the Check
+5. Sets the Check Run's details URL to the exact OS review-agent thread and
+   arms a userspace timeout before waking the model, anchored to the Check
    Run's absolute start-time deadline so webhook redelivery cannot extend it.
-6. Appends those idempotent defaults and one request-keyed
-   `events.iterate.com/agents/message-received` review task in a single batch.
-7. Requests `interrupt-current-request`, so a newer push supersedes obsolete
-   review work while ordinary conversation remains queued.
+6. Gets stock defaults for that exact review-agent path, then appends those
+   idempotent defaults and one request-keyed
+   `events.iterate.com/agents/message-received` review task in a single batch to
+   a dedicated review-agent stream for that Check Run.
+7. Keeps automatic review isolated from the conversational PR stream, so a
+   push-triggered review cannot cancel, coalesce with, or inherit the visible
+   handoff obligation from a mentioned user's multi-step code-work turn.
+   A newer push retires the obsolete review agent before finalizing its check.
 
 Applying defaults in the same append closes the new-stream birth race. The
 task's idempotency key collapses at-least-once automatic webhook delivery;
@@ -155,6 +164,8 @@ actor cannot reuse an old check or marker to suppress policy.
 ### Visible lifecycle and consolidated review
 
 The config worker creates the Check Run and timeout before waking the model.
+GitHub's **View more details** link opens that Check Run's exact OS agent
+thread.
 On a newer push it cancels the prior head's still-running App-owned check. On a
 skip-label event it cancels live-head checks immediately. Useful review content
 remains agent-owned: the task tells the agent to read the complete diff and
@@ -235,8 +246,20 @@ is a user-style view and may show every flag false even when the installation
 can write; attempt the requested operation and report GitHub's actual error.
 
 For code work, the agent fetches the live PR and uses the route prompt's exact
-`GH_TOKEN` recipe to bind a sandbox to that installation. The recipe is shared
-with sandbox provisioning and configures Git smart HTTP as Basic
+plural sandbox API recipe:
+
+```ts
+const { path } = await itx.sandboxes.create({
+  name: `github-pr-${pullNumber}-${Date.now()}`,
+  instanceType: "basic",
+});
+const sandbox = await itx.sandboxes.get(path);
+```
+
+There is no singular `itx.sandbox`. The stock image includes Ubuntu, Node, Bun,
+git, curl, and jq; agents must not assume Python or other tools are installed.
+The route's `GH_TOKEN` recipe then binds the sandbox to that installation. It is
+shared with sandbox provisioning and configures Git smart HTTP as Basic
 `x-access-token:<installation-token>` auth; GitHub rejects API-style Bearer auth
 on that endpoint. It clones the head repository/ref, edits and tests, commits,
 and non-force pushes the exact head branch. `itx.repo` and `itx.workspace`

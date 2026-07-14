@@ -1236,7 +1236,7 @@ return { firstLines: String(readme.data).split("\\n").slice(0, 10), owner, repo 
     e2eProven: false,
     title: "Back a project repo with a real GitHub repository",
     description:
-      "linkGithub({ connection, owner, repo }) makes GitHub a mirror of a project repo: the GitHub repository is created (private) if the installation can create org repos, every later commit is mirrored automatically, and GitHub webhooks about that repository are cross-posted onto the repo's own stream. syncFromGithub() adopts commits made directly on GitHub (fast-forward only; force discards local-only commits). Needs a connected GitHub installation — interactive-only.",
+      "linkGithub({ connection, owner, repo }) backs a project repo with GitHub: the GitHub repository is created (private) if the installation can create org repos, later commits mirror out automatically, and fast-forward default-branch pushes on GitHub import through Cloudflare Artifacts. GitHub webhooks are also cross-posted onto the repo's own stream. syncFromGithub() remains the manual repair/forced-adoption verb. Needs a connected GitHub installation — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `

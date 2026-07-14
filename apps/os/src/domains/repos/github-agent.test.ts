@@ -55,6 +55,10 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     expect(payload.content).toContain("Bots are always untrusted");
     expect(payload.content).toContain('itx.integrations.github.get("install-789").octokit');
     expect(payload.content).toContain(".rest.pulls.get");
+    expect(payload.content).toContain("itx.sandboxes.create");
+    expect(payload.content).toContain("itx.sandboxes.get(path)");
+    expect(payload.content).toContain("`itx.sandbox` does not exist");
+    expect(payload.content).toContain("do not assume Python");
     expect(payload.content).toContain("sandbox.setEnvVars");
     expect(payload.content).toContain("AUTHORIZATION: Basic");
     expect(payload.content).toContain("x-access-token:${GH_TOKEN}");

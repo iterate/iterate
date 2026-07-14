@@ -1,3 +1,4 @@
+import { createWebSocketResponse, isWebSocketUpgradeRequest, WebSocketPair } from "captun";
 import { mockSlackResponseBody } from "../test-support/mock-slack-api.ts";
 import { withTunnel, type TunnelHandle } from "../test-support/tunnel.ts";
 
@@ -39,6 +40,57 @@ export async function startEgressEcho(): Promise<TunnelHandle> {
       return Response.json({ headers });
     },
   });
+}
+
+/** Public WSS fixture for ordinary clients and the stock Codex CLI. */
+export const WEBSOCKET_ECHO_GREETING = "iterate-websocket-ready";
+export const WEBSOCKET_ECHO_PROTOCOL = "iterate.websocket.proof";
+
+export async function startWebSocketEcho(input: CapabilityFixtureInput = {}): Promise<
+  TunnelHandle & {
+    authHeaders: string[];
+    closeEvents: Array<{ code: number; reason: string }>;
+  }
+> {
+  const authHeaders: string[] = [];
+  const closeEvents: Array<{ code: number; reason: string }> = [];
+  const server = await withTunnel({
+    path: "/websocket-echo",
+    fetch(request) {
+      const authorization = request.headers.get("authorization") ?? "";
+      authHeaders.push(authorization);
+      if (!isWebSocketUpgradeRequest(request)) {
+        return new Response("websocket upgrade required", { status: 426 });
+      }
+      if (
+        input.expectedAuthorization !== undefined &&
+        authorization !== input.expectedAuthorization
+      ) {
+        return new Response("unauthorized", { status: 401 });
+      }
+
+      const pair = new WebSocketPair();
+      pair[1].accept({ allowHalfOpen: false });
+      pair[1].addEventListener("message", (event) => {
+        pair[1].send(event.data as string | ArrayBuffer);
+      });
+      pair[1].addEventListener("close", (event) => {
+        closeEvents.push({ code: event.code, reason: event.reason });
+      });
+      pair[1].send(WEBSOCKET_ECHO_GREETING);
+
+      const offeredProtocols = (request.headers.get("sec-websocket-protocol") ?? "")
+        .split(",")
+        .map((protocol) => protocol.trim());
+      return createWebSocketResponse(
+        pair[0],
+        offeredProtocols.includes(WEBSOCKET_ECHO_PROTOCOL)
+          ? { protocol: WEBSOCKET_ECHO_PROTOCOL }
+          : undefined,
+      );
+    },
+  });
+  return { ...server, authHeaders, closeEvents };
 }
 
 export async function startMockOpenApi(

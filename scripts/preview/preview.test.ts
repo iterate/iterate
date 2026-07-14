@@ -5,7 +5,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import {
   CloudflarePreviewAppEntry,
-  EnvironmentConfigLease,
+  CloudflarePreviewSlotDisplay,
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
@@ -28,13 +28,14 @@ const PreviewWorkflowConcurrency = z.object({
 const {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
+  adoptLeaseHeldBySemaphore,
   claimEnvironmentConfigLease,
   describeForcePushCompareHazard,
+  describeLostSlotOwnership,
   evaluateCloudflareZoneCheck,
-  explainPreviewTestSkip,
   holderPullRequestUrl,
-  reassertEnvironmentConfigLease,
   requireExplicitReclaimForce,
+  retakeRecordedSlotIfFree,
   resolveSlotWaitTotalMs,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
@@ -124,7 +125,7 @@ describe("preview workflow scope", () => {
     expect(epoch.trim()).toBe("os-auth-rpc-v1");
     expect(workflow).toContain('expected="os-auth-rpc-v1"');
     expect(workflow.indexOf("Enforce preview deployment epoch")).toBeLessThan(
-      workflow.indexOf("pnpm preview deploy"),
+      workflow.indexOf("pnpm preview run"),
     );
   });
 
@@ -167,29 +168,29 @@ describe("draft preview policy", () => {
     expect(
       decideDraftPreviewPolicy({
         allowDraft: false,
-        hasRecordedLease: false,
+        holdsSlot: false,
         isDraft: false,
         labels: [],
       }),
     ).toBe("deploy");
   });
 
-  it("skips drafts that never had a slot", () => {
+  it("skips drafts that hold no slot", () => {
     expect(
       decideDraftPreviewPolicy({
         allowDraft: false,
-        hasRecordedLease: false,
+        holdsSlot: false,
         isDraft: true,
         labels: ["bug"],
       }),
     ).toBe("skip");
   });
 
-  it("gives a draft's slot back when it holds one without asking", () => {
+  it("gives a draft's slot back when the semaphore says it holds one without asking", () => {
     expect(
       decideDraftPreviewPolicy({
         allowDraft: false,
-        hasRecordedLease: true,
+        holdsSlot: true,
         isDraft: true,
         labels: [],
       }),
@@ -200,7 +201,7 @@ describe("draft preview policy", () => {
     expect(
       decideDraftPreviewPolicy({
         allowDraft: false,
-        hasRecordedLease: false,
+        holdsSlot: false,
         isDraft: true,
         labels: ["preview"],
       }),
@@ -211,7 +212,7 @@ describe("draft preview policy", () => {
     expect(
       decideDraftPreviewPolicy({
         allowDraft: true,
-        hasRecordedLease: false,
+        holdsSlot: false,
         isDraft: true,
         labels: [],
       }),
@@ -274,12 +275,6 @@ describe("auth preview root secrets", () => {
 });
 
 describe("preview test commands", () => {
-  it("uploads Playwright and Vitest artifacts for OS preview failures", () => {
-    expect(cloudflarePreviewApps.os).toMatchObject({
-      previewTestArtifacts: ["test-results", "apps/os/test-results", "/tmp/os-e2e-*"],
-    });
-  });
-
   it("normalizes OS preview artifacts before Depot upload", () => {
     const workflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
@@ -391,7 +386,6 @@ describe("preview retry selection", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
     ).toEqual(["os", "auth"]);
   });
@@ -412,7 +406,6 @@ describe("preview retry selection", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
       // Semaphore's retry pulls in its auth dependency (relying-party JWKS).
     ).toEqual(["semaphore", "auth"]);
@@ -437,12 +430,17 @@ describe("preview retry selection", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
     ).toEqual(["os", "auth"]);
   });
 
-  it("does not re-run awaiting-tests apps from older commits", () => {
+  it("re-runs awaiting-tests apps whatever head deployed them — their e2e never ran", () => {
+    // An awaiting-tests entry at any head is a deploy whose tests never ran
+    // (a cancelled run). Redeploying it at the current head is idempotent and
+    // is what keeps `test`'s "no app recorded at this head" skip honest
+    // (observed 2026-07-10: a cancelled run's deploy landed, the next push's
+    // non-app diff selected nothing, and the check went green over
+    // deployments that never passed tests).
     expect(
       selectPreviewAppsNeedingRetry({
         previousState: {
@@ -458,9 +456,8 @@ describe("preview retry selection", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestHeadSha: "current-head",
-      }),
-    ).toEqual([]);
+      }).map((app) => app.slug),
+    ).toEqual(["os", "auth"]);
   });
 });
 
@@ -649,69 +646,11 @@ describe("describeForcePushCompareHazard", () => {
   });
 });
 
-describe("preview test skip verdicts", () => {
-  const recordedApps = {
-    os: CloudflarePreviewAppEntry.parse({
-      appDisplayName: "OS",
-      appSlug: "os",
-      headSha: "old-head",
-      shortSha: "oldhead",
-      status: "deployed",
-      updatedAt: "2026-07-09T00:00:00.000Z",
-    }),
-  };
-
-  it("skips green when deploy would select nothing for this head", () => {
-    const skip = explainPreviewTestSkip({
-      appsDeployWouldSelect: [],
-      pullRequestHeadSha: "current-head",
-      recordedApps,
-    });
-
-    expect(skip.verdict).toBe("nothing-changed");
-    expect(skip.notice).toContain("nothing app-affecting changed");
-    expect(skip.notice).toContain("still stand");
-  });
-
-  it("fails loudly when apps are recorded at a stale head", () => {
-    // A push that races between the deploy and test steps (or a deploy that
-    // died before recording) leaves the recorded apps at an old head; a green
-    // "deploy + e2e" would then describe a commit that never ran.
-    const skip = explainPreviewTestSkip({
-      appsDeployWouldSelect: ["os", "auth"],
-      pullRequestHeadSha: "current-head",
-      recordedApps,
-    });
-
-    expect(skip.verdict).toBe("stale-head");
-    expect(skip.notice).toContain("refused to skip");
-    expect(skip.notice).toContain("os, auth");
-    expect(skip.notice).toContain("E2e was NOT run");
-    expect(skip.notice).toContain(
-      "os: deployed, head oldhead (stale — deploy has not run for the current head)",
-    );
-  });
-
-  it("fails loudly when nothing is recorded at all but deploy would select apps", () => {
-    const skip = explainPreviewTestSkip({
-      appsDeployWouldSelect: ["os"],
-      pullRequestHeadSha: "current-head",
-      recordedApps: {},
-    });
-
-    expect(skip.verdict).toBe("stale-head");
-    expect(skip.notice).toContain("No apps are recorded at all");
-  });
-});
-
 describe("cloudflare preview state helpers", () => {
   it("round-trips rendered preview state from the managed PR body section", () => {
-    const environmentConfigLease = EnvironmentConfigLease.parse({
+    const environmentConfigLease = CloudflarePreviewSlotDisplay.parse({
       dopplerConfig: "preview_2",
-      leasedUntil: 1_700_000_000_000,
-      leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
       slug: "preview-2",
-      type: "environment-config-lease",
     });
     const entry = CloudflarePreviewAppEntry.parse({
       appDisplayName: "OS",
@@ -745,7 +684,7 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("## Summary");
     expect(body).toContain("## Environment Config Lease");
     expect(body).toContain(
-      "<summary>Lease: preview-2 | Doppler config: preview_2 | Type: environment-config-lease | Leased until: 2023-11-14T22:13:20.000Z</summary>\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
+      "<summary>Slot: preview-2 | Doppler config: preview_2</summary>\n\n| app | status | commit | preview | size (gzip) | deploy duration | test duration | retries | cleanup duration | workflow run | updated | summary |",
     );
     expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");
@@ -789,7 +728,7 @@ describe("cloudflare preview state helpers", () => {
 
     expect(body).toContain("# User content");
     expect(body).toContain("Footer");
-    expect(body).toContain("<summary>No active environment config lease.</summary>");
+    expect(body).toContain("<summary>No preview slot recorded.</summary>");
     expect(body).toContain(
       "| OS | tests failed | `1234567` |  |  |  |  |  |  | [Workflow run](https://github.com/iterate/iterate/actions/runs/456) | 2026-04-02T10:00:00.000Z | AssertionError: expected 2 to be +0 |",
     );
@@ -802,6 +741,29 @@ describe("cloudflare preview state helpers", () => {
       apps: {},
       environmentConfigLease: null,
       notice: null,
+    });
+  });
+
+  it("strips legacy lease fields from bodies written before the semaphore became the single lease truth", () => {
+    // Old bodies persisted the full lease (leaseId, leasedUntil, type). The
+    // display schema keeps only slot + doppler config; the rest must parse
+    // away cleanly rather than blanking the whole recorded state.
+    const body = renderCloudflarePreviewPullRequestBody("", {
+      apps: {},
+      environmentConfigLease: {
+        dopplerConfig: "preview_2",
+        leasedUntil: 1_700_000_000_000,
+        leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+        slug: "preview-2",
+        type: "environment-config-lease",
+        // oxlint-disable-next-line no-explicit-any
+      } as any,
+      notice: null,
+    });
+
+    expect(parseCloudflarePreviewState(body).environmentConfigLease).toEqual({
+      dopplerConfig: "preview_2",
+      slug: "preview-2",
     });
   });
 
@@ -1167,10 +1129,22 @@ function fakeSemaphore(overrides: Record<string, unknown> = {}) {
   return {
     acquire: vi.fn(async () => fakeLease()),
     acquireSpecific: vi.fn(async () => null),
-    renew: vi.fn(async () => null),
     release: vi.fn(async () => ({ released: true })),
     list: vi.fn(async () => []),
     ...overrides,
+  };
+}
+
+/** A semaphore `list` row showing `slug` leased to `holder`. */
+function leasedResource(slug: string, holder: string, dopplerConfig = slug.replaceAll("-", "_")) {
+  return {
+    data: { dopplerConfig },
+    holder,
+    lastAcquiredAt: null,
+    lastReleasedAt: null,
+    leaseState: "leased" as const,
+    leasedUntil: Date.now() + 60_000,
+    slug,
   };
 }
 
@@ -1178,59 +1152,85 @@ function fakeSemaphore(overrides: Record<string, unknown> = {}) {
 // never reclaim share this inert eraser.
 const noopEraseSlotData = async () => {};
 
-const previousLease = EnvironmentConfigLease.parse({
-  dopplerConfig: "preview_2",
-  leasedUntil: 1_700_000_000_000,
-  leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
-  slug: "preview-2",
-  type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-});
-
 describe("claimEnvironmentConfigLease", () => {
-  it("renews the recorded lease when this PR still holds it", async () => {
+  it("adopts (and thereby renews) the slot the semaphore attributes to this holder", async () => {
+    // The PR body's copy is never consulted for ownership: the semaphore says
+    // pr-1600 holds preview-2, so the claim re-issues that lease. Matching
+    // the recorded slug means the slot carries this PR's own deployment — no
+    // erase.
+    const eraseSlotData = vi.fn(async () => {});
     const semaphore = fakeSemaphore({
-      renew: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
+      acquireSpecific: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
     });
 
     const lease = await claimEnvironmentConfigLease({
-      eraseSlotData: noopEraseSlotData,
-      createPreviewSemaphoreResourceClient: () => semaphore,
+      eraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
-      previousEnvironmentConfigLease: previousLease,
+      recordedSlug: "preview-2",
+      semaphore,
       waitTotalMs: 0,
     });
 
     expect(lease.slug).toBe("preview-2");
     expect(lease.leasedUntil).toBe(1_800_000_000_000);
+    expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ slug: "preview-2", holder: "pr-1600", force: true }),
+    );
     expect(semaphore.acquire).not.toHaveBeenCalled();
-    expect(semaphore.acquireSpecific).not.toHaveBeenCalled();
+    expect(eraseSlotData).not.toHaveBeenCalled();
   });
 
-  it("re-takes the recorded slot when the lease expired but the slot is free", async () => {
+  it("prefers the recorded slug when the semaphore attributes several slots to this holder", async () => {
     const semaphore = fakeSemaphore({
-      acquireSpecific: vi.fn(async () =>
-        fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }),
+      acquireSpecific: vi.fn(async (input: { slug: string }) =>
+        fakeLease({ slug: input.slug, data: { dopplerConfig: input.slug.replaceAll("-", "_") } }),
       ),
+      list: vi.fn(async () => [
+        leasedResource("preview-3", "pr-1600"),
+        leasedResource("preview-2", "pr-1600"),
+      ]),
     });
 
     const lease = await claimEnvironmentConfigLease({
       eraseSlotData: noopEraseSlotData,
-      createPreviewSemaphoreResourceClient: () => semaphore,
       holder: "pr-1600",
       leaseMs: 1000,
-      previousEnvironmentConfigLease: previousLease,
+      recordedSlug: "preview-2",
+      semaphore,
+      waitTotalMs: 0,
+    });
+
+    expect(lease.slug).toBe("preview-2");
+    expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ slug: "preview-2" }),
+    );
+  });
+
+  it("re-takes the recorded slot when the lease lapsed but the slot is free", async () => {
+    const acquireSpecific = vi.fn(async (input: { force?: boolean }) =>
+      // Only the non-force affinity re-take can succeed: the semaphore lists
+      // nothing for this holder, so no adoption happens first.
+      input.force ? null : fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }),
+    );
+    const semaphore = fakeSemaphore({ acquireSpecific });
+
+    const lease = await claimEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedSlug: "preview-2",
+      semaphore,
       waitTotalMs: 0,
     });
 
     expect(lease.slug).toBe("preview-2");
     expect(lease.leaseId).toBe("1197a5b3-a705-4380-9958-6a0dbead16b7");
-    expect(semaphore.acquireSpecific).toHaveBeenCalledWith(
+    expect(acquireSpecific).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ slug: "preview-2", holder: "pr-1600" }),
     );
-    expect(semaphore.acquireSpecific).toHaveBeenCalledWith(
-      expect.not.objectContaining({ force: true }),
-    );
+    expect(acquireSpecific).toHaveBeenCalledWith(expect.not.objectContaining({ force: true }));
     expect(semaphore.acquire).not.toHaveBeenCalled();
   });
 
@@ -1239,25 +1239,15 @@ describe("claimEnvironmentConfigLease", () => {
       acquire: vi.fn(async () =>
         fakeLease({ slug: "preview-5", data: { dopplerConfig: "preview_5" } }),
       ),
-      list: vi.fn(async () => [
-        {
-          data: { dopplerConfig: "preview_2" },
-          holder: "pr-1601",
-          lastAcquiredAt: null,
-          lastReleasedAt: null,
-          leaseState: "leased" as const,
-          leasedUntil: Date.now() + 60_000,
-          slug: "preview-2",
-        },
-      ]),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1601")]),
     });
 
     const lease = await claimEnvironmentConfigLease({
       eraseSlotData: noopEraseSlotData,
-      createPreviewSemaphoreResourceClient: () => semaphore,
       holder: "pr-1600",
       leaseMs: 1000,
-      previousEnvironmentConfigLease: previousLease,
+      recordedSlug: "preview-2",
+      semaphore,
       waitTotalMs: 0,
     });
 
@@ -1268,31 +1258,21 @@ describe("claimEnvironmentConfigLease", () => {
 
   it("adopts a lease the semaphore already attributes to this holder instead of taking a second slot", async () => {
     // A cancelled run acquired preview-3 but died before recording it in the
-    // PR body: the next run starts with no recorded lease, and must re-issue
+    // PR body: the next run starts with no recorded slot, and must re-issue
     // the existing hold rather than lease a second slot.
     const semaphore = fakeSemaphore({
       acquireSpecific: vi.fn(async () =>
         fakeLease({ slug: "preview-3", data: { dopplerConfig: "preview_3" } }),
       ),
-      list: vi.fn(async () => [
-        {
-          data: { dopplerConfig: "preview_3" },
-          holder: "pr-1600",
-          lastAcquiredAt: null,
-          lastReleasedAt: null,
-          leaseState: "leased" as const,
-          leasedUntil: Date.now() + 60_000,
-          slug: "preview-3",
-        },
-      ]),
+      list: vi.fn(async () => [leasedResource("preview-3", "pr-1600")]),
     });
 
     const lease = await claimEnvironmentConfigLease({
       eraseSlotData: noopEraseSlotData,
-      createPreviewSemaphoreResourceClient: () => semaphore,
       holder: "pr-1600",
       leaseMs: 1000,
-      previousEnvironmentConfigLease: null,
+      recordedSlug: null,
+      semaphore,
       waitTotalMs: 0,
     });
 
@@ -1311,25 +1291,15 @@ describe("claimEnvironmentConfigLease", () => {
       acquireSpecific: vi.fn(async () =>
         fakeLease({ slug: "preview-3", data: { dopplerConfig: "preview_three" } }),
       ),
-      list: vi.fn(async () => [
-        {
-          data: { dopplerConfig: "preview_three" },
-          holder: "pr-1600",
-          lastAcquiredAt: null,
-          lastReleasedAt: null,
-          leaseState: "leased" as const,
-          leasedUntil: Date.now() + 60_000,
-          slug: "preview-3",
-        },
-      ]),
+      list: vi.fn(async () => [leasedResource("preview-3", "pr-1600", "preview_three")]),
     });
 
     const lease = await claimEnvironmentConfigLease({
       eraseSlotData,
-      createPreviewSemaphoreResourceClient: () => semaphore,
       holder: "pr-1600",
       leaseMs: 1000,
-      previousEnvironmentConfigLease: null,
+      recordedSlug: null,
+      semaphore,
       waitTotalMs: 0,
     });
 
@@ -1342,7 +1312,7 @@ describe("claimEnvironmentConfigLease", () => {
 
   it("propagates unexpected semaphore errors instead of silently switching slots", async () => {
     const semaphore = fakeSemaphore({
-      renew: vi.fn(async () => {
+      list: vi.fn(async () => {
         throw new Error("semaphore is down");
       }),
     });
@@ -1350,10 +1320,10 @@ describe("claimEnvironmentConfigLease", () => {
     await expect(
       claimEnvironmentConfigLease({
         eraseSlotData: noopEraseSlotData,
-        createPreviewSemaphoreResourceClient: () => semaphore,
         holder: "pr-1600",
         leaseMs: 1000,
-        previousEnvironmentConfigLease: previousLease,
+        recordedSlug: "preview-2",
+        semaphore,
         waitTotalMs: 0,
       }),
     ).rejects.toThrow("semaphore is down");
@@ -1437,84 +1407,127 @@ describe("acquireAnyEnvironmentConfigLease", () => {
   });
 });
 
-describe("reassertEnvironmentConfigLease", () => {
-  it("confirms a still-held lease by renewing it", async () => {
-    const semaphore = fakeSemaphore({
-      renew: vi.fn(async () => fakeLease()),
-    });
-
-    const result = await reassertEnvironmentConfigLease({
-      holder: "pr-1600",
-      lease: previousLease,
-      leaseMs: 1000,
-      semaphore,
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("repairs its own lease when only the recorded leaseId is stale", async () => {
+describe("adoptLeaseHeldBySemaphore", () => {
+  it("re-issues the holder's lease under a fresh leaseId — no stored leaseId is ever consulted", async () => {
     const acquireSpecific = vi.fn(async (input: { force?: boolean }) =>
       input.force ? fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }) : null,
     );
     const semaphore = fakeSemaphore({
       acquireSpecific,
-      list: vi.fn(async () => [
-        {
-          data: { dopplerConfig: "preview_2" },
-          holder: "pr-1600",
-          lastAcquiredAt: null,
-          lastReleasedAt: null,
-          leaseState: "leased" as const,
-          leasedUntil: Date.now() + 60_000,
-          slug: "preview-2",
-        },
-      ]),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
     });
 
-    const result = await reassertEnvironmentConfigLease({
+    const lease = await adoptLeaseHeldBySemaphore({
       holder: "pr-1600",
-      lease: previousLease,
       leaseMs: 1000,
+      preferSlug: "preview-2",
       semaphore,
     });
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.lease.leaseId).toBe("1197a5b3-a705-4380-9958-6a0dbead16b7");
-    }
+    expect(lease?.leaseId).toBe("1197a5b3-a705-4380-9958-6a0dbead16b7");
     expect(acquireSpecific).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
   });
 
-  it("refuses when the slot now belongs to another PR", async () => {
+  it("returns null when the semaphore attributes nothing to the holder", async () => {
     const semaphore = fakeSemaphore({
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1601")]),
+    });
+
+    expect(
+      await adoptLeaseHeldBySemaphore({
+        holder: "pr-1600",
+        leaseMs: 1000,
+        preferSlug: "preview-2",
+        semaphore,
+      }),
+    ).toBeNull();
+    expect(semaphore.acquireSpecific).not.toHaveBeenCalled();
+  });
+
+  it("moves to the holder's next slot when onAdopted rejects one", async () => {
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async (input: { slug: string }) =>
+        fakeLease({ slug: input.slug, data: { dopplerConfig: input.slug.replaceAll("-", "_") } }),
+      ),
       list: vi.fn(async () => [
-        {
-          data: { dopplerConfig: "preview_2" },
-          holder: "pr-1601",
-          lastAcquiredAt: null,
-          lastReleasedAt: null,
-          leaseState: "leased" as const,
-          leasedUntil: Date.now() + 60_000,
-          slug: "preview-2",
-        },
+        leasedResource("preview-2", "pr-1600"),
+        leasedResource("preview-3", "pr-1600"),
       ]),
     });
 
-    const result = await reassertEnvironmentConfigLease({
+    const lease = await adoptLeaseHeldBySemaphore({
       holder: "pr-1600",
-      lease: previousLease,
       leaseMs: 1000,
+      onAdopted: async (adopted) => adopted.slug !== "preview-2",
+      preferSlug: "preview-2",
       semaphore,
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.currentHolder).toBe("pr-1601");
-      expect(result.message).toContain("preview-2");
-      expect(result.message).toContain("pr-1601");
-      expect(result.message).toContain("https://github.com/iterate/iterate/pull/1601");
-    }
+    expect(lease?.slug).toBe("preview-3");
+  });
+});
+
+describe("retakeRecordedSlotIfFree", () => {
+  it("takes the recorded slot back without force so the semaphore still arbitrates", async () => {
+    const acquireSpecific = vi.fn(async () => fakeLease());
+    const semaphore = fakeSemaphore({ acquireSpecific });
+
+    const lease = await retakeRecordedSlotIfFree({
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedSlug: "preview-2",
+      semaphore,
+    });
+
+    expect(lease?.slug).toBe("preview-2");
+    expect(acquireSpecific).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ force: true }),
+    );
+  });
+
+  it("returns null when the slot is held (or nothing is recorded)", async () => {
+    const semaphore = fakeSemaphore();
+
+    expect(
+      await retakeRecordedSlotIfFree({
+        holder: "pr-1600",
+        leaseMs: 1000,
+        recordedSlug: "preview-2",
+        semaphore,
+      }),
+    ).toBeNull();
+    expect(
+      await retakeRecordedSlotIfFree({
+        holder: "pr-1600",
+        leaseMs: 1000,
+        recordedSlug: null,
+        semaphore,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("describeLostSlotOwnership", () => {
+  // "no longer belongs to" is a dialed-by-name contract: the flake-hunt loop
+  // (scripts/preview/flake-hunt-loop.sh) and humans grep run logs for it to
+  // tell a slot steal apart from ordinary failures.
+  it("names the slot, the thief, and their PR — and keeps the grep contract", () => {
+    const message = describeLostSlotOwnership({
+      currentHolder: "pr-1601",
+      displaySlot: { dopplerConfig: "preview_2", slug: "preview-2" },
+      holder: "pr-1600",
+    });
+
+    expect(message).toContain("no longer belongs to");
+    expect(message).toContain("preview-2");
+    expect(message).toContain("pr-1601");
+    expect(message).toContain("https://github.com/iterate/iterate/pull/1601");
+  });
+
+  it("keeps the grep contract even when no slot was ever recorded", () => {
+    expect(
+      describeLostSlotOwnership({ currentHolder: null, displaySlot: null, holder: "pr-1600" }),
+    ).toContain("no longer belongs to");
   });
 });
 
@@ -1662,16 +1675,17 @@ describe("lease ownership during acquire", () => {
 describe("assignEnvironmentConfigLease", () => {
   const { assignEnvironmentConfigLease } = previewInternals;
 
-  it("keeps and renews the recorded slot when no specific slot is requested", async () => {
+  it("keeps (and renews via re-issue) the held slot when no specific slot is requested", async () => {
     const semaphore = fakeSemaphore({
-      renew: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
+      acquireSpecific: vi.fn(async () => fakeLease({ expiresAt: 1_800_000_000_000 })),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
     });
 
     const result = await assignEnvironmentConfigLease({
       eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
-      recordedLease: previousLease,
+      recordedSlug: "preview-2",
       semaphore,
       wantedSlug: null,
     });
@@ -1682,35 +1696,41 @@ describe("assignEnvironmentConfigLease", () => {
     expect(semaphore.acquire).not.toHaveBeenCalled();
   });
 
-  it("keeps the recorded slot when it is the one requested", async () => {
+  it("keeps the held slot when it is the one requested", async () => {
     const semaphore = fakeSemaphore({
-      renew: vi.fn(async () => fakeLease()),
+      acquireSpecific: vi.fn(async () => fakeLease()),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
     });
 
     const result = await assignEnvironmentConfigLease({
       eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
-      recordedLease: previousLease,
+      recordedSlug: "preview-2",
       semaphore,
       wantedSlug: "preview-2",
     });
 
     expect(result.outcome).toBe("kept");
-    expect(semaphore.acquireSpecific).not.toHaveBeenCalled();
+    // Exactly the adoption re-issue — no second acquire for the wanted slug.
+    expect(semaphore.acquireSpecific).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ slug: "preview-2", force: true }),
+    );
   });
 
   it("moves to the requested slot and releases the previously held lease", async () => {
     const release = vi.fn(async () => ({ released: true }));
     const semaphore = fakeSemaphore({
-      renew: vi.fn(async () => fakeLease()),
-      acquireSpecific: vi.fn(async () =>
-        fakeLease({
-          slug: "preview-5",
-          data: { dopplerConfig: "preview_5" },
-          leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7",
-        }),
+      acquireSpecific: vi.fn(async (input: { slug: string }) =>
+        input.slug === "preview-2"
+          ? fakeLease({ leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d" })
+          : fakeLease({
+              slug: "preview-5",
+              data: { dopplerConfig: "preview_5" },
+              leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7",
+            }),
       ),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1600")]),
       release,
     });
 
@@ -1718,7 +1738,7 @@ describe("assignEnvironmentConfigLease", () => {
       eraseSlotData: noopEraseSlotData,
       holder: "pr-1600",
       leaseMs: 1000,
-      recordedLease: previousLease,
+      recordedSlug: "preview-2",
       semaphore,
       wantedSlug: "preview-5",
     });
@@ -1728,29 +1748,23 @@ describe("assignEnvironmentConfigLease", () => {
     expect(result.changedFromSlug).toBe("preview-2");
     expect(result.previousLeaseReleased).toBe(true);
     expect(release).toHaveBeenCalledWith(
-      expect.objectContaining({ slug: "preview-2", leaseId: previousLease.leaseId }),
+      expect.objectContaining({
+        slug: "preview-2",
+        leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+      }),
     );
   });
 
   it("reports broken ownership when re-acquiring the same slug after losing it", async () => {
-    // renew and non-force acquireSpecific fail (someone else held it in the
-    // interim); --force re-takes the SAME slug. Outcome must not be "kept".
+    // The semaphore attributes the slot to someone else, and the non-force
+    // re-take fails; --force re-takes the SAME slug. Outcome must not be
+    // "kept" — the interim holder may have deployed over this PR's apps.
     const acquireSpecific = vi.fn(async (input: { force?: boolean }) =>
       input.force ? fakeLease({ leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7" }) : null,
     );
     const semaphore = fakeSemaphore({
       acquireSpecific,
-      list: vi.fn(async () => [
-        {
-          data: { dopplerConfig: "preview_2" },
-          holder: "pr-1601",
-          lastAcquiredAt: null,
-          lastReleasedAt: null,
-          leaseState: "leased" as const,
-          leasedUntil: Date.now() + 60_000,
-          slug: "preview-2",
-        },
-      ]),
+      list: vi.fn(async () => [leasedResource("preview-2", "pr-1601")]),
     });
 
     const result = await assignEnvironmentConfigLease({
@@ -1758,7 +1772,7 @@ describe("assignEnvironmentConfigLease", () => {
       force: true,
       holder: "pr-1600",
       leaseMs: 1000,
-      recordedLease: previousLease,
+      recordedSlug: "preview-2",
       semaphore,
       wantedSlug: "preview-2",
     });
@@ -1770,17 +1784,7 @@ describe("assignEnvironmentConfigLease", () => {
 
   it("explains who holds a requested slot instead of taking it without --force", async () => {
     const semaphore = fakeSemaphore({
-      list: vi.fn(async () => [
-        {
-          data: { dopplerConfig: "preview_5" },
-          holder: "pr-1601",
-          lastAcquiredAt: null,
-          lastReleasedAt: null,
-          leaseState: "leased" as const,
-          leasedUntil: Date.now() + 60_000,
-          slug: "preview-5",
-        },
-      ]),
+      list: vi.fn(async () => [leasedResource("preview-5", "pr-1601")]),
     });
 
     await expect(
@@ -1788,7 +1792,7 @@ describe("assignEnvironmentConfigLease", () => {
         eraseSlotData: noopEraseSlotData,
         holder: "pr-1600",
         leaseMs: 1000,
-        recordedLease: null,
+        recordedSlug: null,
         semaphore,
         wantedSlug: "preview-5",
       }),
@@ -1806,7 +1810,7 @@ describe("assignEnvironmentConfigLease", () => {
       force: true,
       holder: "pr-1600",
       leaseMs: 1000,
-      recordedLease: null,
+      recordedSlug: null,
       semaphore,
       wantedSlug: "preview-5",
     });
@@ -1828,7 +1832,7 @@ describe("assignEnvironmentConfigLease", () => {
       force: true,
       holder: "pr-1600",
       leaseMs: 1000,
-      recordedLease: null,
+      recordedSlug: null,
       semaphore,
       wantedSlug: "preview-5",
     });
@@ -1857,7 +1861,7 @@ describe("assignEnvironmentConfigLease", () => {
         eraseSlotData,
         holder: "pr-1600",
         leaseMs: 1000,
-        recordedLease: null,
+        recordedSlug: null,
         semaphore,
         wantedSlug: "preview-5",
       }),

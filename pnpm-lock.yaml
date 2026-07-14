@@ -642,6 +642,9 @@ importers:
       react-dom:
         specifier: ^19.2.0
         version: 19.2.4(react@19.2.4)
+      sucrase:
+        specifier: ^3.35.1
+        version: 3.35.1
       tailwindcss:
         specifier: ^4.1.18
         version: 4.2.1

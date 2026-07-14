@@ -32,6 +32,7 @@ import {
   type SqlClient,
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
+import { readCatchUpPage } from "./catch-up-page.ts";
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 const DEFAULT_STREAM_PROJECT_ID = "default";
@@ -921,6 +922,7 @@ function createStreamRuntime(
         // page failure just reconnects and resumes from the checkpoint.
         let catchUpOffset = checkpoint.offset;
         let serverHead = serverMaxOffset;
+        let catchUpPageLimit = CATCHUP_PAGE_LIMIT;
         if (serverHead - catchUpOffset > CATCHUP_THRESHOLD_EVENTS) {
           console.info(
             `[stream ${args.streamPath} ${slug}] mirror is ${serverHead - catchUpOffset} events behind; pull-paging before subscribing`,
@@ -939,18 +941,29 @@ function createStreamRuntime(
               serverHead = parseBrowserCoreProcessorState(rawHeadState).maxOffset;
               if (serverHead - catchUpOffset <= CATCHUP_THRESHOLD_EVENTS) break;
             }
-            const page = (await withDeadline(
-              "catch-up page read",
-              election.connection.getEvents({
-                afterOffset: catchUpOffset,
-                // The mirror stores ephemeral rows too (the subscription lane
-                // delivers them); a default read here would skip every chunk
-                // run — losing streamed text the mirror promises to keep and
-                // false-firing the raw-events gap detector on each one.
-                includeEphemeral: true,
-                limit: CATCHUP_PAGE_LIMIT,
-              }),
-            )) as StreamEvent[];
+            const result = await readCatchUpPage(
+              catchUpPageLimit,
+              async (limit) =>
+                (await withDeadline(
+                  "catch-up page read",
+                  election.connection.getEvents({
+                    afterOffset: catchUpOffset,
+                    // The mirror stores ephemeral rows too (the subscription lane
+                    // delivers them); a default read here would skip every chunk
+                    // run — losing streamed text the mirror promises to keep and
+                    // false-firing the raw-events gap detector on each one.
+                    includeEphemeral: true,
+                    limit,
+                  }),
+                )) as StreamEvent[],
+            );
+            if (result.limit < catchUpPageLimit) {
+              console.warn(
+                `[stream ${args.streamPath} ${slug}] catch-up page exceeded the RPC byte limit; reducing page size from ${catchUpPageLimit} to ${result.limit}`,
+              );
+            }
+            catchUpPageLimit = result.limit;
+            const page = result.page;
             if (!ownsRuntime()) return undefined;
             if (page.length === 0) break; // server truth moved (reset?); subscribe reconciles
             deliveryArrivals += 1;

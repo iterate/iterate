@@ -3,6 +3,7 @@ import type { Env } from "../../env.ts";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
+import { stripScriptTypes } from "./script-type-stripping.ts";
 
 /**
  * Stateless loopback executor for capability-host runScript.
@@ -39,7 +40,7 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
 function scriptWorkerRef(input: { code: string; scopePath: string }): StatelessDynamicWorkerRef {
   const source = `
     import { WorkerEntrypoint } from "cloudflare:workers";
-    const fn = ${input.code};
+    const fn = ${stripScriptTypes(input.code)};
     export class ScriptEntrypoint extends WorkerEntrypoint {
       async run() {
         // \`using\`: the itx root is an RPC stub this isolate owns for the

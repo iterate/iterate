@@ -45,11 +45,7 @@ import {
   type StreamMessageComposer,
 } from "~/components/stream-view-composer.tsx";
 import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
-import {
-  defaultPresetForMode,
-  feedItemsFilterFromSearch,
-  presetsForStream,
-} from "~/lib/stream-feed-filters.ts";
+import { feedItemsFilterFromSearch } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { connectItxBrowser, evictItxSocket, evictItxSocketIfCurrent } from "~/itx/itx-react.tsx";
 import { useBrowserStreamMetrics } from "~/lib/stream-presence.ts";
@@ -222,12 +218,6 @@ export function ProjectStreamView({
   const panels = useStreamViewPanels();
   const activeMode = streamViewMode(search, streamPath);
   const caps = modeCapabilities(search, streamPath);
-  // Feed-items presets apply whenever the mode shows raw feed_items.
-  const presets = useMemo(() => presetsForStream(streamPath), [streamPath]);
-  const defaultPreset = defaultPresetForMode(streamPath, activeMode);
-  const activePreset = caps.rawPresets
-    ? (presets.find((preset) => preset.id === search.preset) ?? defaultPreset)
-    : defaultPreset;
   // Trimmed: a whitespace-only query must read as "no filter", not a LIKE
   // pattern of spaces that hides every row.
   const feedSearch = (search.q ?? "").trim();
@@ -285,11 +275,9 @@ export function ProjectStreamView({
   const filterRow =
     search.filter !== true ? null : (
       <StreamFeedFilterRow
-        activePreset={activePreset}
         eventCount={eventCount}
         connectionStatus={snapshot.connectionStatus}
         feedDatabase={feedStore.streamDatabase}
-        presets={presets}
         streamPath={streamPath}
       />
     );

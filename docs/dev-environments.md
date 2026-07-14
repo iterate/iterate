@@ -308,37 +308,9 @@ environment). Generate a fresh forge key with
 
 ## Browsers: the golden path for agents
 
-1. If your agent environment has a built-in browser (Cursor, Devin, …), use
-   that.
-2. Otherwise use **agent-browser against a dedicated headless Chrome** — never
-   attach to the user's running Chrome unless they explicitly asked (the
-   attach prompt requires human approval; an AFK user means you hang forever):
-
-```bash
-# one-time: agent-browser install
-# pick ONE binary explicitly — the glob matches multiple installed versions
-BIN=$(ls -d "$HOME/.agent-browser/browsers/"*"/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" | sort -V | tail -1)
-PROFILE=$(mktemp -d /tmp/ab-XXXXXX)   # fresh profile per run — see below
-nohup "$BIN" --headless=new --remote-debugging-port=9444 --user-data-dir="$PROFILE" about:blank >/dev/null 2>&1 & disown
-
-AGENT_BROWSER_AUTO_CONNECT=0 agent-browser --cdp 9444 open "$(doppler run --project os --config dev -- pnpm --silent auth:mint --browser-url)"
-AGENT_BROWSER_AUTO_CONNECT=0 agent-browser --cdp 9444 snapshot -i
-```
-
-(`AGENT_BROWSER_AUTO_CONNECT=0` matters: some machines default agent-browser
-to auto-attaching to the user's real Chrome.) Run agent-browser commands
-serially — concurrent invocations wedge its daemon.
-
-**Identity hygiene**: cookies leak across runs from two directions — a reused
-`--user-data-dir`, and agent-browser's own saved session state
-(`~/.agent-browser/sessions/*.json`), which its daemon can re-inject even
-into a fresh profile. If the browser shows a user you didn't mint, run
-`agent-browser --cdp 9444 cookies clear` before signing in. When testing
-auth flows specifically, always start with a fresh profile + `cookies clear`.
-
-3. Driving the user's actual Chrome (to reuse their session or look at their
-   tabs) is allowed **only when the user explicitly asks**; then use the
-   chrome-devtools MCP / `--auto-connect` knowingly.
+See [Browser testing](browser-testing.md) for the isolated, headless default;
+visible Chrome for Testing watch mode; reusable test logins; and the explicit
+permission required before attaching to a developer's actual Chrome.
 
 ## Preview environments
 
@@ -365,11 +337,14 @@ invariants:
   `pnpm preview deploy --allow-draft`; the next push re-applies the policy).
   A draft that holds a slot without asking — e.g. a ready PR converted back
   to draft — gives it back on the next lifecycle run.
-- **Nothing steals a live lease without a human `--force`.** Before running
-  tests or destroying anything, the tooling re-asserts that the PR still
-  holds the slot, and refuses (with an explanation naming the current holder)
-  if it doesn't. So a stale PR's cleanup can never destroy another PR's
-  preview, and e2e never runs against someone else's deployment.
+- **The semaphore is the single source of lease truth.** The PR body's
+  managed section only _displays_ the slot (and per-app results); it is never
+  consulted for ownership and never a reason to skip. Before running tests or
+  destroying anything, the tooling asks the semaphore which slot the PR holds
+  right now, and refuses (with an explanation naming the current holder) if
+  the answer is "not that one". So a stale PR's cleanup can never destroy
+  another PR's preview, e2e never runs against someone else's deployment, and
+  nothing steals a live lease without a human `--force`.
 - **Contention queues instead of exploding.** When all nine slots are leased,
   `preview deploy` waits in line (logging who holds what every few minutes)
   for up to 6 minutes before failing with the full holder table and
@@ -401,8 +376,9 @@ operator capability, so use current `main` for manual preview deployments.
 ### Story 1: CI previews my PR
 
 Opening/pushing a PR that touches preview-relevant paths triggers the
-`Cloudflare Previews` workflow, which runs `pnpm preview deploy` then
-`pnpm preview test`. The PR body's managed "Environment Config Lease" section
+`Cloudflare Previews` workflow, which runs `pnpm preview run` — deploy then
+e2e as one step, sharing one resolved PR head so a push cannot race into a
+gap between them. The PR body's managed "Environment Config Lease" section
 records the slot, per-app URLs and statuses; the workflow logs narrate every
 decision (which apps were selected and why, lease transitions, slot waits).
 Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
@@ -423,17 +399,19 @@ lease a slot precisely to inspect what's on it.
 ### Story 2: run what CI runs, locally
 
 ```bash
-# same lifecycle as CI for PR 1234 (deploy + test):
+# same lifecycle as CI for PR 1234 (deploy + e2e, one step — wraps `pnpm preview run`):
 doppler run --project _shared --config prd -- pnpm preview:ci 1234
 
-# or the individual steps CI runs:
+# or the phases individually (flake hunting deploys once, then loops `test`):
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run --pull-request-number 1234
 GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
 GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
 GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
 
-These share the PR's lease and PR-body state with CI, so a local run renews
-(never fights) the slot CI claimed for the same PR.
+These share the PR's slot and PR-body state with CI (ownership lives in the
+semaphore), so a local run renews (never fights) the slot CI claimed for the
+same PR.
 
 ### Story 3: pin a PR to a slot
 

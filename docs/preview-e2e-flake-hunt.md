@@ -29,6 +29,60 @@ launched with `depot ci run --workflow .depot/workflows/preview-e2e-marathon.yml
 Local runs are for fast iteration while fixing a flake; the 50-consecutive-green
 bar is measured on Depot.
 
+## Round 4 (2026-07-13/14, PR #1938)
+
+Goal: 25 consecutive green runs on Depot, re-validating the lane after a week
+of heavy merging (subagents/unified messaging, itx.search, stream metrics,
+MCP OAuth, sandbox AI-gateway egress, …). Method unchanged: Depot marathon
+(`preview-e2e-marathon.yml`) against this PR's leased slot, fail fast, root
+cause + fix every failure, merge main into this branch between marathons so
+the lane is always tested at (or ahead of) main's head.
+
+Result: **96 consecutive green runs in one night, zero test failures, zero
+flakes found** — the goal met on the first marathon and re-proven three more
+times across six merged main heads. Detailed per-run log in the PR comments.
+
+- **marathon r4-1** `r59ccf138r` (head = main 0d53cbc7e): **25/25 green**,
+  21:51–22:53 UTC, ~2.2–2.9 min/run.
+- **marathon r4-2** `dgnsqq9jng` (merged main 9b9f3404d): **21 clean**, then
+  run 22 stopped in 4s — not a flake: the slot's semaphore lease had been
+  claimed by `main-auth-rpc-security-cutover` (the #1940 validation), whose
+  deploy replaced the PR's apps on preview-3. The ownership guard in
+  `preview test` fired exactly as designed. The marathon claimed a fresh slot
+  (preview-1) and moved on.
+- **marathon r4-3** `4xg33k0bf5` (merged main ce18a7d79): **25/25 green**,
+  01:09–02:17 UTC. Runs 24–25 slowed to ~6 min (os lane 372s/355s) with
+  recovered onboarding-stream `liveness probe` WebSocket reconnects — the
+  flake-23 pool-saturation tail signature (the pool rides at the per-type
+  `SANDBOX_MAX_INSTANCES` preview cap; #1747 replaced the flat cap-150 with
+  that table), fully absorbed by the
+  reconnect/retry machinery. The next marathon's preflight redeploy flushed
+  the pool and restored ~2.2 min/run pace from run 1, confirming the
+  mechanism (a rollout resets assigned instances).
+- **marathon r4-4** `6q6j7wlz3z` (merged main d36c2f38d): **25/25 green**,
+  02:24–03:24 UTC, no tail slowdown.
+
+Cost (measured; full breakdown in the PR): ~$54 for 101 lane executions ≈
+$0.53/run — 92% LLM tokens (gpt-5.6-sol BYOK, $49.36 uncached), with the
+AIG response cache absorbing 46.4% of requests (~$42 saved); AI Search
+fixture indexing $0.31; Depot 8-core compute ~275 min ≈ $4.40.
+
+Round-4 lessons (no test-failure fixes needed; the PR carries only the
+slot re-claim above plus a dead-code/doc-drift sweep from the round's
+follow-up reviews):
+
+- The round-1..3 fixes have held through a week of heavy platform churn; the
+  lane's stability is structural, not a lucky streak.
+- A marathon can lose its slot mid-flight to a legitimate external claim;
+  the guard converts that into a clean fast stop. The loop now re-claims a
+  slot (full-fleet redeploy) and re-runs the interrupted run number uncounted,
+  capped at `MAX_SLOT_RECLAIMS` (2) per marathon — no tests ran under the
+  refusal, so this is environment re-establishment, not a retry layer.
+- Sandbox-pool tail pressure at the per-type preview caps is visible (slower
+  runs, recovered liveness reconnects) after ~25 runs on one deploy but
+  self-heals on redeploy and never failed a run; watch it if marathons grow
+  past ~30 runs per deploy.
+
 ## Run log
 
 Depot marathons (the counted lane), 2026-07-05:
@@ -274,8 +328,10 @@ with three apps deploy-failed on the slot. Two fixes:
 - `envs.ts` + `scripts/lib/**` joined the preview shared paths (and the Depot
   workflow's `paths`): every app's wrangler config derives from envs.ts.
 - Failed states (`deploy-failed`, `claim-failed`, `tests-failed`) now retry
-  regardless of which head recorded them; only `awaiting-tests` keeps the
-  same-head guard.
+  regardless of which head recorded them. (`awaiting-tests` initially kept a
+  same-head guard; it too retries at any head since the `preview run`
+  one-step refactor — an awaiting-tests entry at any head is a deploy whose
+  e2e never ran.)
 
 ### 13. Fresh-worker bring-up: module-scope config parse + orphaned container app
 
@@ -589,9 +645,13 @@ slots at 500 `standard-1` instances exceeded the dev/preview account memory
 quota and blocked deploys; 200 fit the currently populated fleet but did not
 leave room for all nine preview slots to carry OS sandbox apps. Destroy
 remains correct — it is what lets an idle fleet drain back to zero instead of
-holding slots forever. If sustained-churn claim latency reproduces at 150,
-this becomes a Cloudflare Containers escalation (pool-manager degradation
-under DO-binding churn), not an app-side fix.
+holding slots forever. If sustained-churn claim latency reproduces at the
+cap, this becomes a Cloudflare Containers escalation (pool-manager
+degradation under DO-binding churn), not an app-side fix. (Update 2026-07-08:
+#1747 replaced the flat cap with per-instance-type caps —
+`SANDBOX_MAX_INSTANCES` in `apps/os/scripts/generate-wrangler-config.ts` is
+now the source of truth; the saturation mechanics above are unchanged, per DO
+class.)
 
 ### 21. Blank route-pending panel fast-fails the first wait after `goto`
 

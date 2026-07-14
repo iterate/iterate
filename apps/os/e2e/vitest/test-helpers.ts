@@ -32,6 +32,20 @@ function requireAppBaseUrl(): string {
   return baseUrl;
 }
 
+/** A public deployment whose Firecracker containers are reachable by fixtures. */
+export function deployedBaseUrl(): string | null {
+  const raw = process.env.APP_CONFIG_BASE_URL?.trim();
+  if (!raw) return null;
+  const url = new URL(raw);
+  if (
+    ["localhost", "127.0.0.1", "::1"].includes(url.hostname) ||
+    url.hostname.endsWith(".localhost")
+  ) {
+    return null;
+  }
+  return url.toString();
+}
+
 type ItxSessionInput = {
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
 };

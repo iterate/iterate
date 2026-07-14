@@ -19,6 +19,7 @@ import { appendedOffsets } from "../streams/rpc-types.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
+import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";
 import {
   assertPlatformApiKeyReferencesAllowed,
   substitutePlatformApiKeyReferences,
@@ -562,16 +563,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   /** The egress lanes proper: platform references, secret substitution, bare fetch. */
   async #egress(request: Request): Promise<Response> {
-    // Sandbox coding agents (Codex, etc.) call api.openai.com with a placeholder
-    // or dummy key. Route them through Cloudflare AI Gateway with the platform
-    // OpenAI key + project metadata — same BYOK/observability posture as agent DO
-    // turns, without exposing openAiApiKey via getSecret({ platform }).
-    if (isOpenAiPublicApiRequest(request)) {
-      const routed = await this.#egressOpenAiViaAiGateway(request);
-      if (routed !== null) return routed;
-      // Fall through when accountId/gateway config is missing (local/dev edge).
-    }
-
     let secretPaths: string[];
     try {
       // Placeholders live in the request envelope: headers, or the URL for
@@ -593,26 +584,43 @@ export class ProjectDurableObject extends DurableObject<Env> {
           config: parseConfig(this.env),
           request,
         });
-        return await fetchWithCredentialRedirects(substituted, {
-          assertUrlAllowed: (url) => assertPlatformApiKeyReferencesAllowed(platformReferences, url),
-        });
+        return await withWebSocketHandshakeHeaders(
+          request,
+          await fetchWithCredentialRedirects(substituted, {
+            assertUrlAllowed: (url) =>
+              assertPlatformApiKeyReferencesAllowed(platformReferences, url),
+          }),
+        );
       } catch (error) {
         if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
         throw error;
       }
     }
 
-    if (secretPaths.length === 0) return fetch(request);
     // One request, one secret: the referenced Secret DO substitutes its own
     // placeholders under its own host pin (cross-secret chaining is gone).
     if (secretPaths.length > 1) return secretErrorResponse("secret_reference_foreign");
+    if (secretPaths.length === 1) {
+      const response = await this.env.SECRET.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: this.#name.projectId,
+          path: secretPaths[0]!,
+        }),
+      ).fetch(request);
+      return withWebSocketHandshakeHeaders(request, response);
+    }
 
-    return this.env.SECRET.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.#name.projectId,
-        path: secretPaths[0]!,
-      }),
-    ).fetch(request);
+    // Sandbox coding agents with no explicit project/platform secret use the
+    // platform OpenAI key through AI Gateway. An explicit project secret wins,
+    // including if a WebSocket client falls back to an HTTP POST, so credential
+    // provenance and the secret audit cannot silently change between transports.
+    if (isOpenAiPublicApiRequest(request)) {
+      const routed = await this.#egressOpenAiViaAiGateway(request);
+      if (routed !== null) return routed;
+      // Fall through when accountId/gateway config is missing (local/dev edge).
+    }
+
+    return withWebSocketHandshakeHeaders(request, await fetch(request));
   }
 
   /**
