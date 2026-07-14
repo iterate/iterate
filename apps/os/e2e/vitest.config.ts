@@ -149,7 +149,9 @@ export default defineConfig({
           // global-setup.ts). Listed on each project because vitest reads
           // globalSetup per project (like `retry` below); the setup dedupes
           // itself, so it still runs once per `pnpm e2e`.
-          globalSetup: ["./e2e/test-support/global-setup.ts"],
+          // Absolute so vitest (project-root-relative) and knip
+          // (config-dir-relative) agree on where this file lives.
+          globalSetup: [resolve(e2eRoot, "test-support/global-setup.ts")],
           setupFiles: ["./e2e/vitest/setup.ts"],
           provide: sharedProvide,
           // #1601 fixed cold-slot creates to ~3-5s per saga under 4-way load
@@ -182,7 +184,9 @@ export default defineConfig({
           name: "browser",
           include: ["./e2e/examples/examples-browser.test.ts"],
           // See the node project: per-project on purpose, dedupes itself.
-          globalSetup: ["./e2e/test-support/global-setup.ts"],
+          // Absolute so vitest (project-root-relative) and knip
+          // (config-dir-relative) agree on where this file lives.
+          globalSetup: [resolve(e2eRoot, "test-support/global-setup.ts")],
           provide: sharedProvide,
           testTimeout: 45_000,
           hookTimeout: 45_000,
