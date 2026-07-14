@@ -88,5 +88,6 @@ test("a resolved editor path stays visible until the renamed task arrives", asyn
 
   expect(editorPathValue("tasks/first.md", draft)).toBe("/tasks/renamed.md");
   expect(editorPathValue("tasks/renamed.md", draft)).toBe("/tasks/renamed.md");
+  expect(resolvedEditorPathDraft("tasks/first.md", "tasks/first.md")).toBeUndefined();
   expect(resolvedEditorPathDraft("tasks/first.md", undefined)).toBeUndefined();
 });

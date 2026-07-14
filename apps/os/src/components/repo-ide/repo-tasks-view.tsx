@@ -388,11 +388,6 @@ export function RepoTasksView({
 
 const TASK_CARD_PREFIX = "task-card:";
 const TASK_CELL_PREFIX = "task-cell:";
-const TASK_BOARD_ROW_ITEMS = [
-  { label: "No grouping", value: "none" },
-  { label: "Folder", value: "folder" },
-  { label: "Label", value: "label" },
-] as const;
 
 function TaskBoard({
   tasks,
@@ -566,7 +561,11 @@ function BoardDisplaySettings({
           <Field orientation="horizontal">
             <FieldLabel htmlFor="task-board-row-grouping">Rows</FieldLabel>
             <Select
-              items={TASK_BOARD_ROW_ITEMS}
+              items={[
+                { label: "No grouping", value: "none" },
+                { label: "Folder", value: "folder" },
+                { label: "Label", value: "label" },
+              ]}
               value={rowField ?? "none"}
               onValueChange={(value) => {
                 if (value === "none") onChangeRowField(null);
@@ -796,16 +795,29 @@ function TaskEditorSheet({
     return resolved;
   };
 
+  const resetTransientState = () => {
+    setPathDraft(undefined);
+    setDeleteTargetPath(undefined);
+    setAssignment(undefined);
+  };
+
   const withResolvedPath = (action: (resolved: RepoTask) => void) => {
     const resolved = resolvePath();
-    if (resolved !== undefined) action(resolved);
+    if (resolved !== undefined) {
+      resetTransientState();
+      action(resolved);
+    }
   };
 
   return (
     <Sheet
       open={task !== undefined}
       onOpenChange={(open) => {
-        if (!open && task !== undefined) onDismiss(resolvePath() ?? task);
+        if (!open && task !== undefined) {
+          const resolved = resolvePath() ?? task;
+          resetTransientState();
+          onDismiss(resolved);
+        }
       }}
     >
       {task === undefined ? null : (

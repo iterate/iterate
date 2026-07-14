@@ -24,5 +24,7 @@ export function resolvedEditorPathDraft(
   source: string,
   resolvedPath: string | undefined,
 ): EditorPathDraft | undefined {
-  return resolvedPath === undefined ? undefined : { source, value: `/${resolvedPath}` };
+  return resolvedPath === undefined || resolvedPath === source
+    ? undefined
+    : { source, value: `/${resolvedPath}` };
 }
