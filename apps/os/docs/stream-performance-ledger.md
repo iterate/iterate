@@ -2521,3 +2521,87 @@ wire calls by itself. Keep the batched callback as an internal protocol detail,
 not a second public concept. That collapse preserves the measured performance
 and correctness boundary while simplifying the external model to append,
 subscribe, read, and wait-for-event.
+
+## 2026-07-14: Seventh Cumulative Main Comparison
+
+### Revisions And Method
+
+- Candidate: `10d8f7e77c9879dc01cf065360712eae78771d3a`.
+- Baseline: `b733e52edc6ef12fa67ae1ff1b2deb53aa161ac9`, freshly fetched
+  `origin/main` when collection started.
+- The complete 17-workload suite ran five times per revision in
+  `M,C,C,M,M,C,C,M,M,C` order. All ten processes and semantic assertions
+  passed.
+- The four noisy concurrency/delivery/reactivation rows then ran with
+  500-1,500 host observations per implementation, and the storage control ran
+  2,000 singleton observations per implementation plus larger batch/read
+  controls.
+- Only one local Workers stack was active at a time. Every timer ran in Node
+  around awaited network/RPC work or observed delivery and consumed the
+  result, so frozen isolate clocks are not used as wall time.
+
+`origin/main` advanced to `e98c1d981` after collection. Those four commits
+do not change the Stream Durable Object, storage, subscriber, or processor
+production paths; they consolidate Stream test doubles and make unrelated
+search/UI/preview changes. They were merged separately as `25d5dcd1f`. The
+recorded comparison remains against the exact current-main revision fetched at
+the start, rather than relabelling post-hoc results with the later SHA.
+
+### Cumulative Result
+
+The unadjusted 17-workload geometric mean improved by 13.480% at p50, 2.945%
+at p95, and 10.361% at mean. Replacing the five deliberately low-sample rows
+with their larger controls gives the more defensible cumulative result:
+
+| Equally weighted suite statistic | Candidate improvement |
+| -------------------------------- | --------------------: |
+| Geometric-mean p50               |           **15.841%** |
+| Geometric-mean p95               |           **11.610%** |
+| Geometric-mean mean              |           **13.286%** |
+
+This is a branch-versus-main suite summary, not a production-traffic
+weighting and not a sum of previously reported percentages.
+
+The focused replacements report change from the median of five per-round
+statistics:
+
+| Focused workload                |       p50 change |       p95 change |      mean change | Capacity change |
+| ------------------------------- | ---------------: | ---------------: | ---------------: | --------------: |
+| One 1 KiB append                |  **3.78% lower** | **6.84% higher** | **5.36% higher** |             n/a |
+| 32 concurrent singleton appends | **13.80% lower** | **12.99% lower** | **13.99% lower** |     **+16.01%** |
+| One live delivery               |  **7.52% lower** | **4.24% higher** | **1.33% higher** |             n/a |
+| Fanout to 25 subscribers        |  **8.20% lower** | **10.28% lower** |  **5.24% lower** |      **+8.94%** |
+| Forced-reactivation head        |  **7.48% lower** | **2.54% higher** | **1.74% higher** |             n/a |
+
+Singleton, one-subscriber delivery, and forced reactivation are classified as
+neutral rather than wins or regressions. Their pooled and median-of-round
+directions disagree on at least one statistic; for example, singleton pooled
+mean is 2.71% lower while median-of-round mean is 5.36% higher. Concurrent
+append and 25-subscriber fanout agree across the larger round and pooled
+distributions and remain established wins.
+
+The storage control also confirms that the retained architecture scales with
+explicit batches:
+
+| Storage workload            |       p50 change |       p95 change |      mean change | Capacity change |
+| --------------------------- | ---------------: | ---------------: | ---------------: | --------------: |
+| 100 tiny events             | **27.29% lower** | **19.37% lower** | **23.82% lower** |     **+37.52%** |
+| 100 events of 1 KiB         | **37.64% lower** | **31.76% lower** | **34.69% lower** |     **+60.36%** |
+| 100 keyed tiny events       | **21.67% lower** | **15.55% lower** | **22.14% lower** |     **+27.67%** |
+| One inline 768 KiB event    | **48.22% lower** | **42.55% lower** | **40.74% lower** |             n/a |
+| One chunked 1,100 KiB event |  **4.29% lower** |  **8.93% lower** |  **2.99% lower** |             n/a |
+
+The 1,000-event batch improved p50/mean by 39.69%/33.06% and capacity by
+65.82%, but its 50 samples per round do not support a tail claim. Dense
+post-reactivation replay improved 14.93%/8.60%/15.05% at p50/p95/mean.
+
+No production code was added for this checkpoint. The latest-main merge
+reduced duplicated test harnesses, and the branch's option-aware in-memory
+append adapter was folded into that one canonical helper. OS typecheck and 173
+affected processor tests pass after the merge. Complete records are
+`/tmp/cumulative-7-full-{main,candidate}-r{1..5}.log`; focused delivery and
+reactivation records are
+`/tmp/cumulative-7-tail-{main,candidate}-r{1..5}.log`; storage records are
+`/tmp/cumulative-7-storage-{main,candidate}-r{1..5}.log`. Collection ended
+at `2026-07-14T14:33:46.511Z`; if active work continues, the next cumulative
+comparison is due by `2026-07-14T18:33:46.511Z`.
