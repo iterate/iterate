@@ -168,13 +168,16 @@ test.skipIf(
       const samples = await measure(
         CONCURRENT_APPEND_SAMPLES || 20,
         async (iteration) => {
-          await Promise.all(
-            Array.from({ length: 32 }, (_, index) =>
-              commitDiscardingResult(
-                stream,
-                event({ marker: `concurrent-${iteration}-${index}-${crypto.randomUUID()}` }),
+          await withHostTimeout(
+            Promise.all(
+              Array.from({ length: 32 }, (_, index) =>
+                commitDiscardingResult(
+                  stream,
+                  event({ marker: `concurrent-${iteration}-${index}-${crypto.randomUUID()}` }),
+                ),
               ),
             ),
+            `concurrent append iteration ${iteration}`,
           );
         },
         3,
@@ -736,10 +739,12 @@ test.skipIf(
       let expectedHead = (await readHead(stream)).maxOffset;
       const samples: number[] = [];
       for (let iteration = 0; iteration < (COLD_SAMPLES || 20); iteration += 1) {
-        await stream.kill().catch(() => undefined);
+        await killStreamForBenchmark(projectId, path, iteration);
         using reactivated = project.streams.get(path);
         const startedAt = performance.now();
-        const observedHead = (await readHead(reactivated)).maxOffset;
+        const observedHead = (
+          await withHostTimeout(readHead(reactivated), `cold head read iteration ${iteration}`)
+        ).maxOffset;
         samples.push(performance.now() - startedAt);
         expect(observedHead).toBeGreaterThanOrEqual(expectedHead);
         expectedHead = observedHead;
@@ -938,8 +943,9 @@ test.skipIf(!ENABLED || !FOCUS_TAILS)(
       type: "admin-secret",
       secret: adminSecret(),
     });
+    const projectId = `prj_${crypto.randomUUID()}`;
     using project = itx.projects.create({
-      projectId: `prj_${crypto.randomUUID()}`,
+      projectId,
       slug: `stream-tail-${IMPLEMENTATION}-${runId}`,
     });
     await project.__describe();
@@ -950,13 +956,16 @@ test.skipIf(!ENABLED || !FOCUS_TAILS)(
       const samples = await measure(
         concurrentSamples,
         async (iteration) => {
-          await Promise.all(
-            Array.from({ length: 32 }, (_, index) =>
-              commitDiscardingResult(
-                stream,
-                event({ marker: `concurrent-${iteration}-${index}-${crypto.randomUUID()}` }),
+          await withHostTimeout(
+            Promise.all(
+              Array.from({ length: 32 }, (_, index) =>
+                commitDiscardingResult(
+                  stream,
+                  event({ marker: `concurrent-${iteration}-${index}-${crypto.randomUUID()}` }),
+                ),
               ),
             ),
+            `focused concurrent append iteration ${iteration}`,
           );
         },
         10,
@@ -974,10 +983,15 @@ test.skipIf(!ENABLED || !FOCUS_TAILS)(
       const expectedHead = (await readHead(stream)).maxOffset;
       const samples: number[] = [];
       for (let iteration = 0; iteration < (COLD_SAMPLES || 100); iteration += 1) {
-        await stream.kill().catch(() => undefined);
+        await killStreamForBenchmark(projectId, path, iteration);
         using reactivated = project.streams.get(path);
         const startedAt = performance.now();
-        const observedHead = (await readHead(reactivated)).maxOffset;
+        const observedHead = (
+          await withHostTimeout(
+            readHead(reactivated),
+            `focused cold head read iteration ${iteration}`,
+          )
+        ).maxOffset;
         samples.push(performance.now() - startedAt);
         expect(observedHead).toBeGreaterThanOrEqual(expectedHead);
       }
@@ -1835,6 +1849,44 @@ async function killProject(project: { kill(): Promise<void> }): Promise<void> {
     await project.kill();
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes("kill requested")) throw error;
+  }
+}
+
+class HostTimeoutError extends Error {}
+
+async function withHostTimeout<T>(
+  operation: PromiseLike<T>,
+  label: string,
+  timeoutMs = 30_000,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(operation),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new HostTimeoutError(`Timed out after ${timeoutMs} ms: ${label}`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function killStreamForBenchmark(
+  projectId: string,
+  path: string,
+  iteration: number,
+): Promise<void> {
+  const auth = { type: "admin-secret" as const, secret: adminSecret() };
+  using project = withItxSession({ auth, projectId });
+  using stream = project.streams.get(path);
+  try {
+    await withHostTimeout(stream.kill(), `forced Stream kill iteration ${iteration}`);
+  } catch (error) {
+    if (error instanceof HostTimeoutError) throw error;
   }
 }
 
