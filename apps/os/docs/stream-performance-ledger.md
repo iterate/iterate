@@ -1632,3 +1632,105 @@ and full OS TypeScript check pass. Raw stress records are
 `/tmp/stream-kill-identity-recovery-r1.log` and
 `/tmp/stream-kill-identity-recovery-{clean,final}.log`; cold-cost records are
 `/tmp/stream-identity-cost-{candidate,parent}-r{1,2,3}.log` locally.
+
+## 2026-07-14: Fourth Cumulative Main Comparison
+
+### Revisions And Method
+
+- Candidate: `6b9ddac113833f3818f854d6875804bd5c874f6b`
+- Baseline: `2f25f617a9edc46406be6e4827405704d4b795ab`
+  (`origin/main`, fetched immediately before and after collection)
+- Five full rounds per revision in `M,C,C,M,M,C,C,M,M,C` order. The inactive
+  server was stopped before every revision switch, so only one Workers stack
+  was resident during collection.
+- Collection ended at `2026-07-14T04:49:37Z`. If this optimization run remains
+  active, the next cumulative comparison is due by `2026-07-14T08:49:37Z`.
+
+The branch-hosted harness selected the cheapest equivalent public operation
+available in each revision. Singleton append used 120 samples and 100-event
+batch append used 30; all other lanes retained their established counts. Every
+interval was measured in Node around an awaited RPC, fully consumed stream, or
+host-observed delivery, and every workload asserted its durable result. No
+measurement relies on a Worker isolate clock advancing without network I/O.
+
+### Results
+
+Each value is the median of the five per-round statistics. Positive change
+means the candidate used less wall time.
+
+| Workload                                       |  Main p50 | Candidate p50 | P50 change |  Main p95 | Candidate p95 | P95 change | Mean change |
+| ---------------------------------------------- | --------: | ------------: | ---------: | --------: | ------------: | ---------: | ----------: |
+| Append one 1 KiB event, discard result         |  2.527 ms |      2.386 ms |       5.6% |  4.262 ms |      4.096 ms |       3.9% |       13.0% |
+| Append 100 tiny events in one call             |  7.478 ms |      5.523 ms |      26.1% | 13.023 ms |      9.605 ms |      26.2% |       26.7% |
+| Append 32 concurrent singleton calls           | 10.852 ms |     10.024 ms |       7.6% | 17.177 ms |     17.020 ms |       0.9% |        1.8% |
+| Append one 256 KiB event, discard result       |  9.359 ms |      9.306 ms |       0.6% | 17.157 ms |     14.381 ms |      16.2% |        8.6% |
+| Retry one acknowledged 256 KiB event           |  3.303 ms |      2.348 ms |      28.9% |  5.254 ms |      3.156 ms |      39.9% |       36.4% |
+| Read a hot stream head                         |  0.636 ms |      0.555 ms |      12.6% |  0.848 ms |      0.820 ms |       3.3% |       10.7% |
+| Read 500 dense 4 KiB events                    | 14.373 ms |     12.711 ms |      11.6% | 22.477 ms |     18.801 ms |      16.4% |       12.4% |
+| Read 20 selected events from 2,000             |  0.855 ms |      0.828 ms |       3.2% |  2.937 ms |      2.491 ms |      15.2% |        2.9% |
+| Read latest selected event                     |  0.763 ms |      0.596 ms |      21.9% |  1.027 ms |      0.885 ms |      13.9% |       25.3% |
+| Replay 500 128-byte events into a subscription |  7.328 ms |      6.053 ms |      17.4% |  9.382 ms |      8.555 ms |       8.8% |       12.0% |
+| Append through delivery to one live subscriber |  1.345 ms |      1.086 ms |      19.3% |  4.513 ms |      3.854 ms |      14.6% |       13.1% |
+| Append through delivery to 25 live subscribers |  4.792 ms |      4.605 ms |       3.9% |  6.193 ms |      6.171 ms |       0.4% |        2.8% |
+| Dense one-event durable cross-post             |  3.640 ms |      3.347 ms |       8.1% |  6.662 ms |      8.136 ms |     -22.1% |      -13.7% |
+| Sparse durable cross-post, 1 of 100 events     |  5.893 ms |      4.995 ms |      15.2% |  9.474 ms |     10.272 ms |      -8.4% |       14.1% |
+| Head read after forced reactivation            |  2.448 ms |      2.391 ms |       2.3% |  4.847 ms |      5.289 ms |      -9.1% |       -8.1% |
+
+The equal-workload geometric mean is **12.7% lower p50**, **9.2% lower p95**,
+and **11.4% lower mean latency**. Eleven of 15 p50s improve by at least 5%; four
+neutral lanes, including forced reactivation, fall below that threshold. The
+candidate's batch-append p50 capacity rises from 13.4k to 18.1k events/s
+(**+35.4%**), concurrent singleton capacity from 2.95k to 3.19k calls/s
+(**+8.3%**), replay from 68.2k to 82.6k events/s (**+21.1%**), and sparse
+cross-post input from 17.0k to 20.0k events/s (**+18.0%**).
+
+This result is weaker than the third comparison's 19.7% p50, 17.3% p95, and
+21.0% mean win against the same baseline SHA. The intervening immediate
+processor redial is dormant in these lanes, while canonical identity recovery
+deliberately adds a synchronous read on cold object construction. The latter
+explains the forced-reactivation mean regression, but cannot explain broad
+warm-path movement. Main and candidate absolute medians both changed across
+the two collections, so this checkpoint does not attribute the entire
+aggregate contraction to code. It does establish the conservative current
+claim: the whole branch remains materially faster than current main, but by
+roughly 9-13% across aggregate latency statistics in this run, not 17-21%.
+
+Dense cross-post p95/mean, sparse cross-post p95, and forced-reactivation
+p95/mean regress. The cross-post tails use only 20 or 30 samples per round and
+are outlier-sensitive; they require focused confirmation before a shipping
+decision. The cold mean regression is directionally consistent with the
+separate 600-sample identity-cost experiment and is accepted as a correctness
+tax unless activation-read coalescing can recover it without weakening the
+identity invariant. The focused 8,000-event processor benchmark remains the
+relevant evidence for immediate redial: 4.03x throughput with no changed
+steady-state lane here.
+
+### Cost And Collapse Assessment
+
+At this SHA, the branch-versus-main diff is 106 files. Production code is
+`+4,833/-1,429` lines (net `+3,404`), tests and e2e are `+8,188/-1,050` (net
+`+7,138`), generated APIs are `+150/-44`, and docs are `+1,709/-35`. Since the
+third comparison, net production growth is 66 lines, primarily the generic
+Durable Object identity invariant; test and documentation growth records the
+reactivation failure and focused processor evidence.
+
+The runtime topology still collapses operationally: one Stream Durable Object,
+one SQLite database, ordinary Workers RPC, and no new deployed service, queue,
+coordinator, storage engine, or periodic timer. Rejected legacy-KV event
+storage, larger frames, direct cross-post, checkpoint, and cast variants leave
+no production mode switches. Identity recovery is one inert key per object and
+immediate redial is one branch in the existing retry machine; either can be
+reverted without converting persistent Stream data.
+
+Source-level complexity is nevertheless high. The current speed and
+correctness mechanisms span cursor epochs, retry identity, compact delivery
+frames, sparse SQL selection, checkpoint recovery, teardown, and RPC
+projections across large stateful modules. A destructive redesign can remove
+all migration and compatibility paths, but consolidation must preserve the
+executable crash, retry, ordering, and idempotency constraints. The shipping
+decision should therefore treat the current branch as measured evidence and a
+candidate implementation, not as proof that every retained abstraction is the
+final one.
+
+All ten cumulative test processes passed. Raw records are
+`/tmp/cumulative-4-{main,candidate}-r{1..5}.log` locally.
