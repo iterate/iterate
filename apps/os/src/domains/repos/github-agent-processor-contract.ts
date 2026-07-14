@@ -117,10 +117,20 @@ export const GithubAgentProcessorContract = defineProcessorContract({
         },
       ],
     },
+    "events.iterate.com/github-agent/repository-collaborator-verified": {
+      description:
+        "Internal audit fact recording that GitHub verified a human trigger source as a repository collaborator when its webhook author_association was inconclusive.",
+      payloadSchema: z.object({
+        actor: z.string().min(1),
+        routeKey: z.string().min(1),
+        sourceOffset: z.number().int().positive(),
+      }),
+    },
   },
   processorDeps: [AgentProcessorContract, RepoProcessorContract],
   consumes: [
     "events.iterate.com/github-agent/configure",
+    "events.iterate.com/github-agent/repository-collaborator-verified",
     "events.iterate.com/github-agent/route-configured",
     "events.iterate.com/github/webhook-received",
   ],
@@ -129,6 +139,7 @@ export const GithubAgentProcessorContract = defineProcessorContract({
     // snapshots are inbound messages from their GitHub sender.
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agents/message-received",
+    "events.iterate.com/github-agent/repository-collaborator-verified",
   ],
 });
 
