@@ -45,6 +45,9 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
   const link = useMutation({
     mutationFn: async (input: { connection: string; owner: string; repo: string }) => {
       const repo = itx.repos.get(repoPath);
+      // linkGithub persists the link before this returns. After it resolves we
+      // never throw — live state already shows LinkedPanel; a throw would toast
+      // "could not link" while the repo is linked.
       const result = await repo.linkGithub(input);
       try {
         const sync = await repo.syncFromGithub({});
@@ -57,8 +60,11 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
             reason: e instanceof Error ? e.message : String(e),
           };
         }
-        if (result.initialPush.ok) return { kind: "seeded" as const, result };
-        throw e instanceof Error ? e : new Error(result.initialPush.error ?? String(e));
+        return {
+          kind: "linked" as const,
+          result,
+          warning: e instanceof Error ? e.message : String(e),
+        };
       }
     },
     onSuccess: (out) => {
@@ -74,9 +80,15 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
       const name = `${out.result.owner}/${out.result.repo}`;
       if (out.kind === "ok" && out.sync.changed) {
         toast.success(`Linked ${name} at ${out.sync.commitOid.slice(0, 7)}.`);
-      } else {
-        toast.success(`Linked ${name}.`);
+        return;
       }
+      if (out.kind === "linked") {
+        toast.warning(
+          `Linked ${name}, but pulling from GitHub failed: ${out.warning} Use Sync from GitHub or Push now.`,
+        );
+        return;
+      }
+      toast.success(`Linked ${name}.`);
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Could not link."),
   });
@@ -369,7 +381,9 @@ function LinkForm({
             </div>
           }
         >
+          {/* key remounts the picker so filter text does not stick across connections */}
           <InstallationRepoPicker
+            key={connection}
             connection={connection}
             projectId={projectId}
             selected={selected}
