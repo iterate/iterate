@@ -7,8 +7,8 @@
 // and reads restore it. Durable Object
 // SQLite caps each string/blob/row cell at ~2 MB; BLOB columns do not raise
 // that ceiling, and SQL-side substr(?) chunking would still require binding
-// the oversized value first, so JSON above the conservative 512 KiB inline
-// ceiling is chunked in JS.
+// the oversized value first, so JSON above the conservative 1 MiB inline
+// ceiling is split into 512 KiB chunks in JS.
 //
 // Every method here is synchronous and must stay that way: the Stream
 // Durable Object's append commit point assigns offsets, reduces state, and
@@ -17,6 +17,7 @@
 import type { StreamEvent } from "./schemas.ts";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
+const MAX_INLINE_EVENT_BYTES = 1024 * 1024;
 const CURRENT_STREAM_STORAGE_SCHEMA_VERSION = 8;
 // Durable Object SQL currently permits at most 100 bound parameters per query.
 // Keep generated multi-row inserts at that ceiling and bound pending BLOB
@@ -339,7 +340,7 @@ export class StreamEventLog {
     if (events.length === 1) {
       const event = events[0]!;
       const bytes = this.#serializeEvent(event);
-      if (bytes.byteLength <= EVENT_CHUNK_SIZE) {
+      if (bytes.byteLength <= MAX_INLINE_EVENT_BYTES) {
         // This is the entire commit in one atomic SQLite statement. An
         // explicit transaction would add begin/commit work without widening
         // the failure boundary; multi-statement paths below still use it.
@@ -366,7 +367,7 @@ export class StreamEventLog {
       for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
         const bytes = this.#serializeEvent(events[eventIndex]!);
         if (
-          bytes.byteLength > EVENT_CHUNK_SIZE ||
+          bytes.byteLength > MAX_INLINE_EVENT_BYTES ||
           candidateByteLength + bytes.byteLength > MAX_PENDING_INSERT_BYTES
         ) {
           if (bytes.byteLength <= MAX_CARRIED_INSERT_BYTES) {
@@ -440,7 +441,8 @@ export class StreamEventLog {
             break;
           }
           serializedEvents.push(bytes);
-          const eventJson = bytes.byteLength <= EVENT_CHUNK_SIZE ? exactArrayBuffer(bytes) : null;
+          const eventJson =
+            bytes.byteLength <= MAX_INLINE_EVENT_BYTES ? exactArrayBuffer(bytes) : null;
           if (useDerivedKeylessDurableInsert) {
             eventBindings.push(eventJson);
           } else if (useKeylessDurableInsert) {
@@ -454,7 +456,7 @@ export class StreamEventLog {
               eventJson,
             );
           }
-          if (bytes.byteLength > EVENT_CHUNK_SIZE) {
+          if (bytes.byteLength > MAX_INLINE_EVENT_BYTES) {
             if (chunkedEvent !== undefined) {
               throw new Error("Stream insert batch exceeded one chunked event");
             }
@@ -494,7 +496,7 @@ export class StreamEventLog {
         for (let index = 0; index < serializedEvents.length; index += 1) {
           const rawJsonBytes = serializedEvents[index]!;
           const event = events[batchStart + index]!;
-          if (rawJsonBytes.byteLength <= EVENT_CHUNK_SIZE) continue;
+          if (rawJsonBytes.byteLength <= MAX_INLINE_EVENT_BYTES) continue;
 
           let chunkIndex = 0;
           for (let start = 0; start < rawJsonBytes.byteLength; start += EVENT_CHUNK_SIZE) {

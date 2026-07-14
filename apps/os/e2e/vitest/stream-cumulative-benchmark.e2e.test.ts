@@ -15,6 +15,7 @@ const OTHER_TYPE = `${EVENT_TYPE}/other`;
 const SMALL_PAYLOAD = "s".repeat(1_024);
 const MEDIUM_PAYLOAD = "m".repeat(4_096);
 const LARGE_PAYLOAD = "l".repeat(256 * 1_024);
+const INLINE_LARGE_PAYLOAD = "i".repeat(768 * 1_024);
 const TAIL_SAMPLES = Number(process.env.STREAM_BENCH_TAIL_SAMPLES ?? "0");
 const APPEND_SAMPLES = Number(process.env.STREAM_BENCH_APPEND_SAMPLES ?? "0");
 const BATCH_SAMPLES = Number(process.env.STREAM_BENCH_BATCH_SAMPLES ?? "0");
@@ -25,6 +26,7 @@ const CROSSPOST_RETRY_EVENTS = Number(process.env.STREAM_BENCH_CROSSPOST_RETRY_E
 const CROSSPOST_RETRY_SAMPLES = Number(process.env.STREAM_BENCH_CROSSPOST_RETRY_SAMPLES ?? "0");
 const SPARSE_SKIP_SAMPLES = Number(process.env.STREAM_BENCH_SPARSE_SKIP_SAMPLES ?? "0");
 const COLD_SAMPLES = Number(process.env.STREAM_BENCH_COLD_SAMPLES ?? "0");
+const INLINE_LARGE_SAMPLES = Number(process.env.STREAM_BENCH_INLINE_LARGE_SAMPLES ?? "0");
 
 type StreamHandle = Stream & Disposable;
 
@@ -141,6 +143,7 @@ test.skipIf(!ENABLED)(
       secret: adminSecret(),
     });
     using project = itx.projects.create({
+      projectId: `prj_${crypto.randomUUID()}`,
       slug: `stream-cumulative-${IMPLEMENTATION}-${runId}`,
     });
     await project.__describe();
@@ -234,6 +237,38 @@ test.skipIf(!ENABLED)(
       expect(
         await stream.getEvents({ afterOffset: 0, eventTypes: [EVENT_TYPE], limit: 500 }),
       ).toHaveLength(23);
+    }
+
+    if (INLINE_LARGE_SAMPLES > 0) {
+      using stream = project.streams.get(`/bench/${runId}/inline-large`);
+      const appendSamples = await measure(
+        INLINE_LARGE_SAMPLES,
+        async (iteration) => {
+          await stream.appendAck(
+            event({
+              marker: `inline-large-${iteration}-${crypto.randomUUID()}`,
+              payload: INLINE_LARGE_PAYLOAD,
+            }),
+          );
+        },
+        3,
+      );
+      metrics.append_single_768k_ack = summarize(appendSamples);
+
+      const head = await stream.head();
+      const readSamples = await measure(
+        INLINE_LARGE_SAMPLES,
+        async () => {
+          const events = await stream.getEvents({
+            afterOffset: head.maxOffset - 1,
+            eventTypes: [EVENT_TYPE],
+            limit: 1,
+          });
+          if (events.length !== 1) throw new Error("768 KiB replay missed its selected event.");
+        },
+        3,
+      );
+      metrics.read_single_768k = summarize(readSamples);
     }
 
     {

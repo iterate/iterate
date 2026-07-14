@@ -324,7 +324,7 @@ describe("StreamEventLog.getRange", () => {
 
   it("hydrates a selected chunked singleton even when it exceeds the byte cap", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
-    const committed = { ...event(1, "selected"), payload: { text: "x".repeat(600 * 1024) } };
+    const committed = { ...event(1, "selected"), payload: { text: "x".repeat(1_100 * 1024) } };
     const inserted = log.insert([committed])[0]!;
 
     expect(
@@ -661,6 +661,28 @@ describe("StreamEventLog.getRange", () => {
     );
   });
 
+  it("keeps medium-large events inline while chunking values beyond the inline ceiling", () => {
+    const db = new DatabaseSync(":memory:");
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+
+    log.insert([
+      { ...event(1, "inline"), payload: { text: "x".repeat(768 * 1024) } },
+      { ...event(2, "chunked"), payload: { text: "x".repeat(1_100 * 1024) } },
+    ]);
+
+    expect(
+      db
+        .prepare("select offset, event_json is not null as is_inline from events order by offset")
+        .all(),
+    ).toEqual([
+      { offset: 1, is_inline: 1 },
+      { offset: 2, is_inline: 0 },
+    ]);
+    expect(
+      db.prepare("select offset, count(*) as count from event_chunks group by offset").all(),
+    ).toEqual([{ offset: 2, count: 3 }]);
+  });
+
   it("opens transactions only for multi-statement commits", () => {
     const db = new DatabaseSync(":memory:");
     const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
@@ -693,7 +715,7 @@ describe("StreamEventLog.getRange", () => {
     expect(transactions).toBe(0);
 
     log.insert(
-      [{ ...event(38, "large"), payload: { text: "x".repeat(600 * 1024) } }],
+      [{ ...event(38, "large"), payload: { text: "x".repeat(1_100 * 1024) } }],
       transactionRunner,
     );
     expect(transactions).toBe(1);
@@ -729,7 +751,7 @@ describe("StreamEventLog.getRange", () => {
 
     expect(() =>
       log.insert(
-        [{ ...event(1, "large"), payload: { text: "x".repeat(600 * 1024) } }],
+        [{ ...event(1, "large"), payload: { text: "x".repeat(1_100 * 1024) } }],
         transactionRunner,
       ),
     ).toThrow("injected chunk failure");
@@ -955,7 +977,7 @@ describe("StreamEventLog.getRange", () => {
     const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
     const committedEvents = Array.from({ length: 34 }, (_, index) => ({
       ...event(index + 1, "same-type"),
-      ...(index === 17 ? { payload: { text: "x".repeat(600 * 1024) } } : {}),
+      ...(index === 17 ? { payload: { text: "x".repeat(1_100 * 1024) } } : {}),
     }));
     let transactions = 0;
     const runner = {
@@ -968,7 +990,7 @@ describe("StreamEventLog.getRange", () => {
     log.insert(committedEvents, runner);
 
     expect(transactions).toBe(1);
-    expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 2 });
+    expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 3 });
     expect(offsets(read(log, { afterOffset: 0, limit: 34 }))).toEqual(
       committedEvents.map((event) => event.offset),
     );
@@ -1005,7 +1027,7 @@ describe("StreamEventLog.getRange", () => {
       enumerable: true,
       get: () => {
         payloadReads += 1;
-        return "x".repeat(600 * 1024);
+        return "x".repeat(1_100 * 1024);
       },
     });
     const committed = { ...event(1, "events.iterate.com/test/large-single"), payload };
@@ -1013,10 +1035,10 @@ describe("StreamEventLog.getRange", () => {
     log.insert([committed]);
 
     expect(payloadReads).toBe(1);
-    expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 2 });
+    expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 3 });
     expect(log.getByOffset(1)).toEqual({
       ...committed,
-      payload: { text: "x".repeat(600 * 1024) },
+      payload: { text: "x".repeat(1_100 * 1024) },
     });
   });
 
@@ -1054,7 +1076,7 @@ describe("StreamEventLog.getRange", () => {
       { ...event(1, "small"), idempotencyKey: "small" },
       {
         ...event(2, "large"),
-        payload: { text: "x".repeat(600 * 1024) },
+        payload: { text: "x".repeat(1_100 * 1024) },
         idempotencyKey: "large",
       },
     ]);
@@ -1150,7 +1172,7 @@ describe("StreamEventLog.getRange", () => {
       { ...event(1, "small"), idempotencyKey: "small-1" },
       {
         ...event(2, "large"),
-        payload: { text: "x".repeat(600 * 1024) },
+        payload: { text: "x".repeat(1_100 * 1024) },
         idempotencyKey: "large-2",
       },
       { ...event(3, "small"), idempotencyKey: "small-3" },
@@ -1213,13 +1235,13 @@ describe("StreamEventLog.getRange", () => {
     const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
     const large = {
       ...event(1, "events.iterate.com/test/multibyte-large"),
-      payload: { text: "é".repeat(300 * 1024) },
+      payload: { text: "é".repeat(600 * 1024) },
     };
 
     const [sized] = log.insert([large]);
 
     expect(db.prepare("select count(*) as count from event_chunks where offset = 1").get()).toEqual(
-      { count: 2 },
+      { count: 3 },
     );
     expect(sized?.byteLength).toBe(new TextEncoder().encode(JSON.stringify(large)).byteLength);
     expect(log.getByOffset(1)).toEqual(large);
@@ -1287,7 +1309,7 @@ describe("StreamEventLog.getRange", () => {
       event(1, "events.iterate.com/test/inline"),
       {
         ...event(2, "events.iterate.com/test/incomplete"),
-        payload: { text: "x".repeat(600 * 1024) },
+        payload: { text: "x".repeat(1_100 * 1024) },
       },
       event(3, "events.iterate.com/test/inline"),
     ];
@@ -1475,10 +1497,10 @@ describe("StreamEventLog.getRange", () => {
       {
         ...event(2, "events.iterate.com/test/chunk"),
         ephemeral: true,
-        payload: { text: "x".repeat(600 * 1024) },
+        payload: { text: "x".repeat(1_100 * 1024) },
       },
     ]);
-    expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 2 });
+    expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 3 });
     failDelete = true;
 
     expect(() => log.evictEphemeralThrough(2, transactionRunner(db))).toThrow(
@@ -1488,7 +1510,7 @@ describe("StreamEventLog.getRange", () => {
       { offset: 1 },
       { offset: 2 },
     ]);
-    expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 2 });
+    expect(db.prepare("select count(*) as count from event_chunks").get()).toEqual({ count: 3 });
     expect(
       db.prepare("select evicted_offset_floor as floor from stream_storage_schema").get(),
     ).toEqual({ floor: 0 });

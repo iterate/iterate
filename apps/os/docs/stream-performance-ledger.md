@@ -889,3 +889,117 @@ Raw Workers records are in `/tmp/sparse-frame-parent-long.log` and
 `/tmp/frame-schema8-{parent,candidate}-{1..5}.log`; chunked append controls are
 in `/tmp/chunked-append-schema8-{parent,candidate}-{1..5}.log` for the life of
 this workstation.
+
+## 2026-07-14: One MiB Inline Event Ceiling
+
+### Change
+
+Event storage previously reused the 512 KiB chunk-row size as the inline-value
+ceiling. A serialized 513 KiB event therefore required an explicit SQLite
+transaction, a null metadata row, a length update, and two chunk rows even
+though workerd permits much larger values. Workerd sets `SQLITE_LIMIT_LENGTH`
+to 2,200,000 bytes and its storage test documents the public limit as 2 MB.
+
+The retained change separates the policies: serialized event JSON through
+1 MiB stays in `events.event_json`, while values above 1 MiB still split into
+512 KiB `event_chunks`. The pending serialization budget and carried-value
+budget remain 1 MiB, so peak buffered JSON does not increase. Schema v8, all
+read shapes, and the RPC surface are unchanged. The production diff is
+`+9/-7` lines.
+
+The cumulative benchmark gained an opt-in 768 KiB append/replay lane. It also
+supplies an admin-owned `prj_...` fixture ID so local benchmark creation does
+not depend on the separately deployed dev auth service being at the same
+revision as OS.
+
+### Exact Host Result
+
+A disposable `node:sqlite` harness called exact production `insert()`,
+`getByOffset()`, and `getRangeSized()` implementations from parent and
+candidate modules. Five alternating fresh processes per revision measured 40
+appends and 80 reads after warmup. Each process stored 45 events and asserted
+that the parent created 90 chunks while the candidate created none. Values are
+medians of the five per-process statistics.
+
+| Operation          | Parent p50 | Candidate p50 | P50 change | Parent p95 | Candidate p95 | P95 change |
+| ------------------ | ---------: | ------------: | ---------: | ---------: | ------------: | ---------: |
+| Append 768 KiB     |   0.998 ms |      0.865 ms |      13.3% |   1.629 ms |      1.124 ms |      31.0% |
+| Point read 768 KiB |   1.092 ms |      0.368 ms |      66.3% |   1.424 ms |      0.584 ms |      59.0% |
+| Range read 768 KiB |   1.108 ms |      0.371 ms |      66.5% |   1.491 ms |      0.569 ms |      61.8% |
+
+Median means improve 16.6%, 65.3%, and 66.6%, respectively.
+
+### Workers Result
+
+- Candidate: the threshold change on exact parent `e05e3df13`.
+- Baseline: exact parent `e05e3df13`.
+- Five full rounds per revision in `P,C,C,P,P,C,C,P,P,C` order, with only one
+  Workers stack active. Every round used three warmups and 20 measured samples
+  for append and replay, fresh project/stream paths, and full semantic checks.
+- Collection ended at `2026-07-14T01:16:50Z`. Host `performance.now()` timers
+  enclosed awaited RPCs and complete replay responses; no isolate clock was
+  used.
+
+| Operation          | Metric |    Parent | Candidate | Change |
+| ------------------ | ------ | --------: | --------: | -----: |
+| Append 768 KiB ack | p50    | 21.970 ms | 17.470 ms |  20.5% |
+|                    | p95    | 35.650 ms | 27.805 ms |  22.0% |
+|                    | mean   | 21.839 ms | 17.011 ms |  22.1% |
+| Replay 768 KiB     | p50    |  4.826 ms |  4.305 ms |  10.8% |
+|                    | p95    |  6.047 ms |  5.801 ms |   4.1% |
+|                    | mean   |  4.937 ms |  4.314 ms |  12.6% |
+
+Median-p50 append throughput rises from 45.5 to 57.2 events/s, **+25.8%**.
+Unaffected controls stayed neutral: 1 KiB append +1.0%, 100-event append
++4.0%, 256 KiB append +1.5%, dense read -1.2%, and hot head +1.7%.
+
+### Correctness And Cost
+
+The 1 MiB row plus its small metadata remains well below workerd's 2.2 MB
+SQLite limit. A new storage test proves a 768 KiB payload is inline and a
+1.1 MiB payload remains a three-row chunked value; every existing chunk,
+rollback, Unicode, idempotency, eviction, and sparse-frame test fixture was
+kept above the new boundary where its behavior depends on chunking.
+
+This adds one constant and no schema, migration, timer, queue, cache, protocol,
+or recovery branch. Rollback is trivial: lower the constant. Existing rows can
+already mix inline and chunked representations, so neither direction requires
+rewriting storage. Raw host records are in
+`/tmp/inline-threshold-{baseline,candidate}-host.log`; Workers records are in
+`/tmp/inline-threshold-workers-{baseline,candidate}.log` for the life of this
+workstation.
+
+## 2026-07-14: Post-Merge Hot-Path Controls And Queue
+
+Three pre-production micro-prototypes were rejected before they added a
+permanent branch:
+
+- Removing cross-post receiver validation and an object spread saved about
+  0.0001 ms for one event and 0.0046 ms for 100 events on the host. RPC cost
+  would dominate it.
+- Storing inline JSON as SQLite TEXT instead of BLOB was neutral: singleton
+  inserts were about 7% slower, 100-event batches about 3% faster, and the
+  production-equivalent `cast(event_json as text)` read was flat.
+- Mutating the parsed storage object to restore `path` instead of spreading it
+  saved about 0.006 ms over 500 4 KiB rows, below 1%.
+
+The next measured candidates, in priority order, are:
+
+1. Split the core checkpoint schedule: retain a 64-event restored-lag bound
+   but checkpoint a clean warm incarnation every 501 events. This may remove
+   full-state KV writes from most 100/500-event appends without changing the
+   journal commit point. It requires dirty-eviction and clean-teardown cycle
+   benchmarks because the one-second condition is only opportunistic under
+   workerd's frozen clock.
+2. Flatten selected historical frames into parallel event/byte-length arrays.
+   An 8,000-event frame would avoid about 8,000 wrapper objects, two temporary
+   arrays, and four traversals without changing SQL or retry semantics.
+3. Bind guaranteed-inline JSON strings through `cast(? as blob) returning
+length(event_json)` to test whether workerd can avoid `TextEncoder` output.
+   This is lower priority because returned rows may cost more than the removed
+   allocation.
+
+The proposed legacy KV storage rewrite remains deprioritized. Current evidence
+continues to favor synchronous SQLite: its commit/output-gate semantics are the
+correctness boundary, and the retained wins came from reducing statements,
+materialization, and redundant work rather than taking over flush scheduling.
