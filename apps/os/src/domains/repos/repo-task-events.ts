@@ -36,6 +36,27 @@ type RepoArtifactPush = {
   branch: string;
 };
 
+/** Recognize a GitHub push webhook without treating it as a commit fact. */
+export function repoGithubPushFromWebhookPayload(
+  payload: unknown,
+): { afterCommitOid: string; branch: string } | null {
+  const captured = record(payload);
+  const headers = record(captured?.headers);
+  if (headers?.githubEvent !== "push") return null;
+  const body = record(captured?.body);
+  const ref = string(body?.ref);
+  const afterCommitOid = string(body?.after);
+  if (
+    ref === null ||
+    afterCommitOid === null ||
+    afterCommitOid === ZERO_COMMIT_OID ||
+    !ref.startsWith("refs/heads/")
+  )
+    return null;
+  const branch = ref.slice("refs/heads/".length);
+  return branch === "" ? null : { afterCommitOid, branch };
+}
+
 /** Markdown files below any directory segment named `tasks` are repo tasks. */
 export function isRepoTaskMarkdownPath(path: string): boolean {
   const segments = path.split("/").filter(Boolean);

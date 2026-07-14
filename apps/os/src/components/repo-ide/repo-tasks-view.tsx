@@ -59,6 +59,7 @@ import {
   isRepoTaskPath,
   parseRepoTask,
   queryRepoTaskBoard,
+  repoTaskHeadingSelection,
   repoTaskHeadingTitle,
   repoTaskCreationPaths,
   repoTaskPathForTitle,
@@ -584,7 +585,7 @@ function TaskColumn({
       ref={ref}
       data-task-cell={dropId}
       className={cn(
-        "flex min-h-36 min-w-[calc(100vw-3.5rem)] flex-1 basis-72 snap-start flex-col pb-4 transition-colors sm:min-w-72",
+        "flex min-h-36 w-[calc(100vw-3.5rem)] flex-none snap-start flex-col pb-4 transition-colors sm:w-72",
         isDropTarget && "rounded-lg bg-accent/40",
       )}
     >
@@ -740,25 +741,32 @@ function TaskEditorSheet({
   const [pathWasEdited, setPathWasEdited] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [assignedAgent, setAssignedAgent] = useState<string | undefined>();
+  const editorSessionOpenRef = useRef(false);
   const taskPath = task?.path;
   const visibleAgent = task?.agent ?? assignedAgent;
 
   useEffect(() => {
     if (taskPath === undefined) {
+      editorSessionOpenRef.current = false;
       setPathWasEdited(false);
       return;
     }
     setPathValue(`/${taskPath}`);
+    if (editorSessionOpenRef.current) return;
+    editorSessionOpenRef.current = true;
     setPathWasEdited(false);
     const focusEditor = () => {
       const editor = editorRef.current;
       if (editor === null) return;
       editor.focus();
-      editor.setSelectionRange(editor.value.length, editor.value.length);
+      const titleSelection = isNew ? repoTaskHeadingSelection(editor.value) : undefined;
+      const start = titleSelection?.start ?? editor.value.length;
+      const end = titleSelection?.end ?? editor.value.length;
+      editor.setSelectionRange(start, end);
     };
     const timeout = window.setTimeout(focusEditor, 250);
     return () => window.clearTimeout(timeout);
-  }, [taskPath]);
+  }, [isNew, taskPath]);
 
   useEffect(() => {
     setAssignedAgent(undefined);

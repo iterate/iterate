@@ -60,6 +60,7 @@ import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
+import { githubFastForwardTransferDepth } from "./github-sync-utils.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
 
@@ -104,6 +105,11 @@ export class RepoDurableObject extends DurableObject<Env> {
       new RepoProcessor({
         ...deps,
         createRepoArtifact: (input) => this.createArtifactRepo(input),
+        // Sync the current GitHub head, not necessarily the delivery's SHA:
+        // GitHub webhooks may arrive out of order, and adopting a newer head
+        // also satisfies every older push delivery. syncFromGithub derives a
+        // bounded depth that still retains the previous Artifacts head.
+        syncFromGithubPush: async () => await this.syncFromGithub(),
         taskChangesForArtifactPush: (input) => this.#taskChangesForArtifactPush(input),
       }),
   );
@@ -665,14 +671,15 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   // ===========================================================================
-  // GitHub mirror: an optional linked GitHub repository this repo pushes to.
+  // GitHub backing: an optional linked GitHub repository synchronized both ways.
   //
   // The Artifacts repo stays primary — commits succeed against it regardless
-  // of GitHub's availability — and the linked GitHub repo is a mirror kept
-  // fresh by a best-effort push after every commit. git push is cumulative, so
-  // a failed mirror push self-heals on the next commit; `pushToGithub` repairs
-  // on demand. `syncFromGithub` is the explicit reverse lane: adopt GitHub's
-  // branch head, fast-forward only unless forced.
+  // of GitHub's availability — and a best-effort push mirrors every commit.
+  // git push is cumulative, so a failed mirror push self-heals on the next
+  // commit; `pushToGithub` repairs on demand. GitHub push webhooks ask the repo
+  // processor to fast-forward Artifacts through `syncFromGithub`; the ensuing
+  // Artifacts queue event remains the sole source of commit/task facts. The
+  // public sync verb is also the explicit repair/forced-adoption lane.
   // ===========================================================================
 
   /** The current GitHub link, or null when this repo is not linked. */
@@ -812,10 +819,10 @@ export class RepoDurableObject extends DurableObject<Env> {
    * moment this returns — same read-your-write boundary as commitFiles.
    *
    * The history transfers in-process (checkout-free clone from GitHub +
-   * force-push to the Artifacts remote), so big histories need `depth` —
-   * which prunes the adopted history to the newest N commits. GitHub retains
-   * the full history, so nothing is lost and a later deeper sync can widen
-   * the window.
+   * force-push to the Artifacts remote). `depth` is a requested lower bound;
+   * a fast-forward always retains the previous Artifacts head as well so its
+   * queue event can compare before/after task trees. GitHub retains the full
+   * history, so a later deeper sync can widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
     return this.#serializeWrite(() => this.#syncFromGithub(input));
@@ -839,16 +846,25 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (headOid === previousCommitOid) {
       return { branch, changed: false, commitOid: headOid, forced: false, previousCommitOid };
     }
+    let transferDepth = input.depth;
     if (input.force !== true) {
-      const status =
+      const comparison =
         previousCommitOid === null
-          ? "unrelated"
+          ? { aheadBy: 0, status: "unrelated" }
           : await this.#githubCompareStatus({ base: previousCommitOid, branch, link, token });
-      if (status !== "ahead") {
+      if (comparison.status !== "ahead") {
         throw new Error(
-          `syncFromGithub is not a fast-forward (GitHub says "${status}" relative to this repo's head ${previousCommitOid ?? "(none)"}). Pass force: true to discard local-only history and adopt GitHub's head.`,
+          `syncFromGithub is not a fast-forward (GitHub says "${comparison.status}" relative to this repo's head ${previousCommitOid ?? "(none)"}). Pass force: true to discard local-only history and adopt GitHub's head.`,
         );
       }
+      // The Artifacts queue projects task changes by checking out BOTH push
+      // oids. Preserve the old head even when the caller requested depth 1;
+      // otherwise the force-moved shallow branch makes `before` unreachable
+      // and the queue-derived task projection wedges on its pinned read.
+      transferDepth = githubFastForwardTransferDepth({
+        aheadBy: comparison.aheadBy,
+        requestedDepth: input.depth,
+      });
     }
     // ONE transfer lane: clone GitHub in this isolate and force-push to the
     // Artifacts remote. Deliberately NOT the server-side Artifacts import —
@@ -872,7 +888,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     if (artifact.created) this.#artifactTokenPromise = undefined;
     await this.#transferGithubHistoryInProcess({
       branch,
-      depth: input.depth,
+      depth: transferDepth,
       expectedCommitOid: headOid,
       link,
       token,
@@ -1129,19 +1145,22 @@ export class RepoDurableObject extends DurableObject<Env> {
     branch: string;
     link: GithubRepoLink;
     token: string;
-  }): Promise<string> {
+  }): Promise<{ aheadBy: number; status: string }> {
     const response = await this.#githubApi(
       `/repos/${args.link.owner}/${args.link.repo}/compare/${args.base}...${encodeURIComponent(args.branch)}`,
       args.token,
     );
-    if (response.status === 404) return "unrelated";
+    if (response.status === 404) return { aheadBy: 0, status: "unrelated" };
     if (!response.ok) {
       throw new Error(
         `GitHub compare for ${args.link.owner}/${args.link.repo} failed: HTTP ${response.status}`,
       );
     }
-    const data = (await response.json()) as { status?: string };
-    return typeof data.status === "string" ? data.status : "unknown";
+    const data = (await response.json()) as { ahead_by?: number; status?: string };
+    return {
+      aheadBy: typeof data.ahead_by === "number" ? data.ahead_by : 0,
+      status: typeof data.status === "string" ? data.status : "unknown",
+    };
   }
 
   #githubApi(path: string, token: string): Promise<Response> {
