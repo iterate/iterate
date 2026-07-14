@@ -8,7 +8,10 @@ const INPUT_ADDED = "events.iterate.com/agent/input-added";
 test("agent checkpoint reconstructs chunked history after eviction and catches up new writes", async () => {
   await using handle = await createTestProject({ slugPrefix: "agent-checkpoint" });
   using itx = handle.itx();
-  const agent = itx.agents.get(`/agents/checkpoint-${crypto.randomUUID()}`);
+  const agentPath = `/agents/checkpoint-${crypto.randomUUID()}`;
+  const agent = itx.agents.get(agentPath);
+  const defaults = await itx.agents.defaults.forPath(agentPath);
+  await agent.stream.append(...defaults.events);
   const history = Array.from({ length: 320 }, (_, index) => ({
     role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
     content: `${index}:`.padEnd(512, "x"),

@@ -599,6 +599,44 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
   }
 });
 
+test("waitForEvent survives a Stream Durable Object incarnation reset", async () => {
+  const marker = crypto.randomUUID();
+  const eventType = `events.iterate.test/lifecycle-wait-reset-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = itx.projects.create({ slug: `lifecycle-wait-reset-${marker}` });
+  using stream = project.streams.get(`/lifecycle-wait-reset-${marker}`);
+
+  const { maxOffset } = await stream.head();
+  const pending = stream.waitForEvent({
+    afterOffset: maxOffset,
+    eventTypes: [eventType],
+    predicate: (event) => event.payload?.marker === marker,
+    timeoutMs: 15_000,
+  });
+  void pending.catch(() => undefined);
+  await waitForWaitForEventConnection(stream);
+
+  // The public wait lives in the fronting Worker. Kill only the Stream DO so
+  // the old subscription handle rejects its heartbeat; the replacement must
+  // replay this durable event without asking the caller to retry.
+  await stream.kill().catch(() => undefined);
+  const [appended] = await appendEvents(stream, {
+    type: eventType,
+    payload: { marker },
+  });
+
+  await expect(pending).resolves.toMatchObject({
+    offset: appended!.offset,
+    payload: { marker },
+    type: eventType,
+  });
+});
+
 async function waitForConfiguredProcessorConnections(
   stream: Stream,
   opts: { expectedKeys?: readonly string[]; settled?: boolean } = {},

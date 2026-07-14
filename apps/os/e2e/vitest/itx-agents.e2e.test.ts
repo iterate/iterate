@@ -96,6 +96,10 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     predicate: (event) => event.payload?.message === "string form with files",
     timeoutMs: 30_000,
   });
+  const scriptCompleted = agent.stream.waitForEvent({
+    eventTypes: ["events.iterate.com/capability-host/script-execution-completed"],
+    timeoutMs: 30_000,
+  });
 
   await agent.stream.append({
     type: AGENT_OUTPUT_ADDED_TYPE,
@@ -124,6 +128,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
       files: [{ contentType: "text/plain", filename: "note.txt", size: 5 }],
     },
   });
+  await scriptCompleted;
 
   const events = await agent.stream.getEvents();
   expect(events.map((event) => event.type)).toEqual(

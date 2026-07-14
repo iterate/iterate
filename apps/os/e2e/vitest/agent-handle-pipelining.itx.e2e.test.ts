@@ -72,19 +72,25 @@ test(
         //    and dispatched through the agent scope's capability host —
         //    all one un-awaited chain.
         const [appended] = await itx.agents.get(${JSON.stringify(agentPath)})
-          .proofAppend({
-            type: ${JSON.stringify(PROOF_TYPE)},
-            payload: { marker: ${JSON.stringify(marker)} },
-          });
+          .proofAppend(
+            { return: "events" },
+            {
+              type: ${JSON.stringify(PROOF_TYPE)},
+              payload: { marker: ${JSON.stringify(marker)} },
+            },
+          );
 
         // 3. The same capability through the explicit capabilityHost door —
         //    equivalent spelling, also pipelined (capabilityHost is a
         //    property hop, proofAppend the dynamic name).
         const [appendedViaHost] = await itx.agents.get(${JSON.stringify(agentPath)})
-          .capabilityHost.proofAppend({
-            type: ${JSON.stringify(PROOF_TYPE)},
-            payload: { marker: ${JSON.stringify(marker)} + "-via-host" },
-          });
+          .capabilityHost.proofAppend(
+            { return: "events" },
+            {
+              type: ${JSON.stringify(PROOF_TYPE)},
+              payload: { marker: ${JSON.stringify(marker)} + "-via-host" },
+            },
+          );
 
         // 4. Another method-returned surface entirely: capabilityHosts.get()
         //    used to hand back a Proxy too — a declared CLASS method must
@@ -93,10 +99,13 @@ test(
         const hostDescription = await itx.capabilityHosts.get(${JSON.stringify(agentPath)})
           .__describe();
         const [appendedViaHostsGet] = await itx.capabilityHosts.get(${JSON.stringify(agentPath)})
-          .proofAppend({
-            type: ${JSON.stringify(PROOF_TYPE)},
-            payload: { marker: ${JSON.stringify(marker)} + "-via-hosts-get" },
-          });
+          .proofAppend(
+            { return: "events" },
+            {
+              type: ${JSON.stringify(PROOF_TYPE)},
+              payload: { marker: ${JSON.stringify(marker)} + "-via-hosts-get" },
+            },
+          );
 
         return {
           messageOffset: sent.offset,

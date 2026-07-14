@@ -1481,6 +1481,7 @@ export class StreamSubscribers {
         : undefined;
 
     const pump = async () => {
+      if (draining) return;
       draining = true;
       try {
         while (open) {

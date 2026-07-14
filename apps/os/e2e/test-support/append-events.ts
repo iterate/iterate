@@ -11,3 +11,15 @@ export async function appendEvents(
   }
   return result as StreamEvent[];
 }
+
+/** Request assigned offsets explicitly in tests that do not need full envelopes. */
+export async function appendOffsets(
+  stream: Pick<Stream, "append">,
+  ...events: StreamEventInput[]
+): Promise<number[]> {
+  const result = await stream.append({ return: "offsets" }, ...events);
+  if (!Array.isArray(result) || result.some((value) => typeof value !== "number")) {
+    throw new Error("append did not return offsets");
+  }
+  return result as number[];
+}

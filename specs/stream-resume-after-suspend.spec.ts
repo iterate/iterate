@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
+import { appendOffsets } from "../apps/os/e2e/test-support/append-events.ts";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
@@ -55,21 +56,21 @@ test("control: appended event is delivered to a live stream feed", async ({
   const keys = runtimeDebugKeys(fixture.project.id);
   await waitForSubscribed(page, keys);
 
-  const [marker] = await agent.stream.append({
+  const [markerOffset] = await appendOffsets(agent.stream, {
     type: MARKER_EVENT_TYPE,
     payload: { marker: "control" },
   });
   const { delivered, snapshot } = await pollDelivered(
     page,
     keys,
-    marker!.offset,
+    markerOffset!,
     HEALTHY_DELIVERY_MS,
   );
   dumpEvidence("control", snapshot, consoleLines);
   // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate suspend-repro probe: pollDelivered() never throws so the evidence dump above always runs; the boolean verdict is asserted here with the diagnostic message.
   expect(
     delivered,
-    `marker at offset ${marker!.offset} should be delivered to a healthy subscription`,
+    `marker at offset ${markerOffset} should be delivered to a healthy subscription`,
   ).toBe(true);
 });
 
@@ -106,14 +107,14 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
   console.log("--- after probe window ---");
   console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
 
-  const [marker] = await agent.stream.append({
+  const [markerOffset] = await appendOffsets(agent.stream, {
     type: MARKER_EVENT_TYPE,
     payload: { marker: "after-socket-death" },
   });
   const { delivered, snapshot } = await pollDelivered(
     page,
     keys,
-    marker!.offset,
+    markerOffset!,
     RECOVERY_DELIVERY_MS,
   );
   dumpEvidence("after socket death", snapshot, consoleLines);
@@ -123,7 +124,7 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
   // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate suspend-repro probe: pollDelivered() never throws so the evidence dump above always runs; the boolean verdict is asserted here with the diagnostic message.
   expect(
     delivered,
-    `marker at offset ${marker!.offset} should be delivered after the browser re-dials /api — see the __streamRuntimeDebug dump above for the reconnect wedge`,
+    `marker at offset ${markerOffset} should be delivered after the browser re-dials /api — see the __streamRuntimeDebug dump above for the reconnect wedge`,
   ).toBe(true);
 });
 
@@ -169,14 +170,14 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   console.log("--- after thaw + probe window ---");
   console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
 
-  const [marker] = await agent.stream.append({
+  const [markerOffset] = await appendOffsets(agent.stream, {
     type: MARKER_EVENT_TYPE,
     payload: { marker: "after-freeze" },
   });
   const { delivered, snapshot } = await pollDelivered(
     page,
     keys,
-    marker!.offset,
+    markerOffset!,
     RECOVERY_DELIVERY_MS,
   );
   dumpEvidence("after freeze", snapshot, consoleLines);
@@ -185,7 +186,7 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate suspend-repro probe: pollDelivered() never throws so the evidence dump above always runs; the boolean verdict is asserted here with the diagnostic message.
   expect(
     delivered,
-    `marker at offset ${marker!.offset} should be delivered after the page thaws — see the __streamRuntimeDebug dump above for the reconnect wedge`,
+    `marker at offset ${markerOffset} should be delivered after the page thaws — see the __streamRuntimeDebug dump above for the reconnect wedge`,
   ).toBe(true);
 });
 
@@ -248,14 +249,14 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   console.log("--- after half-open probe window ---");
   console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
 
-  const [marker] = await agent.stream.append({
+  const [markerOffset] = await appendOffsets(agent.stream, {
     type: MARKER_EVENT_TYPE,
     payload: { marker: "after-half-open" },
   });
   const { delivered, snapshot } = await pollDelivered(
     page,
     keys,
-    marker!.offset,
+    markerOffset!,
     RECOVERY_DELIVERY_MS,
   );
   dumpEvidence("after half-open", snapshot, consoleLines);
@@ -265,7 +266,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate suspend-repro probe: pollDelivered() never throws so the evidence dump above always runs; the boolean verdict is asserted here with the diagnostic message.
   expect(
     delivered,
-    `marker at offset ${marker!.offset} should be delivered after the transport is evicted and re-dialed — see the __streamRuntimeDebug dump above`,
+    `marker at offset ${markerOffset} should be delivered after the transport is evicted and re-dialed — see the __streamRuntimeDebug dump above`,
   ).toBe(true);
 
   // The user's half of the story: the stranded mid-outage send must SETTLE —

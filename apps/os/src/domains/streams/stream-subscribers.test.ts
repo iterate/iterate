@@ -1852,6 +1852,37 @@ describe("StreamSubscribers", () => {
     ]);
   });
 
+  it("n1. subscriber-connected wake cannot start a second connection pump", async () => {
+    const h = makeHarness();
+    const batches: number[][] = [];
+
+    h.onAppendFact((fact) => {
+      if (fact.type !== CONNECTED) return;
+      const first = evt(1, "first");
+      h.append(first);
+      h.subscribers.wake([{ event: first, byteLength: 64 }], 64);
+    });
+
+    h.subscribers.openEphemeral({
+      subscriptionKey: "watcher",
+      replayAfterOffset: 0,
+      sink: (delivered) => {
+        batches.push(delivered.events.map((candidate) => candidate.offset));
+        if (delivered.events.some((candidate) => candidate.offset === 1)) {
+          const second = evt(2, "second");
+          h.append(second);
+          h.subscribers.wake([{ event: second, byteLength: 64 }], 64);
+        }
+      },
+    });
+
+    // open() owns one synchronous pump turn. The nested append is consumed by
+    // that same loop after its delivery yield, not by a second pump.
+    expect(batches).toEqual([[1]]);
+    await h.settle();
+    expect(batches).toEqual([[1], [2]]);
+  });
+
   it("o. webhook: one POST per event in order, per-event acking, lean envelope", async () => {
     const h = makeHarness();
     h.configure(webhookPayload(), 0);

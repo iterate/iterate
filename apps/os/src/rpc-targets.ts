@@ -139,6 +139,7 @@ import type {
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
+import { waitForStreamEvent } from "./domains/streams/wait-for-stream-event.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -272,7 +273,6 @@ import type {
   StreamPushEventBatch,
   ProcessorRuntimeState,
   ProcessorSnapshot,
-  StreamAppend,
   StreamAppendArguments,
   StreamAppendResult,
   StreamAppendResultOptions,
@@ -550,7 +550,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
     timeoutMs: number;
   }): Promise<StreamEvent> {
-    return this.durableObjectStub.waitForEvent(args);
+    return waitForStreamEvent((subscribeArgs) => this.subscribe(subscribeArgs), args);
   }
 
   /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */
@@ -1462,12 +1462,8 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     // namespace: the Durable Object there is the strict authority on whether
     // the sandbox is live, destroyed, or (after a create that died between
     // this append and its call) still to be born — the retry heals it.
-    const catalogue = this.#catalogue as unknown as {
-      append: StreamAppend;
-    };
     const [claim] = appendedEvents(
-      await catalogue.append(
-        { return: "events" },
+      await this.#catalogue.append(
         SandboxProcessorContract.buildEvent({
           type: "events.iterate.com/sandbox/create-requested",
           idempotencyKey: SandboxCollectionRpcTarget.#claimKey(path),
