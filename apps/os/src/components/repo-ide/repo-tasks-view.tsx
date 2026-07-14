@@ -584,7 +584,7 @@ function TaskColumn({
       ref={ref}
       data-task-cell={dropId}
       className={cn(
-        "group/task-column flex min-h-36 min-w-[calc(100vw-3.5rem)] flex-1 basis-72 snap-start flex-col pb-4 transition-colors sm:min-w-72",
+        "flex min-h-36 min-w-[calc(100vw-3.5rem)] flex-1 basis-72 snap-start flex-col pb-4 transition-colors sm:min-w-72",
         isDropTarget && "rounded-lg bg-accent/40",
       )}
     >
@@ -597,6 +597,15 @@ function TaskColumn({
         </header>
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
+        <Button
+          variant="ghost"
+          className="mb-2 h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 hover:bg-muted/70 hover:text-muted-foreground"
+          title={`Add task to ${creationLabel}`}
+          aria-label={`Add task to ${creationLabel}`}
+          onClick={onCreate}
+        >
+          <PlusIcon data-icon="inline-start" />
+        </Button>
         <div className="flex flex-col gap-2">
           {tasks.map((task) => (
             <TaskCard
@@ -607,17 +616,6 @@ function TaskColumn({
               onOpen={onOpen}
             />
           ))}
-        </div>
-        <div className="group/task-add mt-auto min-h-14 pt-4">
-          <Button
-            variant="ghost"
-            className="h-10 w-full shrink-0 border border-dashed border-border/70 text-muted-foreground/60 opacity-0 transition-opacity group-hover/task-add:opacity-100 focus-visible:opacity-100 hover:bg-muted/70 hover:text-muted-foreground [@media(hover:none)]:opacity-100"
-            title={`Add task to ${creationLabel}`}
-            aria-label={`Add task to ${creationLabel}`}
-            onClick={onCreate}
-          >
-            <PlusIcon data-icon="inline-start" />
-          </Button>
         </div>
       </div>
     </section>
