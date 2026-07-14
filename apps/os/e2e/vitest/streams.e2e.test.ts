@@ -655,6 +655,24 @@ test("crossPostTo copies matching events with source provenance", async () => {
     },
     type: CROSS_POST_EVENT_TYPE,
   });
+
+  const replayedConfig = await source.crossPostTo({
+    path: targetPath,
+    key: subscriptionKey,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+    deliver: "all",
+  });
+  await waitForCondition(
+    async () => {
+      const state = await source.runtimeState();
+      return (
+        (state.runtime.subscriptions[subscriptionKey]?.ackedOffset ?? 0) >= replayedConfig.offset
+      );
+    },
+    { description: "cross-post replay cursor to acknowledge duplicate source events" },
+  );
+  const copies = await target.getEvents({ eventTypes: [CROSS_POST_EVENT_TYPE], limit: 500 });
+  expect(copies.filter((event) => event.payload?.marker === marker)).toHaveLength(1);
 });
 
 test("cross-post conditions gate cross-posting on event content", async () => {

@@ -1130,7 +1130,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       projectId: this.name.projectId,
       path: this.name.path,
     });
-    if (inputs.length > 0) this.append(...inputs);
+    if (inputs.length > 0) this.appendAck(...inputs);
   }
 
   #appendToStreamCoordinate(

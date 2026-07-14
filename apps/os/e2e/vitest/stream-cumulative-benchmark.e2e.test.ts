@@ -21,6 +21,8 @@ const BATCH_SAMPLES = Number(process.env.STREAM_BENCH_BATCH_SAMPLES ?? "0");
 const BATCH_SIZE = Number(process.env.STREAM_BENCH_BATCH_SIZE ?? "100");
 const DENSE_CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_DENSE_CROSSPOST_SAMPLES ?? "0");
 const SPARSE_CROSSPOST_SAMPLES = Number(process.env.STREAM_BENCH_SPARSE_CROSSPOST_SAMPLES ?? "0");
+const CROSSPOST_RETRY_EVENTS = Number(process.env.STREAM_BENCH_CROSSPOST_RETRY_EVENTS ?? "0");
+const CROSSPOST_RETRY_SAMPLES = Number(process.env.STREAM_BENCH_CROSSPOST_RETRY_SAMPLES ?? "0");
 const COLD_SAMPLES = Number(process.env.STREAM_BENCH_COLD_SAMPLES ?? "0");
 
 type StreamHandle = Stream & Disposable;
@@ -508,6 +510,81 @@ test.skipIf(!ENABLED)(
       }
       metrics.crosspost_sparse_1_of_100 = summarize(samples);
       await Promise.resolve(handle.unsubscribe());
+    }
+
+    if (CROSSPOST_RETRY_EVENTS > 0) {
+      if (!Number.isInteger(CROSSPOST_RETRY_EVENTS) || CROSSPOST_RETRY_EVENTS > 128) {
+        throw new Error(
+          "STREAM_BENCH_CROSSPOST_RETRY_EVENTS must be an integer from 1 through 128",
+        );
+      }
+      const sampleCount = CROSSPOST_RETRY_SAMPLES || 10;
+      const samples: number[] = [];
+      for (let iteration = -2; iteration < sampleCount; iteration += 1) {
+        const sourcePath = `/bench/${runId}/crosspost-retry-source-${iteration}`;
+        const destinationPath = `/bench/${runId}/crosspost-retry-destination-${iteration}`;
+        const subscriptionKey = `retry-${runId}-${iteration}`;
+        using source = project.streams.get(sourcePath);
+        using destination = project.streams.get(destinationPath);
+        const arrived = new Set<string>();
+        const handle = await destination.subscribe({
+          eventTypes: [SELECTED_TYPE],
+          processEventBatch: (batch) => {
+            for (const delivered of batch.events) {
+              const marker = markerOf(delivered.payload);
+              if (marker !== undefined) arrived.add(marker);
+            }
+          },
+        });
+        await commitDiscardingResult(
+          source,
+          ...Array.from({ length: CROSSPOST_RETRY_EVENTS }, (_, index) =>
+            event({
+              marker: `retry-${iteration}-${index}`,
+              payload: LARGE_PAYLOAD,
+              type: SELECTED_TYPE,
+            }),
+          ),
+        );
+        const configure = () =>
+          source.crossPostTo({
+            deliver: "all",
+            eventTypes: [SELECTED_TYPE],
+            key: subscriptionKey,
+            path: destinationPath,
+          });
+        const waitForAck = async (offset: number) => {
+          const deadline = performance.now() + 30_000;
+          for (;;) {
+            const state = await source.runtimeState();
+            if ((state.runtime.subscriptions[subscriptionKey]?.ackedOffset ?? 0) >= offset) return;
+            if (performance.now() > deadline) {
+              throw new Error(`Timed out waiting for duplicate cross-post ack at ${offset}.`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 1));
+          }
+        };
+        const initialConfig = await configure();
+        await waitFor(
+          () => arrived.size === CROSSPOST_RETRY_EVENTS,
+          `${CROSSPOST_RETRY_EVENTS} initial cross-post events for iteration ${iteration}`,
+          30_000,
+        );
+        await waitForAck(initialConfig.offset);
+
+        const startedAt = performance.now();
+        const replayedConfig = await configure();
+        await waitForAck(replayedConfig.offset);
+        if (iteration >= 0) samples.push(performance.now() - startedAt);
+        expect(
+          await destination.getEvents({ eventTypes: [SELECTED_TYPE], limit: 500 }),
+        ).toHaveLength(CROSSPOST_RETRY_EVENTS);
+        await Promise.resolve(handle.unsubscribe());
+      }
+      metrics[`crosspost_retry_${CROSSPOST_RETRY_EVENTS}x256k`] = summarize(
+        samples,
+        CROSSPOST_RETRY_EVENTS,
+      );
     }
 
     {

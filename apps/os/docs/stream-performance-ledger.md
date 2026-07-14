@@ -728,3 +728,58 @@ boundaries where the cost is large enough to remain visible end to end.
 
 Raw records are in `/tmp/one-type-{parent,candidate}-{1..5}.log` for the life
 of this workstation.
+
+## 2026-07-14: Compact Cross-Post Retry Acknowledgements
+
+### Change
+
+`acceptCrossPost()` returns `void`, but it called the full-result `append()`
+path. An at-least-once retry therefore hydrated and parsed every destination
+event found by its source-derived idempotency key, then discarded those
+envelopes. It now calls `appendAck()`. A warm destination can satisfy a
+complete retry batch from the existing 128-entry acknowledged-idempotency
+offset cache; a cache miss still queries SQLite for offsets only, never event
+JSON. The production change is one substituted method call.
+
+The existing cross-post e2e now replaces a same-key subscription with
+`deliver: "all"`, waits until the authoritative source cursor acknowledges the
+replay, and proves the destination still contains exactly one copy.
+
+### Result
+
+- Candidate: the one-line change on `3c07f0a31`.
+- Baseline: exact parent `3c07f0a31`.
+- Five full rounds per revision, alternated in groups of two, two, and one with
+  only one Workers stack active.
+- Each sample first copied eight 256 KiB events, then timed a same-key
+  deliver-all replacement through source cursor acknowledgement. There were
+  ten measured samples and two warmups per round; destination reads outside
+  the timer asserted all eight source events collapsed to eight copies.
+- Collection ended at `2026-07-14T00:09:54Z`. The Node timer enclosed awaited
+  configuration and runtime-state RPCs; the completion condition was a durable
+  cursor acknowledgement, not a Worker isolate clock.
+
+Each primary value is the median of five per-round statistics. Positive change
+means less wall time.
+
+| Metric |    Parent | Candidate | Change |
+| ------ | --------: | --------: | -----: |
+| p50    | 10.329 ms |  8.882 ms |  14.0% |
+| p95    | 12.706 ms | 12.976 ms |  -2.1% |
+| mean   | 10.128 ms |  9.347 ms |   7.7% |
+
+The 50 pooled samples confirm the central result and do not show a tail cost:
+p50 improves from 10.329 to 8.777 ms (15.0%), p95 from 16.674 to 12.976 ms
+(22.2%), and mean from 10.638 to 9.213 ms (13.4%). Median-p50 retry throughput
+rises from 774.5 to 900.7 copied events/s, **+16.3%**.
+
+This adds no cache, queue, storage write, protocol, or correctness branch. The
+existing cache remains bounded to 128 keys and only bypasses SQLite when every
+key in the batch is present; long keys, eviction, cold activation, or a partial
+hit fall back to the authoritative offset query. The public contract was
+already void and idempotency still derives from the source coordinate, so the
+change removes unused materialization without weakening exactly-once copy
+semantics over at-least-once delivery.
+
+Raw records are in `/tmp/crosspost-ack-{parent,candidate}-{1..5}.log` for the
+life of this workstation.
