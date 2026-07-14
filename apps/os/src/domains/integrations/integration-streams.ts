@@ -153,7 +153,13 @@ export async function routeIntegrationWebhook(input: {
   await integrationStreamStub(
     claim.projectId,
     integrationConnectionStreamPath(input.slug, claim.connection),
-  ).append(input.event);
+  ).append({
+    ...input.event,
+    // Preserve the trusted routing decision on the durable fact. Downstream
+    // userspace can select the exact account that received the webhook
+    // instead of accidentally acting through the project's first connection.
+    payload: { ...input.event.payload, connection: claim.connection },
+  });
   return { connection: claim.connection, ok: true, projectId: claim.projectId };
 }
 
