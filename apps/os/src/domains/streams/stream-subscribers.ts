@@ -184,8 +184,8 @@ type Connection = {
   /** Retained ping capability; absent for subscribers that supplied none. */
   ping?: RetainedSubscriberPing;
   getProcessorRuntimeState?: GetProcessorRuntimeState & Disposable;
-  /** Re-arm the delivery pump after events are committed. Idempotent while draining. */
-  wake(readState: () => CoreProcessorState): void;
+  /** Publish a newer stream head to the resident pump. Idempotent while draining. */
+  notify(state: CoreProcessorState): void;
   /** `true` until close() runs — backs the subscription handle's `ping()`. */
   isLive(): boolean;
   /** `true` while a durable sink delivery is dispatched but unsettled. */
@@ -479,7 +479,10 @@ export class StreamSubscribers {
       freshTailByteLength,
       retainContiguousTail: this.#pushDrains.size > 0 || this.#pokesInFlight.size > 0,
     });
-    for (const connection of this.#connections.values()) connection.wake(this.#readWakeState);
+    if (this.#connections.size > 0) {
+      const state = this.#readWakeState();
+      for (const connection of this.#connections.values()) connection.notify(state);
+    }
     if (this.#tearingDown) return;
     try {
       // Config side effects close stale wake connections before this final
@@ -1459,12 +1462,15 @@ export class StreamSubscribers {
     const deliverEvents = args.events !== false;
     // State-only subscriptions are implicitly live-from-now: replay without
     // events is meaningless, so replayAfterOffset is ignored in that mode.
+    const openedState = this.#hooks.coreState();
     let cursor = deliverEvents
-      ? (args.replayAfterOffset ?? this.#hooks.coreState().maxOffset)
-      : this.#hooks.coreState().maxOffset;
+      ? (args.replayAfterOffset ?? openedState.maxOffset)
+      : openedState.maxOffset;
     let initialBatchPending = true;
     let draining = false;
     let open = true;
+    let notifiedHead = openedState.maxOffset;
+    let pendingState: CoreProcessorState | undefined = openedState;
     const onDeliverySettled =
       subscriptionType === "configured"
         ? (outcome: "ok" | "error", newestCreatedAtMs: number) => {
@@ -1474,13 +1480,12 @@ export class StreamSubscribers {
           }
         : undefined;
 
-    const pump = async (initialState?: CoreProcessorState) => {
+    const pump = async () => {
       draining = true;
       try {
         while (open) {
-          const wakeGeneration = this.#wakeGeneration;
-          const currentState = initialState ?? this.#hooks.coreState();
-          initialState = undefined;
+          const currentState = pendingState ?? this.#hooks.coreState();
+          pendingState = undefined;
           let events: StreamEvent[] = [];
           let deliveredBytes = 0;
           if (deliverEvents) {
@@ -1542,6 +1547,7 @@ export class StreamSubscribers {
               }
             }
             if (events.length === 0 && !initialBatchPending && subscriptionType !== "configured") {
+              if (cursor < currentState.maxOffset) pendingState ??= currentState;
               continue;
             }
           } else {
@@ -1586,10 +1592,12 @@ export class StreamSubscribers {
             onDeliverySettled,
           );
           await Promise.resolve();
-          // Every append calls wake(). If no wake landed while this pump
-          // yielded and this snapshot was delivered through its head, another
-          // core-state probe can only rediscover the same caught-up state.
-          if (cursor >= currentState.maxOffset && wakeGeneration === this.#wakeGeneration) return;
+          // A notification publishes its immutable state snapshot before it
+          // observes `draining`. Keeping only the newest snapshot coalesces an
+          // arbitrary append burst while preserving a no-loss handoff across
+          // this yield. A capped replay keeps its current target until caught up.
+          if (cursor < currentState.maxOffset) pendingState ??= currentState;
+          if (pendingState === undefined) return;
         }
       } finally {
         draining = false;
@@ -1615,8 +1623,14 @@ export class StreamSubscribers {
       // function just to hit its draining guard allocates one resolved Promise
       // per connection on every append burst; the active loop already rereads
       // the stream head after each delivery yield.
-      wake: (readState) => {
-        if (!draining) void pump(readState());
+      notify: (state) => {
+        // A sink may synchronously append while an outer wake is still walking
+        // the connection table. Ignore that outer wake's older snapshot after
+        // the nested wake has already published a newer head.
+        if (state.maxOffset <= notifiedHead) return;
+        notifiedHead = state.maxOffset;
+        pendingState = state;
+        if (!draining) void pump();
       },
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
