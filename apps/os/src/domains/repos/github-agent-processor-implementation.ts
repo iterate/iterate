@@ -186,7 +186,11 @@ export class GithubAgentProcessor extends StreamProcessor<
 
         const sender = readRecord(body.sender);
         const action = readString(body.action) ?? "";
-        const mentionText = mentionTextFromWebhookBody(body, action);
+        const mentionText = mentionTextFromWebhookBody(
+          body,
+          action,
+          githubEventKind(event.payload, body),
+        );
         const batchConversation = this.#batchConversation;
         const possibleMention =
           MENTION_TRIGGERING_ACTIONS.has(action) && AGENT_MENTION_PATTERN.test(mentionText);
@@ -397,7 +401,9 @@ function reduceGithubWebhook(input: {
     isTrustedHumanActivity(body) &&
     action !== undefined &&
     MENTION_TRIGGERING_ACTIONS.has(action) &&
-    AGENT_MENTION_PATTERN.test(mentionTextFromWebhookBody(body, action));
+    AGENT_MENTION_PATTERN.test(
+      mentionTextFromWebhookBody(body, action, githubEventKind(input.event.payload, body)),
+    );
   // Associations GitHub already vouches for activate in the pure projection.
   // Inconclusive mentions activate only after the ordered collaborator check
   // emits its durable verification fact; see #batchConversation for the
@@ -478,7 +484,11 @@ function labelsFromPullRequest(
   return previous;
 }
 
-function mentionTextFromWebhookBody(body: Record<string, unknown>, action: string): string {
+function mentionTextFromWebhookBody(
+  body: Record<string, unknown>,
+  action: string,
+  githubEvent: string,
+): string {
   const comment = readRecord(body.comment);
   const review = readRecord(body.review);
   const pullRequest = readRecord(body.pull_request);
@@ -491,6 +501,10 @@ function mentionTextFromWebhookBody(body: Record<string, unknown>, action: strin
     .join("\n");
   if (action === "opened") return current;
   if (action !== "edited") return "";
+  // Comment edit payloads also use `changes.body.from`, but that value is the
+  // old comment text rather than the old PR description. Only a
+  // `pull_request.edited` delivery may interpret this diff as title/body.
+  if (githubEvent !== "pull_request") return "";
 
   const changes = readRecord(body.changes);
   const prior = ["title", "body"]

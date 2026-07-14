@@ -226,6 +226,56 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     );
   });
 
+  it("does not mistake an edited comment before-value for the old PR description", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = newGithubAgentProcessor(stream);
+    const cursors = new Map<object, number>();
+    const edited = pullRequestBody({
+      action: "edited",
+      body: "An existing description containing @iterate",
+    });
+
+    await stream.append(
+      ROUTE_EVENT,
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          {
+            ...edited,
+            changes: { body: { from: "The old inline comment" } },
+            comment: {
+              author_association: "MEMBER",
+              body: "The edited inline comment",
+              id: 456,
+            },
+          },
+          "pull_request_review_comment",
+        ),
+      },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          {
+            ...edited,
+            changes: { body: { from: "The old issue comment" } },
+            comment: {
+              author_association: "MEMBER",
+              body: "The edited issue comment",
+              id: 457,
+            },
+            issue: { number: 7, pull_request: { url: "x" }, title: "Add widgets" },
+          },
+          "issue_comment",
+        ),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(turns(stream)).toHaveLength(0);
+    expect(processor.state.conversationActive).toBe(false);
+  });
+
   it("queues and acknowledges a submitted review whose body mentions @iterate", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);
