@@ -73,7 +73,3 @@ export const test = base.extend<{
     }
   },
 });
-
-export function uniqueSlug(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`.toLowerCase();
-}

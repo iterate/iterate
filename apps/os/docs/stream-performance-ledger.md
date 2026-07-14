@@ -2605,3 +2605,85 @@ reactivation records are
 `/tmp/cumulative-7-storage-{main,candidate}-r{1..5}.log`. Collection ended
 at `2026-07-14T14:33:46.511Z`; if active work continues, the next cumulative
 comparison is due by `2026-07-14T18:33:46.511Z`.
+
+## 2026-07-14: Column-Owned Event Envelope Advances To Deployed Gate
+
+### Hypothesis And Correctness Boundary
+
+Stream schema 8 stored `type`, `offset`, `idempotencyKey`, and `ephemeral`
+twice: once in indexed SQLite columns and again in `event_json`. The isolated
+`experiment/stream-column-envelope` branch advances directly to destructive
+schema 9 and stores only the event body (`createdAt`, payload, metadata, and
+source) as JSON. Reads restore the indexed envelope columns and the invariant
+stream path. There is deliberately no schema-8 migration or compatibility
+branch; deploying this revision requires erasing the environment's Stream
+Durable Object data.
+
+The indexed columns are authoritative. Insert, inline replay, chunk replay,
+point reads, keyed reads, selected-frame scans, and exact delivery byte cuts
+all use the same reconstructed envelope semantics. Tests compare full UTF-8
+`JSON.stringify(event)` lengths across Unicode types and payloads, quoted
+Unicode idempotency keys, ephemeral rows, and selector SQL. All 82 storage
+tests and all 381 Stream-domain unit tests pass, as does OS typecheck.
+
+The prototype is commit `af05d32eb`, based on exact shipping parent
+`11b84f49a`. A five-process host SQLite prefilter reduced a representative
+tiny stored row from 145 to 82 bytes. It estimated 16.13% lower tiny-batch p50
+and 10.26% lower tiny replay p50; the host result only justified running the
+real workerd gate and is not an acceptance result.
+
+### Exact-Parent Local Workers Result
+
+Five workerd processes per revision ran in `C,M,C,M,M,C,C,M,M,C` order. Each
+process used fresh projects and paths, asserted every semantic result, and
+collected 400 singleton observations, 200 observations for the 100-event
+batch rows, 50 for the 1,000-event row, 100 per replay row, and bounded large
+event samples. Node host timers surrounded awaited network/RPC operations and
+consumed every result; no isolate clock supplied wall time.
+
+Change is computed from the median of five per-round statistics. Positive
+numbers mean lower candidate latency; capacity is operations per second.
+
+| Workload                      | p50 change | p95 change | Mean change | Capacity change |
+| ----------------------------- | ---------: | ---------: | ----------: | --------------: |
+| One 1 KiB append              |      8.77% |     14.63% |      10.34% |             n/a |
+| 100 tiny events               |      7.43% |     15.66% |      12.37% |           8.02% |
+| 100 events of 1 KiB           |      6.61% |      1.98% |       9.06% |           7.08% |
+| 1,000 tiny events             |     13.52% |     47.94% |      17.89% |          15.63% |
+| 100 keyed tiny events         |     14.52% |     11.69% |      19.58% |          16.99% |
+| Dense cold replay, 500 x 1KiB |     -5.66% |     -3.25% |      -5.74% |             n/a |
+| Sparse cold replay, 20/2,000  |      3.40% |     13.83% |       4.39% |             n/a |
+| One inline 768 KiB event      |      4.65% |      6.41% |       6.58% |             n/a |
+| One chunked 1,100 KiB event   |      3.60% |      0.96% |       3.16% |             n/a |
+
+The mixed run's dense replay row disagreed with its pooled distribution,
+which was only 0.60% slower at mean. A separate read-only control therefore
+ran five processes per revision with 500 forced-reactivation observations per
+workload per process. Dense replay was 2.26% lower at median p50, 14.04% lower
+at p95, and 6.57% lower at mean; pooled p50/p95/mean improved
+7.16%/16.69%/9.62%. Sparse replay remained neutral overall: median mean was
+0.96% worse while pooled mean was 1.95% better. Replay is classified as
+neutral-to-improved, not as a regression or a claimed sparse-read win.
+
+Raw mixed records are
+`/tmp/column-envelope-storage-{main,candidate}-r{1..5}.log`; the larger replay
+control is `/tmp/column-envelope-read-{main,candidate}-r{1..5}.log`.
+
+### Cost, Collapse Path, And Remaining Gate
+
+The implementation changes one production module plus its tests: 231 added
+and 88 removed lines in the isolated commit. It deletes redundant persisted
+data but makes read projections and envelope reconstruction explicit, and it
+adds exact SQL byte accounting for selector cuts. That is meaningful local
+complexity, but it does not add a service, queue, async protocol, migration,
+or new externally visible operation. The collapse path is one commit: schema
+9 has not entered the shipping branch, so rejection means deleting the
+experiment branch with no production fallback code left behind.
+
+This experiment is not yet accepted. It still must run on actual deployed
+Cloudflare Workers, with a Worker consumer crossing Workers RPC to the Stream
+Durable Object and a host-observed completion fence. At `2026-07-14T15:16Z`
+all nine preview slots were legitimately leased to active PRs. No holder was
+evicted and no unleased deployment was attempted. The deployed A/B will run
+as soon as a slot is released; production deployment and erasure remain out
+of scope without explicit approval.

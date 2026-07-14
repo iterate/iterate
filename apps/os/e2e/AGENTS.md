@@ -30,8 +30,8 @@ in [docs/testing.md](../../../docs/testing.md).
   `node` project runs the engine suites in `e2e/vitest/` (agents, admin-project, preview
   smoke) and the cross-runtime example matrix in `e2e/examples/`; the `browser` project runs
   that matrix in a real browser. `pnpm e2e --project node` skips the browser lane.
-- Egress + secret substitution coverage lives in itx suite
-  (`e2e/vitest/itx.e2e.test.ts`).
+- Egress + secret substitution coverage lives in `e2e/vitest/itx-egress.e2e.test.ts`
+  (the old `itx.e2e.test.ts` monolith was split across the `itx-*.e2e.test.ts` files).
 - Preview smoke: `pnpm e2e -t "OS preview smoke"` (`preview-smoke.e2e.test.ts`) exercises a
   deployed preview, including its project MCP route (it derives its project slug from
   `GITHUB_SHA` when set).
