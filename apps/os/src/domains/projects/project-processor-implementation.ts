@@ -181,8 +181,8 @@ export class ProjectProcessor extends StreamProcessor<
                     // `removeCrossPost({ path: "/" })` can manage this rule.
                     subscriptionKey: "cross-post:/",
                     delivery: {
-                      mode: "push",
-                      expression: ["streams", ["get", "/"], "acceptCrossPost"],
+                      mode: "cross-post",
+                      path: "/",
                     },
                     deliver: "all",
                   },

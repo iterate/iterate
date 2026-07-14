@@ -63,7 +63,7 @@ const NONDETERMINISTIC_SELECTOR_FUNCTIONS = new Set(["eval", "millis", "now", "r
 /**
  * Parse a JSONata expression, throwing on invalid input. Used for selector
  * `condition`s (must evaluate to exactly `true` to match) and for
- * `Stream.acceptCrossPost` transforms (construct the cross-posted event body) — one
+ * internal cross-post transforms (construct the cross-posted event body) — one
  * compiler, one cache, one language for everything expression-shaped that
  * evaluates against a committed event.
  */

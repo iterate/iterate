@@ -94,6 +94,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
+  /** Direct cross-post targets are stable for this source stream's project scope. */
+  readonly #crossPostTargets = new Map<string, ReturnType<Env["STREAM"]["getByName"]>>();
   readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
@@ -117,6 +119,19 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
+        crossPost: (path, batch) => {
+          let target = this.#crossPostTargets.get(path);
+          if (target === undefined) {
+            target = this.env.STREAM.getByName(
+              DurableObjectNameCodec.stringify(
+                { projectId: this.name.projectId, path },
+                { allowNullProjectId: true },
+              ),
+            );
+            this.#crossPostTargets.set(path, target);
+          }
+          return target.acceptCrossPost(batch);
+        },
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -588,11 +603,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       // append re-reconciles. The lifecycle e2e tests assert both the
       // rejection and that no event was committed.
       // The contract schema already carries the structural delivery
-      // validation (expression grammar + the property-step tail rule, webhook
-      // URL shape); cross-project reach needs no check at all because
-      // persisted expressions are NAMES — every delivery re-derives authority
-      // from THIS stream's own itx root (project-scoped, or the deployment
-      // root for projectId: null streams).
+      // validation (expression grammar + the property-step tail rule,
+      // leading-slash cross-post path, webhook URL shape). Generic expressions
+      // re-derive authority from THIS stream's own itx root; direct cross-post
+      // dials preserve THIS stream's project/deployment scope by construction.
       const event = CoreProcessorContract.parseEventInput(
         "events.iterate.com/stream/subscription-configured",
         args.event,
@@ -1120,7 +1134,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   /**
    * Cross-post receiving end — an ordinary push SINK on the target stream
    * (`(batch) => void`, the same shape every subscriber provides), reached by
-   * a source stream's push subscription (sugar: `crossPostTo`). All
+   * a source stream's direct sibling-DO delivery (configured by `crossPostTo`). All
    * cross-post semantics — provenance, loop protection, idempotency keys,
    * the optional JSONata transform — live in `cross-post.ts`; this method
    * only appends the built inputs in its own synchronous turn.

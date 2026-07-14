@@ -82,7 +82,7 @@ type ProcessorPanelEntry = {
   description?: string;
   processor?: AgentUiProcessorAnnouncement;
   subscriptionType?: "configured" | "ephemeral";
-  deliveryMode?: "wake" | "push" | "webhook";
+  deliveryMode?: "cross-post" | "push" | "wake" | "webhook";
   configuredAtOffset?: number;
   runtimeSubscription?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
   runtimeConnection?: StreamRuntimeDebugState["runtime"]["connections"][string];
@@ -911,7 +911,7 @@ function readCoreConnections(value: unknown): Record<string, Record<string, unkn
 function readConfiguredSubscribers(value: unknown): Record<
   string,
   {
-    deliveryMode: "wake" | "push" | "webhook";
+    deliveryMode: "cross-post" | "push" | "wake" | "webhook";
     configuredAtOffset?: number;
     /** The delivery target as the itx call (or webhook POST) it actually is. */
     deliveryLabel?: string;
@@ -926,14 +926,20 @@ function readConfiguredSubscribers(value: unknown): Record<
       const payload = readRuntimeRecord(latest?.payload);
       const delivery = readRuntimeRecord(payload?.delivery);
       const mode = delivery?.mode;
-      if (mode !== "wake" && mode !== "push" && mode !== "webhook") return [];
+      if (mode !== "cross-post" && mode !== "wake" && mode !== "push" && mode !== "webhook") {
+        return [];
+      }
       const configuredAtOffset = readNumber(latest, "offset") ?? undefined;
       const deliveryLabel =
         mode === "webhook"
           ? typeof delivery?.url === "string"
             ? `POST ${delivery.url}`
             : undefined
-          : formatItxExpression(delivery?.expression);
+          : mode === "cross-post"
+            ? typeof delivery?.path === "string"
+              ? `stream ${delivery.path}`
+              : undefined
+            : formatItxExpression(delivery?.expression);
       return [
         [
           key,
@@ -950,10 +956,9 @@ function readConfiguredSubscribers(value: unknown): Record<
 
 /**
  * A persisted delivery expression rendered as the itx call it names:
- * `["processEventBatch"]` → `itx.processEventBatch()`,
- * `["streams", ["get", "/x"], "acceptCrossPost"]` →
- * `itx.streams.get("/x").acceptCrossPost()` — subscribers are labeled by
- * what the stream actually dials, not a generic lane name.
+ * `["processEventBatch"]` → `itx.processEventBatch()`. Generic push and wake
+ * subscribers are labeled by what the stream actually dials, not a generic
+ * lane name; direct cross-post labels are handled above from their path.
  */
 function formatItxExpression(expression: unknown): string | undefined {
   if (!Array.isArray(expression) || expression.length === 0) return undefined;

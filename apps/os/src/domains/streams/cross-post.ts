@@ -2,11 +2,10 @@
 //
 // THE LOCALITY RULE (streams README): a processor on stream A can only react
 // to events ON stream A; reacting to stream B means copying B's events onto A.
-// This module is the receiving half of that copy — the logic behind
-// `Stream.acceptCrossPost`, an ordinary push SINK (`(batch) => void`) that
-// source streams address with `{ delivery: { mode: "push", expression:
-// ["streams", ["get", targetPath], "acceptCrossPost"] } }` (sugar:
-// `crossPostTo`). Everything
+// This module is the receiving half of that copy — the logic behind the
+// internal Stream DO's `acceptCrossPost` sink (`(batch) => void`) that source
+// streams address with `{ delivery: { mode: "cross-post", path: targetPath } }`
+// (sugar: `crossPostTo`). Everything
 // cross-post-specific lives here, in named receiver code, and the generic
 // delivery spine knows none of it (selectors filter; receivers transform):
 //
@@ -37,7 +36,7 @@ type CrossPostProvenanceChain = NonNullable<NonNullable<StreamEvent["source"]>["
  */
 const MAX_CROSS_POST_HOPS = 5;
 
-/** The receiver params `acceptCrossPost` understands (the `params` bag on
+/** The internal receiver params `acceptCrossPost` understands (the `params` bag on
  * `subscription-configured`). Loose: unknown keys are someone else's params. */
 const AcceptCrossPostParams = z.looseObject({
   transform: z.string().trim().min(1).optional(),
@@ -73,7 +72,7 @@ export function buildCrossPostAppendInput(args: {
 }
 
 /**
- * Everything `Stream.acceptCrossPost` appends for one delivered batch: the
+ * Everything the target Stream DO appends for one delivered batch: the
  * transformed, provenance-stamped copies plus any per-event transform-failure
  * facts. Pure — the Stream Durable Object appends the result in its own
  * synchronous turn.

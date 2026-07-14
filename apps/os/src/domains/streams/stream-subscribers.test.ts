@@ -246,6 +246,7 @@ function makeHarness(options?: { scanPushEventTypesFrame?: boolean }) {
 
   const pokes: StreamSubscriberWakeRequest[] = [];
   const pushes: StreamPushEventBatch[] = [];
+  const crossPosts: { path: string; batch: StreamPushEventBatch }[] = [];
   const pushOutcomes: ("resolved" | "rejected")[] = [];
   const webhooks: { url: string; delivery: StreamWebhookDelivery }[] = [];
   const storageReadLimits: number[] = [];
@@ -263,6 +264,9 @@ function makeHarness(options?: { scanPushEventTypesFrame?: boolean }) {
     push: ((): Promise<void> => Promise.resolve()) as (
       batch: StreamPushEventBatch,
     ) => Promise<void>,
+    crossPost: ((): Promise<void> => Promise.resolve()) as (
+      batch: StreamPushEventBatch,
+    ) => Promise<void>,
     webhook: ((): Promise<void> => Promise.resolve()) as (
       delivery: StreamWebhookDelivery,
     ) => Promise<void>,
@@ -277,6 +281,16 @@ function makeHarness(options?: { scanPushEventTypesFrame?: boolean }) {
       pushes.push(batch);
       try {
         await dialImpl.push(batch);
+      } catch (error) {
+        pushOutcomes.push("rejected");
+        throw error;
+      }
+      pushOutcomes.push("resolved");
+    },
+    crossPost: async (path, batch) => {
+      crossPosts.push({ path, batch });
+      try {
+        await dialImpl.crossPost(batch);
       } catch (error) {
         pushOutcomes.push("rejected");
         throw error;
@@ -416,6 +430,7 @@ function makeHarness(options?: { scanPushEventTypesFrame?: boolean }) {
     egressAtMs,
     pokes,
     pushes,
+    crossPosts,
     pushOutcomes,
     webhooks,
     dialImpl,
@@ -477,6 +492,17 @@ function pushPayload(
   return {
     subscriptionKey: "k",
     delivery: { mode: "push", expression: ["worker", "processEventBatch"] },
+    deliver: "all",
+    ...overrides,
+  };
+}
+
+function crossPostPayload(
+  overrides: Partial<SubscriptionConfiguredPayload> = {},
+): SubscriptionConfiguredPayload {
+  return {
+    subscriptionKey: "k",
+    delivery: { mode: "cross-post", path: "/destination" },
     deliver: "all",
     ...overrides,
   };
@@ -630,6 +656,30 @@ describe("StreamSubscribers", () => {
     expect(h.pushes[1].deliveryId).toBe("k:4-5");
     expect(h.row("k")?.ackedOffset).toBe(5);
     expect(h.store.flushPendingModes.filter((mode) => mode === "all")).toHaveLength(0);
+  });
+
+  it("a2. cross-post uses the direct sibling dial with push durability", async () => {
+    const h = makeHarness();
+    h.configure(crossPostPayload(), 0);
+    h.append(evt(1, "a"), evt(2, "b"));
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(0);
+    expect(h.crossPosts).toHaveLength(1);
+    expect(h.crossPosts[0]?.path).toBe("/destination");
+    expect(h.crossPosts[0]?.batch.events.map((event) => event.offset)).toEqual([1, 2]);
+    expect(h.crossPosts[0]?.batch).toMatchObject({
+      attempt: 1,
+      deliveryId: "k:1-2",
+      projectId: "p1",
+      streamMaxOffset: 2,
+      subscriptionKey: "k",
+    });
+    expect(h.row("k")).toMatchObject({ ackedOffset: 2, attempt: 0, nextAttemptAt: null });
+    expect(h.store.stageAckCalls).toBe(1);
+    expect(h.store.ackCalls).toBe(0);
   });
 
   it("b. selector skip-not-defer: non-matching events advance the cursor without a dial call", async () => {

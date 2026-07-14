@@ -2,19 +2,20 @@
 //
 // A SUBSCRIBER gives the stream exactly one thing — a sink — and the lanes
 // differ only in how the sink reaches the stream and what happens to the call
-// result. Durable addressing is ONE grammar: a persisted itx expression naming
-// the method to invoke (wake pokes it for a handshake, push calls it per
-// batch); webhook is the same cursor machinery with an HTTP POST per EVENT:
+// result. Wake and generic push persist an itx expression; sibling cross-posts
+// persist the destination path and dial its Stream DO directly. Webhook uses
+// the same cursor machinery with an HTTP POST per EVENT:
 //
 // | lane       | sink arrives as                       | call result            |
 // |------------|---------------------------------------|------------------------|
 // | ephemeral  | `subscribe()` parameter               | disposed unpulled — zero return frames |
 // | wake       | returned from the expression-named poke| pulled, never awaited — prompt corpse detection |
 // | push       | named by a persisted itx expression   | awaited — the ack that advances the cursor |
+// | cross-post | direct sibling Stream DO dial          | awaited — the ack that advances the cursor |
 // | webhook    | the configured URL (per-event POST)   | awaited 2xx — the ack that advances the cursor |
 //
 // Ephemeral subscriptions are session-scoped and forgotten on disconnect.
-// Durable subscriptions (wake + push) are desired state — the folded
+// Durable subscriptions are desired state — the folded
 // `subscription-configured` events in core state — and their delivery
 // bookkeeping is the SPINE: one SQLite cursor row per subscription
 // (subscription-cursor-store.ts) plus the Durable Object alarm for retries.
@@ -24,8 +25,8 @@
 //
 // Runtime metrics: every connection carries real counters (events/bytes
 // delivered, lag from cursor), the durable lanes record commit→settled
-// latency on the stream's own clock (wake: the pulled result settling; push/
-// webhook: the awaited ack), and subscribers that hand over a ping capability
+// latency on the stream's own clock (wake: the pulled result settling; other
+// durable lanes: the awaited ack), and subscribers that hand over a ping capability
 // get NTP-style RTT sampled — observer-driven via runtimeState(), throttled,
 // and purely observational (a failed ping drops the sample, nothing else).
 // Ephemeral consumption is deliberately NOT measured here: those results stay
@@ -214,10 +215,9 @@ type OpenConnectionArgs = {
 
 /**
  * The transport quarantine's face: how the spine reaches subscribers. Wake and
- * push are BOTH itx-expression evaluations against the stream's authority root
- * (the project itx for project streams, the trusted deployment root for global
- * streams); `poke` additionally retains the sink the wake handshake returns.
- * `webhook` is a plain per-event HTTP POST.
+ * generic push evaluate itx expressions against the stream's authority root;
+ * `poke` additionally retains the sink the wake handshake returns. Cross-post
+ * directly dials a sibling Stream DO. Webhook is a plain per-event HTTP POST.
  */
 export type SubscriberDial = {
   /** Evaluate the wake expression (`[..., [tail, request]]`) to the handshake response. */
@@ -233,6 +233,8 @@ export type SubscriberDial = {
   }>;
   /** Evaluate the expression to a sink and invoke it with the batch. Resolve = ack. */
   push(expression: ItxExpression, batch: StreamPushEventBatch): Promise<void>;
+  /** Invoke a sibling Stream Durable Object directly. Resolve = ack. */
+  crossPost(path: string, batch: StreamPushEventBatch): Promise<void>;
   /** POST one event to the webhook URL. Resolve (2xx) = ack; non-2xx rejects. */
   webhook(url: string, delivery: StreamWebhookDelivery): Promise<void>;
 };
@@ -297,13 +299,19 @@ type PushDrainStart = {
   row: SubscriptionCursorRow;
 };
 
+function isBatchedPushDelivery(
+  delivery: SubscriptionDelivery,
+): delivery is Extract<SubscriptionDelivery, { mode: "cross-post" | "push" }> {
+  return delivery.mode === "push" || delivery.mode === "cross-post";
+}
+
 function sharedPushEventTypes(
   entries: readonly [string, ConfiguredSubscribers[string]][],
 ): readonly string[] | undefined {
   let shared: readonly string[] | undefined;
   for (const [, entry] of entries) {
     const config = entry.latestConfiguredEvent.payload;
-    if (config.delivery.mode !== "push") continue;
+    if (!isBatchedPushDelivery(config.delivery)) continue;
     const configuredTypes = config.selector?.eventTypes;
     if (
       configuredTypes === undefined ||
@@ -743,8 +751,9 @@ export class StreamSubscribers {
           // head is authoritative for this incarnation. Do not issue a final
           // empty range query after the previous iteration acked the head.
           if (row.ackedOffset >= state.maxOffset) return;
+          const batchedPush = isBatchedPushDelivery(config.delivery);
           const hasPendingPushFrame =
-            config.delivery.mode === "push" &&
+            batchedPush &&
             row.pendingThroughOffset !== null &&
             row.pendingStreamMaxOffset !== null &&
             row.pendingAttempt !== null &&
@@ -765,24 +774,20 @@ export class StreamSubscribers {
           // removed/replaced webhook can never keep POSTing a stale batch to
           // the old URL. The cost is one row/config re-read per event on a
           // backlog, noise against the HTTP POST itself.
-          const maxLimit = config.delivery.mode === "push" ? PUSH_DELIVERY_BATCH_LIMIT : 1;
+          const maxLimit = batchedPush ? PUSH_DELIVERY_BATCH_LIMIT : 1;
           const limit = Math.min(this.#batchLimits.get(subscriptionKey) ?? maxLimit, maxLimit);
           const selector =
             config.selector === undefined
               ? undefined
               : this.#selectorFor(subscriptionKey, entry.latestConfiguredEvent.offset, config);
-          const selectedEventTypes =
-            config.delivery.mode === "push" ? this.#sharedPushEventTypes : undefined;
+          const selectedEventTypes = batchedPush ? this.#sharedPushEventTypes : undefined;
           const read = this.#deliveryFrameReader.read({
             afterOffset: row.ackedOffset,
             limit,
             throughOffset: frameThroughOffset,
             durableOnly: true,
             includeEventByteLengths: selector !== undefined && !selector.matchesAll,
-            byteLimit:
-              config.delivery.mode === "push"
-                ? PUSH_DELIVERY_BATCH_BYTE_LIMIT
-                : DELIVERY_BATCH_BYTE_LIMIT,
+            byteLimit: batchedPush ? PUSH_DELIVERY_BATCH_BYTE_LIMIT : DELIVERY_BATCH_BYTE_LIMIT,
             selectedEventTypes,
           });
           let durable = read.events;
@@ -812,7 +817,7 @@ export class StreamSubscribers {
           }
 
           if (
-            config.delivery.mode === "push" &&
+            batchedPush &&
             selector !== undefined &&
             !selector.matchesAll &&
             matched.length > 0 &&
@@ -897,7 +902,7 @@ export class StreamSubscribers {
           const dispatchAtMs = this.#hooks.now();
           let pushStreamMaxOffset = state.maxOffset;
           let pushAttempt = row.attempt + 1;
-          if (config.delivery.mode === "push") {
+          if (batchedPush) {
             // Both synchronous DO SQLite and setAlarm writes open the output
             // gate. The outbound RPC below cannot leave until the exact frame,
             // monotonic attempt, and crash-recovery wakeup are durable.
@@ -949,7 +954,9 @@ export class StreamSubscribers {
                 configuredEvent,
               };
               await withDeliveryTimeout(
-                this.#hooks.dial.push(config.delivery.expression, batch),
+                config.delivery.mode === "cross-post"
+                  ? this.#hooks.dial.crossPost(config.delivery.path, batch)
+                  : this.#hooks.dial.push(config.delivery.expression, batch),
                 `push ${subscriptionKey}`,
               );
             }
@@ -997,7 +1004,7 @@ export class StreamSubscribers {
             continue;
           }
           let acknowledged: boolean;
-          if (config.delivery.mode === "push") {
+          if (batchedPush) {
             acknowledged = this.#hooks.store.stageAck(subscriptionKey, lastOffset, row.epoch);
           } else {
             acknowledged = this.#hooks.store.ack(subscriptionKey, lastOffset, row.epoch);

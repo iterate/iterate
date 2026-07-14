@@ -1295,19 +1295,11 @@ export interface Stream {
     ping?: StreamSubscriberPing;
   }): Promise<StreamSubscriptionHandle>;
   /**
-   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that
-   * appends the batch's events into THIS stream with provenance stamping,
-   * structural loop protection, and source-derived idempotency keys. A source
-   * stream cross-posts here by configuring
-   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.
-   */
-  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;
-  /**
    * "When events matching this land HERE, post them onto stream `path`" — the
    * cross-post verb. Pure sugar over appending a `subscription-configured`
-   * push subscription targeting the destination's `acceptCrossPost` sink; the appended
-   * event (returned) is the real interface and shows in the log like any
-   * other config. Same-`key` calls replace the previous cross-post; remove
+   * direct sibling-stream delivery; the appended event (returned) is the real
+   * interface and shows in the log like any other config. Same-`key` calls
+   * replace the previous cross-post; remove
    * with `removeCrossPost`. Copies carry the full provenance chain
    * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`
    * is an optional JSONata expression CONSTRUCTING the copied event's body
@@ -3197,10 +3189,11 @@ export type StreamSubscriberDescriptor = {
     | undefined;
 };
 
-/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
+/** A durable subscription's delivery lane: wake, push/cross-post batch, or per-event webhook. */
 export type SubscriptionDelivery =
   | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
   | { mode: "push"; expression: ItxExpression }
+  | { mode: "cross-post"; path: string }
   | { mode: "webhook"; url: string };
 
 /**
