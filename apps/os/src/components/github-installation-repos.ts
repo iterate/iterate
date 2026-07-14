@@ -1,28 +1,6 @@
 import type { ItxReactHandle } from "~/itx/itx-react.tsx";
 
-/** How many 100-repo pages to pull from the installation before cutting off —
- * a picker, not a mirror of the whole org. */
-const MAX_INSTALLATION_REPO_PAGES = 5;
-
-/**
- * Builtin GitHub connection names for a project. Failures return `[]` (never
- * throw): both the repos-page wizard and the IDE GitHub panel share the
- * `["github-connections", projectId]` suspense query key, and a throw would
- * take down the whole page / poison the shared cache with an error.
- */
-export async function listGithubConnections(itx: ItxReactHandle): Promise<string[]> {
-  try {
-    const entries = await itx.integrations.list();
-    // Only builtin GitHub connections can back a repo (they carry the App
-    // installation the mirror pushes authenticate through).
-    return entries.flatMap((entry) =>
-      entry.source === "builtin" && entry.integration === "github" ? [entry.connection] : [],
-    );
-  } catch (error) {
-    console.error("listGithubConnections: listing integrations failed", error);
-    return [];
-  }
-}
+const MAX_PAGES = 5;
 
 export type InstallationRepo = {
   defaultBranch: string;
@@ -32,28 +10,20 @@ export type InstallationRepo = {
   pushedAt: string | null;
 };
 
-/** The slice of GitHub's installation-repositories page the picker reads. */
-type GithubInstallationReposPage = {
-  data: {
-    repositories: Array<{
-      default_branch: string;
-      full_name: string;
-      name: string;
-      owner: { login: string };
-      pushed_at: string | null;
-    }>;
-    total_count: number;
-  };
-};
+/** Builtin GitHub connection names. Never throws (shared suspense cache key). */
+export async function listGithubConnections(itx: ItxReactHandle): Promise<string[]> {
+  try {
+    const entries = await itx.integrations.list();
+    return entries.flatMap((e) =>
+      e.source === "builtin" && e.integration === "github" ? [e.connection] : [],
+    );
+  } catch (error) {
+    console.error("listGithubConnections failed", error);
+    return [];
+  }
+}
 
-/**
- * Every repository the connection's GitHub App installation can see (its
- * "selected repositories" set — an unselected repo simply isn't in this list),
- * most recently pushed first. Uses the same Octokit surface exposed to agents:
- * `itx.integrations.github.get(connection).octokit.rest.apps.listReposAccessibleToInstallation`.
- * A GitHub failure is returned as data, not thrown: suspense callers would
- * otherwise take down a whole page instead of one picker panel.
- */
+/** Repos the App installation can see, via Octokit. Errors returned as data. */
 export async function listInstallationRepos(
   itx: ItxReactHandle,
   connection: string,
@@ -61,33 +31,38 @@ export async function listInstallationRepos(
   const repos: InstallationRepo[] = [];
   let totalCount = 0;
   let error: string | null = null;
-  for (let page = 1; page <= MAX_INSTALLATION_REPO_PAGES; page++) {
-    let response: GithubInstallationReposPage;
+  for (let page = 1; page <= MAX_PAGES; page++) {
     try {
-      response = (await itx.integrations.github
+      const response = (await itx.integrations.github
         .get(connection)
-        .octokit.rest.apps.listReposAccessibleToInstallation({
-          page,
-          per_page: 100,
-        })) as GithubInstallationReposPage;
+        .octokit.rest.apps.listReposAccessibleToInstallation({ page, per_page: 100 })) as {
+        data: {
+          repositories: Array<{
+            default_branch: string;
+            full_name: string;
+            name: string;
+            owner: { login: string };
+            pushed_at: string | null;
+          }>;
+          total_count: number;
+        };
+      };
+      totalCount = response.data.total_count;
+      repos.push(
+        ...response.data.repositories.map((r) => ({
+          defaultBranch: r.default_branch,
+          fullName: r.full_name,
+          name: r.name,
+          owner: r.owner.login,
+          pushedAt: r.pushed_at,
+        })),
+      );
+      if (response.data.repositories.length === 0 || repos.length >= totalCount) break;
     } catch (caught) {
-      // A later page's failure keeps what earlier pages returned: a partial
-      // list with a warning beats discarding fetched repositories.
       error = caught instanceof Error ? caught.message : String(caught);
       break;
     }
-    totalCount = response.data.total_count;
-    repos.push(
-      ...response.data.repositories.map((repo) => ({
-        defaultBranch: repo.default_branch,
-        fullName: repo.full_name,
-        name: repo.name,
-        owner: repo.owner.login,
-        pushedAt: repo.pushed_at,
-      })),
-    );
-    if (response.data.repositories.length === 0 || repos.length >= totalCount) break;
   }
-  repos.sort((left, right) => (right.pushedAt ?? "").localeCompare(left.pushedAt ?? ""));
+  repos.sort((a, b) => (b.pushedAt ?? "").localeCompare(a.pushedAt ?? ""));
   return { error, repos, totalCount: Math.max(totalCount, repos.length) };
 }
