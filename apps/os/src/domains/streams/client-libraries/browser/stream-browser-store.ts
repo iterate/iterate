@@ -741,8 +741,13 @@ function createStreamRuntime(
   //      assignment) — a strike is evidence against one socket and must never
   //      carry over to the next, whichever path redialed (scheduleReconnect,
   //      clearLocalDatabase's reconnectNow, a direct call's connect()).
-  //      Increments are already identity-bound (stream === connection), so
-  //      the installation-time reset is the complete set.
+  //      Every MUTATION is identity-bound too: strike increments check
+  //      stream === connection, and the follow-up latch's handlers release
+  //      only the latch object they armed — so a superseded connection's
+  //      still-pending timer or settling probe can neither clear the
+  //      successor's latch (overlapping probes) nor consume its re-arm
+  //      (dropped follow-up). Installation-time reset + identity-bound
+  //      mutation is the complete set.
   // Interleavings this must get right:
   //   - Probe read + appendBatch overlapping on a cold DO: the first timeout
   //     is strike one; the second captured the pre-strike generation →
@@ -855,22 +860,39 @@ function createStreamRuntime(
   // re-arms in the finally (fire-time re-checks make it a no-op if the ledger
   // reset or the connection was replaced meanwhile), so at most one probe is
   // ever in flight.
-  let strikeFollowUpProbeInFlight = false;
-  let strikeFollowUpProbeRearm = false;
+  //
+  // The latch is IDENTITY-BOUND like the ledger it serves: it carries the
+  // connection it was armed for, and its handlers release only the exact latch
+  // object they armed. Without that, the old connection's still-pending timer
+  // or settling probe could release the latch AFTER a fresh connection
+  // installed and armed its own — permitting an overlapping probe against the
+  // new connection (two concurrent reads striking a merely-cold DO into a
+  // false eviction) — or consume the new latch's remembered re-arm and
+  // "re-arm" with the superseded connection (an immediate no-op), dropping the
+  // follow-up invariant 3 promised. A stale handler now touches nothing: the
+  // install-time reset (and any newer schedule) replaces the latch object, so
+  // the identity check fails.
+  let strikeFollowUpProbe: { readonly owner: BrowserStreamClient; rearm: boolean } | undefined;
   function scheduleStrikeFollowUpProbe(connection: BrowserStreamClient) {
     if (disposed || stream !== connection) return;
-    if (strikeFollowUpProbeInFlight) {
-      strikeFollowUpProbeRearm = true;
+    if (strikeFollowUpProbe?.owner === connection) {
+      strikeFollowUpProbe.rearm = true;
       return;
     }
-    strikeFollowUpProbeInFlight = true;
-    strikeFollowUpProbeRearm = false;
+    // A latch left by a superseded connection is dead weight (its handlers are
+    // identity-checked no-ops); install-time reset already cleared it, so this
+    // arms a fresh latch for the current connection.
+    const latch = { owner: connection, rearm: false };
+    strikeFollowUpProbe = latch;
     setTimeout(() => {
+      // Only the latch this timer armed is its to release — a reconnect's
+      // install reset (or a successor's schedule) replaced it, and the new
+      // owner's own handlers manage it now.
+      if (strikeFollowUpProbe !== latch) return;
       // Re-check at fire time: a success may have reset the ledger, or a
       // reconnect may have replaced the connection, between schedule and now.
       if (disposed || stream !== connection || guardedTimeoutStrikes === 0) {
-        strikeFollowUpProbeInFlight = false;
-        strikeFollowUpProbeRearm = false;
+        strikeFollowUpProbe = undefined;
         return;
       }
       void guardedCall("strike follow-up probe", connection, (rpc) =>
@@ -881,11 +903,10 @@ function createStreamRuntime(
           // guarded lane's own; the probe has nothing to add.
         })
         .finally(() => {
-          strikeFollowUpProbeInFlight = false;
-          if (strikeFollowUpProbeRearm) {
-            strikeFollowUpProbeRearm = false;
-            scheduleStrikeFollowUpProbe(connection);
-          }
+          if (strikeFollowUpProbe !== latch) return;
+          const rearm = latch.rearm;
+          strikeFollowUpProbe = undefined;
+          if (rearm) scheduleStrikeFollowUpProbe(connection);
         });
     }, 0);
   }
@@ -1103,11 +1124,13 @@ function createStreamRuntime(
         // treats a positive backlog as proof of life, so a count stranded by a
         // path that replaced the connection without scheduleReconnect
         // (clearLocalDatabase) must never blind the new connection's orphan
-        // check. The follow-up latch resets with the ledger it serves.
+        // check. The follow-up latch resets with the ledger it serves; its
+        // handlers are latch-identity-bound, so the previous connection's
+        // still-pending timer or settling probe cannot release (or consume the
+        // re-arm of) the latch this connection arms next.
         guardedTimeoutStrikes = 0;
         ledgerGeneration += 1;
-        strikeFollowUpProbeInFlight = false;
-        strikeFollowUpProbeRearm = false;
+        strikeFollowUpProbe = undefined;
         pendingIngestEvents = 0;
         lastDeliveryArrivalAt = undefined;
         arrivalBaselineAt = Date.now();
@@ -1806,7 +1829,7 @@ function createStreamRuntime(
     connectFailuresSinceSuccess,
     guardedTimeoutStrikes,
     ledgerGeneration,
-    strikeFollowUpProbeInFlight,
+    strikeFollowUpProbeInFlight: strikeFollowUpProbe !== undefined,
     reconciledIncarnation,
     started,
     disposed,
