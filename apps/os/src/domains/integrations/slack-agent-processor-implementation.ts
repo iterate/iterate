@@ -300,6 +300,11 @@ export class SlackAgentProcessor extends StreamProcessor<
       );
       return;
     }
+    // Only an EXPLICIT idle clears. An authored-only record (title/note/
+    // shortStatus with busy never announced) says nothing about work, and
+    // clearing on it would strip the 👀 ack for a message the agent has not
+    // even picked up yet.
+    if (status?.busy !== false) return;
     if (!fresh && !this.#paintedBusyStatus) return;
     this.#paintedBusyStatus = false;
     args.blockProcessorWhile(() =>

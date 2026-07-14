@@ -916,6 +916,32 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
+  it("an authored-only patch (busy never announced) paints the title but clears nothing", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    // The agent set its title before any busy flip was announced. That says
+    // nothing about work: no status clear, and the 👀 ack MUST survive.
+    await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { title: "Trip planning" },
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setTitle",
+        body: { channel_id: "C123", thread_ts: "111.222", title: "Trip planning" },
+      },
+    ]);
+  });
+
   it("ignores a stale idle announcement that lost its race with newer work", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
