@@ -3089,3 +3089,63 @@ checkpoint. Raw records are
 The collection ended at `2026-07-14T22:04:40Z`; if active optimization
 continues, the next current-main checkpoint is due by
 `2026-07-15T02:04:40Z`.
+
+## 2026-07-14: Deployed Reset Recovery And PCM Reconfirmation
+
+Commit `7b13cd80add08ec2a71eea0bcf43c75426c60b82` was deployed to leased
+preview 5 as OS Worker version `136cd4ee-5bab-434f-82f8-eb93817608ed`.
+The deployed reset E2E entered through the public Worker/WebSocket capability,
+installed a one-shot wait, killed the actual Stream Durable Object, appended
+while the original handle was dead, and observed the replay through the
+original promise in 10.39 seconds. This confirms that the Worker-owned
+heartbeat detects a changed Stream incarnation and resumes after the latest
+synchronously delivered offset.
+
+The timer did not provide the liveness signal. Each active utility waiter sends
+one tiny `ping()` per second over Workers RPC, both detecting reset and
+providing real network I/O while Cloudflare may freeze the Worker clock. Normal
+event completion remains push-based. The heartbeat is absent from `append`,
+ordinary `subscribe`, configured delivery, and hosted processing.
+
+The same deployment then re-ran the actual exported `processEvent` helper over
+the complete topology:
+
+```text
+Node host -> source Stream DO -> Project Worker callback
+          -> output Stream DO -> Node waiter
+```
+
+Seven fresh projects each ran 40 alternating pairs of 1,000 events with
+1,920-byte PCM-shaped payloads. The baseline used `processEventBatch`; the
+candidate used `subscribe(source, { processEvent })`. Both subscriptions read
+the same source Stream DO and wrote completion events to the same output Stream
+DO. All 280 pairs completed without loss, reordering, timeout, or callback
+lifetime failure. Timers ran only on the Node host around source append and
+host-observed output.
+
+| Post-reset deployed result | Previous loop | `processEvent` |  Change |
+| -------------------------- | ------------: | -------------: | ------: |
+| pooled p50                 |    187.900 ms |     189.688 ms |  -0.95% |
+| pooled p95                 |    437.881 ms |     338.337 ms | +22.73% |
+| pooled mean                |    221.680 ms |     210.125 ms |  +5.21% |
+| paired median              |           n/a |            n/a |  +0.35% |
+| within-pair wins           |           n/a |        144/280 |     n/a |
+
+The baseline-first stratum's paired median was -1.76%; the candidate-first
+stratum's was +2.11%. The median per-project p50 change was -0.84%, and the
+median per-project p95 change was +33.91%. This passes the predeclared 5%
+high-volume non-inferiority gates and reconfirms parity. The observed p95 and
+mean gains are evidence against a regression, not claimed intrinsic helper
+speedups. Across 35 singleton pairs, `processEvent` was 1.36% slower at pooled
+p50, 43.15% faster at observed p95, and 1.73% slower by paired median, which
+also supports central parity at the smaller sample size.
+
+The recovery checkpoint replaces 73 lines of Durable Object-local wait logic
+with a 180-line Worker utility and 125 focused test lines. The full checkpoint,
+including deployed regression coverage and stale-test corrections, is 433
+additions and 108 removals. Its runtime complexity is isolated to the utility
+waiter and one connection-pump ownership guard; it adds no schema, migration,
+queue, service, fallback protocol, or traffic to the Stream hot path. All PR
+checks passed, including the full preview deployment and browser E2E suite.
+Production was not deployed or erased. Raw PCM records are
+`/tmp/process-event-preview5-post-reset-r{1..7}.log`.
