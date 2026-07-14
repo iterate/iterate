@@ -2243,6 +2243,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult> {
+    // Validation (bad source/exclude) throws HERE, outside the degrade path:
+    // an invalid request is the caller's bug, never a warning — mirroring
+    // query(), whose #searchOptions also runs before any catch.
+    const searchOptions = this.#searchOptions(input);
     let response: AiSearchChatCompletionsResponse;
     try {
       response = await this.#instance.chatCompletions({
@@ -2252,7 +2256,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
             : [{ role: "system" as const, content: input.systemPrompt }]),
           { role: "user" as const, content: input.q },
         ],
-        ai_search_options: this.#searchOptions(input),
+        ai_search_options: searchOptions,
       });
     } catch (error) {
       // Degrade exactly like query(): one failure grammar for the whole door.
