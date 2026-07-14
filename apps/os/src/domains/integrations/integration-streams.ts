@@ -183,7 +183,7 @@ export async function routeIntegrationWebhook(input: {
   const claim = await lookupConnectionClaim(input.slug, input.externalId);
   if (claim === null) return { ignored: "external-id-not-claimed", ok: true };
   const streamPath = integrationConnectionStreamPath(input.slug, claim.connection);
-  await integrationStreamStub(claim.projectId, streamPath).append(
+  await integrationStreamStub(claim.projectId, streamPath).appendAck(
     ...(input.routerProcessorSlug === undefined
       ? []
       : [
@@ -246,7 +246,7 @@ export async function appendConnectionDirectoryEvents(
   await integrationStreamStub(
     null,
     integrationDirectoryStreamPath(first.slug, first.externalId),
-  ).append(
+  ).appendAck(
     ...inputs.map((input) => ({
       type: input.claimed ? CONNECTION_CLAIMED_EVENT_TYPE : CONNECTION_UNCLAIMED_EVENT_TYPE,
       payload: {

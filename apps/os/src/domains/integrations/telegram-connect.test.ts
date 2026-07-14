@@ -69,8 +69,12 @@ const network = vi.hoisted(() => {
           async append(
             ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
           ) {
+            return append(...inputs);
+          },
+          async appendAck(
+            ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
+          ) {
             await append(...inputs);
-            return undefined;
           },
           async head() {
             return { maxOffset: stored.length };

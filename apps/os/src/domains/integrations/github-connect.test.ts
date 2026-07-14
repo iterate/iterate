@@ -52,8 +52,10 @@ const network = vi.hoisted(() => {
         }
         return {
           async append(...inputs: Array<{ payload: unknown; type: string }>) {
+            return append(...inputs);
+          },
+          async appendAck(...inputs: Array<{ payload: unknown; type: string }>) {
             await append(...inputs);
-            return undefined;
           },
           async getEvents(input: { afterOffset?: number; limit?: number }) {
             const afterOffset = input.afterOffset ?? 0;

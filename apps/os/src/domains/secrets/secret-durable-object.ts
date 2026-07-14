@@ -14,9 +14,8 @@ import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
-import { appendedEvents, isStreamOffsetConflictError } from "../streams/rpc-types.ts";
-import type { StreamAppend } from "../streams/rpc-types.ts";
-import type { StreamEventInput } from "../streams/schemas.ts";
+import { isStreamOffsetConflictError } from "../streams/rpc-types.ts";
+import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.ts";
 import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
@@ -134,17 +133,15 @@ export class SecretDurableObject extends DurableObject<Env> {
     // needs no privileged append lane: egress, refresh, and audit facts are all
     // ordinary public stream coordination.
     if (input.material === undefined) {
-      const [event] = appendedEvents(
-        await this.#appendSecretEvent(
-          {
-            type: "events.iterate.com/secret/updated",
-            payload: {
-              ...(egress === undefined ? {} : { egress }),
-              ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
-            },
+      const [event] = await this.#appendSecretEvent(
+        {
+          type: "events.iterate.com/secret/updated",
+          payload: {
+            ...(egress === undefined ? {} : { egress }),
+            ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
           },
-          true,
-        ),
+        },
+        true,
       );
       return event!;
     }
@@ -529,19 +526,17 @@ export class SecretDurableObject extends DurableObject<Env> {
         projectId: this.#name.projectId,
       },
     );
-    const [event] = appendedEvents(
-      await this.#appendSecretEvent(
-        {
-          offset: input.offset,
-          type: "events.iterate.com/secret/updated",
-          payload: {
-            egress: input.egress,
-            encryptedMaterial,
-            ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
-          },
+    const [event] = await this.#appendSecretEvent(
+      {
+        offset: input.offset,
+        type: "events.iterate.com/secret/updated",
+        payload: {
+          egress: input.egress,
+          encryptedMaterial,
+          ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
         },
-        true,
-      ),
+      },
+      true,
     );
     return event!;
   }
@@ -576,16 +571,32 @@ export class SecretDurableObject extends DurableObject<Env> {
       type: `events.iterate.com/secret/${string}`;
       payload: Record<string, unknown>;
     },
+    returnEvents: true,
+  ): Promise<StreamEvent[]>;
+  #appendSecretEvent(
+    event: {
+      offset?: number;
+      type: `events.iterate.com/secret/${string}`;
+      payload: Record<string, unknown>;
+    },
+    returnEvents?: false,
+  ): Promise<void>;
+  async #appendSecretEvent(
+    event: {
+      offset?: number;
+      type: `events.iterate.com/secret/${string}`;
+      payload: Record<string, unknown>;
+    },
     returnEvents = false,
-  ) {
+  ): Promise<StreamEvent[] | void> {
     const stream = this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({
         projectId: this.#name.projectId,
         path: this.#name.path,
       }),
-    ) as unknown as { append: StreamAppend };
-    if (returnEvents) return stream.append({ return: "events" }, event as StreamEventInput);
-    return stream.append(event as StreamEventInput);
+    );
+    if (returnEvents) return await stream.append(event as StreamEventInput);
+    await stream.appendAck(event as StreamEventInput);
   }
 }
 

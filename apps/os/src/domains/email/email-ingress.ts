@@ -72,7 +72,7 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
       }));
     // Envelope-sized audit fact — the project can see someone knocked, but
     // rejected bodies are never stored.
-    await integrationStreamStub(project.id, EMAIL_INTEGRATION_STREAM_PATH).append({
+    await integrationStreamStub(project.id, EMAIL_INTEGRATION_STREAM_PATH).appendAck({
       type: EMAIL_REJECTED_EVENT_TYPE,
       idempotencyKey: `email-rejected:${messageKey}:${message.to.toLowerCase()}:${reason}`,
       payload: {
@@ -160,7 +160,7 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
   // The subscription append is belt-and-braces for projects born before the
   // email router existed (the project processor's create lane arms it for new
   // projects): idempotency-keyed, so it is a no-op every time after the first.
-  await integrationStreamStub(project.id, EMAIL_INTEGRATION_STREAM_PATH).append(
+  await integrationStreamStub(project.id, EMAIL_INTEGRATION_STREAM_PATH).appendAck(
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName: DurableObjectNameCodec.stringify({
         projectId: project.id,

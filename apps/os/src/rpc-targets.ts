@@ -3607,8 +3607,10 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       path: scopePath,
     });
     await Promise.all([
-      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append(routeEvent),
-      integrationStreamStub(this.props.projectId, scopePath).append(
+      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).appendAck(
+        routeEvent,
+      ),
+      integrationStreamStub(this.props.projectId, scopePath).appendAck(
         routeEvent,
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName,
@@ -3733,7 +3735,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
       contentType: attachment.type,
     }));
     const appendAudit = () =>
-      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
+      integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).appendAck({
         type: EMAIL_SENT_EVENT_TYPE,
         idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
         // Recipients + subject for audit; bodies stay out of the stream. The
@@ -4489,7 +4491,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     const seedEmailAllowlist = () =>
       creatorEmail === undefined
         ? Promise.resolve()
-        : integrationStreamStub(registered.projectId, EMAIL_INTEGRATION_STREAM_PATH).append(
+        : integrationStreamStub(registered.projectId, EMAIL_INTEGRATION_STREAM_PATH).appendAck(
             buildDurableObjectProcessorSubscriptionConfiguredEvent({
               durableObjectName: streamDurableObjectName({
                 projectId: registered.projectId,
