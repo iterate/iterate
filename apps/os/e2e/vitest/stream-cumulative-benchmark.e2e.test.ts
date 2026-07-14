@@ -196,7 +196,13 @@ async function measureProcessorCatchup(projectId: string, samples: number): Prom
   return measured;
 }
 
-test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP || FOCUS_CROSSPOST_EXACT_RETRY)(
+test.skipIf(
+  !ENABLED ||
+    FOCUS_TAILS ||
+    FOCUS_LIVE_TAILS ||
+    FOCUS_PROCESSOR_CATCHUP ||
+    FOCUS_CROSSPOST_EXACT_RETRY,
+)(
   "cumulative Stream latency and throughput",
   async () => {
     if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
@@ -484,6 +490,7 @@ test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP || FOCUS_CROSSPOS
       });
       await commitDiscardingResult(stream, event({ marker: "live-one-warmup" }));
       await waitFor(() => arrivedAt.has("live-one-warmup"), "one-subscriber warmup");
+      arrivedAt.delete("live-one-warmup");
       const samples: number[] = [];
       for (let iteration = 0; iteration < (TAIL_SAMPLES || 60); iteration += 1) {
         const marker = `live-one-${iteration}`;
@@ -491,6 +498,7 @@ test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP || FOCUS_CROSSPOS
         await commitDiscardingResult(stream, event({ marker }));
         await waitFor(() => arrivedAt.has(marker), `one-subscriber event ${iteration}`);
         samples.push(arrivedAt.get(marker)! - startedAt);
+        arrivedAt.delete(marker);
       }
       metrics.live_delivery_one_subscriber = summarize(samples);
       await Promise.resolve(handle.unsubscribe());
@@ -499,7 +507,10 @@ test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP || FOCUS_CROSSPOS
     {
       using stream = project.streams.get(`/bench/${runId}/live-fanout`);
       const subscriberCount = 25;
-      const arrived = new Map<string, Set<number>>();
+      const arrived = new Map<
+        string,
+        { receivedAt: number | undefined; subscribers: Set<number> }
+      >();
       const handles = await Promise.all(
         Array.from(
           { length: subscriberCount },
@@ -510,9 +521,18 @@ test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP || FOCUS_CROSSPOS
                 for (const delivered of batch.events) {
                   const marker = markerOf(delivered.payload);
                   if (marker === undefined) continue;
-                  const subscribers = arrived.get(marker) ?? new Set<number>();
-                  subscribers.add(subscriber);
-                  arrived.set(marker, subscribers);
+                  const delivery = arrived.get(marker) ?? {
+                    receivedAt: undefined,
+                    subscribers: new Set<number>(),
+                  };
+                  delivery.subscribers.add(subscriber);
+                  if (
+                    delivery.subscribers.size === subscriberCount &&
+                    delivery.receivedAt === undefined
+                  ) {
+                    delivery.receivedAt = performance.now();
+                  }
+                  arrived.set(marker, delivery);
                 }
               },
             }),
@@ -520,19 +540,21 @@ test.skipIf(!ENABLED || FOCUS_TAILS || FOCUS_PROCESSOR_CATCHUP || FOCUS_CROSSPOS
       );
       await commitDiscardingResult(stream, event({ marker: "fanout-warmup" }));
       await waitFor(
-        () => arrived.get("fanout-warmup")?.size === subscriberCount,
+        () => arrived.get("fanout-warmup")?.receivedAt !== undefined,
         "25-subscriber warmup",
       );
+      arrived.delete("fanout-warmup");
       const samples: number[] = [];
       for (let iteration = 0; iteration < 30; iteration += 1) {
         const marker = `fanout-${iteration}`;
         const startedAt = performance.now();
         await commitDiscardingResult(stream, event({ marker }));
         await waitFor(
-          () => arrived.get(marker)?.size === subscriberCount,
+          () => arrived.get(marker)?.receivedAt !== undefined,
           `25-subscriber event ${iteration}`,
         );
-        samples.push(performance.now() - startedAt);
+        samples.push(arrived.get(marker)!.receivedAt! - startedAt);
+        arrived.delete(marker);
       }
       metrics.live_delivery_25_subscribers = summarize(samples, subscriberCount);
       await Promise.all(handles.map(async (handle) => await Promise.resolve(handle.unsubscribe())));
@@ -965,6 +987,7 @@ test.skipIf(!ENABLED || !FOCUS_LIVE_TAILS)(
         await commitDiscardingResult(stream, event({ marker }));
         await waitFor(() => arrivedAt.has(marker), `one-subscriber event ${iteration}`);
         if (iteration >= 0) samples.push(arrivedAt.get(marker)! - startedAt);
+        arrivedAt.delete(marker);
       }
       metrics.live_delivery_one_subscriber = summarize(samples);
       await Promise.resolve(handle.unsubscribe());
@@ -973,7 +996,10 @@ test.skipIf(!ENABLED || !FOCUS_LIVE_TAILS)(
     {
       using stream = project.streams.get(`/bench/${runId}/live-fanout`);
       const subscriberCount = 25;
-      const arrived = new Map<string, Set<number>>();
+      const arrived = new Map<
+        string,
+        { receivedAt: number | undefined; subscribers: Set<number> }
+      >();
       const handles = await Promise.all(
         Array.from(
           { length: subscriberCount },
@@ -984,9 +1010,18 @@ test.skipIf(!ENABLED || !FOCUS_LIVE_TAILS)(
                 for (const delivered of batch.events) {
                   const marker = markerOf(delivered.payload);
                   if (marker === undefined) continue;
-                  const subscribers = arrived.get(marker) ?? new Set<number>();
-                  subscribers.add(subscriber);
-                  arrived.set(marker, subscribers);
+                  const delivery = arrived.get(marker) ?? {
+                    receivedAt: undefined,
+                    subscribers: new Set<number>(),
+                  };
+                  delivery.subscribers.add(subscriber);
+                  if (
+                    delivery.subscribers.size === subscriberCount &&
+                    delivery.receivedAt === undefined
+                  ) {
+                    delivery.receivedAt = performance.now();
+                  }
+                  arrived.set(marker, delivery);
                 }
               },
             }),
@@ -998,10 +1033,11 @@ test.skipIf(!ENABLED || !FOCUS_LIVE_TAILS)(
         const startedAt = performance.now();
         await commitDiscardingResult(stream, event({ marker }));
         await waitFor(
-          () => arrived.get(marker)?.size === subscriberCount,
+          () => arrived.get(marker)?.receivedAt !== undefined,
           `25-subscriber event ${iteration}`,
         );
-        if (iteration >= 0) samples.push(performance.now() - startedAt);
+        if (iteration >= 0) samples.push(arrived.get(marker)!.receivedAt! - startedAt);
+        arrived.delete(marker);
       }
       metrics.live_delivery_25_subscribers = summarize(samples, subscriberCount);
       await Promise.all(handles.map(async (handle) => await Promise.resolve(handle.unsubscribe())));
