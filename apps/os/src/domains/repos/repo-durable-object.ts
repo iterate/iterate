@@ -104,6 +104,12 @@ export class RepoDurableObject extends DurableObject<Env> {
       new RepoProcessor({
         ...deps,
         createRepoArtifact: (input) => this.createArtifactRepo(input),
+        // Sync the current GitHub head, not necessarily the delivery's SHA:
+        // GitHub webhooks may arrive out of order, and adopting a newer head
+        // also satisfies every older push delivery without wedging replay.
+        syncFromGithubPush: async () => {
+          await this.syncFromGithub({ depth: 1 });
+        },
         taskChangesForArtifactPush: (input) => this.#taskChangesForArtifactPush(input),
       }),
   );
@@ -665,14 +671,15 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   // ===========================================================================
-  // GitHub mirror: an optional linked GitHub repository this repo pushes to.
+  // GitHub backing: an optional linked GitHub repository synchronized both ways.
   //
   // The Artifacts repo stays primary — commits succeed against it regardless
-  // of GitHub's availability — and the linked GitHub repo is a mirror kept
-  // fresh by a best-effort push after every commit. git push is cumulative, so
-  // a failed mirror push self-heals on the next commit; `pushToGithub` repairs
-  // on demand. `syncFromGithub` is the explicit reverse lane: adopt GitHub's
-  // branch head, fast-forward only unless forced.
+  // of GitHub's availability — and a best-effort push mirrors every commit.
+  // git push is cumulative, so a failed mirror push self-heals on the next
+  // commit; `pushToGithub` repairs on demand. GitHub push webhooks ask the repo
+  // processor to fast-forward Artifacts through `syncFromGithub`; the ensuing
+  // Artifacts queue event remains the sole source of commit/task facts. The
+  // public sync verb is also the explicit repair/forced-adoption lane.
   // ===========================================================================
 
   /** The current GitHub link, or null when this repo is not linked. */

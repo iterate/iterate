@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  GITHUB_LINK,
   MemoryStream,
   MemoryStreamNetwork,
   deliverNewEvents,
+  webhookPayload,
 } from "./github-agent-test-helpers.ts";
 import type { RepoCommittedFileChange } from "./repo-task-events.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
@@ -14,12 +16,17 @@ function newRepoProcessor(
     beforeCommitOid: string | null;
     branch: string;
   }) => Promise<RepoCommittedFileChange[]>,
+  syncFromGithubPush: (input: {
+    afterCommitOid: string;
+    branch: string;
+  }) => Promise<void> = async () => {},
 ) {
   return new RepoProcessor({
     stream,
     path: "/repos/config",
     projectId: "prj_1",
     taskChangesForArtifactPush,
+    syncFromGithubPush,
     createRepoArtifact: async () => {
       throw new Error("not under test");
     },
@@ -35,6 +42,11 @@ const REPO_CREATED = {
     projectId: "prj_1",
     remote: "https://example.com/repo.git",
   },
+};
+
+const GITHUB_LINK_CONFIGURED = {
+  type: "events.iterate.com/repo/github-link-configured" as const,
+  payload: GITHUB_LINK,
 };
 
 function artifactPush(branch: string) {
@@ -53,6 +65,33 @@ function artifactPush(branch: string) {
 }
 
 describe("RepoProcessor task change events", () => {
+  it("imports connected GitHub main pushes and waits for the Artifacts queue to emit facts", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const syncFromGithubPush = vi.fn(async () => {});
+    const taskChangesForArtifactPush = vi.fn(async () => []);
+    const processor = newRepoProcessor(stream, taskChangesForArtifactPush, syncFromGithubPush);
+
+    await stream.append(REPO_CREATED, GITHUB_LINK_CONFIGURED, {
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhookPayload(
+        { ref: "refs/heads/main", before: "before123", after: "after456" },
+        "push",
+      ),
+    });
+    await deliverNewEvents({ cursors: new Map(), processor, stream });
+
+    expect(syncFromGithubPush).toHaveBeenCalledOnce();
+    expect(syncFromGithubPush).toHaveBeenCalledWith({
+      afterCommitOid: "after456",
+      branch: "main",
+    });
+    expect(taskChangesForArtifactPush).not.toHaveBeenCalled();
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/repo/commit-completed"),
+    ).toBe(false);
+  });
+
   it("projects default-branch task file changes into subscribable repo/task facts", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");

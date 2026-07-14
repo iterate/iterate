@@ -5,6 +5,7 @@ import { githubAgentSubscriptionConfiguredEvent } from "./github-agent-mechanics
 import { githubAgentPath, pullRequestNumbersFromWebhookBody } from "./github-agent-utils.ts";
 import {
   repoArtifactPushFromEventPayload,
+  repoGithubPushFromWebhookPayload,
   type RepoCommittedFileChange,
 } from "./repo-task-events.ts";
 
@@ -25,6 +26,7 @@ type RepoProcessorDeps = {
     beforeCommitOid: string | null;
     branch: string;
   }): Promise<RepoCommittedFileChange[]>;
+  syncFromGithubPush(input: { afterCommitOid: string; branch: string }): Promise<void>;
 };
 
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
@@ -154,6 +156,20 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     }
 
     if (event.type === "events.iterate.com/github/webhook-received") {
+      const push = repoGithubPushFromWebhookPayload(event.payload);
+      if (
+        push !== null &&
+        state.github !== null &&
+        state.defaultBranch !== null &&
+        push.branch === state.defaultBranch
+      ) {
+        // GitHub is an ingress lane, not a second source of commit facts. Pull
+        // its new default-branch head into Artifacts; the resulting Artifacts
+        // queue event is the only thing allowed to emit commit-completed and
+        // task changes, including for merges made directly on GitHub.
+        blockProcessorWhile(() => this.deps.syncFromGithubPush(push));
+      }
+
       // PR webhooks route to a per-PR agent stream, everything else (pushes,
       // stars, plain issues) stays a repo-stream fact. The first forward's
       // route event births the agent (child-stream-created lane) and durably

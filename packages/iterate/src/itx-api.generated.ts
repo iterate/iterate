@@ -1111,10 +1111,12 @@ export interface Repo {
    * Back this repo with a real GitHub repository through a named GitHub
    * connection. From then on every default-branch commit is mirrored to
    * GitHub best-effort (failures journal on the repo stream and self-heal on
-   * the next commit), and every GitHub webhook about that repository is
-   * cross-posted onto this repo's stream. If the GitHub repository does not
-   * exist and the installation can create org repositories, it is created
-   * private. Re-linking replaces the previous link.
+   * the next commit), fast-forward default-branch pushes made on GitHub are
+   * imported through the Cloudflare Artifacts queue, and every GitHub webhook
+   * about that repository is cross-posted onto this repo's stream. If the
+   * GitHub repository does not exist and the installation can create org
+   * repositories, it is created private. Re-linking replaces the previous
+   * link.
    */
   linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;
   /** Remove the GitHub link and its webhook cross-post rule. */

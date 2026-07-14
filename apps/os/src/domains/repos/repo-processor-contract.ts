@@ -184,7 +184,8 @@ export const RepoProcessorContract = defineProcessorContract({
       ],
     },
     "events.iterate.com/repo/github-link-configured": {
-      description: "The repo was linked to a GitHub repository (mirror-out on every commit).",
+      description:
+        "The repo was linked to a GitHub repository (mirror commits out and import fast-forward default-branch pushes).",
       payloadSchema: GithubLinkPayload,
       examples: [
         {
