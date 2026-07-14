@@ -42,6 +42,8 @@ const CUTOVER_HOLDER = "main-auth-rpc-security-cutover";
 const CUTOVER_LEASE_MS = 3 * 60 * 60_000;
 const CHECK_DRAIN_TIMEOUT_MS = 12 * 60_000;
 const CHECK_DRAIN_POLL_MS = 5_000;
+const GITHUB_RATE_LIMIT_MAX_ATTEMPTS = 5;
+const GITHUB_RATE_LIMIT_MAX_DELAY_MS = 30_000;
 
 export type PreviewFleetTarget = {
   envName: Extract<EnvName, `preview_${number}`>;
@@ -53,11 +55,76 @@ export const previewFleetTargets = environmentConfigLeaseInventory.map((resource
   slug: resource.slug,
 })) satisfies PreviewFleetTarget[];
 
-type PreviewCheck = {
+export type PreviewCheck = {
   id: number;
   name: string;
   status: string;
 };
+
+type GitHubRequestError = {
+  status?: number;
+  message?: string;
+  response?: {
+    headers?: Record<string, string | undefined>;
+  };
+};
+
+function secondaryRateLimitDelayMs(error: unknown, attempt: number) {
+  if (!error || typeof error !== "object") return undefined;
+  const requestError = error as GitHubRequestError;
+  if (requestError.status !== 403 && requestError.status !== 429) return undefined;
+
+  const retryAfter = requestError.response?.headers?.["retry-after"];
+  const isSecondaryLimit = requestError.message?.toLowerCase().includes("secondary rate limit");
+  if (!isSecondaryLimit && retryAfter === undefined) return undefined;
+
+  const retryAfterSeconds = Number(retryAfter);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+    return Math.min(Math.max(1_000, retryAfterSeconds * 1_000), GITHUB_RATE_LIMIT_MAX_DELAY_MS);
+  }
+  return Math.min(2 ** (attempt - 1) * 1_000, GITHUB_RATE_LIMIT_MAX_DELAY_MS);
+}
+
+export async function withGitHubSecondaryRateLimitRetry<T>(
+  operation: () => Promise<T>,
+  options: {
+    maxAttempts?: number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+) {
+  const maxAttempts = options.maxAttempts ?? GITHUB_RATE_LIMIT_MAX_ATTEMPTS;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = secondaryRateLimitDelayMs(error, attempt);
+      if (delayMs === undefined || attempt === maxAttempts) throw error;
+      console.warn(
+        `GitHub secondary rate limit; retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxAttempts})`,
+      );
+      await sleep(delayMs);
+    }
+  }
+  throw new Error("GitHub request retry loop exhausted without returning or throwing.");
+}
+
+export async function listPreviewChecksForRefs(input: {
+  refs: Iterable<string>;
+  listChecksForRef: (ref: string) => Promise<PreviewCheck[]>;
+  sleep?: (ms: number) => Promise<void>;
+}) {
+  const checks: PreviewCheck[] = [];
+  for (const ref of new Set(input.refs)) {
+    checks.push(
+      ...(await withGitHubSecondaryRateLimitRetry(() => input.listChecksForRef(ref), {
+        sleep: input.sleep,
+      })),
+    );
+  }
+  return checks;
+}
 
 export type PreviewFleetMigrationDependencies = {
   acquireSlot: (target: PreviewFleetTarget) => Promise<{ leaseId: string }>;
@@ -173,25 +240,30 @@ export async function drainLegacyPreviewChecks(input: {
 async function listRecentPreviewChecks(): Promise<PreviewCheck[]> {
   const octokit = getOctokit();
   const repo = getRepo();
-  const openPulls = await octokit.paginate(octokit.rest.pulls.list, {
-    ...repo,
-    state: "open",
-    per_page: 100,
-  });
-  const recentClosed = (
-    await octokit.rest.pulls.list({
+  const openPulls = await withGitHubSecondaryRateLimitRetry(() =>
+    octokit.paginate(octokit.rest.pulls.list, {
       ...repo,
-      state: "closed",
-      sort: "updated",
-      direction: "desc",
+      state: "open",
       per_page: 100,
-    })
+    }),
+  );
+  const recentClosed = (
+    await withGitHubSecondaryRateLimitRetry(() =>
+      octokit.rest.pulls.list({
+        ...repo,
+        state: "closed",
+        sort: "updated",
+        direction: "desc",
+        per_page: 100,
+      }),
+    )
   ).data;
   const headShas = [
     ...new Set([...openPulls, ...recentClosed].map((pullRequest) => pullRequest.head.sha)),
   ];
-  const checks = await Promise.all(
-    headShas.map(async (ref) => {
+  return listPreviewChecksForRefs({
+    refs: headShas,
+    listChecksForRef: async (ref) => {
       const response = await octokit.rest.checks.listForRef({
         ...repo,
         ref,
@@ -202,9 +274,8 @@ async function listRecentPreviewChecks(): Promise<PreviewCheck[]> {
         name: check.name,
         status: check.status,
       }));
-    }),
-  );
-  return checks.flat();
+    },
+  });
 }
 
 function createDependencies(): PreviewFleetMigrationDependencies {
@@ -236,7 +307,9 @@ function createDependencies(): PreviewFleetMigrationDependencies {
       return drainLegacyPreviewChecks({
         listBlockingChecks: listRecentPreviewChecks,
         readCheck: async (id) => {
-          const response = await octokit.rest.checks.get({ ...repo, check_run_id: id });
+          const response = await withGitHubSecondaryRateLimitRetry(() =>
+            octokit.rest.checks.get({ ...repo, check_run_id: id }),
+          );
           return {
             id: response.data.id,
             name: response.data.name,
