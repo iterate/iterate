@@ -74,6 +74,11 @@ Before PRs:
 pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
+**Browser testing:** use an isolated `agent-browser` Chrome for Testing session,
+headless by default. "Let me watch" means show that isolated browser with
+`--headed`; it does not mean attach to a developer's actual Chrome. See
+[Browser testing](docs/browser-testing.md).
+
 **Draft PRs don't get a preview deployment** (or preview e2e). If you open a
 PR as a draft and want a preview environment, add the `preview` label; marking
 the PR ready for review also starts previews. Lease model details:
@@ -120,6 +125,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 
 ### Development
 
+- [Browser testing](docs/browser-testing.md) — isolated agent-browser sessions, visible watch mode, and reusable test logins
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities, opening project-scoped or platform-wide operator sessions, browsers for agents, preview-from-local
 - [Tunnels](docs/tunnels.md) — public HTTPS URLs for local dev, webhooks, OAuth callbacks, and CI/e2e fixtures
 - [Coding style](docs/coding-style.md)
