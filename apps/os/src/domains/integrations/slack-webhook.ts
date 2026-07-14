@@ -21,6 +21,7 @@
 // flood us with writes.
 
 import { routeIntegrationWebhook } from "./integration-streams.ts";
+import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import { verifySlackSignature } from "./slack-signature.ts";
 import { parseJsonRecord, readString, SLACK_WEBHOOK_RECEIVED_EVENT_TYPE } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
@@ -77,6 +78,7 @@ export async function fetchSlackWebhook(input: {
       type: SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
     },
     externalId: teamId,
+    routerProcessorSlug: SlackProcessorContract.slug,
     slug: "slack",
   });
   if ("ignored" in result) return Response.json({ ignored: result.ignored, ok: true });

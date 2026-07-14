@@ -27,6 +27,7 @@ describe("fetchTelegramWebhook", () => {
     expect(routed[0]).toMatchObject({
       slug: "telegram",
       externalId: BOT_ID,
+      routerProcessorSlug: "telegram",
       event: {
         idempotencyKey: `telegram-webhook:${BOT_ID}:1001`,
         type: "events.iterate.com/telegram/webhook-received",
