@@ -7,8 +7,8 @@ Usage:
   doppler run --project _shared --config prd -- pnpm preview:ci <pr-number>
 
 Runs the same preview lifecycle shape as CI for a pull request:
-  1. pnpm preview deploy
-  2. pnpm preview test
+pnpm preview run (deploy + e2e in one step, like the Cloudflare Previews
+workflow).
 
 The script uses gh auth token when GITHUB_TOKEN is not already set.
 USAGE
@@ -41,12 +41,7 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   GITHUB_TOKEN="$(gh auth token)"
 fi
 
-echo "[preview:ci] deploy PR #$pr_number"
-pnpm preview deploy \
-  --github-token "$GITHUB_TOKEN" \
-  --pull-request-number "$pr_number"
-
-echo "[preview:ci] test PR #$pr_number"
-pnpm preview test \
+echo "[preview:ci] deploy + e2e PR #$pr_number"
+pnpm preview run \
   --github-token "$GITHUB_TOKEN" \
   --pull-request-number "$pr_number"

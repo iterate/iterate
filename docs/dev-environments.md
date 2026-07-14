@@ -404,8 +404,9 @@ operator capability, so use current `main` for manual preview deployments.
 ### Story 1: CI previews my PR
 
 Opening/pushing a PR that touches preview-relevant paths triggers the
-`Cloudflare Previews` workflow, which runs `pnpm preview deploy` then
-`pnpm preview test`. The PR body's managed "Environment Config Lease" section
+`Cloudflare Previews` workflow, which runs `pnpm preview run` — deploy then
+e2e as one step, sharing one resolved PR head so a push cannot race into a
+gap between them. The PR body's managed "Environment Config Lease" section
 records the slot, per-app URLs and statuses; the workflow logs narrate every
 decision (which apps were selected and why, lease transitions, slot waits).
 Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
@@ -426,17 +427,19 @@ lease a slot precisely to inspect what's on it.
 ### Story 2: run what CI runs, locally
 
 ```bash
-# same lifecycle as CI for PR 1234 (deploy + test):
+# same lifecycle as CI for PR 1234 (deploy + e2e, one step — wraps `pnpm preview run`):
 doppler run --project _shared --config prd -- pnpm preview:ci 1234
 
-# or the individual steps CI runs:
+# or the phases individually (flake hunting deploys once, then loops `test`):
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run --pull-request-number 1234
 GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
 GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
 GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
 
-These share the PR's lease and PR-body state with CI, so a local run renews
-(never fights) the slot CI claimed for the same PR.
+These share the PR's slot and PR-body state with CI (ownership lives in the
+semaphore), so a local run renews (never fights) the slot CI claimed for the
+same PR.
 
 ### Story 3: pin a PR to a slot
 

@@ -328,8 +328,10 @@ with three apps deploy-failed on the slot. Two fixes:
 - `envs.ts` + `scripts/lib/**` joined the preview shared paths (and the Depot
   workflow's `paths`): every app's wrangler config derives from envs.ts.
 - Failed states (`deploy-failed`, `claim-failed`, `tests-failed`) now retry
-  regardless of which head recorded them; only `awaiting-tests` keeps the
-  same-head guard.
+  regardless of which head recorded them. (`awaiting-tests` initially kept a
+  same-head guard; it too retries at any head since the `preview run`
+  one-step refactor — an awaiting-tests entry at any head is a deploy whose
+  e2e never ran.)
 
 ### 13. Fresh-worker bring-up: module-scope config parse + orphaned container app
 

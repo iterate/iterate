@@ -162,8 +162,12 @@ while [ "$i" -le "$last_run" ]; do
   kill "$watchdog_pid" 2>/dev/null
   wait "$watchdog_pid" 2>/dev/null
   finished=$(date -u +%H:%M:%S)
-  # `preview test` exits 0 but skips (stale head, no lease) without running
-  # anything — a skip must not count as a green run.
+  # `preview test` exits 0 but skips (no app recorded at this head, nothing
+  # deployed) without running anything — a skip must not count as a green
+  # run. A stolen slot does NOT skip: preview.ts refuses with a non-zero exit
+  # and a "no longer belongs to" message (dialed-by-name contract, guarded by
+  # a unit test on describeLostSlotOwnership), which the FAIL branch below
+  # surfaces.
   if grep -q "skipped: true" "$log"; then
     echo "run $i: SKIPPED — not a real run ($started-$finished UTC) $log"
     exit 2

@@ -128,7 +128,12 @@ jobs:
         run: |-
           for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-      - name: Preview / deploy
+      # ONE step for deploy + e2e: `preview run` shares a single resolved PR
+      # head between the two phases, so a push can no longer race into a gap
+      # between separate deploy and test steps (that gap used to need a whole
+      # class of stale-head skip machinery in preview.ts). Deploy failures
+      # fail the step before any test runs.
+      - name: Preview / deploy + e2e
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
@@ -136,19 +141,10 @@ jobs:
           set -euo pipefail
           # A manual dispatch is an explicit ask for a preview, so it
           # overrides the draft policy.
-          doppler run --project _shared --config prd -- pnpm preview deploy \
+          doppler run --project _shared --config prd -- pnpm preview run \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
             ${{ github.event_name == 'workflow_dispatch' && '--allow-draft' || '' }}
-      - name: Preview / e2e
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-        run: |-
-          set -euo pipefail
-          doppler run --project _shared --config prd -- pnpm preview test \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}"
       - name: Collect OS preview test artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results

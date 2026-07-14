@@ -33,7 +33,6 @@ const {
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
   evaluateCloudflareZoneCheck,
-  explainPreviewTestSkip,
   holderPullRequestUrl,
   requireExplicitReclaimForce,
   retakeRecordedSlotIfFree,
@@ -126,7 +125,7 @@ describe("preview workflow scope", () => {
     expect(epoch.trim()).toBe("os-auth-rpc-v1");
     expect(workflow).toContain('expected="os-auth-rpc-v1"');
     expect(workflow.indexOf("Enforce preview deployment epoch")).toBeLessThan(
-      workflow.indexOf("pnpm preview deploy"),
+      workflow.indexOf("pnpm preview run"),
     );
   });
 
@@ -387,7 +386,6 @@ describe("preview retry selection", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
     ).toEqual(["os", "auth"]);
   });
@@ -408,7 +406,6 @@ describe("preview retry selection", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
       // Semaphore's retry pulls in its auth dependency (relying-party JWKS).
     ).toEqual(["semaphore", "auth"]);
@@ -433,12 +430,17 @@ describe("preview retry selection", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
     ).toEqual(["os", "auth"]);
   });
 
-  it("does not re-run awaiting-tests apps from older commits", () => {
+  it("re-runs awaiting-tests apps whatever head deployed them — their e2e never ran", () => {
+    // An awaiting-tests entry at any head is a deploy whose tests never ran
+    // (a cancelled run). Redeploying it at the current head is idempotent and
+    // is what keeps `test`'s "no app recorded at this head" skip honest
+    // (observed 2026-07-10: a cancelled run's deploy landed, the next push's
+    // non-app diff selected nothing, and the check went green over
+    // deployments that never passed tests).
     expect(
       selectPreviewAppsNeedingRetry({
         previousState: {
@@ -454,9 +456,8 @@ describe("preview retry selection", () => {
           environmentConfigLease: null,
           notice: null,
         },
-        pullRequestHeadSha: "current-head",
-      }),
-    ).toEqual([]);
+      }).map((app) => app.slug),
+    ).toEqual(["os", "auth"]);
   });
 });
 
@@ -642,61 +643,6 @@ describe("describeForcePushCompareHazard", () => {
   it("flags rewritten history as untrustworthy for diffing", () => {
     expect(describeForcePushCompareHazard("diverged")).toContain("not an ancestor");
     expect(describeForcePushCompareHazard("behind")).toContain("not an ancestor");
-  });
-});
-
-describe("preview test skip verdicts", () => {
-  const recordedApps = {
-    os: CloudflarePreviewAppEntry.parse({
-      appDisplayName: "OS",
-      appSlug: "os",
-      headSha: "old-head",
-      shortSha: "oldhead",
-      status: "deployed",
-      updatedAt: "2026-07-09T00:00:00.000Z",
-    }),
-  };
-
-  it("skips green when deploy would select nothing for this head", () => {
-    const skip = explainPreviewTestSkip({
-      appsDeployWouldSelect: [],
-      pullRequestHeadSha: "current-head",
-      recordedApps,
-    });
-
-    expect(skip.verdict).toBe("nothing-changed");
-    expect(skip.notice).toContain("nothing app-affecting changed");
-    expect(skip.notice).toContain("still stand");
-  });
-
-  it("fails loudly when apps are recorded at a stale head", () => {
-    // A push that races between the deploy and test steps (or a deploy that
-    // died before recording) leaves the recorded apps at an old head; a green
-    // "deploy + e2e" would then describe a commit that never ran.
-    const skip = explainPreviewTestSkip({
-      appsDeployWouldSelect: ["os", "auth"],
-      pullRequestHeadSha: "current-head",
-      recordedApps,
-    });
-
-    expect(skip.verdict).toBe("stale-head");
-    expect(skip.notice).toContain("refused to skip");
-    expect(skip.notice).toContain("os, auth");
-    expect(skip.notice).toContain("E2e was NOT run");
-    expect(skip.notice).toContain(
-      "os: deployed, head oldhead (stale — deploy has not run for the current head)",
-    );
-  });
-
-  it("fails loudly when nothing is recorded at all but deploy would select apps", () => {
-    const skip = explainPreviewTestSkip({
-      appsDeployWouldSelect: ["os"],
-      pullRequestHeadSha: "current-head",
-      recordedApps: {},
-    });
-
-    expect(skip.verdict).toBe("stale-head");
-    expect(skip.notice).toContain("No apps are recorded at all");
   });
 });
 

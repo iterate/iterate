@@ -61,37 +61,85 @@ function decideDraftPreviewPolicy(input: {
   return input.holdsSlot ? "teardown" : "skip";
 }
 
-/**
- * Deploy affected preview apps for a pull request without running preview e2e.
- */
-export async function deploy(
-  options: PullRequestCommandOptions & {
-    /**
-     * Deploy every preview app regardless of the diff. Diff selection only
-     * redeploys apps affected since their LAST DEPLOYED head, so unaffected
-     * apps keep an older recorded head and the test lane leaves them out of
-     * its testable set (stale — deploy has not run for the current head). A
-     * caller that needs the whole fleet testable at the current head — the
-     * flake-hunt marathon preflight — uses this to reunify the fleet
-     * explicitly instead of relying on the commit happening to touch a
-     * fleet-shared path.
-     */
-    allApps?: boolean;
-    /**
-     * Deploy even when the PR is a draft without the `preview` label. Draft
-     * PRs otherwise skip previews (or give their slot back); an explicit
-     * invocation — workflow_dispatch, the flake-hunt marathon, a human at a
-     * terminal — is an ask, so those callers pass this.
-     */
-    allowDraft?: boolean;
-  } = {},
-) {
+type DeployCommandOptions = PullRequestCommandOptions & {
+  /**
+   * Deploy every preview app regardless of the diff. Diff selection only
+   * redeploys apps affected since their LAST DEPLOYED head, so unaffected
+   * apps keep an older recorded head and the test lane leaves them out of
+   * its testable set (stale — deploy has not run for the current head). A
+   * caller that needs the whole fleet testable at the current head — the
+   * flake-hunt marathon preflight — uses this to reunify the fleet
+   * explicitly instead of relying on the commit happening to touch a
+   * fleet-shared path.
+   */
+  allApps?: boolean;
+  /**
+   * Deploy even when the PR is a draft without the `preview` label. Draft
+   * PRs otherwise skip previews (or give their slot back); an explicit
+   * invocation — workflow_dispatch, the flake-hunt marathon, a human at a
+   * terminal — is an ask, so those callers pass this.
+   */
+  allowDraft?: boolean;
+};
+
+/** One PR context + runtime shared by every phase of a preview command. */
+async function resolvePreviewCommandSetup(options: PullRequestCommandOptions) {
   const runtime = createPreviewRuntime();
   const context = await resolvePullRequestPreviewContext({
     commandEnvironment: runtime.commandEnvironment,
     githubToken: resolveGithubToken(options, runtime.commandEnvironment),
     pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
   });
+  return { context, runtime };
+}
+
+/**
+ * Deploy affected preview apps for a pull request without running preview e2e.
+ */
+export async function deploy(options: DeployCommandOptions = {}) {
+  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  return await deployPreviewApps({ context, options, runtime });
+}
+
+/**
+ * Run preview e2e against deployed apps recorded in the managed PR preview section.
+ */
+export async function test(options: PullRequestCommandOptions = {}) {
+  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  return await testPreviewApps({ context, runtime });
+}
+
+/**
+ * Deploy then test, in one process — the shape CI runs. The two phases share
+ * ONE resolved PR context (head sha) and the deploy's final recorded state,
+ * so the class of two-step hazards — a push racing into the gap between the
+ * deploy and test steps, and the skip machinery needed to explain it — is
+ * structurally gone. The lease is shared through the semaphore itself (same
+ * holder; test's adopt re-issues the slot deploy just claimed), never
+ * through a handed-around copy. A deploy failure throws before any test
+ * runs; a draft skip skips both phases.
+ */
+export async function run(options: DeployCommandOptions = {}) {
+  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  const deployResult = await deployPreviewApps({ context, options, runtime });
+  if ("skippedReason" in deployResult && deployResult.skippedReason === "draft") {
+    return deployResult;
+  }
+
+  // A "nothing to deploy" skip still tests: the recorded deployments ARE the
+  // current head's code, and their green must be earned, not assumed.
+  return await testPreviewApps({ context, runtime, state: deployResult.state });
+}
+
+async function deployPreviewApps({
+  context,
+  options,
+  runtime,
+}: {
+  context: PullRequestPreviewContext;
+  options: DeployCommandOptions;
+  runtime: PreviewRuntime;
+}) {
   logPreview(
     `deploy for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
@@ -327,21 +375,25 @@ export async function deploy(
   return result;
 }
 
-/**
- * Run preview e2e against deployed apps recorded in the managed PR preview section.
- */
-export async function test(options: PullRequestCommandOptions = {}) {
-  const runtime = createPreviewRuntime();
-  const context = await resolvePullRequestPreviewContext({
-    commandEnvironment: runtime.commandEnvironment,
-    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
-    pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
-  });
-
+async function testPreviewApps({
+  context,
+  runtime,
+  state: knownState,
+}: {
+  context: PullRequestPreviewContext;
+  runtime: PreviewRuntime;
+  /**
+   * In-process state from a just-finished deploy (the `run` path). A fresh
+   * PR-body read can lag deploy's write (GitHub read-after-write lag) and
+   * would miss entries deploy just recorded; the shared state cannot.
+   * Standalone `test` reads the PR body instead.
+   */
+  state?: CloudflarePreviewState;
+}) {
   logPreview(
     `test for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
-  const current = await readCloudflarePreviewState(context);
+  const recorded = knownState ?? (await readCloudflarePreviewState(context)).state;
 
   // The semaphore is the single source of lease truth: resolve ownership
   // FIRST, from what the semaphore attributes to this holder right now. The
@@ -351,7 +403,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
   // steal).
   const holder = pullRequestHolder(context.pullRequestNumber);
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
-  const displaySlot = current.state.environmentConfigLease;
+  const displaySlot = recorded.environmentConfigLease;
   const environmentConfigLease =
     (await adoptLeaseHeldBySemaphore({
       holder,
@@ -366,7 +418,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
       semaphore,
     }));
   if (!environmentConfigLease) {
-    const hasTestableRecordedApps = Object.values(current.state.apps).some((entry) =>
+    const hasTestableRecordedApps = Object.values(recorded.apps).some((entry) =>
       canRunPreviewTests(entry),
     );
     if (!displaySlot && !hasTestableRecordedApps) {
@@ -376,7 +428,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
       return {
         ok: true,
         skipped: true,
-        state: current.state,
+        state: recorded,
       };
     }
 
@@ -430,69 +482,35 @@ export async function test(options: PullRequestCommandOptions = {}) {
     }));
   }
 
-  const toRuntimes = (entries: (typeof current.state.apps)[string][]) =>
-    entries
-      .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
-      .filter((app): app is PreviewAppRuntime => app != null);
-  const recordedTestable = Object.values(current.state.apps).filter((entry) =>
-    canRunPreviewTests(entry),
-  );
-  let testableApps = toRuntimes(
-    recordedTestable.filter((entry) => entry.headSha === context.pullRequestHeadSha),
-  );
+  const testableApps = Object.values(recorded.apps)
+    .filter((entry) => canRunPreviewTests(entry) && entry.headSha === context.pullRequestHeadSha)
+    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
+    .filter((app): app is PreviewAppRuntime => app != null);
 
   if (testableApps.length === 0) {
-    // No app is recorded at this head — but "skip green" is only honest when
-    // nothing app-affecting changed since the last fully tested deploy.
-    // Recompute the exact selection deploy would make for the current head to
-    // tell that case apart from a stale recorded state (a push raced the
-    // deploy step, or deploy died before recording); see
-    // explainPreviewTestSkip.
-    const appsDeployWouldSelect = await selectPreviewAppsForPullRequest({
-      ...context,
-      previousState: current.state,
-    });
-    // Older-head entries that never earned a green ("awaiting-tests" — a
-    // cancelled run's deploy landed but its tests never ran — or
-    // "tests-failed"). When the diff says nothing app-affecting changed,
-    // those deployments ARE this head's code, so the honest move is to run
-    // their tests now — not to skip green over zero results (observed
-    // 2026-07-10: run 7 deployed then got cancelled by run 8's push; run 8's
-    // one-line non-app diff then "skipped, results still stand" while every
-    // app sat at awaiting-tests).
-    const untestedOlderHead = recordedTestable.filter(
-      (entry) => entry.status !== "deployed" || entry.testDurationMs == null,
-    );
-    if (appsDeployWouldSelect.length === 0 && untestedOlderHead.length > 0) {
-      testableApps = toRuntimes(untestedOlderHead);
-      logPreview(
-        `no app is recorded at head ${context.pullRequestHeadSha.slice(0, 7)}, but nothing app-affecting changed and ${untestedOlderHead
-          .map((entry) => `${entry.appSlug} (${entry.status})`)
-          .join(
-            ", ",
-          )} never passed tests on the recorded deploy — testing the recorded deployments now`,
-      );
-    } else {
-      const skip = explainPreviewTestSkip({
-        appsDeployWouldSelect: appsDeployWouldSelect.map((app) => app.slug),
-        pullRequestHeadSha: context.pullRequestHeadSha,
-        recordedApps: current.state.apps,
-      });
-      logPreview(skip.notice);
-      await updatePreviewState(context, (state) => ({
-        ...state,
-        notice: skip.notice,
-      }));
-      if (skip.verdict === "stale-head") {
-        throw new Error(skip.notice);
-      }
-      return {
-        ok: true,
-        skipped: true,
-        skippedReason: skip.verdict,
-        state: current.state,
-      };
-    }
+    // Deploy leaves nothing recorded at this head only when nothing
+    // app-affecting changed since the last fully tested deploy: its retry
+    // selection redeploys every non-green recorded app at the current head
+    // regardless of which head produced it (see
+    // selectPreviewAppsNeedingRetry), so any app still at an older head is a
+    // green whose results stand. `preview run` shares one resolved head
+    // between the deploy and test phases, so the old two-step hazard — a
+    // push racing into the gap and a green check describing a commit that
+    // never ran — cannot reach this branch there. A standalone `test` just
+    // reports the skip; the flake-hunt loop already treats any skip as "not
+    // a green run".
+    const notice = `Preview e2e skipped for head ${context.pullRequestHeadSha.slice(0, 7)}: no app is recorded at this head — nothing app-affecting changed since the last fully tested deploy, so the recorded results below still stand. If this PR has never deployed for this head, run preview deploy first.`;
+    logPreview(notice);
+    await updatePreviewState(context, (state) => ({
+      ...state,
+      notice,
+    }));
+    return {
+      ok: true,
+      skipped: true,
+      skippedReason: "no-apps-at-current-head",
+      state: recorded,
+    };
   }
   logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
 
@@ -500,7 +518,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
   // each app deploys its own workers, and the non-OS suites are seconds-long
   // smokes whose load is negligible next to the OS lanes.
   const maybeEntries = await mapWithConcurrency(testableApps, testableApps.length, async (app) => {
-    const existingEntry = current.state.apps[app.slug];
+    const existingEntry = recorded.apps[app.slug];
     if (!existingEntry?.publicUrl) {
       return null;
     }
@@ -599,7 +617,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
 
   const result = {
     ok,
-    state: current.state,
+    state: recorded,
   };
 
   if (!result.ok) {
@@ -4007,12 +4025,11 @@ async function selectPreviewAppsForPullRequest(input: {
   const fetchCompare = input.fetchCompare ?? makeGithubCompareFetcher(input);
   const probeAppServing = input.probeAppServing ?? probePreviewAppServingOnce;
 
-  // Failed recorded state is retried on EVERY path — not only when the head
-  // is unchanged. A push whose diff misses the failed apps must not leave
-  // them wedged (see the comment in selectPreviewAppsNeedingRetry).
+  // Non-green recorded state is retried on EVERY path — not only when the
+  // head is unchanged. A push whose diff misses the failed apps must not
+  // leave them wedged (see the comment in selectPreviewAppsNeedingRetry).
   const retryApps = selectPreviewAppsNeedingRetry({
     previousState: input.previousState,
-    pullRequestHeadSha: input.pullRequestHeadSha,
   });
 
   const compareBaseSha = resolvePreviewCompareBaseSha(input);
@@ -4089,74 +4106,22 @@ async function selectPreviewAppsForPullRequest(input: {
   return expanded.map((slug) => cloudflarePreviewApps[slug]);
 }
 
-/**
- * Verdict for a `preview test` run that found no recorded app at the PR's
- * current head. Two very different situations look identical in the recorded
- * state, because deploy's diff selection deliberately leaves unaffected apps
- * recorded at older heads:
- *
- * - "nothing-changed": nothing app-affecting changed since the last fully
- *   tested deploy, so the recorded results still describe the code under
- *   review and a green skip is honest;
- * - "stale-head": deploy has not recorded the current head's apps (a push
- *   raced between the deploy and test steps, or deploy died before
- *   recording), so the slot does not run the head being reported on and a
- *   green check would lie — observed as a hazard on preview-7 (PR #1793,
- *   2026-07-09), where a green "deploy + e2e" could stand on a slot that had
- *   run nothing.
- *
- * The discriminator is the selection deploy itself would make for this head:
- * if deploy would select apps, the recorded state is stale and the run must
- * fail loudly. The workflow-level cancel-in-progress means a superseding run
- * for the newer push is usually already queued, so the loud failure is cheap
- * and honest.
- */
-function explainPreviewTestSkip(params: {
-  appsDeployWouldSelect: readonly string[];
-  pullRequestHeadSha: string;
-  recordedApps: CloudflarePreviewState["apps"];
-}): { verdict: "nothing-changed"; notice: string } | { verdict: "stale-head"; notice: string } {
-  const shortHeadSha = params.pullRequestHeadSha.slice(0, 7);
-  if (params.appsDeployWouldSelect.length === 0) {
-    return {
-      verdict: "nothing-changed",
-      notice: `Preview e2e skipped for head ${shortHeadSha}: nothing app-affecting changed since the last fully tested deploy, so the recorded results below still stand.`,
-    };
-  }
-
-  const recordedRows = Object.values(params.recordedApps).map(
-    (entry) =>
-      `  ${entry.appSlug}: ${entry.status}, head ${entry.shortSha ?? "?"}${entry.headSha === params.pullRequestHeadSha ? "" : " (stale — deploy has not run for the current head)"}`,
-  );
-  return {
-    verdict: "stale-head",
-    notice: [
-      `Preview e2e refused to skip for head ${shortHeadSha}: deploy has not recorded ${params.appsDeployWouldSelect.join(", ")} at this head, so a green result would describe a different commit. E2e was NOT run.`,
-      ...(recordedRows.length > 0
-        ? ["Recorded app states:", ...recordedRows]
-        : ["No apps are recorded at all."]),
-      "A push likely raced the deploy step, or deploy failed before recording. A superseding run usually follows automatically; if none does, re-run the Cloudflare Previews workflow (preview deploy + test).",
-    ].join("\n"),
-  };
-}
-
-function selectPreviewAppsNeedingRetry(params: {
-  previousState: CloudflarePreviewState;
-  pullRequestHeadSha: string;
-}) {
-  // Failed state is retried regardless of which head produced it: a slot
-  // whose deploy failed at an OLD head stays wedged if the next push's diff
-  // doesn't select those apps (observed: an envs.ts-only fix push selected
-  // nothing, deploy skipped "nothing to deploy", the test lane then skipped
-  // its stale recorded apps and the whole check went GREEN on a slot with
-  // three deploy-failed apps). awaiting-tests keeps its same-head guard: at
-  // an old head it just means "an older deploy finished and its e2e never
-  // ran", which the current head's normal diff selection supersedes.
+function selectPreviewAppsNeedingRetry(params: { previousState: CloudflarePreviewState }) {
+  // Any non-green state is retried regardless of which head produced it. For
+  // the failed statuses: a slot whose deploy failed at an OLD head stays
+  // wedged if the next push's diff doesn't select those apps (observed: an
+  // envs.ts-only fix push selected nothing, deploy skipped "nothing to
+  // deploy", the test lane then skipped its stale recorded apps and the
+  // whole check went GREEN on a slot with three deploy-failed apps). For
+  // awaiting-tests: at any head it means a deploy landed and its e2e never
+  // ran (a cancelled run), so redeploying it at the current head — idempotent
+  // and cheap — is what makes the test lane's "no app recorded at this head"
+  // an honest green skip (observed 2026-07-10: run 7 deployed then got
+  // cancelled by run 8's push; run 8's one-line non-app diff then skipped
+  // green while every app sat at awaiting-tests).
   const retrySlugs = Object.values(params.previousState.apps)
-    .filter(
-      (entry) =>
-        ["claim-failed", "deploy-failed", "tests-failed"].includes(entry.status) ||
-        (entry.status === "awaiting-tests" && entry.headSha === params.pullRequestHeadSha),
+    .filter((entry) =>
+      ["awaiting-tests", "claim-failed", "deploy-failed", "tests-failed"].includes(entry.status),
     )
     .map((entry) => CloudflarePreviewAppSlug.parse(entry.appSlug));
 
@@ -4406,7 +4371,6 @@ export const previewInternals = {
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
   evaluateCloudflareZoneCheck,
-  explainPreviewTestSkip,
   holderPullRequestUrl,
   pullRequestHolder,
   requireExplicitReclaimForce,
