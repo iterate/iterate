@@ -198,7 +198,16 @@ export class RepoDurableObject extends DurableObject<Env> {
       input.exclude === undefined &&
       input.include === undefined;
     if (cacheable) {
-      return this.#headFilesSnapshot.get(() => this.#loadFilesSnapshot({ ...input, branch }));
+      return this.#headFilesSnapshot.get(
+        () => this.#loadFilesSnapshot({ ...input, branch }),
+        (snapshot) => {
+          // #checkout deliberately returns its last clone after the bounded
+          // eventual-consistency retries. Let current callers use that result,
+          // but never retain it when it still trails the last observed push.
+          const pushed = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
+          return typeof pushed !== "string" || pushed === snapshot.commitOid;
+        },
+      );
     }
     return this.#loadFilesSnapshot(input);
   }

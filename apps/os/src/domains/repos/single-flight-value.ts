@@ -6,12 +6,20 @@
 export class SingleFlightValue<T> {
   #promise: Promise<T> | undefined;
 
-  get(load: () => Promise<T>): Promise<T> {
+  get(load: () => Promise<T>, retain: (value: T) => boolean = () => true): Promise<T> {
     if (this.#promise !== undefined) return this.#promise;
-    const promise = load().catch((error: unknown) => {
-      if (this.#promise === promise) this.#promise = undefined;
-      throw error;
-    });
+    const promise = load()
+      .then((value) => {
+        // A value can be useful to the current callers but unsafe to retain
+        // after state changed while it loaded. Generation-fence the eviction
+        // so an invalidated older load cannot clear its replacement.
+        if (!retain(value) && this.#promise === promise) this.#promise = undefined;
+        return value;
+      })
+      .catch((error: unknown) => {
+        if (this.#promise === promise) this.#promise = undefined;
+        throw error;
+      });
     this.#promise = promise;
     return promise;
   }
