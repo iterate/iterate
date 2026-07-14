@@ -28,7 +28,11 @@ import { Textarea } from "@iterate-com/ui/components/textarea";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
@@ -62,6 +66,7 @@ const parseEgressUrls = (raw: string): string[] =>
     .filter((url) => url !== "");
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
+  staticData: streamPageStaticData(),
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context }) =>
