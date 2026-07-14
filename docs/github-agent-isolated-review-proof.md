@@ -1,3 +1,3 @@
 # GitHub agent isolated-review proof
 
-status: pending
+status: completed by iterate
