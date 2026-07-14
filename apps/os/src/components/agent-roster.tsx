@@ -4,18 +4,15 @@ import { ChevronDown, ChevronUp, Circle } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
 } from "@iterate-com/ui/components/sidebar";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useLiveState } from "~/itx/itx-react.tsx";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
-
-/** How many agents the project sidebar shows; the list scrolls past ~5. */
-const MAX_SIDEBAR_AGENTS = 10;
 
 type RosterRow = {
   path: string;
@@ -67,10 +64,12 @@ function useAgentRoster(projectId: string): RosterRow[] {
 }
 
 /**
- * The most recently active agents, at the bottom of the project sidebar: a
- * live busy dot, the agent's title, and its expandable status line. Hidden
- * while the sidebar is collapsed to icons, and absent entirely until any
- * agent has announced status.
+ * The agents roster in the project sidebar, newest activity first: a live
+ * busy dot, the agent's title, and its expandable status line per agent.
+ * Sits in the nav content after the stream links (its own leading divider),
+ * so a long list scrolls naturally with the sidebar. Hidden while the
+ * sidebar is collapsed to icons, and absent entirely — divider included —
+ * until any agent has announced status.
  */
 export function SidebarRecentAgents({
   projectId,
@@ -82,18 +81,18 @@ export function SidebarRecentAgents({
   const rows = useAgentRoster(projectId);
   if (rows.length === 0) return null;
   return (
-    <SidebarGroup className="py-0 group-data-[collapsible=icon]:hidden">
-      <SidebarGroupLabel>Agents</SidebarGroupLabel>
-      <SidebarGroupContent>
-        <div className="max-h-56 overflow-y-auto no-scrollbar">
+    <>
+      <SidebarSeparator className="group-data-[collapsible=icon]:hidden" />
+      <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+        <SidebarGroupContent>
           <SidebarMenu>
-            {rows.slice(0, MAX_SIDEBAR_AGENTS).map((row) => (
+            {rows.map((row) => (
               <AgentRosterMenuItem key={row.path} projectSlug={projectSlug} row={row} />
             ))}
           </SidebarMenu>
-        </div>
-      </SidebarGroupContent>
-    </SidebarGroup>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </>
   );
 }
 

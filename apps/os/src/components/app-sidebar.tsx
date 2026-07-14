@@ -92,11 +92,6 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
   // Missing projects (auth knows them, this deployment's engine does not) are
   // not navigable — the /projects page owns setting them up.
   const projects = data?.filter((project) => project.deploymentStatus !== "missing") ?? [];
-  // The agents roster subscribes per project (same `address` lane as ⌘K), so
-  // it only mounts once a project route resolves the active project.
-  const matches = useMatches();
-  const activeProject = getActiveRouteProject(matches);
-
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
   // CloseMobileSidebarOnNavigate must sit outside <Sidebar>: on mobile, Sidebar
@@ -117,9 +112,6 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
           <AppSidebarNav routeConfig={routeConfig} />
         </SidebarContent>
         <SidebarFooter>
-          {activeProject === null ? null : (
-            <SidebarRecentAgents projectId={activeProject.id} projectSlug={activeProject.slug} />
-          )}
           <AppSidebarCollapseButton />
           <AppSidebarUser />
         </SidebarFooter>
@@ -430,6 +422,7 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   if (activeProjectSlug) {
     return (
       <ProjectSidebarGroup
+        projectId={activeRouteProject?.id ?? null}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}
@@ -512,10 +505,14 @@ function getActiveRouteProject(matches: ReturnType<typeof useMatches>): ActiveRo
 
 function ProjectSidebarGroup({
   projectHostnameBases,
+  projectId,
   projectSlug,
   appBaseUrl,
 }: {
   projectHostnameBases: readonly string[];
+  /** Null while the route context has not resolved the project (cached-slug
+   * fallback) — the agents roster needs the id to address its subscription. */
+  projectId: string | null;
   projectSlug: string;
   appBaseUrl?: string;
 }) {
@@ -624,6 +621,12 @@ function ProjectSidebarGroup({
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
+      {/* The live agents roster rides the nav content, so overflow scrolls
+          with the sidebar instead of a pinned footer box. Renders nothing
+          (including its leading divider) until an agent announces status. */}
+      {projectId === null ? null : (
+        <SidebarRecentAgents projectId={projectId} projectSlug={projectSlug} />
+      )}
     </>
   );
 }
