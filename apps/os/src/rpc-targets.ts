@@ -4075,13 +4075,21 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     note?: string;
     shortStatus?: string;
   }): Promise<StreamEvent> {
+    // Whitespace-only values are dropped, not journaled: a patch of empty
+    // strings would blank titles and notes on every surface.
+    const field = (value: string | undefined) => {
+      const trimmed = value?.trim();
+      return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+    };
     const patch = {
-      ...(input.title === undefined ? {} : { title: input.title.trim() }),
-      ...(input.note === undefined ? {} : { note: input.note.trim() }),
-      ...(input.shortStatus === undefined ? {} : { shortStatus: input.shortStatus.trim() }),
+      ...(field(input.title) === undefined ? {} : { title: field(input.title) }),
+      ...(field(input.note) === undefined ? {} : { note: field(input.note) }),
+      ...(field(input.shortStatus) === undefined ? {} : { shortStatus: field(input.shortStatus) }),
     };
     if (Object.keys(patch).length === 0) {
-      throw new Error("agent.setStatus requires at least one of title, note, shortStatus.");
+      throw new Error(
+        "agent.setStatus requires at least one non-empty field (title, note, shortStatus).",
+      );
     }
     const [event] = await this.stream.append({
       type: "events.iterate.com/agent/status-changed",

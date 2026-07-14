@@ -328,9 +328,6 @@ export const AgentStatusRecord = z.object({
 /** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */
 export type AgentStatusRecord = z.infer<typeof AgentStatusRecord>;
 
-/** One status-changed payload, as consumers receive it. */
-export type AgentStatusPatch = AgentStatusRecord;
-
 /**
  * Merge one status-changed payload into a folded status record — THE fold
  * every consumer shares (the agent's own state, the Slack painter, the
@@ -342,7 +339,7 @@ export type AgentStatusPatch = AgentStatusRecord;
  */
 export function mergeAgentStatusPatch(
   record: AgentStatusRecord | undefined,
-  patch: AgentStatusPatch,
+  patch: AgentStatusRecord,
 ): AgentStatusRecord | undefined {
   const busyAccepted =
     patch.busy !== undefined &&
