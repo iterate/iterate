@@ -27,6 +27,7 @@ const CROSSPOST_RETRY_SAMPLES = Number(process.env.STREAM_BENCH_CROSSPOST_RETRY_
 const SPARSE_SKIP_SAMPLES = Number(process.env.STREAM_BENCH_SPARSE_SKIP_SAMPLES ?? "0");
 const COLD_SAMPLES = Number(process.env.STREAM_BENCH_COLD_SAMPLES ?? "0");
 const INLINE_LARGE_SAMPLES = Number(process.env.STREAM_BENCH_INLINE_LARGE_SAMPLES ?? "0");
+const CHECKPOINT_CYCLE_SAMPLES = Number(process.env.STREAM_BENCH_CHECKPOINT_CYCLE_SAMPLES ?? "0");
 
 type StreamHandle = Stream & Disposable;
 
@@ -125,6 +126,14 @@ async function readHead(stream: StreamHandle): Promise<{ maxOffset: number }> {
   if (IMPLEMENTATION === "candidate") return await stream.head();
   const state = (await stream.runtimeState()).coreProcessorState as { maxOffset: number };
   return { maxOffset: state.maxOffset };
+}
+
+async function forceIdleTeardown(stream: StreamHandle): Promise<void> {
+  await (
+    stream as unknown as {
+      durableObjectStub: { runIdleTeardownNow(): Promise<void> | void };
+    }
+  ).durableObjectStub.runIdleTeardownNow();
 }
 
 test.skipIf(!ENABLED)(
@@ -664,6 +673,85 @@ test.skipIf(!ENABLED)(
         expect(await destination.getEvents({ eventTypes: [SELECTED_TYPE], limit: 1 })).toEqual([]);
       }
       metrics.crosspost_sparse_skip_8000_rows = summarize(samples, rawRows);
+    }
+
+    if (CHECKPOINT_CYCLE_SAMPLES > 0) {
+      const dirtyHotSamples: number[] = [];
+      const dirtyColdSamples: number[] = [];
+      const dirtyTotalSamples: number[] = [];
+      const cleanHotSamples: number[] = [];
+      const cleanFlushSamples: number[] = [];
+      const cleanColdSamples: number[] = [];
+      const cleanTotalSamples: number[] = [];
+
+      const appendFiveBatches = async (stream: StreamHandle, iteration: number) => {
+        for (let batch = 0; batch < 5; batch += 1) {
+          await stream.appendAck(
+            ...Array.from({ length: 100 }, (_, index) =>
+              event({
+                marker: `checkpoint-${iteration}-${batch}-${index}`,
+                payload: "x",
+              }),
+            ),
+          );
+        }
+      };
+
+      for (let iteration = -2; iteration < CHECKPOINT_CYCLE_SAMPLES; iteration += 1) {
+        const path = `/bench/${runId}/checkpoint-dirty-${iteration}`;
+        using stream = project.streams.get(path);
+        const initialHead = (await stream.head()).maxOffset;
+        const totalStartedAt = performance.now();
+        const hotStartedAt = performance.now();
+        await appendFiveBatches(stream, iteration);
+        const hotMs = performance.now() - hotStartedAt;
+        await stream.kill().catch(() => undefined);
+        using reactivated = project.streams.get(path);
+        const coldStartedAt = performance.now();
+        const observedHead = (await reactivated.head()).maxOffset;
+        const coldMs = performance.now() - coldStartedAt;
+        if (observedHead < initialHead + 500)
+          throw new Error("Dirty checkpoint cycle lost events.");
+        if (iteration >= 0) {
+          dirtyHotSamples.push(hotMs);
+          dirtyColdSamples.push(coldMs);
+          dirtyTotalSamples.push(performance.now() - totalStartedAt);
+        }
+      }
+
+      for (let iteration = -2; iteration < CHECKPOINT_CYCLE_SAMPLES; iteration += 1) {
+        const path = `/bench/${runId}/checkpoint-clean-${iteration}`;
+        using stream = project.streams.get(path);
+        const initialHead = (await stream.head()).maxOffset;
+        const totalStartedAt = performance.now();
+        const hotStartedAt = performance.now();
+        await appendFiveBatches(stream, iteration);
+        const hotMs = performance.now() - hotStartedAt;
+        const flushStartedAt = performance.now();
+        await forceIdleTeardown(stream);
+        const flushMs = performance.now() - flushStartedAt;
+        await stream.kill().catch(() => undefined);
+        using reactivated = project.streams.get(path);
+        const coldStartedAt = performance.now();
+        const observedHead = (await reactivated.head()).maxOffset;
+        const coldMs = performance.now() - coldStartedAt;
+        if (observedHead < initialHead + 500)
+          throw new Error("Clean checkpoint cycle lost events.");
+        if (iteration >= 0) {
+          cleanHotSamples.push(hotMs);
+          cleanFlushSamples.push(flushMs);
+          cleanColdSamples.push(coldMs);
+          cleanTotalSamples.push(performance.now() - totalStartedAt);
+        }
+      }
+
+      metrics.checkpoint_dirty_hot_5x100 = summarize(dirtyHotSamples, 500);
+      metrics.checkpoint_dirty_cold_head = summarize(dirtyColdSamples);
+      metrics.checkpoint_dirty_total_cycle = summarize(dirtyTotalSamples, 500);
+      metrics.checkpoint_clean_hot_5x100 = summarize(cleanHotSamples, 500);
+      metrics.checkpoint_clean_flush = summarize(cleanFlushSamples);
+      metrics.checkpoint_clean_cold_head = summarize(cleanColdSamples);
+      metrics.checkpoint_clean_total_cycle = summarize(cleanTotalSamples, 500);
     }
 
     {

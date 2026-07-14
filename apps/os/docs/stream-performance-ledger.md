@@ -1003,3 +1003,75 @@ The proposed legacy KV storage rewrite remains deprioritized. Current evidence
 continues to favor synchronous SQLite: its commit/output-gate semantics are the
 correctness boundary, and the retained wins came from reducing statements,
 materialization, and redundant work rather than taking over flush scheduling.
+
+## 2026-07-14: Rejected Split Checkpoint Cadence
+
+### Hypothesis
+
+Keep the restored-lag ceiling at 64 events, but let a clean warm incarnation
+trail its disposable core-state checkpoint by up to 500 events. The journal
+would remain the commit truth, while fewer full-state KV writes could make
+100-event append batches faster. Idle teardown and alarms would still flush a
+clean shutdown; an abrupt restart would fold the bounded journal tail.
+
+The prototype used a 501-event warm threshold, switched back to the 64-event
+threshold whenever activation restored nonzero lag, and returned to the warm
+threshold only after that lag had been checkpointed. Focused tests covered 500
+warm events, the 501st event, and the restored-63-plus-one boundary.
+
+### Workers Result
+
+- Baseline: exact parent `b3f1c45ed`; candidate: the split cadence on that
+  parent.
+- Five full rounds per revision in `P,C,C,P,P,C,C,P,P,C` order, with one
+  Workers stack active at a time.
+- Each lifecycle metric used two warmups and ten measured fresh streams per
+  round. Every stream appended five acknowledged 100-event batches, then
+  forced either abrupt reactivation or clean idle teardown and reactivation.
+  The cold read asserted all 500 markers survived.
+- Host `performance.now()` enclosed every awaited RPC and teardown call. The
+  benchmark does not depend on a Worker clock advancing during synchronous
+  storage work.
+
+Values are medians of the five per-round p50, p95, and mean statistics.
+
+| Lifecycle metric       | Statistic |    Parent | Candidate | Change |
+| ---------------------- | --------- | --------: | --------: | -----: |
+| Dirty hot five batches | p50       | 19.307 ms | 18.235 ms |   5.5% |
+|                        | p95       | 26.443 ms | 24.573 ms |   7.1% |
+|                        | mean      | 19.955 ms | 18.249 ms |   8.5% |
+| Dirty cold head        | p50       |  3.187 ms |  3.495 ms |  -9.6% |
+|                        | p95       |  3.770 ms |  6.656 ms | -76.6% |
+|                        | mean      |  3.164 ms |  4.074 ms | -28.8% |
+| Dirty total cycle      | p50       | 26.709 ms | 25.918 ms |   3.0% |
+|                        | p95       | 33.188 ms | 32.256 ms |   2.8% |
+|                        | mean      | 27.338 ms | 26.036 ms |   4.8% |
+| Clean total cycle      | p50       | 27.111 ms | 26.420 ms |   2.5% |
+|                        | p95       | 33.789 ms | 34.432 ms |  -1.9% |
+|                        | mean      | 27.629 ms | 28.033 ms |  -1.5% |
+
+The standalone 100-event append control improved 6.9% p50 and 7.4% throughput,
+confirming the intended hot-path effect. The end-to-end gain did not survive
+the work transfer: dirty total-cycle p50 improved only 3.0%, clean-cycle mean
+regressed 1.5%, and dirty cold-head p95 regressed 76.6%. This misses the 5%
+total-cycle retention gate and creates a materially worse crash-recovery tail.
+
+### Decision And Retained Artifact
+
+Reject the production schedule change and its new branches. The Stream keeps
+the single 64-event bound, so production complexity and recovery behavior are
+unchanged.
+
+Retain the opt-in `STREAM_BENCH_CHECKPOINT_CYCLE_SAMPLES` benchmark lane. It
+measures acknowledged hot appends, forced dirty reactivation, explicit clean
+idle flush, cold head, and both total cycles while proving all event markers
+survive. It is test-only and dormant in normal cumulative runs. Future
+checkpoint experiments now have a lifecycle-level gate instead of relying on
+an append microbenchmark. Raw records are in
+`/tmp/checkpoint-workers-{parent,candidate}.log` for the life of this
+workstation.
+
+The next production experiment is historical-frame flattening: remove wrapper
+objects and redundant traversals after the retained sparse SQL query, then
+measure dense and sparse replay separately before changing storage or RPC
+contracts.
