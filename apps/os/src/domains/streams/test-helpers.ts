@@ -46,7 +46,7 @@ function emptyStreamRuntimeState() {
   };
 }
 
-export function createMemoryStreamAppend(
+function createMemoryStreamAppend(
   commit: (...inputs: StreamEventInput[]) => StreamEvent[] | Promise<StreamEvent[]>,
 ): Stream["append"] {
   return async (...args) => {
@@ -72,17 +72,6 @@ export async function appendTestEvents(
     throw new Error("append did not return events");
   }
   return result as StreamEvent[];
-}
-
-export async function appendTestOffsets(
-  stream: Pick<Stream, "append">,
-  ...events: StreamEventInput[]
-): Promise<number[]> {
-  const result = await stream.append({ return: "offsets" }, ...events);
-  if (!Array.isArray(result) || result.some((value) => typeof value !== "number")) {
-    throw new Error("append did not return offsets");
-  }
-  return result as number[];
 }
 
 export class MemoryStream implements Stream {
