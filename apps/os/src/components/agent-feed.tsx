@@ -20,7 +20,6 @@ import type {
   AgentUiMessageItem,
   AgentUiMessageVia,
   AgentUiStep,
-  AgentUiTokenUsage,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
   Message,
@@ -48,51 +47,6 @@ import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 // activity tail. The rows are `agent.*` feed_items written by the browser-feed
 // projector; the virtualized list that windows over them lives in
 // stream-feed-view.tsx — this file owns only how each item renders.
-
-/**
- * One-line token accounting for the agent, folded from the agent processor's
- * token-usage-reported events: how full the context is (the last request's
- * input+output against its model window — what the next turn starts from)
- * plus lifetime in/out totals with the cached/reasoning breakdowns on hover.
- * Renders nothing until the agent has completed a turn that reported usage.
- */
-export function AgentTokenUsageStrip({ tokenUsage }: { tokenUsage: AgentUiTokenUsage }) {
-  const last = tokenUsage.lastReport;
-  if (last == null) return null;
-  const contextTokens = last.inputTokens + last.outputTokens;
-  const contextPercent = Math.min(100, Math.round((contextTokens / last.maxContextTokens) * 100));
-  const breakdown = [
-    `model: ${last.model}`,
-    `last request: ${last.inputTokens.toLocaleString()} in / ${last.outputTokens.toLocaleString()} out of ${last.maxContextTokens.toLocaleString()} context`,
-    `lifetime input: ${tokenUsage.totalInputTokens.toLocaleString()} (${tokenUsage.totalCachedInputTokens.toLocaleString()} cached)`,
-    `lifetime output: ${tokenUsage.totalOutputTokens.toLocaleString()} (${tokenUsage.totalReasoningOutputTokens.toLocaleString()} reasoning)`,
-  ].join("\n");
-  return (
-    <div
-      title={breakdown}
-      // Sits under the composer pill; the horizontal padding keeps the strip's
-      // edges inside the pill's rounded-3xl corner radius.
-      className="flex shrink-0 items-center justify-end gap-3 px-4 font-mono text-[11px] text-muted-foreground"
-    >
-      <span className={contextPercent >= 80 ? "text-destructive" : undefined}>
-        context {formatTokens(contextTokens)}/{formatTokens(last.maxContextTokens)} (
-        {contextPercent}%)
-      </span>
-      <span>
-        in {formatTokens(tokenUsage.totalInputTokens)}
-        {tokenUsage.totalCachedInputTokens > 0
-          ? ` (${formatTokens(tokenUsage.totalCachedInputTokens)} cached)`
-          : ""}
-      </span>
-      <span>
-        out {formatTokens(tokenUsage.totalOutputTokens)}
-        {tokenUsage.totalReasoningOutputTokens > 0
-          ? ` (${formatTokens(tokenUsage.totalReasoningOutputTokens)} reasoning)`
-          : ""}
-      </span>
-    </div>
-  );
-}
 
 // Memoized: the feed re-renders on every 16ms live-streaming tick, and settled
 // rows (markdown, highlighted code) must not re-render along with it. Item
