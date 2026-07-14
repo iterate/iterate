@@ -825,7 +825,7 @@ return { offset: sent.offset, payload: sent.payload, type: sent.type };
     id: "docs-search-and-get",
     title: "Find working code + types through itx.docs",
     description:
-      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
+      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query. (For the project's own content and history, use itx.search.query.)",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -854,8 +854,9 @@ return {
   },
   {
     id: "search-query-and-resolve-ref",
-    // Not in the unattended matrix: a query on a fresh project lazily CREATES
-    // that project's AI Search instance — real account resources every run.
+    // Not in the unattended matrix: on a fresh fixture project the instance
+    // (born with the project) has not finished its first sync, so the corpus
+    // lane is empty-but-warming — the assertion would race the index.
     e2eProven: false,
     title: "Search the project, then follow a hit's ref to the real object",
     description:

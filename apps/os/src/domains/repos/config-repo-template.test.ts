@@ -5,21 +5,33 @@ function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
-test("template is one worker file with no vendor SDK cruft", () => {
-  // The whole seeded worker lives in worker.ts — the router (default export)
-  // plus the example apps as named exports — so reading one module is reading
-  // the whole system. Vendor SDK surfaces are NOT seeded: built-ins live at
+test("template keeps policy in worker.ts and tested review mechanics in one local module", () => {
+  // The router, apps, and review policy live in worker.ts. The safety-critical
+  // userspace review mechanics are isolated in one importable local module;
+  // review rules stay plain Markdown. Vendor SDK surfaces are NOT seeded:
+  // built-ins live at
   // itx.integrations.<slug>, and a project that wants its own updates its own
   // worker first (worker-build.e2e.test.ts walks exactly that path).
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
   expect(paths.filter((path) => path.startsWith("apps/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
+  expect(paths.filter((path) => path.startsWith("agents/"))).toEqual(["agents/github-review.md"]);
+  expect(paths).toContain("github-reviews.ts");
 
   const worker = templateFile("worker.ts");
   expect(worker).toContain("export default class ProjectWorker");
   expect(worker).toContain("export class HelloApp");
   expect(worker).toContain("export class CounterApp");
+  expect(worker).toContain("const GITHUB_REVIEWS");
+  expect(worker).toContain('from "./github-reviews.ts"');
+  const reviews = templateFile("github-reviews.ts");
+  expect(reviews).toContain("itx.integrations.github.get(target.connection).octokit");
+  expect(reviews).toContain("github-review-timeout:");
+  const rules = templateFile("agents/github-review.md");
+  expect(rules).toContain("If there is no actionable feedback, do not leave a review or comment.");
+  expect(rules).toContain("policy definitions, documentation, generated fixtures, tests");
+  expect(rules).toContain("explicitly allowed");
   expect(worker).not.toMatch(/slack/i);
   expect(worker).not.toMatch(/waitrose/i);
 

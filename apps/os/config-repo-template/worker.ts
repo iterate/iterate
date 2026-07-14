@@ -1,11 +1,24 @@
 import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { processGithubReviewEvent } from "./github-reviews.ts";
 
-// The whole seeded worker in ONE file, so reading this module is reading the
-// whole system: the root project worker (default export) routes HTTP and
-// reacts to project events, and the example apps are named exports — a
-// stateless HelloApp and a stateful CounterApp with live WebSocket updates.
-// Both apps build from THIS file with a different entry class; split an app
-// into its own file (and point its ref's entryPoint at it) when it earns one.
+// Pull-request reviews are project userspace, not platform policy. Keep this
+// list empty to disable them; add exact "owner/repo" names to review every
+// opened, ready, or pushed non-draft head in those repositories. The labels
+// provide per-PR controls using GitHub's own permissions.
+const GITHUB_REVIEWS = {
+  forceLabel: "iterate:review",
+  repositories: [] as string[],
+  rulesPath: "agents/github-review.md",
+  skipLabel: "iterate:skip-review",
+  timeoutSeconds: 30 * 60,
+};
+
+// The root project worker (default export) routes HTTP and reacts to project
+// events, and the example apps are named exports — a stateless HelloApp and a
+// stateful CounterApp with live WebSocket updates. Review POLICY stays visible
+// above; its safety-critical mechanics are isolated in github-reviews.ts so
+// they can be tested. Both apps build from THIS file with a different entry
+// class; split an app into its own file when it earns one.
 //
 // Everything extends the iterate/sdk base classes — IterateWorkerEntrypoint
 // (stateless) and IterateDurableObject (stateful) — which carry the platform
@@ -85,9 +98,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // platform announces it on the project root stream and this
     // reaction appends the agent's policy: system prompt, model,
     // capability mounts, boot context. `itx.agents.defaults.forPath` returns
-    // the platform's defaults as data — edit the result (or pass overrides)
-    // to change how YOUR agents behave. GitHub PR agents expose one complete
-    // `githubAgent` policy here, including the switch that turns reviews off.
+    // the platform's defaults as data — edit the result (or pass prompt/model
+    // overrides) to change how YOUR agents behave. GitHub review automation
+    // is a separate userspace reaction to routed webhook events; see the
+    // platform's GitHub-agent guide for the small copyable pattern.
     if (event.path === "/" && event.type === "events.iterate.com/stream/child-stream-created") {
       const childPath = event.payload?.childPath;
       if (typeof childPath === "string" && childPath.startsWith("/agents/")) {
@@ -98,21 +112,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // bundler at target es2022, which cannot transform `using` yet.
         const itx = await this.env.ITX.get();
         try {
-          const overrides = childPath.startsWith("/agents/repos/")
-            ? {
-                githubAgent: {
-                  automaticReview: {
-                    // Set true to review every new non-draft PR head. A PR's
-                    // `iterate:review` / `iterate:skip-review` labels override
-                    // this project default; `@iterate review now` is one-off.
-                    enabled: false,
-                    instructions:
-                      "Review the complete diff for correctness, security, regressions, and missing tests. Report only specific actionable findings supported by changed code.",
-                  },
-                },
-              }
-            : undefined;
-          const defaults = await itx.agents.defaults.forPath(childPath, overrides);
+          const defaults = await itx.agents.defaults.forPath(childPath);
           await itx.streams.get(childPath).append(...defaults.events);
         } finally {
           // Guarded: stub disposal is contractually non-throwing, but a throw
@@ -122,6 +122,17 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
             itx[Symbol.dispose]?.();
           } catch {}
         }
+      }
+    }
+
+    if (event.type === "events.iterate.com/github/webhook-received") {
+      const itx = await this.env.ITX.get();
+      try {
+        await processGithubReviewEvent({ config: GITHUB_REVIEWS, event, itx });
+      } finally {
+        try {
+          itx[Symbol.dispose]?.();
+        } catch {}
       }
     }
   }
