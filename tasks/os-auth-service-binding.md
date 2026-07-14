@@ -34,24 +34,22 @@ or fallback.
   even for manual dispatches from different refs. New environments and manual
   deployments use the same target-first order. There is deliberately no old
   HTTP route to bridge version skew.
-- Every OS deploy forces an uncached slug lookup through the RPC binding before
-  retiring anything. It then deletes and re-lists the live `secret_text`
-  binding that `--secrets-file` otherwise preserves, repeats the normal and RPC
-  probes against that newly activated version, and only then deletes and
-  re-reads the matching Doppler source. Config provisioning and OAuth-client
-  sync do not mutate that source because they cannot prove live revocation.
-- Immediately after the first main production rollout, an operator drains or
-  cancels pre-cutover preview/cleanup runs and explicitly dispatches the
-  one-release preview-fleet workflow. It shares the temporary global gate with
-  preview deploy and cleanup, drains any still-running legacy checks, then
-  audibly force-acquires all nine Semaphore slots without erasing project data.
-  Auth and OS deploy sequentially in every slot through the normal exact-smoke
-  and retirement path; a final nine-slot pass enforces Worker and Doppler
-  absence. Leases release only after complete success. The permanent
-  `scripts/preview/deployment-epoch` floor rejects stale branches before any app
-  deploy, so old Auth cannot be rolled back ahead of a failed old OS deploy. The
-  cutover workflow, script, and temporary gates are removed in a cleanup PR
-  after the dispatch passes.
+- Every OS deploy fails before touching any deployed resource unless both the
+  resolved Doppler config and current Worker bindings omit the forbidden old
+  token name. The invariant is non-mutating; resurrected credentials require
+  explicit operator remediation. After deployment, a random uncached slug
+  lookup proves the RPC binding reaches Auth's default entrypoint with OS's
+  exact project-miss response.
+- The one-release preview-fleet cutover completed on 2026-07-14. It drained old
+  lifecycle checks, force-acquired all nine Semaphore slots without erasing
+  project data, and deployed Auth then OS sequentially in every slot. Every
+  deployed OS used the default Auth RPC binding and passed a fresh cache-miss
+  lookup; the final all-slot pass confirmed the retired token absent from every
+  live Worker and Doppler config before releasing all nine leases. The temporary
+  workflow, script, and fleet-wide concurrency gate were then removed. The
+  `scripts/preview/deployment-epoch` CI floor still rejects stale PR branches
+  before any app deploy. Direct deployment from an old checkout is unsupported
+  because code in that checkout cannot enforce a newer floor.
 
 ## Remaining public service-token surface
 
@@ -72,14 +70,17 @@ secret at runtime.
   matching auth worker's default entrypoint, local/remote selection is
   fail-closed, and the old runtime secret cannot enter generated OS
   configuration.
-- Deploy-helper and OS deployment tests prove live Worker and Doppler secret
-  retirement are idempotent and fail closed when either system still reports
-  the retired value, a wrong-body RPC 404 cannot trigger deletion, and every
-  post-revocation probe must pass before a normal deploy removes its source.
-  Preview-fleet cutover tests prove the drain precedes whole-fleet acquisition,
-  every slot deploys before final retirement and release, a failed deployment
-  retains all maintenance leases, and a partial pre-deploy acquisition unwinds.
+- Deploy-helper and OS deployment tests prove Worker and Doppler absence checks
+  fail closed without mutating or exposing a resurrected value, run before any
+  deployment preparation, and reject a wrong-body RPC 404 after deployment.
+- Depot run `w23f561lz8` deployed and verified all nine preview slots, re-listed
+  all nine Workers, re-read all nine Doppler configs, and released the fleet
+  only after all retired-token checks passed.
 - Preview orchestration tests prove dependencies deploy first while independent
-  dependents retain parallelism.
+  dependents retain parallelism, ordinary acquisition never force-evicts a live
+  lease, and destructive reclaim requires explicit operator force. Parsed
+  workflow tests retain the breaking CI deployment epoch and prove normal
+  deploy/cleanup serialization is scoped per PR rather than through the removed
+  fleet-wide maintenance gate.
 
 Reference: [Cloudflare Workers RPC service bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/).

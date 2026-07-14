@@ -178,10 +178,6 @@ export async function deploy(
     environmentConfigLease = await claimEnvironmentConfigLease({
       createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
       eraseSlotData: makePreviewSlotDataEraser(runtime),
-      fetchPullRequestState: makePullRequestStateFetcher(
-        context.githubToken,
-        context.repositoryFullName,
-      ),
       holder: pullRequestHolder(context.pullRequestNumber),
       leaseMs: defaultPreviewLeaseMs,
       // Surface the wait in the PR body the moment every slot is busy, not
@@ -626,10 +622,6 @@ export async function assign(options: AssignOptions = {}) {
   const current = await readCloudflarePreviewState(context);
   const result = await assignEnvironmentConfigLease({
     eraseSlotData: makePreviewSlotDataEraser(runtime),
-    fetchPullRequestState: makePullRequestStateFetcher(
-      context.githubToken,
-      context.repositoryFullName,
-    ),
     force: options.force,
     holder,
     leaseMs: defaultPreviewLeaseMs,
@@ -847,15 +839,36 @@ export async function release(options: ReleaseOptions) {
   return { released: true, slug, evictedHolder: currentHolder };
 }
 
-/**
- * Resolve slot contention: report which leased slots are active/idle/orphaned, and take a non-active one back with --slot.
- */
+function requireExplicitReclaimForce(
+  slot: {
+    holder: string | null;
+    lastUsedAgo: string | null;
+    leasedUntil: string | null;
+    pullRequestUrl: string | null;
+    slug: string;
+    verdict: "active" | "available" | "idle" | "orphaned";
+  },
+  force: boolean | undefined,
+) {
+  if (force) return;
+
+  throw new Error(
+    [
+      `${slot.slug} is ${slot.verdict} and still leased by ${slot.holder ?? "unknown holder"}${slot.pullRequestUrl ? ` (${slot.pullRequestUrl})` : ""}:`,
+      `  last used ${slot.lastUsedAgo ?? "recently"}, lease expires ${slot.leasedUntil ?? "soon"}.`,
+      "Taking it would ERASE the slot's data and may race its owner's deploy or close-triggered cleanup.",
+      "Re-run with --force only after verifying no deploy or cleanup is still running.",
+    ].join("\n"),
+  );
+}
+
+/** Report slot contention or explicitly reclaim a held slot after checking its lifecycle. */
 type ReclaimOptions = {
   /** Preview slot to reclaim (number or slug). Omit for a report of every slot's verdict. */
   slot?: string;
   /** Hours without a deploy/test renewal before a hold counts as idle. */
   minIdleHours?: number;
-  /** Also reclaim a slot whose holder is still active. Avoid: this clobbers live work. */
+  /** Required to evict any held slot after verifying no deploy or cleanup is still running. */
   force?: boolean;
   /** GitHub token used to check whether pr-N holders are closed. Defaults to GITHUB_TOKEN. */
   githubToken?: string;
@@ -892,8 +905,8 @@ export async function reclaim(options: ReclaimOptions = {}) {
       slots: report,
       reclaimable: report
         .filter((slot) => slot.verdict === "orphaned" || slot.verdict === "idle")
-        .map((slot) => `pnpm preview reclaim --slot ${slot.slug}`),
-      note: "orphaned = holder PR is closed, so its cleanup failed; idle = holder hasn't deployed/tested for a while; reclaiming ERASES the slot's data before returning it to the pool; taking an active slot needs --force",
+        .map((slot) => `pnpm preview reclaim --slot ${slot.slug} --force`),
+      note: "orphaned = holder PR is closed, so its cleanup may have failed; idle = holder hasn't deployed/tested for a while. Reclaiming ERASES the slot's data and always requires explicit --force after checking that no deploy or cleanup is running.",
     };
   }
 
@@ -905,16 +918,7 @@ export async function reclaim(options: ReclaimOptions = {}) {
   if (slot.verdict === "available") {
     return { released: false, slug, message: `${slug} is already available.` };
   }
-  if (slot.verdict === "active" && !options.force) {
-    throw new Error(
-      [
-        `${slug} is actively held by ${slot.holder ?? "unknown holder"}${slot.pullRequestUrl ? ` (${slot.pullRequestUrl})` : ""}:`,
-        `  last used ${slot.lastUsedAgo ?? "recently"}, lease expires ${slot.leasedUntil ?? "soon"}.`,
-        "Taking it would ERASE their slot's data and clobber live work.",
-        "Re-run with --force only after checking with the holder.",
-      ].join("\n"),
-    );
-  }
+  requireExplicitReclaimForce(slot, options.force);
 
   logPreview(
     `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""}) — erasing its data before returning it to the pool`,
@@ -3224,7 +3228,7 @@ function makePullRequestStateFetcher(
   };
 }
 
-/** Pure verdict for one slot; `orphaned` beats `idle` beats `active`. */
+/** Pure reporting verdict; it never authorizes an automatic lease takeover. */
 function classifyLeaseForReclaim(input: {
   holderPullRequestState: "open" | "closed" | "unknown" | null;
   lastAcquiredAt: number | null;
@@ -3236,13 +3240,14 @@ function classifyLeaseForReclaim(input: {
     return "available";
   }
   if (input.holderPullRequestState === "closed") {
-    // The holder PR is closed, so its cleanup should have released the slot;
-    // the lease only survives when that cleanup failed.
+    // Cleanup may still be running immediately after close. Call this an
+    // orphan candidate for operator visibility, but never use the verdict to
+    // authorize automation to force-acquire the live lease.
     return "orphaned";
   }
   if (input.holderPullRequestState === "unknown") {
-    // The GitHub check failed, so we cannot rule out an open PR — never let a
-    // transient API error downgrade a hold to reclaimable-without---force.
+    // The GitHub check failed, so we cannot rule out an open PR. Report the
+    // hold as active rather than implying that an operator should reclaim it.
     return "active";
   }
   if (input.lastAcquiredAt !== null && input.now - input.lastAcquiredAt >= input.minIdleMs) {
@@ -3307,49 +3312,6 @@ function parsePullRequestHolder(holder: string | null | undefined) {
 }
 
 /**
- * Garbage-collect one orphaned lease: a slot held by a pr-N holder whose PR
- * is closed (its cleanup failed, or the lease would be gone). This is the one
- * case automation may take a live lease — the holder can never come back for
- * it, and GitHub confirms that before we touch anything.
- */
-async function tryReclaimOrphanedEnvironmentConfigLease(input: {
-  fetchPullRequestState: PullRequestStateFetcher | null;
-  holder: string;
-  leaseMs: number;
-  semaphore: PreviewSemaphoreResourceClient;
-}) {
-  if (!input.fetchPullRequestState) {
-    return null;
-  }
-
-  const report = await classifyEnvironmentConfigLeases({
-    fetchPullRequestState: input.fetchPullRequestState,
-    minIdleMs: Number.POSITIVE_INFINITY,
-    semaphore: input.semaphore,
-  });
-  const orphans = report
-    .filter((slot) => slot.verdict === "orphaned")
-    .sort((left, right) => (left.lastUsedAt ?? "").localeCompare(right.lastUsedAt ?? ""));
-  for (const orphan of orphans) {
-    const lease = await input.semaphore.acquireSpecific({
-      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-      slug: orphan.slug,
-      leaseMs: input.leaseMs,
-      holder: input.holder,
-      force: true,
-    });
-    if (lease) {
-      logPreview(
-        `reclaimed orphaned slot ${orphan.slug}: it was leased by ${orphan.holder ?? "unknown holder"} whose PR is closed (${orphan.pullRequestUrl ?? "no PR url"}) — their cleanup must have failed`,
-      );
-      return lease;
-    }
-  }
-
-  return null;
-}
-
-/**
  * Erase a just-acquired slot before it is handed to the caller, giving the
  * lease back on failure. Returns true when the slot is clean and ours.
  *
@@ -3390,16 +3352,16 @@ async function eraseAcquiredSlotOrGiveItBack(input: {
 
 /**
  * Acquire any free slot, queueing (via semaphore long-poll) while all slots
- * are leased. Orphaned leases (holder PR closed but cleanup failed) are
- * garbage-collected before waiting. Every handed-out slot is erased first
- * (see eraseAcquiredSlotOrGiveItBack). Fails with the full holder table and
- * remediation steps once `waitTotalMs` elapses.
+ * are leased. Automation never force-acquires a held slot: a close-triggered
+ * cleanup owns its lease until teardown finishes and releases it, which keeps
+ * another PR from erasing or deploying into that slot concurrently. Every
+ * handed-out slot is erased first (see eraseAcquiredSlotOrGiveItBack). Fails
+ * with the full holder table and remediation steps once `waitTotalMs` elapses.
  */
 async function acquireAnyEnvironmentConfigLease(input: {
   semaphore: PreviewSemaphoreResourceClient;
   /** Required so no acquire path can hand out a slot without wiping it. */
   eraseSlotData: EraseSlotData;
-  fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
   onFirstWait?: (holderTable: string) => Promise<void>;
@@ -3421,9 +3383,8 @@ async function acquireAnyEnvironmentConfigLease(input: {
   for (;;) {
     attempt += 1;
     const remainingMs = deadline - Date.now();
-    // The first attempt returns immediately so orphan garbage collection runs
-    // before any long-poll; later attempts queue on the semaphore in 5-minute
-    // polls, re-checking for freshly orphaned slots between polls.
+    // The first attempt returns immediately so contention is surfaced before
+    // any long-poll; later attempts queue on the semaphore in 5-minute polls.
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
       const acquired = await input.semaphore.acquire({
@@ -3467,33 +3428,8 @@ async function acquireAnyEnvironmentConfigLease(input: {
         throw error;
       }
 
-      const reclaimed = await tryReclaimOrphanedEnvironmentConfigLease({
-        fetchPullRequestState: input.fetchPullRequestState ?? null,
-        holder: input.holder,
-        leaseMs: input.leaseMs,
-        semaphore: input.semaphore,
-      });
-      if (reclaimed) {
-        if (
-          await eraseAcquiredSlotOrGiveItBack({
-            eraseSlotData: input.eraseSlotData,
-            lease: reclaimed,
-            semaphore: input.semaphore,
-          })
-        ) {
-          return reclaimed;
-        }
-        if (Date.now() >= deadline) {
-          throw new Error(
-            `Could not hand ${input.holder} a clean slot: erasing ${reclaimed.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
-          );
-        }
-        continue;
-      }
-      if (attempt === 1 && input.fetchPullRequestState) {
-        logPreview(
-          "all slots leased and none are orphaned (every holder's PR is still open or the hold is manual)",
-        );
+      if (attempt === 1) {
+        logPreview("all slots leased — waiting for an owner to release one");
       }
 
       const holderTable = await describeEnvironmentConfigLeases(input.semaphore);
@@ -3510,10 +3446,10 @@ async function acquireAnyEnvironmentConfigLease(input: {
             `No preview slot became available for ${input.holder} after waiting ${formatDurationMs(input.waitTotalMs)}.`,
             "Current slots:",
             holderTable,
-            "Every slot is leased by an open PR or a manual hold. Options:",
+            "Every slot is still leased. Automation never force-reclaims a held slot because its owner may be cleaning it up. Options:",
             "  - re-run once a slot frees up (leases release when their PR closes)",
-            "  - see which holds are idle or orphaned: doppler run --project _shared --config prd -- pnpm preview reclaim",
-            "  - take an idle/orphaned slot back: doppler run --project _shared --config prd -- pnpm preview reclaim --slot N",
+            "  - inspect idle/orphaned holds: doppler run --project _shared --config prd -- pnpm preview reclaim",
+            "  - after verifying no cleanup/deploy is running, reclaim one explicitly: doppler run --project _shared --config prd -- pnpm preview reclaim --slot N --force",
             "  - close or merge stale PRs holding slots",
           ].join("\n"),
         );
@@ -3535,7 +3471,6 @@ async function acquireAnyEnvironmentConfigLease(input: {
 async function claimEnvironmentConfigLease(input: {
   createPreviewSemaphoreResourceClient: () => PreviewSemaphoreResourceClient;
   eraseSlotData: EraseSlotData;
-  fetchPullRequestState?: PullRequestStateFetcher | null;
   holder: string;
   leaseMs: number;
   onFirstWait?: (holderTable: string) => Promise<void>;
@@ -3580,7 +3515,6 @@ async function claimEnvironmentConfigLease(input: {
   const lease = await acquireAnyEnvironmentConfigLease({
     semaphore,
     eraseSlotData: input.eraseSlotData,
-    fetchPullRequestState: input.fetchPullRequestState,
     holder: input.holder,
     leaseMs: input.leaseMs,
     onFirstWait: input.onFirstWait,
@@ -3600,7 +3534,6 @@ async function claimEnvironmentConfigLease(input: {
  */
 async function assignEnvironmentConfigLease(input: {
   eraseSlotData: EraseSlotData;
-  fetchPullRequestState?: PullRequestStateFetcher | null;
   force?: boolean;
   holder: string;
   leaseMs: number;
@@ -3700,7 +3633,6 @@ async function assignEnvironmentConfigLease(input: {
       await acquireAnyEnvironmentConfigLease({
         semaphore: input.semaphore,
         eraseSlotData: input.eraseSlotData,
-        fetchPullRequestState: input.fetchPullRequestState,
         holder: input.holder,
         leaseMs: input.leaseMs,
         waitTotalMs: 0,
@@ -4435,6 +4367,7 @@ export const previewInternals = {
   holderPullRequestUrl,
   pullRequestHolder,
   reassertEnvironmentConfigLease,
+  requireExplicitReclaimForce,
   resolveSlotWaitTotalMs,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
