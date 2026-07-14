@@ -224,7 +224,6 @@ export function StreamModeTabs({ streamPath }: { streamPath: string }) {
           components: undefined,
           from: undefined,
           to: undefined,
-          preset: undefined,
         });
       }}
     >

@@ -109,7 +109,12 @@ Rules are ordinary trusted Markdown at `agents/github-review.md`. For example:
 ```md
 # Pull-request review rules
 
-- Mentions of the word fart are forbidden; use superfart instead.
+- If there is no actionable feedback, do not leave a review or comment.
+- Outside this proof of concept's own policy definitions, documentation,
+  generated fixtures, tests, and agent instructions, mentions of the word
+  `fart` are forbidden and must say `superfart` instead.
+- The word `fart` is explicitly allowed when defining, documenting, testing,
+  generating, or instructing this proof-of-concept review rule.
 ```
 
 Changing repository scope, labels, rules, or trigger behavior is one normal
@@ -152,12 +157,13 @@ actor cannot reuse an old check or marker to suppress policy.
 The config worker creates the Check Run and timeout before waking the model.
 On a newer push it cancels the prior head's still-running App-owned check. On a
 skip-label event it cancels live-head checks immediately. Useful review content
-remains agent-owned: the task tells the agent to read the complete diff,
-revalidate the live head and controls immediately before publishing, post
-exactly one `COMMENT` review, and only then terminalize the trusted check and
-cancel its timeout:
+remains agent-owned: the task tells the agent to read the complete diff and
+revalidate the live head and controls immediately before its handoff. A clean
+result posts no review or comment and completes the visible Check Run.
+Actionable findings are posted as exactly one `COMMENT` review before the
+trusted check is terminalized and its timeout cancelled:
 
-- `success`: review completed with no actionable findings;
+- `success`: review completed with no actionable findings and no PR comment;
 - `neutral`: review completed with findings;
 - `cancelled`: a newer head superseded it;
 - `failure`: the review itself failed.
@@ -229,9 +235,29 @@ is a user-style view and may show every flag false even when the installation
 can write; attempt the requested operation and report GitHub's actual error.
 
 For code work, the agent fetches the live PR and uses the route prompt's exact
-`GH_TOKEN` recipe to bind a sandbox to that installation. It clones the head
-repository/ref, edits and tests, commits, and non-force pushes the exact head
-branch. `itx.repo` and `itx.workspace` target the project's config-repo default
-branch, so they are never PR code-write doors. If a fork is outside the App
-installation, the agent reports that blocker instead of touching the base
-branch.
+plural sandbox API recipe:
+
+```ts
+const { path } = await itx.sandboxes.create({
+  name: `github-pr-${pullNumber}-${Date.now()}`,
+  instanceType: "basic",
+});
+const sandbox = await itx.sandboxes.get(path);
+```
+
+There is no singular `itx.sandbox`. The stock image includes Ubuntu, Node, Bun,
+git, curl, and jq; agents must not assume Python or other tools are installed.
+The route's `GH_TOKEN` recipe then binds the sandbox to that installation. It is
+shared with sandbox provisioning and configures Git smart HTTP as Basic
+`x-access-token:<installation-token>` auth; GitHub rejects API-style Bearer auth
+on that endpoint. It clones the head repository/ref, edits and tests, commits,
+and non-force pushes the exact head branch. `itx.repo` and `itx.workspace`
+target the project's config-repo default branch, so they are never PR
+code-write doors. If a fork is outside the App installation, the agent reports
+that blocker instead of touching the base branch.
+
+A successful Git write or Octokit mutation is the write acknowledgement.
+GitHub's pull-request projection can briefly lag a just-advanced branch, so an
+immediate old `pulls.get` head is not evidence that the write failed. When a
+post-write check is necessary, the agent reads the branch ref once with
+`octokit.rest.git.getRef`; it never polls or sleeps.

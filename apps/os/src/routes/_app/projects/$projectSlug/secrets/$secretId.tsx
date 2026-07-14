@@ -17,7 +17,11 @@ import type { SecretDescription, SecretUpdateInput } from "../../../../../domain
 import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
@@ -27,6 +31,7 @@ const UpdateSecretForm = z.object({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secretId")({
+  staticData: streamPageStaticData(),
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context, params }) =>

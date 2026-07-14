@@ -22,8 +22,6 @@ export const StreamViewSearch = z.object({
    * otherwise).
    */
   mode: StreamViewModeRaw.optional().catch(undefined),
-  /** Feed-items domain preset id; omitted on default. */
-  preset: z.string().optional().catch(undefined),
   /** Text query (agent feed and/or feed_items, depending on mode). */
   q: z.string().optional().catch(undefined),
   /**
@@ -70,8 +68,6 @@ type StreamModeCapabilities = {
   filters: boolean;
   /** Search box in the filter row. */
   search: boolean;
-  /** Domain feed-items preset pills. */
-  rawPresets: boolean;
   /** Event-type multi-select (types inside feed items). */
   rawEventTypes: boolean;
   /** Raw kind multi-select (feed_items.kind, raw.* family). */
@@ -87,7 +83,6 @@ const PRETTY_CAPS: StreamModeCapabilities = {
   eventInspector: false,
   filters: true,
   search: true,
-  rawPresets: false,
   rawEventTypes: false,
   rawComponents: false,
   rawOffsets: false,
@@ -100,7 +95,6 @@ const PRETTY_RAW_CAPS: StreamModeCapabilities = {
   eventInspector: true,
   filters: true,
   search: true,
-  rawPresets: false,
   rawEventTypes: true,
   rawComponents: true,
   rawOffsets: false,
@@ -113,7 +107,6 @@ const RAW_CAPS: StreamModeCapabilities = {
   eventInspector: true,
   filters: true,
   search: true,
-  rawPresets: true,
   rawEventTypes: true,
   rawComponents: true,
   rawOffsets: true,

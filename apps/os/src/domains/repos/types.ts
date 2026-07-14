@@ -128,3 +128,12 @@ export type GithubSyncResult = {
   forced: boolean;
   previousCommitOid: string | null;
 };
+
+/** What `repo.resetFromGithub` returns after destructively replacing the
+ * Artifacts repository with the linked GitHub repository's branch head. */
+export type GithubResetResult = {
+  artifactReplaced: true;
+  branch: string;
+  commitOid: string;
+  previousCommitOid: string | null;
+};

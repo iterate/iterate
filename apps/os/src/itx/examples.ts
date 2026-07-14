@@ -825,7 +825,7 @@ return { offset: sent.offset, payload: sent.payload, type: sent.type };
     id: "docs-search-and-get",
     title: "Find working code + types through itx.docs",
     description:
-      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
+      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query. (For the project's own content and history, use itx.search.query.)",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -854,8 +854,9 @@ return {
   },
   {
     id: "search-query-and-resolve-ref",
-    // Not in the unattended matrix: a query on a fresh project lazily CREATES
-    // that project's AI Search instance — real account resources every run.
+    // Not in the unattended matrix: on a fresh fixture project the instance
+    // (born with the project) has not finished its first sync, so the corpus
+    // lane is empty-but-warming — the assertion would race the index.
     e2eProven: false,
     title: "Search the project, then follow a hit's ref to the real object",
     description:
@@ -1223,7 +1224,7 @@ return { firstLines: String(readme.data).split("\\n").slice(0, 10), owner, repo 
     e2eProven: false,
     title: "Back a project repo with a real GitHub repository",
     description:
-      "linkGithub({ connection, owner, repo }) makes GitHub a mirror of a project repo: the GitHub repository is created (private) if the installation can create org repos, every later commit is mirrored automatically, and GitHub webhooks about that repository are cross-posted onto the repo's own stream. syncFromGithub() adopts commits made directly on GitHub (fast-forward only; force discards local-only commits). Needs a connected GitHub installation — interactive-only.",
+      "linkGithub({ connection, owner, repo }) backs a project repo with GitHub: the GitHub repository is created (private) if the installation can create org repos, later commits mirror out automatically, and fast-forward default-branch pushes on GitHub import through Cloudflare Artifacts. GitHub webhooks are also cross-posted onto the repo's own stream. syncFromGithub() remains the manual repair/forced-adoption verb. Needs a connected GitHub installation — interactive-only.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `

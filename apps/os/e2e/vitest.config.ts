@@ -63,7 +63,6 @@ const observedFileSeconds: Record<string, number> = {
   "worker-build.e2e.test.ts": 15,
   "workspace.itx.e2e.test.ts": 13,
   "github-backed-repo.e2e.test.ts": 12,
-  "processor-reactivity.e2e.test.ts": 11,
   "itx-core.e2e.test.ts": 10,
   "itx-subscribe.e2e.test.ts": 10,
   "repo-history.itx.e2e.test.ts": 10,
@@ -72,11 +71,7 @@ const observedFileSeconds: Record<string, number> = {
   "admin-project.itx.e2e.test.ts": 8,
   "repo-binary.itx.e2e.test.ts": 8,
   "preview-smoke.e2e.test.ts": 8,
-  "preview.e2e.test.ts": 5,
   "mcp-oauth.e2e.test.ts": 2,
-  "stream-capnweb.test.ts": 2,
-  "stream-rpc.test.ts": 1,
-  "stream-processor-node.test.ts": 1,
 };
 
 /** Longest-processing-time-first: start the slow files so they never tail the lane. */
