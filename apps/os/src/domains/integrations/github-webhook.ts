@@ -44,6 +44,9 @@ export async function fetchGithubWebhook(input: {
     event: {
       idempotencyKey: `github-webhook:${delivery ?? crypto.randomUUID()}`,
       payload: {
+        ...(input.config.integrations.github?.appSlug === undefined
+          ? {}
+          : { appSlug: input.config.integrations.github.appSlug }),
         body: payload,
         headers: {
           githubDelivery: delivery,
