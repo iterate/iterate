@@ -94,9 +94,8 @@ slot_reclaims=0
 # pass/fail is ignored on purpose (they exist only to prime caches/containers).
 WARMUP_RUNS="${WARMUP_RUNS:-0}"
 # Returns 1 if a warmup run hit the ownership refusal. That one failure mode
-# must not be swallowed with the rest: the refusal nulls the recorded lease in
-# the PR body, so the next counted run would exit as SKIPPED (no lease) and
-# never reach the steal handling below.
+# is surfaced instead of swallowed so a steal during warmup re-claims
+# immediately, rather than burning the next counted run on the same refusal.
 warm_slot() {
   local prefix=$1 w wlog
   for w in $(seq 1 "$WARMUP_RUNS"); do
@@ -189,7 +188,7 @@ while [ "$i" -le "$last_run" ]; do
   fi
   if [ "$exit_code" -ne 0 ]; then
     # "no longer belongs to" is the ownership-guard refusal from preview.ts
-    # (reassertEnvironmentConfigLease) — grep for the dialed-by-name string
+    # (describeLostSlotOwnership) — grep for the dialed-by-name string
     # there before rewording it.
     if grep -q "no longer belongs to" "$log"; then
       echo "run $i: SLOT CLAIMED EXTERNALLY — re-claiming a slot and re-running run $i uncounted ($started-$finished UTC) $log"
