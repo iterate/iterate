@@ -916,6 +916,42 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
+  it("retries a failed title paint on batch redelivery", async () => {
+    let failNext = true;
+    const { cursors, processor, slackCalls, stream } = setup({
+      callSlackApi: async (method) => {
+        if (method !== "assistant.threads.setTitle" || !failNext) return;
+        failNext = false;
+        throw new Error("slack blew up");
+      },
+    });
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({}),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+    slackCalls.length = 0;
+
+    const [patch] = await stream.append({
+      type: "events.iterate.com/agent/status-changed",
+      payload: { title: "Trip planning" },
+    });
+    // The failed call fails the batch (checkpoint held) — the painted-title
+    // record must NOT be written, or the redelivered batch would see the
+    // rename as already painted and skip it forever.
+    await expect(deliverNewEvents({ cursors, processor, stream })).rejects.toThrow("slack blew up");
+
+    slackCalls.length = 0;
+    await processor.ingest({ events: [patch!], streamMaxOffset: patch!.offset });
+    expect(slackCalls).toEqual([
+      {
+        method: "assistant.threads.setTitle",
+        body: { channel_id: "C123", thread_ts: "111.222", title: "Trip planning" },
+      },
+    ]);
+  });
+
   it("an authored-only patch (busy never announced) paints the title but clears nothing", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 

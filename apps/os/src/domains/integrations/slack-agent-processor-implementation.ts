@@ -272,32 +272,35 @@ export class SlackAgentProcessor extends StreamProcessor<
 
     // The agent-authored title paints whenever the folded title differs from
     // what this incarnation painted — freshness-gated with everything else,
-    // so a refold never replays historical renames.
+    // so a refold never replays historical renames. The painted-title record
+    // is written only AFTER the call succeeds: a rejected call fails the
+    // batch, and the redelivered batch must retry the rename instead of
+    // seeing it as already painted.
     const title = args.state.status?.title;
     if (fresh && title !== undefined && title !== this.#paintedTitle) {
-      this.#paintedTitle = title;
-      args.blockProcessorWhile(() =>
-        this.#callSlackApi("assistant.threads.setTitle", {
+      args.blockProcessorWhile(async () => {
+        await this.#callSlackApi("assistant.threads.setTitle", {
           channel_id: channel,
           thread_ts: threadTs,
           title,
-        }),
-      );
+        });
+        this.#paintedTitle = title;
+      });
     }
 
     if (status?.busy) {
       if (!fresh) return;
       // The agent's own words win: shortStatus completes "<agent> is …".
       const text = status.shortStatus === undefined ? "thinking" : status.shortStatus;
-      this.#paintedBusyStatus = true;
-      args.blockProcessorWhile(() =>
-        this.#callSlackApi("assistant.threads.setStatus", {
+      args.blockProcessorWhile(async () => {
+        await this.#callSlackApi("assistant.threads.setStatus", {
           channel_id: channel,
           thread_ts: threadTs,
           status: `is ${text}...`,
           loading_messages: [text === "thinking" ? "Thinking..." : `${text}...`],
-        }),
-      );
+        });
+        this.#paintedBusyStatus = true;
+      });
       return;
     }
     // Only an EXPLICIT idle clears. An authored-only record (title/note/
@@ -306,14 +309,14 @@ export class SlackAgentProcessor extends StreamProcessor<
     // even picked up yet.
     if (status?.busy !== false) return;
     if (!fresh && !this.#paintedBusyStatus) return;
-    this.#paintedBusyStatus = false;
-    args.blockProcessorWhile(() =>
-      this.#clearStatus({
+    args.blockProcessorWhile(async () => {
+      await this.#clearStatus({
         channel,
         ...(latestMessageTs == null ? {} : { latestMessageTs }),
         threadTs,
-      }),
-    );
+      });
+      this.#paintedBusyStatus = false;
+    });
   }
 
   async #clearStatus(target: { channel: string; latestMessageTs?: string; threadTs: string }) {
