@@ -1,7 +1,9 @@
 // The stream-processor RUNNER: the delivery driver that owns everything a
 // processor author should not — cursors, checkpoint cadence, retry, recovery —
 // so the processor itself can stay three pure-ish hooks (validate / reduce /
-// processEvent). Design: docs/stream-processor-runner-redesign.md.
+// processEvent, plus the optional at-head onCaughtUp). Design:
+// docs/stream-processor-runner-redesign.md; the invariants are pinned by the
+// in-memory harness in stream-processor-runner.test.ts (the executable spec).
 //
 // The shape inversion this file exists for: today the HOST is the star
 // (`createStreamProcessorHost(ctx)` + `host.add(factory)`, hand-fed a Durable
@@ -21,17 +23,28 @@
 // outcomes). `blockProcessorWhile` is therefore a strict per-event barrier,
 // never a per-frame one.
 //
-// This file is the Phase-1 `SubscriberRunner` home — the post-commit async
-// pump. The Phase-2 `InlineRunner` (the Stream DO's own synchronous
-// commit-path driver, where `validate` gates appends) shares the types below
-// but is gated on a commit-path benchmark. Every method body here is a
-// deliberate slice-1 stub: the types and the class surface are the review
-// unit; slice 2 fills the bodies in. Nothing calls this yet.
+// The load-bearing orderings in here are transplanted from the legacy
+// `StreamProcessor.#ingest` (stream-processor.ts) — the most incident-scarred
+// loop in the system — and each is marked at its new home:
+//   - failed frame settles already-started blockers, cursor untouched (534-563)
+//   - persist BEFORE advancing the in-memory cursor (565-576)
+//   - malformed consumed events advance the cursor, diagnostics append AFTER
+//     the commit, in the background (592-616)
+//
+// This file is the Phase-1 `SubscriberRunner`. The Phase-2 `InlineRunner`
+// (the Stream DO's own synchronous commit-path driver, where `validate` gates
+// appends) shares the types below but is gated on a commit-path benchmark.
 
+import type { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { StreamEvent } from "./schemas.ts";
-import type { MaybePromise, StreamProcessor, StreamProcessorContract } from "./stream-processor.ts";
+import {
+  StreamProcessor,
+  type MaybePromise,
+  type StreamProcessorContract,
+  type StreamProcessorDriver,
+} from "./stream-processor.ts";
 
 /**
  * The reduction half of a processor's durable progress: a disposable CACHE of
@@ -88,8 +101,9 @@ export type ProcessorProgress<State> = {
  * (throws) if `expectedCursorRevision` no longer matches the persisted
  * revision — the fence that stops a stale incarnation (or a continuation
  * outliving an operator `reprocessFrom`) from clobbering the rewound cursor.
- * Backends: DO KV, browser SQLite (where the committer folds projection
- * writes and this record into ONE transaction), or a plain object in tests.
+ * An absent record reads as revision 0. Backends: DO KV, browser SQLite
+ * (where the committer folds projection writes and this record into ONE
+ * transaction), or a plain object in tests.
  */
 export type ProcessorProgressStore<State> = {
   read(): MaybePromise<ProcessorProgress<State> | undefined>;
@@ -107,12 +121,17 @@ export type ProcessorProgressStore<State> = {
  * revival fact nobody consumes recovers nothing.
  *
  * - `keepAliveWhile` parks a durable alarm ahead of in-flight work, so an
- *   incarnation that dies owing work is revived by the alarm's fire.
+ *   incarnation that dies owing work is revived by the alarm's fire. The
+ *   production adapter is `(work) => keepalive.track(work())` over ONE
+ *   ProcessorKeepalive (stream-processor-keepalive.ts) — the runner REUSES
+ *   that machinery wholesale, it never reinvents mark/backoff/quiet-clean.
  * - `appendRevived` appends the `<namespace>/revived` fact — the journaled
  *   evidence that guarantees at least one delivery turn (and therefore one
- *   pass of the processor's own reconciliation handlers) even at zero lag.
- * - `handleAlarm` services the durable timer; the host DO multiplexes its
- *   single alarm across runners and routes fires here.
+ *   `onCaughtUp` pass) even at zero lag. It is called by the adapter's own
+ *   revival pass (the keepalive's `revive` hook), not by the runner core.
+ * - `handleAlarm` services the durable timer (`ProcessorKeepalive.onAlarm`);
+ *   the host DO multiplexes its single alarm across runners and routes fires
+ *   to {@link StreamProcessorRunner.handleAlarm}, which delegates here.
  */
 export type ProcessorRecovery = {
   keepAliveWhile(work: () => Promise<unknown>): void;
@@ -145,11 +164,17 @@ export type DeliveryPhase = "catching-up" | "live";
  * Honest event-time context handed to `processEvent`. Head and lag are POLICY
  * inputs (skip the stale typing indicator, debounce the status repaint), never
  * correctness — the observed head can be behind the real head the moment it
- * is read. `idempotencyKey` mixes the author's key with the event's
- * `sourceOffset` and the current `cursorRevision`, so a crash retry of the
- * same event dedupes (same offset, same revision) while an operator
- * `reprocessFrom` re-emits (same offset, NEW revision) — no random id, no
- * implicit processor prefix.
+ * is read. `idempotencyKey` derives a deterministic effect key from the
+ * author's key + this event's source offset + the current `cursorRevision`,
+ * so a crash retry of the same event dedupes (same offset, same revision)
+ * while an operator `reprocessFrom` re-emits (same offset, NEW revision) — no
+ * random id. At revision 0 the derivation is BYTE-IDENTICAL to the legacy
+ * `StreamProcessor.idempotencyKey(key, whileProcessing)` format
+ * (`<slug>/<key>@<path>:<offset>`): an effect committed under the old code
+ * must dedupe, not duplicate, when the new runner replays it post-deploy.
+ * Obligation-derived stable keys are a SEPARATE concept — those keep using
+ * the processor's own `idempotencyKey(key)` with the deciding state folded
+ * into `key`, exactly as today.
  */
 export type DeliveryContext = {
   phase: DeliveryPhase;
@@ -164,6 +189,64 @@ export type DeliveryContext = {
 };
 
 /**
+ * When to durably persist progress. Consulted after every completed event
+ * (`frameEnd: false`) and once at the end of each frame (`frameEnd: true`).
+ * The gap between the in-memory completed cursor and the last persisted
+ * acknowledgement is the deliberate at-least-once replay window; a policy
+ * that commits less often widens it, never breaks it (appends stay
+ * idempotency-keyed). Ship default: {@link perFrameCadence} — persist once
+ * per frame after all its events' blocking work completes, matching the
+ * legacy batch checkpoint window exactly.
+ */
+export type CheckpointCadence = (args: {
+  /** True for the end-of-frame consult (after every event's blocking work settled). */
+  frameEnd: boolean;
+  /** Events completed since the last durable commit. */
+  eventsSinceCommit: number;
+}) => boolean;
+
+/** The default cadence: one durable commit per delivered frame. */
+export const perFrameCadence: CheckpointCadence = ({ frameEnd }) => frameEnd;
+
+/**
+ * The audit fact appended by the operator cursor controls (`reprocessFrom` /
+ * `skipThrough`). Evidence, not enforcement: the CAS-fenced progress commit is
+ * authoritative (the same KV-over-journal inversion the keepalive documents);
+ * the fact narrates the episode in the journal and dedupes per revision, so a
+ * platform retry never journals a duplicate.
+ */
+export const STREAM_PROCESSOR_CURSOR_CONTROL_EVENT_TYPE =
+  "events.iterate.com/stream-processor/cursor-control";
+
+/** One transport frame as delivered to the sink. */
+type SinkFrame = { events: readonly StreamEvent[]; streamMaxOffset: number };
+
+/** A consumed-type event whose payload failed the contract parse, awaiting its post-commit diagnostic. */
+type PendingParseFailure = { event: StreamEvent; error: z.ZodError };
+
+/** A pending `waitUntilEvent` waiter (see the method doc for semantics). */
+type EventWaiter = {
+  predicate: (event: StreamEvent) => boolean;
+  reject: (error: unknown) => void;
+  resolve: () => void;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
+/** The in-flight fold/cursor context of one frame, committed per cadence. */
+type FrameContext<State> = {
+  /** The revision every commit in this frame asserts (fixed at frame start). */
+  revision: number;
+  state: State;
+  reducedThroughOffset: number;
+  completedThroughOffset: number;
+  eventsSinceCommit: number;
+  /** New events delivered since the last commit — waiters resolve when their commit lands. */
+  uncommittedEvents: StreamEvent[];
+  /** Parse failures since the last commit — diagnostics append only AFTER their commit lands. */
+  uncommittedParseFailures: PendingParseFailure[];
+};
+
+/**
  * The delivery driver for one processor on one stream. Runtime-neutral by
  * construction: the browser, the Durable Object registry, and the in-memory
  * test harness all instantiate exactly this class and differ only in the
@@ -171,18 +254,41 @@ export type DeliveryContext = {
  * the "host" of old survives only as a thin registry that builds adapters and
  * routes wakes/alarms to the right runner.
  *
- * Slice-1 skeleton: every method throws until slice 2 lands the per-event
- * loop, the two-cursor progress commit, and the cadence policy.
+ * Serialization: frames and operator controls share ONE in-memory chain, so a
+ * cursor rewind never interleaves with a half-processed frame. Cross-
+ * incarnation races (a stale runner outliving a rewind made elsewhere) are
+ * fenced durably instead, by the progress store's `cursorRevision` CAS.
  */
 export class StreamProcessorRunner<
   Contract extends StreamProcessorContract,
   Deps extends object = object,
 > {
   private readonly processor: StreamProcessor<Contract, Deps>;
+  private readonly driver: StreamProcessorDriver<Contract>;
   private readonly stream: Stream;
   private readonly durability: ProcessorDurability<ProcessorState<Contract>> | undefined;
   private readonly keepAlive: ((work: () => Promise<unknown>) => void) | undefined;
   private readonly now: () => number;
+  private readonly cadence: CheckpointCadence;
+  private readonly readPageSize: number;
+
+  /** Memoized load; cleared on failure so the next call retries (legacy #loadState). */
+  #loaded: Promise<void> | undefined;
+  /** True once progress reflects a real load (fresh default over an empty
+   * store counts; a pending/failed load does not) — the gate that keeps
+   * default or partially-refolded state from ever escaping (the legacy
+   * `isLoaded` invariant, stream-processor.ts:724). `snapshot()` additionally
+   * awaits the load, so partial state cannot escape through it either. */
+  #hasLoaded = false;
+  /** The COMMITTED progress — what snapshot()/openDelivery() publish. Frame
+   * folds accumulate in locals and land here only after the durable commit. */
+  #progress: ProcessorProgress<ProcessorState<Contract>> | undefined;
+  /** Highest stream offset observed across all frames this incarnation. */
+  #observedHeadOffset = 0;
+  /** Serializes frames + operator controls; failures are contained per entry. */
+  #chain: Promise<void> = Promise.resolve();
+  #disposed = false;
+  readonly #eventWaiters = new Set<EventWaiter>();
 
   constructor(args: {
     /** The processor under drive — passed IN; the runner never constructs one. */
@@ -195,73 +301,761 @@ export class StreamProcessorRunner<
     keepAlive?: (work: () => Promise<unknown>) => void;
     /** Injected clock for the test harness; production uses Date.now. */
     now?: () => number;
+    /** Durable-commit cadence policy; default = once per frame. */
+    cadence?: CheckpointCadence;
+    /** Journal read page size (refold/catch-up paging); tests shrink it. */
+    readPageSize?: number;
   }) {
     this.processor = args.processor;
+    this.driver = StreamProcessor.runnerDriver(args.processor);
     this.stream = args.stream;
     this.durability = args.durability;
     this.keepAlive = args.keepAlive;
     this.now = args.now ?? (() => Date.now());
+    this.cadence = args.cadence ?? perFrameCadence;
+    this.readPageSize = args.readPageSize ?? 500;
+
+    if (this.durability?.recovery !== undefined) {
+      // A revival fact nobody consumes recovers nothing: recovery's whole
+      // mechanism is "append `<ns>/revived`, let the ordinary delivery turn
+      // run the processor's own reconciliation handlers".
+      const consumes = this.driver.contract.consumes;
+      const consumesRevived =
+        consumes.includes("*") || consumes.some((type) => type.endsWith("/revived"));
+      if (!consumesRevived) {
+        throw new Error(
+          `stream processor "${this.driver.contract.slug}" wires recovery but consumes ` +
+            `no "<namespace>/revived" event — a revival fact nobody consumes recovers nothing. ` +
+            `Add the processor's revived event to the contract's consumes.`,
+        );
+      }
+    }
   }
 
   /**
-   * The subscriber half of the wake handshake: answers the resume cursor (the
-   * acknowledged-through offset) plus the live `sink` the stream retains and
-   * invokes per delivered frame. The sink is the internal `processEventBatch`
-   * wire callback — the ONLY place transport batching exists; inside it the
-   * runner reduces and processes one event at a time.
+   * The subscriber half of the wake handshake: answers the resume cursor plus
+   * the live `sink` the stream retains and invokes per delivered frame.
+   *
+   * `checkpointOffset` is the PROCESSING cursor (`acknowledgedThroughOffset`),
+   * never the reduction offset: the stream persists this handshake value as
+   * its delivery watermark, and resuming from a reduction-pinned snapshot
+   * offset could skip events whose effects were never acknowledged.
+   *
+   * The sink is the internal `processEventBatch` wire callback — the ONLY
+   * place transport batching exists; inside it the runner reduces and
+   * processes one event at a time.
    */
-  openDelivery(): Promise<{
+  async openDelivery(): Promise<{
     checkpointOffset: number;
     sink: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) => Promise<void>;
   }> {
-    throw new Error("StreamProcessorRunner.openDelivery: implemented in slice 2");
+    this.#assertNotDisposed();
+    await this.#load();
+    return {
+      checkpointOffset: this.#requireProgress().processing.acknowledgedThroughOffset,
+      sink: (batch: SinkFrame) => {
+        const attempt = this.#enqueue(() => this.#processFrame(batch));
+        // Zero-lag recovery must cover the WHOLE frame attempt, not merely
+        // the work registered inside it (the June-10/July-7 incident class):
+        // an eviction mid-frame on a stream that also died still gets this
+        // processor revived by the keepalive alarm parked ahead of `attempt`.
+        // A failed attempt reads as failure to the keepalive (routing the
+        // next fire to revival); the transport observes the same rejection
+        // through the returned promise and owns the redelivery.
+        this.durability?.recovery?.keepAliveWhile(() => attempt);
+        return attempt;
+      },
+    };
   }
 
   /** Service a durable alarm fire routed here by the hosting registry (recovery lane). */
-  handleAlarm(_info?: unknown): Promise<void> {
-    throw new Error("StreamProcessorRunner.handleAlarm: implemented in slice 2");
+  async handleAlarm(info?: unknown): Promise<void> {
+    const recovery = this.durability?.recovery;
+    if (recovery === undefined) return;
+    await recovery.handleAlarm(info);
   }
 
   /** One consistent read of the fold, pinned to `reducedThroughOffset`. */
-  snapshot(): Promise<{ offset: number; state: ProcessorState<Contract> }> {
-    throw new Error("StreamProcessorRunner.snapshot: implemented in slice 2");
+  async snapshot(): Promise<{ offset: number; state: ProcessorState<Contract> }> {
+    await this.#load();
+    const progress = this.#requireProgress();
+    return {
+      offset: progress.reduction.reducedThroughOffset,
+      state: progress.reduction.state,
+    };
+  }
+
+  /**
+   * Whether published state IS a real fold rather than the schema default —
+   * the legacy `isLoaded` gate. With the runner, the load itself performs any
+   * pending refold, so this is true whenever a load has completed and false
+   * only before the first successful load.
+   */
+  get isLoaded(): boolean {
+    return this.#hasLoaded;
+  }
+
+  /**
+   * Resolve once the ACKNOWLEDGED cursor reaches `offset` — the single
+   * wait-for-progress door (read-your-writes: append, then wait on the offset
+   * the append returned). The predicate form observes FUTURE deliveries only,
+   * and resolves after the frame that delivered the matching event has
+   * durably committed, so state already reflects it.
+   */
+  waitUntilEvent(args: {
+    predicate: (event: StreamEvent) => boolean;
+    timeoutMs?: number;
+  }): Promise<void>;
+  waitUntilEvent(args: { offset: number; timeoutMs?: number }): Promise<void>;
+  async waitUntilEvent(
+    args:
+      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number }
+      | { offset: number; timeoutMs?: number },
+  ): Promise<void> {
+    if ("offset" in args) {
+      await this.#load();
+      if (this.#requireProgress().processing.acknowledgedThroughOffset >= args.offset) return;
+      const { offset, timeoutMs } = args;
+      // No await between the check above and registering the waiter below, so
+      // a frame cannot advance the cursor past `offset` in the gap and be missed.
+      return await this.waitUntilEvent({ predicate: (event) => event.offset >= offset, timeoutMs });
+    }
+    const { predicate, timeoutMs } = args;
+    await new Promise<void>((resolve, reject) => {
+      const waiter: EventWaiter = { predicate, reject, resolve };
+      this.#eventWaiters.add(waiter);
+      if (timeoutMs !== undefined) {
+        waiter.timer = setTimeout(() => {
+          this.#eventWaiters.delete(waiter);
+          reject(new Error(`waitUntilEvent timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
+    });
   }
 
   /**
    * Rebuild the reduction cache through the acknowledged cursor by re-running
-   * `reduce` ONLY — no effects, no cursor movement. Fires automatically on a
-   * `reducerVersion` mismatch; callable by operators to heal a corrupt cache.
+   * `reduce` ONLY — no effects, no cursor movement, no revision bump (the
+   * cache is disposable; rebuilding it rewinds nothing). Fires automatically
+   * on a `reducerVersion` mismatch at load; callable by operators to heal a
+   * corrupt cache. The rebuild stages into locals and swaps in atomically
+   * after the durable commit — a partial refold is never observable.
    */
   reReduce(): Promise<void> {
-    throw new Error("StreamProcessorRunner.reReduce: implemented in slice 2");
+    return this.#enqueue(async () => {
+      await this.#load();
+      const progress = this.#requireProgress();
+      const reduction = await this.#rebuildReduction(progress.processing.acknowledgedThroughOffset);
+      const next: ProcessorProgress<ProcessorState<Contract>> = {
+        reduction,
+        processing: progress.processing,
+      };
+      await this.#commit(next, progress.processing.cursorRevision);
+      this.#progress = next;
+    });
   }
 
   /**
-   * Operator rewind of the EFFECT cursor (appends an audit event): CAS on
-   * `expectedCursorRevision`, set acknowledged = `offset - 1`, bump
-   * `cursorRevision` (staling in-flight continuations and rotating
-   * `idempotencyKey` derivations so effects genuinely re-emit), reconstruct
-   * state, then re-run `reduce` + `processEvent` from `offset`. `snapshot()`
-   * honestly rewinds while it catches back up.
+   * Operator rewind of the EFFECT cursor: CAS on `expectedCursorRevision`,
+   * set acknowledged = `offset - 1`, bump `cursorRevision` (staling in-flight
+   * continuations' commits and rotating `idempotencyKey` derivations so
+   * effects genuinely re-emit), reconstruct the fold through `offset - 1`
+   * (reduce only), then re-run `reduce` + `processEvent` from `offset` by
+   * self-pulling the journal. `snapshot()` honestly rewinds while it catches
+   * back up. Appends a `cursor-control` audit fact (evidence; the CAS commit
+   * is authoritative). The rewind is durable once the commit lands even if
+   * the catch-up replay then fails — the transport's redelivery (or the next
+   * call) resumes from the rewound cursor.
    */
-  reprocessFrom(_args: {
+  reprocessFrom(args: {
     offset: number;
     expectedCursorRevision: number;
     reason: string;
   }): Promise<{ cursorRevision: number }> {
-    throw new Error("StreamProcessorRunner.reprocessFrom: implemented in slice 2");
+    return this.#enqueue(async () => {
+      await this.#load();
+      const progress = this.#requireProgress();
+      if (!Number.isInteger(args.offset) || args.offset < 1) {
+        throw new Error(`reprocessFrom offset must be a positive integer, got ${args.offset}`);
+      }
+      if (args.offset > progress.processing.acknowledgedThroughOffset + 1) {
+        throw new Error(
+          `reprocessFrom(${args.offset}) would SKIP past acknowledged offset ` +
+            `${progress.processing.acknowledgedThroughOffset}; use skipThrough for that`,
+        );
+      }
+      this.#assertExpectedRevision("reprocessFrom", progress, args.expectedCursorRevision);
+      const cursorRevision = args.expectedCursorRevision + 1;
+      const reduction = await this.#rebuildReduction(args.offset - 1);
+      const next: ProcessorProgress<ProcessorState<Contract>> = {
+        reduction,
+        processing: { acknowledgedThroughOffset: args.offset - 1, cursorRevision },
+      };
+      // The CAS commit IS the fence: it lands under the OLD revision and
+      // writes the new one, so any in-flight continuation of the old cursor
+      // fails its own commit from here on.
+      await this.#commit(next, args.expectedCursorRevision);
+      this.#progress = next;
+      this.#appendCursorControlAudit({
+        control: "reprocess-from",
+        offset: args.offset,
+        reason: args.reason,
+        cursorRevision,
+      });
+      await this.#selfCatchUp();
+      return { cursorRevision };
+    });
   }
 
   /**
    * The audited escape hatch past a poison event: advance the acknowledged
-   * cursor through `offset` WITHOUT running its effects, appending the reason
-   * as an audit event. The only exit from the block-retry-forever failure
-   * policy — there is deliberately no auto-DLQ.
+   * cursor through `offset` WITHOUT running its effects, CAS-fenced and
+   * revision-bumping like `reprocessFrom`. The skipped events are still
+   * REDUCED (best-effort — a reduce that itself throws is logged and its
+   * event's fold contribution dropped; the journal remains the authority),
+   * because what is being skipped is the EFFECT, not the fact. The only exit
+   * from the block-retry-forever failure policy — there is deliberately no
+   * auto-DLQ.
    */
-  skipThrough(_args: { offset: number; reason: string }): Promise<{ cursorRevision: number }> {
-    throw new Error("StreamProcessorRunner.skipThrough: implemented in slice 2");
+  skipThrough(args: {
+    offset: number;
+    expectedCursorRevision: number;
+    reason: string;
+  }): Promise<{ cursorRevision: number }> {
+    return this.#enqueue(async () => {
+      await this.#load();
+      const progress = this.#requireProgress();
+      if (args.offset <= progress.processing.acknowledgedThroughOffset) {
+        throw new Error(
+          `skipThrough(${args.offset}) is already acknowledged ` +
+            `(through ${progress.processing.acknowledgedThroughOffset}); nothing to skip`,
+        );
+      }
+      this.#assertExpectedRevision("skipThrough", progress, args.expectedCursorRevision);
+      const cursorRevision = args.expectedCursorRevision + 1;
+
+      let state = progress.reduction.state;
+      if (progress.reduction.reducedThroughOffset < args.offset) {
+        using pager = this.stream.readEvents({
+          afterOffset: progress.reduction.reducedThroughOffset,
+          beforeOffset: args.offset + 1,
+          limit: this.readPageSize,
+        });
+        let page = await pager.next();
+        while (page.length > 0) {
+          for (const event of page) {
+            if (event.offset > args.offset) continue;
+            try {
+              const reduction = this.driver.reduceRawEvent({ event, state });
+              if (reduction !== undefined && !("parseError" in reduction)) {
+                state = reduction.state;
+              }
+            } catch (error) {
+              console.error(
+                `stream processor "${this.driver.contract.slug}" reduce failed on skipped ` +
+                  `offset ${event.offset}; the fold proceeds without it`,
+                error,
+              );
+            }
+          }
+          page = await pager.next();
+        }
+      }
+
+      const next: ProcessorProgress<ProcessorState<Contract>> = {
+        reduction: {
+          reducerVersion: this.driver.contract.version,
+          reducedThroughOffset: args.offset,
+          state,
+        },
+        processing: { acknowledgedThroughOffset: args.offset, cursorRevision },
+      };
+      await this.#commit(next, args.expectedCursorRevision);
+      this.#progress = next;
+      this.#appendCursorControlAudit({
+        control: "skip-through",
+        offset: args.offset,
+        reason: args.reason,
+        cursorRevision,
+      });
+      return { cursorRevision };
+    });
   }
 
   /** Release delivery resources. Idempotent; a disposed runner rejects new work. */
-  dispose(): void {}
+  dispose(): void {
+    this.#disposed = true;
+    for (const waiter of this.#eventWaiters) {
+      if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+      waiter.reject(new Error("StreamProcessorRunner disposed"));
+    }
+    this.#eventWaiters.clear();
+  }
+
+  // ---------------------------------------------------------------------------
+  // The per-event loop.
+  // ---------------------------------------------------------------------------
+
+  async #processFrame(frame: SinkFrame): Promise<void> {
+    await this.#load();
+    const committed = this.#requireProgress();
+
+    // Offset-dedupe against the acknowledged cursor (and within the frame):
+    // redelivered events are silent skips, exactly like legacy ingest.
+    const pending: StreamEvent[] = [];
+    let scan = committed.processing.acknowledgedThroughOffset;
+    for (const event of frame.events) {
+      if (event.offset <= scan) continue;
+      scan = event.offset;
+      pending.push(event);
+    }
+
+    // observedHead = max(streamMaxOffset, last event offset), monotonic across
+    // frames: "the highest offset the runner has OBSERVED" never regresses on
+    // a stale redelivery, so a behind frame can always SEE it is behind.
+    this.#observedHeadOffset = Math.max(this.#observedHeadOffset, frame.streamMaxOffset, scan);
+    if (pending.length === 0) return;
+    const observedHeadOffset = this.#observedHeadOffset;
+    // What this frame will acknowledge through once its blocking work
+    // completes — the legacy `checkpointOffset` semantics, kept verbatim for
+    // the existing `processEvent` signature.
+    const frameCheckpointOffset = pending.at(-1)!.offset;
+
+    const ctx: FrameContext<ProcessorState<Contract>> = {
+      revision: committed.processing.cursorRevision,
+      state: committed.reduction.state,
+      reducedThroughOffset: committed.reduction.reducedThroughOffset,
+      completedThroughOffset: committed.processing.acknowledgedThroughOffset,
+      eventsSinceCommit: 0,
+      uncommittedEvents: [],
+      uncommittedParseFailures: [],
+    };
+    /** Every blocker started anywhere in this frame, for failure settlement. */
+    const startedBlockers: Promise<unknown>[] = [];
+
+    try {
+      for (const event of pending) {
+        const reduction = this.driver.reduceRawEvent({ event, state: ctx.state });
+        if (reduction !== undefined && "parseError" in reduction) {
+          // A malformed consumed event is a fact of the log, not an
+          // exception: collect it, keep advancing (the cursor must never
+          // wedge on it), and record it AFTER its commit lands (below).
+          ctx.uncommittedParseFailures.push({ event, error: reduction.parseError });
+        } else if (reduction !== undefined) {
+          const delivery: DeliveryContext = {
+            phase: event.offset >= observedHeadOffset ? "live" : "catching-up",
+            observedHeadOffset,
+            eventsBehindObservedHead: Math.max(0, observedHeadOffset - event.offset),
+            cursorRevision: ctx.revision,
+            idempotencyKey: (key) => this.#effectIdempotencyKey(key, event, ctx.revision),
+          };
+          const eventBlockers: Promise<unknown>[] = [];
+          const whileProcessing = reduction.event;
+          this.driver.processEvent({
+            event: reduction.event,
+            previousState: reduction.previousState,
+            state: reduction.state,
+            streamMaxOffset: observedHeadOffset,
+            checkpointOffset: frameCheckpointOffset,
+            delivery,
+            blockProcessorWhile: (work) => {
+              const attempt = this.#keepAliveBackedWork(work);
+              eventBlockers.push(attempt);
+              startedBlockers.push(attempt);
+            },
+            runInBackground: (work) => this.#runInBackground(work),
+            append: (...input) => this.driver.append({ whileProcessing }, input),
+            appendTo: (path, ...input) => this.driver.appendTo(path, { whileProcessing }, input),
+          });
+          // STRICT PER-EVENT ORDERING: THIS event's blocking work completes
+          // before the next event's processEvent starts. Background work was
+          // registered (keepalive-backed) and deliberately NOT awaited — it
+          // may overtake later events.
+          await Promise.all(eventBlockers);
+          ctx.state = reduction.state;
+        }
+        // Non-consumed and malformed events advance both cursors too —
+        // mirroring what a filtered delivery's cursor does today.
+        ctx.reducedThroughOffset = event.offset;
+        ctx.completedThroughOffset = event.offset;
+        ctx.eventsSinceCommit += 1;
+        ctx.uncommittedEvents.push(event);
+
+        if (this.cadence({ frameEnd: false, eventsSinceCommit: ctx.eventsSinceCommit })) {
+          await this.#commitFrameContext(ctx);
+        }
+      }
+
+      // AT-HEAD: processing reached everything the runner has observed. This
+      // is the runner-level pulse that replaces the legacy reconcile gate —
+      // and it fires even when the tail events were not consumed (a frame of
+      // foreign types still advances the cursor to head), closing the
+      // requested-N-then-unconsumed-N+1 wedge.
+      if (ctx.completedThroughOffset >= observedHeadOffset) {
+        const caughtUpBlockers: Promise<unknown>[] = [];
+        await this.driver.onCaughtUp({
+          state: ctx.state,
+          delivery: {
+            phase: "live",
+            observedHeadOffset,
+            eventsBehindObservedHead: 0,
+            cursorRevision: ctx.revision,
+            // No source event: obligation keys must stay stable across
+            // passes, so the derivation binds no offset (only the revision).
+            idempotencyKey: (key) => this.#effectIdempotencyKey(key, undefined, ctx.revision),
+          },
+          blockProcessorWhile: (work) => {
+            const attempt = this.#keepAliveBackedWork(work);
+            caughtUpBlockers.push(attempt);
+            startedBlockers.push(attempt);
+          },
+          runInBackground: (work) => this.#runInBackground(work),
+          append: (...input) => this.driver.append({}, input),
+          appendTo: (path, ...input) => this.driver.appendTo(path, {}, input),
+        });
+        await Promise.all(caughtUpBlockers);
+      }
+    } catch (error) {
+      // A failed frame must still settle work it already registered so
+      // nothing rejects unobserved. Whatever was not yet durably committed is
+      // not committed now — the frame stays retryable and the transport
+      // replays it from the last acknowledged cursor.
+      // (stream-processor.ts:534-563 verbatim.)
+      await Promise.allSettled(startedBlockers);
+      throw error;
+    }
+
+    if (
+      ctx.eventsSinceCommit > 0 &&
+      this.cadence({ frameEnd: true, eventsSinceCommit: ctx.eventsSinceCommit })
+    ) {
+      await this.#commitFrameContext(ctx);
+    }
+  }
+
+  /**
+   * Persist the frame context, THEN advance the published cursor, resolve
+   * waiters, and flush parse-failure diagnostics for the covered events.
+   *
+   * Persist-before-advance is load-bearing (stream-processor.ts:565-576): if
+   * the durable write fails, the frame must stay retryable — the redelivered
+   * frame re-reduces from the OLD published state and retries the write.
+   * Advancing in-memory first would make the retry a silent no-op (every
+   * event filtered out, nothing re-saved), losing the frame durably.
+   */
+  async #commitFrameContext(ctx: FrameContext<ProcessorState<Contract>>): Promise<void> {
+    const next: ProcessorProgress<ProcessorState<Contract>> = {
+      reduction: {
+        reducerVersion: this.driver.contract.version,
+        reducedThroughOffset: ctx.reducedThroughOffset,
+        state: ctx.state,
+      },
+      processing: {
+        acknowledgedThroughOffset: ctx.completedThroughOffset,
+        cursorRevision: ctx.revision,
+      },
+    };
+    await this.#commit(next, ctx.revision);
+    this.#progress = next;
+    ctx.eventsSinceCommit = 0;
+    const committedEvents = ctx.uncommittedEvents.splice(0);
+    const committedFailures = ctx.uncommittedParseFailures.splice(0);
+    this.#resolveEventWaiters(committedEvents);
+    // Record skipped unparseable events AFTER the commit, in the background:
+    // the raw event in the log is the authoritative record and the
+    // idempotency key dedupes redelivery, so a failing record append can
+    // never re-poison the frame it just rescued.
+    // (stream-processor.ts:592-616 verbatim.)
+    for (const { event, error } of committedFailures) {
+      const message =
+        `stream processor "${this.driver.contract.slug}" skipped event at offset ` +
+        `${event.offset} ("${event.type}"): it fails the contract's schema`;
+      console.error(message, error);
+      // Raw `stream.append`, not the emitted lane: `stream/error-occurred` is
+      // core-owned and deliberately absent from subclass `emits` — this is
+      // the runtime speaking, not the processor author. Full provenance stamp
+      // (which processor skipped which event) preserved.
+      this.#runInBackground(() =>
+        this.stream.append({
+          type: "events.iterate.com/stream/error-occurred",
+          idempotencyKey: this.#effectIdempotencyKey("event-parse-failed", event, ctx.revision),
+          source: { processor: this.driver.processorStamp(event) },
+          payload: {
+            message,
+            error: { name: error.name, message: error.message },
+          },
+        }),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Progress load / refold / commit.
+  // ---------------------------------------------------------------------------
+
+  #load(): Promise<void> {
+    this.#loaded ??= this.#loadOnce().catch((error: unknown) => {
+      // Clear the memoized load so a later call retries instead of replaying
+      // this rejection forever.
+      this.#loaded = undefined;
+      throw error;
+    });
+    return this.#loaded;
+  }
+
+  async #loadOnce(): Promise<void> {
+    const persisted = await this.durability?.progress.read();
+    if (persisted === undefined) {
+      // Fresh processor: nothing observed yet, so the schema default IS the
+      // fold of the (empty) acknowledged prefix.
+      this.#progress = {
+        reduction: {
+          reducerVersion: this.driver.contract.version,
+          reducedThroughOffset: 0,
+          state: this.driver.initialState(),
+        },
+        processing: { acknowledgedThroughOffset: 0, cursorRevision: 0 },
+      };
+      this.#hasLoaded = true;
+      return;
+    }
+
+    const parsed = this.driver.parseState(persisted.reduction.state);
+    if (persisted.reduction.reducerVersion === this.driver.contract.version && parsed.success) {
+      this.#progress = {
+        reduction: { ...persisted.reduction, state: parsed.state },
+        processing: persisted.processing,
+      };
+      this.#hasLoaded = true;
+      return;
+    }
+
+    // REDUCE-ONLY REFOLD: the reduction cache is stale (reducer version
+    // changed, or the persisted fold no longer fits the schema — same cache
+    // miss). DISCARD the fold, KEEP the processing acknowledgement — this is
+    // the entire point of the two-cursor split: a routine state-schema deploy
+    // rebuilds the cache by re-running `reduce` ONLY, never `processEvent`,
+    // never effects. The rebuild stages into locals; nothing partial is
+    // observable (every read awaits this load).
+    console.warn(
+      `stream processor "${this.driver.contract.slug}" reduction cache is stale ` +
+        `(persisted reducerVersion "${persisted.reduction.reducerVersion}", ` +
+        `current "${this.driver.contract.version}", state ${parsed.success ? "valid" : "invalid"}); ` +
+        `refolding reduce-only through acknowledged offset ` +
+        `${persisted.processing.acknowledgedThroughOffset}`,
+    );
+    const reduction = await this.#rebuildReduction(persisted.processing.acknowledgedThroughOffset);
+    const progress: ProcessorProgress<ProcessorState<Contract>> = {
+      reduction,
+      processing: persisted.processing,
+    };
+    await this.#commit(progress, persisted.processing.cursorRevision);
+    this.#progress = progress;
+    this.#hasLoaded = true;
+  }
+
+  /** Rebuild the fold from offset 0 through `throughOffset`, reduce ONLY, paged. */
+  async #rebuildReduction(
+    throughOffset: number,
+  ): Promise<ReductionProgress<ProcessorState<Contract>>> {
+    let state = this.driver.initialState();
+    if (throughOffset > 0) {
+      using pager = this.stream.readEvents({
+        afterOffset: 0,
+        beforeOffset: throughOffset + 1,
+        limit: this.readPageSize,
+      });
+      let page = await pager.next();
+      while (page.length > 0) {
+        for (const event of page) {
+          if (event.offset > throughOffset) continue;
+          const reduction = this.driver.reduceRawEvent({ event, state });
+          // Parse failures were recorded when first processed (idempotent);
+          // a refold silently folds past them, exactly like live delivery.
+          if (reduction !== undefined && !("parseError" in reduction)) {
+            state = reduction.state;
+          }
+        }
+        page = await pager.next();
+      }
+    }
+    return {
+      reducerVersion: this.driver.contract.version,
+      reducedThroughOffset: throughOffset,
+      state,
+    };
+  }
+
+  async #commit(
+    progress: ProcessorProgress<ProcessorState<Contract>>,
+    expectedCursorRevision: number,
+  ): Promise<void> {
+    if (this.durability === undefined) return;
+    await this.durability.progress.commit(progress, { expectedCursorRevision });
+  }
+
+  /**
+   * Re-run `reduce` + `processEvent` from the (rewound) acknowledged cursor
+   * by self-pulling the journal — reprocessFrom cannot rely on the transport
+   * pump, whose cursor was fixed at wake handshake. One page of lookahead so
+   * every non-final frame carries a streamMaxOffset PAST its own tail (the
+   * at-head pulse fires only on the genuinely final page), mirroring the
+   * host's catch-up.
+   */
+  async #selfCatchUp(): Promise<void> {
+    using pager = this.stream.readEvents({
+      afterOffset: this.#requireProgress().processing.acknowledgedThroughOffset,
+      limit: this.readPageSize,
+    });
+    let events = await pager.next();
+    while (events.length > 0) {
+      const lookahead = await pager.next();
+      await this.#processFrame({
+        events,
+        streamMaxOffset: (lookahead.at(-1) ?? events.at(-1))!.offset,
+      });
+      events = lookahead;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Small shared machinery.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * `<slug>/<key>[@<path>:<offset>]` (the LEGACY derivation, byte-identical),
+   * plus `#<cursorRevision>` only when the revision is nonzero — so effects
+   * committed under pre-runner code dedupe across the deploy, and only an
+   * operator rewind rotates keys.
+   */
+  #effectIdempotencyKey(
+    key: string,
+    whileProcessing: Pick<StreamEvent, "offset" | "path"> | undefined,
+    cursorRevision: number,
+  ): string {
+    const base = this.driver.idempotencyKey(key, whileProcessing);
+    return cursorRevision === 0 ? base : `${base}#${cursorRevision}`;
+  }
+
+  #appendCursorControlAudit(args: {
+    control: "reprocess-from" | "skip-through";
+    offset: number;
+    reason: string;
+    cursorRevision: number;
+  }): void {
+    // Background + best-effort: the CAS-fenced progress commit is
+    // authoritative; this fact is evidence (the keepalive's KV-over-journal
+    // inversion). Keyed per revision so a platform retry never duplicates.
+    this.#runInBackground(() =>
+      this.stream.append({
+        type: STREAM_PROCESSOR_CURSOR_CONTROL_EVENT_TYPE,
+        idempotencyKey: `${this.driver.contract.slug}/cursor-control:${args.control}:${args.cursorRevision}`,
+        source: { processor: this.driver.processorStamp() },
+        payload: {
+          control: args.control,
+          processorSlug: this.driver.contract.slug,
+          offset: args.offset,
+          reason: args.reason,
+          cursorRevision: args.cursorRevision,
+          requestedAtMs: this.now(),
+        },
+      }),
+    );
+  }
+
+  /** Fire-and-forget async work backed by the keepalive, with failures logged. */
+  #runInBackground(work: () => Promise<unknown>): void {
+    this.#keepAliveBackedWork(work).catch((error: unknown) => {
+      console.error("stream processor runner background work failed", error);
+    });
+  }
+
+  /**
+   * Route registered work through the recovery adapter's keepalive when
+   * present (both `blockProcessorWhile` and `runInBackground` ride it — "the
+   * DO died owing work" must equal "the alarm was armed"), else through the
+   * plain `keepAlive` hook, else run directly. Same fire-and-forget→promise
+   * bridge as the legacy `#runKeepAliveBackedWork`.
+   */
+  async #keepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {
+    const keepAliveWhile = this.durability?.recovery?.keepAliveWhile ?? this.keepAlive;
+    if (keepAliveWhile === undefined) return await work();
+    return await new Promise<unknown>((resolve, reject) => {
+      keepAliveWhile(async () => {
+        try {
+          const result = await work();
+          resolve(result);
+          return result;
+        } catch (error) {
+          reject(error);
+          throw error;
+        }
+      });
+    });
+  }
+
+  /** Serialize frames + operator controls; the chain swallows each entry's
+   * failure so one failed frame never wedges the entries behind it. */
+  #enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.#chain.then(() => {
+      this.#assertNotDisposed();
+      return work();
+    });
+    this.#chain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  #assertNotDisposed(): void {
+    if (this.#disposed) {
+      throw new Error(
+        `StreamProcessorRunner for "${this.driver.contract.slug}" is disposed; it accepts no new work`,
+      );
+    }
+  }
+
+  #assertExpectedRevision(
+    control: string,
+    progress: ProcessorProgress<ProcessorState<Contract>>,
+    expectedCursorRevision: number,
+  ): void {
+    if (progress.processing.cursorRevision !== expectedCursorRevision) {
+      throw new Error(
+        `${control} expected cursorRevision ${expectedCursorRevision} but the cursor is at ` +
+          `${progress.processing.cursorRevision} — refusing a stale cursor control`,
+      );
+    }
+  }
+
+  #requireProgress(): ProcessorProgress<ProcessorState<Contract>> {
+    if (this.#progress === undefined) {
+      throw new Error("StreamProcessorRunner progress read before load — this is a runner bug");
+    }
+    return this.#progress;
+  }
+
+  // Settle `waitUntilEvent` waiters whose predicate matches a just-committed
+  // event. Runs after the durable commit + published-cursor advance, so
+  // `snapshot()` already reflects the matched event when a waiter resolves.
+  #resolveEventWaiters(events: readonly StreamEvent[]): void {
+    if (events.length === 0) return;
+    for (const waiter of this.#eventWaiters) {
+      let matched = false;
+      try {
+        matched = events.some(waiter.predicate);
+      } catch (error) {
+        this.#eventWaiters.delete(waiter);
+        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+        waiter.reject(error);
+        continue;
+      }
+      if (matched) {
+        this.#eventWaiters.delete(waiter);
+        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+        waiter.resolve();
+      }
+    }
+  }
 }

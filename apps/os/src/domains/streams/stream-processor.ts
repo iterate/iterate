@@ -3,6 +3,10 @@ import type { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { ProcessorRuntimeState, ProcessorSnapshot } from "./rpc-types.ts";
+// Type-only by necessity, not just hygiene: the runner imports this module's
+// VALUE (the class, for `runnerDriver`), so a value import back would be a
+// runtime cycle. Types erase; the cycle doesn't exist at runtime.
+import type { DeliveryContext } from "./stream-processor-runner.ts";
 import { SubscriberMetrics } from "./subscriber-metrics.ts";
 import {
   assertObjectProcessorState,
@@ -130,6 +134,13 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
      * completes — the last event offset in the batch, not this event's offset.
      */
     checkpointOffset: number;
+    /**
+     * Honest event-time context (delivery phase, lag behind the observed
+     * head, cursor revision, deterministic effect keys). Present when the NEW
+     * StreamProcessorRunner drives this hook; absent on the legacy host/ingest
+     * path. Becomes required once the legacy path is deleted (a later slice).
+     */
+    delivery?: DeliveryContext;
   };
 
 /** What `processEventBatch` receives: the whole delivered batch plus its reductions. */
@@ -152,6 +163,22 @@ type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
   state: ProcessorState<Contract>;
   streamMaxOffset: number;
   checkpointOffset: number;
+};
+
+/**
+ * What `onCaughtUp` receives: the final fold at the runner's observed head,
+ * the at-head delivery context, and the same side-effect helpers/append lanes
+ * as `processEvent` — minus any single event: appends made here are derived
+ * from the whole fold, so they carry no `whileProcessing` stamp, and
+ * `delivery.idempotencyKey` binds no source offset (obligation keys must stay
+ * stable across passes; only an operator `reprocessFrom` rotates them).
+ */
+type OnCaughtUpArgs<Contract> = SideEffectHelpers & {
+  /** The fold through the runner's acknowledged cursor, which reached the observed head. */
+  state: ProcessorState<Contract>;
+  delivery: DeliveryContext;
+  append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
+  appendTo: (path: string, ...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
 };
 
 /**
@@ -203,6 +230,52 @@ export type StreamProcessorConstructorArgs<
   Contract extends StreamProcessorContract,
   Deps extends object,
 > = StreamProcessorBaseDeps<Contract> & Deps;
+
+/** The provenance stamp shape (`source.processor`) carried by processor appends. */
+type ProcessorSourceStamp = NonNullable<NonNullable<StreamEvent["source"]>["processor"]>;
+
+/**
+ * @internal The narrow drive surface {@link StreamProcessor.runnerDriver}
+ * hands the StreamProcessorRunner (stream-processor-runner.ts): exactly the
+ * protected hooks and append lanes the delivery loop needs, nothing an author
+ * or operator could reach for. This is how the runner invokes protected
+ * members without widening the author-facing surface — authors still only
+ * implement `validate`/`reduce`/`processEvent`/`onCaughtUp`, and the runner
+ * never sees checkpoint state (it owns its own two-cursor progress).
+ */
+export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
+  readonly contract: Contract;
+  /** The schema default — the fold of the empty journal prefix. */
+  initialState(): ProcessorState<Contract>;
+  /** Validate a persisted fold against the CURRENT state schema (cache-key check). */
+  parseState(
+    value: unknown,
+  ): { success: true; state: ProcessorState<Contract> } | { success: false; error: z.ZodError };
+  /** The pure fold step: `undefined` = type not consumed, `parseError` = consumed type, bad shape. */
+  reduceRawEvent(args: {
+    event: StreamEvent;
+    state: ProcessorState<Contract>;
+  }): ReducedEvent<Contract> | ConsumedEventParseFailure | undefined;
+  /** The synchronous per-event side-effect hook (virtual — subclass overrides dispatch). */
+  processEvent(args: ProcessEventArgs<Contract>): undefined;
+  /** The at-head hook (virtual); default is a no-op. */
+  onCaughtUp(args: OnCaughtUpArgs<Contract>): Promise<void>;
+  /** The LEGACY key derivation — `<slug>/<key>[@<path>:<offset>]` — byte-preserved. */
+  idempotencyKey(key: string, whileProcessing?: Pick<StreamEvent, "offset" | "path">): string;
+  /** The `source.processor` provenance stamp for runner-authored raw appends. */
+  processorStamp(whileProcessing?: Pick<StreamEvent, "offset" | "type">): ProcessorSourceStamp;
+  /** Emits-checked, provenance-stamped append to the processor's home stream. */
+  append(
+    opts: { whileProcessing?: ConsumedEvent<Contract> },
+    input: EmittedInput<Contract>[],
+  ): Promise<StreamEvent[]>;
+  /** Like `append`, onto a sibling stream (resolved via `stream.at(path)`). */
+  appendTo(
+    path: string,
+    opts: { whileProcessing?: ConsumedEvent<Contract> },
+    input: EmittedInput<Contract>[],
+  ): Promise<StreamEvent[]>;
+};
 
 /**
  * Class-based stream processor.
@@ -290,6 +363,43 @@ export abstract class StreamProcessor<
       ((snapshot) => {
         this.#memorySnapshot = snapshot;
       });
+  }
+
+  /**
+   * @internal Hands the StreamProcessorRunner its {@link StreamProcessorDriver}.
+   * A STATIC accessor on purpose: statics may reach protected/private members
+   * of instances of their own class, so the runner gets the hooks without any
+   * new public instance member (nothing for subclasses to see, shadow, or
+   * call). Authors never touch this; the runner is its only caller.
+   */
+  static runnerDriver<Contract extends StreamProcessorContract, Deps extends object>(
+    processor: StreamProcessor<Contract, Deps>,
+  ): StreamProcessorDriver<Contract> {
+    return {
+      contract: processor.contract,
+      initialState: () => processor.contract.stateSchema.parse({}) as ProcessorState<Contract>,
+      parseState: (value) => {
+        const parsed = processor.contract.stateSchema.safeParse(value);
+        return parsed.success
+          ? { success: true, state: parsed.data as ProcessorState<Contract> }
+          : { success: false, error: parsed.error };
+      },
+      reduceRawEvent: (args) => processor.#reduceRawEvent(args),
+      processEvent: (args) => processor.processEvent(args),
+      onCaughtUp: (args) => processor.onCaughtUp(args),
+      idempotencyKey: (key, whileProcessing) => processor.idempotencyKey(key, whileProcessing),
+      processorStamp: (whileProcessing) => processor.#processorStamp(whileProcessing),
+      append: (opts, input) =>
+        processor.#appendStamped(
+          { target: processor.stream, whileProcessing: opts.whileProcessing },
+          input,
+        ),
+      appendTo: (path, opts, input) =>
+        processor.#appendStamped(
+          { target: processor.stream.at(path), whileProcessing: opts.whileProcessing },
+          input,
+        ),
+    };
   }
 
   /** Current reduced state. Initial state until the first batch loads/reduces. */
@@ -477,6 +587,19 @@ export abstract class StreamProcessor<
    * a no-op.
    */
   protected async reconcile(_args: ProcessEventBatchArgs<Contract>): Promise<void> {}
+
+  /**
+   * At-head hook for the NEW delivery driver (stream-processor-runner.ts):
+   * the runner calls it after a frame whose PROCESSING cursor reaches the
+   * observed head, with the final fold — the signal `reconcile` derives from
+   * `checkpointOffset >= streamMaxOffset` today. This is where obligation
+   * processors drive undriven obligations and settle dead ones (idempotent
+   * appends keyed by stable obligation keys, NOT by any event offset — see
+   * {@link OnCaughtUpArgs}). Simple processors never implement it. Defaults
+   * to a no-op. `reconcile` stays alongside until the migration slice deletes
+   * the legacy host path; only the new runner ever calls `onCaughtUp`.
+   */
+  protected async onCaughtUp(_args: OnCaughtUpArgs<Contract>): Promise<void> {}
 
   /**
    * Reduce one raw stream event against explicit state, without touching the
