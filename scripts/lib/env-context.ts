@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { UNPROVISIONED } from "../../envs.ts";
+import { fetchCloudflareWith429Retry } from "./cloudflare-429-retry.ts";
 
 /**
  * The minimum an app's envs.ts entry must carry for the deploy tooling:
@@ -93,16 +94,23 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
   }
 
   const cfV4 = async <T>(path: string, init?: RequestInit): Promise<T> => {
-    const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      ...init,
-      headers: {
-        authorization: `Bearer ${secrets.CLOUDFLARE_API_TOKEN}`,
-        ...(init?.body && typeof init.body === "string"
-          ? { "content-type": "application/json" }
-          : {}),
-        ...init?.headers,
-      },
-    });
+    // This fetch is THE choke point for every Cloudflare API call the deploy
+    // tooling makes (ctx.cf / ctx.cfV4 across deploy, ensure-resources and
+    // erase-data scripts), so 429 backoff lives here once instead of at each
+    // call site. Request bodies are always strings (see the content-type
+    // sniff below), so replaying the same init per attempt is safe.
+    const response = await fetchCloudflareWith429Retry(`${init?.method ?? "GET"} ${path}`, () =>
+      fetch(`https://api.cloudflare.com/client/v4${path}`, {
+        ...init,
+        headers: {
+          authorization: `Bearer ${secrets.CLOUDFLARE_API_TOKEN}`,
+          ...(init?.body && typeof init.body === "string"
+            ? { "content-type": "application/json" }
+            : {}),
+          ...init?.headers,
+        },
+      }),
+    );
     const body: any = await response.json().catch(() => null);
     if (!response.ok || body?.success === false) {
       throw new CloudflareApiError(
