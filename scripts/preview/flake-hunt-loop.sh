@@ -93,13 +93,16 @@ slot_reclaims=0
 # WARMUP_RUNS uncounted `preview test` invocations warm the slot first; their
 # pass/fail is ignored on purpose (they exist only to prime caches/containers).
 WARMUP_RUNS="${WARMUP_RUNS:-0}"
-for w in $(seq 1 "$WARMUP_RUNS"); do
-  [ "$WARMUP_RUNS" -eq 0 ] && break
-  wlog="$LOG_DIR/warmup-$(printf '%02d' "$w").log"
-  echo "warmup $w/$WARMUP_RUNS: priming the slot (result ignored) -> $wlog"
-  doppler run --project _shared --config prd -- pnpm preview test \
-    --pull-request-number "$PR_NUMBER" >"$wlog" 2>&1 || true
-done
+warm_slot() {
+  local prefix=$1 w wlog
+  for w in $(seq 1 "$WARMUP_RUNS"); do
+    wlog="$LOG_DIR/$prefix-$(printf '%02d' "$w").log"
+    echo "warmup $w/$WARMUP_RUNS: priming the slot (result ignored) -> $wlog"
+    doppler run --project _shared --config prd -- pnpm preview test \
+      --pull-request-number "$PR_NUMBER" >"$wlog" 2>&1 || true
+  done
+}
+warm_slot "warmup"
 
 i="$START_AT"
 last_run=$((START_AT + RUNS - 1))
@@ -160,6 +163,9 @@ while [ "$i" -le "$last_run" ]; do
       echo "run $i: SLOT CLAIMED EXTERNALLY — re-claiming a slot and re-running run $i uncounted (reclaim $slot_reclaims/$MAX_SLOT_RECLAIMS) ($started-$finished UTC) $log"
       mv "$log" "$LOG_DIR/run-$(printf '%03d' "$i")-slot-stolen-$slot_reclaims.log"
       deploy_full_fleet "reclaim $slot_reclaims" "$LOG_DIR/reclaim-$(printf '%02d' "$slot_reclaims")-deploy.log" || exit 4
+      # The re-claimed slot is as cold as the preflight one — give it the
+      # same warmup so the streak's next counted run isn't a cold-boot roll.
+      warm_slot "reclaim-$slot_reclaims-warmup"
       continue
     fi
     echo "run $i: FAIL exit=$exit_code ($started-$finished UTC) $log"
