@@ -5,7 +5,7 @@ import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { listIntegrationConnections } from "../../integrations/connect-flows.ts";
 import { describeNode } from "../../itx/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
-import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-bridge.ts";
+import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-handshake.ts";
 import {
   SandboxProcessorContract,
   type SandboxLifecycleEventInput,
@@ -175,24 +175,18 @@ async function resolveEgressProjectId(
  * never runs, nothing registers, and every request silently falls through to
  * a direct `fetch` (TLS still MITM'd, but egress bypasses project policy).
  *
- * WebSocket upgrades use the same project egress door. The Project DO
- * pair-bridges accepted upgrades (`maybeBridgeWebSocketResponse`) so the
- * sandbox client leg is owned after handshake secret substitution.
+ * WebSocket upgrades use the same project egress door. Project and Secret DOs
+ * pass through the upstream socket opened after policy and substitution; this
+ * final boundary replaces only the hop-specific client handshake headers.
  */
 function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<Env> {
   return async (request, env, ctx) => {
     const projectId = await resolveEgressProjectId(env, ctx.containerId, instanceType);
     const response = await projectStub(env.PROJECT, projectId).fetch(request);
     // Container intercept converts Response.webSocket → HTTP 101 for the
-    // in-container client. Stamp Sec-WebSocket-Accept for the caller's key
-    // (and strip hop-by-hop Upgrade/Connection so intercept injects them once).
-    if (
-      request.headers.get("Upgrade")?.toLowerCase() === "websocket" &&
-      response.webSocket != null
-    ) {
-      return withWebSocketHandshakeHeaders(request, response);
-    }
-    return response;
+    // in-container client. Stamp Accept for this caller's key and leave frame
+    // transport to the native WebSocket response path.
+    return withWebSocketHandshakeHeaders(request, response);
   };
 }
 

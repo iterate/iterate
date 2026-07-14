@@ -18,7 +18,7 @@ import type {
 import type { StreamEvent } from "../streams/schemas.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
-import { maybeBridgeWebSocketResponse } from "../secrets/websocket-bridge.ts";
+import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";
 import {
   assertPlatformApiKeyReferencesAllowed,
   substitutePlatformApiKeyReferences,
@@ -270,19 +270,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
       return approvalGateResponse({
         code: "egress_denied",
         detail: `Egress rule "${rule.ruleKey}" denies this request.`,
-        ruleKey: rule.ruleKey,
-      });
-    }
-    // WebSocket upgrades cannot wait on a human: the hold path buffers the
-    // body and rebuilds the Request, and clients time out long before a
-    // grant lands. Deny with a clear code so policy authors re-scope holds
-    // to non-upgrade traffic (or allow via a non-hold rule).
-    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-      return approvalGateResponse({
-        code: "egress_denied",
-        detail:
-          `Egress rule "${rule.ruleKey}" would hold this WebSocket upgrade; ` +
-          `WebSocket upgrades cannot wait on human approval.`,
         ruleKey: rule.ruleKey,
       });
     }
@@ -564,16 +551,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   /** The egress lanes proper: platform references, secret substitution, bare fetch. */
   async #egress(request: Request): Promise<Response> {
-    // Sandbox coding agents (Codex, etc.) call api.openai.com with a placeholder
-    // or dummy key. Route them through Cloudflare AI Gateway with the platform
-    // OpenAI key + project metadata — same BYOK/observability posture as agent DO
-    // turns, without exposing openAiApiKey via getSecret({ platform }).
-    if (isOpenAiPublicApiRequest(request)) {
-      const routed = await this.#egressOpenAiViaAiGateway(request);
-      if (routed !== null) return routed;
-      // Fall through when accountId/gateway config is missing (local/dev edge).
-    }
-
     let secretPaths: string[];
     try {
       // Placeholders live in the request envelope: headers, or the URL for
@@ -595,32 +572,43 @@ export class ProjectDurableObject extends DurableObject<Env> {
           config: parseConfig(this.env),
           request,
         });
-        const response = await fetchWithCredentialRedirects(substituted, {
-          assertUrlAllowed: (url) => assertPlatformApiKeyReferencesAllowed(platformReferences, url),
-        });
-        return await maybeBridgeWebSocketResponse(request, response);
+        return await withWebSocketHandshakeHeaders(
+          request,
+          await fetchWithCredentialRedirects(substituted, {
+            assertUrlAllowed: (url) =>
+              assertPlatformApiKeyReferencesAllowed(platformReferences, url),
+          }),
+        );
       } catch (error) {
         if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
         throw error;
       }
     }
 
-    if (secretPaths.length === 0) {
-      // Bare fetch (no secrets): still pair-bridge WebSocket upgrades so the
-      // sandbox client leg is owned here, not a fragile pass-through socket.
-      return await maybeBridgeWebSocketResponse(request, await fetch(request));
-    }
     // One request, one secret: the referenced Secret DO substitutes its own
     // placeholders under its own host pin (cross-secret chaining is gone).
     if (secretPaths.length > 1) return secretErrorResponse("secret_reference_foreign");
+    if (secretPaths.length === 1) {
+      const response = await this.env.SECRET.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: this.#name.projectId,
+          path: secretPaths[0]!,
+        }),
+      ).fetch(request);
+      return withWebSocketHandshakeHeaders(request, response);
+    }
 
-    const secretResponse = await this.env.SECRET.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.#name.projectId,
-        path: secretPaths[0]!,
-      }),
-    ).fetch(request);
-    return await maybeBridgeWebSocketResponse(request, secretResponse);
+    // Sandbox coding agents with no explicit project/platform secret use the
+    // platform OpenAI key through AI Gateway. An explicit project secret wins,
+    // including if a WebSocket client falls back to an HTTP POST, so credential
+    // provenance and the secret audit cannot silently change between transports.
+    if (isOpenAiPublicApiRequest(request)) {
+      const routed = await this.#egressOpenAiViaAiGateway(request);
+      if (routed !== null) return routed;
+      // Fall through when accountId/gateway config is missing (local/dev edge).
+    }
+
+    return withWebSocketHandshakeHeaders(request, await fetch(request));
   }
 
   /**

@@ -184,12 +184,12 @@ Deferred to the userspace-integrations PR (see ADR 0005):
   fixture for the jailed variant). Extends the cell to DO + jail; the
   boundary stays "bytes only leave toward pinned hosts"; worker install gated
   like a material write.
-- **WebSocket egress + relay** (the three gateway credential shapes petshop
-  already serves). Landed in outline: Upgrade is a fetch through the same
-  surface with pair-bridge; Discord IDENTIFY is `secret.relayWebSocket`
-  (trusted frame send, not frame scanning). See
-  [sandbox-websocket-egress.md](./sandbox-websocket-egress.md). Remaining:
-  full petshop e2e lanes for all three shapes.
+- **Frame-authenticated WebSocket protocols** (for example Discord IDENTIFY):
+  frame placeholders are sent literally because application frames are opaque.
+  Header-authenticated HTTP/1.1 upgrades use the existing `fetch()` surface
+  and native socket response; frame payloads remain opaque. A trusted
+  first-frame API is still deferred. See
+  [sandbox-websocket-egress.md](./sandbox-websocket-egress.md).
 - **A userspace webhook-verification story** (the compute-methods question
   returns here, answered inside the jail rather than on the public secret).
 

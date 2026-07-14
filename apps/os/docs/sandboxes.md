@@ -187,10 +187,11 @@ Durable Object, the same decision point `ProjectEgressEntrypoint` gives dynamic
 workers' `globalOutbound`. So a sandbox reaches the outside world only through
 the same allow/deny/secret-substitution policy as the rest of the project.
 
-**WebSockets:** outbound `wss://` works on this path (HTTP/1.1 upgrade under
-MITM). Accepted upgrades are pair-bridged in project egress. Header secrets use
-`getSecret` on the upgrade; Discord-style frame auth uses
-`secret.relayWebSocket`. Details:
+**WebSockets:** outbound HTTP/1.1 `wss://` handshakes and duplex frames use this
+same MITM path. Header secrets use `getSecret` on the upgrade; application
+frames remain opaque. Released `ws` receives complete close semantics, but the
+stock image's built-in Node `WebSocket` currently misses the reciprocal close
+event and can wait until timeout. Details:
 [sandbox-websocket-egress.md](./sandbox-websocket-egress.md).
 
 Wiring (three points):
@@ -216,13 +217,16 @@ Wiring (three points):
 ### OpenAI → Cloudflare AI Gateway
 
 JSON **POST/PUT** to **`api.openai.com`** (chat/completions, responses, …) are
-routed at **project egress** (sandbox MITM, worker `egress.fetch`, …) through
-the Workers AI **gateway binding only** — same door and **platform** OpenAI key
-as agent BYOK. Caller `Authorization` is replaced; plant a dummy/placeholder
-`OPENAI_API_KEY` in the container. Requests carry `cf-aig-metadata` with at
-least `{ projectId, source: "project-egress" }`, plus BYOK-parity collect-log
-headers. `OpenAI-*` and `Accept` caller headers are forwarded. Other methods
-(e.g. GET `/v1/models`) are **not** rewritten and use normal project egress
+routed at **project egress** (sandbox MITM, worker `egress.fetch`, …). An
+explicit project or platform `getSecret(...)` reference takes the normal
+pinned secret lane; this keeps the same credential if a WebSocket client falls
+back to HTTP. Without an explicit reference, JSON POST/PUT uses the Workers AI
+**gateway binding only** — the same door and **platform** OpenAI key as agent
+BYOK — and caller `Authorization` is replaced, so a dummy key is sufficient.
+Gateway requests carry `cf-aig-metadata` with at least
+`{ projectId, source: "project-egress" }`, plus BYOK-parity collect-log headers.
+`OpenAI-*` and `Accept` caller headers are forwarded. Other bare methods (for
+example GET `/v1/models`) are **not** rewritten and use normal project egress
 (dummy keys will 401). Implementation: `openai-ai-gateway-egress.ts` +
 `ProjectDurableObject.#egressOpenAiViaAiGateway`.
 

@@ -804,14 +804,12 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Secret",
     kind: "interface",
     sourceText:
-      "/** Path-addressed secret capability. Secret material has no public read API:\n * material never leaves the Secret Durable Object except substituted into a\n * request bound for one of the secret's pinned egress hosts. */\nexport interface Secret {\n  /** Like every other node, the secret's self-report IS `__describe()`: the\n   * discovery Description merged with the secret's public SecretDescription\n   * (audit, egress, whether material is present, the refresh strategy). The\n   * raw value is never part of it. */\n  __describe(): Promise<Description & SecretDescription>;\n  /** Egress fetch with this secret's placeholders substituted server-side. */\n  fetch(request: Request): Promise<Response>;\n  /**\n   * Discord-shaped WebSocket relay: IDENTIFY with material held only in the\n   * Secret DO, then a pair-bridged socket for app frames. See\n   * `SecretWebSocketRelayInput` / petshop `/gateway`.\n   *\n   * Routed through DO **fetch** (not a JSRPC method) so `Response.webSocket`\n   * can leave the Secret DO — method returns reject sockets with DataCloneError.\n   */\n  relayWebSocket(input: SecretWebSocketRelayInput): Promise<Response>;\n  /** Restart the secret's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** Set secret material, its egress allowlist, and/or refresh strategy.\n   * Replacement material requires its complete egress policy in the same\n   * update. Every update without replacement material clears stored material. */\n  update(input: SecretUpdateInput): Promise<StreamEvent>;\n  /** The secret stream processor; its public state IS the SecretDescription. */\n  processor: WakeableStreamProcessorRpc<SecretDescription>;\n  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<SecretDescription>;\n}",
+      "/** Path-addressed secret capability. Secret material has no public read API:\n * material never leaves the Secret Durable Object except substituted into a\n * request bound for one of the secret's pinned egress hosts. */\nexport interface Secret {\n  /** Like every other node, the secret's self-report IS `__describe()`: the\n   * discovery Description merged with the secret's public SecretDescription\n   * (audit, egress, whether material is present, the refresh strategy). The\n   * raw value is never part of it. */\n  __describe(): Promise<Description & SecretDescription>;\n  /** Egress fetch with this secret's placeholders substituted server-side. */\n  fetch(request: Request): Promise<Response>;\n  /** Restart the secret's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** Set secret material, its egress allowlist, and/or refresh strategy.\n   * Replacement material requires its complete egress policy in the same\n   * update. Every update without replacement material clears stored material. */\n  update(input: SecretUpdateInput): Promise<StreamEvent>;\n  /** The secret stream processor; its public state IS the SecretDescription. */\n  processor: WakeableStreamProcessorRpc<SecretDescription>;\n  /** The secret's live state — its public SecretDescription (never the ciphertext). See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<SecretDescription>;\n}",
     summary: "Path-addressed secret capability.",
     memberSummaries: {
       __describe:
         "Like every other node, the secret's self-report IS `__describe()`: the discovery Description merged with the secret's public SecretDescription (audit, egress, whether material is present, the refresh strategy).",
       fetch: "Egress fetch with this secret's placeholders substituted server-side.",
-      relayWebSocket:
-        "Discord-shaped WebSocket relay: IDENTIFY with material held only in the Secret DO, then a pair-bridged socket for app frames.",
       kill: "Restart the secret's server-side object; the next request boots it fresh.",
       update: "Set secret material, its egress allowlist, and/or refresh strategy.",
       processor: "The secret stream processor; its public state IS the SecretDescription.",
@@ -820,7 +818,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [
       "Description",
       "SecretDescription",
-      "SecretWebSocketRelayInput",
       "SecretUpdateInput",
       "StreamEvent",
       "WakeableStreamProcessorRpc",
@@ -1874,16 +1871,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "A stored secret's public face — its live state and what `__describe()` merges in: usage audit counters, pinned egress URLs, whether material is present, and the configured refresh strategy's kind.",
     memberSummaries: {},
     referencedTypeNames: ["SecretRefresh"],
-  },
-  {
-    name: "SecretWebSocketRelayInput",
-    kind: "typeAlias",
-    sourceText:
-      '/**\n * Input to `secret.relayWebSocket`: open a pinned wss, optionally send\n * IDENTIFY with material held only in the Secret DO, then return a\n * pair-bridged socket for subsequent app frames.\n */\nexport type SecretWebSocketRelayInput = {\n  /** Absolute ws/wss (or http/https, upgraded) URL on the secret\'s egress pin. */\n  url: string;\n  /**\n   * When set, after the socket opens the Secret DO waits for a server JSON\n   * frame with `op === waitForOp` (default `"hello"`), then sends an IDENTIFY\n   * frame whose token field is filled from secret material. Omit to open and\n   * bridge immediately (header/subprotocol-auth gateways that are already\n   * identified at upgrade).\n   */\n  identify?: {\n    /** Server op to wait for before IDENTIFY. Default `"hello"`. Pass `null` to send IDENTIFY immediately after open. */\n    waitForOp?: string | null;\n    /** Dotted field into structured material; omit when material is a plain string token. */\n    tokenField?: string;\n    /**\n     * JSON object template for the IDENTIFY frame. Any string equal to\n     * `"$token"` is replaced with the secret token. Default:\n     * `{ op: "identify", token: "$token" }` (petshop / Discord shape).\n     */\n    frame?: Record<string, unknown>;\n  };\n  /** Bound for hello wait + identify round-trip. Default 15_000. */\n  timeoutMs?: number;\n};',
-    summary:
-      "Input to `secret.relayWebSocket`: open a pinned wss, optionally send IDENTIFY with material held only in the Secret DO, then return a pair-bridged socket for subsequent app frames.",
-    memberSummaries: {},
-    referencedTypeNames: [],
   },
   {
     name: "SecretUpdateInput",

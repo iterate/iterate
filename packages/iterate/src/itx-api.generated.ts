@@ -1415,15 +1415,6 @@ export interface Secret {
   __describe(): Promise<Description & SecretDescription>;
   /** Egress fetch with this secret's placeholders substituted server-side. */
   fetch(request: Request): Promise<Response>;
-  /**
-   * Discord-shaped WebSocket relay: IDENTIFY with material held only in the
-   * Secret DO, then a pair-bridged socket for app frames. See
-   * `SecretWebSocketRelayInput` / petshop `/gateway`.
-   *
-   * Routed through DO **fetch** (not a JSRPC method) so `Response.webSocket`
-   * can leave the Secret DO — method returns reject sockets with DataCloneError.
-   */
-  relayWebSocket(input: SecretWebSocketRelayInput): Promise<Response>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
   /** Set secret material, its egress allowlist, and/or refresh strategy.
@@ -2992,37 +2983,6 @@ export type SecretDescription = {
   hasMaterial: boolean;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
-};
-
-/**
- * Input to `secret.relayWebSocket`: open a pinned wss, optionally send
- * IDENTIFY with material held only in the Secret DO, then return a
- * pair-bridged socket for subsequent app frames.
- */
-export type SecretWebSocketRelayInput = {
-  /** Absolute ws/wss (or http/https, upgraded) URL on the secret's egress pin. */
-  url: string;
-  /**
-   * When set, after the socket opens the Secret DO waits for a server JSON
-   * frame with `op === waitForOp` (default `"hello"`), then sends an IDENTIFY
-   * frame whose token field is filled from secret material. Omit to open and
-   * bridge immediately (header/subprotocol-auth gateways that are already
-   * identified at upgrade).
-   */
-  identify?: {
-    /** Server op to wait for before IDENTIFY. Default `"hello"`. Pass `null` to send IDENTIFY immediately after open. */
-    waitForOp?: string | null;
-    /** Dotted field into structured material; omit when material is a plain string token. */
-    tokenField?: string;
-    /**
-     * JSON object template for the IDENTIFY frame. Any string equal to
-     * `"$token"` is replaced with the secret token. Default:
-     * `{ op: "identify", token: "$token" }` (petshop / Discord shape).
-     */
-    frame?: Record<string, unknown>;
-  };
-  /** Bound for hello wait + identify round-trip. Default 15_000. */
-  timeoutMs?: number;
 };
 
 /**
