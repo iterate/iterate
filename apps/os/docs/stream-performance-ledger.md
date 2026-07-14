@@ -3225,3 +3225,48 @@ Raw corrected records are
 The collection ended at `2026-07-14T23:34:01Z`; if active optimization
 continues, the next current-main checkpoint is due by
 `2026-07-15T03:34:01Z`. Production was not deployed or erased.
+
+## 2026-07-14: Deployed Reset, Re-wake, And Retry Soak
+
+Preview 5 was green at draft head `ba7cdab2e`, including its normal deploy and
+end-to-end lane. Two additional deployed soaks then targeted
+`https://os.iterate-preview-5.com` through the public Worker/Cap'n Web surface.
+Each process had a 120-second Node-host deadline; completion did not depend on
+a Worker isolate timer advancing while Cloudflare could freeze its clock.
+
+Ten fresh reset/re-wake processes each ran two scenarios on independent
+projects:
+
+1. Tear down a root Stream's configured processor connections, append after
+   they are absent, and require every configured subscriber to re-dial from its
+   checkpoint.
+2. Start a public `waitForEvent`, observe its internal subscription, kill the
+   actual Stream Durable Object, append through the replacement incarnation,
+   and require the original promise to receive the exact durable event.
+
+All 20 scenarios passed without loss, timeout, stale-handle failure, or failed
+re-dial. Whole-scenario wall time, including project/session setup, was 7.749 s
+p50 / 8.813 s observed p95 for configured re-wake and 9.745 s p50 / 14.376 s
+observed p95 for wait recovery. These are soak timings, not isolated Stream DO
+latency claims.
+
+Ten more fresh processes each ran two durable-delivery scenarios:
+
+1. Configure source-to-target cross-posting, require an exact provenance copy,
+   replay/replace the subscription, and prove the idempotency key collapses the
+   duplicate.
+2. Exercise frame-level exact retry across target-DO reset, reject a delivery
+   while paused, resume, retry, and require every newly eligible event exactly
+   once.
+
+All 20 delivery/retry scenarios passed. Whole-scenario p50 / observed p95 was
+9.738 / 10.567 s for configured copying and 9.594 / 11.720 s for exact retry.
+Seven complete local reset/re-wake pre-soak processes also passed. An eighth
+local process stalled before Vitest entered its run while unrelated long-lived
+test processes were active on the machine; it was terminated and excluded as
+a host-runner failure, not counted as Stream evidence.
+
+Raw deployed records are `/tmp/stream-reset-soak-preview5-r{1..10}.log` and
+`/tmp/stream-retry-soak-preview5-r{1..10}.log`. This soak changed no production
+code, schema, protocol, or preview configuration. Production was not deployed
+or erased.
