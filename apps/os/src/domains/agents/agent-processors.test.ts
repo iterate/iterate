@@ -2322,12 +2322,19 @@ describe("busy/idle status announcements", () => {
     await deliverNewEvents({ processor: agent, stream, cursors });
     expect(announcements(stream)).toEqual([{ busy: true, sinceOffset: expect.any(Number) }]);
 
-    // A second message arrives inside the window: derived activity is busy
-    // again — equal to what is already announced — so the pending idle is
-    // superseded and the journal never records the blip.
+    // A second message arrives inside the window: the pending idle is
+    // superseded WITHOUT its blip ever journaling, and the busy generation
+    // is re-announced at the new trigger's offset — so a stale idle append
+    // from the superseded timer (had it raced out) would be rejected by
+    // every consuming fold's sinceOffset guard.
     await stream.append(userMessage());
     await deliverNewEvents({ processor: agent, stream, cursors });
-    expect(announcements(stream)).toEqual([{ busy: true, sinceOffset: expect.any(Number) }]);
+    const busyAnnouncements = announcements(stream) as { busy: boolean; sinceOffset: number }[];
+    expect(busyAnnouncements).toEqual([
+      { busy: true, sinceOffset: expect.any(Number) },
+      { busy: true, sinceOffset: expect.any(Number) },
+    ]);
+    expect(busyAnnouncements[1]!.sinceOffset).toBeGreaterThan(busyAnnouncements[0]!.sinceOffset);
   });
 
   it("a revived incarnation announces a past-due idle flip immediately", async () => {

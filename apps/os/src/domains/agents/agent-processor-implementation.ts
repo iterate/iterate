@@ -508,15 +508,29 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // Undefined means the agent has never been busy; genesis idle is not news.
     if (flip === undefined) return;
     const announced = args.state.announcedStatus;
-    // Busy is due unless already announced; idle is due ONLY when a busy
-    // announcement stands. An idle flip with no busy in the journal — the
-    // record is undefined OR authored-only (title/note/shortStatus patches
-    // never carry busy) — means no surface ever painted anything (a whole
-    // turn folded in one at-head page: a replayed pre-announcement journal
-    // or a synthetically seeded lifecycle), so there is nothing to clear;
-    // announcing it would append one idle event to every historical agent
-    // journal on the first refold after a contract deploy.
-    const announcementDue = flip.busy ? announced?.busy !== true : announced?.busy === true;
+    // Busy is due unless already announced AT THIS GENERATION; idle is due
+    // ONLY when a busy announcement stands.
+    //
+    // The generation comparison on the busy side closes a race: with busy
+    // announced at generation A, an idle flip B arms its timer, and newer
+    // busy work C supersedes it. A boolean-only comparison would skip
+    // announcing C — and if B's timer append was already in flight past its
+    // best-effort staleness check, consumers holding generation A would
+    // accept B's idle and clear a working agent. Announcing C's newer
+    // sinceOffset makes every consuming fold reject B's racing append. (A
+    // busy generation only changes by toggling through idle, so this adds
+    // one announcement exactly when a pending idle was superseded.)
+    //
+    // An idle flip with no busy in the journal — the record is undefined OR
+    // authored-only (title/note/shortStatus patches never carry busy) —
+    // means no surface ever painted anything (a whole turn folded in one
+    // at-head page: a replayed pre-announcement journal or a synthetically
+    // seeded lifecycle), so there is nothing to clear; announcing it would
+    // append one idle event to every historical agent journal on the first
+    // refold after a contract deploy.
+    const announcementDue = flip.busy
+      ? announced?.busy !== true || announced.sinceOffset !== flip.sinceOffset
+      : announced?.busy === true;
     if (!announcementDue) {
       this.#cancelIdleStatusAnnouncement();
       return;
