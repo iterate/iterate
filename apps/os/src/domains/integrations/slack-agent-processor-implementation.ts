@@ -186,8 +186,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         const eventType = readStringField(slackEvent, "type");
         // `app_mention` is Slack's dedicated "someone mentioned this app"
         // delivery; treat it like a message for transcription + LLM wake.
-        const isMessageLike = eventType === "message" || eventType === "app_mention";
-        if (!isMessageLike) {
+        if (eventType !== "message" && eventType !== "app_mention") {
           blockProcessorWhile(async () => {
             await appendAgentMessage({
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
