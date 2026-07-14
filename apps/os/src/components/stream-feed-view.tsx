@@ -206,7 +206,6 @@ export function StreamFeedView({
     filter.raw != null &&
     (filter.raw.eventTypes != null ||
       filter.raw.components != null ||
-      filter.raw.eventTypePrefix != null ||
       filter.raw.searchQuery != null ||
       filter.raw.offsetFrom != null ||
       filter.raw.offsetTo != null);

@@ -101,7 +101,6 @@ const STREAM_VIEW_SEARCH_RESET = {
   from: undefined,
   mode: undefined,
   panel: undefined,
-  preset: undefined,
   processor: undefined,
   q: undefined,
   to: undefined,
