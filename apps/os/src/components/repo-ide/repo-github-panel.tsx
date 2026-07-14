@@ -11,6 +11,7 @@ import {
   githubHistoryMergeAgentInstructions,
   githubHistoryMergeAgentPath,
   isGithubHistoryConflictError,
+  preferredResolutionForSyncConflict,
 } from "./github-history-resolution.ts";
 import {
   listGithubConnections,
@@ -73,7 +74,7 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
           owner: out.result.owner,
           repo: out.result.repo,
           reason: out.reason,
-          prefer: "pull",
+          prefer: preferredResolutionForSyncConflict(out.reason),
         });
         return;
       }
@@ -217,11 +218,12 @@ function LinkedPanel({
       toast.success(r.changed ? `Synced ${r.commitOid.slice(0, 7)}.` : "Already at GitHub's head."),
     onError: (e) => {
       if (isGithubHistoryConflictError(e)) {
+        const reason = e instanceof Error ? e.message : String(e);
         onConflict({
           owner: github.owner,
           repo: github.repo,
-          prefer: "pull",
-          reason: e instanceof Error ? e.message : String(e),
+          prefer: preferredResolutionForSyncConflict(reason),
+          reason,
         });
         return;
       }

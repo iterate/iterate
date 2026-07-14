@@ -13,6 +13,15 @@ export function isGithubHistoryConflictError(error: unknown): boolean {
   );
 }
 
+/**
+ * Default resolution when a non-forced `syncFromGithub` fails.
+ * Compare `"behind"` means GitHub lags this repo — force-push, don't drop local commits.
+ * Diverged / unrelated / connect-time default: pull (GitHub wins).
+ */
+export function preferredResolutionForSyncConflict(reason: string): "pull" | "push" {
+  return reason.toLowerCase().includes('github says "behind"') ? "push" : "pull";
+}
+
 /** Shallow force-pull window so large histories fit the DO isolate. */
 export const GITHUB_UI_FORCE_PULL_DEPTH = 50;
 

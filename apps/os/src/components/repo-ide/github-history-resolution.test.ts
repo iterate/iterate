@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   githubHistoryMergeAgentPath,
   isGithubHistoryConflictError,
+  preferredResolutionForSyncConflict,
 } from "./github-history-resolution.ts";
 
 describe("isGithubHistoryConflictError", () => {
@@ -34,5 +35,23 @@ describe("githubHistoryMergeAgentPath", () => {
     const path = githubHistoryMergeAgentPath("/repos/Config");
     expect(path).toBe(path.toLowerCase());
     expect(path).toMatch(/^\/agents\/web\/github-merge-[a-z0-9-]+$/);
+  });
+});
+
+describe("preferredResolutionForSyncConflict", () => {
+  it("force-pushes when GitHub is behind local", () => {
+    expect(
+      preferredResolutionForSyncConflict(
+        'syncFromGithub is not a fast-forward (GitHub says "behind" relative to this repo\'s head abc).',
+      ),
+    ).toBe("push");
+  });
+
+  it("pulls for diverged/unrelated", () => {
+    expect(
+      preferredResolutionForSyncConflict(
+        'syncFromGithub is not a fast-forward (GitHub says "diverged" relative to this repo\'s head abc).',
+      ),
+    ).toBe("pull");
   });
 });
