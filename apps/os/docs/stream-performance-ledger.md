@@ -2141,3 +2141,113 @@ as small-sample tail noise rather than shipping regressions. Cross-post records
 are `/tmp/stream-crosspost-tail-{main,candidate}-r{1..5}.log`; reactivation
 records are `/tmp/stream-reactivation-tail-{main,candidate}-r{1..5}.log`. The
 controls ended at `2026-07-14T07:28:46Z`.
+
+## 2026-07-14: Fresh Retained-Tail Reads Retained
+
+Ascending public reads now reuse the delivery reader's already-retained append
+tail when that tail proves the answer is complete. The fast path applies the
+same event-type, wildcard, ephemeral, offset, and limit semantics in memory.
+It declines when the requested lower bound predates the retained window, when
+an offset gap exists, or for descending reads; those cases continue through
+the existing indexed SQLite query. No second event cache or new retained copy
+was added.
+
+The exact parent/candidate experiment compared parent `e47e15155` with
+candidate `195498999` for five alternating rounds per revision on one
+worktree, port, and local state. Each host sample enclosed and consumed the
+awaited RPC result. Median-of-round results were:
+
+| Read path              |       Main p50 / p95 / mean |  Candidate p50 / p95 / mean |         Change p50 / p95 / mean |
+| ---------------------- | --------------------------: | --------------------------: | ------------------------------: |
+| 500 events, 4 KiB each | 14.310 / 26.569 / 15.202 ms | 12.563 / 18.343 / 13.256 ms | **12.2% / 31.0% / 12.8% lower** |
+| 768 KiB event          |   5.335 / 11.650 / 5.876 ms |   4.841 / 11.272 / 5.534 ms |    **9.3% / 3.3% / 5.8% lower** |
+
+The sparse ascending lane also improved 25.7%/15.2%/19.6% because its retained
+tail could prove the answer. The unchanged descending-latest SQLite fallback
+was neutral at -0.8%/+3.9%/+4.3% for p50/p95/mean. This is important: the gain
+does not depend on weakening the indexed historical-read path.
+
+A larger current-main gate then compared main `a23d5cdd0` with final candidate
+`6857ef674` for five rounds of 100 samples. A 768 KiB read improved from
+5.705/9.305/6.236 ms to 4.849/7.415/5.302 ms, or
+**15.0%/20.3%/15.0% lower p50/p95/mean**. The same fixture's 768 KiB
+discarded-result append improved 49.2%/52.5%/51.7%; its absolute append times
+are not compared with the cumulative suite because 100 consecutive large
+writes intentionally grow one local store much further.
+
+Correctness includes 378 Stream unit tests, all 16 public Stream e2e tests,
+and OS typecheck. The focused tests cover filters, wildcards, ephemerals,
+limits, exact and fractional bounds, retained gaps, and SQL fallback. The
+fractional public bound found during review is deliberately rounded with
+`ceil(bound) - 1`, preserving the prior SQL predicate exactly.
+
+Production cost is `+68/-4` lines and tests are `+108/-2`. The additional
+branch is local to the reader and collapses safely to the old SQLite query on
+any uncertainty. It introduces no schema, migration, timer, RPC, persistent
+state, compatibility mode, or duplicated retained payload. Raw focused
+records are `/tmp/stream-fresh-read-{parent,candidate}-r{1..5}.log` and
+`/tmp/stream-768-tail-{main,candidate}-r{1..5}.log`.
+
+## 2026-07-14: Fifth Cumulative Main Comparison
+
+### Revisions And Runtime
+
+- Candidate: `9be38d96dc7758555db146807ce8cd458c1f00e1`
+- Baseline: `f66ba9bd0f0e1c1c8efedf1a09a5195481c6f6c8`
+  (`origin/main`, fetched before and after collection)
+- Five complete rounds per revision in `M,C,C,M,M,C,C,M,M,C` order.
+- The same branch-hosted harness drove both revisions, only one Workers stack
+  was active, and each sample timed awaited host-visible network work.
+- Collection ended at `2026-07-14T09:33:16.787Z`. If this run remains active,
+  the next cumulative comparison is due by `2026-07-14T13:33:16.787Z`.
+
+All ten processes passed. The table reports change from the median of the five
+per-round statistics; positive percentages mean less candidate wall time.
+
+| Workload                               | p50 change | p95 change | mean change |
+| -------------------------------------- | ---------: | ---------: | ----------: |
+| Append one 1 KiB event, discard result |       1.3% |       1.6% |        5.0% |
+| Append 100 tiny events in one call     |  **43.2%** |  **45.2%** |   **44.6%** |
+| 32 concurrent singleton appends        |  **21.8%** |     -47.1% |   **20.5%** |
+| Append one 256 KiB event               |  **33.9%** |  **29.1%** |   **33.4%** |
+| Append one 768 KiB event               |  **31.3%** |  **32.2%** |   **32.5%** |
+| Read one 768 KiB event                 |  **19.0%** |  **40.1%** |   **20.5%** |
+| Retry duplicate 256 KiB append         |  **29.7%** |  **22.9%** |   **26.1%** |
+| Hot stream head                        |   **7.1%** |       4.0% |   **12.1%** |
+| Read 500 events of 4 KiB               |  **29.3%** |  **21.0%** |   **28.5%** |
+| Sparse ascending read, 20 of 2,000     |  **16.1%** |     -40.2% |   **10.5%** |
+| Latest sparse event                    |  **13.0%** |     -50.6% |    **8.1%** |
+| Replay 500 events                      |  **17.0%** |  **12.0%** |   **17.6%** |
+| One live delivery                      |  **17.1%** |     -11.6% |   **11.4%** |
+| Live fanout to 25 subscribers          |   **5.8%** |     -13.9% |       -9.2% |
+| Dense durable cross-post               |  **12.5%** |       0.4% |   **12.2%** |
+| Sparse durable cross-post, 1 of 100    |  **31.9%** |  **20.0%** |   **31.7%** |
+| Forced-reactivation head               |     -13.3% |     -16.0% |       -6.1% |
+
+Across all 17 equally weighted workloads, geometric-mean p50 improved
+**19.7%**, p95 improved **7.0%**, and mean improved **18.8%**. This is a suite
+summary, not a production-traffic weighting. Capacity effects from the same
+median rounds include:
+
+| Workload                 |               Main |          Candidate | Capacity change |
+| ------------------------ | -----------------: | -----------------: | --------------: |
+| 100-event batch append   |     8,118 events/s |    14,282 events/s |      **+75.9%** |
+| 32-way singleton append  |        2,095 ops/s |        2,679 ops/s |      **+27.8%** |
+| Replay 500 events        |    60,857 events/s |    73,292 events/s |      **+20.4%** |
+| Fanout to 25 subscribers | 4,675 deliveries/s | 4,961 deliveries/s |       **+6.1%** |
+
+The red low-sample p95 cells are not treated as established regressions. The
+fresh-read focused control cleared sparse ascending reads and classified the
+unchanged descending path as neutral. Earlier 1,500-sample reactivation and
+larger cross-post controls cleared those tails against main. Concurrent
+append, one-delivery, and fanout tails remain candidates for dedicated larger
+controls; until then, claims are limited to their stable central tendency and
+the aggregate p95 improvement. Cold head remains the one cumulative row whose
+central tendency is genuinely slower, although the larger forced-reactivation
+public-operation control remains faster overall.
+
+The fifth checkpoint therefore strengthens the shipping case without hiding
+the cost: common batch, large-event, replay, read, and cross-post paths improve
+materially, while isolated p95 validation is still required for concurrent and
+live fanout paths. Raw records are
+`/tmp/cumulative-5-current-{main,candidate}-r{1..5}.log`.
