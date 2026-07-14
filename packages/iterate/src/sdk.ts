@@ -16,6 +16,7 @@ import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
   DynamicWorkerRef,
   ItxBinding,
+  Stream,
   StreamEventBatch,
   StreamEvent,
 } from "./itx-api.generated";
@@ -27,6 +28,37 @@ export type * from "./itx-api.generated";
 /** The one binding the platform supplies to every dynamic worker: `get()`
  * for capability method calls, `fetch()` for HTTP into sibling workers. */
 type IterateEnv = { ITX: ItxBinding };
+
+type StreamSubscribeArgs = Omit<Parameters<Stream["subscribe"]>[0], "processEventBatch"> & {
+  /** Called once per event after the internal batch reaches this isolate. */
+  processEvent(event: StreamEvent): void | Promise<void>;
+};
+
+/**
+ * Subscribe to a stream with one user-level callback per event.
+ *
+ * Delivery remains batched on the wire: this receiver-side adapter accepts
+ * one internal batch, then invokes `processEvent` locally in order. Keeping
+ * that boundary avoids one RPC envelope per event while leaving the public
+ * operation as `subscribe` rather than exposing transport batching to user
+ * code. Synchronous handlers run without a microtask yield between events;
+ * asynchronous handlers are awaited in order within each delivered batch.
+ */
+export function subscribe(
+  stream: Pick<Stream, "subscribe">,
+  args: StreamSubscribeArgs,
+): ReturnType<Stream["subscribe"]> {
+  const { processEvent, ...options } = args;
+  return stream.subscribe({
+    ...options,
+    async processEventBatch(batch) {
+      for (const event of batch.events) {
+        const result = processEvent(event);
+        if (result !== undefined) await result;
+      }
+    },
+  });
+}
 
 /**
  * Forward a request to one of the project's dynamic workers (an "app") —

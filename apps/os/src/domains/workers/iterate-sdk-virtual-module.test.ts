@@ -5,10 +5,18 @@ import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generat
 type EmbeddedSdk = {
   IterateDurableObject: new (...args: unknown[]) => EventBatchReceiver;
   IterateWorkerEntrypoint: new (...args: unknown[]) => EventBatchReceiver;
+  subscribe: (
+    stream: {
+      subscribe(args: { processEventBatch(batch: EventBatch): Promise<void> }): Promise<unknown>;
+    },
+    args: { processEvent(event: unknown): void | Promise<void> },
+  ) => Promise<unknown>;
 };
 
+type EventBatch = { events: unknown[] };
+
 type EventBatchReceiver = {
-  processEventBatch(batch: { events: unknown[] }): Promise<void>;
+  processEventBatch(batch: EventBatch): Promise<void>;
 };
 
 async function loadEmbeddedSdk(): Promise<EmbeddedSdk> {
@@ -58,6 +66,7 @@ test("the embedded iterate/sdk runtime is loader-ready plain JavaScript", async 
   // platform dependency left external for workerd to resolve.
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("class IterateWorkerEntrypoint");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("class IterateDurableObject");
+  expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("function subscribe");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("processEventBatch");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("invokeCapability");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("x-iterate-worker-dispatch");
@@ -84,6 +93,87 @@ test.each(["IterateWorkerEntrypoint", "IterateDurableObject"] as const)(
     await completion;
   },
 );
+
+test("subscribe adapts one wire batch to synchronous per-event handlers without yielding", async () => {
+  const sdk = await loadEmbeddedSdk();
+  const seen: unknown[] = [];
+  let processEventBatch!: (batch: EventBatch) => Promise<void>;
+  const subscribed = sdk.subscribe(
+    {
+      async subscribe(args) {
+        processEventBatch = args.processEventBatch;
+        return "handle";
+      },
+    },
+    {
+      processEvent(event) {
+        seen.push(event);
+      },
+    },
+  );
+  const events = [{ index: 0 }, { index: 1 }, { index: 2 }];
+
+  await expect(subscribed).resolves.toBe("handle");
+  const completion = processEventBatch({ events });
+
+  expect(seen).toEqual(events);
+  await completion;
+});
+
+test("subscribe awaits asynchronous per-event handlers in order", async () => {
+  const sdk = await loadEmbeddedSdk();
+  const seen: unknown[] = [];
+  let processEventBatch!: (batch: EventBatch) => Promise<void>;
+  let releaseFirst!: () => void;
+  const firstCompletion = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  await sdk.subscribe(
+    {
+      async subscribe(args) {
+        processEventBatch = args.processEventBatch;
+      },
+    },
+    {
+      processEvent(event) {
+        seen.push(event);
+        if (seen.length === 1) return firstCompletion;
+      },
+    },
+  );
+  const events = [{ index: 0 }, { index: 1 }, { index: 2 }];
+
+  const completion = processEventBatch({ events });
+  expect(seen).toEqual(events.slice(0, 1));
+
+  releaseFirst();
+  await completion;
+  expect(seen).toEqual(events);
+});
+
+test("subscribe propagates a per-event handler failure and stops the local batch", async () => {
+  const sdk = await loadEmbeddedSdk();
+  const seen: unknown[] = [];
+  const failure = new Error("ephemeral process event failed");
+  let processEventBatch!: (batch: EventBatch) => Promise<void>;
+  await sdk.subscribe(
+    {
+      async subscribe(args) {
+        processEventBatch = args.processEventBatch;
+      },
+    },
+    {
+      processEvent(event) {
+        seen.push(event);
+        if (seen.length === 2) return Promise.reject(failure);
+      },
+    },
+  );
+  const events = [{ index: 0 }, { index: 1 }, { index: 2 }];
+
+  await expect(processEventBatch({ events })).rejects.toBe(failure);
+  expect(seen).toEqual(events.slice(0, 2));
+});
 
 test.each(["IterateWorkerEntrypoint", "IterateDurableObject"] as const)(
   "%s awaits asynchronous handlers in order",

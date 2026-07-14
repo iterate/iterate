@@ -54,6 +54,8 @@ const WORKER_CONSUMER_BATCH_SIZE = Number(
 );
 const WORKER_CONSUMER_PROCESS_EVENT =
   process.env.STREAM_BENCH_WORKER_CONSUMER_PROCESS_EVENT === "1";
+const WORKER_CONSUMER_PAIRED = process.env.STREAM_BENCH_WORKER_CONSUMER_PAIRED === "1";
+const WORKER_CONSUMER_EPHEMERAL = process.env.STREAM_BENCH_WORKER_CONSUMER_EPHEMERAL === "1";
 const WORKER_CONSUMER_PAYLOAD_BYTES = Number(
   process.env.STREAM_BENCH_WORKER_CONSUMER_PAYLOAD_BYTES ?? "0",
 );
@@ -1228,7 +1230,9 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     if (!Number.isInteger(WORKER_CONSUMER_BATCH_SAMPLES) || WORKER_CONSUMER_BATCH_SAMPLES < 1) {
       throw new Error("STREAM_BENCH_WORKER_CONSUMER_BATCH_SAMPLES must be a positive integer.");
     }
-    const maxBatchSize = WORKER_CONSUMER_PROCESS_EVENT ? 1_000 : 100;
+    const paired = WORKER_CONSUMER_PAIRED || WORKER_CONSUMER_EPHEMERAL;
+    const useProcessEvent = WORKER_CONSUMER_PROCESS_EVENT || paired;
+    const maxBatchSize = useProcessEvent ? 1_000 : 100;
     if (
       !Number.isInteger(WORKER_CONSUMER_BATCH_SIZE) ||
       WORKER_CONSUMER_BATCH_SIZE < 1 ||
@@ -1244,6 +1248,7 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
 
     const runId = crypto.randomUUID().slice(0, 8);
     const sourcePath = `/bench/${runId}/worker-consumer-source`;
+    const candidateSourcePath = `${sourcePath}-candidate`;
     const outputPath = `/bench/${runId}/worker-consumer-output`;
     const triggerType = `${EVENT_TYPE}/worker-consumer-trigger`;
     const forwardedType = `${EVENT_TYPE}/worker-consumer-forwarded`;
@@ -1273,9 +1278,28 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           return new Response("stream process-event adapter benchmark");
         }
 
+        ${
+          WORKER_CONSUMER_PAIRED
+            ? `async processEventBatch(batch) {
+          const mode = batch.events.find(
+            (event) => event.path === SOURCE_PATH && event.type === TRIGGER_TYPE,
+          )?.payload.mode;
+          if (mode === "baseline") {
+            for (const event of batch.events) await this.processEvent(event);
+            return;
+          }
+          if (mode !== "candidate") throw new Error(\`Unknown processEvent mode: \${mode}.\`);
+          for (const event of batch.events) {
+            const result = this.processEvent(event);
+            if (result !== undefined) await result;
+          }
+        }`
+            : ""
+        }
+
         processEvent(event) {
           if (event.path !== SOURCE_PATH || event.type !== TRIGGER_TYPE) return;
-          const { count, index, iteration } = event.payload;
+          const { count, index, iteration, mode } = event.payload;
           if (index === 0) {
             this.#iteration = iteration;
             this.#receivedCount = 0;
@@ -1292,16 +1316,16 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           }
           this.#iteration = undefined;
           this.#receivedCount = 0;
-          return this.#complete(iteration, count, event);
+          return this.#complete(iteration, count, mode, event);
         }
 
-        async #complete(iteration, count, event) {
+        async #complete(iteration, count, mode, event) {
           const project = await this.env.ITX.get();
           try {
             await project.streams.get(OUTPUT_PATH).append({
               type: COMPLETED_TYPE,
               idempotencyKey: \`worker-completed:\${event.path}@\${event.offset}\`,
-              payload: { count, iteration },
+              payload: { count, iteration, mode },
             });
           } finally {
             project[Symbol.dispose]?.();
@@ -1310,13 +1334,100 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
       }
     `;
 
+    const ephemeralProcessEventWorkerSource = `
+      import { IterateWorkerEntrypoint, subscribe } from "iterate/sdk";
+
+      const BASELINE_SOURCE_PATH = ${JSON.stringify(sourcePath)};
+      const CANDIDATE_SOURCE_PATH = ${JSON.stringify(candidateSourcePath)};
+      const OUTPUT_PATH = ${JSON.stringify(outputPath)};
+      const TRIGGER_TYPE = ${JSON.stringify(triggerType)};
+      const COMPLETED_TYPE = ${JSON.stringify(completedType)};
+
+      export default class ProjectWorker extends IterateWorkerEntrypoint {
+        #handles = [];
+        #project;
+        #state = {
+          baseline: { iteration: undefined, receivedCount: 0 },
+          candidate: { iteration: undefined, receivedCount: 0 },
+        };
+
+        fetch() {
+          return new Response("stream ephemeral process-event adapter benchmark");
+        }
+
+        async startEphemeralBenchmark() {
+          this.#project = await this.env.ITX.get();
+          const baseline = this.#project.streams.get(BASELINE_SOURCE_PATH);
+          const candidate = this.#project.streams.get(CANDIDATE_SOURCE_PATH);
+          this.#handles.push(
+            await baseline.subscribe({
+              eventTypes: [TRIGGER_TYPE],
+              processEventBatch: async (batch) => {
+                let finalEvent;
+                for (const event of batch.events) {
+                  if (this.#accept(event, "baseline")) finalEvent = event;
+                }
+                if (finalEvent !== undefined) await this.#complete(finalEvent, "baseline");
+              },
+            }),
+            await subscribe(candidate, {
+              eventTypes: [TRIGGER_TYPE],
+              processEvent: (event) => {
+                if (this.#accept(event, "candidate")) {
+                  return this.#complete(event, "candidate");
+                }
+              },
+            }),
+          );
+          return true;
+        }
+
+        #accept(event, mode) {
+          const expectedPath = mode === "baseline" ? BASELINE_SOURCE_PATH : CANDIDATE_SOURCE_PATH;
+          if (event.path !== expectedPath || event.type !== TRIGGER_TYPE) {
+            throw new Error(\`Unexpected \${mode} event \${event.path} \${event.type}.\`);
+          }
+          const { count, index, iteration } = event.payload;
+          const state = this.#state[mode];
+          if (index === 0) {
+            state.iteration = iteration;
+            state.receivedCount = 0;
+          }
+          if (iteration !== state.iteration || index !== state.receivedCount) {
+            throw new Error(
+              \`Out-of-order ephemeral \${mode} event: expected \${state.iteration}#\${state.receivedCount}, got \${iteration}#\${index}.\`,
+            );
+          }
+          state.receivedCount += 1;
+          if (state.receivedCount < count) return false;
+          if (state.receivedCount !== count) {
+            throw new Error(\`Ephemeral \${mode} received too many events for \${iteration}.\`);
+          }
+          state.iteration = undefined;
+          state.receivedCount = 0;
+          return true;
+        }
+
+        async #complete(event, mode) {
+          const { count, iteration } = event.payload;
+          await this.#project.streams.get(OUTPUT_PATH).append({
+            type: COMPLETED_TYPE,
+            idempotencyKey: \`ephemeral-\${mode}-completed:\${event.path}@\${event.offset}\`,
+            payload: { count, iteration, mode },
+          });
+        }
+      }
+    `;
+
     await project.repo.commitFiles({
       changes: [
         {
           path: "worker.ts",
-          content: WORKER_CONSUMER_PROCESS_EVENT
-            ? processEventWorkerSource
-            : `
+          content: WORKER_CONSUMER_EPHEMERAL
+            ? ephemeralProcessEventWorkerSource
+            : useProcessEvent
+              ? processEventWorkerSource
+              : `
             import { WorkerEntrypoint } from "cloudflare:workers";
 
             const SOURCE_PATH = ${JSON.stringify(sourcePath)};
@@ -1362,15 +1473,27 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           `,
         },
       ],
-      message: WORKER_CONSUMER_PROCESS_EVENT
-        ? "Install Stream process-event adapter benchmark"
-        : "Install Stream Worker-consumer benchmark",
+      message: WORKER_CONSUMER_EPHEMERAL
+        ? "Install ephemeral Stream process-event adapter benchmark"
+        : useProcessEvent
+          ? "Install Stream process-event adapter benchmark"
+          : "Install Stream Worker-consumer benchmark",
     });
 
     using source = project.streams.get(sourcePath);
+    using candidateSource = project.streams.get(candidateSourcePath);
     using outputStream = project.streams.get(outputPath);
+    if (WORKER_CONSUMER_EPHEMERAL) {
+      // @ts-expect-error - benchmark method comes from worker.ts committed above
+      expect(await project.worker.startEphemeralBenchmark()).toBe(true);
+    }
     let outputOffset = 0;
-    const forward = async (count: number, iteration: string): Promise<number> => {
+    type ProcessEventMode = "baseline" | "candidate";
+    const forward = async (
+      count: number,
+      iteration: string,
+      mode?: ProcessEventMode,
+    ): Promise<number> => {
       const completed = outputStream.waitForEvent({
         afterOffset: outputOffset,
         eventTypes: [completedType],
@@ -1378,7 +1501,9 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
       });
       await waitForWaiterConnection(outputStream, 60_000);
       const startedAt = performance.now();
-      await source.append(
+      const inputStream =
+        WORKER_CONSUMER_EPHEMERAL && mode === "candidate" ? candidateSource : source;
+      await inputStream.append(
         ...Array.from({ length: count }, (_, index) => ({
           type: triggerType,
           payload: {
@@ -1386,46 +1511,81 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
             count,
             index,
             iteration,
+            mode,
           },
         })),
       );
-      const observed = await completed;
+      let observed: StreamEvent;
+      try {
+        observed = await completed;
+      } catch (error) {
+        throw new Error(
+          `Worker consumer timed out for ${mode ?? "default"} ${iteration} (${count} events).`,
+          { cause: error },
+        );
+      }
       const elapsedMs = performance.now() - startedAt;
-      if (observed.payload?.iteration !== iteration || observed.payload?.count !== count) {
+      if (
+        observed.payload?.iteration !== iteration ||
+        observed.payload?.count !== count ||
+        observed.payload?.mode !== mode
+      ) {
         throw new Error(`Worker consumer completed the wrong batch for ${iteration}.`);
       }
       outputOffset = observed.offset;
       return elapsedMs;
     };
 
-    await forward(1, "warmup-single");
-    await forward(WORKER_CONSUMER_BATCH_SIZE, "warmup-batch");
+    const modes: readonly ProcessEventMode[] = paired ? ["baseline", "candidate"] : ["candidate"];
+    for (const mode of modes) {
+      const payloadMode = paired ? mode : undefined;
+      await forward(1, `warmup-${mode}-single`, payloadMode);
+      await forward(WORKER_CONSUMER_BATCH_SIZE, `warmup-${mode}-batch`, payloadMode);
+    }
 
-    const singletonSamples: number[] = [];
+    const singletonSamples = new Map(modes.map((mode) => [mode, [] as number[]]));
     for (let iteration = 0; iteration < WORKER_CONSUMER_SAMPLES; iteration += 1) {
-      singletonSamples.push(await forward(1, `single-${iteration}`));
+      const orderedModes = iteration % 2 === 0 ? modes : [...modes].reverse();
+      for (const mode of orderedModes) {
+        singletonSamples
+          .get(mode)!
+          .push(await forward(1, `${mode}-single-${iteration}`, paired ? mode : undefined));
+      }
     }
 
-    const batchSamples: number[] = [];
+    const batchSamples = new Map(modes.map((mode) => [mode, [] as number[]]));
     for (let iteration = 0; iteration < WORKER_CONSUMER_BATCH_SAMPLES; iteration += 1) {
-      batchSamples.push(
-        await forward(
-          WORKER_CONSUMER_BATCH_SIZE,
-          `batch-${WORKER_CONSUMER_BATCH_SIZE}-${iteration}`,
-        ),
-      );
+      const orderedModes = iteration % 2 === 0 ? modes : [...modes].reverse();
+      for (const mode of orderedModes) {
+        batchSamples
+          .get(mode)!
+          .push(
+            await forward(
+              WORKER_CONSUMER_BATCH_SIZE,
+              `${mode}-batch-${WORKER_CONSUMER_BATCH_SIZE}-${iteration}`,
+              paired ? mode : undefined,
+            ),
+          );
+      }
     }
 
-    const metricPrefix = WORKER_CONSUMER_PROCESS_EVENT
-      ? "worker_consumer_process_event"
-      : "worker_consumer_forward";
+    const metrics: Record<string, Metric> = {};
+    for (const mode of modes) {
+      const metricPrefix = WORKER_CONSUMER_EPHEMERAL
+        ? `worker_consumer_ephemeral_process_event_paired_${mode}`
+        : WORKER_CONSUMER_PAIRED
+          ? `worker_consumer_process_event_paired_${mode}`
+          : WORKER_CONSUMER_PROCESS_EVENT
+            ? "worker_consumer_process_event"
+            : "worker_consumer_forward";
+      metrics[`${metricPrefix}_single`] = summarize(singletonSamples.get(mode)!);
+      metrics[
+        `${metricPrefix}_batch_${WORKER_CONSUMER_BATCH_SIZE}x${WORKER_CONSUMER_PAYLOAD_BYTES}`
+      ] = summarize(batchSamples.get(mode)!, WORKER_CONSUMER_BATCH_SIZE);
+    }
     const output: BenchmarkOutput = {
       implementation: IMPLEMENTATION,
-      metrics: {
-        [`${metricPrefix}_single`]: summarize(singletonSamples),
-        [`${metricPrefix}_batch_${WORKER_CONSUMER_BATCH_SIZE}x${WORKER_CONSUMER_PAYLOAD_BYTES}`]:
-          summarize(batchSamples, WORKER_CONSUMER_BATCH_SIZE),
-      },
+      metrics,
       revision: REVISION,
       timestamp: new Date().toISOString(),
     };
