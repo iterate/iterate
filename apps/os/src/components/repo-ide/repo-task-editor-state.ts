@@ -6,6 +6,7 @@ export type EditorPathOverride = {
 export type EditorPathDraft = {
   source: string;
   value: string;
+  target?: string;
 };
 
 export function reconcileEditorPathOverride(
@@ -15,9 +16,16 @@ export function reconcileEditorPathOverride(
   return override !== undefined && override.source === selectedPath ? override : undefined;
 }
 
+export function editorPathDraftApplies(
+  path: string | undefined,
+  draft: EditorPathDraft | undefined,
+) {
+  return path !== undefined && (draft?.source === path || draft?.target === path);
+}
+
 export function editorPathValue(path: string | undefined, draft: EditorPathDraft | undefined) {
   if (path === undefined) return "";
-  return draft?.source === path ? draft.value : `/${path}`;
+  return draft !== undefined && editorPathDraftApplies(path, draft) ? draft.value : `/${path}`;
 }
 
 export function resolvedEditorPathDraft(
@@ -26,5 +34,5 @@ export function resolvedEditorPathDraft(
 ): EditorPathDraft | undefined {
   return resolvedPath === undefined || resolvedPath === source
     ? undefined
-    : { source, value: `/${resolvedPath}` };
+    : { source, target: resolvedPath, value: `/${resolvedPath}` };
 }

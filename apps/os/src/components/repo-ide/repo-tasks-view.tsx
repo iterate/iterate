@@ -91,6 +91,7 @@ import {
   type WorkingTreeChanges,
 } from "./staged-changes.ts";
 import {
+  editorPathDraftApplies,
   editorPathValue,
   reconcileEditorPathOverride,
   resolvedEditorPathDraft,
@@ -779,7 +780,7 @@ function TaskEditorSheet({
     agent?: string;
   }>();
   const taskPath = task?.path;
-  const pathWasEdited = taskPath !== undefined && pathDraft?.source === taskPath;
+  const pathWasEdited = editorPathDraftApplies(taskPath, pathDraft);
   const pathValue = editorPathValue(taskPath, pathDraft);
   const currentAssignment = assignment?.taskPath === taskPath ? assignment : undefined;
   const assigning = currentAssignment?.assigning ?? false;

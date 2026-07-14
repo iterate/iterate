@@ -83,11 +83,14 @@ test("an editor path override expires after router selection advances", async ()
 });
 
 test("a resolved editor path stays visible until the renamed task arrives", async () => {
-  const { editorPathValue, resolvedEditorPathDraft } = await import("./repo-task-editor-state.ts");
+  const { editorPathDraftApplies, editorPathValue, resolvedEditorPathDraft } =
+    await import("./repo-task-editor-state.ts");
   const draft = resolvedEditorPathDraft("tasks/first.md", "tasks/renamed.md");
 
   expect(editorPathValue("tasks/first.md", draft)).toBe("/tasks/renamed.md");
   expect(editorPathValue("tasks/renamed.md", draft)).toBe("/tasks/renamed.md");
+  expect(editorPathDraftApplies("tasks/first.md", draft)).toBe(true);
+  expect(editorPathDraftApplies("tasks/renamed.md", draft)).toBe(true);
   expect(resolvedEditorPathDraft("tasks/first.md", "tasks/first.md")).toBeUndefined();
   expect(resolvedEditorPathDraft("tasks/first.md", undefined)).toBeUndefined();
 });
