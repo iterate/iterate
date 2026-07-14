@@ -1285,3 +1285,53 @@ This clears both suite-level tail warnings. It also rejects checkpoint-tail
 work as the next optimization: there is no reproduced checkpoint regression
 to pay complexity for. Raw records are `/tmp/stream-focused-{main,candidate}-r{1,2,3}.log`
 and `/tmp/stream-cold1000-{main,candidate}-r1.log` locally.
+
+## 2026-07-14: Direct Cross-Post Dial Rejected
+
+Source review identified a plausible cross-post cost: each delivered batch
+walked the generic itx capability path from the cached authority root through
+`streams.get(path).acceptCrossPost(batch)`. A destructive prototype made
+cross-post a fourth persisted delivery mode, stored only its normalized sibling
+path, dialed the destination Stream Durable Object directly, and cached each
+destination stub for the source isolate. It also removed the now-unneeded public
+`Stream.acceptCrossPost` capability. The existing cursor claim, retry, alarm,
+parking, staged acknowledgement, provenance, and destination-idempotency
+machinery remained unchanged.
+
+The implementation commit `46e18f461` changed 29 files (`+347/-226`): production
+needed a core-state version bump and another delivery branch; generated APIs,
+first-party bootstrap configs, UI state rendering, tests, and design docs all
+had to understand the new mode. It passed full OS typecheck, lint, 384 focused
+Stream/project/repo tests, the complete 1,556-test OS unit suite, and repeated
+focused end-to-end delivery. That is still materially more source-level
+complexity for what should be a transport fast path.
+
+The host-timed benchmark enclosed `appendAck` plus observation at a live
+subscriber on the destination stream, so no result depends on a Worker clock
+advancing without network I/O. Each round measured 500 sequential one-event
+cross-posts and 200 groups of 16 concurrent singleton appends. Candidate and
+exact parent `47f8831f3` ran with only one Workers stack active at a time.
+
+An initial five-round aggregate misleadingly suggested a retainable result:
+dense p50 appeared 7.7% lower and 16-way throughput 5.6% higher. A final
+alternating `C,M,M,C,C,M` sequence did not reproduce it:
+
+| Workload                   | Metric     |     Parent | Direct + cached | Change |
+| -------------------------- | ---------- | ---------: | --------------: | -----: |
+| Dense one-event cross-post | p50        |   3.908 ms |        3.888 ms |   0.5% |
+|                            | p95        |   5.985 ms |        6.476 ms |  -8.2% |
+|                            | mean       |   4.092 ms |        4.129 ms |  -0.9% |
+| 16 concurrent singletons   | p50        |  11.287 ms |       11.038 ms |   2.2% |
+|                            | p95        |  14.641 ms |       15.526 ms |  -6.0% |
+|                            | mean       |  11.542 ms |       11.322 ms |   1.9% |
+|                            | throughput | 1,418 ev/s |      1,450 ev/s |   2.3% |
+
+The generic Cap'n Web route is already pipelined from a cached authority root;
+the hypothesized two serial intermediate round trips were not present as
+independent host-visible costs. The remaining direct-dial saving is below
+noise and its p95 moved the wrong way. The entire prototype was reverted by
+`ed8076854`. Production keeps one push mode, one addressing grammar, and no
+cross-post-only stub cache. Raw records are
+`/tmp/stream-direct-crosspost-{candidate,parent}-r{1,2,3,4,5}.log`,
+`/tmp/stream-direct-crosspost-cached-candidate-r{1,2,3,4,5,6,7}.log`, and
+`/tmp/stream-direct-crosspost-parent-r{6,7,8}.log` locally.
