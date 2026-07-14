@@ -2606,7 +2606,7 @@ reactivation records are
 at `2026-07-14T14:33:46.511Z`; if active work continues, the next cumulative
 comparison is due by `2026-07-14T18:33:46.511Z`.
 
-## 2026-07-14: Column-Owned Event Envelope Advances To Deployed Gate
+## 2026-07-14: Column-Owned Event Envelope Local Gate
 
 ### Hypothesis And Correctness Boundary
 
@@ -2669,7 +2669,7 @@ Raw mixed records are
 `/tmp/column-envelope-storage-{main,candidate}-r{1..5}.log`; the larger replay
 control is `/tmp/column-envelope-read-{main,candidate}-r{1..5}.log`.
 
-### Cost, Collapse Path, And Remaining Gate
+### Cost And Deployed Gate
 
 The implementation changes one production module plus its tests: 231 added
 and 88 removed lines in the isolated commit. It deletes redundant persisted
@@ -2680,10 +2680,168 @@ or new externally visible operation. The collapse path is one commit: schema
 9 has not entered the shipping branch, so rejection means deleting the
 experiment branch with no production fallback code left behind.
 
-This experiment is not yet accepted. It still must run on actual deployed
-Cloudflare Workers, with a Worker consumer crossing Workers RPC to the Stream
-Durable Object and a host-observed completion fence. At `2026-07-14T15:16Z`
-all nine preview slots were legitimately leased to active PRs. No holder was
-evicted and no unleased deployment was attempted. The deployed A/B will run
-as soon as a slot is released; production deployment and erasure remain out
-of scope without explicit approval.
+This local result advanced the experiment to an actual deployed Worker A/B,
+recorded below. At `2026-07-14T15:16Z` all nine preview slots were legitimately
+leased to active PRs, so no holder was evicted and no unleased deployment was
+attempted. The later run used this PR's legitimate `preview_5` lease.
+
+## 2026-07-14: Eighth Cumulative Main Comparison
+
+### Revisions And Method
+
+- Candidate: `f2fbff2c138cb4505cf694e0e28df834e2e89591`.
+- Baseline: `c80cad73a1a4d8416151b8789749aba16fe74a83`, freshly fetched
+  `origin/main` when collection started.
+- The complete 17-workload suite ran five times per revision in
+  `M,C,C,M,M,C,C,M,M,C` order. All ten processes and all semantic assertions
+  passed.
+- Larger controls then ran five times per revision in the same order: 2,000
+  singleton storage observations; 500 concurrent-append and forced-reactivation
+  observations; 1,500 one-subscriber and 25-subscriber live observations; and
+  larger batch/read controls.
+- Each process used a dedicated explicit port, fresh state, and fresh projects
+  and paths. Only one Workers stack was active at a time. Node timed awaited
+  network/RPC calls or host-observed delivery and consumed every result; no
+  Worker-isolate clock supplied wall time.
+
+`origin/main` advanced through `7b106d623` after collection. It was merged as
+`79b671d46`; the one browser-runtime conflict combined main's new single-download
+composite mirror with this branch's cheaper `head()` reconcile and required the
+composite to fan out `ingestThrough`. OS typecheck and all 389 Stream unit tests
+pass. The benchmark record remains against the immutable current-main SHA that
+was fetched when collection began.
+
+### Cumulative Result
+
+The unadjusted 17-workload geometric mean improved by **13.596% at p50**,
+**5.303% at p95**, and **13.968% at mean**. Replacing singleton append,
+concurrent append, one- and 25-subscriber live delivery, and forced reactivation
+with their larger controls gives the more defensible cumulative result:
+
+| Equally weighted suite statistic | Candidate improvement |
+| -------------------------------- | --------------------: |
+| Geometric-mean p50               |           **17.416%** |
+| Geometric-mean p95               |            **9.324%** |
+| Geometric-mean mean              |           **16.077%** |
+
+This is an equal-workload branch-versus-main summary, not a production-traffic
+weighting and not a sum of prior comparison percentages.
+
+The focused controls report change from the median of five per-process
+statistics. Rows with conflicting pooled/median directions or changes below
+5% remain neutral.
+
+| Focused workload                |       p50 change |       p95 change |      mean change | Capacity change |
+| ------------------------------- | ---------------: | ---------------: | ---------------: | --------------: |
+| One 1 KiB append                |  **2.84% lower** | **5.94% higher** | **8.34% higher** |         neutral |
+| 32 concurrent singleton appends | **21.77% lower** | **14.58% lower** | **19.10% lower** |     **+27.83%** |
+| One live delivery               | **26.84% lower** |  **7.65% lower** | **16.77% lower** |             n/a |
+| Fanout to 25 subscribers        | **15.26% lower** |  **9.97% lower** | **11.01% lower** |     **+18.01%** |
+| Forced-reactivation head        |  **5.85% lower** | **7.02% higher** |  **5.95% lower** |         neutral |
+| 100 tiny events                 | **21.66% lower** |  **5.87% lower** | **13.20% lower** |     **+27.64%** |
+| 100 events of 1 KiB             | **32.52% lower** | **28.85% lower** | **30.98% lower** |     **+48.18%** |
+| 100 keyed tiny events           | **21.93% lower** |  **7.47% lower** | **17.92% lower** |     **+28.09%** |
+| Dense post-reactivation replay  | **22.09% lower** | **16.71% lower** | **20.05% lower** |             n/a |
+| Sparse post-reactivation replay | **16.96% lower** |          neutral | **14.55% lower** |             n/a |
+| One inline 768 KiB event        | **48.53% lower** | **40.95% lower** | **39.31% lower** |             n/a |
+| One chunked 1,100 KiB event     |          neutral |          neutral |          neutral |             n/a |
+
+The 1,000-event batch improved p50/mean by 43.71%/36.62% and capacity by
+77.66%; its small per-process tail sample regressed 15.92%, so no p95 win is
+claimed. Complete records are
+`/tmp/cumulative-8-full-{main,candidate}-r{1..5}.log` and
+`/tmp/cumulative-8-focus-{main,candidate}-r{1..5}.log`. Collection ended at
+`2026-07-14T18:56:13.048Z`; if active work continues, the next cumulative
+comparison is due by `2026-07-14T22:56:13.048Z`.
+
+## 2026-07-14: Column-Owned Event Envelope Rejected At Deployed Gate
+
+### Actual Worker Topology
+
+The deployed lane does not benchmark a direct host-to-DO shortcut. The Node
+host first waits on an output stream, then appends through the public OS Worker
+RPC to a source Stream Durable Object. A dynamic Project Worker receives the
+subscription batch, forwards its events through public append into an output
+Stream Durable Object, and writes a completion fact there. The host stops its
+clock only after observing and validating that completion. This covers:
+
+```text
+Node host -> OS Worker -> source Stream DO -> Project Worker consumer
+          -> OS Worker -> output Stream DO -> Node host observation
+```
+
+All timers are on the Node host around real network I/O, and all returned or
+delivered values are consumed. The measurement therefore remains valid when
+Cloudflare freezes an isolate clock between I/O operations.
+
+The A/B alternated deployment periods on the draft PR's `preview_5` lease:
+shipping schema 8, candidate schema 9, shipping, candidate, then final shipping
+restore. Five complete processes per implementation contributed 300 single
+forwarding observations and 120 100-event forwarding observations per
+implementation. One baseline process hung during setup before emitting a
+benchmark marker and was excluded rather than treated as latency data.
+
+### Worker-Consumer Result
+
+Positive change means the candidate used less time. The pooled distribution
+and median of the five per-process statistics must agree before accepting a
+deployed win.
+
+| Workload                      | Aggregation | p50 change | p95 change | Mean change |
+| ----------------------------- | ----------- | ---------: | ---------: | ----------: |
+| Forward one event end to end  | Pooled      |      2.96% |     19.66% |       6.63% |
+| Forward one event end to end  | Median run  |     -3.12% |      4.43% |      11.29% |
+| Forward 100 events end to end | Pooled      |      3.97% |    -46.90% |     -12.92% |
+| Forward 100 events end to end | Median run  |     -0.44% |    -30.75% |     -17.78% |
+
+The single-event median direction disagrees and the p50 effect is below the 5%
+acceptance threshold. The 100-event path is neutral at p50 and materially worse
+at p95/mean. Schema 9 therefore provides no demonstrated end-to-end deployed
+Worker-consumer improvement.
+
+### Deployed Storage Control
+
+The storage-focused lane used equal pooled sample counts for both revisions
+across one large and one smaller deployment-period run. It isolates public
+append and post-reactivation reads while still timing from Node across the
+deployed Worker/Stream-DO boundary.
+
+| Storage workload               | p50 change | p95 change | Mean change |
+| ------------------------------ | ---------: | ---------: | ----------: |
+| One 1 KiB append               |      4.68% |    -34.11% |       3.98% |
+| 100 tiny events                |      3.29% |     -7.82% |      -5.86% |
+| 100 events of 1 KiB            |      8.31% |     13.21% |       5.41% |
+| 1,000 tiny events              |      9.72% |     12.82% |      13.53% |
+| 100 keyed tiny events          |     -6.17% |     -7.59% |     -20.26% |
+| Dense cold replay, 500 x 1 KiB |      3.30% |     15.38% |       4.01% |
+| Sparse cold replay, 20 / 2,000 |      2.54% |     23.28% |      11.36% |
+| One inline 768 KiB event       |    -37.41% |     21.63% |      -5.53% |
+| One chunked 1,100 KiB event    |     26.13% |     53.06% |       4.56% |
+
+The two deployment periods frequently disagreed. In the second paired period,
+for example, schema 9 made 100 x 1 KiB slower rather than faster and left dense
+replay effectively unchanged. The pooled 1,000-event win is useful evidence
+that smaller rows can help the intended case, but it does not outweigh the
+keyed-write regression, the 768 KiB median regression, or the absent
+Worker-consumer gain. Large-event tails contain multi-hundred-millisecond to
+multi-second platform outliers; the chunked p50 is only 1.91% better when
+comparing median runs and is classified as neutral.
+
+### Decision And Collapse
+
+Schema 9 is rejected and its production diff is not integrated. It trades 231
+added and 88 removed lines in storage/tests for workload-specific local wins,
+but deployed evidence shows no coherent end-to-end benefit and exposes real
+regressions. The clean collapse is therefore immediate: shipping remains on
+schema 8 with no migration branch, fallback path, second persistence model, or
+runtime flag. The isolated experiment remains at
+`experiment/stream-column-envelope` commit `639e98a3d4df618a2925b90869d9aa6351753621`
+for evidence only.
+
+The reusable deployed benchmark lane remains because it closes a previous
+measurement gap for real Worker consumers. Raw Worker records are
+`/tmp/schema9-preview5-{main,candidate}-worker-r*.log`; storage records are
+`/tmp/schema9-preview5-{main,candidate}-storage-r{1,2}.log`. Preview 5 was
+restored to shipping OS version `a0e07804-fac5-4858-95eb-a5e37c9532d0`, and
+dashboard, event-docs, OS-API, and auth-RPC smoke checks passed. Production was
+not deployed or erased.
