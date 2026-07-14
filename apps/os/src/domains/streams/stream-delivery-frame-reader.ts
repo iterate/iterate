@@ -42,7 +42,7 @@ export type DeliveryFrameProjection = {
   stoppedByByteLimit: boolean;
 };
 
-export type DeliveryFrame = {
+type DeliveryFrame = {
   events: StreamEvent[];
   scannedEventCount: number;
   lastOffset: number | undefined;
@@ -53,7 +53,7 @@ export type DeliveryFrame = {
   stoppedByByteLimit: boolean;
 };
 
-export type DeliveryFrameRequest = {
+type DeliveryFrameRequest = {
   afterOffset: number;
   limit: number;
   throughOffset: number;
