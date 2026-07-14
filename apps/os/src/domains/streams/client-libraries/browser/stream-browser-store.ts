@@ -675,7 +675,9 @@ function createStreamRuntime(
   //     connection mean the transport is swallowing calls (the post-suspend
   //     half-open socket) — evict it and reconnect so the redial is fresh.
   //     Strikes are shared across lanes on purpose: an unanswered append and
-  //     an unanswered probe are evidence against the same socket.
+  //     an unanswered probe are evidence against the same socket. "Consecutive"
+  //     is episode-scoped, though — overlapping timeouts are ONE strike (the
+  //     episode rules at the ledger's declaration below).
   //   - A session-broken REJECTION ("Peer closed WebSocket" — capnweb throws
   //     plain Errors, so the shapes are message-matched of necessity) is
   //     definitive on the first hit: the transport observably died or already
@@ -686,14 +688,44 @@ function createStreamRuntime(
   // The error always rethrows so the caller sees its own failure — appendBatch
   // retries it, the probe waits for its next tick, one-shot reads surface it.
   const GUARDED_CALL_TIMEOUT_MS = 10_000;
-  // Consecutive timed-out guarded calls against the CURRENT connection; reset
-  // by any successful guarded call, and zeroed where every fresh connection is
-  // installed (connect()'s stream assignment) — a strike is evidence against
-  // one socket and must never carry over to the next, whichever path redialed
-  // (scheduleReconnect, clearLocalDatabase's reconnectNow, a direct call's
-  // connect()). Increments are already identity-bound (stream === connection),
-  // so the installation-time reset is the complete set.
+  // Consecutive timed-out guarded EPISODES against the CURRENT connection;
+  // reset by any successful guarded call, and zeroed where every fresh
+  // connection is installed (connect()'s stream assignment) — a strike is
+  // evidence against one socket and must never carry over to the next,
+  // whichever path redialed (scheduleReconnect, clearLocalDatabase's
+  // reconnectNow, a direct call's connect()). Increments are already
+  // identity-bound (stream === connection), so the installation-time reset is
+  // the complete set.
+  //
+  // EPISODE semantics: lanes run concurrently (a composer submit's appendBatch
+  // can overlap the probe's read), so two timeouts whose guarded windows
+  // OVERLAP are one piece of evidence — the same cold DO answering nothing —
+  // not two. A timeout counts as a NEW strike only if its guarded window
+  // STARTED at-or-after the moment the previous strike was recorded
+  // (`lastStrikeRecordedAt`): a call that began after seeing strike one and
+  // still timed out is genuinely consecutive evidence; calls already in flight
+  // when strike one landed are the same cold episode and are absorbed.
+  // Interleavings this must get right:
+  //   - Probe read + appendBatch overlapping on a cold DO: the first timeout
+  //     is strike one; the second started before that strike was recorded →
+  //     absorbed, no false eviction of a healthy-but-cold socket.
+  //   - Three (or N) calls overlapping: still one strike — every later timeout
+  //     started before the first strike landed.
+  //   - Success during a timeout window: ANY completed round-trip on the
+  //     current connection resets the whole ledger, even if that call started
+  //     before a strike was recorded — a completed round-trip proves the
+  //     socket is alive NOW, which is the only question the ledger asks.
+  //   - The subscribe chain's deliberate retry-then-evict (withDeadline): the
+  //     retry's guarded window opens inside the first attempt's catch, i.e.
+  //     at-or-after strike one was recorded — so its timeout is a genuine
+  //     strike two and the eviction that comment promises still happens. The
+  //     at-or-AFTER comparison (>=, not >) is load-bearing here: both stamps
+  //     can land in the same millisecond.
   let guardedTimeoutStrikes = 0;
+  // Wall-clock stamp of the most recent strike against the CURRENT connection;
+  // reset together with the strike count everywhere the ledger resets (it is
+  // the episode boundary, meaningless without the count).
+  let lastStrikeRecordedAt: number | undefined;
 
   function isSessionBrokenError(error: unknown) {
     const message = errorMessage(error).toLowerCase();
@@ -705,6 +737,7 @@ function createStreamRuntime(
     connection: BrowserStreamClient,
     call: (rpc: BrowserStreamClient) => Promise<T> | T,
   ): Promise<T> {
+    const startedAt = Date.now();
     try {
       const result = await raceWithTimeout(
         Promise.resolve(call(connection)),
@@ -713,15 +746,24 @@ function createStreamRuntime(
       );
       // A late success from an abandoned call on a superseded connection says
       // nothing about the current one.
-      if (stream === connection) guardedTimeoutStrikes = 0;
+      if (stream === connection) {
+        guardedTimeoutStrikes = 0;
+        lastStrikeRecordedAt = undefined;
+      }
       return result;
     } catch (error) {
       if (disposed || stream !== connection) throw error;
       if (error instanceof StepTimeoutError) {
-        guardedTimeoutStrikes += 1;
-        // reconnectAfterError evicts on StepTimeoutError.
-        if (guardedTimeoutStrikes >= 2)
-          reconnectAfterError(step, error, 0, { suspect: connection });
+        // Episode rule (contract at the ledger's declaration): a timeout whose
+        // window was already open when the previous strike landed is the same
+        // cold episode, not new evidence.
+        if (lastStrikeRecordedAt === undefined || startedAt >= lastStrikeRecordedAt) {
+          guardedTimeoutStrikes += 1;
+          lastStrikeRecordedAt = Date.now();
+          // reconnectAfterError evicts on StepTimeoutError.
+          if (guardedTimeoutStrikes >= 2)
+            reconnectAfterError(step, error, 0, { suspect: connection });
+        }
       } else if (isSessionBrokenError(error)) {
         reconnectAfterError(step, error, 0, { suspect: connection });
       }
@@ -939,6 +981,7 @@ function createStreamRuntime(
         // probe's grace is measured from this connection's own install, like
         // the strike ledger (see the stamps' contract at their declaration).
         guardedTimeoutStrikes = 0;
+        lastStrikeRecordedAt = undefined;
         lastDeliveryArrivalAt = undefined;
         arrivalBaselineAt = Date.now();
         stream = connection;
@@ -996,9 +1039,10 @@ function createStreamRuntime(
     // server-touching step rides the guarded lane AND follows its two-strike policy: one
     // struck timeout is retried immediately against the same connection (the underlying call
     // is still in flight, so a cold DO's late answer resolves inside the retry window
-    // without duplicating work), and the retry's timeout is the lane's second strike —
-    // guardedCall evicts the half-open transport and reconnects, so the wedge above still
-    // converges. A rejection the lane did not already act on lands in the catch below,
+    // without duplicating work), and the retry's timeout is the lane's second strike:
+    // the retry's guarded window opens after strike one was recorded, so the ledger's
+    // episode rule counts it as genuinely consecutive evidence — guardedCall evicts the
+    // half-open transport and reconnects, so the wedge above still converges. A rejection the lane did not already act on lands in the catch below,
     // which reconnects on a fresh socket to the live instance.
     const withDeadline = <T>(step: string, promise: Promise<T> | T): Promise<T> => {
       const attempt = () => guardedCall(step, election.connection, () => promise);
@@ -1362,9 +1406,10 @@ function createStreamRuntime(
   // subscription, so for it the answered read is the whole check.
   const LIVENESS_PROBE_INTERVAL_MS = 10_000;
   const DELIVERY_GRACE_MS = 2_000;
-  // Single-flight latch: two overlapping verifies would race their guarded
-  // reads (one cold DO could double-strike a healthy connection) — but a check
-  // requested while one is in flight must not be silently dropped either. A
+  // Single-flight latch: two overlapping verifies would burn concurrent reads
+  // to answer one question (the ledger's episode rule already keeps their
+  // overlapping timeouts to one strike) — but a check requested while one is
+  // in flight must not be silently dropped either. A
   // probe whose guarded read is waiting out its deadline (twice, with the
   // retry) holds the latch for up to two GUARDED_CALL_TIMEOUT_MS windows, and
   // a composer-submit nudge landing in that window is exactly the caller this
@@ -1581,6 +1626,7 @@ function createStreamRuntime(
     pendingIngestEvents,
     connectFailuresSinceSuccess,
     guardedTimeoutStrikes,
+    lastStrikeRecordedAt: lastStrikeRecordedAt ?? null,
     reconciledIncarnation,
     started,
     disposed,
