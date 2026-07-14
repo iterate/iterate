@@ -28,10 +28,15 @@ function connectedEvent() {
 function humanMessageWebhookPayload(input: {
   channel?: string;
   eventId?: string;
+  /** When true (default), the message @mentions the authorized bot so the
+   * mention-gate wakes the LLM. Pass false for ambient channel traffic. */
+  mentionBot?: boolean;
   text?: string;
   threadTs?: string;
   ts?: string;
 }) {
+  const mentionBot = input.mentionBot !== false;
+  const defaultText = mentionBot ? "<@UBOT> hello agent" : "hello agent";
   return {
     slackTeamId: TEAM_ID,
     headers: { slackEventId: input.eventId ?? "Ev123", slackRequestTimestamp: "1" },
@@ -47,7 +52,7 @@ function humanMessageWebhookPayload(input: {
         type: "message",
         channel: input.channel ?? "C123",
         user: "UHUMAN",
-        text: input.text ?? "hello agent",
+        text: input.text ?? defaultText,
         ts: input.ts ?? "111.222",
         blocks: [{ type: "rich_text", elements: [] }],
         ...(input.threadTs === undefined ? {} : { thread_ts: input.threadTs }),
@@ -456,7 +461,7 @@ describe("SlackAgentProcessor", () => {
     return { clock, cursors, network, processor, slackCalls, stream };
   }
 
-  it("turns a routed human message into triggering agent input and adds the eyes reaction", async () => {
+  it("turns a routed @mention into triggering agent input and adds the eyes reaction", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
     await stream.append({
@@ -502,9 +507,92 @@ describe("SlackAgentProcessor", () => {
       botBotId: "BBOT",
       botUserId: "UBOT",
       channel: "C123",
+      conversationActive: true,
       latestMessageTs: "111.222",
       threadTs: "111.222",
     });
+  });
+
+  it("records unmentioned human messages as non-triggering history without eyes", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: humanMessageWebhookPayload({ mentionBot: false, text: "just humans talking" }),
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
+    );
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]!.payload).toMatchObject({
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    });
+    expect((inputs[0]!.payload as { content: string }).content).toContain("just humans talking");
+    expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
+    expect(processor.state.conversationActive).toBe(false);
+  });
+
+  it("wakes on app_mention without requiring the text form <@bot>", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    const payload = humanMessageWebhookPayload({ text: "hey iterate, status?" });
+    (payload.body.event as Record<string, unknown>).type = "app_mention";
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload,
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
+    );
+    expect(inputs).toHaveLength(1);
+    expect((inputs[0]!.payload as { llmRequestPolicy?: unknown }).llmRequestPolicy).toEqual({
+      behaviour: "after-current-request",
+    });
+    expect(slackCalls).toContainEqual({
+      method: "reactions.add",
+      body: { channel: "C123", name: "eyes", timestamp: "111.222" },
+    });
+    expect(processor.state.conversationActive).toBe(true);
+  });
+
+  it("after a mention, later unmentioned thread messages still trigger the LLM", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    await stream.append(
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: humanMessageWebhookPayload({ text: "<@UBOT> please help", ts: "111.222" }),
+      },
+      {
+        type: "events.iterate.com/slack/webhook-received",
+        payload: humanMessageWebhookPayload({
+          mentionBot: false,
+          text: "and also check the logs",
+          threadTs: "111.222",
+          ts: "111.333",
+        }),
+      },
+    );
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = stream.events.filter(
+      (event) => event.type === "events.iterate.com/agents/message-received",
+    );
+    expect(inputs).toHaveLength(2);
+    expect(
+      inputs.map(
+        (event) => (event.payload as { llmRequestPolicy?: { behaviour: string } }).llmRequestPolicy,
+      ),
+    ).toEqual([{ behaviour: "after-current-request" }, { behaviour: "after-current-request" }]);
+    // Eyes only on the activating mention, not the follow-up.
+    expect(slackCalls.filter((call) => call.method === "reactions.add")).toEqual([
+      { method: "reactions.add", body: { channel: "C123", name: "eyes", timestamp: "111.222" } },
+    ]);
+    expect(processor.state.conversationActive).toBe(true);
   });
 
   it("materializes shared files and attaches them to the agent input", async () => {
@@ -1266,10 +1354,12 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toHaveLength(0);
   });
 
-  it("forwards messages posted by other bots to the agent", async () => {
+  it("forwards other-bot @mentions as triggering agent input without eyes", async () => {
     const { cursors, processor, slackCalls, stream } = setup();
 
-    const payload = humanMessageWebhookPayload({ text: "I am another bot mentioning @iterate" });
+    const payload = humanMessageWebhookPayload({
+      text: "<@UBOT> I am another bot mentioning iterate",
+    });
     const event = payload.body.event as Record<string, unknown>;
     event.subtype = "bot_message";
     event.bot_id = "BOTHERBOT"; // not our authorized bot (BBOT)
@@ -1280,12 +1370,41 @@ describe("SlackAgentProcessor", () => {
     });
     await deliverNewEvents({ cursors, processor, stream });
 
-    expect(
-      stream.events.filter((streamEvent) => {
-        return streamEvent.type === "events.iterate.com/agents/message-received";
-      }),
-    ).toHaveLength(1);
+    const inputs = stream.events.filter((streamEvent) => {
+      return streamEvent.type === "events.iterate.com/agents/message-received";
+    });
+    expect(inputs).toHaveLength(1);
+    expect((inputs[0]!.payload as { llmRequestPolicy?: unknown }).llmRequestPolicy).toEqual({
+      behaviour: "after-current-request",
+    });
     // Bot-authored messages never get the eyes reaction, even when forwarded.
+    expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
+  });
+
+  it("records other-bot messages without an @mention as non-triggering history", async () => {
+    const { cursors, processor, slackCalls, stream } = setup();
+
+    const payload = humanMessageWebhookPayload({
+      mentionBot: false,
+      text: "I am another bot chatting ambiently",
+    });
+    const event = payload.body.event as Record<string, unknown>;
+    event.subtype = "bot_message";
+    event.bot_id = "BOTHERBOT";
+    delete event.user;
+    await stream.append({
+      type: "events.iterate.com/slack/webhook-received",
+      payload,
+    });
+    await deliverNewEvents({ cursors, processor, stream });
+
+    const inputs = stream.events.filter(
+      (streamEvent) => streamEvent.type === "events.iterate.com/agents/message-received",
+    );
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]!.payload).toMatchObject({
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    });
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
 
@@ -1389,8 +1508,25 @@ describe("SlackAgentProcessor", () => {
 });
 
 describe("eyesReactionTargetFromWebhookPayload", () => {
-  it("targets human messages", () => {
+  it("targets human messages that @mention the bot", () => {
     expect(eyesReactionTargetFromWebhookPayload(humanMessageWebhookPayload({}))).toEqual({
+      channel: "C123",
+      timestamp: "111.222",
+    });
+  });
+
+  it("skips ambient human messages that do not @mention the bot", () => {
+    expect(
+      eyesReactionTargetFromWebhookPayload(
+        humanMessageWebhookPayload({ mentionBot: false, text: "not for the bot" }),
+      ),
+    ).toBeNull();
+  });
+
+  it("targets app_mention deliveries", () => {
+    const payload = humanMessageWebhookPayload({ text: "status?" });
+    (payload.body.event as Record<string, unknown>).type = "app_mention";
+    expect(eyesReactionTargetFromWebhookPayload(payload)).toEqual({
       channel: "C123",
       timestamp: "111.222",
     });
@@ -1433,6 +1569,8 @@ describe("compileBangCommand", () => {
     expect(prompt).toContain("itx.integrations.gmail.get().request");
     expect(prompt).toContain('path: "/users/me/messages"');
     expect(prompt).toContain("Do not claim you lack inbox access");
+    expect(prompt).toContain("SILENCE IS THE DEFAULT");
+    expect(prompt).toContain("When in doubt, stay silent");
   });
 
   it("wraps bare expressions in an async itx arrow", () => {

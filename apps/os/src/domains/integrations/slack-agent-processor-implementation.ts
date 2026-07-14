@@ -93,11 +93,13 @@ export class SlackAgentProcessor extends StreamProcessor<
         if (target == null) return state;
         const botUserId = state.botUserId ?? botUserIdFromPayload(event.payload);
         const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
+        const mentioned = slackWebhookMentionsOurBot(event.payload, botUserId);
         return {
           ...state,
           ...(botBotId == null ? {} : { botBotId }),
           ...(botUserId == null ? {} : { botUserId }),
           channel: target.channel,
+          conversationActive: state.conversationActive || mentioned,
           ...(target.messageTs == null ? {} : { latestMessageTs: target.messageTs }),
           threadTs: target.threadTs,
         };
@@ -180,12 +182,16 @@ export class SlackAgentProcessor extends StreamProcessor<
         const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
         if (isOwnBotMessage(slackEvent, { botBotId, botUserId })) return;
         if (isBotAction(slackEvent, botUserId)) return;
-        if (readStringField(slackEvent, "type") !== "message") {
+
+        const eventType = readStringField(slackEvent, "type");
+        // `app_mention` is Slack's dedicated "someone mentioned this app"
+        // delivery; treat it like a message for transcription + LLM wake.
+        const isMessageLike = eventType === "message" || eventType === "app_mention";
+        if (!isMessageLike) {
           blockProcessorWhile(async () => {
             await appendAgentMessage({
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             });
-            await this.#addEyesReactionForMessageTarget(target, event);
           });
           return;
         }
@@ -197,16 +203,18 @@ export class SlackAgentProcessor extends StreamProcessor<
           readStringField(slackEvent, "thread_ts") ??
           readNestedMessageStringField(slackEvent, "thread_ts") ??
           readStringField(slackEvent, "ts");
+        const messageText = readStringField(slackEvent, "text")?.trim();
         const bangCommand = compileBangCommand({
           channel,
           connection:
             state.streamPath == null ? null : slackConnectionFromAgentPath(state.streamPath),
-          message: readStringField(slackEvent, "text")?.trim(),
+          message: messageText,
           threadTs,
         });
         if (bangCommand != null) {
-          // The script request must commit before the eyes reaction signals
-          // receipt, so both run in one blocking closure.
+          // Explicit !commands are directed at the bot even without an
+          // @mention. The script request must commit before the eyes reaction
+          // signals receipt, so both run in one blocking closure.
           blockProcessorWhile(async () => {
             await append({
               type: "events.iterate.com/capability-host/script-execution-requested",
@@ -221,12 +229,22 @@ export class SlackAgentProcessor extends StreamProcessor<
           return;
         }
 
+        // Cost gate: do not spend model tokens until someone @mentions us
+        // (or Slack delivers app_mention). After that activation, later
+        // messages in this thread also wake the agent so multi-turn work does
+        // not require re-mentioning. Unmentioned pre-activation traffic is
+        // still transcribed as non-triggering history.
+        const mentioned =
+          eventType === "app_mention" || slackTextMentionsBot(messageText, botUserId);
+        const shouldTriggerLlm = mentioned || state.conversationActive;
+
         // Same ordering requirement: the agent input append commits before the
         // eyes reaction tells the user their message was picked up. Files
         // shared on the message are materialized into project file storage
         // first so the input event carries the attachments; a failed download
         // degrades to the plain webhook input (the YAML already names the
-        // files) rather than wedging the processor.
+        // files) rather than wedging the processor. Eyes only on mentions —
+        // follow-ups after activation wake the agent without the 👀 noise.
         blockProcessorWhile(async () => {
           const sharedFiles = readSlackMessageFiles(slackEvent);
           let files: AgentFileAttachment[] | undefined;
@@ -243,8 +261,15 @@ export class SlackAgentProcessor extends StreamProcessor<
               });
             }
           }
-          await appendAgentMessage(files == null ? {} : { files });
-          await this.#addEyesReactionForMessageTarget(target, event);
+          await appendAgentMessage({
+            ...(files == null ? {} : { files }),
+            ...(shouldTriggerLlm
+              ? {}
+              : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
+          });
+          if (mentioned) {
+            await this.#addEyesReactionForMessageTarget(target, event);
+          }
         });
         return;
       }
@@ -684,6 +709,25 @@ function botUserIdFromPayload(payload: unknown): string | undefined {
   return botAuth == null ? undefined : readString(readRecord(botAuth)?.user_id);
 }
 
+/** True when message text encodes a Slack user mention of our bot (`<@U…>`). */
+function slackTextMentionsBot(text: string | undefined, botUserId: string | undefined): boolean {
+  if (text == null || botUserId == null || botUserId.length === 0) return false;
+  // Slack encodes mentions as <@U123> or <@U123|display name>.
+  return text.includes(`<@${botUserId}>`) || text.includes(`<@${botUserId}|`);
+}
+
+/**
+ * True when this webhook is an @mention of our bot: either Slack's
+ * `app_mention` event type, or a `message` whose text contains `<@botUserId>`.
+ */
+function slackWebhookMentionsOurBot(payload: unknown, botUserId: string | undefined): boolean {
+  const body = readRecord(readRecord(payload)?.body);
+  const slackEvent = readRecord(body?.event);
+  if (slackEvent == null) return false;
+  if (readString(slackEvent.type) === "app_mention") return true;
+  return slackTextMentionsBot(readString(slackEvent.text), botUserId);
+}
+
 function botBotIdFromPayload(payload: unknown): string | undefined {
   const body = readRecord(readRecord(payload)?.body);
   const authorizations = body?.authorizations;
@@ -730,10 +774,11 @@ function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget 
  * reaction added at the routing hop, before the routed thread stream and its
  * slack-agent host even exist. Mirrors `#addEyesReactionForMessageTarget`'s
  * gating using only what the webhook itself carries — bot-authored messages,
- * reaction events, and actions performed by the authorized bot user are
- * skipped. The slack-agent processor still adds the same reaction once the
- * routed stream catches up; Slack's `already_reacted` makes the pair
- * idempotent.
+ * reaction events, actions performed by the authorized bot user, and messages
+ * that do not @mention our bot are skipped. 👀 is a "we heard you" signal for
+ * mention-activated turns only; ambient channel traffic must not get it. The
+ * slack-agent processor still adds the same reaction once the routed stream
+ * catches up; Slack's `already_reacted` makes the pair idempotent.
  */
 export function eyesReactionTargetFromWebhookPayload(
   payload: unknown,
@@ -746,5 +791,9 @@ export function eyesReactionTargetFromWebhookPayload(
   const eventUserId = readString(slackEvent?.user);
   const botUserId = botUserIdFromPayload(payload);
   if (eventUserId != null && botUserId != null && eventUserId === botUserId) return null;
+  // Fast-ack only when this delivery is a mention of us. Follow-ups after
+  // thread activation still wake the agent, but they do not re-add 👀 at the
+  // router hop (the agent-side path also eyes only on mentions).
+  if (!slackWebhookMentionsOurBot(payload, botUserId)) return null;
   return { channel: target.channel, timestamp: target.messageTs };
 }
