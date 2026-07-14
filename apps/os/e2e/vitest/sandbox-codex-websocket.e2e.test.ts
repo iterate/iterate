@@ -53,7 +53,7 @@ const exactCodexProofEnabled = process.env.OS_E2E_STOCK_CODEX_WEBSOCKET === "1";
 describe("sandbox stock Codex WebSocket egress", () => {
   test.skipIf(deployedBaseUrl() === null || !exactCodexProofEnabled)(
     `completes a whole OpenAI turn with unmodified @openai/codex@${CODEX_VERSION}`,
-    { timeout: 300_000 },
+    { timeout: 180_000 },
     async () => {
       const openAiKey = liveOpenAiKey();
       const secretPath = `/secrets/codex-proof/${crypto.randomUUID()}`;
