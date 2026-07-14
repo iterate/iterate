@@ -1075,3 +1075,40 @@ The next production experiment is historical-frame flattening: remove wrapper
 objects and redundant traversals after the retained sparse SQL query, then
 measure dense and sparse replay separately before changing storage or RPC
 contracts.
+
+## 2026-07-14: Rejected Historical-Frame Flattening
+
+The prototype changed only selected historical frames from
+`{event, byteLength}[]` wrappers to aligned `events[]` and
+`eventByteLengths[]`. It accumulated bytes in the storage row pass, removed the
+normal-path `filter()` and `reduce()`, and removed both delivery-reader `map()`
+passes. Missing chunk rows triggered lockstep in-place compaction; chunk lengths
+still came from SQL's full-envelope metadata, scan progress remained SQL-owned,
+and returned event arrays remained isolated from cached projections.
+
+A disposable exact-method `node:sqlite` harness included the complete
+synchronous section: the retained production SQL, 8,000-row scan, JSON parse,
+frame construction, and delivery projection. Five fresh processes per shape
+ran five warmups before measurement. Values are medians of per-process
+statistics.
+
+| Frame shape                 | Metric |   Parent | Candidate | Change |
+| --------------------------- | ------ | -------: | --------: | -----: |
+| 4,000 of 8,000 selected     | p50    | 8.610 ms |  8.484 ms |   1.5% |
+|                             | p95    | 9.490 ms |  9.705 ms |  -2.3% |
+|                             | mean   | 8.708 ms |  8.599 ms |   1.2% |
+| No selected rows            | p50    | 0.686 ms |  0.681 ms |   0.7% |
+| First selected row byte-cut | p50    | 2.604 ms |  2.652 ms |  -1.8% |
+
+The entire OS unit suite passed with the prototype (1,555 tests), but parsing
+and SQLite dominate the dense frame. A 1.5% p50 gain with a p95/control cost is
+below the retention threshold and does not justify a parallel-array contract
+plus corruption-only compaction branch. The production and test changes were
+removed completely. Raw host records are in
+`/tmp/frame-flatten-{baseline,candidate}.log` for the life of this workstation.
+
+Next is the lower-risk bind experiment: test whether binding inline JSON text
+through `cast(? as blob)` plus `returning length(event_json)` can remove the
+eager `TextEncoder` allocation without making insertion or returned-row work
+slower. It remains a micro-optimization and will be rejected unless exact
+append controls show a clear gain.
