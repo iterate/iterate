@@ -6,13 +6,11 @@
 # clobbering the earlier success on every merged PR (GitHub displays the
 # latest check run per name).
 #
-# The concurrency groups below are copied VERBATIM from cloudflare-previews.yml
+# The concurrency groups below match cloudflare-previews.yml for the same PR,
 # so the two workflows still coordinate: closing a PR mid-deploy cancels the
 # in-flight deploy run (cancel-in-progress on the shared workflow-level group)
-# and the job-level lifecycle group serializes whatever remains. During the
-# one-release auth RPC cutover this is deliberately a fleet-wide group shared
-# with preview deploy and migrate-os-auth-preview-fleet.yml; the cleanup PR
-# restores the normal per-PR lifecycle group.
+# and the job-level lifecycle group serializes whatever remains. Cleanup never
+# races a deploy for the same preview slot.
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged.
@@ -57,7 +55,7 @@ jobs:
     name: Preview / cleanup
     runs-on: depot-ubuntu-24.04
     concurrency:
-      group: cloudflare-preview-fleet-auth-rpc-cutover
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code

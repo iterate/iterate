@@ -20,10 +20,9 @@
  *      steady-state redeploy are all the same single command).
  *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
  *      actually serving.
- *   5. Force an uncached project-directory lookup through the AUTH binding.
- *      Only then delete the retired auth service-token binding from the live
- *      Worker (omitting it from `--secrets-file` does not revoke it), smoke
- *      the immediately activated version again, and delete its Doppler source.
+ *   5. Before touching any deployed resource, assert that the removed auth
+ *      service token is absent from both Doppler and the live Worker. After
+ *      deploy, force an uncached project-directory lookup through AUTH.
  *
  * The worker script is never deleted and routes are ensure-only, so a deploy
  * can never strand the env's hostnames (the old zombie-route/522 class).
@@ -34,10 +33,9 @@ import { envs, type DeployedEnv } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import {
-  deleteDopplerSecretIfPresent,
-  deleteWorkerSecretIfPresent,
+  assertDopplerSecretAbsent,
+  assertWorkerSecretAbsent,
   run,
-  smoke,
   smokeResponse,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
@@ -117,6 +115,21 @@ export default async function deploy(
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
     prepare: async (ctx, secretValues, credentials) => {
+      // These are permanent fail-closed invariants, not a migration path.
+      // Omitted Wrangler secrets survive code uploads, so check the current
+      // Worker before any sidecar or OS version can be deployed.
+      assertDopplerSecretAbsent({
+        project: "os",
+        config: ctx.env.dopplerConfig,
+        secretName: RETIRED_AUTH_SERVICE_TOKEN,
+        secrets: ctx.secrets,
+      });
+      await assertWorkerSecretAbsent({
+        cf: ctx.cf,
+        workerName: ctx.env.osWorkerName,
+        secretName: RETIRED_AUTH_SERVICE_TOKEN,
+      });
+
       // Baked at deploy time, so it's the one secret not in secrets.required.
       secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({
         authBaseUrl: ctx.env.authBaseUrl,
@@ -192,29 +205,6 @@ export default async function deploy(
     smokes: osSmokes,
     afterDeploy: async (ctx) => {
       await smokeAuthRpc(ctx.env, "auth Workers RPC");
-
-      const deleted = await deleteWorkerSecretIfPresent({
-        cf: ctx.cf,
-        workerName: ctx.env.osWorkerName,
-        secretName: RETIRED_AUTH_SERVICE_TOKEN,
-      });
-      if (deleted) {
-        // Secret deletion immediately deploys another Worker version. Verify
-        // that version too; the first probes covered the code upload, not this
-        // credential-revocation deployment.
-        for (const probe of osSmokes(ctx.env)) {
-          await smoke(probe.url, probe.ok, `${probe.label} after secret revocation`);
-        }
-        await smokeAuthRpc(ctx.env, "auth Workers RPC after secret revocation");
-      }
-
-      // This is intentionally last. A failed code deploy, RPC probe, live
-      // revocation, or post-revocation probe retains the source for diagnosis.
-      deleteDopplerSecretIfPresent({
-        project: "os",
-        config: ctx.env.dopplerConfig,
-        secretName: RETIRED_AUTH_SERVICE_TOKEN,
-      });
     },
   });
 }

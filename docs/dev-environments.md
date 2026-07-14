@@ -372,7 +372,7 @@ invariants:
   preview, and e2e never runs against someone else's deployment.
 - **Contention queues instead of exploding.** When all nine slots are leased,
   `preview deploy` waits in line (logging who holds what every few minutes)
-  for up to 20 minutes before failing with the full holder table and
+  for up to 6 minutes before failing with the full holder table and
   remediation steps. `PREVIEW_SLOT_WAIT_MS=0` makes it fail fast.
 - **Freed slots rest as long as possible.** Acquiring "any slot" hands out
   the least-recently-released one (never-used slots first). A freed slot
@@ -387,16 +387,16 @@ invariants:
   available, slot taken over, slot moved — are additionally bannered as a
   caution alert at the top of the PR body's managed preview section.
 
-CI and local machines run the **same commands against the same semaphore** —
-there is no CI-only path.
+CI and local machines run the **same preview commands against the same
+semaphore**. CI additionally checks the deployment epoch before invoking those
+commands.
 
-The explicitly dispatched, one-release OS-to-auth RPC security cutover is the
-exception to the normal ownership rule. Its operator first drains pre-cutover
-preview/cleanup runs; during the maintenance window, one attributable
-automation holder force-acquires all nine leases without erasing project data,
-deploys auth then OS everywhere, verifies token retirement, and releases only
-after complete success. The permanent preview deployment-epoch check rejects
-pre-cutover branches before any app is touched; rebase is the only remedy.
+The preview CI deployment-epoch check rejects branches from before the
+OS-to-auth Workers RPC migration before any app is touched. Rebase onto current
+`main` when that check fails; there is no compatibility deployment path. A
+direct deploy from an old checkout cannot be protected by code that checkout
+does not contain and is unsupported. Doppler/Cloudflare deploy access is an
+operator capability, so use current `main` for manual preview deployments.
 
 ### Story 1: CI previews my PR
 
@@ -491,37 +491,37 @@ cleanup may destroy your worker.
 `pnpm preview reclaim` is the conflict-resolution tool. It classifies every
 leased slot by how its holder is actually behaving:
 
-- **orphaned** — the holder is `pr-N` and that PR is closed, so its cleanup
-  failed; the holder can never come back for the slot. Safe to take.
+- **orphaned** — the holder is `pr-N` and that PR is closed. Its cleanup may
+  still be running or may have failed; check the lifecycle run before taking
+  it.
 - **idle** — the holder hasn't deployed or tested for a while (default 6h;
   `--min-idle-hours N` tunes it). Leases renew on every deploy/test run, so
   idle really means "untouched". Probably safe; the report shows the holder
   and PR link so you can check.
-- **active** — recently used. Taking it clobbers live work; `reclaim` refuses
-  without `--force`.
+- **active** — recently used. Taking it clobbers live work.
 
 ```bash
 doppler run --project _shared --config prd -- pnpm preview status     # holders, PR links, expiries
-doppler run --project _shared --config prd -- pnpm preview reclaim    # verdict per slot + what's safe to take
-doppler run --project _shared --config prd -- pnpm preview reclaim --slot 4   # take back an orphaned/idle slot
+doppler run --project _shared --config prd -- pnpm preview reclaim    # verdict per slot + reclaim commands
+doppler run --project _shared --config prd -- pnpm preview reclaim --slot 4 --force  # after checking lifecycle runs
 doppler run --project _shared --config prd -- pnpm preview reconcile  # leases vs Doppler configs vs Cloudflare zones
 ```
 
-`reclaim --slot` takes the slot under a temporary lease of its own, **erases
-its data**, then returns it to the pool clean — the previous holder's
+`reclaim --slot --force` takes the slot under a temporary lease of its own,
+**erases its data**, then returns it to the pool clean — the previous holder's
 projects, agents and schedules are gone, which is the point. If the erase
 fails, the temporary lease stays in place (the slot shows as held by
 `reclaim-<you>`) rather than a dirty slot going back in the pool.
 
-Orphaned leases are also garbage-collected automatically: when `preview
-deploy` finds every slot taken, it checks each `pr-N` holder against GitHub
-and reclaims a slot whose PR is closed before queueing (erasing it on
-handover, like every acquire). That is the **only** case automation takes a
-live lease — idle-but-open and manual holds always need a human running
-`reclaim --slot` / `--force`.
+Automation never force-reclaims a live lease, including one whose PR is
+closed. That lets close-triggered cleanup remain the sole owner until it has
+finished erasing and releases the slot; another PR can queue but cannot deploy
+or erase concurrently. A failed cleanup leaves the lease visible until it
+expires or an operator verifies the lifecycle is stopped and runs the explicit
+`reclaim --slot N --force` path.
 
-`--force` (on `acquire`, `release`, and `reclaim`) is the only way to take an
-actively-used lease from its holder. Every eviction logs an
+`--force` (on `acquire`, `release`, and `reclaim`) is the only way to take any
+live lease from its holder. Every eviction logs an
 `evicted`/`force-released` event with both identities, so the audit trail
 survives.
 

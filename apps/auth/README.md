@@ -38,6 +38,18 @@ and implements the Workers RPC methods. Public requests can invoke only
 `fetch`; OS receives an RPC stub because its deployment holds the required
 same-account `AUTH` service binding. The binding intentionally omits an
 `entrypoint` selector, which targets the worker's default export.
+
+Using the default entrypoint is deliberate. Auth has one internal capability
+role, and every OS caller holding `AUTH` receives the same complete typed
+contract. A named entrypoint would add another exported surface and a binding
+selector without narrowing that authority. Cloudflare explicitly supports
+[`fetch` alongside RPC methods on a default `WorkerEntrypoint`](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/),
+with [`fetch` reserved for HTTP dispatch](https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/).
+If Auth later needs independently grantable RPC roles, that is the point to
+split them into named entrypoints. Project-controlled workers never receive
+`AUTH`; their generated bindings expose only project-scoped capabilities such
+as `ITX`.
+
 Static assets + SSR still work: asset routing happens at the edge before `fetch` is invoked, and
 `run_worker_first: ["/api/*"]` (in the generated `wrangler.jsonc`) sends API
 paths to the worker.
@@ -267,66 +279,40 @@ differs. `.depot/workflows/deploy-auth.yml` owns only the shared development aut
 worker. Do not add a second production auth job: independent workflows can race
 and leave OS bound to an incompatible revision.
 
-The OS deploy forces a fresh project-host lookup through `AUTH` before it
-retires anything. The random slug bypasses KV and in-isolate negative caches,
-and the probe requires OS's exact JSON 404 body, so an edge-level 404 cannot
-produce a false green. It then explicitly deletes the retired
-`APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN` binding from the live Cloudflare Worker
-and repeats both the normal probes and the RPC cache miss against the newly
-activated version. Removing a name from `--secrets-file` is not sufficient
-because Cloudflare preserves omitted secrets. The same per-environment deploy
-deletes and re-reads the matching Doppler source only after every live check
-succeeds; a failed cutover retains that source for diagnosis.
+Every OS deploy now treats the removed
+`APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN` as a forbidden invariant. Before any
+sidecar or OS version is uploaded, it fails unless the resolved Doppler config
+and the current Worker's secret bindings both omit that name. This check is
+deliberately non-mutating: an operator must remove resurrected credential state
+explicitly and then retry. After deployment, OS forces a fresh project-host
+lookup through `AUTH`; the random slug bypasses KV and in-isolate negative
+caches, and the probe requires OS's exact JSON 404 body, so an edge-level 404
+cannot produce a false green.
 
-Immediately after the first main-branch production rollout, an operator runs the
-one-release preview-fleet security cutover in
-`.depot/workflows/migrate-os-auth-preview-fleet.yml`. Preview deploy, preview
-cleanup, and that cutover temporarily share one non-cancelling concurrency
-gate. Before dispatching, list Depot's queued/running workflows and cancel or
-wait for every preview deploy/cleanup created before this change; the required
-confirmation attests to that drain. The cutover also snapshots and waits for any
-still-running check it finds. It then force-acquires all nine existing Semaphore
-`environment-config-lease` resources under the attributable
-`main-auth-rpc-security-cutover` holder. This is a deliberate breaking
-maintenance operation: an existing holder is evicted, but manual acquisition
-does not erase the slot's project data.
-
-With the complete fleet parked, the cutover sequentially deploys auth then OS
-to every slot. Each normal OS deployment must pass its exact RPC probe, revoke
-and re-list the live Worker secret, pass the post-revocation probes, and only
-then delete and re-read that slot's Doppler source. A final nine-slot retirement
-pass is defense in depth. The cutover releases leases only after every slot
-succeeds; a failed run leaves the fleet parked for a safe rerun (or bounded
-lease expiry). `scripts/preview/deployment-epoch` is a permanent pre-deploy
-floor: a stale branch fails before Auth can be rolled back and must rebase.
-The cutover job, script, and temporary fleet-wide gates are removed after the
-first successful cutover dispatch. Config provisioning and OAuth-client sync never
-delete the retired source because they cannot coordinate this fleet-wide drain
-or prove live revocation.
-
-```bash
-depot ci run list --org 0p91s0lz49 --repo iterate/iterate \
-  --status queued --status running --output json
-
-depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow migrate-os-auth-preview-fleet.yml --ref main \
-  --input confirmation=MIGRATE_OS_AUTH_RPC
-```
-
-Do not dispatch from a branch or while a pre-cutover preview/cleanup run remains
-queued. New epoch-aware runs may queue behind the maintenance gate safely.
+The one-release preview-fleet cutover completed on 2026-07-14. All nine slots
+deployed Auth before OS, passed fresh RPC lookup probes, and finished with the
+retired OS token absent from both the live Worker bindings and Doppler. The
+temporary fleet workflow and global concurrency gate were removed after that
+verification. Normal preview deploy and cleanup jobs are again serialized per
+PR, and ordinary slot acquisition never force-evicts another lifecycle's
+lease. The preview CI workflow retains `scripts/preview/deployment-epoch` as a
+pre-deploy floor: a stale PR branch fails before Auth can be rolled back and
+must rebase. A direct manual deployment from an old checkout bypasses that CI
+guard and is unsupported; operators must deploy previews from current `main`.
+Config provisioning and OAuth-client sync do not mutate forbidden credential
+state.
 
 The coordinated workflow sets `ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1` while
 generating OS's complete Wrangler config. A manual production OS deployment
 must set the same explicit guard; local processes otherwise fail closed rather
 than acquiring production write authority from a Doppler issuer accidentally.
 
-This migration intentionally has no compatibility routes, token fallback, or
-dual-read period. The first production rollout briefly makes the old OS
-revision unable to use the removed auth HTTP procedures after auth deploys;
-the coordinated job immediately replaces OS. Treat that one rollout as a
-short maintenance cutover. Future additive RPC methods can deploy auth first
-without interrupting the previous OS revision.
+This migration shipped without compatibility routes, token fallback, or a
+dual-read period. The first production rollout was a short maintenance cutover:
+Auth deployed first, then the coordinated job immediately replaced the old OS
+revision that could no longer call the removed HTTP procedures. Future
+additive RPC methods can deploy Auth first without interrupting the previous
+OS revision.
 
 **Gotchas that have bitten before:**
 
