@@ -2,6 +2,7 @@ import {
   StreamProcessor,
   type StreamProcessorConstructorArgs,
 } from "../streams/stream-processor.ts";
+import type { ProcessorState } from "../streams/processor-contracts.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
@@ -123,6 +124,31 @@ export type ParentCapabilityHost = {
   describeCapabilities(): Promise<CapabilityDescription[]>;
 };
 
+/**
+ * RUNNER-backed reads of the committed fold. Under registry drive the runner
+ * owns both cursors and the processor instance's internal checkpoint never
+ * advances, so every fold read this processor makes OUTSIDE a hook's own args
+ * — capability resolution, the revoke guard, the provide/revoke
+ * read-your-writes barriers, the script-completion wait — must go through the
+ * runner's committed progress. The hosting DO wires this to
+ * `registry.reads(processor)` (lazily — `reads()` needs the registered
+ * processor); test harnesses wire it to the driving StreamProcessorRunner.
+ * `waitUntilEvent` takes BOTH forms as one union parameter (the registry's
+ * read surface accepts it; the predicate form is in-process-only — a function
+ * cannot cross the RPC facade).
+ */
+export type CapabilityHostProcessorReads = {
+  snapshot(): Promise<{
+    offset: number;
+    state: ProcessorState<CapabilityHostProcessorContract>;
+  }>;
+  waitUntilEvent(
+    input:
+      | { offset: number; timeoutMs?: number }
+      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number },
+  ): Promise<void>;
+};
+
 export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProcessorContract> {
   readonly contract = CapabilityHostProcessorContract;
   #itx: Project;
@@ -139,11 +165,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       }) => Promise<ScriptExecutionCheck>)
     | undefined;
   #liveCapabilities = new Map<string, LiveCapability>();
+  #reads: CapabilityHostProcessorReads;
 
   constructor(
     args: StreamProcessorConstructorArgs<CapabilityHostProcessorContract, object> & {
       itx: Project;
       path: string;
+      /** Runner-backed fold reads — see {@link CapabilityHostProcessorReads}. */
+      reads: CapabilityHostProcessorReads;
       /** Runs run-script workers in this scope. */
       scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
       /** Injected clock (expiry decisions); production defaults to Date.now. */
@@ -173,6 +202,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     super(args);
     this.#itx = args.itx;
     this.#path = normalizePath(args.path);
+    this.#reads = args.reads;
     this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
     this.#now = args.now;
     this.#parent = args.parent;
@@ -257,32 +287,36 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   readonly #liveExecutions = new Set<string>();
 
   /**
-   * End-of-batch reconciliation of desired (open script obligations in the
-   * fold) against actual (this incarnation's live executions) — the same
-   * shape as the LLM providers' (see OpenAiWsProcessor.processEventBatch for
-   * the doctrine), with one policy difference: a `started` script that lost
-   * its incarnation is settled as a FAILURE and never re-run, because a
-   * script may have half-executed its side effects and scripts are not
-   * assumed idempotent. The agent renders the failure and the model decides
-   * whether to retry.
+   * At-head reconciliation of desired (open script obligations in the head
+   * fold) against actual (this incarnation's live executions) — the
+   * obligation doctrine, with one policy difference from the LLM providers: a
+   * `started` script that lost its incarnation is settled as a FAILURE and
+   * never re-run, because a script may have half-executed its side effects
+   * and scripts are not assumed idempotent. The agent renders the failure and
+   * the model decides whether to retry.
+   *
+   * The runner calls this only when the processing cursor reaches the
+   * observed stream head (the at-head gate the legacy `processEventBatch`
+   * override carried lives in the runner now). RECOVERY rides this same
+   * hook: `events.iterate.com/capability-host/revived` — the fact the
+   * keepalive's revival pass journals after an eviction took in-flight work —
+   * is consumed by the contract, so its ordinary delivery is a guaranteed
+   * turn that drives the runner to head and lands here, where the undriven
+   * obligations are re-driven. No `processEvent` arm for it exists or is
+   * needed.
    */
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEventBatch"]>[0],
+  protected override async onCaughtUp(
+    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["onCaughtUp"]>[0],
   ): Promise<void> {
-    await super.processEventBatch(args);
-    // At-head gate — see OpenAiWsProcessor.processEventBatch.
-    if (args.checkpointOffset < args.streamMaxOffset) return;
     const now = (this.#now ?? Date.now)();
     const settle: { executionId: string; error: string }[] = [];
     for (const [executionId, execution] of Object.entries(args.state.scriptExecutions)) {
       if (this.#liveExecutions.has(executionId)) continue;
       if (execution.status === "requested" && now < execution.expiresAt) {
         this.#liveExecutions.add(executionId);
-        // The batch's own fold, NOT this.state: the durable checkpoint (and
-        // the state getter behind it) advances only after this hook returns,
-        // and the typecheck gate must see capabilities provided in the same
-        // batch as the request or it would judge the script against a stale
-        // scope.
+        // The head fold handed to this hook, NOT an instance read: the
+        // typecheck gate must see capabilities provided in the same delivery
+        // as the request or it would judge the script against a stale scope.
         const capabilities = args.state.capabilities;
         args.runInBackground(() =>
           this.#executeScript({ capabilities, code: execution.code, executionId }),
@@ -394,7 +428,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     }
     previousLive?.dispose();
 
-    await this.waitUntilEvent({ offset: committedOffset });
+    await this.#reads.waitUntilEvent({ offset: committedOffset });
     return { path, providedAtOffset: committedOffset };
   }
 
@@ -449,7 +483,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
     assertCapabilityPath(path);
-    const current = this.state.capabilities.find((record) => samePath(record.path, path));
+    const { state } = await this.#reads.snapshot();
+    const current = state.capabilities.find((record) => samePath(record.path, path));
     if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
       return;
     }
@@ -464,7 +499,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     });
     this.#liveCapabilities.delete(key);
     previousLive?.dispose();
-    await this.waitUntilEvent({ offset: committed.offset });
+    await this.#reads.waitUntilEvent({ offset: committed.offset });
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
@@ -473,7 +508,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     // validate the path without it or discovery on provided capabilities dies
     // here with "invalid capability path segment".
     assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
-    const hit = resolveLongestPrefix(this.state.capabilities, path);
+    const { state } = await this.#reads.snapshot();
+    const hit = resolveLongestPrefix(state.capabilities, path);
     if (!hit) {
       // Not declared at THIS scope. Capability reads chain up the scope hierarchy,
       // so ask the enclosing scope before giving up — this is how an agent sees
@@ -546,8 +582,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   // declared at. A nearer scope shadows a farther one at the same path (same rule
   // as `resolveLongestPrefix` above), so the caller — usually an LLM deciding what
   // it can invoke — sees exactly one entry per reachable path and where it lives.
-  describeCapabilities(): Promise<CapabilityDescription[]> {
-    return this.#describeCapabilitiesFrom(this.state.capabilities);
+  async describeCapabilities(): Promise<CapabilityDescription[]> {
+    const { state } = await this.#reads.snapshot();
+    return await this.#describeCapabilitiesFrom(state.capabilities);
   }
 
   async #describeCapabilitiesFrom(records: CapabilityRecord[]): Promise<CapabilityDescription[]> {
@@ -580,7 +617,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
 
   async #waitForScriptCompletion(executionId: string) {
     let completed: StreamEvent | undefined;
-    await this.waitUntilEvent({
+    await this.#reads.waitUntilEvent({
       predicate: (event) => {
         if (event.type !== "events.iterate.com/capability-host/script-execution-completed")
           return false;

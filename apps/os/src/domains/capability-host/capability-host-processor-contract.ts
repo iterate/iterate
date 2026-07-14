@@ -62,6 +62,18 @@ const CapabilityRevokedPayload = z.strictObject({
  */
 export const DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS = 15 * 60_000;
 
+/**
+ * The processor-scoped revival fact `durableObjectRecovery` appends when an
+ * incarnation died owing background work (stream-processor-runner.ts's
+ * `ProcessorRecovery`). The contract CONSUMES it — the runner's construction
+ * check requires that — but never emits it: the recovery adapter appends it
+ * raw, as the runtime speaking. Its ordinary delivery is the guaranteed turn
+ * that drives the runner to the stream head, where `onCaughtUp` re-drives
+ * open script obligations; no per-event handling is needed (reduce ignores
+ * it), so there is deliberately no `processEvent` arm for it.
+ */
+export const CAPABILITY_HOST_REVIVED_EVENT_TYPE = "events.iterate.com/capability-host/revived";
+
 export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
   version: "0.1.0",
@@ -186,6 +198,25 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
         },
       ],
     },
+    [CAPABILITY_HOST_REVIVED_EVENT_TYPE]: {
+      description:
+        "The capability host was revived after its incarnation died owing background work (an in-flight script execution lost to an eviction). Appended by the platform's recovery alarm, not by the processor; its delivery guarantees a caught-up pass that re-drives open script obligations — fresh requested scripts start, orphaned started scripts settle as failures.",
+      // Loose ON PURPOSE: the payload is authored by the shared recovery
+      // adapter (durableObjectRecovery.appendRevived), and future fields it
+      // grows must not turn historical revivals into parse failures.
+      payloadSchema: z.looseObject({
+        processorSlug: z.string(),
+        revivals: z.number(),
+        version: z.string(),
+      }),
+      examples: [
+        {
+          description:
+            "The keepalive alarm revived this scope after an eviction took an in-flight script execution.",
+          payload: { processorSlug: "capability-host", revivals: 1, version: "2026-07-14.1" },
+        },
+      ],
+    },
   },
   consumes: [
     "events.iterate.com/capability-host/capability-provided",
@@ -193,6 +224,10 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-started",
     "events.iterate.com/capability-host/script-execution-completed",
+    // The revival fact MUST be consumed (the runner throws at construction
+    // otherwise): a revival nobody consumes recovers nothing. See the
+    // constant's doc for why it is absent from `emits`.
+    CAPABILITY_HOST_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/capability-host/capability-provided",

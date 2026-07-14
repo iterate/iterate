@@ -69,6 +69,7 @@
 import { tracing } from "cloudflare:workers";
 import type { Stream } from "../../itx-api.generated.ts";
 import { LiveState } from "../../lib/live-state/engine.ts";
+import type { StreamEvent } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
 import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
 import { StreamProcessorRunner } from "./stream-processor-runner.ts";
@@ -109,9 +110,19 @@ export type RegisteredProcessorState<P extends RegisterableProcessor> = Awaited<
 /**
  * What {@link StreamProcessorRegistry.reads} returns: the RPC-facing
  * {@link ProcessorReads} plus the two synchronous reads a DO's `getLiveState`
- * closure needs (live-state assembly runs synchronously; see `refreshLive`).
+ * closure needs (live-state assembly runs synchronously; see `refreshLive`),
+ * with `waitUntilEvent` widened to the runner's full waiter — the offset
+ * barrier {@link ProcessorReads} publishes over RPC PLUS the in-process-only
+ * predicate form (a function cannot cross the RPC facade; a DO wires it into
+ * processor deps that wait for a specific future event, e.g. the capability
+ * host's script-completion wait).
  */
-export type RegisteredProcessorReads<State> = ProcessorReads<State> & {
+export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitUntilEvent"> & {
+  waitUntilEvent(
+    input:
+      | { offset: number; timeoutMs?: number }
+      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number },
+  ): Promise<void>;
   /** The runner's committed fold, synchronously (schema default until loaded). */
   readonly currentState: State;
   /** Whether `currentState` is a real fold — gate live publishing on it. */
@@ -454,7 +465,10 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           const state = await entry.processor.getRuntimeState();
           return { ...state, snapshot: await runner.snapshot() };
         },
-        waitUntilEvent: (input) => runner.waitUntilEvent(input),
+        // The union parameter narrows into the runner's two overloads; both
+        // branches are the same passthrough.
+        waitUntilEvent: (input) =>
+          "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
         get currentState() {
           return runner.currentState;
         },
