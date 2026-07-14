@@ -18,6 +18,7 @@ const FOCUS_WAIT_FOR_EVENT = process.env.STREAM_BENCH_FOCUS_WAIT_FOR_EVENT === "
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
 const FOCUS_CROSSPOST_EXACT_RETRY = process.env.STREAM_BENCH_FOCUS_CROSSPOST_EXACT_RETRY === "1";
 const FOCUS_STORAGE_JOURNAL = process.env.STREAM_BENCH_FOCUS_STORAGE_JOURNAL === "1";
+const FOCUS_WORKER_CONSUMER = process.env.STREAM_BENCH_FOCUS_WORKER_CONSUMER === "1";
 const IMPLEMENTATION = process.env.STREAM_BENCH_IMPLEMENTATION;
 const REVISION = process.env.STREAM_BENCH_REVISION ?? "unknown";
 const EVENT_TYPE = "events.iterate.test/stream-cumulative-benchmark";
@@ -43,6 +44,13 @@ const CHECKPOINT_CYCLE_SAMPLES = Number(process.env.STREAM_BENCH_CHECKPOINT_CYCL
 const PROCESSOR_CATCHUP_SAMPLES = Number(process.env.STREAM_BENCH_PROCESSOR_CATCHUP_SAMPLES ?? "0");
 const PROCESSOR_CATCHUP_EVENTS = Number(
   process.env.STREAM_BENCH_PROCESSOR_CATCHUP_EVENTS ?? "8000",
+);
+const WORKER_CONSUMER_SAMPLES = Number(process.env.STREAM_BENCH_WORKER_CONSUMER_SAMPLES ?? "30");
+const WORKER_CONSUMER_BATCH_SAMPLES = Number(
+  process.env.STREAM_BENCH_WORKER_CONSUMER_BATCH_SAMPLES ?? "12",
+);
+const WORKER_CONSUMER_BATCH_SIZE = Number(
+  process.env.STREAM_BENCH_WORKER_CONSUMER_BATCH_SIZE ?? "100",
 );
 
 type StreamHandle = Stream & Disposable;
@@ -71,7 +79,8 @@ test.skipIf(
     FOCUS_WAIT_FOR_EVENT ||
     FOCUS_PROCESSOR_CATCHUP ||
     FOCUS_CROSSPOST_EXACT_RETRY ||
-    FOCUS_STORAGE_JOURNAL,
+    FOCUS_STORAGE_JOURNAL ||
+    FOCUS_WORKER_CONSUMER,
 )(
   "cumulative Stream latency and throughput",
   async () => {
@@ -1200,6 +1209,155 @@ test.skipIf(!ENABLED || !FOCUS_PROCESSOR_CATCHUP)(
     console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
   },
   600_000,
+);
+
+test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
+  "focused deployed Worker consumer to Stream DO forwarding",
+  async () => {
+    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
+      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
+    }
+    if (!Number.isInteger(WORKER_CONSUMER_SAMPLES) || WORKER_CONSUMER_SAMPLES < 1) {
+      throw new Error("STREAM_BENCH_WORKER_CONSUMER_SAMPLES must be a positive integer.");
+    }
+    if (!Number.isInteger(WORKER_CONSUMER_BATCH_SAMPLES) || WORKER_CONSUMER_BATCH_SAMPLES < 1) {
+      throw new Error("STREAM_BENCH_WORKER_CONSUMER_BATCH_SAMPLES must be a positive integer.");
+    }
+    if (
+      !Number.isInteger(WORKER_CONSUMER_BATCH_SIZE) ||
+      WORKER_CONSUMER_BATCH_SIZE < 1 ||
+      WORKER_CONSUMER_BATCH_SIZE > 100
+    ) {
+      throw new Error("STREAM_BENCH_WORKER_CONSUMER_BATCH_SIZE must be an integer from 1 to 100.");
+    }
+
+    const runId = crypto.randomUUID().slice(0, 8);
+    const sourcePath = `/bench/${runId}/worker-consumer-source`;
+    const outputPath = `/bench/${runId}/worker-consumer-output`;
+    const triggerType = `${EVENT_TYPE}/worker-consumer-trigger`;
+    const forwardedType = `${EVENT_TYPE}/worker-consumer-forwarded`;
+    const completedType = `${EVENT_TYPE}/worker-consumer-completed`;
+
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({
+      projectId: `prj_${crypto.randomUUID()}`,
+      slug: `stream-worker-consumer-${IMPLEMENTATION}-${runId}`,
+    });
+    await project.__describe();
+
+    await project.repo.commitFiles({
+      changes: [
+        {
+          path: "worker.ts",
+          content: `
+            import { WorkerEntrypoint } from "cloudflare:workers";
+
+            const SOURCE_PATH = ${JSON.stringify(sourcePath)};
+            const OUTPUT_PATH = ${JSON.stringify(outputPath)};
+            const TRIGGER_TYPE = ${JSON.stringify(triggerType)};
+            const FORWARDED_TYPE = ${JSON.stringify(forwardedType)};
+            const COMPLETED_TYPE = ${JSON.stringify(completedType)};
+
+            export default class ProjectWorker extends WorkerEntrypoint {
+              fetch() {
+                return new Response("stream worker-consumer benchmark");
+              }
+
+              async processEventBatch(batch) {
+                const events = batch.events.filter(
+                  (event) => event.path === SOURCE_PATH && event.type === TRIGGER_TYPE,
+                );
+                if (events.length === 0) return;
+
+                const project = await this.env.ITX.get();
+                const output = project.streams.get(OUTPUT_PATH);
+                const iteration = events[0].payload.iteration;
+                await output.append(
+                  ...events.map((event) => ({
+                    type: FORWARDED_TYPE,
+                    idempotencyKey: \`worker-forwarded:\${event.path}@\${event.offset}\`,
+                    payload: {
+                      iteration,
+                      sourceOffset: event.offset,
+                    },
+                  })),
+                  {
+                    type: COMPLETED_TYPE,
+                    idempotencyKey: \`worker-completed:\${events.at(-1).path}@\${events.at(-1).offset}\`,
+                    payload: {
+                      count: events.length,
+                      iteration,
+                    },
+                  },
+                );
+              }
+            }
+          `,
+        },
+      ],
+      message: "Install Stream Worker-consumer benchmark",
+    });
+
+    using source = project.streams.get(sourcePath);
+    using outputStream = project.streams.get(outputPath);
+    let outputOffset = 0;
+    const forward = async (count: number, iteration: string): Promise<number> => {
+      const completed = outputStream.waitForEvent({
+        afterOffset: outputOffset,
+        eventTypes: [completedType],
+        timeoutMs: 60_000,
+      });
+      await waitForWaiterConnection(outputStream, 60_000);
+      const startedAt = performance.now();
+      await source.append(
+        ...Array.from({ length: count }, (_, index) => ({
+          type: triggerType,
+          payload: { index, iteration },
+        })),
+      );
+      const observed = await completed;
+      const elapsedMs = performance.now() - startedAt;
+      if (observed.payload?.iteration !== iteration || observed.payload?.count !== count) {
+        throw new Error(`Worker consumer completed the wrong batch for ${iteration}.`);
+      }
+      outputOffset = observed.offset;
+      return elapsedMs;
+    };
+
+    await forward(1, "warmup-single");
+    await forward(WORKER_CONSUMER_BATCH_SIZE, "warmup-batch");
+
+    const singletonSamples: number[] = [];
+    for (let iteration = 0; iteration < WORKER_CONSUMER_SAMPLES; iteration += 1) {
+      singletonSamples.push(await forward(1, `single-${iteration}`));
+    }
+
+    const batchSamples: number[] = [];
+    for (let iteration = 0; iteration < WORKER_CONSUMER_BATCH_SAMPLES; iteration += 1) {
+      batchSamples.push(
+        await forward(
+          WORKER_CONSUMER_BATCH_SIZE,
+          `batch-${WORKER_CONSUMER_BATCH_SIZE}-${iteration}`,
+        ),
+      );
+    }
+
+    const output: BenchmarkOutput = {
+      implementation: IMPLEMENTATION,
+      metrics: {
+        worker_consumer_forward_single: summarize(singletonSamples),
+        [`worker_consumer_forward_batch_${WORKER_CONSUMER_BATCH_SIZE}`]: summarize(
+          batchSamples,
+          WORKER_CONSUMER_BATCH_SIZE,
+        ),
+      },
+      revision: REVISION,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
+  },
+  900_000,
 );
 
 test.skipIf(!ENABLED || !FOCUS_CROSSPOST_EXACT_RETRY)(
