@@ -439,6 +439,12 @@ export class RepoDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.put(repoPushedHeadStorageKey(result.branch), result.commitOid);
   }
 
+  #invalidateArtifactState(branch: string) {
+    this.#artifactTokenPromise = undefined;
+    this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
+  }
+
   /**
    * Committed file contents at HEAD — or, with `commitOid`, pinned to that
    * commit — null when the path does not exist there. `encoding: "base64"`
@@ -889,15 +895,14 @@ export class RepoDurableObject extends DurableObject<Env> {
       beforeDelete: () => {
         // From this destructive boundary onward, neither a concurrent read nor
         // a failed replacement push may observe/cache the old Artifact head.
-        this.#artifactTokenPromise = undefined;
-        this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
-        this.ctx.storage.kv.delete(repoPushedHeadStorageKey(branch));
+        this.#invalidateArtifactState(branch);
       },
     });
-    // Reads are not serialized with writes: one can mint a token for the old
-    // Artifact while deletion is being polled. Discard that possible refill
-    // after recreation, immediately before this write obtains its token.
-    this.#artifactTokenPromise = undefined;
+    // Reads are not serialized with writes: one can refill the token or head
+    // caches from the old Artifact while deletion is being polled. Discard
+    // every possible refill after recreation, immediately before this write
+    // obtains the replacement token.
+    this.#invalidateArtifactState(branch);
     await this.#pushGithubHistoryInProcess({
       branch,
       git,
