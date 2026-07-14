@@ -17,15 +17,16 @@ export async function replaceArtifactWithEmptyRepo(
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<void> {
+  const pollAttempts = options.pollAttempts ?? DELETE_POLL_ATTEMPTS;
+  const pollIntervalMs = options.pollIntervalMs ?? DELETE_POLL_INTERVAL_MS;
+  const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+
   // Callers must invalidate any cached view of the old repository before the
   // remote deletion begins. Keep this inside the helper's boundary so a
   // future refactor cannot accidentally move invalidation after the delete.
   options.beforeDelete?.();
   const deleted = await artifacts.delete(name);
   if (deleted) {
-    const pollAttempts = options.pollAttempts ?? DELETE_POLL_ATTEMPTS;
-    const pollIntervalMs = options.pollIntervalMs ?? DELETE_POLL_INTERVAL_MS;
-    const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     let deletionApplied = false;
 
     for (let attempt = 0; attempt < pollAttempts; attempt++) {
@@ -46,5 +47,22 @@ export async function replaceArtifactWithEmptyRepo(
     }
   }
 
-  await artifacts.create(name, { setDefaultBranch: "main" });
+  // Artifacts' read and create paths are not one consistency boundary. In
+  // production, get() reported NOT_FOUND for the deleted repo while create()
+  // still rejected the same name with ALREADY_EXISTS. Keep the stronger
+  // NOT_FOUND barrier above (it protects the replacement from the queued
+  // delete), then wait for the create plane to release the name as well.
+  for (let attempt = 0; attempt < pollAttempts; attempt++) {
+    try {
+      await artifacts.create(name, { setDefaultBranch: "main" });
+      return;
+    } catch (error) {
+      if ((error as { code?: unknown })?.code !== "ALREADY_EXISTS") throw error;
+      if (attempt + 1 < pollAttempts) await sleep(pollIntervalMs);
+    }
+  }
+
+  throw new Error(
+    `Timed out waiting for Artifacts repository "${name}" name to become reusable after deletion.`,
+  );
 }
