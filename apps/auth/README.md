@@ -38,6 +38,18 @@ and implements the Workers RPC methods. Public requests can invoke only
 `fetch`; OS receives an RPC stub because its deployment holds the required
 same-account `AUTH` service binding. The binding intentionally omits an
 `entrypoint` selector, which targets the worker's default export.
+
+Using the default entrypoint is deliberate. Auth has one internal capability
+role, and every OS caller holding `AUTH` receives the same complete typed
+contract. A named entrypoint would add another exported surface and a binding
+selector without narrowing that authority. Cloudflare explicitly supports
+[`fetch` alongside RPC methods on a default `WorkerEntrypoint`](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/),
+with [`fetch` reserved for HTTP dispatch](https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/).
+If Auth later needs independently grantable RPC roles, that is the point to
+split them into named entrypoints. Project-controlled workers never receive
+`AUTH`; their generated bindings expose only project-scoped capabilities such
+as `ITX`.
+
 Static assets + SSR still work: asset routing happens at the edge before `fetch` is invoked, and
 `run_worker_first: ["/api/*"]` (in the generated `wrangler.jsonc`) sends API
 paths to the worker.
