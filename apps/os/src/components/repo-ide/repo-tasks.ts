@@ -289,7 +289,7 @@ export function repoTaskCreationPaths(
 }
 
 export function taskStateColumns(tasks: readonly RepoTask[]): string[] {
-  const unknown = new Set(tasks.map((task) => task.state));
+  const unknown = new Set(tasks.map(taskColumnState));
   for (const state of STANDARD_TASK_STATES) unknown.delete(state);
   return [
     ...STANDARD_TASK_STATES,
@@ -318,7 +318,7 @@ export function queryRepoTaskBoard(
       ...row,
       cells: states.map((state) => ({
         state,
-        tasks: row.tasks.filter((task) => task.state === state),
+        tasks: row.tasks.filter((task) => taskColumnState(task) === state),
       })),
     })),
     taskCount: matchingTasks.length,
@@ -328,6 +328,15 @@ export function queryRepoTaskBoard(
       labels: query.rows !== "label",
     },
   };
+}
+
+/**
+ * UI-only query projection from literal task metadata to the v1 Kanban
+ * columns. This never rewrites frontmatter: a legacy `state: backlog` remains
+ * literal in `task.state` and on disk, but shares the single Todo column.
+ */
+export function taskColumnState(task: Pick<RepoTask, "state">): string {
+  return task.state === "backlog" ? DEFAULT_TASK_STATE : task.state;
 }
 
 export function taskStateLabel(state: string): string {
