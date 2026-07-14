@@ -1214,7 +1214,7 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus path-specific policy and the onboarding kickoff). Pass overrides ({ systemPrompt?, model?, githubAgent? }) to bake customizations into the returned events. githubAgent configures automatic reviews with enabled and instructions; mentions and push interruption use the platform's fixed GitHub-agent semantics. The seeded project worker calls this from its child-stream-created reaction.",
+        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus path-specific policy and the onboarding kickoff). Pass overrides ({ systemPrompt?, model? }) to bake customizations into the returned events. GitHub review selection and rules are userspace reactions in the project config repo, not agent-default options. The seeded project worker calls this from its child-stream-created reaction.",
       children: { forPath: "Default policy (and its event batch) for one agent path." },
       parent: "the agent catalog (itx.agents.defaults)",
     });
@@ -1987,13 +1987,15 @@ function parseStoredRef(serialized: string): ItxExpression | undefined {
 }
 
 /**
- * Project search over everything the project accumulates — stream events,
- * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
- * instance over the deployment's search-index bucket
- * (domains/search/search-index.ts). One instance PER PROJECT, created on
- * first use, indexing only the project's `{projectId}/**` slice of the
- * bucket — tenancy is structural, not a query filter. Experimental — the
- * surface may change.
+ * Search everything this project has accumulated — every conversation (web
+ * chat, Slack threads, email, Telegram), inbound webhook (GitHub, Slack),
+ * stream event, itx.files object, repo file, and custom document — with
+ * semantic + keyword retrieval. Every hit carries a `ref` expression that
+ * fetches the exact source back, so a result is never a dead end.
+ *
+ * Mechanics: one Cloudflare AI Search instance per project (born with the
+ * project), indexing only that project's slice of the deployment's corpus
+ * bucket — tenancy is structural, not a query filter.
  */
 class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   constructor(
@@ -2006,8 +2008,12 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "One search over everything this project accumulates — stream events, itx.files, repo " +
-        "files, and itx.docs — via this project's own AI Search instance. query({ q }) returns " +
+        "Search the project's PAST: every conversation (web chat, Slack, email, Telegram), " +
+        "webhook (GitHub, Slack), stream event, file, and repo file is indexed — semantic + " +
+        "keyword, so ask a plain question. Two searches, one rule: itx.docs.search finds HOW " +
+        "(example code, types, capabilities); itx.search.query finds WHAT (this project's own " +
+        "content and history — the top docs hits federate in automatically; docs is not a " +
+        'source — use exclude: ["docs"] to drop them). query({ q }) returns ' +
         "scored chunks; hits carry a `ref` — an itx EXPRESSION ARRAY leading back to the domain " +
         'object: ["streams", ["get", path], ["getEvents", { afterOffset, beforeOffset }]] for ' +
         'stream events, ["files", ["get", path]], ["repos", ["get", repoPath], ["readFile", ' +
@@ -2027,16 +2033,20 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
         answer: "RAG answer over the project corpus + docs, with cited source chunks.",
         backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
         ensureIndex:
-          "Ensure this project's search instance exists (idempotent; created at project birth).",
+          "Ensure the search instance exists — you normally never need this (created at project " +
+          "birth; query/index self-heal). To rebuild content, see reindex.",
         index:
           "Add/replace one standalone document ({ kind, id, text, ref, title?, context? }) — " +
           "ref (itx expression) is required.",
         indexEvent:
-          "Pin one stream event by coordinates ({ stream, offset, note? }) — ref leads back to it.",
-        indexRepo: "Snapshot one repo's default-branch HEAD into the search corpus now.",
-        indexStream: "Re-index one stream from the beginning (backfill/repair).",
+          "Pin/annotate: make ONE stream event a first-class search document " +
+          "({ path, offset, note? }) — its hit's ref leads back to exactly it.",
+        indexRepo:
+          "Backfill/repair (rarely needed — indexing is automatic): snapshot one repo's HEAD now.",
+        indexStream:
+          "Backfill/repair (rarely needed — indexing is automatic): re-index one stream from offset 0.",
         reindex:
-          "Reindex the whole project — every stream, repo, and file — crude, idempotent, re-runnable.",
+          "Backfill/repair the WHOLE project — every stream, repo, and file; idempotent, re-runnable.",
         query:
           "Retrieve scored, kind-tagged chunks matching a query (with source/exclude filters).",
       },
@@ -2172,8 +2182,9 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
    * so callers can contextualize a hit. Docs hits carry synthetic 0.5-band
-   * scores (keyword overlap, not comparable to corpus relevance) and are
-   * exempt from `limit`/`scoreThreshold` (separately capped at 5). On a
+   * scores (not comparable to corpus relevance), ride on top of `limit`
+   * corpus chunks (their own cap: min(limit, 5)), and ignore
+   * `scoreThreshold`. On a
    * project whose instance doesn't exist yet, the instance is created and
    * docs results return with a `warning` — retry once its first index
    * completes (typically a minute or two). A warning-free empty result means
@@ -2217,10 +2228,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
   }
 
   /**
-   * Retrieve matching chunks AND generate an answer from them (RAG).
-   * Unlike `query`, a project whose instance doesn't exist yet THROWS here
-   * (message: "first index is in progress — retry shortly") — there is no
-   * warning-carrying degraded result. `searchQuery` echoes the input
+   * Retrieve matching chunks AND generate an answer from them (RAG). Same
+   * first-touch grammar as `query`: on a project whose instance doesn't
+   * exist yet, the instance is created and an empty-response result returns
+   * with a `warning` — retry shortly. `searchQuery` echoes the input
    * verbatim (never the rewritten query).
    */
   async answer(input: {
@@ -2233,6 +2244,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
     /** Optional system prompt for the answer generation. */
     systemPrompt?: string;
   }): Promise<SearchAnswerResult> {
+    // Validation (bad source/exclude) throws HERE, outside the degrade path:
+    // an invalid request is the caller's bug, never a warning — mirroring
+    // query(), whose #searchOptions also runs before any catch.
+    const searchOptions = this.#searchOptions(input);
     let response: AiSearchChatCompletionsResponse;
     try {
       response = await this.#instance.chatCompletions({
@@ -2242,10 +2257,12 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
             : [{ role: "system" as const, content: input.systemPrompt }]),
           { role: "user" as const, content: input.q },
         ],
-        ai_search_options: this.#searchOptions(input),
+        ai_search_options: searchOptions,
       });
     } catch (error) {
-      throw new Error(await this.#ensureInstanceAfterMiss(error), { cause: error });
+      // Degrade exactly like query(): one failure grammar for the whole door.
+      const warning = await this.#ensureInstanceAfterMiss(error);
+      return { response: "", searchQuery: input.q, results: [], warning };
     }
     return {
       response: response.choices[0]?.message.content ?? "",
@@ -2288,19 +2305,35 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * domain-object way to make a specific moment findable. The event's content
    * is read from the stream (never trusted from the caller) and indexed as a
    * focused document together with the optional `note`; the search hit's
-   * `ref` is the itx expression fetching exactly that event. Note the param
-   * is `stream` (unlike indexStream's `path`). Idempotent per
+   * `ref` is the itx expression fetching exactly that event. Idempotent per
    * (stream, offset).
    */
-  async indexEvent(input: {
-    /** The stream path, e.g. "/agents/slack/T1/thr-9". */
-    stream: string;
-    /** The event's offset on that stream. */
-    offset: number;
-    /** Optional annotation, indexed alongside the event ("decision made here"). */
-    note?: string;
-  }): Promise<{ key: string }> {
-    const path = normalizePath(input.stream);
+  async indexEvent(
+    input: (
+      | {
+          /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+          path: string;
+          stream?: undefined;
+        }
+      | {
+          /** Alias for `path` (the original name of this parameter). */
+          stream: string;
+          path?: undefined;
+        }
+    ) & {
+      /** The event's offset on that stream. */
+      offset: number;
+      /** Optional annotation, indexed alongside the event ("decision made here"). */
+      note?: string;
+    },
+  ): Promise<{ key: string }> {
+    const streamPath = input.path ?? input.stream;
+    if (streamPath === undefined) {
+      // Unreachable for TS callers (the union requires one); itx callers are
+      // dynamic, so keep the runtime guard with a pointed message.
+      throw new Error("indexEvent needs the stream path: { path, offset }");
+    }
+    const path = normalizePath(streamPath);
     const streamStub = env.STREAM.getByName(
       DurableObjectNameCodec.stringify(
         { projectId: this.props.projectId, path },
@@ -3925,7 +3958,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   }
 
   /**
-   * Set THIS agent's policy: system prompt, model, and/or GitHub behavior. Works on an agent
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
    * that already ran (a plain last-write-wins update) AND on a path that has
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
@@ -3961,17 +3994,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         type: "events.iterate.com/agent/llm-provider-selected",
         payload: { model: defaults.model },
       });
-    }
-    if (input.githubAgent !== undefined) {
-      const configured = defaults.events.find(
-        (event) => event.type === "events.iterate.com/github-agent/configure",
-      );
-      if (configured !== undefined) {
-        events.push({
-          type: configured.type,
-          payload: configured.payload,
-        });
-      }
     }
     await this.stream.append(...events);
   }
@@ -4741,7 +4763,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   egress: "Project-attributed outbound fetch (+ intercept).",
   email:
     "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
-  docs: 'Find working code + types: search({ q: "many related words" }) over the example-script catalogue, type declarations, and mounted capabilities; get({ name }) fetches one.',
+  docs: 'Find working code + types (HOW — for project content/history see itx.search): search({ q: "many related words" }) over the example-script catalogue, type declarations, and mounted capabilities; get({ name }) fetches one.',
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
@@ -4760,6 +4782,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
   sandboxes:
     "The project's sandboxes (pets): create({ name, instanceType }), get(path), list(); start/sleep/destroy live on the sandbox.",
+  search:
+    "Search the project's PAST — every conversation (chat/Slack/email/Telegram), webhook (GitHub/Slack), stream event, file, and repo file is indexed: query({ q }) returns scored chunks, each with a ref expression back to the exact source; answer({ q }) gives a cited answer. Search before paging streams with getEvents.",
   scheduler:
     'The default project Scheduler (= schedulers.get("/scheduler/primary")): set({ key, recurrence, script }) runs an itx script on a schedule; cancel(key), list(), trigger(key).',
   schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
@@ -5043,7 +5067,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** The docs door: `search({ q })` finds e2e-tested example scripts, type
    * declarations, and this scope's mounted capabilities; `get({ name })`
    * fetches one. Pass search MANY related words — matching is dumb word
-   * overlap. */
+   * overlap. For project CONTENT and history, see itx.search. */
   get docs(): ItxDocsRpcTarget {
     return new ItxDocsRpcTarget({ capabilityHost: this.#props.capabilityHost });
   }
@@ -5801,7 +5825,8 @@ const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.contex
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),
  * which is why every docstring here tells callers to pass MANY related words
- * — recall comes from the query, not the engine.
+ * — recall comes from the query, not the engine. (For semantic search over
+ * the project's own content and history, see itx.search.)
  */
 class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
   readonly #capabilityHost: CapabilityHostRpcTarget;
@@ -5815,6 +5840,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     return describeNode({
       instructions:
         "Search + fetch over everything callable from this scope: working example scripts (proven ones run unattended against a live project in the platform's test suite — copy those first), the public type surface, and this scope's mounted capabilities. " +
+        "Two searches, one rule: THIS door finds HOW (code, types, capabilities); itx.search.query finds WHAT (the project's own content and history). " +
         'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". ' +
         "get({ name }) fetches what a hit names: an example's full annotated code, a type declaration with its referenced types, or a mounted capability's instructions + types. " +
         "typecheck({ code }) compiles an `async (itx) => { … }` script against this scope's types without running it.",
@@ -5837,7 +5863,8 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * `"worker"`, or `"agents"` rank their subject first instead of every row
    * that mentions the word. Example hits are working scripts — prefer copying
    * them over writing calls from scratch. Each hit's `fetchCall` field holds
-   * the ready-made docs.get call that fetches its full doc.
+   * the ready-made docs.get call that fetches its full doc. (For the
+   * project's own content and history, see itx.search.)
    */
   async search(input: { q: string }): Promise<DocsSearchHit[]> {
     const scored: Array<{ hit: DocsSearchHit; score: number; proven?: boolean }> = [];

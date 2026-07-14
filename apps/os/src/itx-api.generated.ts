@@ -132,7 +132,7 @@ export interface Project {
   /** The docs door: `search({ q })` finds e2e-tested example scripts, type
    * declarations, and this scope's mounted capabilities; `get({ name })`
    * fetches one. Pass search MANY related words — matching is dumb word
-   * overlap. */
+   * overlap. For project CONTENT and history, see itx.search. */
   docs: Docs;
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
   files: Files;
@@ -352,7 +352,7 @@ export interface Agent {
         },
   ): Promise<StreamEvent>;
   /**
-   * Set THIS agent's policy: system prompt, model, and/or GitHub behavior. Works on an agent
+   * Set THIS agent's policy: system prompt and/or model. Works on an agent
    * that already ran (a plain last-write-wins update) AND on a path that has
    * never existed — the append births the agent with the full default policy
    * plus these overrides, and the batch claims the same idempotency keys the
@@ -598,7 +598,8 @@ export interface EmailCapability {
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),
  * which is why every docstring here tells callers to pass MANY related words
- * — recall comes from the query, not the engine.
+ * — recall comes from the query, not the engine. (For semantic search over
+ * the project's own content and history, see itx.search.)
  */
 export interface Docs {
   __describe(): Promise<Description>;
@@ -611,7 +612,8 @@ export interface Docs {
    * `"worker"`, or `"agents"` rank their subject first instead of every row
    * that mentions the word. Example hits are working scripts — prefer copying
    * them over writing calls from scratch. Each hit's `fetchCall` field holds
-   * the ready-made docs.get call that fetches its full doc.
+   * the ready-made docs.get call that fetches its full doc. (For the
+   * project's own content and history, see itx.search.)
    */
   search(input: { q: string }): Promise<DocsSearchHit[]>;
   /**
@@ -854,13 +856,15 @@ export interface SandboxCollection {
 }
 
 /**
- * Project search over everything the project accumulates — stream events,
- * itx.files, repo files, custom documents — indexed in a Cloudflare AI Search
- * instance over the deployment's search-index bucket
- * (domains/search/search-index.ts). One instance PER PROJECT, created on
- * first use, indexing only the project's `{projectId}/**` slice of the
- * bucket — tenancy is structural, not a query filter. Experimental — the
- * surface may change.
+ * Search everything this project has accumulated — every conversation (web
+ * chat, Slack threads, email, Telegram), inbound webhook (GitHub, Slack),
+ * stream event, itx.files object, repo file, and custom document — with
+ * semantic + keyword retrieval. Every hit carries a `ref` expression that
+ * fetches the exact source back, so a result is never a dead end.
+ *
+ * Mechanics: one Cloudflare AI Search instance per project (born with the
+ * project), indexing only that project's slice of the deployment's corpus
+ * bucket — tenancy is structural, not a query filter.
  */
 export interface Search {
   __describe(): Promise<Description>;
@@ -876,8 +880,9 @@ export interface Search {
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
    * so callers can contextualize a hit. Docs hits carry synthetic 0.5-band
-   * scores (keyword overlap, not comparable to corpus relevance) and are
-   * exempt from `limit`/`scoreThreshold` (separately capped at 5). On a
+   * scores (not comparable to corpus relevance), ride on top of `limit`
+   * corpus chunks (their own cap: min(limit, 5)), and ignore
+   * `scoreThreshold`. On a
    * project whose instance doesn't exist yet, the instance is created and
    * docs results return with a `warning` — retry once its first index
    * completes (typically a minute or two). A warning-free empty result means
@@ -897,10 +902,10 @@ export interface Search {
     exclude?: readonly string[];
   }): Promise<SearchQueryResult>;
   /**
-   * Retrieve matching chunks AND generate an answer from them (RAG).
-   * Unlike `query`, a project whose instance doesn't exist yet THROWS here
-   * (message: "first index is in progress — retry shortly") — there is no
-   * warning-carrying degraded result. `searchQuery` echoes the input
+   * Retrieve matching chunks AND generate an answer from them (RAG). Same
+   * first-touch grammar as `query`: on a project whose instance doesn't
+   * exist yet, the instance is created and an empty-response result returns
+   * with a `warning` — retry shortly. `searchQuery` echoes the input
    * verbatim (never the rewritten query).
    */
   answer(input: {
@@ -939,18 +944,28 @@ export interface Search {
    * domain-object way to make a specific moment findable. The event's content
    * is read from the stream (never trusted from the caller) and indexed as a
    * focused document together with the optional `note`; the search hit's
-   * `ref` is the itx expression fetching exactly that event. Note the param
-   * is `stream` (unlike indexStream's `path`). Idempotent per
+   * `ref` is the itx expression fetching exactly that event. Idempotent per
    * (stream, offset).
    */
-  indexEvent(input: {
-    /** The stream path, e.g. "/agents/slack/T1/thr-9". */
-    stream: string;
-    /** The event's offset on that stream. */
-    offset: number;
-    /** Optional annotation, indexed alongside the event ("decision made here"). */
-    note?: string;
-  }): Promise<{ key: string }>;
+  indexEvent(
+    input: (
+      | {
+          /** The stream path, e.g. "/agents/slack/T1/thr-9". */
+          path: string;
+          stream?: undefined;
+        }
+      | {
+          /** Alias for `path` (the original name of this parameter). */
+          stream: string;
+          path?: undefined;
+        }
+    ) & {
+      /** The event's offset on that stream. */
+      offset: number;
+      /** Optional annotation, indexed alongside the event ("decision made here"). */
+      note?: string;
+    },
+  ): Promise<{ key: string }>;
   /**
    * Re-index one stream from the beginning — the repair verb for streams that
    * predate search indexing, or the rare tail gap a failed per-batch write can
@@ -2086,9 +2101,6 @@ export type StreamEvent = {
  * systemPrompt override REPLACES the path's platform prompt wholesale — the
  * caller owns the whole contract, including how the agent acts (codemode). */
 export type AgentDefaultsOverrides = {
-  /** GitHub pull-request behavior. The resulting configured fact always
-   * contains the complete materialized policy, including `enabled: false`. */
-  githubAgent?: GithubAgentConfigurationInput;
   systemPrompt?: string;
   model?: string;
 };
@@ -2870,13 +2882,6 @@ export type CfMarkdownConversionOptions = {
   };
 };
 
-/** Partial GitHub pull-request agent policy accepted by agent defaults and configuration calls. */
-export type GithubAgentConfigurationInput = {
-  automaticReview?:
-    | { enabled?: boolean | undefined; instructions?: string | undefined }
-    | undefined;
-};
-
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {
   args: unknown[];
@@ -2920,9 +2925,17 @@ export type PublicBuiltinIntegrationSlug = "github" | "gmail" | "slack" | "teleg
 
 /** One retrieved chunk: the matched index document plus its scored text and provenance. */
 export type SearchResultChunk = {
-  /** The index object key, e.g. `prj_x/streams/agents/…/events-00000001.md`. */
+  /**
+   * The internal corpus key this chunk came from (diagnostic; for federated
+   * docs hits it holds the docs.get fetchCall instead). Use `ref` — not this
+   * — to fetch the source.
+   */
   filename: string;
-  /** Relevance score in [0, 1]. */
+  /**
+   * Relevance in [0, 1] for corpus hits. `kind: "docs"` hits carry synthetic
+   * scores in a descending band from 0.5 — not comparable to corpus
+   * relevance.
+   */
   score: number;
   /** The matched text content (the specific matching chunk). */
   content: string;
