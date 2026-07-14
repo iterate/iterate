@@ -2962,6 +2962,37 @@ does not prove tail parity: random multi-second Cloudflare stalls were larger
 on the candidate samples in this collection, so no p95 or mean improvement is
 claimed.
 
+The final lane exercised the actual exported helper while retaining one
+physical source Stream DO. It installed two ephemeral subscriptions on that
+source: the baseline used `processEventBatch`, the candidate used
+`subscribe(source, { processEvent })`, and distinct event-type filters selected
+the path. Both wrote completion events to the same output Stream DO. Twelve
+fresh projects each completed 40 alternating 1,000-event pairs with 1,920-byte
+PCM-shaped payloads, for 480 valid pairs and no exclusions:
+
+| Actual-helper deployed result | Previous adapter | `processEvent` |  Change |
+| ----------------------------- | ---------------: | -------------: | ------: |
+| pooled p50                    |       194.874 ms |     197.152 ms |  -1.17% |
+| pooled p95                    |       546.734 ms |     424.564 ms | +22.35% |
+| pooled mean                   |       235.688 ms |     237.921 ms |  -0.95% |
+| paired median change          |              n/a |            n/a |  -0.40% |
+| within-pair wins              |              n/a |        233/480 |     n/a |
+
+This passed every predeclared high-volume gate: pooled p50 and paired-median
+slowdown were below 5%, the candidate won 48.54% of pairs, both execution-order
+strata were within 5% (-1.04% baseline-first and +0.41% candidate-first), and
+both pooled p95 and median per-project p95 were within the 5% tail budget. The
+median project p95 change was +6.30%. The observed pooled p95 improvement is
+evidence against a regression, not a claimed intrinsic helper speedup; the
+receiver-only measurement remains the evidence for removed dispatch overhead.
+
+Each project also completed five singleton pairs. Across 60 pairs, candidate
+p50 was 0.95% slower. A single 357.8 ms candidate outlier made p95 12.62% slower
+and mean 5.15% slower, so this smaller sample supports only singleton central
+parity, not singleton tail parity. All twelve initiating Worker RPC invocations
+remained alive through completion; there were no timeouts, order failures, or
+callback losses.
+
 One of eight earlier whole-helper projects was invalidated in full after four
 successful warmups. Its source append succeeded in 1.234 seconds, but no
 completion reached the output Stream DO and the host waiter expired after
@@ -2981,7 +3012,7 @@ hatch only for intentional whole-batch atomicity.
 
 The production source cost is 47 added and 4 removed lines in one SDK module,
 plus one regenerated embedded-module line. The rest is 197 lines of runtime
-tests and 300 added/26 removed lines in the reusable benchmark. There is no
+tests and 306 added/27 removed lines in the reusable benchmark. There is no
 storage change, migration, flag, service, queue, retry protocol, fallback, or
 second subscription transport. Collapse is one helper and two short adapter
 loops, so it can be reverted cleanly without data work. Preview 5 was restored
@@ -2993,4 +3024,6 @@ Raw records are `/tmp/process-event-local-{main,candidate}-r{1..5}.log`,
 `/tmp/process-event-preview5-{main,candidate}-r{1..5}.log`,
 `/tmp/process-event-preview5-paired-r{1..7}.log`,
 `/tmp/process-event-preview5-ephemeral-r{1..8}.log`, and
-`/tmp/process-event-preview5-ephemeral-shared-r{1..7}.log`.
+`/tmp/process-event-preview5-ephemeral-shared-r{1..7}.log`. The final
+actual-helper soak is
+`/tmp/process-event-preview5-ephemeral-helper-shared-r{1..12}.log`.

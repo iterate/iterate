@@ -1250,6 +1250,8 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     const sourcePath = `/bench/${runId}/worker-consumer-source`;
     const outputPath = `/bench/${runId}/worker-consumer-output`;
     const triggerType = `${EVENT_TYPE}/worker-consumer-trigger`;
+    const baselineTriggerType = `${triggerType}/baseline`;
+    const candidateTriggerType = `${triggerType}/candidate`;
     const forwardedType = `${EVENT_TYPE}/worker-consumer-forwarded`;
     const completedType = `${EVENT_TYPE}/worker-consumer-completed`;
     const readyType = `${EVENT_TYPE}/worker-consumer-ready`;
@@ -1335,11 +1337,12 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     `;
 
     const ephemeralProcessEventWorkerSource = `
-      import { IterateWorkerEntrypoint } from "iterate/sdk";
+      import { IterateWorkerEntrypoint, subscribe } from "iterate/sdk";
 
       const SOURCE_PATH = ${JSON.stringify(sourcePath)};
       const OUTPUT_PATH = ${JSON.stringify(outputPath)};
-      const TRIGGER_TYPE = ${JSON.stringify(triggerType)};
+      const BASELINE_TRIGGER_TYPE = ${JSON.stringify(baselineTriggerType)};
+      const CANDIDATE_TRIGGER_TYPE = ${JSON.stringify(candidateTriggerType)};
       const COMPLETED_TYPE = ${JSON.stringify(completedType)};
       const READY_TYPE = ${JSON.stringify(readyType)};
 
@@ -1367,25 +1370,20 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           const source = this.#project.streams.get(SOURCE_PATH);
           this.#handles.push(
             await source.subscribe({
-              eventTypes: [TRIGGER_TYPE],
+              eventTypes: [BASELINE_TRIGGER_TYPE],
               processEventBatch: async (batch) => {
-                const mode = batch.events[0]?.payload.mode;
-                if (mode === "baseline") {
-                  let finalEvent;
-                  for (const event of batch.events) {
-                    if (this.#accept(event, mode)) finalEvent = event;
-                  }
-                  if (finalEvent !== undefined) await this.#complete(finalEvent, mode);
-                  return;
-                }
-                if (mode !== "candidate") {
-                  throw new Error(\`Unknown ephemeral processEvent mode: \${mode}.\`);
-                }
+                let finalEvent;
                 for (const event of batch.events) {
-                  const result = this.#processEvent(event);
-                  if (result !== undefined) await result;
+                  if (this.#accept(event, "baseline")) finalEvent = event;
                 }
+                if (finalEvent !== undefined) await this.#complete(finalEvent, "baseline");
               },
+            }),
+          );
+          this.#handles.push(
+            await subscribe(source, {
+              eventTypes: [CANDIDATE_TRIGGER_TYPE],
+              processEvent: (event) => this.#processEvent(event),
             }),
           );
           await this.#project.streams.get(OUTPUT_PATH).append({
@@ -1396,7 +1394,9 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
         }
 
         #accept(event, mode) {
-          if (event.path !== SOURCE_PATH || event.type !== TRIGGER_TYPE) {
+          const expectedType =
+            mode === "baseline" ? BASELINE_TRIGGER_TYPE : CANDIDATE_TRIGGER_TYPE;
+          if (event.path !== SOURCE_PATH || event.type !== expectedType) {
             throw new Error(\`Unexpected \${mode} event \${event.path} \${event.type}.\`);
           }
           const { count, index, iteration } = event.payload;
@@ -1542,7 +1542,12 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
       const startedAt = performance.now();
       await source.append(
         ...Array.from({ length: count }, (_, index) => ({
-          type: triggerType,
+          type:
+            WORKER_CONSUMER_EPHEMERAL && mode !== undefined
+              ? mode === "baseline"
+                ? baselineTriggerType
+                : candidateTriggerType
+              : triggerType,
           payload: {
             blob: "p".repeat(WORKER_CONSUMER_PAYLOAD_BYTES),
             count,
