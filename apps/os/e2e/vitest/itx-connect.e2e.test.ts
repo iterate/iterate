@@ -72,8 +72,8 @@ test("OpenAPI built-in connects directly and mounts as a described capability", 
       types,
     });
     const described = await project.__describe();
-    expect(described.capabilities).toEqual(
-      expect.arrayContaining([
+    expect(described).toMatchObject({
+      capabilities: expect.arrayContaining([
         expect.objectContaining({
           instructions,
           path: ["pets"],
@@ -81,14 +81,16 @@ test("OpenAPI built-in connects directly and mounts as a described capability", 
           types,
         }),
       ]),
-    );
+    });
     await expect(
       // @ts-expect-error - mounted OpenAPI capability root.
       project.pets.findPetsByStatus({ status: "pending" }),
     ).resolves.toEqual([{ id: 1, name: "pending-pet", status: "pending" }]);
 
     if (api.authHeaders.length > 0) {
-      expect(api.authHeaders).toEqual(expect.arrayContaining([`Bearer ${secretMaterial}`]));
+      expect(api).toMatchObject({
+        authHeaders: expect.arrayContaining([`Bearer ${secretMaterial}`]),
+      });
     }
   } finally {
     await api.close();
@@ -150,8 +152,8 @@ test("MCP built-in connects directly and mounts as a described capability", asyn
       types,
     });
     const described = await project.__describe();
-    expect(described.capabilities).toEqual(
-      expect.arrayContaining([
+    expect(described).toMatchObject({
+      capabilities: expect.arrayContaining([
         expect.objectContaining({
           instructions,
           path: ["cloudflareDocs"],
@@ -159,18 +161,20 @@ test("MCP built-in connects directly and mounts as a described capability", asyn
           types,
         }),
       ]),
-    );
+    });
     await expect(
       // @ts-expect-error - mounted MCP capability root.
       project.cloudflareDocs.search_docs({ query: "Durable Objects" }),
     ).resolves.toEqual({ answer: "docs:Durable Objects" });
 
     if (mcp.methods.length > 0) {
-      expect(mcp.methods).toEqual(expect.arrayContaining(["initialize", "tools/call"]));
+      expect(mcp).toMatchObject({ methods: expect.arrayContaining(["initialize", "tools/call"]) });
       expect(mcp.methods).not.toContain("tools/list");
     }
     if (mcp.authHeaders.length > 0) {
-      expect(mcp.authHeaders).toEqual(expect.arrayContaining([`Bearer ${secretMaterial}`]));
+      expect(mcp).toMatchObject({
+        authHeaders: expect.arrayContaining([`Bearer ${secretMaterial}`]),
+      });
     }
   } finally {
     await mcp.close();
@@ -231,8 +235,8 @@ test("itx expression capabilities mount MCP and OpenAPI built-ins through connec
     });
 
     const described = await project.__describe();
-    expect(described.capabilities).toEqual(
-      expect.arrayContaining([
+    expect(described).toMatchObject({
+      capabilities: expect.arrayContaining([
         expect.objectContaining({
           instructions: petsInstructions,
           path: ["exprPets"],
@@ -246,7 +250,7 @@ test("itx expression capabilities mount MCP and OpenAPI built-ins through connec
           types: docsTypes,
         }),
       ]),
-    );
+    });
 
     await expect(
       // @ts-expect-error - mounted expression capability root.
@@ -343,6 +347,7 @@ test("itx expression capabilities mount project workers, streams, method aliases
     payload: { ok: true },
     type: "events.iterate.test/itx-expression-stream",
   });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact round-trip: the appended payload must come back untouched
   expect(event.payload).toEqual({ ok: true });
 
   using _sourceProvision = await project.provideCapability({

@@ -93,21 +93,19 @@ test.skipIf(!process.env.PETSHOP_BASE_URL)(
 
       // Authed call through the secret: token substituted, petshop sees it.
       const me = await callThroughConnection(project, connectionPath, "/api/me");
-      expect(me.status).toBe(200);
-      expect(me.body).toMatchObject({ clientId: instance.clientId });
+      expect(me).toMatchObject({ status: 200, body: { clientId: instance.clientId } });
 
       // Force a real 401 (epoch bump) and call again: the Secret DO must run
       // the refresh grant against the pinned token endpoint and retry to a 200.
       await petshopExpireTokens();
       const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
-      expect(afterExpiry.status).toBe(200);
-      expect(afterExpiry.body).toMatchObject({ clientId: instance.clientId });
+      expect(afterExpiry).toMatchObject({ status: 200, body: { clientId: instance.clientId } });
 
       // Confinement: describe() leaks no token; the use is audited.
       const described = await connectionSecret.__describe();
       expect(JSON.stringify(described)).not.toContain(tokens.access_token);
       expect(JSON.stringify(described)).not.toContain(instance.clientSecret);
-      expect(described.hasMaterial).toBe(true);
+      expect(described).toMatchObject({ hasMaterial: true });
       await waitForCondition(
         async () => (await connectionSecret.__describe()).audit.usedCount >= 1,
         {
@@ -160,15 +158,13 @@ test.skipIf(!process.env.PETSHOP_BASE_URL)(
     );
 
     const me = await callThroughConnection(project, connectionPath, "/api/me");
-    expect(me.status).toBe(200);
-    expect(me.body).toMatchObject({ clientId });
+    expect(me).toMatchObject({ status: 200, body: { clientId } });
 
     // Force a 401 and prove the strategy refreshes using the PLATFORM client
     // credential resolved from deployment config — never present in material.
     await petshopExpireTokens();
     const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
-    expect(afterExpiry.status).toBe(200);
-    expect(afterExpiry.body).toMatchObject({ clientId });
+    expect(afterExpiry).toMatchObject({ status: 200, body: { clientId } });
   },
 );
 

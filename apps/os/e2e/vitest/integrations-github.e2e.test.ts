@@ -82,22 +82,19 @@ test.skipIf(!process.env.PETSHOP_BASE_URL)(
     // installation token → the secret substitutes it. petshop names which
     // installation we're acting as.
     const me = await callThroughConnection(project, connectionPath, "/api/me");
-    expect(me.status).toBe(200);
-    expect(me.body).toMatchObject({ installationId, appId });
+    expect(me).toMatchObject({ status: 200, body: { installationId, appId } });
 
     // Force a real 401 (epoch bump invalidates the installation token) and call
     // again: the strategy must re-mint (sign a fresh JWT) and retry to a 200.
     await petshopExpireTokens();
     const afterExpiry = await callThroughConnection(project, connectionPath, "/api/me");
-    expect(afterExpiry.status).toBe(200);
-    expect(afterExpiry.body).toMatchObject({ installationId, appId });
+    expect(afterExpiry).toMatchObject({ status: 200, body: { installationId, appId } });
 
     // Confinement: the App private key never left the secret; describe() leaks
     // neither the key nor a minted token. Egress uses land on the audit trail.
     const described = await connectionSecret.__describe();
     expect(JSON.stringify(described)).not.toContain("BEGIN PRIVATE KEY");
-    expect(described.hasMaterial).toBe(true);
-    expect(described.refresh).toBe("github-app-installation");
+    expect(described).toMatchObject({ hasMaterial: true, refresh: "github-app-installation" });
     await waitForCondition(async () => (await connectionSecret.__describe()).audit.usedCount >= 1, {
       description: "github connection egress use to audit",
     });

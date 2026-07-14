@@ -74,7 +74,7 @@ test.skipIf(deployedBaseUrl() === null)(
       const { result } = await project.capabilityHost.runScript(script);
       const proof = result as { body: string; certIssuer: string; exitCode: number };
 
-      expect(proof.exitCode).toBe(0);
+      expect(proof).toMatchObject({ exitCode: 0 });
 
       // (1) MITM: the container was handed the interception CA's cert, proving
       // the TLS session was terminated by the container proxy, not the origin.

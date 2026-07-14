@@ -94,7 +94,7 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       payload: { approvalRequestEventOffset: requested.offset },
     });
     const releasedResponse = await heldFetch;
-    expect(releasedResponse.status).toBe(200);
+    expect(releasedResponse).toMatchObject({ status: 200 });
     const echoed = (await releasedResponse.json()) as { headers: Record<string, string> };
     expect(echoed.headers["x-approval-proof"]).toBe("hold-me");
 
@@ -122,7 +122,7 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       payload: { approvalRequestEventOffset: rejectedRequested.offset, reason: "human" },
     });
     const rejectedResponse = await rejectedFetch;
-    expect(rejectedResponse.status).toBe(403);
+    expect(rejectedResponse).toMatchObject({ status: 403 });
     await expect(rejectedResponse.json()).resolves.toMatchObject({
       error: "approval_rejected",
       ruleKey: "post-echo",
@@ -130,7 +130,7 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
 
     // ── deny lane: refused synchronously, no approval round-trip.
     const deniedResponse = await project.egress.fetch(new Request(echo.url, { method: "DELETE" }));
-    expect(deniedResponse.status).toBe(403);
+    expect(deniedResponse).toMatchObject({ status: 403 });
     await expect(deniedResponse.json()).resolves.toMatchObject({
       error: "egress_denied",
       ruleKey: "never-delete",
@@ -140,7 +140,7 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
     const expiredResponse = await project.egress.fetch(
       new Request(echo.url, { method: "PUT", body: "too slow" }),
     );
-    expect(expiredResponse.status).toBe(403);
+    expect(expiredResponse).toMatchObject({ status: 403 });
     await expect(expiredResponse.json()).resolves.toMatchObject({
       error: "approval_expired",
       ruleKey: "impatient",
@@ -251,7 +251,7 @@ test("enrolled approval keys make unsigned grants inert; a signed grant releases
     });
 
     const releasedResponse = await heldFetch;
-    expect(releasedResponse.status).toBe(200);
+    expect(releasedResponse).toMatchObject({ status: 200 });
 
     // The settled event proves release happened via the SIGNED grant path:
     // it appends strictly after the signed grant's offset. (Had either

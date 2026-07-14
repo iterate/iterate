@@ -41,7 +41,7 @@ test("log, commitDetails and pinned readFile over a few commits", async () => {
 
   // ── log: newest first, parents chain, author + epoch-ms timestamp ──────
   const log = await project.repo.log({});
-  expect(log.branch).toBe("main");
+  expect(log).toMatchObject({ branch: "main" });
   expect(log.commits.length).toBeGreaterThanOrEqual(4); // seed + 3
   expect(log.commits[0]).toMatchObject({
     oid: third.commitOid,
@@ -57,7 +57,7 @@ test("log, commitDetails and pinned readFile over a few commits", async () => {
     author: { name: "History Tester", email: "history@example.com" },
   });
   const rootCommit = log.commits[log.commits.length - 1]!;
-  expect(rootCommit.parents).toEqual([]);
+  expect(rootCommit).toMatchObject({ parents: [] });
   // epoch milliseconds, not git's seconds
   expect(log.commits[0]!.timestamp).toBeGreaterThan(Date.now() - 15 * 60_000);
   expect(log.commits[0]!.timestamp).toBeLessThan(Date.now() + 5 * 60_000);
@@ -77,6 +77,7 @@ test("log, commitDetails and pinned readFile over a few commits", async () => {
   });
 
   const thirdDetails = await project.repo.commitDetails({ commitOid: third.commitOid });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: toEqual pins the exact single-entry files list; toMatchObject would let extra keys on the entry pass
   expect(thirdDetails.files).toEqual([
     { path: "notes.md", status: "deleted", additions: 0, deletions: 4, binary: false },
   ]);

@@ -154,7 +154,9 @@ test(
 
       // Deployed runs reach this same fixture over apps/tunnels, so call
       // capture proves the request reached the runner-side mock.
-      expect(mock.calls).toEqual(expect.arrayContaining(["chat.postMessage", "users.list"]));
+      expect(mock).toMatchObject({
+        calls: expect.arrayContaining(["chat.postMessage", "users.list"]),
+      });
 
       // A dotted path that resolves to nothing fails loudly in the seeded
       // walk — the template's one piece of dispatch machinery, unchanged by

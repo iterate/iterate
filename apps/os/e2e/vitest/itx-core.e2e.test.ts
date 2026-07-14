@@ -26,7 +26,7 @@ test("Authenticated session __describe returns principal", async () => {
 
   const projects = itx.projects;
 
-  expect((await itx.__describe()).principal).toBe("alice");
+  expect(await itx.__describe()).toMatchObject({ principal: "alice" });
   // list() enriches each scope: an impersonated principal's scopes have no
   // directory record, so the id doubles as the slug and the org is unknown.
   const list = await projects.list();
@@ -290,7 +290,7 @@ test("Authenticated session __describe and projects list complete in one HTTP ba
   });
   // If we didn't do Promise.all, this wouldn't work - wouldn't be sent as part of the same batch
   const [description, projects] = await Promise.all([itx.__describe(), itx.projects.list()]);
-  expect(description.principal).toBe("alice");
+  expect(description).toMatchObject({ principal: "alice" });
   expect(projects.map((project) => project.id)).toEqual(["prj_alice", "prj_ref"]);
 
   // session is now finished - cannot be used again in batch http mode

@@ -275,22 +275,23 @@ test.skipIf(!process.env.PETSHOP_BASE_URL)(
     // strategy runs the NewSession login inside the Secret DO, and the retried
     // request lands on the pets API as the logged-in account.
     const me = await callApi("/api/me");
-    expect(me.status).toBe(200);
-    expect(me.body.sub).toBe(username);
-    expect(me.body.clientId).toBe("graphql-session-login");
+    expect(me).toMatchObject({
+      status: 200,
+      body: { sub: username, clientId: "graphql-session-login" },
+    });
 
     // Force a real 401 (epoch bump kills the stored session) and call again:
     // re-login IS the refresh — the same strategy re-mints and the retry wins.
     await petshopExpireTokens();
     const pets = await callApi("/api/pets");
-    expect(pets.status).toBe(200);
+    expect(pets).toMatchObject({ status: 200 });
     expect(Array.isArray(pets.body.pets ?? pets.body)).toBe(true);
 
     // Confinement: describe() leaks neither the password nor a session token
     // (hasMaterial is the only material-shaped fact), and uses are audited.
     const described = await secret.__describe();
     expect(JSON.stringify(described)).not.toContain("correct-horse");
-    expect(described.hasMaterial).toBe(true);
+    expect(described).toMatchObject({ hasMaterial: true });
     await waitForCondition(async () => (await secret.__describe()).audit.usedCount >= 2, {
       description: "waitrose/mum usage audit to fold",
     });

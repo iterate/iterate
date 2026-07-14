@@ -83,6 +83,7 @@ test(
     expect(spilled).not.toBeNull();
     expect(spilled!.length).toBe(expected.length);
     const parsed = JSON.parse(spilled!) as typeof result;
+    // oxlint-disable-next-line iterate/prefer-object-property-match -- targeting the whole object would print the 10MB blob on failure (see the sized-assertions comment above)
     expect(parsed.marker).toBe(marker);
     expect(parsed.blob.length).toBe(10_000_000);
   },

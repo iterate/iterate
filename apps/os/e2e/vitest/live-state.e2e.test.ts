@@ -38,7 +38,7 @@ test("itx.liveState pushes a snapshot then a minimal diff; the DO-backed counter
     timeoutMs: 30_000,
   });
   expect(track.patchCount()).toBeGreaterThan(0);
-  expect(track.state()!.liveDemo.count).toBe(before + 1);
+  expect(track.state()!.liveDemo).toMatchObject({ count: before + 1 });
 
   // ping() reports liveness — the lever the dashboard watchdog uses — and it
   // flips false ONCE UNSUBSCRIBED, over the real wire: a ping that kept
@@ -54,7 +54,7 @@ test("itx.liveState pushes a snapshot then a minimal diff; the DO-backed counter
   const closedAt = track.state()!.liveDemo.count;
   await project.liveDemo.increment();
   await new Promise((resolve) => setTimeout(resolve, 1_000));
-  expect(track.state()!.liveDemo.count).toBe(closedAt);
+  expect(track.state()!.liveDemo).toMatchObject({ count: closedAt });
 });
 
 test("itx.liveDemo.ticker (stateless, no Durable Object) advances over time", async () => {

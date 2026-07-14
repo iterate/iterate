@@ -24,7 +24,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
   const { projectId } = await project.__describe();
 
   const pageResponse = await fetch(buildUrl({ path: `/${projectId}` }));
-  expect(pageResponse.status).toBe(200);
+  expect(pageResponse).toMatchObject({ status: 200 });
   const homepage = await pageResponse.text();
   expect(homepage).toContain("Hello from your Iterate project worker");
   // The homepage links to each seeded app on its own host: the current host
@@ -93,7 +93,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   const hello = await fetchAppReady(`hello--${slug}`, {
     headers: { "x-iterate-app": "counter" },
   });
-  expect(hello.status).toBe(200);
+  expect(hello).toMatchObject({ status: 200 });
   expect(await hello.json()).toMatchObject({ app: "hello", projectId });
 
   // Stateful app: a mini client-side counter page — the count renders
@@ -104,14 +104,14 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   // needs a second wildcard level and is exercised in the unit tests +
   // reserved for custom hostnames.)
   const page = await fetchAppReady(`counter--${slug}`);
-  expect(page.status).toBe(200);
+  expect(page).toMatchObject({ status: 200 });
   expect(await page.text()).toContain('count: <span id="n">0</span>');
 
   const increment = await fetchApp(`counter--${slug}`, {
     method: "POST",
     path: "/increment",
   });
-  expect(increment.status).toBe(200);
+  expect(increment).toMatchObject({ status: 200 });
   expect(await increment.json()).toEqual({ count: 1 });
 
   await fetchApp(`counter--${slug}`, { method: "POST", path: "/increment" });
@@ -122,7 +122,9 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   const workerSource = await project.repo.readFile({ path: "worker.ts" });
   expect(workerSource?.content).toContain("export default class ProjectWorker");
   const tree = await project.repo.listFiles();
-  expect(tree.paths).toEqual(expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]));
+  expect(tree).toMatchObject({
+    paths: expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]),
+  });
   // The seed is ONE worker file — the example apps are named exports of it.
   expect(tree.paths).not.toContain("sdk.ts");
   expect(tree.paths.some((path: string) => path.startsWith("apps/"))).toBe(false);
@@ -130,7 +132,7 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
 
   // Unknown apps 404 in the router itself.
   const unknown = await fetchApp(`nope--${slug}`);
-  expect(unknown.status).toBe(404);
+  expect(unknown).toMatchObject({ status: 404 });
   expect(await unknown.text()).toContain("unknown app");
 });
 
@@ -221,7 +223,7 @@ test("counter websockets: upgrade flows through ingress and increments broadcast
       const firstSaw = nextMessage(first);
       const secondSaw = nextMessage(second);
       const incremented = await postIncrement();
-      expect(incremented.status).toBe(200);
+      expect(incremented).toMatchObject({ status: 200 });
       expect(await firstSaw).toBe("1");
       expect(await secondSaw).toBe("1");
     } finally {

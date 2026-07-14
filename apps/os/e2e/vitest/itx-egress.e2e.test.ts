@@ -102,7 +102,7 @@ test("every egress-only update clears retained secret material", async () => {
     egress: { urls: [attacker.url] },
     material: "replacement-material",
   });
-  expect((await secret.__describe()).egress.urls).toEqual([attacker.url]);
+  expect(await secret.__describe()).toMatchObject({ egress: { urls: [attacker.url] } });
 
   await secret.update({
     egress: { urls: [original.url, attacker.url] },
@@ -114,7 +114,7 @@ test("every egress-only update clears retained secret material", async () => {
   ]);
   expect(concurrentChanges.map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
   expect([[original.url], [attacker.url]]).toContainEqual((await secret.__describe()).egress.urls);
-  expect((await secret.__describe()).hasMaterial).toBe(false);
+  expect(await secret.__describe()).toMatchObject({ hasMaterial: false });
 });
 
 test("an in-flight refresh cannot resurrect material after an egress event", async () => {
@@ -311,8 +311,8 @@ test("URL-path secret material is not returned in Response metadata", async () =
     url: `${new URL(endpoint.url).origin}/botgetSecret({ path: "${secretPath}" })/getMe`,
   });
 
-  expect(response.url).toBe("");
-  expect(response.redirected).toBe(false);
+  expect(response).toMatchObject({ url: "", redirected: false });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- toEqual pins the exact body; a subset match would tolerate extra keys
   expect(response.body).toEqual({ ok: true });
   expect(receivedPaths).toEqual([`/bot${material}/getMe`]);
 });
@@ -366,7 +366,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
         headers: { [EGRESS_PROOF_HEADER]: secretReference },
       }),
     );
-    expect(explicitResponse.status).toBe(200);
+    expect(explicitResponse).toMatchObject({ status: 200 });
     expect(echoedEgressProofHeader(await explicitResponse.json())).toBe(expected);
 
     using probe = egressProbeWorker(project);
@@ -413,26 +413,20 @@ test("Project egress substitutes path-addressed secrets for explicit and project
       { description: "project processor to fold agent, repo, and secret stream lists" },
     );
     const projectState = (await project.processor.snapshot()).state;
-    expect(projectState.streams).toEqual(
-      expect.arrayContaining([
+    expect(projectState).toMatchObject({
+      streams: expect.arrayContaining([
         expect.objectContaining({ path: "/" }),
         expect.objectContaining({ path: agentPath }),
         expect.objectContaining({ path: repoPath }),
         expect.objectContaining({ path: secretPath }),
       ]),
-    );
-    expect(projectState.agents).toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
-    );
-    expect(projectState.repos).toEqual(
-      expect.arrayContaining([
+      agents: expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
+      repos: expect.arrayContaining([
         expect.objectContaining({ path: "/repos/config" }),
         expect.objectContaining({ path: repoPath }),
       ]),
-    );
-    expect(projectState.secrets).toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: secretPath })]),
-    );
+      secrets: expect.arrayContaining([expect.objectContaining({ path: secretPath })]),
+    });
     expect(await project.secrets.list()).toEqual(
       expect.arrayContaining([expect.objectContaining({ path: secretPath })]),
     );
@@ -451,13 +445,16 @@ test("Project egress substitutes path-addressed secrets for explicit and project
       description: "agent boot-context input to fold into history",
       timeoutMs: 30_000,
     });
-    expect((await agentProcessor.snapshot()).state.history).toEqual([
-      expect.objectContaining({
-        role: "user",
-        content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
-      }),
-    ]);
-    expect((await project.repo.processor.snapshot()).state.created).toBe(true);
+    expect((await agentProcessor.snapshot()).state).toMatchObject({
+      history: [
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
+        }),
+      ],
+    });
+    expect((await project.repo.processor.snapshot()).state).toMatchObject({ created: true });
+    // oxlint-disable-next-line iterate/prefer-object-property-match -- toEqual pins the exact egress config; a subset match would tolerate extra keys
     expect((await secret.processor.snapshot()).state.egress).toEqual({ urls: [echo.url] });
   } finally {
     await echo.close();
@@ -517,7 +514,7 @@ test("Project egress intercept catches explicit and worker fetches before secret
       url: echo.url,
     });
     expect(JSON.stringify(workerBody)).not.toContain("intercept-secret-material");
-    expect((await secret.__describe()).audit.usedCount).toBe(0);
+    expect(await secret.__describe()).toMatchObject({ audit: { usedCount: 0 } });
 
     await intercept.release();
 

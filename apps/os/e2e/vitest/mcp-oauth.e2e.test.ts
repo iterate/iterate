@@ -53,7 +53,7 @@ test("project MCP OAuth opaque-token flow", async () => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: ADMIN_EMAIL, password }),
   });
-  expect(signIn.status, "bootstrap admin sign-in").toBe(200);
+  expect(signIn, "bootstrap admin sign-in").toMatchObject({ status: 200 });
 
   // 2. Ensure an organization + a fresh project to grant the client.
   const orgs = await c.orpc<Array<{ slug: string }>>("user/myOrganizations", {});
@@ -164,7 +164,7 @@ test("project MCP OAuth opaque-token flow", async () => {
     }).toString(),
   });
   const token = (await tokenRes.json()) as { access_token: string; token_type: string };
-  expect(tokenRes.status, "token exchange").toBe(200);
+  expect(tokenRes, "token exchange").toMatchObject({ status: 200 });
   // Lock in that we are exercising the OPAQUE path (the bug was here), not the
   // JWT path: a JWT would be three dot-separated segments.
   expect(token.access_token.split(".").length, "token is opaque, not a JWT").toBe(1);
@@ -198,11 +198,11 @@ test("project MCP OAuth opaque-token flow", async () => {
       clientInfo: { name: "mcp-oauth-e2e", version: "1.0" },
     },
   });
-  expect(init.status, "MCP initialize with opaque bearer").toBe(200);
+  expect(init, "MCP initialize with opaque bearer").toMatchObject({ status: 200 });
   expect(init.parsed.result?.serverInfo?.name).toBe("os");
 
   const tools = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-  expect(tools.status, "MCP tools/list").toBe(200);
+  expect(tools, "MCP tools/list").toMatchObject({ status: 200 });
   const toolNames = tools.parsed.result?.tools?.map((tool) => tool.name) ?? [];
   expect(toolNames, "opaque token grants the project MCP tool surface").toContain(
     "exec_typescript",
@@ -210,7 +210,7 @@ test("project MCP OAuth opaque-token flow", async () => {
   expect(toolNames, "assistant tool is hidden by default").not.toContain("ask_assistant");
 
   const agentTools = await mcp({ jsonrpc: "2.0", id: 3, method: "tools/list" }, "?withAgent=true");
-  expect(agentTools.status, "MCP tools/list with agent opt-in").toBe(200);
+  expect(agentTools, "MCP tools/list with agent opt-in").toMatchObject({ status: 200 });
   const agentToolNames = agentTools.parsed.result?.tools?.map((tool) => tool.name) ?? [];
   expect(agentToolNames, "agent opt-in keeps exec_typescript").toContain("exec_typescript");
   expect(agentToolNames, "agent opt-in exposes assistant tool").toContain("ask_assistant");

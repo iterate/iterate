@@ -97,6 +97,7 @@ test("Project stream subscribe can observe project worker processEventBatch forw
       event.type === PROJECT_WORKER_FORWARDED_EVENT_TYPE && event.payload?.marker === marker,
     timeoutMs: 8_000,
   });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: state must be exactly these keys, and the receiver is a live processor instance, not a data object
   expect(processor.state).toEqual({
     childPaths: [triggerPath],
     markers: [marker],
@@ -120,6 +121,7 @@ test("Project stream subscribe can observe project worker processEventBatch forw
     },
   });
   await new Promise((resolve) => setTimeout(resolve, 750));
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: asserts state is frozen after unsubscribe; toMatchObject subset-matching would weaken the check
   expect(processor.state).toEqual(stateAtUnsubscribe);
 });
 

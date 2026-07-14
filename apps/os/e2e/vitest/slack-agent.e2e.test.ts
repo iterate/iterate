@@ -94,7 +94,7 @@ test.skipIf(signingSecret === null)(
     const unclaimedResponse = await fetch(
       await signedSlackWebhookRequest(unclaimedBody, signingSecret!),
     );
-    expect(unclaimedResponse.status).toBe(200);
+    expect(unclaimedResponse).toMatchObject({ status: 200 });
     expect(await unclaimedResponse.json()).toMatchObject({
       ok: true,
       ignored: "external-id-not-claimed",
@@ -102,7 +102,7 @@ test.skipIf(signingSecret === null)(
 
     // --- A badly-signed request is the one deliberate non-2xx (trust boundary).
     const badSignature = await signedSlackWebhookRequest(unclaimedBody, "wrong-signing-secret");
-    expect((await fetch(badSignature)).status).toBe(401);
+    expect(await fetch(badSignature)).toMatchObject({ status: 401 });
 
     // --- The synthetic HUMAN message in the claimed workspace.
     const humanBody = JSON.stringify({
@@ -119,7 +119,7 @@ test.skipIf(signingSecret === null)(
       },
     });
     const webhookResponse = await fetch(await signedSlackWebhookRequest(humanBody, signingSecret!));
-    expect(webhookResponse.status).toBe(200);
+    expect(webhookResponse).toMatchObject({ status: 200 });
     expect(await webhookResponse.json()).toMatchObject({ ok: true });
 
     // --- Router: the webhook lands on the connection's integration stream and

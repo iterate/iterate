@@ -252,6 +252,7 @@
         "iterate/no-describe": "error",
         "iterate/no-lifecycle-hooks": "error",
         "iterate/no-vi-mock": "error",
+        "iterate/prefer-object-property-match": "error",
         "iterate/prefer-test-over-it": "error"
       }
     },

@@ -374,6 +374,7 @@ test('An agent scope provides a capability to the whole project via capabilityHo
       return { viaRoot, viaChain, describedScopes };
     }`);
 
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: the script returns exactly these keys; toMatchObject would subset-match and hide extras
   expect(execution.result).toEqual({
     viaRoot: "pong-from-agent-mount",
     viaChain: "pong-from-agent-mount",
@@ -535,6 +536,7 @@ test("Project worker processEventBatch receives events from every project stream
     sourceOffset: sourceEvent.offset,
     sourcePath,
   });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: the copied payload must be exactly the original (metadata above is deliberately subset-matched); toMatchObject would hide contamination
   expect(copiedEvent.payload).toEqual({
     originalPayload: { text: "hello from a child stream" },
     originalType: "events.iterate.com/test/source",

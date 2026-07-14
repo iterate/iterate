@@ -81,7 +81,7 @@ test("the boundary, pinned: a socket-carrying Response dies crossing the worker 
   // serialize fine over capability dispatch. Only the socket cannot cross.
   // @ts-expect-error dynamic capability path
   const plain = await project.wsbackend.fetch(new Request("https://live.example.com/"));
-  expect(plain.status).toBe(426);
+  expect(plain).toMatchObject({ status: 426 });
 
   const outcome = await (async () => {
     try {

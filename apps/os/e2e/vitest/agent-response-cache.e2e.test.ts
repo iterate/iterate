@@ -17,10 +17,10 @@ test("a second project's onboarding turn replays the first one's answer from the
   // path) — exactly what cloudflareAiGatewayResponseCacheKey masks — so its
   // birth turn must replay the first one's response without touching OpenAI.
   const second = await runOnboardingBirthTurn(`aig-cache-b-${marker}`);
-  expect(second.cacheStatus).toBe("HIT");
+  expect(second).toMatchObject({ cacheStatus: "HIT" });
 
   // A replay is byte-identical: same greeting, deterministic e2e for free.
-  expect(second.greeting).toBe(first.greeting);
+  expect(second).toMatchObject({ greeting: first.greeting });
 }, 300_000);
 
 type LlmCompletionEvidence = {

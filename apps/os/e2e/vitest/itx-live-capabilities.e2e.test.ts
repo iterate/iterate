@@ -347,14 +347,14 @@ test("itx expression replacement records the recipe without evaluating it", asyn
     type: "itx-expression",
   });
   const description = await project.__describe();
-  expect(description.capabilities).toEqual(
-    expect.arrayContaining([
+  expect(description).toMatchObject({
+    capabilities: expect.arrayContaining([
       expect.objectContaining({
         path: ["replaceProbe"],
         type: "itx-expression",
       }),
     ]),
-  );
+  });
 
   // @ts-expect-error - dynamic capability root
   await expect(project.replaceProbe.value()).rejects.toThrow();
@@ -418,7 +418,9 @@ test("Authenticated project can provide the Slack SDK as nested dotted functions
       ok: true,
       via: "mock-slack-api",
     });
-    expect(mock.calls).toEqual(expect.arrayContaining(["chat.postMessage", "users.list"]));
+    expect(mock).toMatchObject({
+      calls: expect.arrayContaining(["chat.postMessage", "users.list"]),
+    });
 
     await provision.revoke();
     await expect(

@@ -26,6 +26,7 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
         worker: \`\${body.app} fetched \${body.path}\`,
       };
     }`);
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: the script result must round-trip exactly; toMatchObject would subset-match and hide extra keys
   expect(scriptResult.result).toEqual({
     repo: `repo ${description.projectId}:/repos/config`,
     worker: "hello fetched /script",
