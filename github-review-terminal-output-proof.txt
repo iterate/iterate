@@ -1,0 +1,1 @@
+This temporary clean PR proves that a completed review replaces its in-progress Check Run title.
