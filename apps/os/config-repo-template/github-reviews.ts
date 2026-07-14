@@ -42,11 +42,14 @@ export async function processGithubReviewEvent(input: {
   // A routed webhook carries the exact connection and deployment App slug
   // chosen by the signed-webhook door. Automatic work must not guess either.
   const octokit = input.itx.integrations.github.get(target.connection).octokit;
-  const liveResponse = await octokit.rest.pulls.get({
-    owner: target.owner,
-    pull_number: target.number,
-    repo: target.repo,
-  });
+  const [projectId, liveResponse] = await Promise.all([
+    input.itx.projectId,
+    octokit.rest.pulls.get({
+      owner: target.owner,
+      pull_number: target.number,
+      repo: target.repo,
+    }),
+  ]);
   const live = liveResponse.data;
   const liveLabels = live.labels.map((label) => label.name.toLowerCase());
   const liveHeadSha = live.head.sha;
@@ -63,7 +66,7 @@ export async function processGithubReviewEvent(input: {
     }
     await cancelReviewChecks({
       appSlug: target.appSlug,
-      externalIdPrefix: githubReviewExternalIdPrefix(target, input.itx.projectId),
+      externalIdPrefix: githubReviewExternalIdPrefix(target, projectId),
       headSha: liveHeadSha,
       itx: input.itx,
       octokit,
@@ -87,7 +90,7 @@ export async function processGithubReviewEvent(input: {
     // Reconcile visible UI instead of merely declining to start new work.
     await cancelReviewChecks({
       appSlug: target.appSlug,
-      externalIdPrefix: githubReviewExternalIdPrefix(target, input.itx.projectId),
+      externalIdPrefix: githubReviewExternalIdPrefix(target, projectId),
       headSha: liveHeadSha,
       itx: input.itx,
       octokit,
@@ -112,7 +115,7 @@ export async function processGithubReviewEvent(input: {
   if (target.previousHeadSha !== undefined && target.previousHeadSha !== target.headSha) {
     await cancelReviewChecks({
       appSlug: target.appSlug,
-      externalIdPrefix: githubReviewExternalIdPrefix(target, input.itx.projectId),
+      externalIdPrefix: githubReviewExternalIdPrefix(target, projectId),
       headSha: target.previousHeadSha,
       itx: input.itx,
       octokit,
@@ -123,14 +126,14 @@ export async function processGithubReviewEvent(input: {
     });
   }
 
-  const externalId = `${githubReviewExternalIdPrefix(target, input.itx.projectId)}${target.requestKey}`;
+  const externalId = `${githubReviewExternalIdPrefix(target, projectId)}${target.requestKey}`;
   if (target.trigger === "explicit") {
     // A fresh explicit request supersedes any other review of this same head.
     // Excluding its own identity makes at-least-once label delivery harmless.
     await cancelReviewChecks({
       appSlug: target.appSlug,
       exceptExternalId: externalId,
-      externalIdPrefix: githubReviewExternalIdPrefix(target, input.itx.projectId),
+      externalIdPrefix: githubReviewExternalIdPrefix(target, projectId),
       headSha: target.headSha,
       itx: input.itx,
       octokit,

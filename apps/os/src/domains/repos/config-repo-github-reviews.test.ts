@@ -122,7 +122,9 @@ function harness(input?: {
   const itx = {
     agents: { defaults: { forPath: defaultsForPath } },
     integrations: { github: { get: getConnection } },
-    projectId: "prj_test",
+    // Scalar Workers RPC properties are promises at the caller even though
+    // the generated project surface describes their resolved value.
+    projectId: Promise.resolve("prj_test"),
     repo: { readFile },
     scheduler: { cancel, set },
     streams: { get: vi.fn(() => ({ append })) },
