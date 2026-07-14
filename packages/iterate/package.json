@@ -67,14 +67,14 @@
     "@types/node": "^22.0.0",
     "capnweb": "^0.8.0",
     "octokit": "^5.0.5",
-    "react": "^19.2.0",
+    "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
     "zod": "4.1.12"
   },
   "devDependencies": {
     "@iterate-com/ui": "workspace:*",
-    "@types/react": "^19.2.14",
+    "@types/react": "^19.2.17",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
     "vitest": "4.0.15"
