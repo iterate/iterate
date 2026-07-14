@@ -235,9 +235,17 @@ is a user-style view and may show every flag false even when the installation
 can write; attempt the requested operation and report GitHub's actual error.
 
 For code work, the agent fetches the live PR and uses the route prompt's exact
-`GH_TOKEN` recipe to bind a sandbox to that installation. It clones the head
-repository/ref, edits and tests, commits, and non-force pushes the exact head
-branch. `itx.repo` and `itx.workspace` target the project's config-repo default
-branch, so they are never PR code-write doors. If a fork is outside the App
-installation, the agent reports that blocker instead of touching the base
-branch.
+`GH_TOKEN` recipe to bind a sandbox to that installation. The recipe is shared
+with sandbox provisioning and configures Git smart HTTP as Basic
+`x-access-token:<installation-token>` auth; GitHub rejects API-style Bearer auth
+on that endpoint. It clones the head repository/ref, edits and tests, commits,
+and non-force pushes the exact head branch. `itx.repo` and `itx.workspace`
+target the project's config-repo default branch, so they are never PR
+code-write doors. If a fork is outside the App installation, the agent reports
+that blocker instead of touching the base branch.
+
+A successful Git write or Octokit mutation is the write acknowledgement.
+GitHub's pull-request projection can briefly lag a just-advanced branch, so an
+immediate old `pulls.get` head is not evidence that the write failed. When a
+post-write check is necessary, the agent reads the branch ref once with
+`octokit.rest.git.getRef`; it never polls or sleeps.
