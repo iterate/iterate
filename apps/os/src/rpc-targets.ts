@@ -2028,19 +2028,30 @@ const resultContentCap = (hitCount: number): number =>
   Math.min(1_000, Math.max(250, Math.floor(RESULT_CONTENT_BUDGET_CHARS / Math.max(1, hitCount))));
 
 /**
- * One result row per source DOCUMENT: AI Search returns chunk-level rows, so
- * a strong document yields several near-duplicate hits (live: 20 rows over
- * 12 documents) — each repeating filename/context/ref at full weight. Keep
- * the best-scoring chunk per document; its ref stays chunk-narrowed to that
- * best match.
+ * One result row per MATCH LOCATION — full-text-search semantics. The corpus
+ * stores stream events in 100-offset SEGMENT documents, so ten different
+ * pirate mentions in one segment are ten different chunks of ONE document:
+ * deduping by document would collapse ten real matches to one. The identity
+ * that matches user intuition is the chunk-narrowed ref window (the exact
+ * events a chunk covers): distinct windows stay distinct rows; the SAME
+ * window (context-expansion echoes, re-scored duplicates) collapses to its
+ * best score. Non-stream documents (files, repo files, custom docs) narrow
+ * to the whole-object ref, so their chunks collapse per document — which is
+ * right: every chunk of one file leads to the same domain object.
  */
-function dedupeChunksByDocument(
+function dedupeChunksByMatchLocation(
   chunks: AiSearchSearchResponse["chunks"],
 ): AiSearchSearchResponse["chunks"] {
   const best = new Map<string, AiSearchSearchResponse["chunks"][number]>();
   for (const chunk of chunks) {
-    const existing = best.get(chunk.item.key);
-    if (existing === undefined || chunk.score > existing.score) best.set(chunk.item.key, chunk);
+    const metadata = chunk.item.metadata ?? {};
+    const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
+    const narrowed =
+      storedRef === undefined ? undefined : narrowStreamRefToChunk(storedRef, chunk.text);
+    const identity =
+      narrowed === undefined ? chunk.item.key : `${chunk.item.key}#${JSON.stringify(narrowed)}`;
+    const existing = best.get(identity);
+    if (existing === undefined || chunk.score > existing.score) best.set(identity, chunk);
   }
   return [...best.values()];
 }
@@ -2263,8 +2274,10 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
    * Retrieve scored chunks matching a query, scoped to this project's own
    * search instance. Merges the corpus (streams/files/repos/custom kinds)
    * with federated itx.docs, each result tagged with its `kind` and `context`
-   * so callers can contextualize a hit. ONE row per source document (best
-   * chunk wins), content capped so a full default result is ~3-4k tokens —
+   * so callers can contextualize a hit. ONE row per MATCH — distinct event
+   * windows within one stream segment stay distinct rows (full-text-search
+   * semantics); only same-location re-scores collapse. Content capped so a
+   * full default result is ~3-4k tokens —
    * about two queries fit one inline script return; fanning out more, return
    * selected fields (kind/context/ref), not whole results. Docs hits carry
    * synthetic 0.5-band
@@ -2306,7 +2319,7 @@ class SearchRpcTarget extends IterateRpcTarget<"Search"> {
       if (input.source !== undefined) return { searchQuery: input.q, results: [], warning };
       return { searchQuery: input.q, results: docs.value, warning };
     }
-    const deduped = dedupeChunksByDocument(corpus.value.chunks);
+    const deduped = dedupeChunksByMatchLocation(corpus.value.chunks);
     const results = [
       ...deduped.map((chunk) => this.#toChunk(chunk, resultContentCap(deduped.length))),
       ...docs.value,
