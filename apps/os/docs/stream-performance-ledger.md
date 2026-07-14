@@ -1774,3 +1774,67 @@ option, constructor plumbing, and tests were all removed. Production and
 persistent data are exactly unchanged. Raw valid records are
 `/tmp/stream-activation-list-{parent,candidate}-r{1,2,3}.log`; the favorable
 non-counted smoke is `/tmp/stream-activation-list-candidate-smoke.log` locally.
+
+## 2026-07-14: One-Capability Hosted Delivery Session Rejected
+
+A workerd/Cap'n Web source audit identified three independently returned live
+capabilities in every hosted-processor wake handshake: the delivery sink,
+runtime-state reader, and ping responder. The proposed collapse grouped all
+three behind one retained session. Workerd accounts roughly 1.6 KiB of
+external memory per live RPC stub, so the theoretical saving was two stubs, or
+about 3.2 KiB per active hosted connection, plus fewer independent release
+paths. This is a memory-accounting estimate from source, not a measured RSS
+result.
+
+Two wire shapes were tested against exact parent
+`5b3a1d34d68ce4b75542c9c564475b554fdeb9d7`:
+
+1. An explicit `RpcTarget` with `processEventBatch`, `getRuntimeState`, and
+   `ping` methods. This guarantees one exported object capability but changes
+   delivery from a direct callback invocation to a method call.
+2. A callable sink with runtime-state and ping attached as own properties. This
+   preserves direct delivery syntax and matches Cap'n Web's callable-stub
+   model while still presenting one top-level returned capability.
+
+Each shape passed focused ownership tests, the generated API check, OS
+typecheck, and a live Workers RPC smoke with no undisposed-stub warning. The
+latency discriminator then ran three 300-sample rounds per revision in
+`C,P,P,C,C,P` order, restarting the inactive server at every switch. Every
+sample killed the project host, appended one event, and awaited the hosted
+processor's durable checkpoint. The Node timer enclosed `appendAck` plus
+`waitUntilEvent`, so every interval contains awaited network I/O and remains
+valid when Workers freezes an isolate clock. One unchanged-parent process in
+the callable run lost its client WebSocket; it produced no result, was
+discarded, and passed after a clean parent restart.
+
+Positive change means the candidate used less wall time.
+
+| One-event processor reactivation | Object parent | Object session | Change | Callable parent | Callable session | Change |
+| -------------------------------- | ------------: | -------------: | -----: | --------------: | ---------------: | -----: |
+| Median-of-round p50              |      5.945 ms |       6.436 ms |  -8.3% |        5.988 ms |         6.664 ms | -11.3% |
+| Median-of-round p95              |      9.204 ms |       9.450 ms |  -2.7% |        9.233 ms |        10.772 ms | -16.7% |
+| Median-of-round mean             |      6.003 ms |       6.419 ms |  -6.9% |        6.059 ms |         6.831 ms | -12.7% |
+
+Pooled callable results were also worse: p50 `+11.7%`, p95 `+13.7%`, mean
+`+17.6%`, and p99 `+60.2%` latency, with a `113.288 ms` candidate maximum
+versus `16.845 ms` for its parent. The object variant's pooled p50/p95/mean
+were `+8.2%`/`+2.7%`/`+5.9%` slower.
+
+The likely explanation is that workerd's existing callback exports are cheap
+enough that reducing their retained count cannot repay session projection,
+adapter, and ownership work on this handshake-dominated path. The callable
+form disproved the narrower theory that only the object method dispatch caused
+the first regression. Because both shapes failed the one-event latency gate by
+wide margins, the planned 8,000-event throughput guard and 10,000-connection
+memory stress were not run; those cannot make a latency-regressing handshake a
+shipping candidate without a demonstrated production memory limit.
+
+The callable prototype touched eight files and peaked at `+275/-62` lines
+including ownership tests and generated API churn. That is more lifecycle code,
+not a collapse: the stream still projected three local operations while also
+owning a shared remote session and response-envelope release rule. Both
+variants were removed completely. Production, public generated types, and
+persistent data are unchanged. Raw records are
+`/tmp/stream-session-{parent,candidate}-r{1,2,3}.log` for the object shape and
+`/tmp/stream-callable-session-{parent,candidate}-r{1,2,3}.log` for the callable
+shape; `/tmp/stream-callable-session-smoke.log` is the non-counted smoke.
