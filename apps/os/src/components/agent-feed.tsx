@@ -52,9 +52,6 @@ import {
 } from "~/lib/feed-format.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
-/** How often the live "Running code 0.9s" counter ticks. */
-const CODE_ELAPSED_TICK_MS = 100;
-
 // The clean agent chat rows: user and assistant messages plus archived
 // activity rows ("Ran code 2× · 3 requests · 7.4 s"), and the live in-flight
 // activity tail. The rows are `agent.*` feed_items written by the browser-feed
@@ -867,7 +864,7 @@ function useElapsedLabel(startedAtMs: number | null): string | null {
   useEffect(() => {
     if (startedAtMs == null) return;
     setNowMs(Date.now());
-    const interval = setInterval(() => setNowMs(Date.now()), CODE_ELAPSED_TICK_MS);
+    const interval = setInterval(() => setNowMs(Date.now()), 100);
     return () => clearInterval(interval);
   }, [startedAtMs]);
   if (startedAtMs == null) return null;
