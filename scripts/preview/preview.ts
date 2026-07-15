@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
+import { dummyPetshopEnvs } from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
@@ -378,6 +379,38 @@ async function deployPreviewApps({
   return result;
 }
 
+function resolvePreviewTestBaseUrlEnvironment({
+  app,
+  apps,
+  headSha,
+}: {
+  app: CloudflarePreviewApp;
+  apps: Partial<
+    Record<CloudflarePreviewAppSlug, { headSha?: string | null; publicUrl?: string | null }>
+  >;
+  headSha: string;
+}): string[] {
+  const requiredUrls = new Map<CloudflarePreviewAppSlug, string>();
+  requiredUrls.set(app.slug, app.previewTestBaseUrlEnvVar);
+  for (const [dependencySlug, environmentVariable] of Object.entries(
+    app.previewTestDependencyBaseUrlEnvVars ?? {},
+  )) {
+    if (environmentVariable) {
+      requiredUrls.set(CloudflarePreviewAppSlug.parse(dependencySlug), environmentVariable);
+    }
+  }
+
+  return [...requiredUrls].map(([appSlug, environmentVariable]) => {
+    const entry = apps[appSlug];
+    if (!entry?.publicUrl || entry.headSha !== headSha) {
+      throw new Error(
+        `Cannot test ${app.slug}: ${environmentVariable} requires ${appSlug} deployed at head ${headSha.slice(0, 7)}. Re-run preview deploy.`,
+      );
+    }
+    return `${environmentVariable}=${entry.publicUrl}`;
+  });
+}
+
 async function testPreviewApps({
   context,
   runtime,
@@ -526,6 +559,12 @@ async function testPreviewApps({
       return null;
     }
 
+    const baseUrlEnvironment = resolvePreviewTestBaseUrlEnvironment({
+      app,
+      apps: recorded.apps,
+      headSha: context.pullRequestHeadSha,
+    });
+
     const startedAt = Date.now();
     logPreview(
       `test start: ${app.slug} against ${existingEntry.publicUrl} (doppler config ${environmentConfigLease.dopplerConfig})`,
@@ -542,7 +581,7 @@ async function testPreviewApps({
         environmentConfigLease.dopplerConfig,
         "--",
         "env",
-        `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
+        ...baseUrlEnvironment,
         ...app.previewTestCommandArgs,
       ],
       command: "doppler",
@@ -1060,7 +1099,13 @@ export async function provisionAuthPreviewConfigs(
   };
 }
 
-export const CloudflarePreviewAppSlug = z.enum(["os", "semaphore", "auth", "streams-example-app"]);
+export const CloudflarePreviewAppSlug = z.enum([
+  "os",
+  "semaphore",
+  "auth",
+  "streams-example-app",
+  "dummy-petshop",
+]);
 
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 type CloudflarePreviewAppSlugType = CloudflarePreviewAppSlug;
@@ -1077,8 +1122,24 @@ export type CloudflarePreviewApp = {
   deployCommandArgs: readonly [string, ...string[]];
   destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
+  /**
+   * Resolve non-secret public app config from the repo instead of Doppler.
+   * Most apps mirror this into APP_CONFIG_BASE_URL; apps whose envs.ts entry
+   * is the sole source of truth can opt into that source directly.
+   */
+  resolvePreviewAppConfig?: (dopplerConfig: string) => {
+    baseUrl: string;
+    projectHostnameBases?: string[];
+  };
   paths: string[];
   previewDependencies?: CloudflarePreviewAppSlug[];
+  /**
+   * Public URLs of deployed preview dependencies that the app's e2e command
+   * must receive. Values come from this PR's recorded deployment at the
+   * current head; a missing/stale dependency fails the lane instead of
+   * silently pointing at another environment.
+   */
+  previewTestDependencyBaseUrlEnvVars?: Partial<Record<CloudflarePreviewAppSlug, string>>;
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
   previewTestBaseUrlEnvVar: string;
@@ -1299,16 +1360,21 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/os/**",
       "apps/auth/**",
       "apps/auth-contract/**",
+      "apps/dummy-petshop/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS bakes auth JWKS and binds auth's default RPC entrypoint, so auth must
+    // OS bakes auth JWKS and binds auth's default RPC entrypoint, and its
+    // integration e2e talks to the slot's deployed dummy Petshop. Both must
     // finish deploying before OS starts.
-    previewDependencies: ["auth"],
+    previewDependencies: ["auth", "dummy-petshop"],
     // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
     // ~60s as of 2026-07-02). Crossing them warns, never fails.
     previewDeployBudgetMs: 55_000,
     previewTestBudgetMs: 80_000,
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
+    previewTestDependencyBaseUrlEnvVars: {
+      "dummy-petshop": "PETSHOP_BASE_URL",
+    },
     // The apps/os e2e Vitest suite runs its `node` project (engine + itx
     // catalogue matrix; the `browser` project is skipped here — the root
     // Playwright REPL specs cover the catalogue in-browser). It reads
@@ -1455,6 +1521,27 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         "pnpm playwright --grep @preview --reporter=list",
       ].join("; "),
     ],
+  },
+  "dummy-petshop": {
+    slug: "dummy-petshop",
+    displayName: "Dummy Petshop",
+    appPath: "apps/dummy-petshop",
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    // The fixture holds only fake data, so cleanup deliberately leaves its
+    // worker and singleton Durable Object in place.
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
+    dopplerProject: "dummy-petshop",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = dummyPetshopEnvs[dopplerConfig as keyof typeof dummyPetshopEnvs];
+      if (!env) {
+        throw new Error(`Unknown dummy-petshop environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return { baseUrl: env.baseUrl };
+    },
+    paths: ["apps/dummy-petshop/**"],
+    previewReadyUrlPath: "/",
+    previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
+    previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
 };
 
@@ -3126,6 +3213,15 @@ async function readPreviewAppConfig(input: {
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
+  const PreviewAppConfig = z.object({
+    baseUrl: z.string().trim().url(),
+    projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
+  });
+  const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
+  if (repoConfig) {
+    return PreviewAppConfig.parse(repoConfig);
+  }
+
   const script = [
     "function parseStringArrayEnv(value) {",
     "  if (!value?.trim()) return [];",
@@ -3166,13 +3262,7 @@ async function readPreviewAppConfig(input: {
     throw new Error(commandFailureMessage(result, "Failed to read preview app config."));
   }
 
-  const parsed = z
-    .object({
-      baseUrl: z.string().trim().url(),
-      projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
-    })
-    .parse(JSON.parse(result.stdout));
-  return parsed;
+  return PreviewAppConfig.parse(JSON.parse(result.stdout));
 }
 
 async function runPreviewDeployCommand(input: {
@@ -4451,6 +4541,7 @@ export const previewInternals = {
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
   readPlaywrightRetryTelemetry,
+  readPreviewAppConfig,
   readVitestRetryTelemetry,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
@@ -4459,6 +4550,7 @@ export const previewInternals = {
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
+  resolvePreviewTestBaseUrlEnvironment,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,

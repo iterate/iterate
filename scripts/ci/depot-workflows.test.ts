@@ -136,6 +136,16 @@ describe("Depot deployment safety", () => {
 });
 
 describe("Depot validation capacity", () => {
+  it("runs every workspace test script, including the iterate CLI", () => {
+    const packageJson = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")) as {
+      scripts: { test: string };
+    };
+    const workflow = readFileSync(resolve(repoRoot, ".depot/workflows/test.yml"), "utf8");
+
+    expect(packageJson.scripts.test).toBe("pnpm -r --parallel test");
+    expect(workflow).toContain("run: doppler run -- pnpm test");
+  });
+
   it.each([
     {
       file: ".depot/workflows/test.yml",
