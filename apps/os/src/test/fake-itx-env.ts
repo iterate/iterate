@@ -15,7 +15,7 @@
 // the few DO methods the flows call — not the itx Stream interface;
 // MemoryStream in domains/streams/test-helpers.ts plays that role.
 
-export type FakeStreamEvent = {
+type FakeStreamEvent = {
   createdAt: string;
   idempotencyKey?: string;
   offset: number;
@@ -23,7 +23,7 @@ export type FakeStreamEvent = {
   type: string;
 };
 
-export type FakeSecretRecord = {
+type FakeSecretRecord = {
   egress?: { urls: string[] };
   material?: unknown;
   refresh?: unknown;

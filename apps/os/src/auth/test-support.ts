@@ -119,7 +119,7 @@ export async function signedTokenSet(
   };
 }
 
-export async function signJwt(privateKey: CryptoKey, payload: Record<string, unknown>) {
+async function signJwt(privateKey: CryptoKey, payload: Record<string, unknown>) {
   const encodedHeader = base64UrlEncode(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   const input = `${encodedHeader}.${encodedPayload}`;
@@ -131,7 +131,7 @@ export async function signJwt(privateKey: CryptoKey, payload: Record<string, unk
   return `${input}.${base64UrlEncode(signature)}`;
 }
 
-export function base64UrlEncode(value: string | ArrayBuffer) {
+function base64UrlEncode(value: string | ArrayBuffer) {
   const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
