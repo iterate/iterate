@@ -14,6 +14,7 @@
 // (durable-object-processor-durability.test.ts).
 
 import type { Stream } from "../../itx-api.generated.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 import type {
   ProcessorProgress,
@@ -96,8 +97,10 @@ export function durableObjectProgressStore<State>(args: {
  *   - `waitUntil` — the hosting DO's `ctx.waitUntil` lane, keeping the
  *     incarnation alive while tracked work runs.
  *
- * Revival appends the processor-scoped `<namespace>/revived` fact to the
- * stream and STOPS: the append wakes the stream's subscription spine (its
+ * Revival appends the core `stream/processor-revived` fact (ONE type for
+ * every processor — {@link STREAM_PROCESSOR_REVIVED_EVENT_TYPE}; the payload's
+ * `processorSlug` and the idempotency key carry the per-processor identity)
+ * to the stream and STOPS: the append wakes the stream's subscription spine (its
  * `woken` fan-out cold-boots the stream DO if the deploy evicted it too), and
  * the ordinary wake-mode delivery of that fact is the guaranteed turn that
  * runs the processor's own reconciliation — the runner's construction check
@@ -115,8 +118,6 @@ export function durableObjectRecovery(args: {
   slug: string;
   /** The processor's home stream: revived facts and crash-loop evidence land here. */
   stream: Stream;
-  /** The processor-scoped `<namespace>/revived` event type this adapter appends. */
-  revivedEventType: string;
   /** Worker deploy version; a change resets the keepalive's crash-loop budget
    * (the antidote deploy). Pass `workerVersion(env)`. REQUIRED for the same
    * reason the host requires it: a silent default could never take the
@@ -135,9 +136,6 @@ export function durableObjectRecovery(args: {
   const readRecord = () => args.storage.kv.get<KeepaliveRecord>(recordKey);
 
   const recovery: ProcessorRecovery = {
-    // Exposed so the runner's construction check can validate the contract
-    // consumes THIS adapter's revival fact (exact identity, not shape).
-    revivedEventType: args.revivedEventType,
     // The host's wiring verbatim (stream-processor-host.ts:445): every
     // registered closure — blocking, background, and the runner's whole-frame
     // attempt — rides the keepalive, so "the DO died owing work" is exactly
@@ -151,7 +149,7 @@ export function durableObjectRecovery(args: {
       // derivation as the host's `processor-host-revived@...` key, per-slug.
       const record = readRecord();
       await args.stream.append({
-        type: args.revivedEventType,
+        type: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
         idempotencyKey:
           `processor-revived:${args.slug}` +
           `@${record?.version ?? args.version}:${record?.revivals ?? 0}:${record?.lastRevivalAt ?? 0}`,

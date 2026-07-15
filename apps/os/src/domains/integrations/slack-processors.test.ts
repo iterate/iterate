@@ -1081,7 +1081,7 @@ describe("SlackAgentProcessor", () => {
       {
         // Consumed by slack-agent but carrying no announcement: the revival
         // fact's ordinary delivery is the at-head pulse the repaint rides.
-        type: "events.iterate.com/slack-agent/revived",
+        type: "events.iterate.com/stream/processor-revived",
         payload: { processorSlug: "slack-agent", revivals: 1, version: "2026-07-14.1" },
       },
     );

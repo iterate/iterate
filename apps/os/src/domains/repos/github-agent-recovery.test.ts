@@ -6,7 +6,7 @@
 // deploy evicts both) during a verification at raw head: nothing is armed to
 // dial either side again, and the mention strands indefinitely. Per-runner
 // recovery closes that — the durable alarm survives the death, its revival
-// appends `github-agent/revived` (in production the append cold-boots the
+// appends the core `stream/processor-revived` fact (in production the append cold-boots the
 // Stream DO, whose `woken` fan-out restores the spine), and the ordinary
 // redelivery of the UNACKNOWLEDGED frame re-runs the verification and the
 // turn append.
@@ -25,11 +25,9 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "../streams/stream-processor-registry.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { GITHUB_LINK, pullRequestBody, webhookPayload } from "./github-agent-test-helpers.ts";
-import {
-  GITHUB_AGENT_REVIVED_EVENT_TYPE,
-  GithubAgentProcessorContract,
-} from "./github-agent-processor-contract.ts";
+import { GithubAgentProcessorContract } from "./github-agent-processor-contract.ts";
 import { GithubAgentProcessor } from "./github-agent-processor-implementation.ts";
 import { githubAgentPath } from "./github-agent-utils.ts";
 
@@ -109,7 +107,7 @@ function makeHarness() {
         isRepositoryCollaborator: (input) => verify.impl(input),
         now: () => clock.now,
       }),
-      { recovery: { revivedEventType: GITHUB_AGENT_REVIVED_EVENT_TYPE } },
+      { recovery: true },
     );
   };
   boot();
@@ -180,7 +178,7 @@ function makeHarness() {
 }
 
 describe("eviction recovery end to end", () => {
-  it("died mid-verification → keepalive alarm → exactly one github-agent/revived → the unacked frame redelivers → the verification and turn re-run", async () => {
+  it("died mid-verification → keepalive alarm → exactly one stream/processor-revived → the unacked frame redelivers → the verification and turn re-run", async () => {
     const h = makeHarness();
     // Incarnation 1 HANGS inside the collaborator check: the frame is blocked
     // in the mention's trust verification, the attempt rides the keepalive,
@@ -216,7 +214,7 @@ describe("eviction recovery end to end", () => {
     // fact — in production its append cold-boots the Stream DO, whose woken
     // fan-out drives the redelivery simulated below.
     const revived = h.stream.events.filter(
-      (event) => event.type === GITHUB_AGENT_REVIVED_EVENT_TYPE,
+      (event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
     );
     expect(revived).toHaveLength(1);
     expect(revived[0]!.payload).toMatchObject({

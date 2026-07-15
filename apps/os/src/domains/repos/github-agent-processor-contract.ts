@@ -7,6 +7,10 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 
@@ -37,24 +41,6 @@ const PullRequestActivity = z.object({
   summary: z.string(),
   trustedInstructionSource: z.boolean().default(false),
 });
-
-/**
- * The processor-scoped revival fact `durableObjectRecovery` appends when an
- * incarnation died owing work (stream-processor-runner.ts's
- * `ProcessorRecovery`) — here, the collaborator verification + agent-message
- * append running under `blockProcessorWhile` for a trusted mention. The held
- * cursor alone is not enough: a SIMULTANEOUS Agent+Stream DO death (a deploy
- * evicts both) leaves nothing armed to dial either side again, so a mention
- * at raw head strands indefinitely. The keepalive alarm survives that death;
- * its revival appends this fact, which cold-boots the Stream DO (the append's
- * `woken` fan-out restores the spine), and the ordinary redelivery of the
- * UNACKNOWLEDGED frame re-runs the verification and the turn append. The
- * contract CONSUMES it — the runner's construction check requires that — but
- * never emits it: the recovery adapter appends it raw, as the runtime
- * speaking. The fact itself is only a wake trigger; no per-event handling is
- * needed (reduce ignores it).
- */
-export const GITHUB_AGENT_REVIVED_EVENT_TYPE = "events.iterate.com/github-agent/revived";
 
 /**
  * Processor for one pull-request agent stream.
@@ -96,35 +82,23 @@ export const GithubAgentProcessorContract = defineProcessorContract({
         sourceOffset: z.number().int().positive(),
       }),
     },
-    [GITHUB_AGENT_REVIVED_EVENT_TYPE]: {
-      description:
-        "The github-agent processor was revived after its incarnation died owing work (a collaborator verification or turn append in flight when an eviction took both the agent and stream DOs). Appended by the platform's recovery alarm, not by the processor; the append cold-boots the stream so the unacknowledged frame redelivers and the blocking verification + turn append re-run.",
-      // Loose ON PURPOSE: the payload is authored by the shared recovery
-      // adapter (durableObjectRecovery.appendRevived), and future fields it
-      // grows must not turn historical revivals into parse failures.
-      payloadSchema: z.looseObject({
-        processorSlug: z.string(),
-        revivals: z.number(),
-        version: z.string(),
-      }),
-      examples: [
-        {
-          description:
-            "The keepalive alarm revived this PR's github-agent after an eviction took its in-flight collaborator verification.",
-          payload: { processorSlug: "github-agent", revivals: 1, version: "2026-07-15.1" },
-        },
-      ],
-    },
   },
-  processorDeps: [AgentProcessorContract, RepoProcessorContract],
+  // CoreProcessorContract brings the platform revival fact into scope (see
+  // `consumes`).
+  processorDeps: [AgentProcessorContract, RepoProcessorContract, CoreProcessorContract],
   consumes: [
     "events.iterate.com/github-agent/repository-collaborator-verified",
     "events.iterate.com/github-agent/route-configured",
     "events.iterate.com/github/webhook-received",
-    // The revival fact MUST be consumed (the runner throws at construction
-    // otherwise): a revival nobody consumes recovers nothing. See the
-    // constant's doc for why it is absent from `emits`.
-    GITHUB_AGENT_REVIVED_EVENT_TYPE,
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): appended when an
+    // incarnation died owing work — a collaborator verification or turn
+    // append lost to a simultaneous Agent+Stream DO death — the append
+    // cold-boots the Stream DO so the unacknowledged frame redelivers and the
+    // blocking verification + turn append re-run. Never emitted by the
+    // processor: the recovery adapter appends it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
     // Route context stays a plain model-visible input; policy-triggered

@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 import { StreamProcessor } from "./stream-processor.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 import {
@@ -30,7 +31,9 @@ const REQUESTED = "events.iterate.com/test-task/requested";
 const COMPLETED = "events.iterate.com/test-task/completed";
 const ECHOED = "events.iterate.com/test-task/echoed";
 const DRIVEN = "events.iterate.com/test-task/driven";
-const REVIVED = "events.iterate.com/test-task/revived";
+// The ONE platform revival fact (core-owned); the fixture contract defines it
+// LOCALLY so this harness stays free of the real core contract's machinery.
+const REVIVED = STREAM_PROCESSOR_REVIVED_EVENT_TYPE;
 const NOISE = "events.iterate.com/other/noise";
 const HOME = "/tests/runner";
 const SIBLING = "/tests/runner-sibling";
@@ -1274,7 +1277,6 @@ describe("StreamProcessorRunner recovery wiring", () => {
     const revivals: KeepaliveRecord[] = [];
     const build = (): ProcessorRecovery => {
       const recovery: ProcessorRecovery = {
-        revivedEventType: REVIVED,
         keepAliveWhile: (work) => keepalive.track(work()),
         appendRevived: () => void journal.seed({ type: REVIVED, payload: {} }),
         handleAlarm: async () => {
@@ -1326,18 +1328,20 @@ describe("StreamProcessorRunner recovery wiring", () => {
           stream: journal.stream,
           durability: { progress: makeProgressStore().store as never, recovery },
         }),
-    ).toThrow(/revival fact is "events\.iterate\.com\/test-task\/revived".*does not consume it/);
+    ).toThrow(
+      /does not consume the revival fact "events\.iterate\.com\/stream\/processor-revived"/,
+    );
   });
 
-  it("throws at construction when consumes has SOME /revived event but not the recovery adapter's own", () => {
+  it("throws at construction when consumes has SOME /revived event but not the core stream/processor-revived", () => {
     // The trap the exact-membership check closes: a shape-only check
-    // (endsWith "/revived") accepts a contract that consumes ANOTHER
-    // processor's revival fact, while the fact THIS adapter appends never
-    // invokes the processor — recovery silently recovers nothing.
+    // (endsWith "/revived") accepts a contract that consumes some namespaced
+    // revival-looking event, while the ONE core fact the recovery adapter
+    // appends never invokes the processor — recovery silently recovers
+    // nothing.
     const OTHER_REVIVED = "events.iterate.com/other-processor/revived";
     const journal = makeJournal();
     const recovery = makeRecoveryFixture(journal).build();
-    expect(recovery.revivedEventType).toBe(REVIVED);
     const wrongRevivedContract = defineProcessorContract({
       slug: "test-wrong-revived",
       version: "0.0.1",
@@ -1361,7 +1365,9 @@ describe("StreamProcessorRunner recovery wiring", () => {
           stream: journal.stream,
           durability: { progress: makeProgressStore().store as never, recovery },
         }),
-    ).toThrow(/revival fact is "events\.iterate\.com\/test-task\/revived".*does not consume it/);
+    ).toThrow(
+      /does not consume the revival fact "events\.iterate\.com\/stream\/processor-revived"/,
+    );
   });
 
   it("blocking, background, AND whole-frame work ride the keepalive; a quiet-clean alarm disarms", async () => {

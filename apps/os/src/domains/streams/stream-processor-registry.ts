@@ -51,13 +51,14 @@
 // RECOVERY IS OPT-IN PER PROCESSOR, AND THE OPT-IN IS LOAD-BEARING (codex
 // review §4/#6): the runner cannot detect whether a processor's
 // `runInBackground` work is consequential, so the DO author MUST pass
-// `{ recovery: { revivedEventType } }` to `register` for every processor
-// whose background work has an outcome that matters (LLM turns, repo seeds,
-// vendor calls with journaled obligations). A processor registered without
-// recovery gets NO post-eviction revival: an incarnation that dies owing its
-// work loses that work silently — acceptable only for telemetry-grade
-// effects. The runner enforces the mechanical half (the contract must consume
-// the revived fact); this judgement call is the half only the author can make.
+// `{ recovery: true }` to `register` for every processor whose background
+// work has an outcome that matters (LLM turns, repo seeds, vendor calls with
+// journaled obligations). A processor registered without recovery gets NO
+// post-eviction revival: an incarnation that dies owing its work loses that
+// work silently — acceptable only for telemetry-grade effects. The runner
+// enforces the mechanical half (the contract must consume the core
+// `stream/processor-revived` fact); this judgement call is the half only the
+// author can make.
 //
 // KNOWN LIMITATION — retry vs transport parking (codex review §4/#7): a
 // permanently failing frame is rethrown by the runner's sink, and the
@@ -163,16 +164,14 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * Register a processor (constructed by the DO — the processor is the star,
    * the registry is plumbing) under its contract slug and build its runner:
    * durable two-cursor progress in DO KV keyed by the slug, plus — WHEN THE
-   * DO PASSES IT — the per-runner recovery adapter (keepalive + revived
-   * fact). See the module doc: recovery is REQUIRED for any processor whose
-   * `runInBackground` work is consequential; the registry cannot infer that.
+   * DO PASSES `{ recovery: true }` — the per-runner recovery adapter
+   * (keepalive + the core `stream/processor-revived` fact). See the module
+   * doc: recovery is REQUIRED for any processor whose `runInBackground` work
+   * is consequential; the registry cannot infer that.
    * Duplicate slugs throw. Returns the processor, so DOs keep their
    * `field = registry.register(new XProcessor(...))` shape.
    */
-  register<P extends RegisterableProcessor>(
-    processor: P,
-    opts?: { recovery?: { revivedEventType: string } },
-  ): P;
+  register<P extends RegisterableProcessor>(processor: P, opts?: { recovery?: boolean }): P;
   /**
    * The runner-backed READ surface for one registered processor. The runner
    * owns both cursors and the fold — the processor instance holds no
@@ -410,20 +409,18 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // Recovery FIRST, because durableObjectRecovery's construction re-issues
       // a persisted alarm desire (the lost-platform-alarm heal) through this
       // runner's own slice — and because the runner's constructor validates
-      // that the contract consumes the adapter's revived fact.
-      const recovery =
-        opts?.recovery === undefined
-          ? undefined
-          : durableObjectRecovery({
-              storage: ctx.storage,
-              slug,
-              stream: options.stream,
-              revivedEventType: opts.recovery.revivedEventType,
-              version: options.version,
-              armAlarm: (atMs) => void setAlarmSlice(`keepalive:${slug}`, atMs),
-              waitUntil: (work) => ctx.waitUntil(work),
-              now,
-            });
+      // that the contract consumes the core `stream/processor-revived` fact.
+      const recovery = opts?.recovery
+        ? durableObjectRecovery({
+            storage: ctx.storage,
+            slug,
+            stream: options.stream,
+            version: options.version,
+            armAlarm: (atMs) => void setAlarmSlice(`keepalive:${slug}`, atMs),
+            waitUntil: (work) => ctx.waitUntil(work),
+            now,
+          })
+        : undefined;
       const runner = new StreamProcessorRunner({
         // See RegisterableProcessor: the class is invariant in its contract,
         // so the structural door narrows back to the class here; runnerDriver

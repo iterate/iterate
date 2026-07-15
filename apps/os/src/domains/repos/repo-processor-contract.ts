@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 
 /**
  * The GitHub repository one repo mirrors to: a named GitHub connection (the
@@ -25,21 +28,6 @@ const RepoCommitCompletedPayload = z.object({
   branch: z.string().trim().min(1),
   commitOid: z.string().trim().min(1),
 });
-
-/**
- * The processor-scoped revival fact `durableObjectRecovery` appends when an
- * incarnation died owing background work (stream-processor-runner.ts's
- * `ProcessorRecovery`). The contract CONSUMES it — the runner's construction
- * check requires that — but never emits it: the recovery adapter appends it
- * raw, as the runtime speaking. Its ordinary delivery is the guaranteed turn
- * that lands at the stream head, where `processEvent`'s at-head reconcile
- * (`delivery.caughtUp`) re-drives the repo's open obligations — an unfinished
- * creation (never re-run once `repo/created` folded; see #reconcileObligations)
- * and an open GitHub import (safely re-driven: the sync is an idempotent
- * current-head fast-forward). Reduce ignores it and the `processEvent` switch
- * has no arm for its type — the at-head reconcile is the whole point.
- */
-export const REPO_REVIVED_EVENT_TYPE = "events.iterate.com/repo/revived";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
@@ -453,25 +441,6 @@ export const RepoProcessorContract = defineProcessorContract({
         },
       ],
     },
-    [REPO_REVIVED_EVENT_TYPE]: {
-      description:
-        "The repo processor was revived after its incarnation died owing background work (an in-flight repo creation or GitHub import lost to an eviction). Appended by the platform's recovery alarm, not by the processor; its delivery guarantees a caught-up pass that re-drives open repo obligations — an unfinished creation completes from the at-head fold (never re-run once repo/created folded), and an open GitHub import re-drives the idempotent current-head sync.",
-      // Loose ON PURPOSE: the payload is authored by the shared recovery
-      // adapter (durableObjectRecovery.appendRevived), and future fields it
-      // grows must not turn historical revivals into parse failures.
-      payloadSchema: z.looseObject({
-        processorSlug: z.string(),
-        revivals: z.number(),
-        version: z.string(),
-      }),
-      examples: [
-        {
-          description:
-            "The keepalive alarm revived this repo after an eviction took an in-flight GitHub import.",
-          payload: { processorSlug: "repo", revivals: 1, version: "2026-07-14.1" },
-        },
-      ],
-    },
     "events.iterate.com/github-agent/route-configured": {
       description:
         "Binds one PR agent stream to its pull request: the GitHub coordinates (via the repo's link), the PR number, and the repo path the webhooks route from. Appended to the agent stream by the repo processor's PR webhook forward.",
@@ -528,10 +497,17 @@ export const RepoProcessorContract = defineProcessorContract({
     // (re)attach.
     "events.iterate.com/stream/woken",
     "events.iterate.com/stream/subscriber-connected",
-    // The revival fact MUST be consumed (the runner throws at construction
-    // otherwise): a revival nobody consumes recovers nothing. See the
-    // constant's doc for why it is absent from `emits`.
-    REPO_REVIVED_EVENT_TYPE,
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): its ordinary delivery is
+    // the guaranteed at-head turn where the obligation reconcile
+    // (`processEvent` under `delivery.caughtUp`) re-drives the repo's open
+    // obligations — an unfinished creation (never re-run once `repo/created`
+    // folded; see #reconcileObligations) and an open GitHub import (safely
+    // re-driven: the sync is an idempotent current-head fast-forward). Reduce
+    // ignores it, and it is absent from `emits`: the recovery adapter appends
+    // it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/repo/created",

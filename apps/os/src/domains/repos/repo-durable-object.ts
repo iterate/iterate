@@ -57,7 +57,7 @@ import {
   classifyRepoAccessError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
-import { REPO_REVIVED_EVENT_TYPE, RepoProcessorContract } from "./repo-processor-contract.ts";
+import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
@@ -108,7 +108,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   // `runInBackground` work (journaled requested/started obligations whose
   // OUTCOME matters), and repo creation is a blocking at-head obligation — an
   // incarnation that dies owing either must be revived. The keepalive alarm
-  // appends `repo/revived`, whose ordinary delivery lands at head and
+  // appends the `stream/processor-revived` fact, whose ordinary delivery lands at head and
   // `processEvent`'s at-head reconcile (`delivery.caughtUp`) re-drives the
   // obligations (see the registry module doc's recovery rule).
   readonly #repoProcessor = this.#registry.register(
@@ -124,7 +124,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       syncFromGithubPush: async () => await this.syncFromGithub(),
       taskChangesForArtifactPush: (input) => this.#taskChangesForArtifactPush(input),
     }),
-    { recovery: { revivedEventType: REPO_REVIVED_EVENT_TYPE } },
+    { recovery: true },
   );
   // Runner-backed reads: under runner drive the runner owns the cursors and
   // the processor instance's internal checkpoint never advances, so every

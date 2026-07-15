@@ -6,7 +6,7 @@
 // cover is the SIMULTANEOUS Agent+Stream DO death (a deploy evicts both):
 // nothing is armed to dial either side again, and a quiet inbox message
 // strands untranscribed. Per-runner recovery closes that — the durable alarm
-// survives the death, its revival appends `email-agent/revived` (in
+// survives the death, its revival appends `stream/processor-revived` (in
 // production the append cold-boots the Stream DO, whose `woken` fan-out
 // restores the spine), and the ordinary redelivery of the UNACKNOWLEDGED
 // frame re-runs the blocking transcription.
@@ -26,10 +26,8 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "../streams/stream-processor-registry.ts";
-import {
-  EMAIL_AGENT_REVIVED_EVENT_TYPE,
-  EmailAgentProcessorContract,
-} from "./email-agent-processor-contract.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
+import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
 
 const HOME = "/agents/email/t1";
@@ -123,7 +121,7 @@ function makeHarness() {
         projectId: null,
         resolveStoredAttachments: () => resolve.impl(),
       }),
-      { recovery: { revivedEventType: EMAIL_AGENT_REVIVED_EVENT_TYPE } },
+      { recovery: true },
     );
   };
   boot();
@@ -194,7 +192,7 @@ function makeHarness() {
 }
 
 describe("eviction recovery end to end", () => {
-  it("died mid-transcription → keepalive alarm → exactly one email-agent/revived → the unacked frame redelivers → the transcription re-runs", async () => {
+  it("died mid-transcription → keepalive alarm → exactly one stream/processor-revived → the unacked frame redelivers → the transcription re-runs", async () => {
     const h = makeHarness();
     // Incarnation 1 HANGS while resolving attachments: the frame is blocked
     // inside the transcription, the attempt rides the keepalive, the revival
@@ -229,7 +227,7 @@ describe("eviction recovery end to end", () => {
     // fact — in production its append cold-boots the Stream DO, whose woken
     // fan-out drives the redelivery simulated below.
     const revived = h.stream.events.filter(
-      (event) => event.type === EMAIL_AGENT_REVIVED_EVENT_TYPE,
+      (event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
     );
     expect(revived).toHaveLength(1);
     expect(revived[0]!.payload).toMatchObject({

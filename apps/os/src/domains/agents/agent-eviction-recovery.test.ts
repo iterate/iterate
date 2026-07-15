@@ -20,10 +20,10 @@ import {
   StreamProcessorRunner,
   type ProcessorProgress,
 } from "../streams/stream-processor-runner.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
-  AGENT_REVIVED_EVENT_TYPE,
   AgentProcessorContract,
 } from "./agent-processor-contract.ts";
 
@@ -35,7 +35,7 @@ const T = {
   completed: "events.iterate.com/agent/llm-request-completed",
   cancelled: "events.iterate.com/agent/llm-request-cancelled",
   output: "events.iterate.com/agent/output-added",
-  revived: AGENT_REVIVED_EVENT_TYPE,
+  revived: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } as const;
 
 const SLUG = AgentProcessorContract.slug;
@@ -147,7 +147,7 @@ function makeHarness() {
         },
       },
     });
-    registry.register(processor, { recovery: { revivedEventType: AGENT_REVIVED_EVENT_TYPE } });
+    registry.register(processor, { recovery: true });
     // The DO's `#reads = registry.reads(processor)` wiring, per incarnation.
     runnerReadsByProcessor.set(processor, registry.reads(processor));
   };
@@ -301,7 +301,7 @@ describe("eviction recovery, end to end", () => {
     h.crash(); // evicted BEFORE the debounce fired; the timer is gone
 
     await h.advance(15_000);
-    // The revival pass appends agent/revived; its ordinary delivery drives
+    // The revival pass appends stream/processor-revived; its ordinary delivery drives
     // the runner to head, where the at-head reconciliation finds scheduled +
     // no live timer → requested immediately, keyed on the scheduled offset so
     // a concurrently-surviving timer could never double-fire it.

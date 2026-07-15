@@ -17,10 +17,7 @@ import {
   type ParentCapabilityHost,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
-import {
-  CAPABILITY_HOST_REVIVED_EVENT_TYPE,
-  CapabilityHostProcessorContract,
-} from "./capability-host-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
@@ -60,7 +57,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   // Registered WITH recovery: script executions are consequential
   // `runInBackground` work (journaled requested/started obligations whose
   // OUTCOME matters), so an incarnation that dies owing one must be revived —
-  // the keepalive alarm appends `capability-host/revived`, whose ordinary
+  // the keepalive alarm appends the `stream/processor-revived` fact, whose ordinary
   // delivery lands at head and `processEvent`'s at-head reconcile
   // (`delivery.caughtUp`) re-drives the obligations (see the registry module
   // doc's recovery rule).
@@ -88,7 +85,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       typecheckScript: (input) =>
         checkItxScriptForExecution({ ...input, typechecker: this.env.TYPECHECKER }),
     }),
-    { recovery: { revivedEventType: CAPABILITY_HOST_REVIVED_EVENT_TYPE } },
+    { recovery: true },
   );
   // Runner-backed reads: under runner drive the runner owns the cursors and
   // the processor instance's internal checkpoint never advances, so every

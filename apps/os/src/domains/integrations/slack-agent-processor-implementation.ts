@@ -321,7 +321,7 @@ export class SlackAgentProcessor extends StreamProcessor<
    * freshness-gated like every other acknowledgement — a refold's months-old
    * announcements must not burst Slack calls across every historical thread —
    * with one exception: a stale idle still clears a busy status this
-   * incarnation painted. Recovery's `slack-agent/revived` delivery lands here
+   * incarnation painted. Recovery's `stream/processor-revived` delivery lands here
    * too: a fresh incarnation's caught-up pass repaints from the fold.
    */
   async #reconcileStatus(

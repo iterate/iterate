@@ -17,6 +17,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "./processor-contracts.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 import { StreamProcessor } from "./stream-processor.ts";
 import { KEEPALIVE_ALARM_LEAD_MS } from "./stream-processor-keepalive.ts";
 import { MemoryStream } from "./test-helpers.ts";
@@ -27,8 +28,9 @@ import {
 
 const HOME = "/tests/registry";
 const REQUESTED = "events.iterate.com/registry-test/requested";
-const ALPHA_REVIVED = "events.iterate.com/alpha-proc/revived";
-const BETA_REVIVED = "events.iterate.com/beta-proc/revived";
+// Both slugs share the ONE core revival type; per-runner identity rides the
+// payload's processorSlug (and the idempotency key), exactly as in production.
+const REVIVED = STREAM_PROCESSOR_REVIVED_EVENT_TYPE;
 
 // -----------------------------------------------------------------------------
 // Processor fixture: `requested` folds an id into state; hooks observe every
@@ -45,10 +47,10 @@ function recorderContract(slug: string) {
     stateSchema: z.object({ ids: z.array(z.string()).default([]) }),
     events: {
       [REQUESTED]: { payloadSchema: z.object({ id: z.string() }) },
-      [ALPHA_REVIVED]: { payloadSchema: z.looseObject({}) },
-      [BETA_REVIVED]: { payloadSchema: z.looseObject({}) },
+      // Defined LOCALLY so the harness stays free of the real core contract.
+      [REVIVED]: { payloadSchema: z.looseObject({}) },
     },
-    consumes: [REQUESTED, ALPHA_REVIVED, BETA_REVIVED],
+    consumes: [REQUESTED, REVIVED],
     emits: [],
   });
 }
@@ -136,7 +138,7 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
         contract: AlphaContract,
         hooks: hooks.alpha,
       }),
-      { recovery: { revivedEventType: ALPHA_REVIVED } },
+      { recovery: true },
     );
     registry.register(
       new RecorderProcessor({
@@ -146,7 +148,7 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
         contract: BetaContract,
         hooks: hooks.beta,
       }),
-      opts.betaRecovery === true ? { recovery: { revivedEventType: BETA_REVIVED } } : undefined,
+      opts.betaRecovery === true ? { recovery: true } : undefined,
     );
   };
   boot();
@@ -216,6 +218,14 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
 }
 
 const hang = () => new Promise<never>(() => {});
+
+/** The processorSlugs of every journaled revival fact, sorted — revivals share
+ * the ONE core type, so the payload's slug is what identifies the runner. */
+const revivedSlugs = (h: { stream: MemoryStream }) =>
+  h.stream.events
+    .filter((event) => event.type === REVIVED)
+    .map((event) => (event.payload as { processorSlug: string }).processorSlug)
+    .sort();
 
 // =============================================================================
 // Registration
@@ -308,9 +318,9 @@ describe("alarm multiplex", () => {
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
 
     // ONE fire, routed to every runner: each keepalive self-gated as due and
-    // journaled ITS revival fact.
-    expect(h.stream.events.filter((event) => event.type === ALPHA_REVIVED)).toHaveLength(1);
-    expect(h.stream.events.filter((event) => event.type === BETA_REVIVED)).toHaveLength(1);
+    // journaled ITS revival fact — the shared core type, identified per
+    // runner by the payload's processorSlug.
+    expect(revivedSlugs(h)).toEqual(["alpha-proc", "beta-proc"]);
     // The safety-net retry stays armed after a revival pass (only a
     // quiet-clean confirmation disarms).
     expect(h.alarm.at).not.toBeNull();
@@ -348,15 +358,14 @@ describe("recovery revival", () => {
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
 
     // Only the runner that owed work journaled a revival fact.
-    expect(h.stream.events.filter((event) => event.type === ALPHA_REVIVED)).toHaveLength(1);
-    expect(h.stream.events.filter((event) => event.type === BETA_REVIVED)).toHaveLength(0);
+    expect(revivedSlugs(h)).toEqual(["alpha-proc"]);
 
     // The fact's ordinary delivery turn is the guaranteed recovery pass: the
     // wake resumes from the durable acknowledgement (the dead frame DID
     // checkpoint — that is the zero-lag wedge) and hands alpha its fact.
     const woken = await h.deliverPending("alpha-proc");
     expect(woken.checkpointOffset).toBe(1);
-    expect(processed).toEqual([ALPHA_REVIVED]);
+    expect(processed).toEqual([REVIVED]);
   });
 });
 

@@ -502,7 +502,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   // `delivery.caughtUp` (the last consumed event of a batch that reached
   // head), so neither pass needs its own mid-refold gate: a catch-up fold can
   // never dial env.AI for a long-settled request or journal a false failure.
-  // RECOVERY rides this same path: `events.iterate.com/agent/revived` — the
+  // RECOVERY rides this same path: `events.iterate.com/stream/processor-revived` — the
   // fact the keepalive's revival pass journals after an eviction took
   // in-flight work — is consumed by the contract, so its ordinary delivery is
   // a guaranteed turn that lands at head and runs this reconcile, where the

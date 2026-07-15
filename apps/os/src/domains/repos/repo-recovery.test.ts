@@ -18,8 +18,9 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "../streams/stream-processor-registry.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { GITHUB_LINK } from "./github-agent-test-helpers.ts";
-import { REPO_REVIVED_EVENT_TYPE, RepoProcessorContract } from "./repo-processor-contract.ts";
+import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const HOME = "/repos/config";
@@ -94,7 +95,7 @@ function makeHarness() {
         syncFromGithubPush: (input) => sync.impl(input),
         taskChangesForArtifactPush: async () => [],
       }),
-      { recovery: { revivedEventType: REPO_REVIVED_EVENT_TYPE } },
+      { recovery: true },
     );
   };
   boot();
@@ -292,7 +293,9 @@ describe("eviction recovery end to end", () => {
 
     // durableObjectRecovery's revival pass journaled the processor-scoped
     // fact — the ONLY thing that creates a delivery turn for the wedged frame.
-    const revived = h.stream.events.filter((event) => event.type === REPO_REVIVED_EVENT_TYPE);
+    const revived = h.stream.events.filter(
+      (event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+    );
     expect(revived).toHaveLength(1);
     expect(revived[0]!.payload).toMatchObject({
       processorSlug: SLUG,
@@ -351,9 +354,9 @@ describe("eviction recovery end to end", () => {
     };
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
 
-    expect(h.stream.events.filter((event) => event.type === REPO_REVIVED_EVENT_TYPE)).toHaveLength(
-      1,
-    );
+    expect(
+      h.stream.events.filter((event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE),
+    ).toHaveLength(1);
 
     // The revived delivery drives the runner to head; onCaughtUp finds the
     // open import obligation and — unlike scripts — RE-drives it: the sync is

@@ -9,26 +9,22 @@ import type {
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
-import { SLACK_AGENT_REVIVED_EVENT_TYPE } from "../integrations/slack-agent-processor-contract.ts";
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
 import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
-import { TELEGRAM_AGENT_REVIVED_EVENT_TYPE } from "../integrations/telegram-agent-processor-contract.ts";
 import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
 import {
   slackConnectionFromAgentPath,
   telegramConnectionFromAgentPath,
 } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
-import { EMAIL_AGENT_REVIVED_EVENT_TYPE } from "../email/email-agent-processor-contract.ts";
 import { GithubAgentProcessor } from "../repos/github-agent-processor-implementation.ts";
-import { GITHUB_AGENT_REVIVED_EVENT_TYPE } from "../repos/github-agent-processor-contract.ts";
 import { connectionOctokit } from "../integrations/github-api.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor, type AgentProcessorReads } from "./agent-processor-implementation.ts";
-import { AGENT_REVIVED_EVENT_TYPE, AgentProcessorContract } from "./agent-processor-contract.ts";
+import { AgentProcessorContract } from "./agent-processor-contract.ts";
 import { parseAgentDurableObjectName } from "./utils.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
@@ -50,7 +46,7 @@ export class AgentDurableObject extends DurableObject<Env> {
   // work (journaled requested/started obligations whose OUTCOME matters), and
   // the debounce timer is a droppable attempt whose loss must not strand a
   // scheduled turn. An incarnation that dies owing either must be revived —
-  // the keepalive alarm appends `agent/revived`, whose ordinary delivery
+  // the keepalive alarm appends the `stream/processor-revived` fact, whose ordinary delivery
   // lands at head and `processEvent`'s at-head reconcile (`delivery.caughtUp`)
   // settles/re-drives the open obligations (see the registry module doc's
   // recovery rule).
@@ -96,7 +92,7 @@ export class AgentDurableObject extends DurableObject<Env> {
           }),
         ).writeFile(path, content),
     }),
-    { recovery: { revivedEventType: AGENT_REVIVED_EVENT_TYPE } },
+    { recovery: true },
   );
   // Runner-backed reads: under runner drive the runner owns the cursors and
   // the processor instance's internal checkpoint never advances, so every
@@ -121,7 +117,7 @@ export class AgentDurableObject extends DurableObject<Env> {
   // blocking work, and the held cursor alone only helps while something still
   // dials — a SIMULTANEOUS Agent+Stream DO death mid-blocker (a deploy evicts
   // both) leaves nothing armed to redeliver. The alarm's
-  // `slack-agent/revived` append cold-boots the stream; the unacknowledged
+  // `stream/processor-revived` append cold-boots the stream; the unacknowledged
   // frame redelivers and the freshness-gated paint re-derives from the fold.
   readonly slackAgentProcessor = this.#registry.register(
     new SlackAgentProcessor({
@@ -195,7 +191,7 @@ export class AgentDurableObject extends DurableObject<Env> {
         });
       },
     }),
-    { recovery: { revivedEventType: SLACK_AGENT_REVIVED_EVENT_TYPE } },
+    { recovery: true },
   );
 
   // Registered on every agent host; it only wakes on routed Telegram agent
@@ -208,7 +204,7 @@ export class AgentDurableObject extends DurableObject<Env> {
   // work, and the held cursor alone only helps while something still dials —
   // a SIMULTANEOUS Agent+Stream DO death mid-send (a deploy evicts both)
   // leaves nothing armed to redeliver, and the legacy host's shared keepalive
-  // covered exactly that. The alarm's `telegram-agent/revived` append
+  // covered exactly that. The alarm's `stream/processor-revived` append
   // cold-boots the stream; the unacknowledged frame redelivers and the send
   // re-runs (at-least-once at the Bot API, as under the legacy host).
   readonly telegramAgentProcessor = this.#registry.register(
@@ -266,7 +262,7 @@ export class AgentDurableObject extends DurableObject<Env> {
         return { messageId };
       },
     }),
-    { recovery: { revivedEventType: TELEGRAM_AGENT_REVIVED_EVENT_TYPE } },
+    { recovery: true },
   );
 
   // Registered on every agent host; it wakes on routed email agent streams
@@ -279,7 +275,7 @@ export class AgentDurableObject extends DurableObject<Env> {
   // while something still dials — a SIMULTANEOUS Agent+Stream DO death while
   // resolving attachments or before `agents/message-received` commits leaves
   // nothing armed to redeliver on a quiet inbox. The alarm's
-  // `email-agent/revived` append cold-boots the stream; the unacknowledged
+  // `stream/processor-revived` append cold-boots the stream; the unacknowledged
   // frame redelivers and the transcription re-runs.
   readonly emailAgentProcessor = this.#registry.register(
     new EmailAgentProcessor({
@@ -306,7 +302,7 @@ export class AgentDurableObject extends DurableObject<Env> {
         );
       },
     }),
-    { recovery: { revivedEventType: EMAIL_AGENT_REVIVED_EVENT_TYPE } },
+    { recovery: true },
   );
 
   // Registered on every agent host; it wakes on routed PR agent streams
@@ -319,7 +315,7 @@ export class AgentDurableObject extends DurableObject<Env> {
   // append are consequential blocking work, and the held cursor alone only
   // helps while something still dials — a SIMULTANEOUS Agent+Stream DO death
   // mid-verification at raw head leaves nothing armed to redeliver, and the
-  // mention strands. The alarm's `github-agent/revived` append cold-boots the
+  // mention strands. The alarm's `stream/processor-revived` append cold-boots the
   // stream; the unacknowledged frame redelivers and the verification + turn
   // append re-run. The eyes reaction stays cosmetic.
   readonly githubAgentProcessor = this.#registry.register(
@@ -390,7 +386,7 @@ export class AgentDurableObject extends DurableObject<Env> {
         }
       },
     }),
-    { recovery: { revivedEventType: GITHUB_AGENT_REVIVED_EVENT_TYPE } },
+    { recovery: true },
   );
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {

@@ -19,10 +19,8 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "../streams/stream-processor-registry.ts";
-import {
-  CAPABILITY_HOST_REVIVED_EVENT_TYPE,
-  CapabilityHostProcessorContract,
-} from "./capability-host-processor-contract.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";
 
 const HOME = "/agents/test";
@@ -32,7 +30,7 @@ const T = {
   requested: "events.iterate.com/capability-host/script-execution-requested",
   started: "events.iterate.com/capability-host/script-execution-started",
   completed: "events.iterate.com/capability-host/script-execution-completed",
-  revived: CAPABILITY_HOST_REVIVED_EVENT_TYPE,
+  revived: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } as const;
 
 function makeHarness() {
@@ -95,7 +93,7 @@ function makeHarness() {
           waitUntilEvent: (input) => registry.reads(processor).waitUntilEvent(input),
         },
       }),
-      { recovery: { revivedEventType: CAPABILITY_HOST_REVIVED_EVENT_TYPE } },
+      { recovery: true },
     );
   };
   boot();

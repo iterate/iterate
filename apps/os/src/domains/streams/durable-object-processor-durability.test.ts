@@ -10,6 +10,7 @@ import { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { defineProcessorContract } from "./processor-contracts.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 import { StreamProcessor } from "./stream-processor.ts";
 import { KEEPALIVE_ALARM_LEAD_MS, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 import {
@@ -26,7 +27,9 @@ import {
 
 const SLUG = "test-durability";
 const REQUESTED = "events.iterate.com/test-durability/requested";
-const REVIVED = "events.iterate.com/test-durability/revived";
+// The ONE core revival type the adapter appends; the fixture contract defines
+// it LOCALLY so this harness stays free of the real core contract.
+const REVIVED = STREAM_PROCESSOR_REVIVED_EVENT_TYPE;
 const HOME = "/tests/durable-object-durability";
 const VERSION = "0.0.1";
 
@@ -137,7 +140,7 @@ const contract = defineProcessorContract({
   stateSchema: z.object({ ids: z.array(z.string()).default([]) }),
   events: {
     [REQUESTED]: { payloadSchema: z.object({ id: z.string() }) },
-    [REVIVED]: { payloadSchema: z.object({}) },
+    [REVIVED]: { payloadSchema: z.looseObject({}) },
   },
   consumes: [REQUESTED, REVIVED],
   emits: [],
@@ -285,7 +288,6 @@ describe("durableObjectRecovery", () => {
         storage: args.storage,
         slug: SLUG,
         stream: args.journal.stream,
-        revivedEventType: REVIVED,
         version: "v1",
         armAlarm: (atMs) => void alarmCalls.push(atMs),
         waitUntil: (work) => void work.catch(() => undefined),
@@ -297,13 +299,6 @@ describe("durableObjectRecovery", () => {
       ) as KeepaliveRecord | undefined;
     return { clock, alarmCalls, build, readRecord };
   }
-
-  it("exposes its revivedEventType so the runner's construction check can validate exact identity", () => {
-    const journal = makeJournal();
-    const { storage } = makeStorage();
-    const fixture = makeRecoveryFixture({ journal, storage });
-    expect(fixture.build().revivedEventType).toBe(REVIVED);
-  });
 
   it("keepAliveWhile arms the durable alarm ahead of tracked work; a quiet-clean fire disarms through the seam", async () => {
     const journal = makeJournal();

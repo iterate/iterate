@@ -38,6 +38,7 @@
 
 import type { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { StreamEvent } from "./schemas.ts";
 import {
@@ -118,15 +119,17 @@ export type ProcessorProgressStore<State> = {
  * Optional recovery capability. Present only for durable processors that own
  * background obligations (`runInBackground` work whose OUTCOME matters): the
  * runner throws at construction if recovery is wired but the contract's
- * `consumes` omits the processor-scoped `<namespace>/revived` event, because a
- * revival fact nobody consumes recovers nothing.
+ * `consumes` omits the core `stream/processor-revived` event
+ * ({@link STREAM_PROCESSOR_REVIVED_EVENT_TYPE}), because a revival fact
+ * nobody consumes recovers nothing.
  *
  * - `keepAliveWhile` parks a durable alarm ahead of in-flight work, so an
  *   incarnation that dies owing work is revived by the alarm's fire. The
  *   production adapter is `(work) => keepalive.track(work())` over ONE
  *   ProcessorKeepalive (stream-processor-keepalive.ts) — the runner REUSES
  *   that machinery wholesale, it never reinvents mark/backoff/quiet-clean.
- * - `appendRevived` appends the `<namespace>/revived` fact — the journaled,
+ * - `appendRevived` appends the core `stream/processor-revived` fact (the
+ *   payload's `processorSlug` names the revived processor) — the journaled,
  *   CONSUMED evidence that guarantees at least one delivery turn (and, since
  *   the fact is at head when delivered, one `delivery.caughtUp` reconcile)
  *   even at zero lag. It is called by the adapter's own revival pass (the
@@ -136,11 +139,6 @@ export type ProcessorProgressStore<State> = {
  *   to {@link StreamProcessorRunner.handleAlarm}, which delegates here.
  */
 export type ProcessorRecovery = {
-  /** The exact `<namespace>/revived` event type `appendRevived` appends. The
-   * runner's construction check validates the contract consumes THIS type —
-   * a processor consuming some OTHER processor's revived event would pass a
-   * shape-only check while its own revival fact never invokes it. */
-  revivedEventType: string;
   keepAliveWhile(work: () => Promise<unknown>): void;
   appendRevived(): MaybePromise<void>;
   handleAlarm(info?: unknown): MaybePromise<void>;
@@ -190,7 +188,8 @@ export type DeliveryContext = {
    * hook). It is TRUE for exactly the last consumed event of a batch that
    * reached head; a batch whose tail is a type this processor does not consume
    * simply defers the pass to the next consumed-at-head event (or the
-   * `<ns>/revived` fact recovery appends) — see the runner's delivery loop.
+   * `stream/processor-revived` fact recovery appends) — see the runner's
+   * delivery loop.
    */
   caughtUp: boolean;
   /** The processing cursor's current fencing token (see {@link ProcessingProgress}). */
@@ -300,18 +299,19 @@ export class StreamProcessorRunner<
 
     if (this.durability?.recovery !== undefined) {
       // A revival fact nobody consumes recovers nothing: recovery's whole
-      // mechanism is "append `<ns>/revived`, let the ordinary delivery turn
-      // run the processor's own reconciliation handlers". Exact identity, not
-      // shape: consuming some OTHER processor's `/revived` event recovers
-      // nothing either — the fact THIS adapter appends must be consumed.
-      const revivedEventType = this.durability.recovery.revivedEventType;
+      // mechanism is "append the core `stream/processor-revived` fact, let
+      // the ordinary delivery turn run the processor's own reconciliation
+      // handlers". Exact identity, not shape: consuming some namespaced
+      // `<ns>/revived` event recovers nothing — the ONE core fact the
+      // recovery adapter appends must be consumed.
       const consumes = this.driver.contract.consumes;
-      const consumesRevived = consumes.includes("*") || consumes.includes(revivedEventType);
+      const consumesRevived =
+        consumes.includes("*") || consumes.includes(STREAM_PROCESSOR_REVIVED_EVENT_TYPE);
       if (!consumesRevived) {
         throw new Error(
-          `stream processor "${this.driver.contract.slug}" wires recovery whose revival fact ` +
-            `is "${revivedEventType}", but the contract does not consume it — a revival fact ` +
-            `nobody consumes recovers nothing. Add that exact event type to the contract's consumes.`,
+          `stream processor "${this.driver.contract.slug}" wires recovery but the contract does ` +
+            `not consume the revival fact "${STREAM_PROCESSOR_REVIVED_EVENT_TYPE}" — a revival ` +
+            `fact nobody consumes recovers nothing. Add that exact event type to the contract's consumes.`,
         );
       }
     }

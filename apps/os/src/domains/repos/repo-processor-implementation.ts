@@ -291,7 +291,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * streamMaxOffset` gate the legacy `processEventBatch` override carried lives
    * in the runner now); the refold path runs reduce-only, so it never reaches
    * this reconcile. RECOVERY rides this same path:
-   * `events.iterate.com/repo/revived` — the fact the keepalive's revival pass
+   * `events.iterate.com/stream/processor-revived` — the fact the keepalive's revival pass
    * journals after an eviction took in-flight work — is consumed by the
    * contract, so its ordinary delivery is a guaranteed turn that lands at head
    * and runs this reconcile, where the undriven obligations are re-driven.

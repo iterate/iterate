@@ -5,7 +5,7 @@
 // death (a deploy evicts both): nothing is armed to dial either side again,
 // and the unmet send obligation strands on a quiet thread. Per-runner
 // recovery closes that — the durable alarm survives the death, its revival
-// appends `telegram-agent/revived` (in production the append cold-boots the
+// appends the core `stream/processor-revived` fact (in production the append cold-boots the
 // Stream DO, whose `woken` fan-out restores the spine), and the ordinary
 // redelivery of the UNACKNOWLEDGED frame re-runs the blocking send.
 //
@@ -23,10 +23,8 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "../streams/stream-processor-registry.ts";
-import {
-  TELEGRAM_AGENT_REVIVED_EVENT_TYPE,
-  TelegramAgentProcessorContract,
-} from "./telegram-agent-processor-contract.ts";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
+import { TelegramAgentProcessorContract } from "./telegram-agent-processor-contract.ts";
 import { TelegramAgentProcessor } from "./telegram-agent-processor-implementation.ts";
 
 const CONNECTION = "mishas-helper-bot";
@@ -86,7 +84,7 @@ function makeHarness() {
         sendTelegramMessage: (body) => send.impl(body),
         now: () => clock.now,
       }),
-      { recovery: { revivedEventType: TELEGRAM_AGENT_REVIVED_EVENT_TYPE } },
+      { recovery: true },
     );
   };
   boot();
@@ -157,7 +155,7 @@ function makeHarness() {
 }
 
 describe("eviction recovery end to end", () => {
-  it("died mid-send → keepalive alarm → exactly one telegram-agent/revived → the unacked frame redelivers → the send re-runs and is marked", async () => {
+  it("died mid-send → keepalive alarm → exactly one stream/processor-revived → the unacked frame redelivers → the send re-runs and is marked", async () => {
     const h = makeHarness();
     // Incarnation 1 HANGS inside the Bot API call: the frame is blocked in
     // the send obligation, the attempt rides the keepalive, the revival alarm
@@ -196,7 +194,7 @@ describe("eviction recovery end to end", () => {
     // fact — in production its append cold-boots the Stream DO, whose woken
     // fan-out drives the redelivery simulated below.
     const revived = h.stream.events.filter(
-      (event) => event.type === TELEGRAM_AGENT_REVIVED_EVENT_TYPE,
+      (event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
     );
     expect(revived).toHaveLength(1);
     expect(revived[0]!.payload).toMatchObject({

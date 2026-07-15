@@ -2,30 +2,20 @@
 // agent stream (`/agents/slack/<channel>/ts-<threadTs>`).
 //
 // Rewritten new-style for itx from the pre-migration (git history)
-// reference. The processor owns no event types of its own beyond the platform
-// revival fact: the assistant status is a pure PAINT of the agent's own
-// status-changed announcements (which carry their debounce at the source), so
-// there is no Slack-side clear obligation left to journal.
+// reference. The processor owns no event types of its own: the assistant
+// status is a pure PAINT of the agent's own status-changed announcements
+// (which carry their debounce at the source), so there is no Slack-side clear
+// obligation left to journal.
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract, AgentStatusRecord } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
-
-/**
- * The processor-scoped revival fact `durableObjectRecovery` appends when an
- * incarnation died owing in-flight work (stream-processor-runner.ts's
- * `ProcessorRecovery`) — here, a frame's blocking Slack paints/acks lost to a
- * SIMULTANEOUS Agent+Stream DO death, where nothing is left armed to
- * redeliver. The contract CONSUMES it — the runner's construction check
- * requires that — but never emits it: the recovery adapter appends it raw, as
- * the runtime speaking. Its ordinary delivery is the guaranteed turn that
- * drives the runner to the stream head, where the at-head repaint re-derives
- * the assistant status from the folded status record; no per-event handling
- * is needed (reduce ignores it).
- */
-export const SLACK_AGENT_REVIVED_EVENT_TYPE = "events.iterate.com/slack-agent/revived";
 
 /**
  * Processor for one Slack-backed agent stream.
@@ -70,36 +60,28 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     streamPath: z.string().optional(),
     threadTs: z.string().optional(),
   }),
-  events: {
-    [SLACK_AGENT_REVIVED_EVENT_TYPE]: {
-      description:
-        "The slack-agent processor was revived after its incarnation died owing in-flight work (a frame's blocking Slack paints/acks lost to a simultaneous Agent+Stream DO death). Appended by the platform's recovery alarm, not by the processor; its delivery guarantees a caught-up pass whose at-head repaint re-derives the assistant status from the folded status record.",
-      // Loose ON PURPOSE: the payload is authored by the shared recovery
-      // adapter (durableObjectRecovery.appendRevived), and future fields it
-      // grows must not turn historical revivals into parse failures.
-      payloadSchema: z.looseObject({
-        processorSlug: z.string(),
-        revivals: z.number(),
-        version: z.string(),
-      }),
-      examples: [
-        {
-          description:
-            "The keepalive alarm revived this thread's slack-agent after an eviction took an in-flight frame.",
-          payload: { processorSlug: "slack-agent", revivals: 1, version: "2026-07-14.1" },
-        },
-      ],
-    },
-  },
-  processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, SlackProcessorContract],
+  events: {},
+  // CoreProcessorContract brings the platform revival fact into scope (see
+  // `consumes`).
+  processorDeps: [
+    AgentProcessorContract,
+    CapabilityHostProcessorContract,
+    SlackProcessorContract,
+    CoreProcessorContract,
+  ],
   consumes: [
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
     "events.iterate.com/agent/status-changed",
-    // The revival fact MUST be consumed (the runner throws at construction
-    // otherwise): a revival nobody consumes recovers nothing. See the
-    // constant's doc for why it is absent from `emits`.
-    SLACK_AGENT_REVIVED_EVENT_TYPE,
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): appended when an
+    // incarnation died owing in-flight work — a frame's blocking Slack
+    // paints/acks lost to a simultaneous Agent+Stream DO death — its delivery
+    // guarantees a caught-up pass whose at-head repaint re-derives the
+    // assistant status from the folded status record. Never emitted by the
+    // processor: the recovery adapter appends it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/agents/message-received",

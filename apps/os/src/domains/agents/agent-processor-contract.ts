@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 
 export const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol";
 export const DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
@@ -224,21 +227,6 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '- Project-specific tools and data live in MOUNTED CAPABILITIES and integrations, not in the repo\'s files — when hunting for "something this project can do", search docs and __describe before reading worker.ts. When hunting for "something that happened", itx.search.query — not getEvents paging.',
   "- The platform you run on is open source: https://github.com/iterate/iterate — `apps/os/src/itx/examples.ts` is the whole example catalogue, `apps/os/src/rpc-targets.ts` every capability's real behavior; AI-written architecture summaries at https://deepwiki.com/iterate/iterate.",
 ].join("\n");
-
-/**
- * The processor-scoped revival fact `durableObjectRecovery` appends when an
- * incarnation died owing background work (stream-processor-runner.ts's
- * `ProcessorRecovery`) — an in-flight LLM attempt or an armed debounce timer
- * lost to an eviction. The contract CONSUMES it — the runner's construction
- * check requires that — but never emits it: the recovery adapter appends it
- * raw, as the runtime speaking. Its ordinary delivery is the guaranteed turn
- * that lands at the stream head, where `processEvent`'s at-head reconcile
- * (`delivery.caughtUp`) re-drives the open LLM obligations (crash-cancel
- * `started` attempts, re-fire lost debounces, settle expired intents). Reduce
- * ignores it and the `processEvent` switch has no arm for its type — the whole
- * point is the at-head reconcile its delivery guarantees, not per-event work.
- */
-export const AGENT_REVIVED_EVENT_TYPE = "events.iterate.com/agent/revived";
 
 /**
  * A file reference riding on an agent input: where the bytes live in project
@@ -967,25 +955,6 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
     },
-    [AGENT_REVIVED_EVENT_TYPE]: {
-      description:
-        "The agent processor was revived after its incarnation died owing background work (an in-flight LLM attempt or an armed debounce timer lost to an eviction). Appended by the platform's recovery alarm, not by the processor; its delivery guarantees a caught-up reconcile (processEvent under delivery.caughtUp) that re-drives open LLM obligations — orphaned started attempts are cancelled as durable-object-crashed (never re-driven), lost debounce timers re-fire the request, and expired intents settle as failures.",
-      // Loose ON PURPOSE: the payload is authored by the shared recovery
-      // adapter (durableObjectRecovery.appendRevived), and future fields it
-      // grows must not turn historical revivals into parse failures.
-      payloadSchema: z.looseObject({
-        processorSlug: z.string(),
-        revivals: z.number(),
-        version: z.string(),
-      }),
-      examples: [
-        {
-          description:
-            "The keepalive alarm revived this agent after a deploy took an in-flight LLM turn.",
-          payload: { processorSlug: "agent", revivals: 1, version: "2026-07-14.1" },
-        },
-      ],
-    },
     "events.iterate.com/agent/status-changed": {
       description:
         "A patch to the agent's status record, for surfaces that show the agent (Slack assistant " +
@@ -1091,10 +1060,15 @@ export const AgentProcessorContract = defineProcessorContract({
     // strand it until the next domain event.
     "events.iterate.com/stream/woken",
     "events.iterate.com/stream/subscriber-connected",
-    // The revival fact MUST be consumed (the runner throws at construction
-    // otherwise): a revival nobody consumes recovers nothing. See the
-    // constant's doc for why it is absent from `emits`.
-    AGENT_REVIVED_EVENT_TYPE,
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): its ordinary delivery is
+    // the guaranteed at-head turn where the obligation reconcile
+    // (`processEvent` under `delivery.caughtUp`) re-drives the open LLM
+    // obligations — crash-cancel `started` attempts, re-fire lost debounces,
+    // settle expired intents. Reduce ignores it, and it is absent from
+    // `emits`: the recovery adapter appends it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",

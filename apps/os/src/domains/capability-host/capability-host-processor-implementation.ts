@@ -315,7 +315,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
    * and scripts are not assumed idempotent. The agent renders the failure and
    * the model decides whether to retry.
    *
-   * RECOVERY rides this same path: `events.iterate.com/capability-host/revived`
+   * RECOVERY rides this same path: `events.iterate.com/stream/processor-revived`
    * — the fact the keepalive's revival pass journals after an eviction took
    * in-flight work — is consumed by the contract, so its ordinary delivery is
    * a guaranteed turn that lands at head and runs this reconcile, where the

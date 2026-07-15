@@ -67,7 +67,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   // is awaited before the frame commits, and every fire's triggerDue re-derives
   // the due set AND re-launches orphaned pending executions from the fold — so
   // `runInBackground` executions lost to an eviction are recovered without a
-  // `<ns>/revived` fact (see the registry module doc's recovery rule).
+  // `stream/processor-revived` fact (see the registry module doc's recovery rule).
   readonly #schedulerProcessor = this.#registry.register(
     new SchedulerProcessor({
       stream: this.#stream,
