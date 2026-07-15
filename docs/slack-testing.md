@@ -55,8 +55,72 @@ identity is not `iterate-preview-2`.
 
 Do not use the same app's Bot User OAuth Token to pretend to be the user that
 wakes that same app. That creates self-wake ambiguity and can be ignored by the
-processor. `Niterate (CI bot)` is only an internal legacy CI/smoke actor; it is
-not the production `iterate` app and should not be the normal preview trigger.
+processor.
+
+### `SLACK_CI_BOT_TOKEN` — the scripted trigger actor
+
+Doppler has a second bot used only as a **message sender** for automated
+smokes (CI notifications and agent smoke posts). It is **not** the product bot:
+
+|          | Product bot under test                                                                                                                           | Trigger actor                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Identity | production `iterate`, or `iterate-preview-N`                                                                                                     | `Niterate` / `iterate_ci_preview_bo`                             |
+| Doppler  | project secret `/secrets/integrations/slack/<connection>/bot-token` (Connect Slack); optional recovery `APP_CONFIG_INTEGRATIONS__SLACK.botToken` | **`SLACK_CI_BOT_TOKEN`** on `os/*` configs **and** `_shared/prd` |
+| Used for | receiving events, 👀, replies                                                                                                                    | `chat.postMessage` only                                          |
+
+```bash
+# Resolve the CI actor token (never print it)
+doppler secrets get SLACK_CI_BOT_TOKEN --project os --config prd --plain >/dev/null
+
+# Or from monorepo scripts — scripts/ci/slack.ts getSlackBotToken():
+#   process.env.SLACK_CI_BOT_TOKEN
+#   or: doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN
+```
+
+**The product bot must be a member of the channel** or Slack will not deliver
+`message.channels` events to it. A bare @mention does nothing if the app is not
+in the channel. Prefer a dedicated public channel:
+
+| Channel                 | ID            | Purpose                      |
+| ----------------------- | ------------- | ---------------------------- |
+| `#slack-agent-e2e-test` | `C096Q1M4Y86` | Production / agent e2e smoke |
+
+If `@iterate` is missing from that channel, join with the **project's Slack
+connection** (not the CI actor — it usually lacks invite/`channels:manage`):
+
+```bash
+# from apps/os — joins as the connected iterate install (production "iterate" project)
+doppler run --config prd -- pnpm cli itx run \
+  --context prj_d08f4599397a4e37b6467ce1e2b07bae \
+  -e 'return await itx.integrations.slack.get().conversations.join({ channel: "C096Q1M4Y86" })'
+```
+
+`APP_CONFIG_INTEGRATIONS__SLACK.botToken` is only a recovery credential and may
+be `invalid_auth`; do not rely on it for join/invite. Prefer
+`itx.integrations.slack.get()` against a project that has completed **Connect
+Slack**.
+
+Then post as the CI actor (ambient vs mention smoke):
+
+```bash
+doppler run --project os --config prd -- python3 - <<'PY'
+import json, os, urllib.request
+token, ch = os.environ["SLACK_CI_BOT_TOKEN"], "C096Q1M4Y86"
+# production iterate user id in the Iterate workspace (confirm via users.list)
+iterate_uid = "U08NQR1GCRE"
+
+def post(text):
+    req = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage",
+        data=json.dumps({"channel": ch, "text": text}).encode(),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    return json.loads(urllib.request.urlopen(req).read())
+
+print(post("ambient smoke — should not wake"))
+print(post(f"<@{iterate_uid}> mention smoke — should 👀 and reply"))
+PY
+```
 
 ## Manual preview smoke test
 
