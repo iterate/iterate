@@ -133,9 +133,10 @@ type PathCall = { path: string[]; args: unknown[] }; // itx.slack.chat.postMessa
 // ⇢ { path: ["slack","chat","postMessage"], args: [x] }
 ```
 
-**`PathProxy`** is the consumer-side half: a callable JS Proxy where property
-access accumulates a path locally (zero round trips, `then` reads undefined
-so `await` never misfires mid-chain) and the terminal call fires once with
+The consumer-side half is a callable JS Proxy
+(`createInvokeCapabilityPathProxy`, domains/itx/utils.ts): property access
+accumulates a path locally (zero round trips, `then` reads undefined so
+`await` never misfires mid-chain) and the terminal call fires once with
 the accumulated `PathCall`. **`RESERVED_PATH_SEGMENTS`** is the one list of
 names that may never traverse a dynamic surface (prototype-pollution vectors,
 stub controls like `dup`/`then`/`constructor`).
@@ -327,7 +328,7 @@ certificate + a handle), **`super`** (a path-proxied handle on the parent
 context — the "call next()" of middleware: a `fetch` shadow delegates to the
 unshadowed pipe via `itx.super.fetch(request)`), `streams`, `project`,
 `projects`, `fetch`, `describe`, `capability(name)` — and a
-fallthrough Proxy: any unknown name becomes a `PathProxy` (①) whose terminal
+fallthrough Proxy: any unknown name becomes a path proxy (①) whose terminal
 call is one `invoke` on the node's core (Scene 1).
 
 One papercut, priced and accepted: `super` is a reserved word, so
