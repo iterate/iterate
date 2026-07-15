@@ -1752,6 +1752,35 @@ describe("preview fleet capacity diagnosis", () => {
     expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: [] })).toBe(false);
   });
 
+  it("does not call a label-less draft slot-less when it actually holds one (--allow-draft)", () => {
+    const diagnosis = diagnosePreviewFleetCapacity({
+      openPullRequests: [
+        {
+          number: 4242,
+          title: "draft dispatched with --allow-draft",
+          url: "https://github.com/iterate/iterate/pull/4242",
+          isDraft: true,
+          labels: [],
+        },
+      ],
+      slots: [
+        {
+          slug: "preview-1",
+          verdict: "active",
+          holder: "pr-4242",
+          pullRequestUrl: "https://github.com/iterate/iterate/pull/4242",
+          pullRequestState: "open",
+          leasedUntil: "2026-07-16T09:20:18.639Z",
+          lastUsedAgo: "2m ago",
+        },
+      ],
+    });
+
+    // It holds a slot, so it must not be reported as "correctly claims no slot".
+    expect(diagnosis.holdersWithOpenPrs).toContain(4242);
+    expect(diagnosis.reasons.some((reason) => reason.includes("claim no slot"))).toBe(false);
+  });
+
   it("explains a full fleet held mostly by closed PRs despite few open ones", () => {
     const diagnosis = diagnosePreviewFleetCapacity({
       openPullRequests: [

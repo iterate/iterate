@@ -3705,8 +3705,13 @@ function diagnosePreviewFleetCapacity(input: {
   const previewEligibleWithoutSlot = previewEligibleOpen.filter(
     (pullRequest) => !holdersWithOpenPrs.includes(pullRequest.number),
   );
+  // Drafts that opted in via a one-shot `--allow-draft` dispatch hold a slot
+  // without the label, so exclude any that actually hold one — otherwise we'd
+  // tell the operator it "correctly claims no slot" next to holdsSlot: true.
   const openButIneligible = input.openPullRequests.filter(
-    (pullRequest) => !pullRequestWouldClaimPreviewSlot(pullRequest),
+    (pullRequest) =>
+      !pullRequestWouldClaimPreviewSlot(pullRequest) &&
+      !holdersWithOpenPrs.includes(pullRequest.number),
   );
   const closedHolders = leased.filter((slot) => slot.pullRequestState === "closed");
   const nonPrHolders = leased.filter((slot) => parsePullRequestHolder(slot.holder) === null);
