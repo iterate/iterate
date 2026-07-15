@@ -2,8 +2,8 @@
 // OAuth here: connect is getMe → claim check → setWebhook → recordConnection.
 // The Telegram Bot API side is a REAL local HTTP server (no fetch mocking),
 // pointed at via config.integrations.telegram.apiBaseUrl — the dependency
-// injection that config knob exists for. Durable Object storage is the same
-// in-memory itxEnv seam as github-connect.test.ts / google-connection.test.ts.
+// injection that config knob exists for. Durable Object storage is the shared
+// in-memory itxEnv seam (src/test/fake-itx-env.ts).
 
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -21,98 +21,9 @@ import {
 } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
-const network = vi.hoisted(() => {
-  type StoredEvent = { idempotencyKey?: string; offset: number; payload: unknown; type: string };
-  const streams = new Map<string, StoredEvent[]>();
-  // One entry per append CALL: which stream, which event types — so tests can
-  // assert atomicity (e.g. the steal's [unclaim, claim] committing as one
-  // directory append, never two).
-  const appendBatches: Array<{ name: string; types: string[] }> = [];
-  const secrets = new Map<
-    string,
-    { egress?: { urls: string[] }; material?: unknown; refresh?: unknown }
-  >();
-  return {
-    SECRET: {
-      getByName(name: string) {
-        return {
-          async update(input: { egress?: { urls: string[] }; material?: unknown }) {
-            secrets.set(name, { ...secrets.get(name), ...input });
-          },
-        };
-      },
-    },
-    STREAM: {
-      getByName(name: string) {
-        let events = streams.get(name);
-        if (!events) {
-          events = [];
-          streams.set(name, events);
-        }
-        const stored = events;
-        async function append(
-          ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
-        ) {
-          appendBatches.push({ name, types: inputs.map((input) => input.type) });
-          return inputs.map((input) => {
-            const existing =
-              input.idempotencyKey === undefined
-                ? undefined
-                : stored.find((event) => event.idempotencyKey === input.idempotencyKey);
-            if (existing) return existing;
-            const event = { ...input, offset: stored.length + 1 };
-            stored.push(event);
-            return event;
-          });
-        }
-        return {
-          async append(
-            ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
-          ) {
-            return append(...inputs);
-          },
-          async appendAck(
-            ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
-          ) {
-            await append(...inputs);
-          },
-          async head() {
-            return { maxOffset: stored.length };
-          },
-          async runtimeState() {
-            return { coreProcessorState: { maxOffset: stored.length } };
-          },
-          async getEvents(
-            input: {
-              afterOffset?: number;
-              beforeOffset?: number;
-              eventTypes?: readonly string[];
-              limit?: number;
-              order?: "asc" | "desc";
-            } = {},
-          ) {
-            const { afterOffset = 0, beforeOffset = Infinity, eventTypes, limit = 500 } = input;
-            const matches = stored.filter(
-              (event) =>
-                event.offset > afterOffset &&
-                event.offset < beforeOffset &&
-                (eventTypes === undefined || eventTypes.includes(event.type)),
-            );
-            if (input.order === "desc") matches.reverse();
-            return matches.slice(0, limit);
-          },
-        };
-      },
-    },
-    reset() {
-      streams.clear();
-      secrets.clear();
-      appendBatches.length = 0;
-    },
-    appendBatches,
-    secrets,
-    streams,
-  };
+const network = await vi.hoisted(async () => {
+  const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
+  return createFakeItxEnv();
 });
 
 const SECRET_ENCRYPTION_KEY = "test-secret-encryption-key";

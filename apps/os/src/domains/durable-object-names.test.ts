@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import { DurableObjectNameCodec, resolveDurableObjectName } from "./durable-object-names.ts";
 
 function identityContext(args: { name?: string; values?: Map<string, unknown> }) {
@@ -16,60 +16,61 @@ function identityContext(args: { name?: string; values?: Map<string, unknown> })
 }
 
 describe("DurableObjectNameCodec", () => {
-  it("encodes project-local stream coordinates", () => {
-    expect(
-      DurableObjectNameCodec.stringify({ projectId: "prj_123", path: "/repos/repo_123" }),
-    ).toBe("prj_123.iterate/repos/repo_123");
-  });
-
-  it("encodes optional props as query parameters", () => {
-    expect(
-      DurableObjectNameCodec.stringify({
+  test.for([
+    {
+      name: "encodes project-local stream coordinates",
+      input: { projectId: "prj_123", path: "/repos/repo_123" },
+      expected: "prj_123.iterate/repos/repo_123",
+    },
+    {
+      name: "encodes optional props as query parameters",
+      input: {
         projectId: "prj_123",
         path: "/repos/repo_123",
         props: { branch: "main", env: "prod" },
-      }),
-    ).toBe("prj_123.iterate/repos/repo_123?branch=main&env=prod");
-  });
-
-  it("encodes null projectId as the global host", () => {
+      },
+      expected: "prj_123.iterate/repos/repo_123?branch=main&env=prod",
+    },
+    {
+      name: "encodes null projectId as the global host",
+      input: { projectId: null, path: "/repos/iterate-config-base" },
+      options: { allowNullProjectId: true } as const,
+      expected: "global.iterate/repos/iterate-config-base",
+    },
+  ])("$name", ({ input, options, expected }) => {
     expect(
-      DurableObjectNameCodec.stringify(
-        { projectId: null, path: "/repos/iterate-config-base" },
-        { allowNullProjectId: true },
-      ),
-    ).toBe("global.iterate/repos/iterate-config-base");
+      options === undefined
+        ? DurableObjectNameCodec.stringify(input as { projectId: string; path: string })
+        : DurableObjectNameCodec.stringify(input, options),
+    ).toBe(expected);
   });
 
-  it("parses URL-shaped names back into parts", () => {
-    expect(DurableObjectNameCodec.parse("prj_123.iterate/repos/repo_123")).toEqual({
-      projectId: "prj_123",
-      path: "/repos/repo_123",
-      props: {},
-    });
-  });
-
-  it("parses the global host back to null projectId", () => {
+  test.for([
+    {
+      name: "parses URL-shaped names back into parts",
+      input: "prj_123.iterate/repos/repo_123",
+      expected: { projectId: "prj_123", path: "/repos/repo_123", props: {} },
+    },
+    {
+      name: "parses the global host back to null projectId",
+      input: "global.iterate/repos/iterate-config-base",
+      options: { allowNullProjectId: true } as const,
+      expected: { projectId: null, path: "/repos/iterate-config-base", props: {} },
+    },
+    {
+      name: "parses query props back into a record",
+      input: "prj_123.iterate/bla/bla?branch=main&env=prod",
+      expected: { projectId: "prj_123", path: "/bla/bla", props: { branch: "main", env: "prod" } },
+    },
+  ])("$name", ({ input, options, expected }) => {
     expect(
-      DurableObjectNameCodec.parse("global.iterate/repos/iterate-config-base", {
-        allowNullProjectId: true,
-      }),
-    ).toEqual({
-      projectId: null,
-      path: "/repos/iterate-config-base",
-      props: {},
-    });
+      options === undefined
+        ? DurableObjectNameCodec.parse(input)
+        : DurableObjectNameCodec.parse(input, options),
+    ).toEqual(expected);
   });
 
-  it("parses query props back into a record", () => {
-    expect(DurableObjectNameCodec.parse("prj_123.iterate/bla/bla?branch=main&env=prod")).toEqual({
-      projectId: "prj_123",
-      path: "/bla/bla",
-      props: { branch: "main", env: "prod" },
-    });
-  });
-
-  it("round-trips formatted names", () => {
+  test("round-trips formatted names", () => {
     const input = {
       projectId: "prj_123",
       path: "/agents/onboarding",
@@ -82,7 +83,7 @@ describe("DurableObjectNameCodec", () => {
     });
   });
 
-  it("round-trips global names", () => {
+  test("round-trips global names", () => {
     const input = { projectId: null, path: "/projects/catalog" };
     const durableObjectName = DurableObjectNameCodec.stringify(input, {
       allowNullProjectId: true,
@@ -93,40 +94,46 @@ describe("DurableObjectNameCodec", () => {
     });
   });
 
-  it("rejects legacy colon-encoded names", () => {
-    expect(() => DurableObjectNameCodec.parse("prj_123:/repos/project")).toThrow(
-      /must be "\{projectId\}\.iterate"/,
-    );
-  });
-
-  it("rejects using global as a literal project id", () => {
-    expect(() =>
-      DurableObjectNameCodec.stringify({ projectId: "global", path: "/repos/foo" }),
-    ).toThrow(/reserved for deployment-wide/);
-  });
-
-  it("rejects names that exceed the Durable Object byte limit", () => {
-    const longPath = `/${"a".repeat(300)}`;
-    expect(() =>
-      DurableObjectNameCodec.stringify({ projectId: "prj_123", path: longPath }),
-    ).toThrow(/at most 256 bytes/);
-  });
-
-  it("rejects null project ids unless global names are allowed", () => {
-    const stringifyUnchecked = DurableObjectNameCodec.stringify as unknown as (input: {
-      path: string;
-      projectId: string | null;
-    }) => string;
-    expect(() => stringifyUnchecked({ projectId: null, path: "/" })).toThrow(/allowNullProjectId/);
-  });
-
-  it("rejects global names unless null project ids are allowed", () => {
-    expect(() => DurableObjectNameCodec.parse("global.iterate/")).toThrow(/allowNullProjectId/);
+  test.for([
+    {
+      name: "rejects legacy colon-encoded names",
+      act: () => DurableObjectNameCodec.parse("prj_123:/repos/project"),
+      expected: /must be "\{projectId\}\.iterate"/,
+    },
+    {
+      name: "rejects using global as a literal project id",
+      act: () => DurableObjectNameCodec.stringify({ projectId: "global", path: "/repos/foo" }),
+      expected: /reserved for deployment-wide/,
+    },
+    {
+      name: "rejects names that exceed the Durable Object byte limit",
+      act: () =>
+        DurableObjectNameCodec.stringify({ projectId: "prj_123", path: `/${"a".repeat(300)}` }),
+      expected: /at most 256 bytes/,
+    },
+    {
+      name: "rejects null project ids unless global names are allowed",
+      act: () =>
+        (
+          DurableObjectNameCodec.stringify as unknown as (input: {
+            path: string;
+            projectId: string | null;
+          }) => string
+        )({ projectId: null, path: "/" }),
+      expected: /allowNullProjectId/,
+    },
+    {
+      name: "rejects global names unless null project ids are allowed",
+      act: () => DurableObjectNameCodec.parse("global.iterate/"),
+      expected: /allowNullProjectId/,
+    },
+  ])("$name", ({ act, expected }) => {
+    expect(act).toThrow(expected);
   });
 });
 
 describe("resolveDurableObjectName", () => {
-  it("persists a named activation and restores it for an ID-only reactivation", () => {
+  test("persists a named activation and restores it for an ID-only reactivation", () => {
     const first = identityContext({ name: "prj_123.iterate/" });
     expect(resolveDurableObjectName(first.ctx)).toBe("prj_123.iterate/");
 
@@ -134,7 +141,7 @@ describe("resolveDurableObjectName", () => {
     expect(resolveDurableObjectName(reactivated.ctx)).toBe("prj_123.iterate/");
   });
 
-  it("rejects a runtime name that disagrees with stored identity", () => {
+  test("rejects a runtime name that disagrees with stored identity", () => {
     const first = identityContext({ name: "prj_123.iterate/" });
     resolveDurableObjectName(first.ctx);
 
@@ -142,7 +149,7 @@ describe("resolveDurableObjectName", () => {
     expect(() => resolveDurableObjectName(mismatched.ctx)).toThrow(/identity mismatch/);
   });
 
-  it("rejects an ID-only first activation with no canonical identity", () => {
+  test("rejects an ID-only first activation with no canonical identity", () => {
     expect(() => resolveDurableObjectName(identityContext({}).ctx)).toThrow(
       /no canonical name was stored/,
     );

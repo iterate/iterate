@@ -11,14 +11,8 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { GITHUB_CONNECTED_EVENT_TYPE } from "../integrations/utils.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./github-link.ts";
 
-const network = vi.hoisted(() => {
-  type StoredEvent = {
-    createdAt: string;
-    offset: number;
-    payload: Record<string, unknown>;
-    type: string;
-  };
-  const streams = new Map<string, StoredEvent[]>();
+const network = await vi.hoisted(async () => {
+  const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
   const repoCalls: Array<{ args: unknown[]; method: string; name: string }> = [];
   const state = {
     githubLink: null as Record<string, unknown> | null,
@@ -29,20 +23,22 @@ const network = vi.hoisted(() => {
     configureLinkShouldFail: false,
     subscriptionRemoveAppendShouldFail: false,
   };
-
-  function streamEvents(name: string): StoredEvent[] {
-    let events = streams.get(name);
-    if (!events) {
-      events = [];
-      streams.set(name, events);
-    }
-    return events;
-  }
+  const itx = createFakeItxEnv({
+    onAppend: ({ event }) => {
+      if (
+        state.subscriptionRemoveAppendShouldFail &&
+        event.type === "events.iterate.com/stream/subscription-removed"
+      ) {
+        throw new Error("subscription-removed append exploded");
+      }
+    },
+  });
 
   return {
+    ...itx,
     repoCalls,
     reset() {
-      streams.clear();
+      itx.reset();
       repoCalls.length = 0;
       state.githubLink = null;
       state.githubRepoExists = true;
@@ -51,71 +47,24 @@ const network = vi.hoisted(() => {
       state.configureLinkShouldFail = false;
       state.subscriptionRemoveAppendShouldFail = false;
     },
-    seedStream(name: string, ...events: Array<{ payload: Record<string, unknown>; type: string }>) {
-      const stored = streamEvents(name);
-      for (const event of events) {
-        stored.push({ ...event, createdAt: new Date().toISOString(), offset: stored.length + 1 });
-      }
-    },
     state,
-    streams,
-    STREAM: {
-      getByName(name: string) {
-        const stored = streamEvents(name);
-        async function append(
-          ...inputs: Array<{ payload: Record<string, unknown>; type: string }>
-        ) {
-          for (const input of inputs) {
-            if (
-              network.state.subscriptionRemoveAppendShouldFail &&
-              input.type === "events.iterate.com/stream/subscription-removed"
-            ) {
-              throw new Error("subscription-removed append exploded");
-            }
-            stored.push({
-              ...input,
-              createdAt: new Date().toISOString(),
-              offset: stored.length + 1,
-            });
-          }
-          return inputs;
-        }
-        return {
-          async append(...inputs: Array<{ payload: Record<string, unknown>; type: string }>) {
-            return append(...inputs);
-          },
-          async appendAck(...inputs: Array<{ payload: Record<string, unknown>; type: string }>) {
-            await append(...inputs);
-          },
-          async getEvents(args: { afterOffset?: number; beforeOffset?: number }) {
-            const after = args.afterOffset ?? 0;
-            const before = args.beforeOffset ?? Number.MAX_SAFE_INTEGER;
-            return stored.filter((event) => event.offset > after && event.offset < before);
-          },
-          async head() {
-            return { maxOffset: stored.length };
-          },
-          async runtimeState() {
-            return { coreProcessorState: { maxOffset: stored.length } };
-          },
-        };
-      },
-    },
     // The connection secret's fetch IS the fake GitHub API: the wrapped
-    // Octokit dispatches every request through it.
+    // Octokit dispatches every request through it. (The shared seam's SECRET
+    // is a store of update()d records; this suite needs the other half of
+    // the Secret DO — its egress fetch — so it stays bespoke.)
     SECRET: {
       getByName(_name: string) {
         return {
           async fetch(request: Request) {
             const url = new URL(request.url);
             if (request.method === "GET" && /^\/repos\/[^/]+\/[^/]+$/.test(url.pathname)) {
-              if (network.state.githubRepoExists) {
+              if (state.githubRepoExists) {
                 return Response.json({ default_branch: "main", full_name: "acme/widgets" });
               }
               return Response.json({ message: "Not Found" }, { status: 404 });
             }
             if (request.method === "POST" && /^\/orgs\/[^/]+\/repos$/.test(url.pathname)) {
-              if (network.state.githubCreateStatus === 422) {
+              if (state.githubCreateStatus === 422) {
                 // What real GitHub answers when the name is taken — the shape
                 // the exists-but-not-selected detection keys off.
                 return Response.json(
@@ -133,10 +82,10 @@ const network = vi.hoisted(() => {
                   { status: 422 },
                 );
               }
-              if (network.state.githubCreateStatus !== 201) {
+              if (state.githubCreateStatus !== 201) {
                 return Response.json(
                   { message: "Resource not accessible by integration" },
-                  { status: network.state.githubCreateStatus },
+                  { status: state.githubCreateStatus },
                 );
               }
               return Response.json({ full_name: "acme/widgets", private: true }, { status: 201 });
@@ -155,23 +104,23 @@ const network = vi.hoisted(() => {
           // Read-only probe, deliberately not recorded in repoCalls: the
           // ordering assertions track the mutating verbs.
           async getGithubLink() {
-            return network.state.githubLink;
+            return state.githubLink;
           },
           async configureGithubLink(link: Record<string, unknown>) {
-            if (network.state.configureLinkShouldFail) throw new Error("link write exploded");
-            network.state.githubLink = link;
-            network.repoCalls.push({ args: [link], method: "configureGithubLink", name });
+            if (state.configureLinkShouldFail) throw new Error("link write exploded");
+            state.githubLink = link;
+            repoCalls.push({ args: [link], method: "configureGithubLink", name });
             return link;
           },
           async removeGithubLink() {
-            const removed = network.state.githubLink;
-            network.state.githubLink = null;
-            network.repoCalls.push({ args: [], method: "removeGithubLink", name });
+            const removed = state.githubLink;
+            state.githubLink = null;
+            repoCalls.push({ args: [], method: "removeGithubLink", name });
             return removed;
           },
           async pushToGithub(input: { force?: boolean }) {
-            network.repoCalls.push({ args: [input], method: "pushToGithub", name });
-            if (network.state.pushShouldFail) throw new Error("github push exploded");
+            repoCalls.push({ args: [input], method: "pushToGithub", name });
+            if (state.pushShouldFail) throw new Error("github push exploded");
             return { branch: "main", commitOid: "abc123" };
           },
         };

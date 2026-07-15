@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
+import { itxScript } from "../test-support/itx-script-builder.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -16,18 +17,17 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
 
   // The seeded root worker now routes via x-iterate-app (static homepage
   // otherwise); the hello app keeps the path-echo this assertion relies on.
-  const scriptResult = await project.capabilityHost.runScript(`async (itx) => {
-      const response = await itx.worker.fetch(
-        new Request("https://example.com/script", { headers: { "x-iterate-app": "hello" } }),
-      );
-      const body = await response.json();
-      return {
-        repo: await itx.repo.whoami(),
-        worker: \`\${body.app} fetched \${body.path}\`,
-      };
-    }`);
-  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: the script result must round-trip exactly; toMatchObject would subset-match and hide extra keys
-  expect(scriptResult.result).toEqual({
+  const scriptResult = await itxScript(project.capabilityHost).execute(async (itx) => {
+    const response = await itx.worker.fetch(
+      new Request("https://example.com/script", { headers: { "x-iterate-app": "hello" } }),
+    );
+    const body = (await response.json()) as { app: string; path: string };
+    return {
+      repo: await itx.repo.whoami(),
+      worker: `${body.app} fetched ${body.path}`,
+    };
+  });
+  expect(scriptResult.success()).toEqual({
     repo: `repo ${description.projectId}:/repos/config`,
     worker: "hello fetched /script",
   });
