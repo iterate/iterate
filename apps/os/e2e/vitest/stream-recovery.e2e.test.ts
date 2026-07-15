@@ -65,8 +65,27 @@ test("recovery streams byte-bounded pages through one acknowledged export", asyn
     secondLarge?.offset,
   );
   expect(summary).toMatchObject({
+    complete: true,
     exportedEventCount: pages.reduce((count, page) => count + page.events.length, 0),
+    lastExportedOffset: pages.at(-1)?.events.at(-1)?.offset,
     pageCount: pages.length,
     throughOffset: pages[0]?.throughOffset,
   });
+
+  const sessionPages: (typeof firstPage)[] = [];
+  const sessionSink = new (class extends RpcTarget {
+    async write(page: typeof firstPage) {
+      sessionPages.push(page);
+    }
+  })();
+  const firstSession = await recovery.exportToRecovery({ sink: sessionSink, maxPages: 1 });
+  expect(firstSession).toMatchObject({ complete: false, pageCount: 1 });
+  const secondSession = await recovery.exportToRecovery({
+    sink: sessionSink,
+    afterOffset: firstSession.lastExportedOffset,
+    maxPages: 1,
+    throughOffset: firstSession.throughOffset,
+  });
+  expect(secondSession).toMatchObject({ complete: true, pageCount: 1 });
+  expect(sessionPages).toHaveLength(2);
 });
