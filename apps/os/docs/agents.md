@@ -55,6 +55,12 @@ circuit breaker; provider trust and turn budgeting are separate decisions.
 `refs` point back to richer source events or objects so the model need not
 receive an entire webhook. Files are attached directly to the context item.
 
+Agent actors intentionally share one trusted instruction domain within a
+project. Sending a message to another agent is an explicit capability call, so
+agent-authored developer context remains developer on a native transport and
+maps to system on a transport without a confirmed developer role. Do not stamp
+an agent actor onto third-party data merely to preserve that precedence.
+
 The payload `key` and the event envelope's `idempotencyKey` are deliberately
 different. `idempotencyKey` prevents a processor retry from appending the same
 journal event twice. `key` identifies a logical model-context slot while still
@@ -189,6 +195,27 @@ runtime's per-value limit. If the product raises the retained-context target,
 materialize context in chunked rows and keep only lifecycle metadata plus the
 projection cursor in the generic checkpoint. The logical `context` state and
 provider-neutral rendering boundary do not need to change.
+
+## Breaking Rollout
+
+This event and checkpoint contract is a flag-day cutover. Retired agent input,
+message, output, configuration, and system-prompt events are intentionally not
+consumed, and legacy checkpoints are intentionally not accepted. Do not deploy
+this change in place over live projects without first choosing and completing
+one forward rollout:
+
+- erase and recreate the affected projects/agent streams, including regenerating
+  their config repos from the current template; or
+- run a one-time heal through each project's own agent-defaults reaction and
+  overrides, appending its current configuration events to every live agent
+  while omitting (or making non-triggering) the onboarding kickoff, and patch
+  existing config-repo worker/review code to emit `agents/context-added`.
+
+Without that reset or heal, an existing agent has no canonical
+`agent/system-prompt` item, so new triggers remain held, and old config-repo
+code can keep appending retired events that no processor observes. The cutover
+deliberately has no compatibility consumer; completing one of the forward
+rollouts above is a production deployment prerequisite.
 
 ## Authoring Rules
 

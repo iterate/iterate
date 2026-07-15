@@ -177,6 +177,12 @@ export class StreamOffsetConflictError extends Error {
   override readonly name = StreamOffsetConflictError.NAME;
 }
 
+/** Canonical compare-and-append conflict text, including across RPC hops that
+ * normalize the custom error name to `Error`. */
+export function streamOffsetConflictMessage(expectedOffset: number, actualOffset: number): string {
+  return `expected next offset ${expectedOffset}, found ${actualOffset}`;
+}
+
 const STREAM_OFFSET_CONFLICT_MESSAGE = /^expected next offset \d+, found \d+$/;
 
 /**

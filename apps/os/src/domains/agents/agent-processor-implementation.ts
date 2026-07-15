@@ -182,10 +182,12 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             type: "events.iterate.com/agents/context-added",
             idempotencyKey: this.idempotencyKey("render-web-response", event),
             payload: {
-              role: "developer",
+              // This quotes assistant-authored text. Keep it as assistant
+              // history so model output can never acquire developer/system
+              // instruction precedence merely by passing through sendMessage.
+              role: "assistant",
               content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
               ...(files === undefined || files.length === 0 ? {} : { files }),
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
             },
           }),
         );
@@ -882,9 +884,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           `render-interrupted-partial@${request.llmRequestOffset}`,
         ),
         payload: {
-          role: "developer" as const,
+          // The wrapper is platform-authored, but the quoted body is model
+          // output. Assistant role preserves that provenance and prevents a
+          // partial response from being elevated to developer/system.
+          role: "assistant" as const,
           content: `Your in-progress response was interrupted by the user input above and cancelled. It never completed, and no code block in it was executed. Your response so far:\n\n${partialResponse}`,
-          llmRequestPolicy: { behaviour: "dont-trigger-request" as const },
         },
       },
     ];

@@ -73,7 +73,10 @@ export type WorkersAiMessage = {
  * projection. Trusted developer messages sent through a transport without a
  * confirmed native developer role receive the conservative system-role
  * equivalent. Today only the direct OpenAI BYOK endpoint opts into that role;
- * the Workers AI partner-model interface remains conservative. */
+ * the Workers AI partner-model interface remains conservative. Agent actors
+ * intentionally stay in this trusted set: agents in one project are one
+ * instruction trust domain, and sending to another agent is an explicit
+ * capability call. Their system-role fallback is therefore deliberate. */
 export function adaptMessagesForModel(
   messages: WorkersAiMessage[],
   options: { supportsDeveloperRole: boolean },

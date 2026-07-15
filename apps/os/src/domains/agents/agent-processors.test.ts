@@ -1392,27 +1392,26 @@ describe("interrupt and stray-request hygiene", () => {
     const partialInput = stream.events.find(
       (event) =>
         event.type === "events.iterate.com/agents/context-added" &&
-        event.payload?.role === "developer" &&
+        event.payload?.role === "assistant" &&
         typeof event.payload?.content === "string" &&
         event.payload.content.includes("Once upon a time"),
     );
     expect(partialInput?.payload?.content).toContain("Your response so far");
-    expect(partialInput?.payload).toMatchObject({
-      llmRequestPolicy: { behaviour: "dont-trigger-request" },
-    });
+    expect(partialInput?.payload).not.toHaveProperty("llmRequestOffset");
     // The partial folds into history, so the NEXT request's prompt carries it.
     const state = reduceAgentEvents(stream.events);
     expect(
       state.context.history.some(
         (item) =>
-          item.role === "developer" &&
+          item.role === "assistant" &&
           typeof item.content === "string" &&
           item.content.includes("Once upon a time"),
       ),
     ).toBe(true);
 
     // Let the doomed attempt finish: its completion settles as stale, so no
-    // assistant context doubles up with the partial already in history.
+    // linked final assistant output doubles up with the unlinked partial
+    // already in history.
     sse.enqueue(encoder.encode("data: [DONE]\n\n"));
     sse.close();
     await vi.waitFor(() => {
@@ -1426,7 +1425,8 @@ describe("interrupt and stray-request hygiene", () => {
       stream.events.some(
         (event) =>
           event.type === "events.iterate.com/agents/context-added" &&
-          event.payload?.role === "assistant",
+          event.payload?.role === "assistant" &&
+          event.payload?.llmRequestOffset !== undefined,
       ),
     ).toBe(false);
   });
@@ -1777,19 +1777,19 @@ describe("file attachments in the LLM request", () => {
     const reflected = stream.events.find(
       (event) =>
         event.type === "events.iterate.com/agents/context-added" &&
-        event.payload?.role === "developer",
+        event.payload?.role === "assistant",
     );
     expect(reflected?.payload).toMatchObject({
-      role: "developer",
+      role: "assistant",
       content: "The assistant sent this visible web-chat message: Here is your cat!",
       files: [attachment],
-      llmRequestPolicy: { behaviour: "dont-trigger-request" },
     });
+    expect(reflected?.payload).not.toHaveProperty("llmRequestOffset");
 
     // ...so the next request's history carries the image the agent sent.
     const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestOffset: 99 });
     const reflectedMessage = body.messages.find(
-      (message) => message.role === "developer" && message.files !== undefined,
+      (message) => message.role === "assistant" && message.files !== undefined,
     );
     expect(reflectedMessage).toMatchObject({
       content: expect.stringMatching(
