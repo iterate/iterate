@@ -384,6 +384,10 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
   using project = itx.projects.create({ slug: "dynamic-worker-scope-cache" });
   const { projectId } = await project.__describe();
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
+  using _agentHost = await project.capabilityHosts.create({
+    ancestorPath: "/",
+    path: agentPath,
+  });
   using agent = project.agents.get(agentPath);
   const scopeProbeWorkerRef = (path: string) => ({
     entrypoint: "ScopeProbeEntrypoint",
@@ -442,6 +446,10 @@ test('An agent scope provides a capability to the whole project via capabilityHo
   using project = itx.projects.create({ slug: "cross-scope-provide" });
   await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
+  using _agentHost = await project.capabilityHosts.create({
+    ancestorPath: "/",
+    path: agentPath,
+  });
   using agent = project.agents.get(agentPath);
 
   // The provide runs INSIDE the agent scope: the script's `itx` fronts the

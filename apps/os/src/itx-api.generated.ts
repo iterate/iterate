@@ -503,7 +503,16 @@ export interface CapabilityHost {
 /** Catalog of capability scopes within one project (`itx.capabilityHosts`). */
 export interface CapabilityHostCollection {
   __describe(): Promise<Description>;
-  /** The capability host at a scope path (`"/"` is the project root). */
+  /**
+   * Declare a capability host's explicit ancestor and return only after its
+   * processor has folded that exact birth event. Repeating the same creation
+   * is idempotent; attempting to reuse the path with another ancestor fails.
+   */
+  create(input: { ancestorPath: string | null; path: string }): Promise<CapabilityHost>;
+  /**
+   * Address an already-declared capability host at a scope path (`"/"` is the
+   * project root). Use create({ path, ancestorPath }) for a new host.
+   */
   get(path: string): CapabilityHost;
 }
 

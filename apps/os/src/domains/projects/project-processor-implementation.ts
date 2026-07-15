@@ -8,7 +8,7 @@ import type { StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { capabilityHostBirthEvents } from "../capability-host/capability-host-birth.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
@@ -365,31 +365,27 @@ function agentSubscriptionEvents(input: {
     projectId: input.projectId,
     path: input.childPath,
   });
-  const subscription = (processorSlug: string, hostKind: "agent" | "capability-host") =>
+  const subscription = (processorSlug: string) =>
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
-      processor:
-        hostKind === "agent"
-          ? ["agents", ["get", input.childPath], "processor"]
-          : ["capabilityHosts", ["get", input.childPath], "processor"],
+      processor: ["agents", ["get", input.childPath], "processor"],
       processorSlug,
     });
   return [
     // Capability inheritance is an explicit part of the birth certificate.
     // A real child agent inherits its parent agent; routed/top-level agents
     // inherit root directly. Namespace prefixes never become implicit hosts.
-    CapabilityHostProcessorContract.buildEvent({
-      type: "events.iterate.com/capability-host/ancestor-configured",
-      idempotencyKey: `capability-host/ancestor-configured:${durableObjectName}`,
-      payload: { ancestorPath: childAgentParentPath(input.childPath) ?? "/" },
+    ...capabilityHostBirthEvents({
+      ancestorPath: childAgentParentPath(input.childPath) ?? "/",
+      path: input.childPath,
+      projectId: input.projectId,
     }),
     // One agent processor owns history, scheduling, and the Cloudflare AI call.
-    subscription(AgentProcessorContract.slug, "agent"),
-    subscription(CapabilityHostProcessorContract.slug, "capability-host"),
-    ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
-    ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug, "agent")] : []),
-    ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
+    subscription(AgentProcessorContract.slug),
+    ...(input.slack ? [subscription(SlackAgentProcessorContract.slug)] : []),
+    ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug)] : []),
+    ...(input.email ? [subscription(EmailAgentProcessorContract.slug)] : []),
     ...(input.github
       ? [
           githubAgentSubscriptionConfiguredEvent({

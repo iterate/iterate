@@ -7,7 +7,7 @@
  *
  *   await itx.agents.get("researcher").message(task);   // child agent, relative path
  *   await itx.agents.get(path).someTool(args);
- *   await itx.capabilityHosts.get(path).runScript(code);
+ *   await itx.capabilityHosts.get(path).runScript(code); // existing host
  *
  * Each chains a call onto the un-awaited RESULT of a method — that is workerd
  * promise pipelining. workerd classifies a call result for pipelining with
@@ -56,7 +56,7 @@ test(
     // method alias: calling it appends to the proof stream). Durable rather
     // than live because the script below runs server-side, long after this
     // capnweb session's live table would have been the wrong place anyway.
-    using host = itx.capabilityHosts.get(agentPath);
+    using host = await itx.capabilityHosts.create({ ancestorPath: "/", path: agentPath });
     using _provision = await host.provideCapability({
       expression: ["streams", ["get", PROOF_STREAM], "append"],
       instructions: "e2e proof: appends its argument to the proof stream.",
@@ -240,7 +240,13 @@ test(
     // Run from the PARENT AGENT's scope, so the script's itx resolves relative
     // paths against it and message() stamps the parent as the sender — the
     // verbatim delegation idiom from the subagent system prompt.
-    using parentHost = itx.capabilityHosts.get(parentPath);
+    // This test starts directly in a host scope, before any message has born
+    // the parent agent. Declare that scope explicitly; get() never invents an
+    // ancestor from path prefixes.
+    using parentHost = await itx.capabilityHosts.create({
+      ancestorPath: "/",
+      path: parentPath,
+    });
     const run = (
       await itxScript(parentHost).execute(async (itx) => {
         const sent = await itx.agents.get("researcher").message("pipelined delegation");

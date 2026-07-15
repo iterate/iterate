@@ -328,10 +328,12 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CapabilityHostCollection",
     kind: "interface",
     sourceText:
-      '/** Catalog of capability scopes within one project (`itx.capabilityHosts`). */\nexport interface CapabilityHostCollection {\n  __describe(): Promise<Description>;\n  /** The capability host at a scope path (`"/"` is the project root). */\n  get(path: string): CapabilityHost;\n}',
+      '/** Catalog of capability scopes within one project (`itx.capabilityHosts`). */\nexport interface CapabilityHostCollection {\n  __describe(): Promise<Description>;\n  /**\n   * Declare a capability host\'s explicit ancestor and return only after its\n   * processor has folded that exact birth event. Repeating the same creation\n   * is idempotent; attempting to reuse the path with another ancestor fails.\n   */\n  create(input: { ancestorPath: string | null; path: string }): Promise<CapabilityHost>;\n  /**\n   * Address an already-declared capability host at a scope path (`"/"` is the\n   * project root). Use create({ path, ancestorPath }) for a new host.\n   */\n  get(path: string): CapabilityHost;\n}',
     summary: "Catalog of capability scopes within one project (`itx.capabilityHosts`).",
     memberSummaries: {
-      get: 'The capability host at a scope path (`"/"` is the project root).',
+      create:
+        "Declare a capability host's explicit ancestor and return only after its processor has folded that exact birth event.",
+      get: 'Address an already-declared capability host at a scope path (`"/"` is the project root).',
     },
     referencedTypeNames: ["Description", "CapabilityHost"],
   },

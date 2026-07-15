@@ -48,8 +48,9 @@ live in domain files.
   `{projectId, path}`. Host operations are `provideCapability`,
   `revokeCapability`, `runScript`, and `__describe()`. Each itx fronts exactly
   one host (`itx.capabilityHost`; `itx.provideCapability`/`revokeCapability`
-  are shortcuts onto it), and `itx.capabilityHosts.get(path)` addresses any
-  other scope's host — `get("/")` mounts on the whole project.
+  are shortcuts onto it). `itx.capabilityHosts.create({ path, ancestorPath })`
+  declares a new host and fences until the declaration is live;
+  `itx.capabilityHosts.get(path)` addresses one that already exists.
 
 ## `__describe()`: discovery everywhere
 
@@ -105,7 +106,8 @@ Itx (ProjectRpcTarget) -- "itx" is a convention: capabilityHost.path selects
 |   |-- runScript(code)                                async (itx) => {...} in THIS scope
 |   `-- <anything else>                                dotted fallback -> invokeCapability
 |-- capabilityHosts (CapabilityHostCollectionRpcTarget)
-|   `-- get(path)                                      -> CapabilityHost of ANY scope;
+|   |-- create({ path, ancestorPath })                 -> declared, ready CapabilityHost
+|   `-- get(path)                                      -> existing CapabilityHost of ANY scope;
 |                                                         get("/") mounts project-wide
 |-- provideCapability / revokeCapability               shortcuts -> capabilityHost
 |-- debug()                                            dashboard/debug info (Slack-friendly)
@@ -121,7 +123,7 @@ Itx (ProjectRpcTarget) -- "itx" is a convention: capabilityHost.path selects
 `-- <anything else>                                    DYNAMIC: the proxy routes unknown
                                                          roots to capabilityHost
                                                          .invokeCapability({ path, args }),
-                                                         which chains child -> parent -> "/"
+                                                         which follows declared ancestors
 
 Agent (AgentRpcTarget) -- via itx.agents.get("/agents/...") or itx.agent
 |                                                      __describe().whoami = "agent <prj>:<path>"
@@ -148,6 +150,10 @@ Agent birth normally points a top-level/routed agent straight at project root,
 while a deliberate child agent points at its parent agent; namespace prefixes
 are never activated as capability hosts. A root mount is therefore visible to
 every agent whose declared ancestor graph reaches root.
+Creating an ad-hoc host is equally explicit:
+`capabilityHosts.create({ path, ancestorPath })` commits both its ancestor and
+processor subscription, then waits for the processor to fold that exact event.
+`get(path)` never manufactures ancestry from the path.
 `provideCapability` always mounts on exactly the host you called it on — to
 mount elsewhere, address that scope explicitly via `capabilityHosts.get(path)`.
 

@@ -58,7 +58,7 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
+import { capabilityHostBirthEvents } from "./domains/capability-host/capability-host-birth.ts";
 import type {
   StreamRecoveryExportPage,
   StreamRecoveryExportSink,
@@ -4621,18 +4621,10 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // create-requested lane, on the repo's own stream at CONFIG_REPO_PATH.
     const appendRootEvents = () =>
       stream.append(
-        CapabilityHostProcessorContract.buildEvent({
-          type: "events.iterate.com/capability-host/ancestor-configured",
-          idempotencyKey: `capability-host/ancestor-configured:${registered.projectId}:/`,
-          payload: { ancestorPath: null },
-        }),
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: "/",
-          }),
-          processor: ["capabilityHosts", ["get", "/"], "processor"],
-          processorSlug: CapabilityHostProcessorContract.slug,
+        ...capabilityHostBirthEvents({
+          ancestorPath: null,
+          path: "/",
+          projectId: registered.projectId,
         }),
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName: streamDurableObjectName({
@@ -5011,8 +5003,11 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Capability hosts of ANY scope, by path: get("/") is the project root (mount there to make a capability visible project-wide), get("/agents/<name>") an agent scope.',
-      children: { get: "The capability host at a scope path." },
+        'Capability hosts of ANY scope, by path. create({ path, ancestorPath }) durably declares a new host and waits until that declaration is live; get(path) addresses an already-declared host. get("/") is the project root (mount there to make a capability visible project-wide).',
+      children: {
+        create: "Declare a host with one explicit ancestor and return it ready for use.",
+        get: "Address an already-declared capability host at a scope path.",
+      },
       parent: "a project itx (itx.capabilityHosts)",
     });
   }
@@ -5022,7 +5017,44 @@ class CapabilityHostCollectionRpcTarget extends IterateRpcTarget<"CapabilityHost
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The capability host at a scope path (`"/"` is the project root). */
+  /**
+   * Declare a capability host's explicit ancestor and return only after its
+   * processor has folded that exact birth event. Repeating the same creation
+   * is idempotent; attempting to reuse the path with another ancestor fails.
+   */
+  async create(input: {
+    ancestorPath: string | null;
+    path: string;
+  }): Promise<CapabilityHostRpcTarget> {
+    const path = normalizePath(input.path);
+    const ancestorPath = input.ancestorPath === null ? null : normalizePath(input.ancestorPath);
+    const stream = new StreamRpcTarget({
+      auth: this.props.auth,
+      projectId: this.props.projectId,
+      path,
+    });
+    const [ancestorConfigured] = await stream.append(
+      ...capabilityHostBirthEvents({
+        ancestorPath,
+        path,
+        projectId: this.props.projectId,
+      }),
+    );
+    const committedAncestor = ancestorConfigured.payload?.ancestorPath;
+    if (committedAncestor !== ancestorPath) {
+      throw new Error(
+        `capability-host ${JSON.stringify(path)} already declares ancestor ${JSON.stringify(committedAncestor)}, not ${JSON.stringify(ancestorPath)}`,
+      );
+    }
+    const host = this.get(path);
+    await host.processor.waitUntilEvent({ offset: ancestorConfigured.offset, timeoutMs: 10_000 });
+    return host;
+  }
+
+  /**
+   * Address an already-declared capability host at a scope path (`"/"` is the
+   * project root). Use create({ path, ancestorPath }) for a new host.
+   */
   get(path: string): CapabilityHostRpcTarget {
     return new CapabilityHostRpcTarget({
       auth: this.props.auth,
