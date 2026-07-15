@@ -15,13 +15,13 @@ function templateFile(path: string): string {
 test("template ships policy only — no seeded apps, integrations, or sdk snapshot", () => {
   // Vendor SDK surfaces are NOT seeded (built-ins live at
   // itx.integrations.<slug>), projects grow their own apps/ and
-  // integrations/ by editing their repo, and the one seeded agent policy is
-  // the GitHub review rules with its mechanics in one local module.
+  // integrations/ by editing their repo. GitHub review rules are typed data
+  // in worker.ts, with their mechanics in one local module.
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
   expect(paths.filter((path) => path.startsWith("apps/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
-  expect(paths.filter((path) => path.startsWith("agents/"))).toEqual(["agents/github-review.md"]);
+  expect(paths.filter((path) => path.startsWith("agents/"))).toEqual([]);
   expect(paths).toContain("github-reviews.ts");
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {

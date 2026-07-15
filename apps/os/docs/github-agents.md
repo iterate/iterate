@@ -11,8 +11,8 @@ GitHub deliveries remain raw `events.iterate.com/github/webhook-received`
 facts on that stream. The platform `github-agent` processor has one narrow
 job: it folds current PR metadata plus twelve recent activity summaries and
 turns trusted PR conversation into agent messages. It does **not** decide
-whether code review runs. Userspace review automation creates a separate child
-agent stream per Check Run under `<pr-path>/iterate-reviews/<check-id>`.
+whether code review runs. Userspace review automation appends its own trusted,
+typed review task to this same persistent pull-request agent stream.
 
 Each activity summary carries its raw stream offset. When the bounded summary
 omits something, the agent point-reads that delivery instead of dumping the
@@ -37,7 +37,7 @@ ordinary events whether or not they trigger an LLM turn.
 | Trusted PR edit that newly adds `@iterate` to title or description | Add 👀 to the PR and queue; later edits do not retrigger it |
 | Later trusted comment or submitted review after activation         | Queue like a message in an active Slack thread              |
 | Push, CI, unmentioned discussion before activation, bot input      | Record and project only                                     |
-| Project config worker appends a review task                        | Run independently on its dedicated review stream            |
+| Project config worker appends a review task                        | Interrupt obsolete work and review on the same PR stream    |
 
 A submitted review summary has no reaction endpoint of its own, so its 👀 is
 attached to the pull request. Inline review comments use their native reaction
@@ -75,7 +75,7 @@ untrusted even when GitHub reports a repository association.
 
 ## Review automation is exclusively userspace
 
-Review selection, repository scope, per-PR controls, visibility, and Markdown
+Review selection, repository scope, per-PR controls, visibility, and typed
 rules live in the project config repo. The small policy object stays in
 `worker.ts`; the copyable, tested mechanics live beside it in
 `github-reviews.ts`. There is no
@@ -86,14 +86,23 @@ own timeout terminalizer.
 The seeded config repo contains a complete userspace reaction and these knobs:
 
 ```ts
+const GITHUB_REVIEW_RULES = [
+  {
+    id: "structure/no-small-single-use-helper",
+    files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
+    invariant:
+      "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
+  },
+] satisfies readonly GithubReviewRule[];
+
 const GITHUB_REVIEWS = {
   forceLabel: "iterate:review",
   osBaseUrl: "https://os.iterate.com",
   repositories: [] as string[], // empty means reviews are off
-  rulesPath: "agents/github-review.md",
+  rules: GITHUB_REVIEW_RULES,
   skipLabel: "iterate:skip-review",
   timeoutSeconds: 30 * 60,
-};
+} satisfies GithubReviewConfig;
 ```
 
 Add exact `owner/repo` strings to `repositories` to enable reviews. Remove a
@@ -107,23 +116,27 @@ head. Closing the pull request or converting it to draft also immediately
 cancels current-head review work. Label authorization is GitHub's normal
 repository authorization; the agent maintains no command state of its own.
 
-Rules are ordinary trusted Markdown at `agents/github-review.md`. For example:
+Each rule has a stable `id`, one or more `files` glob patterns, and an
+`invariant`. The task tells the agent to inspect only matching changed files,
+prefix every inline finding with its rule ID, and include per-rule counts in
+the consolidated review. For example:
 
-```md
-# Pull-request review rules
-
-- If there is no actionable feedback, do not leave a review or comment.
-- Outside this proof of concept's own policy definitions, documentation,
-  generated fixtures, tests, and agent instructions, mentions of the word
-  `fart` are forbidden and must say `superfart` instead.
-- The word `fart` is explicitly allowed when defining, documenting, testing,
-  generating, or instructing this proof-of-concept review rule.
+```ts
+{
+  id: "typescript/explain-type-cast",
+  files: ["**/*.{ts,tsx,mts,cts}"],
+  invariant:
+    "Every type cast must have a nearby explanation of why the cast is safe and cannot reasonably be avoided.",
+}
 ```
+
+An exact `iterate-lint-disable <rule-id> -- <reason>` source comment suppresses
+that rule for its file; `iterate-lint-disable-next-line <rule-id> -- <reason>`
+suppresses the next line. The marker is data, not an instruction channel.
 
 Changing repository scope, labels, rules, or trigger behavior is one normal
 config-repo commit and redeploy. Existing PR agents need no migration because
-the worker reads rules at trigger time and appends the complete review task for
-that immutable head.
+the worker serializes the current typed rules into each immutable-head task.
 
 ### What the userspace reaction does
 
@@ -136,35 +149,35 @@ eligible routed webhook it:
    automatic policy never guesses the first installation.
 2. Fetches the live PR and drops stale, closed, draft, or disabled deliveries
    before they can create a check or queue an agent turn.
-3. Reads the Markdown rules from the config repo.
-4. Retires the previous revision's model and code-execution workers, cancels
-   its running App-owned checks, then creates or
+3. Serializes the typed rules from `worker.ts` into the trusted review task.
+4. Cancels the previous revision's running App-owned checks, then creates or
    recovers an `Iterate Review` Check Run for the immutable head. Check lookup
    is fully paginated.
-5. Sets the Check Run's details URL to the exact OS review-agent thread and
+5. Sets the Check Run's details URL to the existing OS pull-request thread and
    arms a userspace timeout before waking the model, anchored to the Check
    Run's absolute start-time deadline so webhook redelivery cannot extend it.
-6. Gets stock defaults for that exact review-agent path, then appends those
-   idempotent defaults and one request-keyed
-   `events.iterate.com/agents/message-received` review task in a single batch to
-   a dedicated review-agent stream for that Check Run.
-7. Keeps automatic review isolated from the conversational PR stream, so a
-   push-triggered review cannot cancel, coalesce with, or inherit the visible
-   handoff obligation from a mentioned user's multi-step code-work turn.
-   A newer push retires the obsolete review agent before finalizing its check.
+6. Appends one request-keyed `events.iterate.com/agents/message-received` task
+   to the existing PR stream with `interrupt-current-request`, so a newer push
+   supersedes obsolete automatic review work.
+7. Lets the persistent agent use earlier review attempts, replies, and explicit
+   human dispositions to avoid re-raising already accepted or suppressed
+   findings without evidence that they should be reconsidered.
 
-Applying defaults in the same append closes the new-stream birth race. The
-task's idempotency key collapses at-least-once automatic webhook delivery;
+The task's idempotency key collapses at-least-once automatic webhook delivery;
 explicit label requests get distinct identities so they can rerun the same
 head. The deterministic external ID includes the stable project ID,
 installation, pull request, and request identity. Recovery also requires the
 App slug transcribed by the signed-webhook boundary, so another project or
 actor cannot reuse an old check or marker to suppress policy.
 
+No project Durable Object is required. The pull-request stream is the durable
+agent history; GitHub Check Runs are the visible attempt ledger; and the
+userspace scheduler is only the timeout terminalizer.
+
 ### Visible lifecycle and consolidated review
 
 The config worker creates the Check Run and timeout before waking the model.
-GitHub's **View more details** link opens that Check Run's exact OS agent
+GitHub's **View more details** link opens the persistent OS pull-request agent
 thread.
 On a newer push it cancels the prior head's still-running App-owned check. On a
 skip-label event it cancels live-head checks immediately. Useful review content
@@ -192,9 +205,9 @@ not the older commit-status API. Check Runs are GitHub App-native, appear in
 the PR checks rollup, and support rich output and annotations.
 
 A trusted conversational request such as `@iterate review this again` still
-works like any other mention: the PR agent uses its judgment and Octokit to do
-the requested work. It is separate from automatic userspace policy and does
-not mutate labels or repository configuration.
+works like any other mention: the same PR agent uses its judgment and Octokit
+to do the requested work. It does not mutate labels or repository
+configuration.
 
 ## GitHub and code tools
 

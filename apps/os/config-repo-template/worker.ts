@@ -1,18 +1,43 @@
 import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
-import { processGithubReviewEvent } from "./github-reviews.ts";
+import {
+  processGithubReviewEvent,
+  type GithubReviewConfig,
+  type GithubReviewRule,
+} from "./github-reviews.ts";
 
 // Pull-request reviews are project userspace, not platform policy. Keep this
 // list empty to disable them; add exact "owner/repo" names to review every
 // opened, ready, or pushed non-draft head in those repositories. The labels
 // provide per-PR controls using GitHub's own permissions.
+const GITHUB_REVIEW_RULES = [
+  {
+    id: "structure/no-small-single-use-helper",
+    files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
+    invariant:
+      "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
+  },
+  {
+    id: "typescript/no-inferable-type-annotation",
+    files: ["**/*.{ts,tsx,mts,cts}"],
+    invariant:
+      "Do not declare a type annotation when TypeScript already infers the intended type precisely.",
+  },
+  {
+    id: "typescript/explain-type-cast",
+    files: ["**/*.{ts,tsx,mts,cts}"],
+    invariant:
+      "Every type cast must have a nearby explanation of why the cast is safe and cannot reasonably be avoided.",
+  },
+] satisfies readonly GithubReviewRule[];
+
 const GITHUB_REVIEWS = {
   forceLabel: "iterate:review",
   osBaseUrl: "https://os.iterate.com",
   repositories: [] as string[],
-  rulesPath: "agents/github-review.md",
+  rules: GITHUB_REVIEW_RULES,
   skipLabel: "iterate:skip-review",
   timeoutSeconds: 30 * 60,
-};
+} satisfies GithubReviewConfig;
 
 // The root project worker (default export) routes HTTP and reacts to project
 // events, and the example apps are named exports — a stateless HelloApp and a
