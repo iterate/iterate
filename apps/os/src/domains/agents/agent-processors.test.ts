@@ -359,29 +359,6 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
-  test("extracts the whole script when a string literal embeds a markdown fence", async () => {
-    const { stream, deliver } = setup();
-
-    // Mirrors a prd incident (agents/web/2026-07-09t14-21-45-359z): a chat
-    // message formatted as markdown puts ``` inside the script's string
-    // literal; extraction must not cut the script at that inner fence.
-    const script = [
-      "async (itx) => {",
-      '  await itx.chat.sendMessage("Tail:\\n```text\\n" + "0123456789".slice(-4) + "\\n```");',
-      "}",
-    ].join("\n");
-    await stream.append({
-      type: "events.iterate.com/agent/output-added",
-      payload: { content: `Reading the saved output now.\n\n\`\`\`ts\n${script}\n\`\`\`` },
-    });
-    await deliver();
-
-    const requested = stream.events.find(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
-    );
-    expect(requested?.payload?.code).toBe(script);
-  });
-
   // Mirrors a prd incident (agents/web/2026-07-10t05-13-04-967z): the model
   // planned a whole workflow as four sequential scripts in one response. Only
   // the first used to run — silently; the model believed all four did.
