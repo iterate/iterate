@@ -284,7 +284,10 @@ function subscribeLiveCodeClock(onStoreChange: () => void) {
   }
   // Notify after subscribe returns so the first snapshot is current wall time
   // (updating the scalar alone does not re-render useSyncExternalStore).
-  queueMicrotask(onStoreChange);
+  // Skip if already unsubscribed (Strict Mode remount / codeRunning flip).
+  queueMicrotask(() => {
+    if (liveCodeClockListeners.has(onStoreChange)) onStoreChange();
+  });
   return () => {
     liveCodeClockListeners.delete(onStoreChange);
     if (liveCodeClockListeners.size === 0 && liveCodeClockTimer != null) {

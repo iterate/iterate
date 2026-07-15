@@ -33,9 +33,13 @@ function createTickingClock(intervalMs: number) {
       // Notify after subscribe returns — useSyncExternalStore re-reads
       // getSnapshot on notification; updating `now` alone without notifying
       // leaves the render-time snapshot in place until the next interval tick.
+      // Only fire if still registered (Strict Mode / enabled flip can
+      // unsubscribe before the microtask runs).
       now = Date.now();
       ensureTimer();
-      queueMicrotask(onStoreChange);
+      queueMicrotask(() => {
+        if (listeners.has(onStoreChange)) onStoreChange();
+      });
       return () => {
         listeners.delete(onStoreChange);
         maybeStopTimer();
