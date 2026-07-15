@@ -3323,3 +3323,61 @@ previously absent from the cumulative harness and because its fresh-capability
 kill discipline prevents false hangs in later experiments. Raw corrected
 records are `/tmp/stream-wake-selector-{main,candidate}-r{1..5}.log`.
 Production was not deployed or erased.
+
+## 2026-07-15: Eleventh Current-Main Cumulative Checkpoint
+
+The eleventh checkpoint pinned candidate
+`3423e25e90a25e4713e01fe2a571993dc01a0510` against freshly fetched main
+`7b106d623ca1d814304443c0ad34f8e36ac0b0bb`. Separate local workerd servers
+ran those exact revisions. Every timer ran in the Node host around awaited
+network/RPC work or host-observed output; no result depends on a Worker clock
+advancing without network I/O.
+
+Five fresh processes per revision ran each of the full cumulative suite,
+storage controls, concurrent/live-tail controls, and enlarged cross-post
+controls. Every process passed its semantic assertions. The unmodified full
+suite geometric result was 24.628% lower p50, 11.181% lower p95, and 22.719%
+lower mean latency.
+
+The conservative headline retains the established checkpoint-eight through
+ten rule: replace exactly singleton append, 100-event append, concurrent-32
+append, one-live-subscriber delivery, and 25-live-subscriber delivery with
+their larger focused controls, then take the equal-workload geometric mean.
+It does not substitute the enlarged cross-post controls:
+
+| Equal-workload statistic | Improvement versus current main |
+| ------------------------ | ------------------------------: |
+| p50                      |                     **22.857%** |
+| p95                      |                      **9.148%** |
+| mean                     |                     **21.406%** |
+
+Focused median-of-five-run results were:
+
+| Focused workload                     | P50 change | P95 change | Mean change |
+| ------------------------------------ | ---------: | ---------: | ----------: |
+| Append one 1 KiB event               |     14.19% |      5.82% |      12.74% |
+| Append 100 tiny events               |     40.31% |     28.89% |      35.74% |
+| Append 100 1 KiB events              |     52.74% |     44.54% |      50.90% |
+| Append 1,000 tiny events             |     62.06% |     51.59% |      58.40% |
+| Append 32 concurrent singleton calls |     32.86% |     21.33% |      30.02% |
+| Deliver to one live subscriber       |     13.10% |     12.64% |      11.84% |
+| Deliver to 25 live subscribers       |     13.27% |     18.13% |      18.29% |
+| Head after forced reactivation       |     12.33% |     -5.69% |      11.71% |
+| Dense one-event cross-post           |     26.15% |     27.15% |      27.29% |
+| Sparse cross-post, 1 of 100 events   |     37.33% |     30.88% |      35.72% |
+| Append one inline 768 KiB event      |     53.03% |     37.10% |      39.88% |
+| Append one chunked 1.1 MiB event     |     -1.25% |    -16.19% |      -1.10% |
+
+P50-derived capacity improved 67.52% for 100-event append, 48.95% for 32
+concurrent singleton appends, and 15.30% for 25-subscriber fanout. The
+enlarged dense and sparse cross-post controls improved every statistic but are
+still excluded from the headline to preserve the prior aggregation rule.
+
+The meaningful residual caveats are forced-reactivation p95 at 5.69% slower
+and chunked 1.1 MiB p95 at 16.19% slower. The chunked path is neutral at p50
+and mean, so this does not establish a central regression, but it remains a
+tail investigation rather than a shipping win. Raw records are
+`/tmp/cumulative-11-{full,storage,tail,live,crosspost}-{main,candidate}-r{1..5}.log`.
+The collection ended at `2026-07-15T01:23:09Z`; if active optimization
+continues, the next current-main checkpoint is due by
+`2026-07-15T05:23:09Z`. Production was not deployed or erased.
