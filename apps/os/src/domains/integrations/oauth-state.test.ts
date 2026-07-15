@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import { createOAuthState, parseOAuthStateUnverified, verifyOAuthState } from "./oauth-state.ts";
 import { verifySlackSignature } from "./slack-signature.ts";
 
 const KEY = "test-secret-encryption-key";
 
 describe("oauth state", () => {
-  it("round-trips through create -> verify", async () => {
+  test("round-trips through create -> verify", async () => {
     const state = await createOAuthState(
       {
         callbackUrl: "https://example.com/settings",
@@ -24,7 +24,7 @@ describe("oauth state", () => {
     });
   });
 
-  it("parses routing fields without the key but never verifies them", async () => {
+  test("parses routing fields without the key but never verifies them", async () => {
     const state = await createOAuthState(
       { projectId: "prj_2", provider: "google", userId: "usr_1", codeVerifier: "ver" },
       KEY,
@@ -35,46 +35,76 @@ describe("oauth state", () => {
     });
   });
 
-  it("rejects tampered payloads, wrong keys, and provider mismatches", async () => {
+  test.for([
+    {
+      name: "rejects a provider mismatch",
+      verify: (state: string) => verifyOAuthState({ provider: "google", state }, KEY),
+    },
+    {
+      name: "rejects a wrong key",
+      verify: (state: string) => verifyOAuthState({ provider: "slack", state }, "other-key"),
+    },
+    {
+      name: "rejects a tampered payload",
+      verify: (state: string) => {
+        const [version, payload, signature] = state.split(".");
+        const tamperedPayload = Buffer.from(
+          JSON.stringify({
+            ...(JSON.parse(Buffer.from(payload!, "base64url").toString()) as object),
+            projectId: "prj_evil",
+          }),
+        ).toString("base64url");
+        return verifyOAuthState(
+          { provider: "slack", state: `${version}.${tamperedPayload}.${signature}` },
+          KEY,
+        );
+      },
+    },
+    {
+      // Appending garbage breaks the signature — the only way to hold an
+      // expired-or-otherwise-doctored state without the key.
+      name: "rejects a state with a broken signature",
+      verify: (state: string) => verifyOAuthState({ provider: "slack", state: `${state}x` }, KEY),
+    },
+  ])("$name", async ({ verify }) => {
     const state = await createOAuthState(
       { projectId: "prj_1", provider: "slack", userId: "usr_1" },
       KEY,
     );
-    expect(await verifyOAuthState({ provider: "google", state }, KEY)).toBeNull();
-    expect(await verifyOAuthState({ provider: "slack", state }, "other-key")).toBeNull();
+    // Sanity: the fixture state is live (carries a future expiry), so every
+    // rejection below is the verifier's doing, never mere expiry.
+    expect(parseOAuthStateUnverified(state)!.expiresAt).toBeGreaterThan(Date.now());
 
-    const [version, payload, signature] = state.split(".");
-    const tamperedPayload = Buffer.from(
-      JSON.stringify({
-        ...(JSON.parse(Buffer.from(payload!, "base64url").toString()) as object),
-        projectId: "prj_evil",
-      }),
-    ).toString("base64url");
-    expect(
-      await verifyOAuthState(
-        { provider: "slack", state: `${version}.${tamperedPayload}.${signature}` },
-        KEY,
-      ),
-    ).toBeNull();
-  });
-
-  it("rejects expired states", async () => {
-    const state = await createOAuthState(
-      { projectId: "prj_1", provider: "slack", userId: "usr_1" },
-      KEY,
-    );
-    const [version, payload, signature] = state.split(".");
-    // Sanity: the parsed payload carries a future expiry…
-    expect(
-      parseOAuthStateUnverified(`${version}.${payload}.${signature}`)!.expiresAt,
-    ).toBeGreaterThan(Date.now());
-    // …and an expired one (re-signed with the wrong key) can never verify.
-    expect(await verifyOAuthState({ provider: "slack", state: `${state}x` }, KEY)).toBeNull();
+    expect(await verify(state)).toBeNull();
   });
 });
 
+type SlackSignatureInput = {
+  body: string;
+  signature: string | null;
+  signingSecret: string;
+  timestamp: string;
+};
+
 describe("verifySlackSignature", () => {
-  it("accepts a correctly signed body and rejects everything else", async () => {
+  test.for([
+    { name: "accepts a correctly signed body", expected: true },
+    {
+      name: "rejects a tampered body",
+      tamper: (input: SlackSignatureInput) => ({ ...input, body: `${input.body} ` }),
+      expected: false,
+    },
+    {
+      name: "rejects a stale timestamp",
+      tamper: (input: SlackSignatureInput) => ({ ...input, timestamp: "1" }),
+      expected: false,
+    },
+    {
+      name: "rejects a missing signature",
+      tamper: (input: SlackSignatureInput) => ({ ...input, signature: null }),
+      expected: false,
+    },
+  ])("$name", async ({ expected, tamper }) => {
     const signingSecret = "8f742231b10e8888abcd99yyyzzz85a5";
     const body = JSON.stringify({ type: "event_callback", team_id: "T1" });
     const timestamp = String(Math.floor(Date.now() / 1000));
@@ -91,15 +121,7 @@ describe("verifySlackSignature", () => {
     );
     const signature = `v0=${Array.from(mac, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 
-    expect(await verifySlackSignature({ body, signature, signingSecret, timestamp })).toBe(true);
-    expect(
-      await verifySlackSignature({ body: `${body} `, signature, signingSecret, timestamp }),
-    ).toBe(false);
-    expect(await verifySlackSignature({ body, signature, signingSecret, timestamp: "1" })).toBe(
-      false,
-    );
-    expect(await verifySlackSignature({ body, signature: null, signingSecret, timestamp })).toBe(
-      false,
-    );
+    const input: SlackSignatureInput = { body, signature, signingSecret, timestamp };
+    expect(await verifySlackSignature(tamper === undefined ? input : tamper(input))).toBe(expected);
   });
 });
