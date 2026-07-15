@@ -209,19 +209,19 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Ai",
     kind: "interface",
     sourceText:
-      '/** Workers AI binding exposed through itx as a project/agent capability. */\nexport interface Ai {\n  __describe(): Promise<Description>;\n  /** List the Workers AI model catalog. */\n  models(): Promise<unknown>;\n  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).\n   * The optional third argument is the binding\'s own options object — e.g.\n   * `{ gateway: { id: "default", skipCache: true } }` — passed through to\n   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */\n  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;\n  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */\n  toMarkdown(\n    ...args: CfMarkdownConversionArgs\n  ): Promise<\n    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]\n  >;\n}',
+      '/** Workers AI binding exposed through itx as a project/agent capability. */\nexport interface Ai {\n  __describe(): Promise<Description>;\n  /** List the Workers AI model catalog. */\n  models(): Promise<unknown>;\n  /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).\n   * The optional third argument is the binding\'s own options object — e.g.\n   * `{ gateway: { id: "default", skipCache: true } }` — passed through to\n   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */\n  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;\n  /** Calling with no arguments lists the file formats the converter accepts. */\n  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;\n  /** Convert one document (`{ name, blob }`) to Markdown. */\n  toMarkdown(\n    document: CfMarkdownDocument,\n    options?: CfMarkdownConversionOptions,\n  ): Promise<CfMarkdownConversionResult>;\n  /** Convert a batch of documents to Markdown; results come back in input order. */\n  toMarkdown(\n    documents: CfMarkdownDocument[],\n    options?: CfMarkdownConversionOptions,\n  ): Promise<CfMarkdownConversionResult[]>;\n}',
     summary: "Workers AI binding exposed through itx as a project/agent capability.",
     memberSummaries: {
       models: "List the Workers AI model catalog.",
       run: 'Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).',
-      toMarkdown:
-        "Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list.",
+      toMarkdown: "Convert a batch of documents to Markdown; results come back in input order.",
     },
     referencedTypeNames: [
       "Description",
       "CfAiRunOptions",
-      "CfMarkdownConversionArgs",
       "CfMarkdownSupportedFormat",
+      "CfMarkdownDocument",
+      "CfMarkdownConversionOptions",
       "CfMarkdownConversionResult",
     ],
   },
@@ -1162,22 +1162,32 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "CfMarkdownConversionArgs",
-    kind: "typeAlias",
-    sourceText:
-      "/** The `ai.toMarkdown` argument tuple: empty lists the supported formats;\n * otherwise one document (or an array) plus optional conversion options\n * converts to markdown. */\nexport type CfMarkdownConversionArgs =\n  | []\n  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];",
-    summary:
-      "The `ai.toMarkdown` argument tuple: empty lists the supported formats; otherwise one document (or an array) plus optional conversion options converts to markdown.",
-    memberSummaries: {},
-    referencedTypeNames: ["CfMarkdownDocument", "CfMarkdownConversionOptions"],
-  },
-  {
     name: "CfMarkdownSupportedFormat",
     kind: "typeAlias",
     sourceText:
       "/** One file format the markdown converter accepts (extension plus MIME type);\n * `ai.toMarkdown()` with no arguments returns the full list. */\nexport type CfMarkdownSupportedFormat = {\n  extension: string;\n  mimeType: string;\n};",
     summary:
       "One file format the markdown converter accepts (extension plus MIME type); `ai.toMarkdown()` with no arguments returns the full list.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfMarkdownDocument",
+    kind: "typeAlias",
+    sourceText:
+      "/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):\n * a filename plus the raw bytes as a Blob. */\nexport type CfMarkdownDocument = {\n  /** Filename including the extension; Cloudflare uses it to choose the converter. */\n  name: string;\n  blob: Blob;\n};",
+    summary:
+      "One input document for Workers AI markdown conversion (`ai.toMarkdown`): a filename plus the raw bytes as a Blob.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "CfMarkdownConversionOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,\n * hostname for relative links), image description language, PDF metadata\n * exclusion. */\nexport type CfMarkdownConversionOptions = {\n  conversionOptions?: {\n    html?: {\n      cssSelector?: string;\n      hostname?: string;\n    };\n    image?: {\n      descriptionLanguage?: string;\n    };\n    pdf?: {\n      excludeMetadata?: boolean;\n    };\n  };\n};",
+    summary:
+      "Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector, hostname for relative links), image description language, PDF metadata exclusion.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -1850,26 +1860,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       '/** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */\nexport type AgentStatusRecord = {\n  busy?: boolean | undefined;\n  phase?: "llm" | "script" | undefined;\n  sinceOffset?: number | undefined;\n  blocked?: boolean | undefined;\n  title?: string | undefined;\n  note?: string | undefined;\n  shortStatus?: string | undefined;\n  icon?: string | undefined;\n};',
     summary:
       "The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "CfMarkdownDocument",
-    kind: "typeAlias",
-    sourceText:
-      "/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):\n * a filename plus the raw bytes as a Blob. */\nexport type CfMarkdownDocument = {\n  /** Filename including the extension; Cloudflare uses it to choose the converter. */\n  name: string;\n  blob: Blob;\n};",
-    summary:
-      "One input document for Workers AI markdown conversion (`ai.toMarkdown`): a filename plus the raw bytes as a Blob.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "CfMarkdownConversionOptions",
-    kind: "typeAlias",
-    sourceText:
-      "/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,\n * hostname for relative links), image description language, PDF metadata\n * exclusion. */\nexport type CfMarkdownConversionOptions = {\n  conversionOptions?: {\n    html?: {\n      cssSelector?: string;\n      hostname?: string;\n    };\n    image?: {\n      descriptionLanguage?: string;\n    };\n    pdf?: {\n      excludeMetadata?: boolean;\n    };\n  };\n};",
-    summary:
-      "Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector, hostname for relative links), image description language, PDF metadata exclusion.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

@@ -246,7 +246,9 @@ import type {
   CfImageTransformInput,
   CfAiRunOptions,
   CfMarkdownConversionArgs,
+  CfMarkdownConversionOptions,
   CfMarkdownConversionResult,
+  CfMarkdownDocument,
   CfMarkdownSupportedFormat,
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
@@ -2697,7 +2699,18 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
     return env.AI.run(model, body as Record<string, unknown>, merged as AiRunOptions | undefined);
   }
 
-  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */
+  /** Calling with no arguments lists the file formats the converter accepts. */
+  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
+  /** Convert one document (`{ name, blob }`) to Markdown. */
+  toMarkdown(
+    document: CfMarkdownDocument,
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult>;
+  /** Convert a batch of documents to Markdown; results come back in input order. */
+  toMarkdown(
+    documents: CfMarkdownDocument[],
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult[]>;
   toMarkdown(
     ...args: CfMarkdownConversionArgs
   ): Promise<

@@ -12,7 +12,6 @@ import type {
   Agent,
   AgentChat,
   CapabilityProvision,
-  CfMarkdownSupportedFormat,
   DynamicWorkerRef,
   FileData,
   FileHandle,
@@ -1493,7 +1492,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
       };
     },
   }),
-  projectExample<ToMarkdownNoArgGap>({
+  projectExample({
     id: "cf-ai-to-markdown",
     e2eProven: false,
     title: "Convert a document to Markdown with Workers AI",
@@ -1949,11 +1948,6 @@ type GmailDataGap = {
     };
   };
 };
-
-/** `ai.toMarkdown()`'s no-argument call returns the supported-format list;
- * the generated union covers all call shapes at once, so the no-arg arity
- * needs this narrowing. */
-type ToMarkdownNoArgGap = { ai: { toMarkdown(): Promise<CfMarkdownSupportedFormat[]> } };
 
 /** `itx.ai.run` returns `unknown` in the generated surface (outputs are
  * model-shaped); entries that read a specific model's response fields use

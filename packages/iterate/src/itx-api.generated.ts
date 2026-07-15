@@ -280,12 +280,18 @@ export interface Ai {
    * `{ gateway: { id: "default", skipCache: true } }` — passed through to
    * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
   run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;
-  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */
+  /** Calling with no arguments lists the file formats the converter accepts. */
+  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
+  /** Convert one document (`{ name, blob }`) to Markdown. */
   toMarkdown(
-    ...args: CfMarkdownConversionArgs
-  ): Promise<
-    CfMarkdownSupportedFormat[] | CfMarkdownConversionResult | CfMarkdownConversionResult[]
-  >;
+    document: CfMarkdownDocument,
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult>;
+  /** Convert a batch of documents to Markdown; results come back in input order. */
+  toMarkdown(
+    documents: CfMarkdownDocument[],
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult[]>;
 }
 
 /** Cloudflare Browser Run binding exposed through itx. */
@@ -2071,18 +2077,37 @@ export type CfAiRunOptions = {
   returnRawResponse?: boolean;
 };
 
-/** The `ai.toMarkdown` argument tuple: empty lists the supported formats;
- * otherwise one document (or an array) plus optional conversion options
- * converts to markdown. */
-export type CfMarkdownConversionArgs =
-  | []
-  | [documents: CfMarkdownDocument | CfMarkdownDocument[], options?: CfMarkdownConversionOptions];
-
 /** One file format the markdown converter accepts (extension plus MIME type);
  * `ai.toMarkdown()` with no arguments returns the full list. */
 export type CfMarkdownSupportedFormat = {
   extension: string;
   mimeType: string;
+};
+
+/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
+ * a filename plus the raw bytes as a Blob. */
+export type CfMarkdownDocument = {
+  /** Filename including the extension; Cloudflare uses it to choose the converter. */
+  name: string;
+  blob: Blob;
+};
+
+/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
+ * hostname for relative links), image description language, PDF metadata
+ * exclusion. */
+export type CfMarkdownConversionOptions = {
+  conversionOptions?: {
+    html?: {
+      cssSelector?: string;
+      hostname?: string;
+    };
+    image?: {
+      descriptionLanguage?: string;
+    };
+    pdf?: {
+      excludeMetadata?: boolean;
+    };
+  };
 };
 
 /** One converted document from `ai.toMarkdown`: `format` is "markdown" with
@@ -3372,32 +3397,6 @@ export type AgentStatusRecord = {
   note?: string | undefined;
   shortStatus?: string | undefined;
   icon?: string | undefined;
-};
-
-/** One input document for Workers AI markdown conversion (`ai.toMarkdown`):
- * a filename plus the raw bytes as a Blob. */
-export type CfMarkdownDocument = {
-  /** Filename including the extension; Cloudflare uses it to choose the converter. */
-  name: string;
-  blob: Blob;
-};
-
-/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
- * hostname for relative links), image description language, PDF metadata
- * exclusion. */
-export type CfMarkdownConversionOptions = {
-  conversionOptions?: {
-    html?: {
-      cssSelector?: string;
-      hostname?: string;
-    };
-    image?: {
-      descriptionLanguage?: string;
-    };
-    pdf?: {
-      excludeMetadata?: boolean;
-    };
-  };
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */

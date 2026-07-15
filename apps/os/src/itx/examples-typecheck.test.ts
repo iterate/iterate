@@ -160,9 +160,6 @@ const SURFACE_GAPS: Record<string, string> = {
   "gmail-search-inbox":
     "GmailConnection.request() data is unknown (resource-shaped); the body reads list/get resources " +
     "dynamically",
-  "cf-ai-to-markdown":
-    "ai.toMarkdown()'s return is the union over all call shapes; the no-arg call's format list is " +
-    "narrowed per entry in examples-source.ts",
   "ai-generate-text":
     "ai.run() returns unknown (model-shaped output); the body reads result.response",
   "ai-generate-image": "ai.run() returns unknown; the body reads response.image",
