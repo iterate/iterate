@@ -255,7 +255,7 @@ describe("preview workflow scope", () => {
     expect(cleanupWorkflowText).not.toContain("cloudflare-preview-fleet-auth-rpc-cutover");
   });
 
-  it("always runs cleanup on close with default-branch tooling (no paths filter)", () => {
+  test("always runs cleanup on close with default-branch tooling (no paths filter)", () => {
     const cleanupWorkflowText = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-preview-cleanup.yml"),
       "utf8",
@@ -274,7 +274,7 @@ describe("preview workflow scope", () => {
     expect(cleanupWorkflowText).not.toContain("github.event.pull_request.head.sha");
   });
 
-  it("sweeps expired leases on a schedule from default-branch tooling", () => {
+  test("sweeps expired leases on a schedule from default-branch tooling", () => {
     const gcWorkflowText = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-preview-gc.yml"),
       "utf8",
@@ -1697,13 +1697,13 @@ describe("lease reclaim verdicts", () => {
 describe("preview fleet capacity diagnosis", () => {
   const { diagnosePreviewFleetCapacity, pullRequestWouldClaimPreviewSlot } = previewInternals;
 
-  it("treats ready PRs and preview-labeled drafts as slot-eligible", () => {
+  test("treats ready PRs and preview-labeled drafts as slot-eligible", () => {
     expect(pullRequestWouldClaimPreviewSlot({ isDraft: false, labels: [] })).toBe(true);
     expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: ["preview"] })).toBe(true);
     expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: [] })).toBe(false);
   });
 
-  it("does not call a label-less draft slot-less when it actually holds one (--allow-draft)", () => {
+  test("does not call a label-less draft slot-less when it actually holds one (--allow-draft)", () => {
     const diagnosis = diagnosePreviewFleetCapacity({
       openPullRequests: [
         {
@@ -1732,7 +1732,7 @@ describe("preview fleet capacity diagnosis", () => {
     expect(diagnosis.reasons.some((reason) => reason.includes("claim no slot"))).toBe(false);
   });
 
-  it("explains a full fleet held mostly by closed PRs despite few open ones", () => {
+  test("explains a full fleet held mostly by closed PRs despite few open ones", () => {
     const diagnosis = diagnosePreviewFleetCapacity({
       openPullRequests: [
         {
@@ -1788,7 +1788,7 @@ describe("gc expired-lease selection", () => {
   const now = 1_000_000_000_000;
   const base = { data: {}, lastReleasedAt: null, lastAcquiredAt: null };
 
-  it("selects only leased slots whose lease is at or past expiry", () => {
+  test("selects only leased slots whose lease is at or past expiry", () => {
     const selected = selectExpiredLeasesForGc(
       [
         // Live lease — a PR is still using it, skip.
@@ -1818,7 +1818,7 @@ describe("gc expired-lease selection", () => {
     expect(selected.map((slot) => slot.slug)).toEqual(["preview-2", "preview-3"]);
   });
 
-  it("resolves the doppler config from lease data, else derives it from the slug", () => {
+  test("resolves the doppler config from lease data, else derives it from the slug", () => {
     const selected = selectExpiredLeasesForGc(
       [
         {
