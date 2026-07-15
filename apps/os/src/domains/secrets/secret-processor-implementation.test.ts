@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
+import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
@@ -13,12 +14,21 @@ const neverStream = new Proxy({} as Stream, {
   },
 });
 
-function processor() {
-  return new SecretProcessor({
+/** REAL runner drive with hand-built frames (offsets preserved verbatim);
+ * the never-stream proves the fold makes no stream calls of its own. */
+function subject() {
+  const processor = new SecretProcessor({
     path: "/secrets/example",
     projectId: "prj_example",
     stream: neverStream,
   });
+  const runner = new StreamProcessorRunner({ processor, stream: neverStream });
+  return {
+    async deliver(frame: { events: StreamEvent[]; streamMaxOffset: number }) {
+      await (await runner.openDelivery()).sink(frame);
+    },
+    snapshot: () => runner.snapshot(),
+  };
 }
 
 function updated(offset: number, payload: Record<string, unknown>): StreamEvent {
@@ -39,8 +49,8 @@ const encryptedMaterial = {
 
 describe("SecretProcessor material decisions", () => {
   test("records the committed offset with material", async () => {
-    const subject = processor();
-    await subject.ingest({
+    const driver = subject();
+    await driver.deliver({
       events: [
         updated(7, {
           egress: { urls: ["https://api.example.com"] },
@@ -50,14 +60,14 @@ describe("SecretProcessor material decisions", () => {
       streamMaxOffset: 7,
     });
 
-    await expect(subject.snapshot()).resolves.toMatchObject({
+    await expect(driver.snapshot()).resolves.toMatchObject({
       state: { encryptedMaterial: { ...encryptedMaterial, offset: 7 }, updatedOffset: 7 },
     });
   });
 
   test("every material-less update clears retained material", async () => {
-    const subject = processor();
-    await subject.ingest({
+    const driver = subject();
+    await driver.deliver({
       events: [
         updated(1, {
           egress: { urls: ["https://api.example.com"] },
@@ -70,7 +80,7 @@ describe("SecretProcessor material decisions", () => {
       streamMaxOffset: 2,
     });
 
-    await expect(subject.snapshot()).resolves.toMatchObject({
+    await expect(driver.snapshot()).resolves.toMatchObject({
       offset: 2,
       state: { encryptedMaterial: null, refresh: null, updatedOffset: 2 },
     });

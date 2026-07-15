@@ -3,7 +3,7 @@
 
 import { MemoryStreamNetwork as CanonicalMemoryStreamNetwork } from "../streams/test-helpers.ts";
 
-export { MemoryStream, deliverNewEvents } from "../streams/test-helpers.ts";
+export { MemoryStream } from "../streams/test-helpers.ts";
 
 /**
  * The canonical network with its clock pinned to the epoch: the GitHub agent

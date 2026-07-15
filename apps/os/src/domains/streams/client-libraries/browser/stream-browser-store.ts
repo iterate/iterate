@@ -1384,9 +1384,13 @@ function createStreamRuntime(
         // descriptor — the same position the wake handshake gives them,
         // built by the same shared helper so the two hosts cannot drift.
         // Half our measured transport RTT is the one-way estimate that
-        // turns observed pings into the clock-offset correction.
+        // turns observed pings into the clock-offset correction. The SNAPSHOT
+        // half of runtime state comes from the runner's committed progress —
+        // the runner owns the cursors; the processor contributes only its
+        // runtime bag (metrics merged in by the helper).
         const capabilities = hostRuntimeCapabilities(processor, {
           now: () => Date.now(),
+          snapshot: () => runner.snapshot(),
           oneWayEstimateMs: () => {
             const rtt = transportRtt.stats();
             return rtt === null ? undefined : rtt.p50 / 2;
@@ -1401,16 +1405,7 @@ function createStreamRuntime(
               announcement: announceContract(processor.contract),
             },
           },
-          // The processor's own runtime bag and metrics, but the SNAPSHOT
-          // re-pinned to the runner's committed progress (the registry
-          // cutover's read-your-writes repointing): the runner owns the
-          // cursors now, and the processor's legacy internal checkpoint —
-          // which runner drive never advances — would report the schema
-          // default forever to the processor inspector panels.
-          getRuntimeState: async () => ({
-            ...(await capabilities.getRuntimeState()),
-            snapshot: await runner.snapshot(),
-          }),
+          getRuntimeState: capabilities.getRuntimeState,
           ping: capabilities.ping,
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is

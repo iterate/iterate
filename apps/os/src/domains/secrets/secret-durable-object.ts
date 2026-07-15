@@ -16,6 +16,7 @@ import {
 } from "../integrations/github-app.ts";
 import { isStreamOffsetConflictError } from "../streams/rpc-types.ts";
 import type { StreamEventInput } from "../streams/schemas.ts";
+import type { ProcessorState } from "../streams/processor-contracts.ts";
 import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
 import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.ts";
 import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
@@ -31,7 +32,7 @@ import {
 } from "./utils.ts";
 import { withWebSocketHandshakeHeaders } from "./websocket-handshake.ts";
 
-type SecretState = InstanceType<typeof SecretProcessor>["state"];
+type SecretState = ProcessorState<typeof SecretProcessorContract>;
 type SecretSnapshot = { offset: number; state: SecretState };
 const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
 

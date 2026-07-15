@@ -1,18 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
-import { MemoryStreamNetwork } from "../streams/test-helpers.ts";
+import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
-
-function event(type: string, payload: Record<string, unknown>, offset = 1): StreamEvent {
-  return {
-    type,
-    payload,
-    createdAt: new Date(offset).toISOString(),
-    offset,
-    path: "/projects/test",
-  };
-}
 
 function makeHarness() {
   const network = new MemoryStreamNetwork();
@@ -26,28 +15,25 @@ function makeHarness() {
     // (best-effort); the fake resolves so the saga's Promise.all settles.
     search: { ensureIndex: async () => ({ created: true }) },
   } as unknown as ProjectRpcTarget;
+  const stream = network.get("/");
   const processor = new ProjectProcessor({
-    stream: network.get("/"),
+    stream,
     path: "/",
     projectId: "prj_test",
     itx,
   });
-  return { network, processor };
+  return { network, stream, driver: driveProcessor(processor, stream) };
 }
 
 describe("ProjectProcessor bootstrap", () => {
   it("arms the config repo on its own stream: processor subscription, cross-post to /, create request", async () => {
-    const { network, processor } = makeHarness();
+    const { network, stream, driver } = makeHarness();
 
-    await processor.ingest({
-      events: [
-        event("events.iterate.com/project/create-requested", {
-          projectId: "prj_test",
-          slug: "demo",
-        }),
-      ],
-      streamMaxOffset: 1,
+    await stream.append({
+      type: "events.iterate.com/project/create-requested",
+      payload: { projectId: "prj_test", slug: "demo" },
     });
+    await driver.deliver();
 
     const configRepo = network.eventsAt("/repos/config");
     expect(configRepo.map((streamEvent) => streamEvent.type)).toEqual([
@@ -71,48 +57,37 @@ describe("ProjectProcessor bootstrap", () => {
   });
 
   it("completes the saga from the (cross-posted) repo/created fact for the config repo", async () => {
-    const { network, processor } = makeHarness();
+    const { network, stream, driver } = makeHarness();
 
-    await processor.ingest({
-      events: [
-        event("events.iterate.com/project/create-requested", {
-          projectId: "prj_test",
-          slug: "demo",
-        }),
-      ],
-      streamMaxOffset: 1,
+    await stream.append({
+      type: "events.iterate.com/project/create-requested",
+      payload: { projectId: "prj_test", slug: "demo" },
     });
-    await processor.ingest({
-      events: [
-        {
-          ...event(
-            "events.iterate.com/repo/created",
-            {
-              artifactName: "prj_test--L3JlcG9zL2NvbmZpZw",
-              defaultBranch: "main",
-              path: "/repos/config",
-              projectId: "prj_test",
-              remote: "https://example.artifacts.cloudflare.net/git/ns/x.git",
-            },
-            2,
-          ),
-          // As delivered on `/`: a cross-posted copy with provenance.
-          source: {
-            crossPostedFrom: [
-              {
-                subscriptionKey: "cross-post:/",
-                createdAt: new Date(2).toISOString(),
-                offset: 4,
-                path: "/repos/config",
-                projectId: "prj_test",
-                type: "events.iterate.com/repo/created",
-              },
-            ],
+    await driver.deliver();
+    await stream.append({
+      type: "events.iterate.com/repo/created",
+      payload: {
+        artifactName: "prj_test--L3JlcG9zL2NvbmZpZw",
+        defaultBranch: "main",
+        path: "/repos/config",
+        projectId: "prj_test",
+        remote: "https://example.artifacts.cloudflare.net/git/ns/x.git",
+      },
+      // As delivered on `/`: a cross-posted copy with provenance.
+      source: {
+        crossPostedFrom: [
+          {
+            subscriptionKey: "cross-post:/",
+            createdAt: new Date(2).toISOString(),
+            offset: 4,
+            path: "/repos/config",
+            projectId: "prj_test",
+            type: "events.iterate.com/repo/created",
           },
-        },
-      ],
-      streamMaxOffset: 2,
+        ],
+      },
     });
+    await driver.deliver();
 
     const rootTypes = network.eventsAt("/").map((streamEvent) => streamEvent.type);
     expect(rootTypes).toContain("events.iterate.com/project/created");
@@ -121,16 +96,13 @@ describe("ProjectProcessor bootstrap", () => {
 
 describe("ProjectProcessor agent birth", () => {
   it("appends only processor subscriptions at birth — policy comes from the project worker", async () => {
-    const { network, processor } = makeHarness();
+    const { network, stream, driver } = makeHarness();
 
-    await processor.ingest({
-      events: [
-        event("events.iterate.com/stream/child-stream-created", {
-          childPath: "/agents/demo",
-        }),
-      ],
-      streamMaxOffset: 1,
+    await stream.append({
+      type: "events.iterate.com/stream/child-stream-created",
+      payload: { childPath: "/agents/demo" },
     });
+    await driver.deliver();
 
     // Mechanics only. System prompt, model selection, capability mounts,
     // and boot context are appended by the project worker via

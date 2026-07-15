@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useReducer, useSyncExternalStore } from "react";
 import type { Stream } from "../../../../../itx-api.generated.ts";
-import type { StreamProcessorStateStorage } from "../../../stream-processor.ts";
 import type { SqlClient } from "../stream-browser-db.ts";
 import {
   acquireStreamRuntime,
@@ -14,18 +13,17 @@ import {
  * What every browser-hosted processor's constructor receives: the stream
  * connection and the local SQLite client. Having one canonical shape is what
  * lets {@link useStreamProcessorStore} construct any processor class. The
- * legacy checkpoint storage hooks stay in the type (optional) for
- * compatibility, but the hook no longer wires them: the runtime drives the
- * processor with a StreamProcessorRunner whose progress lives in the
- * transactional browser progress store, not in the processor instance.
+ * runtime drives the processor with a StreamProcessorRunner whose progress
+ * lives in the transactional browser progress store, not in the processor
+ * instance — so there is no checkpoint wiring here.
  */
-type BrowserProcessorConstructorArgs<State> = {
+type BrowserProcessorConstructorArgs = {
   stream: Stream;
   /** The mirrored stream's identity (StreamProcessor base deps). */
   path: string;
   projectId: string;
   sql: SqlClient;
-} & StreamProcessorStateStorage<State>;
+};
 
 /**
  * Mount a browser-hosted stream processor and subscribe this component to its
@@ -39,7 +37,7 @@ type BrowserProcessorConstructorArgs<State> = {
  * `acquireStreamRuntime` dedupes by (projectId, streamPath, slug), so
  * remounts and re-renders join the existing runtime instead of re-replaying.
  */
-export function useStreamProcessorStore<State>(input: {
+export function useStreamProcessorStore(input: {
   createStreamClient: BrowserStreamClientFactory;
   /** See BrowserStreamConnectionConfig.resetTransport — evict a dead-but-never-closed transport. */
   resetTransport?: () => void;
@@ -51,7 +49,7 @@ export function useStreamProcessorStore<State>(input: {
   tables: string[];
   resetOnSchemaVersionChange?: boolean;
   Processor: new (
-    args: BrowserProcessorConstructorArgs<State>,
+    args: BrowserProcessorConstructorArgs,
   ) => ReturnType<BrowserProcessorConfig["createProcessor"]>;
 }): { store: StreamBrowserStore; snapshot: StreamBrowserSnapshot } {
   const {

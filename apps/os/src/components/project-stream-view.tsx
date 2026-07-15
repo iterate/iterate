@@ -22,14 +22,12 @@ import {
   BROWSER_RAW_EVENTS_TABLES,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
-  type BrowserRawEventsState,
 } from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
 import {
   BROWSER_FEED_SCHEMA_VERSION,
   BROWSER_FEED_TABLE,
   BrowserFeedContract,
   BrowserFeedProcessor,
-  type BrowserFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
@@ -190,7 +188,7 @@ export function ProjectStreamView({
   // every mode (pretty chat rows and raw rows in one total order) and whose
   // reduced state carries the live activity + presence the header derives
   // presence/busy from — which is why it mounts here, not in the feed body.
-  const { store, snapshot } = useStreamProcessorStore<BrowserRawEventsState>({
+  const { store, snapshot } = useStreamProcessorStore({
     createStreamClient: streamClientFactory,
     ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
@@ -200,7 +198,7 @@ export function ProjectStreamView({
     tables: BROWSER_RAW_EVENTS_TABLES,
     Processor: BrowserRawEventsProcessor,
   });
-  const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore<BrowserFeedState>({
+  const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore({
     createStreamClient: streamClientFactory,
     ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,

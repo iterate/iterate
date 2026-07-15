@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import { EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
-import { MemoryStreamNetwork, deliverNewEvents } from "../streams/test-helpers.ts";
+import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
 import { EmailProcessor } from "./email-processor-implementation.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
@@ -39,13 +39,13 @@ describe("EmailProcessor (thread router)", () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
     const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/email/received",
       payload: receivedPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     // The route fact lands on the router's own stream, keyed by offset 1…
     const routeEvents = stream.events.filter(
@@ -66,15 +66,15 @@ describe("EmailProcessor (thread router)", () => {
       "events.iterate.com/email/received",
     ]);
     expect(routed[1]!.payload).toEqual(receivedPayload({}));
-    expect(processor.state.threads).toEqual({ "1": "/agents/email/t1" });
-    expect(processor.state.threadByMessageId).toEqual({ "msg-1@mail.example": "1" });
+    expect(driver.state.threads).toEqual({ "1": "/agents/email/t1" });
+    expect(driver.state.threadByMessageId).toEqual({ "msg-1@mail.example": "1" });
   });
 
   it("routes a +t-tagged reply to the existing thread without a new route", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
     const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/email/received",
@@ -84,7 +84,7 @@ describe("EmailProcessor (thread router)", () => {
       type: "events.iterate.com/email/received",
       payload: receivedPayload({ threadTag: "1", messageId: "msg-2@mail.example" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     const routed = network
       .eventsAt("/agents/email/t1")
@@ -96,14 +96,14 @@ describe("EmailProcessor (thread router)", () => {
       ),
     ).toHaveLength(1);
     // The reply's message id joined the thread index too.
-    expect(processor.state.threadByMessageId["msg-2@mail.example"]).toBe("1");
+    expect(driver.state.threadByMessageId["msg-2@mail.example"]).toBe("1");
   });
 
   it("routes an untagged reply via In-Reply-To/References to the existing thread", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
     const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/email/received",
@@ -117,7 +117,7 @@ describe("EmailProcessor (thread router)", () => {
         references: ["msg-1@mail.example"],
       }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     expect(
       network
@@ -131,7 +131,7 @@ describe("EmailProcessor (thread router)", () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
     const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/email/received",
@@ -158,7 +158,7 @@ describe("EmailProcessor (thread router)", () => {
         inReplyTo: "out-1@iterate.app",
       }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     expect(
       network
@@ -171,7 +171,7 @@ describe("EmailProcessor (thread router)", () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
     const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append(
       {
@@ -187,9 +187,9 @@ describe("EmailProcessor (thread router)", () => {
         payload: { pattern: "*@iterate.com" },
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
-    expect(processor.state.allowedSenders).toEqual(["jonas@example.com", "*@iterate.com"]);
+    expect(driver.state.allowedSenders).toEqual(["jonas@example.com", "*@iterate.com"]);
   });
 
   it("forwards replies to agent-initiated threads to the SENDING agent's stream", async () => {
@@ -199,7 +199,7 @@ describe("EmailProcessor (thread router)", () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
     const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append(
       {
@@ -235,7 +235,7 @@ describe("EmailProcessor (thread router)", () => {
         inReplyTo: "out-slack-1@iterate.app",
       }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     const forwarded = network
       .eventsAt("/agents/slack/conn/c123/ts-1")
@@ -249,16 +249,16 @@ describe("EmailProcessor (thread router)", () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
     const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/email/received",
       payload: receivedPayload({ threadTag: "999" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     // The unknown tag did NOT become the thread id; the offset did.
-    expect(processor.state.threads).toEqual({ "1": "/agents/email/t1" });
+    expect(driver.state.threads).toEqual({ "1": "/agents/email/t1" });
     expect(network.streams.has("/agents/email/t999")).toBe(false);
   });
 
@@ -276,19 +276,20 @@ describe("EmailProcessor (thread router)", () => {
       return originalRoutedAppend(...inputs);
     };
     const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
-    const [received] = await stream.append({
+    const driver = driveProcessor(processor, stream);
+    await stream.append({
       type: "events.iterate.com/email/received",
       payload: receivedPayload({}),
     });
 
-    await expect(processor.ingest({ events: [received!], streamMaxOffset: 1 })).rejects.toThrow(
-      /StreamsCapability/,
-    );
-    expect(processor.checkpointOffset).toBe(0);
+    await expect(driver.deliver()).rejects.toThrow(/StreamsCapability/);
+    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 0 });
     expect(routed.events).toHaveLength(0);
 
-    await processor.ingest({ events: [received!], streamMaxOffset: 1 });
-    expect(processor.checkpointOffset).toBe(1);
+    // The retry replays from the un-advanced cursor; the forward lands and
+    // the cursor advances through the route fact the failed attempt had
+    // already committed to the router's own stream.
+    await driver.deliver();
     expect(routed.events.map((event) => event.type)).toEqual([
       "events.iterate.com/email/thread-route-configured",
       "events.iterate.com/email/received",
@@ -315,8 +316,8 @@ describe("EmailAgentProcessor", () => {
       projectId: null,
       ...deps,
     });
-    const cursors = new Map<object, number>();
-    return { cursors, network, processor, stream };
+    const driver = driveProcessor(processor, stream);
+    return { driver, network, processor, stream };
   }
 
   it("attaches door-stored attachments to the agent input as files", async () => {
@@ -328,7 +329,7 @@ describe("EmailAgentProcessor", () => {
       url: "https://iterate-files--acme.iterate.app/report.pdf?sig=x",
     };
     const seen: unknown[] = [];
-    const { cursors, processor, stream } = setup({
+    const { driver, stream } = setup({
       resolveStoredAttachments: async (attachments) => {
         seen.push(attachments);
         return [resolved];
@@ -347,7 +348,7 @@ describe("EmailAgentProcessor", () => {
       { filename: "broken.bin", mimeType: null, size: 10 },
     ];
     await stream.append({ type: "events.iterate.com/email/received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     expect(seen).toEqual([
       [
@@ -367,7 +368,7 @@ describe("EmailAgentProcessor", () => {
   });
 
   it("degrades to a plain transcription when attachment resolution fails", async () => {
-    const { cursors, processor, stream } = setup({
+    const { driver, stream } = setup({
       resolveStoredAttachments: async () => {
         throw new Error("signing exploded");
       },
@@ -378,7 +379,7 @@ describe("EmailAgentProcessor", () => {
       { filename: "cat.png", mimeType: "image/png", size: 3, path: "/email/inbound/msg-0-cat.png" },
     ];
     await stream.append({ type: "events.iterate.com/email/received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -389,7 +390,7 @@ describe("EmailAgentProcessor", () => {
   });
 
   it("captures thread context and transcribes inbound mail into triggering agent input", async () => {
-    const { cursors, processor, stream } = setup();
+    const { driver, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/email/thread-route-configured",
@@ -404,7 +405,7 @@ describe("EmailAgentProcessor", () => {
       type: "events.iterate.com/email/received",
       payload: receivedPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -417,7 +418,7 @@ describe("EmailAgentProcessor", () => {
     // The contract default (triggering) policy applies to human mail.
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
 
-    expect(processor.state).toMatchObject({
+    expect(driver.state).toMatchObject({
       threadId: "1",
       streamPath: "/agents/email/t1",
       counterpart: "jonas@example.com",
@@ -426,13 +427,13 @@ describe("EmailAgentProcessor", () => {
   });
 
   it("records automated mail as non-triggering input (mail-loop guard)", async () => {
-    const { cursors, processor, stream } = setup();
+    const { driver, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/email/received",
       payload: receivedPayload({ automated: true }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -444,7 +445,7 @@ describe("EmailAgentProcessor", () => {
   });
 
   it("never lets automated mail become the thread counterpart", async () => {
-    const { cursors, processor, stream } = setup();
+    const { driver, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/email/received",
@@ -454,14 +455,14 @@ describe("EmailAgentProcessor", () => {
       type: "events.iterate.com/email/received",
       payload: receivedPayload({ automated: true, from: "mailer-daemon@example.com" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     // The human sender stays the counterpart even after a later bounce.
-    expect(processor.state.counterpart).toBe("jonas@example.com");
+    expect(driver.state.counterpart).toBe("jonas@example.com");
   });
 
   it("ignores the project's own mail looping back, including for counterpart state", async () => {
-    const { cursors, processor, stream } = setup();
+    const { driver, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/email/received",
@@ -471,65 +472,65 @@ describe("EmailAgentProcessor", () => {
       type: "events.iterate.com/email/received",
       payload: receivedPayload({ from: "acme@iterate.app" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(1);
     // Our own looped-back mail never becomes the thread counterpart — the
     // human sender stays the reply target.
-    expect(processor.state.counterpart).toBe("jonas@example.com");
+    expect(driver.state.counterpart).toBe("jonas@example.com");
   });
 
   it("falls back to the envelope from when MIME parsing yields no From mailbox", async () => {
-    const { cursors, processor, stream } = setup();
+    const { driver, stream } = setup();
 
     const payload = receivedPayload({});
     payload.message.from = { name: "Jonas" };
     await stream.append({ type: "events.iterate.com/email/received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     // The envelope sender — the address ingress authenticated — becomes the
     // counterpart, so email.reply still has a target.
-    expect(processor.state.counterpart).toBe("jonas@example.com");
+    expect(driver.state.counterpart).toBe("jonas@example.com");
   });
 
   it("filters mail from the project's own tagged addresses as loop-back", async () => {
-    const { cursors, processor, stream } = setup();
+    const { driver, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/email/received",
       payload: receivedPayload({ from: "acme+t42@iterate.app" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toHaveLength(0);
-    expect(processor.state.counterpart).toBeUndefined();
+    expect(driver.state.counterpart).toBeUndefined();
   });
 
   it("skips a Reply-To pointing back at the project itself (never mail ourselves)", async () => {
-    const { cursors, processor, stream } = setup();
+    const { driver, stream } = setup();
 
     const payload = receivedPayload({});
     payload.message.replyToAddress = "acme+t1@iterate.app";
     await stream.append({ type: "events.iterate.com/email/received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     // The project-owned Reply-To is skipped; the human From wins.
-    expect(processor.state.counterpart).toBe("jonas@example.com");
+    expect(driver.state.counterpart).toBe("jonas@example.com");
   });
 
   it("prefers Reply-To over From as the thread counterpart", async () => {
-    const { cursors, processor, stream } = setup();
+    const { driver, stream } = setup();
 
     const payload = receivedPayload({});
     payload.message.replyToAddress = "replies@example.com";
     await stream.append({ type: "events.iterate.com/email/received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
-    expect(processor.state.counterpart).toBe("replies@example.com");
+    expect(driver.state.counterpart).toBe("replies@example.com");
   });
 });
 

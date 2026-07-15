@@ -431,7 +431,7 @@ describe("StreamProcessorRunner batch-division invariance", () => {
       args.blockProcessorWhile(() =>
         args.appendTo(SIBLING, {
           type: ECHOED,
-          idempotencyKey: args.delivery!.idempotencyKey("echo"),
+          idempotencyKey: args.delivery.idempotencyKey("echo"),
           payload: { id: args.event.payload.id },
         }),
       );
@@ -585,7 +585,7 @@ describe("StreamProcessorRunner crash/redelivery", () => {
           }
           await args.appendTo(SIBLING, {
             type: ECHOED,
-            idempotencyKey: args.delivery!.idempotencyKey("echo"),
+            idempotencyKey: args.delivery.idempotencyKey("echo"),
             payload: { id: args.event.payload.id },
           });
         });
@@ -702,7 +702,7 @@ describe("StreamProcessorRunner reduce-only refold", () => {
         args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: ECHOED,
-            idempotencyKey: args.delivery!.idempotencyKey("echo"),
+            idempotencyKey: args.delivery.idempotencyKey("echo"),
             payload: { id: args.event.payload.id },
           }),
         );
@@ -865,7 +865,7 @@ describe("StreamProcessorRunner cursor-revision fencing", () => {
     const keys: string[] = [];
     const hooksB: TaskHooks = {
       onProcess: (args) => {
-        keys.push(args.delivery!.idempotencyKey("echo"));
+        keys.push(args.delivery.idempotencyKey("echo"));
       },
     };
     const b = a.crash({ hooks: hooksB });
@@ -913,7 +913,7 @@ describe("StreamProcessorRunner cursor-revision fencing", () => {
           args.blockProcessorWhile(() =>
             args.appendTo(SIBLING, {
               type: ECHOED,
-              idempotencyKey: args.delivery!.idempotencyKey("echo"),
+              idempotencyKey: args.delivery.idempotencyKey("echo"),
               payload: { id: args.event.payload.id },
             }),
           );
@@ -1096,7 +1096,7 @@ describe("StreamProcessorRunner onCaughtUp", () => {
     const hooks: TaskHooks = {
       onProcess: (args) => {
         processPhases.push(
-          `${args.event.offset}:${args.delivery!.phase}:${args.delivery!.eventsBehindObservedHead}`,
+          `${args.event.offset}:${args.delivery.phase}:${args.delivery.eventsBehindObservedHead}`,
         );
       },
       onHead: (args) => {
@@ -1257,7 +1257,7 @@ describe("StreamProcessorRunner idempotency keys", () => {
     const headKeys: string[] = [];
     const hooks: TaskHooks = {
       onProcess: (args) => {
-        eventKeys.push(args.delivery!.idempotencyKey("foo"));
+        eventKeys.push(args.delivery.idempotencyKey("foo"));
       },
       onHead: (args) => {
         headKeys.push(args.delivery.idempotencyKey("bar"));

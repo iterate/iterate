@@ -36,8 +36,8 @@ import {
 } from "../processors/browser-feed/implementation.ts";
 import {
   browserProcessorProgressStore,
-  browserProcessorStateStorage,
   deleteBrowserProcessorState,
+  ensureBrowserProcessorProgressSchema,
   resetBrowserProcessorProjection,
 } from "./processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "./stream-browser-db.ts";
@@ -142,39 +142,25 @@ const readLegacyRow = (sql: SqlClient, slug: string) =>
 const mirroredOffsets = async (sql: SqlClient) =>
   (await sql.exec(`SELECT offset FROM events ORDER BY offset`)).map((row) => Number(row.offset));
 
-describe("browserProcessorStateStorage", () => {
-  it("round-trips snapshots keyed by slug and subscription key", async () => {
-    const sql = wrap(new DatabaseSync(":memory:"));
-    const a = browserProcessorStateStorage<{ n: number }>({
-      sql,
-      processorSlug: "proc-a",
-      subscriptionKey: "sub-1",
-    });
-    const b = browserProcessorStateStorage<{ n: number }>({
-      sql,
-      processorSlug: "proc-a",
-      subscriptionKey: "sub-2",
-    });
-
-    expect(await a.readState()).toBeUndefined();
-
-    await a.writeState({ offset: 3, state: { n: 1 } });
-    await b.writeState({ offset: 9, state: { n: 2 } });
-    await a.writeState({ offset: 4, state: { n: 5 } });
-
-    expect(await a.readState()).toEqual({ offset: 4, state: { n: 5 } });
-    expect(await b.readState()).toEqual({ offset: 9, state: { n: 2 } });
-  });
-
+describe("deleteBrowserProcessorState", () => {
   it("deletes one subscription key, or every row for a slug when the key is omitted", async () => {
     const sql = wrap(new DatabaseSync(":memory:"));
+    await ensureBrowserProcessorProgressSchema(sql);
+    // Raw legacy-table rows (the retired-slug lane this function exists for).
     const write = (slug: string, key: string) =>
-      browserProcessorStateStorage({ sql, processorSlug: slug, subscriptionKey: key }).writeState({
-        offset: 1,
-        state: {},
-      });
-    const read = (slug: string, key: string) =>
-      browserProcessorStateStorage({ sql, processorSlug: slug, subscriptionKey: key }).readState();
+      sql.exec(
+        `INSERT INTO processor_state (processor_slug, subscription_key, reduced_state, max_offset)
+         VALUES (?, ?, '{}', 1)`,
+        [slug, key],
+      );
+    const read = async (slug: string, key: string) =>
+      (
+        await sql.exec(
+          `SELECT 1 AS present FROM processor_state
+           WHERE processor_slug = ? AND subscription_key = ?`,
+          [slug, key],
+        )
+      )[0];
 
     await write("proc-a", "sub-1");
     await write("proc-a", "sub-2");
@@ -409,10 +395,12 @@ describe("legacy checkpoint migration", () => {
         JSON.stringify(rawEvent(offset)),
       ]);
     }
-    await browserProcessorStateStorage<BrowserRawEventsState>({
-      sql: seedSql,
-      processorSlug: BrowserRawEventsContract.slug,
-    }).writeState({ offset: 2, state: {} });
+    await ensureBrowserProcessorProgressSchema(seedSql);
+    await seedSql.exec(
+      `INSERT INTO processor_state (processor_slug, subscription_key, reduced_state, max_offset)
+       VALUES (?, '', '{}', 2)`,
+      [BrowserRawEventsContract.slug],
+    );
 
     const load = rawEventsLoad(db);
     // The read CONVERTS the legacy record — acknowledgement preserved, never

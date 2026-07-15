@@ -18,8 +18,6 @@ export const BROWSER_FEED_TABLE = "feed_items";
 /** Bumped into the writer-lock name (and mirror meta) so a schema/projection change rebuilds the mirror. */
 export const BROWSER_FEED_SCHEMA_VERSION = 1;
 
-export type { BrowserFeedState };
-
 /**
  * Folds stream events into the single `feed_items` projection for the browser
  * feed UI. The projection logic lives in the pure `planBrowserFeedOps` helper,

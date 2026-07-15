@@ -168,7 +168,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   #reads: CapabilityHostProcessorReads;
 
   constructor(
-    args: StreamProcessorConstructorArgs<CapabilityHostProcessorContract, object> & {
+    args: StreamProcessorConstructorArgs & {
       itx: Project;
       path: string;
       /** Runner-backed fold reads — see {@link CapabilityHostProcessorReads}. */

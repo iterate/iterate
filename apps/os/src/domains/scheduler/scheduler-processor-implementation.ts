@@ -186,9 +186,10 @@ export class SchedulerProcessor extends StreamProcessor<
     await this.deps.repointAlarm(nextWakeAtMs(state, this.deps.now()));
   }
 
+  // The processor-contributed runtime bag only — the hosting registry pins
+  // the runner's snapshot under it before it leaves over RPC.
   override async getRuntimeState() {
     return {
-      snapshot: await this.deps.reads.snapshot(),
       runtime: {
         inflightExecutions: [...this.#inflightExecutions],
         nextAlarmAt: await this.deps.readAlarm(),

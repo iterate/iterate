@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { MemoryStreamNetwork, deliverNewEvents } from "../streams/test-helpers.ts";
+import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
 import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import {
   createStreamProcessorRegistry,
@@ -88,13 +88,13 @@ describe("SlackProcessor (webhook router)", () => {
         acked.push(payload);
       },
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append(connectedEvent(), {
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     // The route fact lands on the router's own stream…
     const routeEvents = stream.events.filter(
@@ -131,13 +131,13 @@ describe("SlackProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     const routed = network.eventsAt("/agents/slack/nustom/c123/ts-111-222");
     expect(routed.map((event) => event.type)).toEqual([
@@ -155,7 +155,7 @@ describe("SlackProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/slack/thread-route-configured",
@@ -169,7 +169,7 @@ describe("SlackProcessor (webhook router)", () => {
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({ eventId: "Ev456", threadTs: "111.222", ts: "333.444" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     const routed = network.eventsAt("/agents/slack/custom-route");
     expect(routed.map((event) => event.type)).toEqual([
@@ -192,7 +192,7 @@ describe("SlackProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
@@ -208,7 +208,7 @@ describe("SlackProcessor (webhook router)", () => {
         },
       },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     expect(network.streams.size).toBe(1); // nothing forwarded anywhere
     expect(
@@ -227,17 +227,17 @@ describe("SlackProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append(connectedEvent(), {
       type: "events.iterate.com/slack/disconnected",
       payload: { projectId: "prj_1", teamId: TEAM_ID },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
     // The router's whole state is its routing table; connection status is read
     // straight off the journal by getConnectionStatus, so lifecycle facts
     // reduce to nothing here.
-    expect(processor.state).toEqual({ routes: {} });
+    expect(driver.state).toEqual({ routes: {} });
   });
 
   it("errors loudly instead of routing when the host stream carries no connection", async () => {
@@ -250,7 +250,7 @@ describe("SlackProcessor (webhook router)", () => {
       projectId: null,
       connection: null,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
@@ -258,7 +258,7 @@ describe("SlackProcessor (webhook router)", () => {
     });
     // Throwing (not dropping) holds the checkpoint so the webhook stays
     // replayable — a silent drop here is the 2026-06-15 outage shape.
-    await expect(deliverNewEvents({ cursors, processor, stream })).rejects.toThrow(/no connection/);
+    await expect(driver.deliver()).rejects.toThrow(/no connection/);
     expect(network.streams.size).toBe(1);
   });
 
@@ -275,7 +275,7 @@ describe("SlackProcessor (webhook router)", () => {
         acked.push(payload);
       },
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/slack/thread-route-configured",
@@ -289,7 +289,7 @@ describe("SlackProcessor (webhook router)", () => {
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({ threadTs: "111.222", ts: "333.444" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     // The fast ack fires on the known-route path too, not just route creation.
     expect(acked).toHaveLength(1);
@@ -312,13 +312,13 @@ describe("SlackProcessor (webhook router)", () => {
       },
       now: () => clock.now,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
     expect(acked).toHaveLength(1);
     const routedPath = "/agents/slack/nustom/c123/ts-111-222";
     expect(network.eventsAt(routedPath)).toHaveLength(2);
@@ -335,7 +335,7 @@ describe("SlackProcessor (webhook router)", () => {
       },
       now: () => clock.now,
     });
-    await deliverNewEvents({ cursors, processor: refolded, stream });
+    await driveProcessor(refolded, stream).deliver();
 
     // The stale ack is skipped; the durable forwards replay and dedupe at the
     // append layer (idempotency keys), leaving the routed stream unchanged.
@@ -361,13 +361,13 @@ describe("SlackProcessor (webhook router)", () => {
         acked.push(payload);
       },
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: { body: { type: "url_verification", challenge: "x" } },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     expect(network.streams.size).toBe(1); // nothing forwarded anywhere
     expect(
@@ -403,27 +403,28 @@ describe("SlackProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
+    const driver = driveProcessor(processor, stream);
     // The connected fact folds first (the connection names new thread paths).
-    const [connected] = await stream.append(connectedEvent());
-    await processor.ingest({ events: [connected!], streamMaxOffset: 1 });
-    expect(processor.checkpointOffset).toBe(1);
-    const [webhook] = await stream.append({
+    await stream.append(connectedEvent());
+    await driver.deliver();
+    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 1 });
+    await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
 
-    // First delivery: the forward throws. ingest MUST reject and the
-    // checkpoint MUST hold — otherwise the webhook is gone for good.
-    await expect(processor.ingest({ events: [webhook!], streamMaxOffset: 2 })).rejects.toThrow(
-      /StreamsCapability/,
-    );
-    expect(processor.checkpointOffset).toBe(1);
+    // First delivery: the forward throws. The pass MUST reject and the
+    // cursor MUST hold — otherwise the webhook is gone for good. (The home
+    // route fact landed before the forward threw; it replays and dedupes.)
+    await expect(driver.deliver()).rejects.toThrow(/StreamsCapability/);
+    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 1 });
     expect(routed.events).toHaveLength(0);
 
-    // The host replays the same webhook from the un-advanced checkpoint; the
-    // forward now succeeds and the checkpoint advances.
-    await processor.ingest({ events: [webhook!], streamMaxOffset: 2 });
-    expect(processor.checkpointOffset).toBe(2);
+    // The runner replays the same webhook from the un-advanced cursor; the
+    // forward now succeeds and the cursor advances through the route fact
+    // the failed attempt had already committed to the router's own stream.
+    await driver.deliver();
+    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 3 });
     expect(routed.events.map((event) => event.type)).toEqual([
       "events.iterate.com/slack/thread-route-configured",
       "events.iterate.com/slack/webhook-received",

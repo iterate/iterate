@@ -21,11 +21,9 @@
 //     table. It is read once for the on-the-fly migration (acknowledgement
 //     preserved — treating it as absent would replay the whole mirror), and it
 //     is STILL WRITTEN by every commit (same transaction): the stream view's
-//     live agent tail reads `reduced_state` from this table reactively, and
-//     the streams-example-app constructs processors with
-//     `browserProcessorStateStorage`. The dual-write keeps both working and
-//     doubles as rollback compatibility — code from before the runner cutover
-//     finds a current checkpoint here.
+//     live agent tail reads `reduced_state` from this table reactively. The
+//     dual-write keeps that working and doubles as rollback compatibility —
+//     code from before the runner cutover finds a current checkpoint here.
 //
 // Resets NEVER delete a live progress row — they REWIND it
 // (`browserProcessorProgressRewindStatements`): acknowledgement to 0 and
@@ -37,10 +35,6 @@
 // fence the REBUILDING runner's commits as "backward". The revision bump
 // points the fence at the stale writer instead.
 
-import type {
-  StreamProcessorSnapshot,
-  StreamProcessorStateStorage,
-} from "../../stream-processor.ts";
 import type { ProcessorProgress, ProcessorProgressStore } from "../../stream-processor-runner.ts";
 import { createSchemaEnsurer } from "./ensure-schema-once.ts";
 import type { BrowserProjectionWriteBuffer } from "./projection-write-buffer.ts";
@@ -66,10 +60,6 @@ const LEGACY_STATE_TABLE_SQL = `
     PRIMARY KEY (processor_slug, subscription_key)
   )
 `;
-
-const ensureBrowserProcessorStateSchema = createSchemaEnsurer({
-  run: (sql) => sql.batch([{ sql: LEGACY_STATE_TABLE_SQL }], { transaction: true }),
-});
 
 /**
  * Ensure the progress schema (new two-cursor table + fence + legacy table).
@@ -429,65 +419,6 @@ export function browserProcessorProgressStore<State = unknown>(args: {
           },
         ],
         { transaction: true },
-      );
-    },
-  };
-}
-
-/**
- * LEGACY `readState`/`writeState` over the `processor_state` table. Kept for
- * the streams-example-app, whose `createProcessor` wires it into processor
- * constructors — under runner drive those hooks are inert (the runner owns
- * progress through {@link browserProcessorProgressStore}), and the table
- * itself stays live as the commit's dual-write target.
- */
-export function browserProcessorStateStorage<State>(args: {
-  sql: SqlClient;
-  processorSlug: string;
-  subscriptionKey?: string;
-}): Required<StreamProcessorStateStorage<State>> {
-  const subscriptionKey = args.subscriptionKey ?? DEFAULT_SUBSCRIPTION_KEY;
-
-  return {
-    readState: async () => {
-      await ensureBrowserProcessorStateSchema(args.sql);
-      const [row] = await args.sql.exec(
-        `
-          SELECT reduced_state, max_offset
-          FROM processor_state
-          WHERE processor_slug = ?
-            AND subscription_key = ?
-          LIMIT 1
-        `,
-        [args.processorSlug, subscriptionKey],
-      );
-      if (row === undefined) return undefined;
-      if (typeof row.reduced_state !== "string") {
-        throw new Error("processor_state.reduced_state must be JSON text");
-      }
-      return {
-        state: JSON.parse(row.reduced_state) as State,
-        offset: Number(row.max_offset),
-      };
-    },
-    writeState: async (snapshot: StreamProcessorSnapshot<State>) => {
-      await ensureBrowserProcessorStateSchema(args.sql);
-      await args.sql.exec(
-        `
-          INSERT INTO processor_state (
-            processor_slug,
-            subscription_key,
-            reduced_state,
-            max_offset,
-            updated_at
-          )
-          VALUES (?, ?, ?, ?, datetime('now'))
-          ON CONFLICT(processor_slug, subscription_key) DO UPDATE SET
-            reduced_state = excluded.reduced_state,
-            max_offset = excluded.max_offset,
-            updated_at = excluded.updated_at
-        `,
-        [args.processorSlug, subscriptionKey, JSON.stringify(snapshot.state), snapshot.offset],
       );
     },
   };

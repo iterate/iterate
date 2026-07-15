@@ -1,37 +1,35 @@
 // The DO-side "thin registry" over per-processor StreamProcessorRunners — the
-// replacement for createStreamProcessorHost (stream-processor-host.ts), built
-// to the same consumed SURFACE so cutover is a mechanical swap per Durable
-// Object. WIRED INTO: the secret DO (secret-durable-object.ts — the reference
-// cutover), the project DO (multi-processor), the scheduler DO (domain alarm
-// slice), the capability-host DO (the recovery template), the repo DO
-// (reconcile + processEventBatch merged into onCaughtUp), and the agent DO
-// (agent-durable-object.ts — multi-processor with per-processor recovery on
-// all five: agent, slack-agent, telegram-agent, email-agent, github-agent;
-// the spine's redelivery alone cannot cover a SIMULTANEOUS Agent+Stream DO
-// death mid-blocker — codex review P1). EVERY processor-hosting DO now runs
-// the registry; the legacy host survives only for its own tests until a
-// deletion slice retires it. Its ONE cross-deploy remnant — the shared
-// `stream-processor-host:keepalive` record a pre-cutover incarnation may
-// have armed — is adopted exactly once by `handleAlarm` (see
-// adoptLegacyHostKeepalive).
+// replacement for the deleted legacy processor host (createStreamProcessorHost),
+// built to the same consumed SURFACE so cutover was a mechanical swap per
+// Durable Object. WIRED INTO: the secret DO (secret-durable-object.ts — the
+// reference cutover), the project DO (multi-processor), the scheduler DO
+// (domain alarm slice), the capability-host DO (the recovery template), the
+// repo DO (reconcile + processEventBatch merged into onCaughtUp), and the
+// agent DO (agent-durable-object.ts — multi-processor with per-processor
+// recovery on all five: agent, slack-agent, telegram-agent, email-agent,
+// github-agent; the spine's redelivery alone cannot cover a SIMULTANEOUS
+// Agent+Stream DO death mid-blocker — codex review P1). EVERY
+// processor-hosting DO runs the registry; the legacy host is deleted. Its ONE
+// cross-deploy remnant — the shared `stream-processor-host:keepalive` record
+// a pre-cutover incarnation may have armed — is adopted exactly once by
+// `handleAlarm` (see adoptLegacyHostKeepalive).
 //
-// THE CUTOVER RECIPE (established by the secret DO; repeat per DO):
+// THE WIRING RECIPE (established by the secret DO; the same on every DO):
 //   1. `createStreamProcessorRegistry(this.ctx, { stream, path, projectId,
-//      version: workerVersion(this.env), getLiveState? })` replaces
-//      `createStreamProcessorHost(...)` — same options bag.
+//      version: workerVersion(this.env), getLiveState? })`.
 //   2. The DO CONSTRUCTS its processor (`new XProcessor({ stream, path,
-//      projectId, ...deps })` — no more host-injected readState/writeState/
+//      projectId, ...deps })` — no host-injected readState/writeState/
 //      keepAliveWhile; the runner owns progress and keepalive) and passes it
 //      to `register`, deciding recovery per the module-doc rule below.
 //   3. READ-YOUR-WRITES REPOINTING: build `#reads = registry.reads(processor)`
 //      and serve every read from it — `new StreamProcessorRpcTarget(this.#reads,
 //      { catchUpBeforeSnapshot: () => registry.catchUp(slug), ... })`, DO verbs
 //      that read their own fold via `#reads.snapshot()`, and `getLiveState`
-//      closures via `#reads.currentState`. Reads against the processor
-//      INSTANCE are stale forever under runner drive (see `reads` below).
+//      closures via `#reads.currentState`. The runner owns the cursors; the
+//      processor instance holds no fold to read (see `reads` below).
 //   4. `alarm()` → `registry.handleAlarm(alarmInfo)`, `wakeStreamSubscriber`
 //      → `registry.wakeStreamSubscriber`, `.liveState` →
-//      `new LiveStateRpcTarget(registry)` — all same shapes as the host.
+//      `new LiveStateRpcTarget(registry)`.
 //
 // The redesign (docs/stream-processor-runner-redesign.md, "option B") allows
 // the registry exactly these jobs:
@@ -80,6 +78,7 @@ import type { Stream } from "../../itx-api.generated.ts";
 import { LiveState } from "../../lib/live-state/engine.ts";
 import type { StreamEvent } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
+import type { ProcessorState } from "./processor-contracts.ts";
 import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
 import { StreamProcessorRunner, type ProcessorRecovery } from "./stream-processor-runner.ts";
 import type { KeepaliveRecord } from "./stream-processor-keepalive.ts";
@@ -98,8 +97,8 @@ import {
  * What `register` accepts: a real {@link StreamProcessor} subclass instance
  * that also carries the hosted-capability surface — contract description,
  * runtime state, subscriber metrics — the wake handshake shares with the
- * browser host. The bound is STRUCTURAL ({@link AnyHostedProcessor}, exactly
- * like the host's `add`) because the class itself cannot appear here: it is
+ * browser host. The bound is STRUCTURAL ({@link AnyHostedProcessor})
+ * because the class itself cannot appear here: it is
  * invariant in its contract parameter (private state storage holds `State` in
  * both positions), so no single instantiation is a supertype of all
  * processors. The "must be a real StreamProcessor" half is enforced at
@@ -109,14 +108,15 @@ import {
 export type RegisterableProcessor = AnyHostedProcessor;
 
 /**
- * The folded-state type of a registered processor, derived from its own
- * `snapshot()` signature — the class's contract parameter is invariant and
+ * The folded-state type of a registered processor, derived from its
+ * contract's `stateSchema` — the class's contract parameter is invariant and
  * cannot be named through {@link RegisterableProcessor}'s structural bound,
- * but every concrete subclass's `snapshot()` already carries the state type.
+ * but every concrete subclass's `contract` property already carries the
+ * schema whose output IS the state type.
  */
-export type RegisteredProcessorState<P extends RegisterableProcessor> = Awaited<
-  ReturnType<P["snapshot"]>
->["state"];
+export type RegisteredProcessorState<P extends RegisterableProcessor> = ProcessorState<
+  P["contract"]
+>;
 
 /**
  * What {@link StreamProcessorRegistry.reads} returns: the RPC-facing
@@ -185,17 +185,15 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
     opts?: { recovery?: { revivedEventType: string } },
   ): P;
   /**
-   * The runner-backed READ surface for one registered processor — the
-   * read-your-writes repointing every cutover needs. Under runner drive the
-   * runner owns both cursors and the processor's legacy internal checkpoint
-   * never advances, so reads against the INSTANCE (`snapshot` /
-   * `getRuntimeState` / `waitUntilEvent`) would answer the schema default
-   * forever. Hand THIS to `new StreamProcessorRpcTarget(...)` and to every DO
-   * verb that reads its own fold: `snapshot`/`waitUntilEvent` come from the
-   * runner's committed progress; `getRuntimeState` keeps the processor's own
-   * runtime bag but re-pins its snapshot to the runner; `currentState` /
-   * `isLoaded` serve `getLiveState` closures without an async hop. Takes the
-   * registered instance (not a slug) so the state type flows through.
+   * The runner-backed READ surface for one registered processor. The runner
+   * owns both cursors and the fold — the processor instance holds no
+   * readable state at all — so every read goes through here. Hand THIS to
+   * `new StreamProcessorRpcTarget(...)` and to every DO verb that reads its
+   * own fold: `snapshot`/`waitUntilEvent` come from the runner's committed
+   * progress; `getRuntimeState` assembles the processor's contributed
+   * runtime bag under the runner's snapshot; `currentState` / `isLoaded`
+   * serve `getLiveState` closures without an async hop. Takes the registered
+   * instance (not a slug) so the state type flows through.
    */
   reads<P extends RegisterableProcessor>(
     processor: P,
@@ -244,10 +242,10 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
   ctx: DurableObjectState,
   options: {
     stream: Stream;
-    /** Path of the hosted stream. Carried for call-site parity with the host
-     * (the DO passes the same options bag it passes today and still needs
-     * path/projectId to construct its processors); the registry itself does
-     * not consume them — provenance stamping lives in the processors. */
+    /** Path of the hosted stream. Carried for options-bag symmetry (the DO
+     * still needs path/projectId to construct its processors); the registry
+     * itself does not consume them — provenance stamping lives in the
+     * processors. */
     path: string;
     /** Owning project, or null on a global (deployment-root) stream. */
     projectId: string | null;
@@ -274,8 +272,8 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
   const now = options.now ?? (() => Date.now());
 
   // ---------------------------------------------------------------------------
-  // The shared DO alarm (transplanted from the host, stream-processor-host.ts
-  // :205-261). A Durable Object has exactly ONE alarm and setAlarm clobbers
+  // The shared DO alarm (transplanted from the legacy processor host). A
+  // Durable Object has exactly ONE alarm and setAlarm clobbers
   // it, so every desire goes through this slice map and the earliest wins.
   // Slices are in-memory (an eviction loses them) and that is correct: the
   // durable alarm itself survives, its fire runs every subsystem's handler,
@@ -399,8 +397,8 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     ctx.storage.kv.delete(LEGACY_HOST_KEEPALIVE_KEY);
   }
 
-  // The node's live-state engine (transplanted from the host, :377-415).
-  // Seeded empty; assembled from runner state on the first `loadAndRefreshLive`
+  // The node's live-state engine (transplanted from the legacy processor
+  // host). Seeded empty; assembled from runner state on the first `loadAndRefreshLive`
   // and kept fresh by each runner's committed-state observer. The empty seed
   // and the primary-runner fallback are the two places the registry must
   // assert `Live` (they only apply when `getLiveState` was omitted, where
@@ -505,14 +503,15 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         );
       }
       const { runner } = entry;
-      return {
+      const reads: RegisteredProcessorReads<unknown> = {
         snapshot: () => runner.snapshot(),
         getRuntimeState: async () => {
-          // The processor's own runtime bag with the SNAPSHOT re-pinned to
-          // the runner's committed progress — the same repointing the wake
-          // handshake's getRuntimeState performs below.
-          const state = await entry.processor.getRuntimeState();
-          return { ...state, snapshot: await runner.snapshot() };
+          // The processor contributes only its runtime bag; the SNAPSHOT half
+          // comes from the runner's committed progress — the same assembly
+          // the wake handshake's capability performs (metrics excluded here:
+          // this is the inspection read, not the wake capability).
+          const contributed = await entry.processor.getRuntimeState();
+          return { ...contributed, snapshot: await runner.snapshot() };
         },
         // The union parameter narrows into the runner's two overloads; both
         // branches are the same passthrough.
@@ -525,13 +524,18 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           return runner.isLoaded;
         },
       };
+      // The runner is stored under the type-erased `RegistryEntry` (a map of
+      // heterogeneous processors), so the concrete state type re-enters here:
+      // the registered instance's contract carries it, and `reads()` promised
+      // it in the signature.
+      return reads as RegisteredProcessorReads<RegisteredProcessorState<typeof processor>>;
     },
 
     catchUp,
 
     handleAlarm(alarmInfo) {
-      // Transplanted from the host (:461-496); the one structural change is
-      // that the fire routes to EVERY runner instead of one shared keepalive.
+      // Transplanted from the legacy processor host; the one structural change
+      // is that the fire routes to EVERY runner instead of one shared keepalive.
       return tracing.enterSpan("alarm processor keepalive", async (span) => {
         // Entering alarm() means the platform consumed the durable alarm:
         // whatever we believed was armed no longer is, and every reconcile
@@ -597,7 +601,15 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // batch left short of the raw head (codex review #1) — the registry
       // must not wrap it in a second copy of any of that.
       const opened = await entry.runner.openDelivery();
-      const capabilities = hostRuntimeCapabilities(entry.processor, { now });
+      // The capability assembles runtime state from its two honest sources:
+      // the SNAPSHOT from the runner (the cursor owner) and the runtime bag +
+      // metrics from the processor. Same Cloudflare clock domain, so the
+      // ping's one-way estimate is omitted and the clock-offset estimate is
+      // ~zero.
+      const capabilities = hostRuntimeCapabilities(entry.processor, {
+        now,
+        snapshot: () => entry.runner.snapshot(),
+      });
       return {
         // The PROCESSING cursor — the stream persists this as its delivery
         // watermark, and a reduction-pinned offset could skip events whose
@@ -607,17 +619,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         subscriber: {
           processor: { announcement: announceContract(entry.processor.contract) },
         },
-        // Same Cloudflare clock domain, so the ping's one-way estimate is
-        // omitted and the clock-offset estimate is ~zero.
         ...capabilities,
-        // The processor's own runtime bag and metrics, but the SNAPSHOT
-        // pinned to the runner's committed progress: the runner owns the
-        // cursors now, and the processor's legacy internal checkpoint (which
-        // the runner never drives) would report the schema default forever.
-        getRuntimeState: async () => {
-          const state = await capabilities.getRuntimeState();
-          return { ...state, snapshot: await entry.runner.snapshot() };
-        },
       };
     },
   };

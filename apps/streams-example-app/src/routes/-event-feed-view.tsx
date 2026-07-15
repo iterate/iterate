@@ -24,13 +24,11 @@ import {
   type StreamBrowserStore,
 } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
 import {
   BROWSER_FEED_SCHEMA_VERSION,
   BROWSER_FEED_TABLE,
   BrowserFeedContract,
   BrowserFeedProcessor,
-  type BrowserFeedState,
 } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
@@ -59,20 +57,11 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
         slug: BrowserFeedContract.slug,
         schemaVersion: BROWSER_FEED_SCHEMA_VERSION,
         tables: [BROWSER_FEED_TABLE],
-        createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
-          const storage = browserProcessorStateStorage<BrowserFeedState>({
-            sql,
-            processorSlug: BrowserFeedContract.slug,
-            subscriptionKey,
-          });
-          return new BrowserFeedProcessor({
-            stream,
-            path,
-            projectId,
-            sql,
-            readState: storage.readState,
-            writeState: storage.writeState,
-          });
+        // The runtime drives the processor with a StreamProcessorRunner
+        // whose progress lives in the transactional browser progress store —
+        // no per-processor checkpoint wiring here.
+        createProcessor({ stream, path, projectId, sql }) {
+          return new BrowserFeedProcessor({ stream, path, projectId, sql });
         },
       }),
     [streamView.projectId, streamView.path],

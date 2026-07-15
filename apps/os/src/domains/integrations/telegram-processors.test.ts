@@ -7,7 +7,7 @@ import type { StreamEventInput } from "../streams/schemas.ts";
 import { telegramAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import {
   MemoryStreamNetwork as CanonicalMemoryStreamNetwork,
-  deliverNewEvents,
+  driveProcessor,
 } from "../streams/test-helpers.ts";
 import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import { TelegramProcessor } from "./telegram-processor-implementation.ts";
@@ -30,13 +30,13 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     const routed = network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`);
     expect(routed.map((event) => event.type)).toEqual([
@@ -54,14 +54,14 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     const payload = humanMessageWebhookPayload({ chatId: -1004242, chatType: "supergroup" });
     const message = payload.body.message as Record<string, unknown>;
     message.is_topic_message = true;
     message.message_thread_id = 77;
     await stream.append({ type: "events.iterate.com/telegram/webhook-received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     // The sign is significant (chat 1004242 and supergroup -1004242 must not
     // collide), so the id is used verbatim, minus and all.
@@ -79,7 +79,7 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
@@ -91,7 +91,7 @@ describe("TelegramProcessor (webhook router)", () => {
         },
       },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     expect(network.streams.size).toBe(1); // nothing forwarded anywhere
   });
@@ -105,7 +105,7 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append(
       {
@@ -117,8 +117,8 @@ describe("TelegramProcessor (webhook router)", () => {
         payload: { botId: BOT_ID, projectId: "prj_1" },
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
-    expect(processor.state).toEqual({ sessionsByChat: {}, sentMessages: {} });
+    await driver.deliver();
+    expect(driver.state).toEqual({ sessionsByChat: {}, sentMessages: {} });
     expect(network.streams.size).toBe(1);
   });
 
@@ -132,7 +132,7 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: null,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
@@ -140,7 +140,7 @@ describe("TelegramProcessor (webhook router)", () => {
     });
     // Throwing (not dropping) holds the checkpoint so the webhook stays
     // replayable — the Slack 2026-06-15 outage shape.
-    await expect(deliverNewEvents({ cursors, processor, stream })).rejects.toThrow(/no connection/);
+    await expect(driver.deliver()).rejects.toThrow(/no connection/);
     expect(network.streams.size).toBe(1);
   });
 
@@ -163,27 +163,27 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const [webhook] = await stream.append({
+    const driver = driveProcessor(processor, stream);
+    await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
 
-    // First delivery: the forward throws. ingest MUST reject and the
-    // checkpoint MUST hold — otherwise the message is gone for good.
-    await expect(processor.ingest({ events: [webhook!], streamMaxOffset: 1 })).rejects.toThrow(
-      /StreamsCapability/,
-    );
-    expect(processor.checkpointOffset).toBe(0);
+    // First delivery: the forward throws. The pass MUST reject and the
+    // cursor MUST hold — otherwise the message is gone for good.
+    await expect(driver.deliver()).rejects.toThrow(/StreamsCapability/);
+    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 0 });
     expect(routed.events).toHaveLength(0);
 
-    // The host replays the same webhook from the un-advanced checkpoint; the
-    // forward now succeeds and the checkpoint advances.
-    await processor.ingest({ events: [webhook!], streamMaxOffset: 1 });
-    expect(processor.checkpointOffset).toBe(1);
+    // The runner replays the same webhook from the un-advanced cursor; the
+    // forward now succeeds and the cursor advances.
+    await driver.deliver();
+    await expect(driver.snapshot()).resolves.toMatchObject({ offset: 1 });
     expect(routed.events).toHaveLength(1);
 
-    // A second replay dedupes on the forward's idempotency key.
-    await processor.ingest({ events: [webhook!], streamMaxOffset: 1 });
+    // A full replay (a fresh runner over the same journal) dedupes on the
+    // forward's idempotency key.
+    await driveProcessor(processor, stream).deliver();
     expect(routed.events).toHaveLength(1);
   });
 
@@ -196,7 +196,7 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
     const sessionZero = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
 
     await stream.append(
@@ -214,7 +214,7 @@ describe("TelegramProcessor (webhook router)", () => {
         payload: humanMessageWebhookPayload({ date: 2500, messageId: 3, text: "new world" }),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     expect(network.eventsAt(sessionZero)).toHaveLength(1);
     // The /new message AND everything after it land in the session stream.
@@ -235,7 +235,7 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append(
       {
@@ -249,8 +249,8 @@ describe("TelegramProcessor (webhook router)", () => {
         payload: humanMessageWebhookPayload({ date: 3000, messageId: 11, text: "/new again" }),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
-    expect(processor.state.sessionsByChat[`chat-${CHAT_ID}`]).toMatchObject([
+    await driver.deliver();
+    expect(driver.state.sessionsByChat[`chat-${CHAT_ID}`]).toMatchObject([
       { date: 3000, messageId: 10 },
       { date: 3000, messageId: 11 },
     ]);
@@ -265,8 +265,8 @@ describe("TelegramProcessor (webhook router)", () => {
         updateId: 42,
       }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
-    expect(processor.state.sessionsByChat[`chat-${CHAT_ID}`]!.at(-1)).toMatchObject({
+    await driver.deliver();
+    expect(driver.state.sessionsByChat[`chat-${CHAT_ID}`]!.at(-1)).toMatchObject({
       messageId: 11,
     });
   });
@@ -280,7 +280,7 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
 
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
@@ -290,7 +290,7 @@ describe("TelegramProcessor (webhook router)", () => {
         text: "/new@MishasHelperBot let's plan a trip",
       }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
     expect(
       network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-4000`),
     ).toHaveLength(1);
@@ -305,7 +305,7 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
     const oldSession = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-1000`;
 
     await stream.append(
@@ -341,7 +341,7 @@ describe("TelegramProcessor (webhook router)", () => {
         }),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     // Routing is untouched (latest session); the hint names the old thread.
     const session = network.eventsAt(`/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-5000`);
@@ -360,7 +360,7 @@ describe("TelegramProcessor (webhook router)", () => {
       projectId: null,
       connection: CONNECTION,
     });
-    const cursors = new Map<object, number>();
+    const driver = driveProcessor(processor, stream);
     const chatPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
 
     const userMessage = (messageId: number, date: number) => ({
@@ -409,7 +409,7 @@ describe("TelegramProcessor (webhook router)", () => {
         }),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await driver.deliver();
 
     const latestSession = network.eventsAt(`${chatPath}/session-2000`);
     const [, replyInside, replyAncient, replyCurrent] = latestSession;

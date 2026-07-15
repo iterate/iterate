@@ -30,13 +30,11 @@ import {
   type StreamBrowserDatabase,
   type StreamEventRow,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BROWSER_RAW_EVENTS_TABLES,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
-  type BrowserRawEventsState,
 } from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
@@ -206,20 +204,11 @@ const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
   slug: BrowserRawEventsContract.slug,
   schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   tables: BROWSER_RAW_EVENTS_TABLES,
-  createProcessor({ stream, path, projectId, sql, subscriptionKey }) {
-    const storage = browserProcessorStateStorage<BrowserRawEventsState>({
-      sql,
-      processorSlug: BrowserRawEventsContract.slug,
-      subscriptionKey,
-    });
-    return new BrowserRawEventsProcessor({
-      stream,
-      path,
-      projectId,
-      sql,
-      readState: storage.readState,
-      writeState: storage.writeState,
-    });
+  // The runtime drives the processor with a StreamProcessorRunner whose
+  // progress lives in the transactional browser progress store — no
+  // per-processor checkpoint wiring here.
+  createProcessor({ stream, path, projectId, sql }) {
+    return new BrowserRawEventsProcessor({ stream, path, projectId, sql });
   },
 };
 
