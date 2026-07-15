@@ -578,8 +578,8 @@ describe("SlackAgentProcessor", () => {
         body: {
           channel_id: "C123",
           thread_ts: "111.222",
-          status: "is making an LLM request...",
-          loading_messages: ["making an LLM request..."],
+          status: "is waiting for a response...",
+          loading_messages: ["waiting for a response..."],
         },
       },
     ]);
@@ -755,8 +755,8 @@ describe("SlackAgentProcessor", () => {
         body: {
           channel_id: "C123",
           thread_ts: "111.222",
-          status: "is running a script...",
-          loading_messages: ["running a script..."],
+          status: "is running code...",
+          loading_messages: ["running code..."],
         },
       },
     ]);
@@ -852,8 +852,8 @@ describe("SlackAgentProcessor", () => {
         body: {
           channel_id: "C123",
           thread_ts: "111.222",
-          status: "is making an LLM request...",
-          loading_messages: ["making an LLM request..."],
+          status: "is waiting for a response...",
+          loading_messages: ["waiting for a response..."],
         },
       },
     ]);

@@ -1,7 +1,8 @@
 /**
  * Pure terminal formatting for agent feed items. Phrasing deliberately rhymes
  * with the web feed (apps/os/src/components/agent-feed.tsx): activities read
- * "Ran code 2× · 3 requests · 7.4s", steps read "gpt-5 · 1.2s".
+ * "Ran code 2× · 3 requests · 7.4s", steps read "gpt-5 · 1.2s". Live status
+ * is "Thinking" / "Waiting for a response" / "Running code 0.9s".
  */
 import type {
   AgentUiActivity,
@@ -25,6 +26,9 @@ export function formatActivitySummary(activity: AgentUiActivity): string {
 }
 
 export function formatStepLine(step: AgentUiStep): string {
+  if (step.kind === "code" && step.status === "running") {
+    return "Running code";
+  }
   const label = step.kind === "code" ? "Ran code" : (step.model ?? "LLM request");
   const parts: string[] = [label];
   if (step.kind === "llm") {
@@ -37,8 +41,27 @@ export function formatStepLine(step: AgentUiStep): string {
     parts.push("failed");
   }
   if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
-  if (step.status === "running") parts.push("running");
   return parts.join(" · ");
+}
+
+/**
+ * Live spinner label for the in-flight activity. Mirrors the web feed:
+ * reasoning tokens → Thinking; otherwise Waiting for a response; code →
+ * Running code (caller may append a live `0.9s` counter).
+ */
+export function formatLiveActivityLabel(
+  activity: AgentUiActivity,
+  nowMs: number = Date.now(),
+): string {
+  const running = activity.steps.filter((step) => step.status === "running");
+  const code = running.find((step) => step.kind === "code");
+  if (code != null) {
+    return `Running code ${formatSeconds(Math.max(0, nowMs - code.startedAtMs))}`;
+  }
+  const llm = running.findLast((step) => step.kind === "llm");
+  if (llm == null || llm.kind !== "llm") return "Working…";
+  if (llm.thinkingText !== "" && llm.responseText === "") return "Thinking";
+  return "Waiting for a response";
 }
 
 function formatSeconds(ms: number): string {

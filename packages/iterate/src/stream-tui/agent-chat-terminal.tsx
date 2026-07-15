@@ -26,7 +26,12 @@ import {
   resolveItxAuth,
   type AgentConnectionStatus,
 } from "./agent-connection.ts";
-import { formatActivitySummary, formatStepLine, streamingTail } from "./feed-format.ts";
+import {
+  formatActivitySummary,
+  formatLiveActivityLabel,
+  formatStepLine,
+  streamingTail,
+} from "./feed-format.ts";
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
@@ -273,7 +278,7 @@ function LiveActivity(props: { activity: AgentUiActivity }) {
         : "";
   return (
     <box flexDirection="column">
-      <text fg={COLORS.warning}>✦ working…</text>
+      <text fg={COLORS.warning}>✦ {formatLiveActivityLabel(props.activity)}</text>
       {props.activity.steps.map((step) => (
         <text key={step.id} fg={COLORS.textMuted}>
           {"  "}· {formatStepLine(step)}

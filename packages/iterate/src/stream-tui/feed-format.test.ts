@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 import type { AgentUiActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { formatActivitySummary, formatStepLine, streamingTail } from "./feed-format.ts";
+import {
+  formatActivitySummary,
+  formatLiveActivityLabel,
+  formatStepLine,
+  streamingTail,
+} from "./feed-format.ts";
 
 const activity = (overrides: Partial<AgentUiActivity>): AgentUiActivity => ({
   kind: "activity",
@@ -54,7 +59,7 @@ describe("formatStepLine", () => {
     ).toBe("gpt-test · 1.2k → 80 tok · 1.2s");
   });
 
-  test("running code step is marked running", () => {
+  test("running code step is labeled Running code", () => {
     expect(
       formatStepLine({
         kind: "code",
@@ -64,7 +69,90 @@ describe("formatStepLine", () => {
         code: "return 1",
         startedAtMs: 0,
       }),
-    ).toBe("Ran code · running");
+    ).toBe("Running code");
+  });
+});
+
+describe("formatLiveActivityLabel", () => {
+  test("Thinking while reasoning tokens stream", () => {
+    expect(
+      formatLiveActivityLabel(
+        activity({
+          status: "running",
+          steps: [
+            {
+              kind: "llm",
+              id: "l1",
+              llmRequestOffset: 1,
+              status: "running",
+              thinkingText: "hmm",
+              responseText: "",
+              startedAtMs: 0,
+            },
+          ],
+        }),
+      ),
+    ).toBe("Thinking");
+  });
+
+  test("Waiting for a response before tokens and while response streams", () => {
+    expect(
+      formatLiveActivityLabel(
+        activity({
+          status: "running",
+          steps: [
+            {
+              kind: "llm",
+              id: "l1",
+              llmRequestOffset: 1,
+              status: "running",
+              thinkingText: "",
+              responseText: "",
+              startedAtMs: 0,
+            },
+          ],
+        }),
+      ),
+    ).toBe("Waiting for a response");
+    expect(
+      formatLiveActivityLabel(
+        activity({
+          status: "running",
+          steps: [
+            {
+              kind: "llm",
+              id: "l1",
+              llmRequestOffset: 1,
+              status: "running",
+              thinkingText: "hmm",
+              responseText: "hi",
+              startedAtMs: 0,
+            },
+          ],
+        }),
+      ),
+    ).toBe("Waiting for a response");
+  });
+
+  test("Running code with one-decimal elapsed counter", () => {
+    expect(
+      formatLiveActivityLabel(
+        activity({
+          status: "running",
+          steps: [
+            {
+              kind: "code",
+              id: "c1",
+              executionId: "x",
+              status: "running",
+              code: "return 1",
+              startedAtMs: 1000,
+            },
+          ],
+        }),
+        1900,
+      ),
+    ).toBe("Running code 0.9s");
   });
 });
 

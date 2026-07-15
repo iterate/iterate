@@ -2375,7 +2375,7 @@ describe("busy/idle status announcements", () => {
     await stream.append(userMessage());
     await deliver();
     // The turn hands off to a script: busy stays true but the phase flips,
-    // so surfaces switch from "making an LLM request" to "running a script".
+    // so surfaces switch from "waiting for a response" to "running code".
     const [script] = await stream.append({
       type: "events.iterate.com/capability-host/script-execution-requested",
       payload: { code: "async () => {}", executionId: "script-1" },

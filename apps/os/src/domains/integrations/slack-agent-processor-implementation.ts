@@ -336,10 +336,10 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (status?.busy) {
       if (!fresh) return;
       // The agent's own words win; otherwise the platform-derived phase says
-      // what it is doing ("making an LLM request" / "running a script").
+      // what it is doing ("waiting for a response" / "running code").
       const text =
         status.shortStatus ??
-        (status.phase === "script" ? "running a script" : "making an LLM request");
+        (status.phase === "script" ? "running code" : "waiting for a response");
       args.blockProcessorWhile(async () => {
         await this.#callSlackApi("assistant.threads.setStatus", {
           channel_id: channel,

@@ -374,7 +374,7 @@ export interface Agent {
    * Update this agent's status record — the title, note, and shortStatus that
    * project surfaces (the agents list, the Slack thread status) show for it.
    * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag (and what you are doing — LLM request vs running script)
+   * busy/idle flag (and what you are doing — waiting for a response vs running code)
    * into the same record on its own. `shortStatus` completes the sentence
    * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
    * while the agent works — update it as your work moves through phases.
