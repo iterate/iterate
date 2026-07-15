@@ -9,7 +9,6 @@ import {
 const ANCESTOR_CONFIGURED = "events.iterate.com/capability-host/ancestor-configured" as const;
 
 function makeProcessor(input: {
-  legacyAncestorPath?: string | null;
   path: string;
   resolveAncestor: (path: string) => CapabilityHostAncestor;
   stream: MemoryStream;
@@ -19,9 +18,6 @@ function makeProcessor(input: {
     itx: {} as Project,
     path: input.path,
     projectId: null,
-    ...(input.legacyAncestorPath === undefined
-      ? {}
-      : { legacyAncestorPath: input.legacyAncestorPath }),
     resolveAncestor: input.resolveAncestor,
     scriptExecutionEntrypoint: {
       run: () => {
@@ -89,34 +85,28 @@ describe("explicit capability-host ancestors", () => {
     expect(describeCapabilities).toHaveBeenCalledTimes(1);
   });
 
-  it("journals the pre-0.2 relationship once before using it", async () => {
+  it("rejects an unconfigured host without consulting a path prefix", async () => {
     const stream = new MemoryStream();
-    const root: CapabilityHostAncestor = {
-      describeCapabilities: async () => [],
-      invokeCapability: async () => "migrated-root",
-    };
+    const resolveAncestor = vi.fn(() => {
+      throw new Error("must not infer an ancestor");
+    });
     const processor = makeProcessor({
-      legacyAncestorPath: "/",
-      path: "/agents/web/legacy-conversation",
-      resolveAncestor: () => root,
+      path: "/agents/web/unconfigured-conversation",
+      resolveAncestor,
       stream,
     });
 
-    const pending = processor.invokeCapability({ path: ["projectTool"] });
-    await vi.waitFor(() => {
-      expect(stream.events).toHaveLength(1);
-      expect(stream.events[0]).toMatchObject({
-        type: ANCESTOR_CONFIGURED,
-        payload: { ancestorPath: "/" },
-      });
-    });
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
-    await expect(pending).resolves.toBe("migrated-root");
-
-    await expect(processor.invokeCapability({ path: ["projectTool"] })).resolves.toBe(
-      "migrated-root",
+    await expect(processor.invokeCapability({ path: ["projectTool"] })).rejects.toThrow(
+      'capability-host "/agents/web/unconfigured-conversation" has no ancestor declaration',
     );
-    expect(stream.events).toHaveLength(1);
+    expect(() => processor.describeCapabilities()).toThrow(
+      'capability-host "/agents/web/unconfigured-conversation" has no ancestor declaration',
+    );
+    await expect(processor.runScript("async () => null")).rejects.toThrow(
+      'capability-host "/agents/web/unconfigured-conversation" has no ancestor declaration',
+    );
+    expect(resolveAncestor).not.toHaveBeenCalled();
+    expect(stream.events).toEqual([]);
   });
 
   it("fails a configured ancestor cycle with the full bounded traversal", async () => {

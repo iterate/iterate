@@ -129,6 +129,11 @@ export type CapabilityHostAncestor = {
 
 const MAX_CAPABILITY_ANCESTOR_DEPTH = 32;
 
+type AncestorDeclaration = {
+  configuredAtOffset: number;
+  path: string | null;
+};
+
 export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProcessorContract> {
   readonly contract = CapabilityHostProcessorContract;
   #itx: Project;
@@ -137,13 +142,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   /** Injected clock (expiry decisions); production defaults to Date.now. */
   #now: (() => number) | undefined;
   #resolveAncestor: ((path: string) => CapabilityHostAncestor) | undefined;
-  /**
-   * Only for the bounded pre-0.2 migration. `undefined` means the harness has
-   * no migration policy; `null` explicitly terminates at this host.
-   */
-  #legacyAncestorPath: string | null | undefined;
-  // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: #migrateLegacyAncestor reads and assigns this via ??=.
-  #legacyAncestorMigration: Promise<void> | undefined;
   #validateCapabilityTypes: ((types: string) => Promise<string[]>) | undefined;
   #typecheckScript:
     | ((input: {
@@ -163,11 +161,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       now?: () => number;
       /** Resolves only the path recorded by ancestor-configured. */
       resolveAncestor?: (path: string) => CapabilityHostAncestor;
-      /**
-       * One-time migration target for hosts created before explicit ancestry.
-       * Production supplies this; new hosts receive the declaration at birth.
-       */
-      legacyAncestorPath?: string | null;
       /**
        * Compiles a mount's `types` string, returning problems (empty = it
        * compiles). Wired to the typechecker sidecar in production; the node
@@ -192,7 +185,6 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
     this.#now = args.now;
     this.#resolveAncestor = args.resolveAncestor;
-    this.#legacyAncestorPath = args.legacyAncestorPath;
     this.#validateCapabilityTypes = args.validateCapabilityTypes;
     this.#typecheckScript = args.typecheckScript;
   }
@@ -497,6 +489,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     { args = [], path }: { args?: unknown[]; path: string[] },
     visitedScopePaths: string[] = [],
   ) {
+    const ancestorDeclaration = this.#requireAncestorDeclaration(this.state.ancestor);
     // A trailing __describe is a valid INVOCATION (answered from the mount's
     // durable metadata below) — the reserved-name rule is for MOUNT names, so
     // validate the path without it or discovery on provided capabilities dies
@@ -508,7 +501,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       // durable declaration. Path prefixes are names, not capability scopes.
       // Resolution reads live state every call, so revoking a child mount
       // transparently re-exposes whatever the declared ancestor still has.
-      const ancestor = await this.#ancestorFor(this.state.ancestor);
+      const ancestor = this.#ancestorFor(ancestorDeclaration);
       if (ancestor !== undefined) {
         return await ancestor.invokeCapability(
           { args, path },
@@ -581,14 +574,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   describeCapabilities(visitedScopePaths: string[] = []): Promise<CapabilityDescription[]> {
     return this.#describeCapabilitiesFrom(
       this.state.capabilities,
-      this.state.ancestor,
+      this.#requireAncestorDeclaration(this.state.ancestor),
       visitedScopePaths,
     );
   }
 
   async #describeCapabilitiesFrom(
     records: CapabilityRecord[],
-    ancestorDeclaration: { configuredAtOffset: number; path: string | null } | undefined,
+    ancestorDeclaration: AncestorDeclaration,
     visitedScopePaths: string[] = [],
   ): Promise<CapabilityDescription[]> {
     const local: CapabilityDescription[] = records.map((record) => ({
@@ -599,7 +592,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       type: record.type,
       types: record.types,
     }));
-    const ancestor = await this.#ancestorFor(ancestorDeclaration);
+    const ancestor = this.#ancestorFor(ancestorDeclaration);
     if (ancestor === undefined) return local;
     const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
     const inherited = await ancestor.describeCapabilities(
@@ -625,11 +618,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     return [...visitedScopePaths, this.#path];
   }
 
-  async #ancestorFor(
-    declaration: { configuredAtOffset: number; path: string | null } | undefined,
-  ): Promise<CapabilityHostAncestor | undefined> {
-    const ancestorPath = await this.#ancestorPathFor(declaration);
-    if (ancestorPath === undefined || ancestorPath === null) return undefined;
+  #ancestorFor(declaration: AncestorDeclaration): CapabilityHostAncestor | undefined {
+    const ancestorPath = declaration.path;
+    if (ancestorPath === null) return undefined;
     if (ancestorPath === this.#path) {
       throw new Error(`capability-host "${this.#path}" cannot be its own ancestor`);
     }
@@ -642,39 +633,19 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     return resolveAncestor(ancestorPath);
   }
 
-  async ancestorPath(): Promise<string | null | undefined> {
-    return await this.#ancestorPathFor(this.state.ancestor);
+  ancestorPath(): string | null {
+    return this.#requireAncestorDeclaration(this.state.ancestor).path;
   }
 
-  async #ancestorPathFor(
-    declaration: { configuredAtOffset: number; path: string | null } | undefined,
-  ): Promise<string | null | undefined> {
-    if (declaration !== undefined) return declaration.path;
-    if (this.#legacyAncestorPath === undefined) return undefined;
-    await this.#migrateLegacyAncestor(this.#legacyAncestorPath);
-    return this.#legacyAncestorPath;
-  }
-
-  async #migrateLegacyAncestor(ancestorPath: string | null): Promise<void> {
-    this.#legacyAncestorMigration ??= (async () => {
-      console.warn("[capability-host] migrating implicit ancestor to a durable declaration", {
-        ancestorPath,
-        scopePath: this.#path,
-      });
-      const [configured] = await this.append({
-        type: "events.iterate.com/capability-host/ancestor-configured",
-        idempotencyKey: this.idempotencyKey("legacy-ancestor-configured"),
-        payload: { ancestorPath },
-      });
-      await this.waitUntilEvent({ offset: configured.offset });
-    })().catch((error: unknown) => {
-      this.#legacyAncestorMigration = undefined;
-      throw error;
-    });
-    await this.#legacyAncestorMigration;
+  #requireAncestorDeclaration(declaration: AncestorDeclaration | undefined): AncestorDeclaration {
+    if (declaration === undefined) {
+      throw new Error(`capability-host "${this.#path}" has no ancestor declaration`);
+    }
+    return declaration;
   }
 
   async runScript(code: string): Promise<RunScriptResult> {
+    this.#requireAncestorDeclaration(this.state.ancestor);
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
     await this.append({
@@ -715,7 +686,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async #typecheckScriptForRun(
     code: string,
     records: CapabilityRecord[],
-    ancestorDeclaration: { configuredAtOffset: number; path: string | null } | undefined,
+    ancestorDeclaration: AncestorDeclaration,
   ): Promise<{ rejection: string | null; emittedJs?: string }> {
     const typecheckScript = this.#typecheckScript;
     if (typecheckScript === undefined) return { rejection: null };
@@ -724,10 +695,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         "capability_host.script_describe_capabilities",
         async (span) => {
           span.setAttribute("iterate.capability_host.local_capability_count", records.length);
-          span.setAttribute(
-            "iterate.capability_host.ancestor_declared",
-            ancestorDeclaration !== undefined,
-          );
+          span.setAttribute("iterate.capability_host.ancestor_declared", true);
           const described = await this.#describeCapabilitiesFrom(records, ancestorDeclaration);
           span.setAttribute("iterate.capability_host.reachable_capability_count", described.length);
           return described;
@@ -766,7 +734,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async #executeScript(input: {
-    ancestor: { configuredAtOffset: number; path: string | null } | undefined;
+    ancestor: AncestorDeclaration | undefined;
     capabilities: CapabilityRecord[];
     code: string;
     executionId: string;
@@ -779,6 +747,16 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         input.capabilities.length,
       );
       try {
+        if (input.ancestor === undefined) {
+          span.setAttribute("iterate.capability_host.script_outcome", "ancestor_not_declared");
+          await tracing.enterSpan("capability_host.script_completion_append", () =>
+            this.#appendCompletion({
+              executionId: input.executionId,
+              error: `Script was NOT executed: capability-host "${this.#path}" has no ancestor declaration.`,
+            }),
+          );
+          return;
+        }
         // The typecheck gate runs BEFORE the started evidence: it has no side
         // effects, so a rejected script provably never ran (requested →
         // completed, no started event) and the reconciler doctrine is untouched.

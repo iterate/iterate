@@ -19,6 +19,7 @@ import {
 } from "./capability-host-processor-implementation.ts";
 
 const T = {
+  ancestorConfigured: "events.iterate.com/capability-host/ancestor-configured",
   provided: "events.iterate.com/capability-host/capability-provided",
   requested: "events.iterate.com/capability-host/script-execution-requested",
   started: "events.iterate.com/capability-host/script-execution-started",
@@ -53,6 +54,12 @@ function makeProcessor(options: {
 }
 
 async function requestScript(stream: MemoryStream, processor: CapabilityHostProcessor) {
+  if (!stream.events.some((event) => event.type === T.ancestorConfigured)) {
+    await stream.append({
+      type: T.ancestorConfigured,
+      payload: { ancestorPath: null },
+    });
+  }
   const [requested] = await stream.append({
     type: T.requested,
     payload: { code: "async (itx) => itx.streams.gett('/')", executionId: "exec-1" },
@@ -67,6 +74,27 @@ function completion(stream: MemoryStream) {
 beforeEach(() => resetRecordedSpans());
 
 describe("script execution typecheck gate", () => {
+  it("settles a directly journaled request on an unconfigured host without running it", async () => {
+    const stream = new MemoryStream();
+    const run = vi.fn(async () => null);
+    const processor = makeProcessor({ stream, run });
+    const [requested] = await stream.append({
+      type: T.requested,
+      payload: { code: "async () => null", executionId: "exec-unconfigured" },
+    });
+
+    await processor.ingest({ events: stream.events, streamMaxOffset: requested!.offset });
+
+    await vi.waitFor(() =>
+      expect(completion(stream)?.payload).toMatchObject({
+        executionId: "exec-unconfigured",
+        error: expect.stringContaining("has no ancestor declaration"),
+      }),
+    );
+    expect(stream.events.some((event) => event.type === T.started)).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("a problems verdict settles as an error completion — never started, never run", async () => {
     const stream = new MemoryStream();
     const processor = makeProcessor({

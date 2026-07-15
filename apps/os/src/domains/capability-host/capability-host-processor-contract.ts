@@ -68,9 +68,9 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   description: "A tiny dynamic capability table and script execution journal.",
   stateSchema: z.object({
     /**
-     * The one explicitly declared scope this host inherits from. `undefined`
-     * identifies a pre-0.2 host awaiting the bounded journal migration; an
-     * explicit `path: null` terminates inheritance (normally the project root).
+     * The one explicitly declared scope this host inherits from. Absence means
+     * the host has not been born correctly and read/execution operations fail;
+     * `path: null` explicitly terminates inheritance (normally at project root).
      */
     ancestor: z
       .object({
