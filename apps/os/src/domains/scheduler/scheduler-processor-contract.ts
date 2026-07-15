@@ -114,8 +114,7 @@ const PendingTrigger = z.looseObject({
 });
 type PendingTrigger = z.infer<typeof PendingTrigger>;
 
-export const SchedulerBirthCertificate = z.strictObject({ config: z.strictObject({}) });
-export type SchedulerBirthCertificate = z.infer<typeof SchedulerBirthCertificate>;
+const SchedulerBirthCertificate = z.strictObject({ config: z.strictObject({}) });
 
 export const SchedulerProcessorContract = defineProcessorContract({
   slug: "scheduler",

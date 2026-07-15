@@ -17,7 +17,9 @@
  * silently absorbed — the 90s tail is a real product-latency signal.
  */
 import { fileURLToPath } from "node:url";
+import { ONBOARDING_AGENT_SYSTEM_PROMPT } from "../../src/domains/agents/agent-defaults.ts";
 import { connectItx } from "../../src/itx-client.ts";
+import { onboardingStartEvent } from "../../src/lib/onboarding-agent.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -39,10 +41,10 @@ async function attemptOnboardingSmoke(): Promise<void> {
   console.log(`project created in ${Date.now() - start}ms:`, description.projectId);
 
   using agent = project.agents.get("/agents/onboarding");
-  // The onboarding agent is born explicitly; the dashboard's chat page does
-  // exactly this create({}) when it opens. This smoke is the ONE e2e
-  // entry point that intentionally pays the onboarding LLM turn.
-  await agent.create({});
+  // Match the dashboard's explicit onboarding flow: agent birth is generic,
+  // while this caller supplies the onboarding prompt and startup input.
+  await agent.create({ systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT });
+  await agent.stream.append(onboardingStartEvent(description.projectId));
   const greeting = await agent.stream.waitForEvent({
     eventTypes: ["events.iterate.com/agents/web-message-sent"],
     timeoutMs: 90_000,

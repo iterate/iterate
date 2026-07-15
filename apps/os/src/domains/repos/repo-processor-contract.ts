@@ -28,8 +28,7 @@ const RepoCommitCompletedPayload = z.object({
   commitOid: z.string().trim().min(1),
 });
 
-export const RepoBirthCertificate = z.strictObject({ config: z.strictObject({}) });
-export type RepoBirthCertificate = z.infer<typeof RepoBirthCertificate>;
+const RepoBirthCertificate = z.strictObject({ config: z.strictObject({}) });
 
 export const GithubAgentBirthCertificate = z.strictObject({
   config: z.strictObject({
@@ -505,7 +504,7 @@ export const RepoProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<RepoProcessorContract>`,
- * `ConsumedEvent<RepoProcessorContract>`, `ProcessorEvent<RepoProcessorContract, T>`.
+ * `ConsumedEvent<RepoProcessorContract>`.
  */
 export type RepoProcessorContract = typeof RepoProcessorContract;
 

@@ -170,7 +170,7 @@ export type AgentDefaultsOverrides = {
 
 /** The default policy for one agent path: the named pieces plus the exact
  * event batch that applies them (idempotency-keyed, safe to re-append). */
-export type AgentDefaultPolicy = {
+type AgentDefaultPolicy = {
   systemPrompt: string;
   model: string;
   events: AgentPolicyEventInput[];
@@ -179,7 +179,7 @@ export type AgentDefaultPolicy = {
 /** The policy events an agent is born with, as append inputs. Typed
  * structurally (not against the full event catalog) so the SDK projection
  * stays self-contained. */
-export type AgentPolicyEventInput = {
+type AgentPolicyEventInput = {
   type: string;
   idempotencyKey: string;
   payload: Record<string, unknown>;

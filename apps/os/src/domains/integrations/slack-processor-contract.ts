@@ -8,10 +8,9 @@ import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
-export const SlackBirthCertificate = z.object({
+const SlackBirthCertificate = z.object({
   config: z.object({ connection: z.string() }),
 });
-export type SlackBirthCertificate = z.output<typeof SlackBirthCertificate>;
 
 export const SlackAgentBirthCertificate = z.object({
   config: z.object({
@@ -152,7 +151,7 @@ export const SlackProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<SlackProcessorContract>`,
- * `ConsumedEvent<SlackProcessorContract>`, `ProcessorEvent<SlackProcessorContract, T>`.
+ * `ConsumedEvent<SlackProcessorContract>`.
  */
 export type SlackProcessorContract = typeof SlackProcessorContract;
 

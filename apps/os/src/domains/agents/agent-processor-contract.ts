@@ -15,14 +15,11 @@ export const AgentConfig = z.strictObject({
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 
-export const AgentConfigPatch = z.strictObject({
+const AgentConfigPatch = z.strictObject({
   systemPrompt: z.string().optional(),
   llm: z.strictObject({ model: z.string().min(1).optional() }).optional(),
 });
-export type AgentConfigPatch = z.infer<typeof AgentConfigPatch>;
-
-export const AgentBirthCertificate = z.strictObject({ config: AgentConfig });
-export type AgentBirthCertificate = z.infer<typeof AgentBirthCertificate>;
+const AgentBirthCertificate = z.strictObject({ config: AgentConfig });
 
 /**
  * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
@@ -1132,7 +1129,7 @@ export const AgentProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<AgentProcessorContract>`,
- * `ConsumedEvent<AgentProcessorContract>`, `ProcessorEvent<AgentProcessorContract, T>`.
+ * `ConsumedEvent<AgentProcessorContract>`.
  */
 export type AgentProcessorContract = typeof AgentProcessorContract;
 

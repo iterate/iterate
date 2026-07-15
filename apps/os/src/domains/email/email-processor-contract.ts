@@ -10,11 +10,9 @@ import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
-export const EmailBirthCertificate = z.object({
+const EmailBirthCertificate = z.object({
   config: z.object({}),
 });
-
-export type EmailBirthCertificate = z.output<typeof EmailBirthCertificate>;
 
 export const EmailAgentBirthCertificate = z.object({
   config: z.object({

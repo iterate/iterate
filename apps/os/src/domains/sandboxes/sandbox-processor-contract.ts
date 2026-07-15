@@ -2,10 +2,9 @@ import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { SandboxInstanceType } from "./instance-types.ts";
 
-export const SandboxBirthCertificate = z.object({
+const SandboxBirthCertificate = z.object({
   config: z.object({ instanceType: SandboxInstanceType }),
 });
-export type SandboxBirthCertificate = z.output<typeof SandboxBirthCertificate>;
 
 /**
  * The event catalog, spelled out as a const so

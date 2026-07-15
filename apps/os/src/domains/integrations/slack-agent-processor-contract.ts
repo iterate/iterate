@@ -75,7 +75,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<SlackAgentProcessorContract>`,
- * `ConsumedEvent<SlackAgentProcessorContract>`, `ProcessorEvent<SlackAgentProcessorContract, T>`.
+ * `ConsumedEvent<SlackAgentProcessorContract>`.
  */
 export type SlackAgentProcessorContract = typeof SlackAgentProcessorContract;
 

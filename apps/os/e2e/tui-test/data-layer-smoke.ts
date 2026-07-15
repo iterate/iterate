@@ -14,6 +14,8 @@ import {
   connectAgentFeed,
   resolveItxAuth,
 } from "../../../../packages/iterate/src/stream-tui/agent-connection.ts";
+import { ONBOARDING_AGENT_SYSTEM_PROMPT } from "../../src/domains/agents/agent-defaults.ts";
+import { onboardingStartEvent } from "../../src/lib/onboarding-agent.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 
@@ -24,12 +26,12 @@ const startedAt = Date.now();
 const project = await createTestProject({ slugPrefix: "tui-smoke" });
 log(`created project ${project.project.id} at ${project.baseUrl}`);
 
-// The onboarding agent is born explicitly (the dashboard's chat page does
-// this same create({}) when it opens); without it there is no
-// unprompted greeting to fold.
+// Match the dashboard's explicit onboarding birth and startup input; without
+// that input there is deliberately no unprompted greeting to fold.
 {
   using agent = project.agent(AGENT_PATH);
-  await agent.create({});
+  await agent.create({ systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT });
+  await agent.stream.append(onboardingStartEvent(project.project.id));
 }
 
 const model = createAgentFeedModel();

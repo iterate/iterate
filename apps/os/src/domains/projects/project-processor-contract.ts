@@ -62,7 +62,7 @@ export type ProjectCustomDomainCloudflareSnapshot = z.output<
 /** One custom domain as reduced onto project processor state. */
 export type ProjectCustomDomain = z.output<typeof ProjectCustomDomain>;
 
-export const ProjectBirthCertificate = z.object({
+const ProjectBirthCertificate = z.object({
   config: z.object({
     slug: z.string(),
     onboardingActive: z.boolean().optional(),
@@ -71,8 +71,6 @@ export const ProjectBirthCertificate = z.object({
     creatorEmail: z.string().optional(),
   }),
 });
-
-export type ProjectBirthCertificate = z.output<typeof ProjectBirthCertificate>;
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
@@ -475,7 +473,7 @@ export const ProjectProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<ProjectProcessorContract>`,
- * `ConsumedEvent<ProjectProcessorContract>`, `ProcessorEvent<ProjectProcessorContract, T>`.
+ * `ConsumedEvent<ProjectProcessorContract>`.
  */
 export type ProjectProcessorContract = typeof ProjectProcessorContract;
 

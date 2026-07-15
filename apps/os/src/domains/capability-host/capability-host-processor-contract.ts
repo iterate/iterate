@@ -54,10 +54,9 @@ const CapabilityRevokedPayload = z.strictObject({
   providedAtOffset: z.number().int().nonnegative().optional(),
 }) satisfies z.ZodType<RevokeCapabilityInput, unknown>;
 
-export const CapabilityHostBirthCertificate = z.strictObject({
+const CapabilityHostBirthCertificate = z.strictObject({
   config: z.strictObject({}),
 });
-export type CapabilityHostBirthCertificate = z.infer<typeof CapabilityHostBirthCertificate>;
 
 /**
  * How stale a script-execution-requested's intent may be before the
@@ -224,6 +223,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<CapabilityHostProcessorContract>`,
- * `ConsumedEvent<CapabilityHostProcessorContract>`, `ProcessorEvent<CapabilityHostProcessorContract, T>`.
+ * `ConsumedEvent<CapabilityHostProcessorContract>`.
  */
 export type CapabilityHostProcessorContract = typeof CapabilityHostProcessorContract;

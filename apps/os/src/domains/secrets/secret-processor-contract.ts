@@ -44,15 +44,13 @@ const StoredEncryptedMaterial = EncryptedMaterial.extend({
 /** The egress allowlist: substituted requests may only target these origins. */
 const Egress = z.object({ urls: z.array(z.string()) });
 
-export const SecretBirthCertificate = z.strictObject({
+const SecretBirthCertificate = z.strictObject({
   config: z.strictObject({
     egress: Egress,
     encryptedMaterial: EncryptedMaterial.optional(),
     refresh: SecretRefresh.nullable(),
   }),
 });
-export type SecretBirthCertificate = z.infer<typeof SecretBirthCertificate>;
-
 export const SecretProcessorContract = defineProcessorContract({
   slug: "secret",
   version: "0.5.0",
@@ -160,6 +158,6 @@ export const SecretProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<SecretProcessorContract>`,
- * `ConsumedEvent<SecretProcessorContract>`, `ProcessorEvent<SecretProcessorContract, T>`.
+ * `ConsumedEvent<SecretProcessorContract>`.
  */
 export type SecretProcessorContract = typeof SecretProcessorContract;

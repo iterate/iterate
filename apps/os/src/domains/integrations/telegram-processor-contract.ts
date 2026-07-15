@@ -8,10 +8,9 @@ import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
-export const TelegramBirthCertificate = z.object({
+const TelegramBirthCertificate = z.object({
   config: z.object({ connection: z.string() }),
 });
-export type TelegramBirthCertificate = z.output<typeof TelegramBirthCertificate>;
 
 export const TelegramAgentBirthCertificate = z.object({
   config: z.object({

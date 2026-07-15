@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
-import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
+import { ONBOARDING_AGENT_PATH, onboardingStartEvent } from "~/lib/onboarding-agent.ts";
 import { ONBOARDING_AGENT_SYSTEM_PROMPT } from "~/domains/agents/agent-defaults.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
@@ -62,17 +62,7 @@ function ProjectAgentDetailContent() {
           const itx = await connectItxBrowser({ projectId: project.id });
           const agent = itx.agents.get(ONBOARDING_AGENT_PATH);
           await agent.create({ systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT });
-          await agent.stream.append({
-            type: "events.iterate.com/agents/context-added",
-            idempotencyKey: `project-onboarding-start:${project.id}`,
-            payload: {
-              role: "developer",
-              key: "agent/onboarding-start",
-              content:
-                "Begin onboarding. The project owner just created this project and is looking at the chat. If the user already sent a message above, answer it first, then continue the onboarding script.",
-              llmRequestPolicy: { behaviour: "after-current-request" },
-            },
-          });
+          await agent.stream.append(onboardingStartEvent(project.id));
           return;
         } catch {
           await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));
