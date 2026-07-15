@@ -75,7 +75,10 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
 How to open a PR (branch hygiene, body shape, **screenshots that actually
-render**, drafts/previews): **[Pull requests](docs/pull-requests.md)**.
+render**, drafts/previews) — and **after open**: wait for Iterate Review /
+review bots, address **every** CI/review comment (fix or reply + resolve),
+**never leave threads standing**, **never merge on red CI** unless the human
+explicitly said so: **[Pull requests](docs/pull-requests.md)**.
 
 **Browser testing:** use an isolated, headed `agent-browser` Chrome for Testing
 session by default so the developer can watch it. Give every concurrent agent
