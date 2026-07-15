@@ -1379,6 +1379,11 @@ export interface Stream {
     path: string;
     /** Subscription identity; defaults to `cross-post:<destination path>`. */
     key?: string;
+    /**
+     * Human-readable note for operators and the stream state panel (why this
+     * cross-post exists). Optional on the API; platform call sites always set it.
+     */
+    description?: string;
     eventTypes?: string[];
     /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */
     condition?: string;

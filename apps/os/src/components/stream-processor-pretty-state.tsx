@@ -104,6 +104,10 @@ export function CorePrettyState({
                 : [];
               const condition =
                 typeof selector?.condition === "string" ? selector.condition : undefined;
+              const note =
+                typeof payload?.description === "string" && payload.description.trim() !== ""
+                  ? payload.description.trim()
+                  : undefined;
               const destination = readAcceptCrossPostPath(delivery?.expression);
               const deliveryHint =
                 typeof delivery?.url === "string"
@@ -120,6 +124,9 @@ export function CorePrettyState({
                       {lag == null ? "" : ` · lag ${lag}`}
                     </div>
                   </div>
+                  {note == null ? null : (
+                    <div className="mt-1 text-[11px] leading-snug text-foreground/80">{note}</div>
+                  )}
                   {deliveryHint == null ? null : (
                     <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
                       {deliveryHint}
