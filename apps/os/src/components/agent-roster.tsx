@@ -23,6 +23,7 @@ import {
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useLiveState } from "~/itx/itx-react.tsx";
 import { agentPathIcon, agentPathLabel } from "~/lib/agent-roster-labels.ts";
+import { agentBusyPhaseLabel } from "~/lib/feed-format.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
@@ -70,9 +71,7 @@ function useAgentRoster(projectId: string): RosterRow[] {
         const doing =
           row.status.shortStatus ??
           (state === "busy"
-            ? row.status.phase === "script"
-              ? "running a script"
-              : "making an LLM request"
+            ? agentBusyPhaseLabel(row.status.phase)
             : state === "blocked"
               ? "waiting for input"
               : undefined);

@@ -42,6 +42,7 @@ import {
   SlackAgentProcessorContract,
   type SlackAgentProcessorState,
 } from "./slack-agent-processor-contract.ts";
+import { agentBusyPhaseLabel } from "~/lib/feed-format.ts";
 
 /** One file shared on a Slack message, as the webhook carries it. */
 type SlackSharedFile = { mimetype?: string; name?: string; urlPrivate: string };
@@ -336,10 +337,8 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (status?.busy) {
       if (!fresh) return;
       // The agent's own words win; otherwise the platform-derived phase says
-      // what it is doing ("making an LLM request" / "running a script").
-      const text =
-        status.shortStatus ??
-        (status.phase === "script" ? "running a script" : "making an LLM request");
+      // what it is doing ("waiting for a response" / "running code").
+      const text = status.shortStatus ?? agentBusyPhaseLabel(status.phase);
       args.blockProcessorWhile(async () => {
         await this.#callSlackApi("assistant.threads.setStatus", {
           channel_id: channel,

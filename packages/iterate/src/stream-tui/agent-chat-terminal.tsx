@@ -14,7 +14,7 @@
 import { StyledText, bg, fg } from "@opentui/core";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type {
   AgentUiActivity,
   AgentUiItem,
@@ -26,7 +26,12 @@ import {
   resolveItxAuth,
   type AgentConnectionStatus,
 } from "./agent-connection.ts";
-import { formatActivitySummary, formatStepLine, streamingTail } from "./feed-format.ts";
+import {
+  formatActivitySummary,
+  formatLiveActivityLabel,
+  formatStepLine,
+  streamingTail,
+} from "./feed-format.ts";
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
@@ -263,6 +268,19 @@ function SettledActivity(props: { activity: AgentUiActivity }) {
 }
 
 function LiveActivity(props: { activity: AgentUiActivity }) {
+  // Tick while code runs so "Running code 0.9s" counts up without waiting
+  // for feed events (script execution often emits nothing mid-run).
+  const codeRunning = props.activity.steps.some(
+    (step) => step.kind === "code" && step.status === "running",
+  );
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!codeRunning) return;
+    setNowMs(Date.now());
+    const interval = setInterval(() => setNowMs(Date.now()), 100);
+    return () => clearInterval(interval);
+  }, [codeRunning]);
+
   const lastStep = props.activity.steps[props.activity.steps.length - 1];
   const thinking = lastStep?.kind === "llm" ? streamingTail(lastStep.thinkingText) : "";
   const streamed =
@@ -273,7 +291,7 @@ function LiveActivity(props: { activity: AgentUiActivity }) {
         : "";
   return (
     <box flexDirection="column">
-      <text fg={COLORS.warning}>✦ working…</text>
+      <text fg={COLORS.warning}>✦ {formatLiveActivityLabel(props.activity, nowMs)}</text>
       {props.activity.steps.map((step) => (
         <text key={step.id} fg={COLORS.textMuted}>
           {"  "}· {formatStepLine(step)}

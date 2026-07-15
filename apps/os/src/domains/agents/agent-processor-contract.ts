@@ -992,7 +992,7 @@ export const AgentProcessorContract = defineProcessorContract({
       }),
       examples: [
         {
-          description: "A user message queued a turn; the agent is making an LLM request.",
+          description: "A user message queued a turn; the agent is waiting for a response.",
           payload: { busy: true, phase: "llm", sinceOffset: 57 },
         },
         {

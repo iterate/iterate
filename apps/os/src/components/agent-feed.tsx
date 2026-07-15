@@ -1,4 +1,12 @@
-import { memo, useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Link } from "@tanstack/react-router";
 import {
   BanIcon,
@@ -35,9 +43,11 @@ import {
   formatClockTime,
   formatDateTime,
   formatDateTimeAttribute,
+  formatElapsedSeconds,
   formatFileSize,
   formatSeconds,
   formatTokens,
+  liveActivityLabel,
   looksLikeCode,
 } from "~/lib/feed-format.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
@@ -767,6 +777,12 @@ export function AgentLiveActivity({
   const runningLlmStep = runningSteps
     .filter((step): step is AgentUiLlmStep => step.kind === "llm")
     .at(-1);
+  const runningCodeStartedAtMs =
+    runningSteps.find((step) => step.kind === "code")?.startedAtMs ?? null;
+  const codeElapsed = useElapsedLabel(runningCodeStartedAtMs);
+  const statusWithElapsed = `${liveActivityLabel(runningSteps)}${
+    codeElapsed == null ? "" : ` ${codeElapsed}`
+  }`;
 
   if (!working && activityWasInterrupted(live)) {
     return (
@@ -785,8 +801,8 @@ export function AgentLiveActivity({
       {working ? (
         <div className="flex h-7 items-center gap-2 self-start px-0.5">
           <Spinner className="size-3 shrink-0 text-amber-600" />
-          <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
-            {liveActivityLabel(runningSteps)}
+          <span className="text-sm font-medium tabular-nums text-amber-700 dark:text-amber-500">
+            {statusWithElapsed}
           </span>
           {runningLlmStep != null && onInspectLlmRequest != null ? (
             <InspectLlmRequestButton
@@ -840,17 +856,20 @@ function liveStepHasVisibleContent(step: AgentUiStep) {
   return step.thinkingText !== "" || step.responseText !== "";
 }
 
-function liveActivityLabel(runningSteps: AgentUiStep[]): string {
-  const scriptCount = runningSteps.filter((step) => step.kind === "code").length;
-  const llmCount = runningSteps.length - scriptCount;
-  const parts: string[] = [];
-  if (scriptCount > 0) {
-    parts.push(`Running ${scriptCount} script${scriptCount === 1 ? "" : "s"}`);
-  }
-  if (llmCount > 0) {
-    parts.push(`Making ${llmCount} LLM request${llmCount === 1 ? "" : "s"}`);
-  }
-  return parts.join(" · ") || "Working…";
+/**
+ * Live CLI-style elapsed counter (`0.9s`) while code is running. Ticks every
+ * 100ms so the tenths place moves; idle when `startedAtMs` is null.
+ */
+function useElapsedLabel(startedAtMs: number | null): string | null {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (startedAtMs == null) return;
+    setNowMs(Date.now());
+    const interval = setInterval(() => setNowMs(Date.now()), 100);
+    return () => clearInterval(interval);
+  }, [startedAtMs]);
+  if (startedAtMs == null) return null;
+  return formatElapsedSeconds(nowMs - startedAtMs);
 }
 
 function LiveStepStream({ step }: { step: AgentUiStep }) {
