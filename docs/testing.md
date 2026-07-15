@@ -3,7 +3,7 @@
 How the test lanes are organized, how to run each against any environment,
 the canonical environment variables, and [the retry/timeout
 policy](#retries-and-timeouts) every lane follows. For unit-test style (fake
-timers, inline snapshots, `test.for` tables), see
+timers, `test.for` tables with hand-written literal expectations), see
 [Vitest patterns](vitest-patterns.md).
 
 ## Philosophy
