@@ -829,7 +829,7 @@ return await itx.projects.get(pid).__describe();
     id: "agent-send-message",
     title: "Send a message to an agent (also how you create one)",
     description:
-      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends the unified message-received event to the agent's stream and returns it — the sender is derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured). This is ALSO how you create, spawn, or birth a new child agent / subagent to delegate work to: messaging a fresh /agents/** path births that agent with default policy — put everything the child needs in the message.",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends an agents/context-added item to the agent's stream and returns it — the sender and user/developer role are derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured). This is ALSO how you create, spawn, or birth a new child agent / subagent to delegate work to: messaging a fresh /agents/** path births that agent with default policy — put everything the child needs in the message.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { agentPath?: string; message?: string }) => {
       // One expression: get() pipelines, so no intermediate await is needed. The

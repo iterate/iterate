@@ -45,8 +45,13 @@ describe("agent-ui reducer", () => {
   test("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "count the inputs", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          content: "count the inputs",
+          actor: { type: "user", origin: "web" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -95,8 +100,13 @@ describe("agent-ui reducer", () => {
   test("settles the activity into items when all work completes", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "hi", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          content: "hi",
+          actor: { type: "user", origin: "web" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -176,8 +186,9 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
       },
       {
-        type: "events.iterate.com/agent/output-added",
+        type: "events.iterate.com/agents/context-added",
         payload: {
+          role: "assistant",
           llmRequestOffset: 10,
           content:
             "```ts\nasync (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
@@ -234,8 +245,13 @@ describe("agent-ui reducer", () => {
     // showed only a bare spinner because the reducer ignored these frames.
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "count the inputs", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          content: "count the inputs",
+          actor: { type: "user", origin: "web" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -308,6 +324,33 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  test("uses assistant context as the authoritative LLM response", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 3,
+        payload: { model: "test-model" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-response-chunk",
+        payload: { llmRequestOffset: 3, sequence: 0, chunk: { response: "partial" } },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          content: "authoritative complete response",
+          llmRequestOffset: 3,
+        },
+      },
+    ]);
+
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      responseText: "authoritative complete response",
+    });
+  });
+
   test("tracks subscriber presence including processor announcements", () => {
     const state = reduceAll([
       {
@@ -324,7 +367,7 @@ describe("agent-ui reducer", () => {
                 description: "Drives the LLM loop.",
                 consumes: ["a"],
                 emits: ["b"],
-                ownedEvents: [{ type: "events.iterate.com/agent/input-added" }],
+                ownedEvents: [{ type: "events.iterate.com/agents/context-added" }],
               },
             },
           },
@@ -480,8 +523,13 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "also, one more thing", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          content: "also, one more thing",
+          actor: { type: "user", origin: "web" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
       },
     ]);
 
@@ -504,8 +552,13 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test" },
       },
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "also, one more thing", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          content: "also, one more thing",
+          actor: { type: "user", origin: "web" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
@@ -549,8 +602,13 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agents/message-received",
-        payload: { content: "oh this is taking too long", from: { kind: "user", origin: "web" } },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "user",
+          content: "oh this is taking too long",
+          actor: { type: "user", origin: "web" },
+          llmRequestPolicy: { behaviour: "interrupt-current-request" },
+        },
       },
       {
         type: "events.iterate.com/agent/llm-request-cancelled",
@@ -791,7 +849,7 @@ describe("agent-ui reducer", () => {
 
   test("shows only the attachments from the slack-agent's transcribed message", () => {
     // The slack message itself already rendered from the webhook event; the
-    // slack-agent processor's message-received yaml transcription exists for
+    // slack-agent processor's developer context transcription exists for
     // the model, not the user — but its stored file attachments are the only
     // browser-renderable copy of shared files.
     const file = {
@@ -803,12 +861,13 @@ describe("agent-ui reducer", () => {
     };
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
-        idempotencyKey: "slack-agent:webhook-to-agent-input:41",
+        type: "events.iterate.com/agents/context-added",
         payload: {
+          role: "developer",
           content: "```yaml\nbody: ...\n```",
-          from: { kind: "slack", userId: "U1" },
+          actor: { type: "slack", userId: "U1" },
           files: [file],
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
     ]);
@@ -821,11 +880,22 @@ describe("agent-ui reducer", () => {
   test("keeps email/github transcription text visible — they have no raw-event bubble", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
+        type: "events.iterate.com/agents/context-added",
         payload: {
+          role: "developer",
           content:
             "`events.iterate.com/email/received` event received\n\n```yaml\nsubject: hi\n```",
-          from: { kind: "email", address: "dana@example.com" },
+          actor: { type: "email", address: "dana@example.com" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          content: "GitHub agent turn\n\nRecent activity: reviewed the release plan.",
+          actor: { type: "github", login: "dana" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
         },
       },
     ]);
@@ -836,37 +906,56 @@ describe("agent-ui reducer", () => {
         text: expect.stringContaining("subject: hi"),
         via: { service: "email", sender: "dana@example.com" },
       },
+      {
+        kind: "user",
+        text: expect.stringContaining("reviewed the release plan"),
+        via: { service: "github", sender: "dana" },
+      },
     ]);
   });
 
-  test("still blanks pre-unification slack yaml inputs from old journals", () => {
-    const file = {
-      contentType: "image/png",
-      filename: "screenshot.png",
-      path: "files/screenshot.png",
-      size: 123,
-      url: "https://files.example/screenshot.png",
-    };
+  test("hides slack, telegram, and platform developer context from the feed", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey: "slack-agent:webhook-to-agent-input:41",
-        payload: { content: "```yaml\nbody: ...\n```", files: [file] },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          content: "Slack webhook transcription",
+          actor: { type: "slack", userId: "U1" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          content: "Telegram webhook transcription",
+          actor: { type: "telegram", username: "misha" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          content: "The assistant sent a visible web-chat message.",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
       },
     ]);
 
-    expect(state.items).toMatchObject([
-      { kind: "user", text: "", files: [file], via: { service: "slack" } },
-    ]);
+    expect(state.items).toEqual([]);
   });
 
   test("renders inter-agent mail as a labeled user bubble", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/message-received",
+        type: "events.iterate.com/agents/context-added",
         payload: {
+          role: "developer",
           content: "Done. Findings attached below.",
-          from: { kind: "agent", path: "/agents/main/researcher" },
+          actor: { type: "agent", path: "/agents/main/researcher" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
         },
       },
     ]);
@@ -954,7 +1043,7 @@ describe("agent-ui reducer", () => {
     expect(state.items).toHaveLength(0);
   });
 
-  test("a history-reset clears the context-fullness reading but keeps lifetime totals", () => {
+  test("compaction context clears the context-fullness reading but keeps lifetime totals", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/token-usage-reported",
@@ -967,11 +1056,12 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agent/history-reset",
+        type: "events.iterate.com/agents/context-added",
         payload: {
-          systemPrompt: "You are a helpful assistant.",
-          history: [{ role: "user", content: "[Compacted summary.]" }],
-          reason: "compaction@3",
+          role: "developer",
+          content: "[Earlier conversation history was compacted.]\n\nCompacted summary.",
+          compaction: { replacesHistoryThrough: 1 },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
     ]);

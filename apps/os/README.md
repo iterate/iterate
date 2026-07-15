@@ -200,6 +200,7 @@ test coverage removed without replacement is
 ## Read Next
 
 - [itx README](./src/README.md)
+- [Agent context and turns](./docs/agents.md) — the context event, projection, keyed publication boundary, request rendering, and compaction
 - [Integrations](./docs/integrations.md)
 - [GitHub pull-request agents](./docs/github-agents.md)
 - [Worker Topology](./docs/worker-topology.md)

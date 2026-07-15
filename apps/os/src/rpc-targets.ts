@@ -233,7 +233,11 @@ import type {
   SearchQueryResult,
   SearchResultChunk,
 } from "./domains/search/search-corpus.ts";
-import type { AgentFileAttachment } from "./domains/agents/agent-processor-contract.ts";
+import {
+  AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+  type AgentFileAttachment,
+  type AgentProcessorState,
+} from "./domains/agents/agent-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
 import type {
@@ -295,7 +299,6 @@ import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-m
 import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
 import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
-import type { AgentProcessorState } from "./domains/agents/agent-processor-contract.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
@@ -1312,7 +1315,7 @@ class AgentDefaultsRpcTarget extends IterateRpcTarget<"AgentDefaults"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (config, model selection, workspace mount, boot context; plus path-specific policy and the onboarding kickoff). Pass overrides ({ systemPrompt?, model? }) to bake customizations into the returned events. GitHub review selection and rules are userspace reactions in the project config repo, not agent-default options. The seeded project worker calls this from its child-stream-created reaction.",
+        "Default agent policy by path, as data: forPath(path) returns { systemPrompt, model, events } — `events` is the exact idempotency-keyed batch to append to a new agent stream (system context, model selection, workspace mount, boot context; plus path-specific policy and the onboarding kickoff). Pass overrides ({ systemPrompt?, model? }) to bake customizations into the returned events. GitHub review selection and rules are userspace reactions in the project config repo, not agent-default options. The seeded project worker calls this from its child-stream-created reaction.",
       children: { forPath: "Default policy (and its event batch) for one agent path." },
       parent: "the agent catalog (itx.agents.defaults)",
     });
@@ -4078,9 +4081,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /**
    * Send a message to this agent — THE inbound door for every caller. The
-   * event's `from` derives from the calling scope: inside an agent script
+   * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
-   * `{ kind: "agent", path }` and does NOT refill the receiver's autonomous
+   * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
    * (web UI, CLI, MCP session) it is a user message. Messaging a path that
    * never existed births the agent: the first append creates the stream and
@@ -4100,33 +4103,34 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       typeof input === "string"
         ? { message: input, files: undefined }
         : { message: input.message, files: input.files };
-    const from = this.#messageFrom();
+    const actor = this.#contextActor();
     const files =
       fileInputs === undefined || fileInputs.length === 0
         ? undefined
         : await storeAgentFileAttachments({
-            agentPath: from.kind === "agent" ? from.path : this.#path,
+            agentPath: actor.type === "agent" ? actor.path : this.#path,
             config: parseConfig(env),
             files: fileInputs,
             projectId: this.#props.projectId,
           });
     const [event] = await this.stream.append({
-      type: "events.iterate.com/agents/message-received",
+      type: "events.iterate.com/agents/context-added",
       payload: {
+        role: actor.type === "agent" ? "developer" : "user",
         content: message,
-        from,
+        actor,
         ...(files === undefined ? {} : { files }),
       },
     });
     return event;
   }
 
-  /** WHO a message() through this handle is from: the calling scope when it is an agent, else a user. */
-  #messageFrom(): { kind: "agent"; path: string } | { kind: "user"; origin: "web" } {
+  /** Provenance for context added through this handle. */
+  #contextActor(): { type: "agent"; path: string } | { type: "user"; origin: "web" } {
     const source = this.#props.sourceScopePath;
     return source !== undefined && source.startsWith("/agents/")
-      ? { kind: "agent", path: source }
-      : { kind: "user", origin: "web" };
+      ? { type: "agent", path: source }
+      : { type: "user", origin: "web" };
   }
 
   /**
@@ -4148,8 +4152,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       overrides: input,
     });
     // The defaults batch (fixed keys) establishes policy on a fresh agent and
-    // dedupes away on an existing one; the keyless events are the last word
-    // when the agent already had policy applied.
+    // dedupes away on an existing one; the envelope-keyless update is the last
+    // word when the agent already had policy applied. Its payload key lets it
+    // coalesce with the default before a request observes either occurrence.
     const events: Array<{
       type: string;
       idempotencyKey?: string;
@@ -4157,8 +4162,12 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     }> = [...defaults.events];
     if (input.systemPrompt !== undefined) {
       events.push({
-        type: "events.iterate.com/agent/config-updated",
-        payload: { systemPrompt: defaults.systemPrompt },
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "system",
+          key: AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+          content: defaults.systemPrompt,
+        },
       });
     }
     if (input.model !== undefined) {
@@ -4244,12 +4253,13 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     /** How long to wait for the reply. Defaults to 45s. */
     timeoutMs?: number;
   }): Promise<StreamEvent> {
-    const from = this.#messageFrom();
+    const actor = this.#contextActor();
     const [sent] = await this.stream.append({
-      type: "events.iterate.com/agents/message-received",
+      type: "events.iterate.com/agents/context-added",
       payload: {
+        role: actor.type === "agent" ? "developer" : "user",
         content: input.message,
-        from: from.kind === "user" ? { kind: "user", origin: input.origin ?? "web" } : from,
+        actor: actor.type === "user" ? { type: "user", origin: input.origin ?? "web" } : actor,
       },
     });
     return await this.stream.waitForEvent({
@@ -4263,8 +4273,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * Store files AND make them part of this agent's conversation in one call.
    * The bytes land in project file storage under the agent's own path
    * (`<agent path>/<short id>-<filename>`), and ONE input event carrying all
-   * attachments (each with a signed public `url`) is appended to the agent
-   * stream — so the files show up as a single conversation message, and
+   * attachments (each with a signed public `url`) is appended as one context
+   * item — so the files show up as a single conversation message, and
    * images become visible to vision-capable models on following turns. Pass
    * `llmRequestPolicy: { behaviour: "dont-trigger-request" }` to record files
    * WITHOUT starting an LLM turn (the right choice for files the agent
@@ -4285,9 +4295,12 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       files: input.files,
       projectId: this.#props.projectId,
     });
+    const actor = this.#contextActor();
     const [event] = await this.stream.append({
-      type: "events.iterate.com/agent/input-added",
+      type: "events.iterate.com/agents/context-added",
       payload: {
+        role: actor.type === "agent" ? "developer" : "user",
+        actor,
         content:
           input.message ?? `[Files attached: ${files.map((file) => file.filename).join(", ")}]`,
         files,

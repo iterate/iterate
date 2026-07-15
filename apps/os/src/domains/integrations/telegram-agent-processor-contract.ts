@@ -16,7 +16,7 @@ import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
  * webhook updates here. This processor owns the Telegram-specific in-chat
  * behavior:
  *
- * - transcribing updates into agent input (ignoring the bot's own messages),
+ * - transcribing updates into agent context (ignoring the bot's own messages),
  *   including reply-thread hints the router attached and `/new` handling (a
  *   FIXED acknowledgement message — not an agent greeting — plus the trailing
  *   text as the fresh session's first message);
@@ -73,7 +73,7 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-requested",
   ],
   emits: [
-    "events.iterate.com/agents/message-received",
+    "events.iterate.com/agents/context-added",
     "events.iterate.com/telegram/send-requested",
     "events.iterate.com/telegram/message-sent",
     "events.iterate.com/capability-host/script-execution-requested",

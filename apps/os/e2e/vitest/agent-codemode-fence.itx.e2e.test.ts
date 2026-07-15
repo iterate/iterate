@@ -2,8 +2,9 @@
  * Goal coverage: an assistant reply whose script embeds a markdown fence
  * inside a string literal executes in full. No LLM involved — the reply is
  * synthesized directly on the agent stream, exactly as an LLM provider
- * journals it (agent/output-added), and the script then runs in a real
- * dynamic worker. Repro of a prd incident (agents/web/2026-07-09t14-21-45-359z):
+ * journals it (assistant agents/context-added with an llmRequestOffset), then
+ * the script runs in a real dynamic worker. Repro of a prd incident
+ * (agents/web/2026-07-09t14-21-45-359z):
  * agents that send markdown-formatted chat messages write scripts containing
  * ``` inside strings; the reply used to be cut at that inner fence, the
  * unparseable prefix failed with "Invalid or unexpected token", and the
@@ -12,6 +13,7 @@
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
+import { appendSyntheticProviderOutput } from "./itx-test-support.ts";
 
 test(
   "a script that embeds a markdown fence in a string literal runs in full",
@@ -28,10 +30,10 @@ test(
       `  await itx.chat.sendMessage("Tail (${marker}):\\n\`\`\`text\\n" + "0123456789".slice(-4) + "\\n\`\`\`");`,
       "}",
     ].join("\n");
-    await agent.stream.append({
-      type: "events.iterate.com/agent/output-added",
-      payload: { content: `Reading the saved output now.\n\n\`\`\`js\n${script}\n\`\`\`` },
-    });
+    await appendSyntheticProviderOutput(
+      agent.stream,
+      `Reading the saved output now.\n\n\`\`\`ts\n${script}\n\`\`\``,
+    );
 
     // Sync on the script finishing, keeping its error (if any) so a
     // regression reports the actual script failure instead of a poll timeout.

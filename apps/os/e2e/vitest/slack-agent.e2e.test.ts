@@ -19,6 +19,7 @@ import {
 } from "../../src/domains/integrations/utils.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../src/domains/streams/utils.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
+import { AGENT_CONTEXT_ADDED_TYPE } from "./itx-test-support.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -143,15 +144,20 @@ test.skipIf(signingSecret === null)(
     const hasEvent = (events: StreamEvent[], type: string) =>
       events.some((event) => event.type === type);
 
-    // --- slack-agent: webhook transcribed into triggering agent input, and the
-    // agent processor schedules + requests LLM work for it.
+    // --- slack-agent: webhook transcribed into triggering developer context,
+    // and the agent processor schedules + requests LLM work for it.
     await waitFor(
       () => agentStream.getEvents({ afterOffset: 0 }),
       (events) =>
         hasEvent(events, "events.iterate.com/slack/webhook-received") &&
-        hasEvent(events, "events.iterate.com/agents/message-received") &&
+        events.some(
+          (event) =>
+            event.type === AGENT_CONTEXT_ADDED_TYPE &&
+            event.payload?.role === "developer" &&
+            (event.payload.actor as { type?: string } | undefined)?.type === "slack",
+        ) &&
         hasEvent(events, "events.iterate.com/agent/llm-request-requested"),
-      () => `agent input + llm request on ${agentStreamPath}`,
+      () => `agent context + llm request on ${agentStreamPath}`,
       120_000,
     );
 
