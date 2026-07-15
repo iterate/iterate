@@ -76,6 +76,32 @@ export function PresenceAvatar({
  */
 export type StreamRuntimeDebugState = Awaited<ReturnType<Stream["runtimeState"]>>;
 
+/**
+ * Desired-state slice of a durable subscription, lifted from the latest
+ * `subscription-configured` fact. Enough for the panel to explain a cross-post
+ * or webhook in human terms without re-fetching the event log.
+ */
+type ConfiguredSubscriberDetails = {
+  deliveryMode: "wake" | "push" | "webhook";
+  configuredAtOffset?: number;
+  /** The delivery target as the itx call (or webhook POST) it actually is. */
+  deliveryLabel?: string;
+  /**
+   * Destination stream path when this is a cross-post
+   * (`…acceptCrossPost` push expression).
+   */
+  crossPostDestination?: string;
+  /** Selector event types; absent means every type. */
+  eventTypes?: string[];
+  /** Optional JSONata filter over the whole event. */
+  condition?: string;
+  /** Optional JSONata constructor for the copied event body (cross-post). */
+  transform?: string;
+  deliver?: "all" | "new" | { afterOffset: number };
+  onPoison?: "park" | "skip";
+  webhookUrl?: string;
+};
+
 type ProcessorPanelEntry = {
   subscriptionKey: string;
   kind: "core" | "processor" | "subscriber" | "consumer";
@@ -86,6 +112,8 @@ type ProcessorPanelEntry = {
   subscriptionType?: "configured" | "ephemeral";
   deliveryMode?: "wake" | "push" | "webhook";
   configuredAtOffset?: number;
+  /** Full configured payload details when this entry is a durable subscription. */
+  config?: ConfiguredSubscriberDetails;
   runtimeSubscription?: StreamRuntimeDebugState["runtime"]["subscriptions"][string];
   runtimeConnection?: StreamRuntimeDebugState["runtime"]["connections"][string];
 };
@@ -675,14 +703,21 @@ function ProcessorEntryButton({
       type="button"
       onClick={() => onFocus(entry.subscriptionKey)}
       className={cn(
-        "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-center gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
+        "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-start gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
         focused && "bg-muted/60 ring-1 ring-inset ring-border",
       )}
     >
-      <span className="flex min-w-0 items-center gap-2.5">
-        <PresenceAvatar entry={entry} busy={busy && isLlmish(entry)} />
+      <span className="flex min-w-0 items-start gap-2.5">
+        <PresenceAvatar entry={entry} busy={busy && isLlmish(entry)} className="mt-0.5" />
         <span className="min-w-0">
-          <span className="block truncate font-mono text-xs">{presenceLabel(entry)}</span>
+          {/*
+            break-all rather than truncate: cross-post labels are long itx
+            expressions (`itx.streams.get("/…").acceptCrossPost()`) and
+            hiding the path under ellipsis is exactly what this panel is for.
+          */}
+          <span className="block break-all font-mono text-xs leading-snug">
+            {presenceLabel(entry)}
+          </span>
           <span
             className={cn(
               "block text-xs",
@@ -697,14 +732,15 @@ function ProcessorEntryButton({
           >
             {processorEntryStatus(entry, busy)}
           </span>
+          <ConfiguredFilterSummary config={entry.config} />
         </span>
       </span>
-      <span className="text-right font-mono text-xs text-muted-foreground">
+      <span className="pt-0.5 text-right font-mono text-xs text-muted-foreground">
         {rttMs == null ? "—" : `${rttMs}ms`}
       </span>
       <span
         className={cn(
-          "text-right font-mono text-xs",
+          "pt-0.5 text-right font-mono text-xs",
           lag == null || String(lag) === "0" ? "text-muted-foreground" : "text-amber-600",
         )}
       >
@@ -735,17 +771,19 @@ function buildProcessorPanelEntries(
     const coreConnection = coreConnections[entry.subscriptionKey];
     const subscriptionType = readSubscriptionType(coreConnection) ?? "ephemeral";
     const runtimeConnection = streamRuntime?.runtime.connections[entry.subscriptionKey];
+    const config = configured[entry.subscriptionKey];
     entries.set(entry.subscriptionKey, {
       ...entry,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
       subscriptionType,
       ...(runtimeConnection === undefined ? {} : { runtimeConnection }),
-      ...(configured[entry.subscriptionKey]?.deliveryMode === undefined
+      ...(config === undefined
         ? {}
-        : { deliveryMode: configured[entry.subscriptionKey].deliveryMode }),
-      ...(configured[entry.subscriptionKey]?.configuredAtOffset === undefined
-        ? {}
-        : { configuredAtOffset: configured[entry.subscriptionKey].configuredAtOffset }),
+        : {
+            deliveryMode: config.deliveryMode,
+            configuredAtOffset: config.configuredAtOffset,
+            config,
+          }),
       runtimeSubscription: streamRuntime?.runtime.subscriptions[entry.subscriptionKey],
     });
   }
@@ -755,6 +793,7 @@ function buildProcessorPanelEntries(
     const subscriber = readRuntimeRecord(connection.subscriber);
     const announcement = readAnnouncement(subscriber?.processor);
     const subscriptionType = readSubscriptionType(connection) ?? "ephemeral";
+    const config = configured[subscriptionKey];
     entries.set(subscriptionKey, {
       subscriptionKey,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
@@ -768,12 +807,13 @@ function buildProcessorPanelEntries(
       ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
         ? {}
         : { runtimeConnection: streamRuntime.runtime.connections[subscriptionKey] }),
-      ...(configured[subscriptionKey]?.deliveryMode === undefined
+      ...(config === undefined
         ? {}
-        : { deliveryMode: configured[subscriptionKey].deliveryMode }),
-      ...(configured[subscriptionKey]?.configuredAtOffset === undefined
-        ? {}
-        : { configuredAtOffset: configured[subscriptionKey].configuredAtOffset }),
+        : {
+            deliveryMode: config.deliveryMode,
+            configuredAtOffset: config.configuredAtOffset,
+            config,
+          }),
       runtimeSubscription: streamRuntime?.runtime.subscriptions[subscriptionKey],
     });
   }
@@ -815,6 +855,11 @@ function buildProcessorPanelEntries(
         subscriptionType: "configured",
         deliveryMode: config.deliveryMode,
         configuredAtOffset: config.configuredAtOffset,
+        config,
+        // Prefer the delivery label over a generic presence description so
+        // cross-posts show as `itx.streams.get(…).acceptCrossPost()` rather
+        // than a raw subscription key.
+        description: config.deliveryLabel ?? current.description,
         runtimeSubscription,
         connected: runtimeSubscription?.connected ?? current.connected,
       });
@@ -833,6 +878,7 @@ function buildProcessorPanelEntries(
       subscriptionType: "configured",
       deliveryMode: config.deliveryMode,
       configuredAtOffset: config.configuredAtOffset,
+      config,
       runtimeSubscription,
       ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
         ? {}
@@ -938,44 +984,62 @@ function readCoreConnections(value: unknown): Record<string, Record<string, unkn
   );
 }
 
-function readConfiguredSubscribers(value: unknown): Record<
-  string,
-  {
-    deliveryMode: "wake" | "push" | "webhook";
-    configuredAtOffset?: number;
-    /** The delivery target as the itx call (or webhook POST) it actually is. */
-    deliveryLabel?: string;
-  }
-> {
+function readConfiguredSubscribers(value: unknown): Record<string, ConfiguredSubscriberDetails> {
   const record = readRuntimeRecord(value);
   const configured = readRuntimeRecord(record?.configuredSubscribersByKey);
   if (configured == null) return {};
   return Object.fromEntries(
     Object.entries(configured).flatMap(([key, entry]) => {
-      const latest = readRuntimeRecord(readRuntimeRecord(entry)?.latestConfiguredEvent);
-      const payload = readRuntimeRecord(latest?.payload);
-      const delivery = readRuntimeRecord(payload?.delivery);
-      const mode = delivery?.mode;
-      if (mode !== "wake" && mode !== "push" && mode !== "webhook") return [];
-      const configuredAtOffset = readNumber(latest, "offset") ?? undefined;
-      const deliveryLabel =
-        mode === "webhook"
-          ? typeof delivery?.url === "string"
-            ? `POST ${delivery.url}`
-            : undefined
-          : formatItxExpression(delivery?.expression);
-      return [
-        [
-          key,
-          {
-            deliveryMode: mode,
-            configuredAtOffset,
-            ...(deliveryLabel === undefined ? {} : { deliveryLabel }),
-          },
-        ],
-      ];
+      const details = readConfiguredSubscriberDetails(entry);
+      return details == null ? [] : [[key, details]];
     }),
   );
+}
+
+function readConfiguredSubscriberDetails(entry: unknown): ConfiguredSubscriberDetails | null {
+  const latest = readRuntimeRecord(readRuntimeRecord(entry)?.latestConfiguredEvent);
+  const payload = readRuntimeRecord(latest?.payload);
+  const delivery = readRuntimeRecord(payload?.delivery);
+  const mode = delivery?.mode;
+  if (mode !== "wake" && mode !== "push" && mode !== "webhook") return null;
+
+  const configuredAtOffset = readNumber(latest, "offset") ?? undefined;
+  const expression = delivery?.expression;
+  const deliveryLabel =
+    mode === "webhook"
+      ? typeof delivery?.url === "string"
+        ? `POST ${delivery.url}`
+        : undefined
+      : formatItxExpression(expression);
+  const crossPostDestination = readCrossPostDestination(expression);
+  const selector = readRuntimeRecord(payload?.selector);
+  const eventTypes = readStringArray(selector?.eventTypes);
+  const condition =
+    typeof selector?.condition === "string" && selector.condition.trim() !== ""
+      ? selector.condition
+      : undefined;
+  const params = readRuntimeRecord(payload?.params);
+  const transform =
+    typeof params?.transform === "string" && params.transform.trim() !== ""
+      ? params.transform
+      : undefined;
+  const deliver = readDeliverPolicy(payload?.deliver);
+  const onPoison =
+    payload?.onPoison === "park" || payload?.onPoison === "skip" ? payload.onPoison : undefined;
+  const webhookUrl = typeof delivery?.url === "string" ? delivery.url : undefined;
+
+  return {
+    deliveryMode: mode,
+    ...(configuredAtOffset === undefined ? {} : { configuredAtOffset }),
+    ...(deliveryLabel === undefined ? {} : { deliveryLabel }),
+    ...(crossPostDestination === undefined ? {} : { crossPostDestination }),
+    ...(eventTypes === undefined ? {} : { eventTypes }),
+    ...(condition === undefined ? {} : { condition }),
+    ...(transform === undefined ? {} : { transform }),
+    ...(deliver === undefined ? {} : { deliver }),
+    ...(onPoison === undefined ? {} : { onPoison }),
+    ...(webhookUrl === undefined ? {} : { webhookUrl }),
+  };
 }
 
 /**
@@ -1009,6 +1073,115 @@ function formatItxExpression(expression: unknown): string | undefined {
   }
   const call = steps.join(".");
   return `itx.${call.endsWith(")") ? call : `${call}()`}`;
+}
+
+/**
+ * `["streams", ["get", "/repos/root"], "acceptCrossPost"]` → `"/repos/root"`.
+ * Only the cross-post sink shape — other expressions leave destination unset.
+ */
+function readCrossPostDestination(expression: unknown): string | undefined {
+  if (!Array.isArray(expression) || expression.length < 3) return undefined;
+  if (expression[0] !== "streams") return undefined;
+  if (expression[expression.length - 1] !== "acceptCrossPost") return undefined;
+  const getStep = expression[1];
+  if (!Array.isArray(getStep) || getStep[0] !== "get") return undefined;
+  return typeof getStep[1] === "string" ? getStep[1] : undefined;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.filter(
+    (item): item is string => typeof item === "string" && item.trim() !== "",
+  );
+  return items.length === 0 ? undefined : items;
+}
+
+function readDeliverPolicy(value: unknown): "all" | "new" | { afterOffset: number } | undefined {
+  if (value === "all" || value === "new") return value;
+  const record = readRuntimeRecord(value);
+  if (record == null) return undefined;
+  const afterOffset = readNumber(record, "afterOffset");
+  return afterOffset == null ? undefined : { afterOffset };
+}
+
+/**
+ * Labeled multi-line overview under a durable subscriber row: destination,
+ * event types, condition, transform. Plain "a · b · c" made event types look
+ * like path fragments — explicit labels + chips trade a bit of height for
+ * scannability.
+ */
+function ConfiguredFilterSummary({ config }: { config: ConfiguredSubscriberDetails | undefined }) {
+  if (config == null) return null;
+  const hasEventFilter =
+    config.eventTypes != null && config.eventTypes.length > 0 && !config.eventTypes.includes("*");
+  const hasExtra =
+    config.crossPostDestination !== undefined ||
+    hasEventFilter ||
+    config.condition !== undefined ||
+    config.transform !== undefined;
+  if (!hasExtra) return null;
+
+  const eventTypes = hasEventFilter
+    ? config.eventTypes!
+    : config.crossPostDestination !== undefined ||
+        config.condition !== undefined ||
+        config.transform !== undefined
+      ? null // "all event types" shown as text, not chips
+      : undefined;
+
+  return (
+    <span className="mt-1.5 flex flex-col gap-1 text-[11px] leading-snug text-muted-foreground">
+      {config.crossPostDestination == null ? null : (
+        <ConfiguredFilterLine label="to">
+          <span className="break-all font-mono text-foreground/80">
+            {config.crossPostDestination}
+          </span>
+        </ConfiguredFilterLine>
+      )}
+      {eventTypes === undefined ? null : eventTypes == null ? (
+        <ConfiguredFilterLine label="types">
+          <span className="text-foreground/70">all event types</span>
+        </ConfiguredFilterLine>
+      ) : (
+        <ConfiguredFilterLine label="types">
+          <span className="flex min-w-0 flex-wrap gap-1">
+            {eventTypes.map((type) => (
+              <span
+                key={type}
+                title={type}
+                className="rounded-md bg-violet-50 px-1.5 py-0.5 font-mono text-[10px] text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+              >
+                {shortEventType(type)}
+              </span>
+            ))}
+          </span>
+        </ConfiguredFilterLine>
+      )}
+      {config.condition == null ? null : (
+        <ConfiguredFilterLine label="when">
+          <span className="break-all font-mono text-foreground/80">
+            {config.condition.length > 80 ? `${config.condition.slice(0, 77)}…` : config.condition}
+          </span>
+        </ConfiguredFilterLine>
+      )}
+      {config.transform == null ? null : (
+        <ConfiguredFilterLine label="transform">
+          <span className="text-foreground/70">JSONata (see detail)</span>
+        </ConfiguredFilterLine>
+      )}
+    </span>
+  );
+}
+
+function ConfiguredFilterLine({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-start gap-1.5">
+      <span className="w-12 shrink-0 pt-px text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+        {label}
+      </span>
+      <span className="min-w-0">{children}</span>
+    </span>
+  );
 }
 
 function readSubscriptionType(
@@ -1155,9 +1328,11 @@ function ProcessorDetail({
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">
-            <span className="truncate font-mono text-sm font-semibold">{presenceLabel(entry)}</span>
+            <span className="break-all font-mono text-sm font-semibold leading-snug">
+              {presenceLabel(entry)}
+            </span>
             {processor == null ? null : (
-              <span className="font-mono text-[10px] text-muted-foreground/70">
+              <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
                 v{processor.version}
               </span>
             )}
@@ -1175,9 +1350,11 @@ function ProcessorDetail({
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 pt-2">
         {processor == null ? (
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            {entry.description ?? "This subscriber did not announce a processor contract."}
-          </p>
+          shouldShowConfiguredDetail(entry.config) ? null : (
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              {entry.description ?? "This subscriber did not announce a processor contract."}
+            </p>
+          )
         ) : (
           <>
             <p className="text-sm leading-relaxed text-foreground/70">{processor.description}</p>
@@ -1204,6 +1381,9 @@ function ProcessorDetail({
             </div>
           </>
         )}
+        {shouldShowConfiguredDetail(entry.config) ? (
+          <ConfiguredSubscriberDetail config={entry.config!} />
+        ) : null}
         {entry.kind === "core" ? null : <SubscriptionRuntimeSummary entry={entry} />}
         <ProcessorRuntimeStateView
           runtimeStateLoad={runtimeStateLoad}
@@ -1212,12 +1392,163 @@ function ProcessorDetail({
         />
         <div>
           <SectionHeading>Subscription</SectionHeading>
-          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground break-all">
             {entry.subscriptionKey}
           </div>
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Wake processors already document what they consume via the processor
+ * contract; the interesting config surface is push/webhook (cross-posts,
+ * webhooks) and any wake entry that carries an explicit selector/transform.
+ */
+function shouldShowConfiguredDetail(
+  config: ConfiguredSubscriberDetails | undefined,
+): config is ConfiguredSubscriberDetails {
+  if (config == null) return false;
+  if (config.deliveryMode === "push" || config.deliveryMode === "webhook") return true;
+  return (
+    config.crossPostDestination !== undefined ||
+    (config.eventTypes != null && config.eventTypes.length > 0) ||
+    config.condition !== undefined ||
+    config.transform !== undefined
+  );
+}
+
+/**
+ * Human-readable desired state for a durable push/webhook/wake config —
+ * especially cross-posts, where the interesting bit is which events are
+ * copied onto which stream, not the raw subscription key.
+ */
+function ConfiguredSubscriberDetail({ config }: { config: ConfiguredSubscriberDetails }) {
+  const isCrossPost = config.crossPostDestination !== undefined;
+  const heading = isCrossPost
+    ? "Cross-post"
+    : config.deliveryMode === "webhook"
+      ? "Webhook"
+      : config.deliveryMode === "push"
+        ? "Push delivery"
+        : "Wake delivery";
+  const eventTypes =
+    config.eventTypes == null || config.eventTypes.includes("*") ? null : config.eventTypes;
+  const deliverLabel =
+    config.deliver === undefined
+      ? isCrossPost || config.deliveryMode !== "wake"
+        ? "new (from configure time)"
+        : null
+      : config.deliver === "all"
+        ? "all history"
+        : config.deliver === "new"
+          ? "new (from configure time)"
+          : `after offset #${config.deliver.afterOffset}`;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <SectionHeading>{heading}</SectionHeading>
+        <p className="text-sm leading-relaxed text-foreground/70">
+          {isCrossPost
+            ? "When matching events land on this stream, copies are pushed onto the destination with provenance (`source.crossPostedFrom`)."
+            : config.deliveryMode === "webhook"
+              ? "Each matching event is POSTed as JSON to the configured URL."
+              : config.deliveryMode === "push"
+                ? "Matching events are dialed into the configured itx expression as push batches."
+                : "The subscriber owns its checkpoint; the stream pokes it when the watermark lags."}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {config.deliveryLabel == null ? null : (
+          <DetailField label="delivers to" mono>
+            {config.deliveryLabel}
+          </DetailField>
+        )}
+        {config.crossPostDestination == null ? null : (
+          <DetailField label="destination stream" mono>
+            {config.crossPostDestination}
+          </DetailField>
+        )}
+        {config.webhookUrl == null || config.deliveryLabel != null ? null : (
+          <DetailField label="url" mono>
+            {config.webhookUrl}
+          </DetailField>
+        )}
+        {deliverLabel == null ? null : (
+          <DetailField label="starts from">{deliverLabel}</DetailField>
+        )}
+        {config.onPoison == null ? null : (
+          <DetailField label="on poison">{config.onPoison}</DetailField>
+        )}
+      </div>
+
+      <div>
+        <SectionHeading>Copies these events</SectionHeading>
+        {eventTypes == null ? (
+          <span className="text-xs text-muted-foreground">
+            All event types
+            {config.condition == null ? "" : " matching the condition below"}
+          </span>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {eventTypes.map((type) => (
+              <span
+                key={type}
+                className="rounded-full bg-violet-50 px-2.5 py-0.5 font-mono text-[10px] text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+                title={type}
+              >
+                {shortEventType(type)}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {config.condition == null ? null : (
+        <div>
+          <SectionHeading>Condition</SectionHeading>
+          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
+            {config.condition}
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            JSONata over the whole event — must evaluate to exactly true.
+          </p>
+        </div>
+      )}
+
+      {config.transform == null ? null : (
+        <div>
+          <SectionHeading>Transform</SectionHeading>
+          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed text-foreground/80 break-all whitespace-pre-wrap">
+            {config.transform}
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            JSONata constructor for the copied event body. Omitted fields copy verbatim; provenance
+            is stamped after the transform.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetailField({
+  label,
+  children,
+  mono = false,
+}: {
+  label: string;
+  children: React.ReactNode;
+  mono?: boolean;
+}) {
+  return (
+    <div className="rounded-xl bg-muted/40 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
+      <div className={cn("mt-0.5 text-sm break-all", mono && "font-mono text-xs")}>{children}</div>
+    </div>
   );
 }
 
@@ -1320,6 +1651,11 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
   }
   const runtime = entry.runtimeSubscription;
   const connection = entry.runtimeConnection;
+  const hasLatency =
+    connection != null ||
+    runtime?.settleLatencyMs != null ||
+    runtime?.deliveryDurationMs != null ||
+    runtime?.bytesSent != null;
   return (
     <div>
       <SectionHeading>Delivery</SectionHeading>
@@ -1349,7 +1685,7 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
           }
         />
       </div>
-      {connection == null && runtime?.settleLatencyMs == null ? null : (
+      {hasLatency ? (
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <RuntimeStateStat
             label="ping rtt"
@@ -1367,25 +1703,30 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
             })()}
           />
           <RuntimeStateStat
-            label="delivered"
-            // Events delivered, live-connection lanes only: push/webhook
-            // subscriptions track bytes (the adjacent stat), not an event
-            // count — a dash beats relabeling bytes as events.
-            value={connection != null ? `${connection.eventsSent} ev` : "—"}
+            label="call rtt"
+            value={(() => {
+              const stats = runtime?.deliveryDurationMs;
+              return stats == null ? "—" : `${stats.last}ms · p95 ${stats.p95}ms`;
+            })()}
           />
           <RuntimeStateStat
-            label="bytes"
+            label="delivered"
+            // Live connections report events; push/webhook report bytes this
+            // incarnation (no durable event counter on the spine).
             value={
               connection != null
-                ? formatFileSize(connection.bytesSent)
+                ? `${connection.eventsSent} ev · ${formatFileSize(connection.bytesSent)}`
                 : runtime?.bytesSent != null
                   ? formatFileSize(runtime.bytesSent)
                   : "—"
             }
           />
         </div>
-      )}
-      {entry.configuredAtOffset == null && runtime?.lastError == null ? null : (
+      ) : null}
+      {entry.configuredAtOffset == null &&
+      runtime?.lastError == null &&
+      runtime?.parkedAtOffset == null &&
+      runtime?.nextAttemptAt == null ? null : (
         <div className="mt-2 rounded-xl bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {entry.configuredAtOffset == null ? null : (
             <div>configured at #{entry.configuredAtOffset}</div>
@@ -1397,6 +1738,12 @@ function SubscriptionRuntimeSummary({ entry }: { entry: ProcessorPanelEntry }) {
           {runtime?.lastError == null ? null : (
             <div className="mt-1 text-destructive">{runtime.lastError}</div>
           )}
+          {connection == null && runtime?.bytesSent == null && entry.deliveryMode !== "wake" ? (
+            <div className="mt-1 text-muted-foreground/80">
+              Delivery volume (bytes) resets when this stream Durable Object restarts — there is no
+              durable cross-post counter.
+            </div>
+          ) : null}
         </div>
       )}
     </div>
