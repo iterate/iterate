@@ -26,7 +26,11 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./processor-contracts": "./src/processor-contracts.ts",
     "./sdk": "./src/sdk.ts",
+    "./stream-events": "./src/stream-events.ts",
+    "./stream-processor": "./src/stream-processor.ts",
+    "./stream-processor-host": "./src/stream-processor-host.ts",
     "./worker": "./src/worker.ts"
   },
   "publishConfig": {
@@ -36,9 +40,25 @@
         "import": "./dist/index.mjs",
         "types": "./dist/index.d.mts"
       },
+      "./processor-contracts": {
+        "import": "./dist/processor-contracts.mjs",
+        "types": "./dist/processor-contracts.d.ts"
+      },
       "./sdk": {
         "import": "./dist/sdk.mjs",
         "types": "./dist/sdk.d.ts"
+      },
+      "./stream-events": {
+        "import": "./dist/stream-events.mjs",
+        "types": "./dist/stream-events.d.ts"
+      },
+      "./stream-processor": {
+        "import": "./dist/stream-processor.mjs",
+        "types": "./dist/stream-processor.d.ts"
+      },
+      "./stream-processor-host": {
+        "import": "./dist/stream-processor-host.mjs",
+        "types": "./dist/stream-processor-host.d.ts"
       },
       "./worker": {
         "import": "./dist/worker.mjs",

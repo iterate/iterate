@@ -1,2 +1,2 @@
-// Compatibility path for platform code; the public implementation lives in iterate/sdk.
-export * from "iterate/sdk";
+// One contract implementation for platform and project-defined processors.
+export * from "iterate/processor-contracts";

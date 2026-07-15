@@ -26,6 +26,25 @@ export default defineConfig([
     clean: false,
   },
   {
+    // Browser/server code inside OS imports the exact processor layer it
+    // needs, while project workers use the combined virtual `iterate/sdk`
+    // entry above. Keeping these as separate entries prevents a browser-side
+    // schema import from pulling in the Workers-only base classes.
+    entry: [
+      "src/processor-contracts.ts",
+      "src/stream-events.ts",
+      "src/stream-processor.ts",
+      "src/stream-processor-host.ts",
+    ],
+    format: "esm",
+    deps: {
+      neverBundle: ["cloudflare:workers"],
+    },
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
+  {
     entry: ["src/worker.ts"],
     format: "esm",
     deps: {

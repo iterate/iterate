@@ -8,7 +8,7 @@ import { diff } from "./live-state-diff.js";
 import type { LiveUpdate } from "./live-state-protocol.js";
 
 /** Handle returned by `LiveState.subscribe` — the ownership + liveness surface for one subscriber. */
-export type LiveStateSubscription = {
+type LiveStateSubscription = {
   /** Still registered with a live-state publisher? A dead DO incarnation also rejects the call. */
   ping(): boolean;
   unsubscribe(): void;

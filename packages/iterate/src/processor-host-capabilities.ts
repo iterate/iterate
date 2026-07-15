@@ -8,16 +8,6 @@ import type {
 } from "./itx-api.generated.js";
 import type { SubscriberMetrics } from "./subscriber-metrics.js";
 
-/** Serializable processor contract carried in a subscriber presence fact. */
-export type ProcessorContractAnnouncement = {
-  slug: string;
-  version: string;
-  description: string;
-  consumes: string[];
-  emits: string[];
-  ownedEvents: { type: string; description?: string }[];
-};
-
 /** The processor surface shared by Durable Object and browser hosts. */
 export type AnyHostedProcessor = {
   contract: {
@@ -68,6 +58,16 @@ export function hostRuntimeCapabilities(
     },
   };
 }
+
+/** Serializable processor contract carried in a subscriber presence fact. */
+type ProcessorContractAnnouncement = {
+  slug: string;
+  version: string;
+  description: string;
+  consumes: string[];
+  emits: string[];
+  ownedEvents: { type: string; description?: string }[];
+};
 
 /** Serializable processor contract carried by server and browser hosts. */
 export function announceContract(contract: {

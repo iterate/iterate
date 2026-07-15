@@ -28,7 +28,7 @@ export function diff(prev: unknown, next: unknown): LiveStatePatch | undefined {
   // properties (safe for any key) and yields an ordinary Object.prototype
   // object — which matters, because patches cross capnweb, whose serializer
   // accepts exactly Object.prototype (a null-proto bag reads as unsupported
-  // and kills the push). (applyPatch has the mirror-image write guard.)
+  // and kills the push).
   // Own-property checks throughout (`Object.hasOwn`, not `in` / bare reads):
   // `"__proto__" in x` is true for EVERY object via inheritance, so `in` would
   // misread that key's presence in both directions.
@@ -54,45 +54,11 @@ export function diff(prev: unknown, next: unknown): LiveStatePatch | undefined {
 }
 
 /**
- * Apply a `LiveStatePatch` to a previous value, returning the next value.
- *
- * Like `diff`, this preserves structural sharing: a fresh object is built only
- * along changed paths, so untouched branches keep their previous reference.
- * That's what lets a client selector (`s => s.streamsIndex`) skip re-rendering
- * when an unrelated slice changed — the slice it reads stays `Object.is`-equal
- * across applies.
- */
-export function applyPatch<State>(prev: State, patch: LiveStatePatch): State {
-  if ("set" in patch) return patch.set as State;
-  const base: Record<string, unknown> = isPlainObject(prev) ? prev : {};
-  const next: Record<string, unknown> = { ...base };
-  if (patch.fields) {
-    for (const [key, childPatch] of Object.entries(patch.fields)) {
-      // Define, don't assign: `next[key] =` with key "__proto__" would SET THE
-      // PROTOTYPE instead of creating an own property — dropping the field and
-      // letting a hostile patch inject one. (The spread above is already safe:
-      // spread uses define semantics.) `Object.hasOwn` guards the read the same
-      // way — a bare `base["__proto__"]` reads the prototype, not a field.
-      Object.defineProperty(next, key, {
-        value: applyPatch(Object.hasOwn(base, key) ? base[key] : undefined, childPatch),
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-    }
-  }
-  if (patch.drop) {
-    for (const key of patch.drop) delete next[key];
-  }
-  return next as State;
-}
-
-/**
  * A PLAIN object — prototype `Object.prototype` or `null` — the only thing
- * `diff` descends into and `applyPatch` merges over. Arrays and class instances
- * (`Date`, `Map`, `Set`, …) fail this on purpose: they carry state outside
- * their own enumerable keys, so per-key diffing would misread them (see the
- * `diff` docstring) — they are leaves, replaced wholesale.
+ * `diff` descends into. Arrays and class instances (`Date`, `Map`, `Set`, …)
+ * fail this on purpose: they carry state outside their own enumerable keys,
+ * so per-key diffing would misread them (see the `diff` docstring) — they are
+ * leaves, replaced wholesale.
  */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null) return false;

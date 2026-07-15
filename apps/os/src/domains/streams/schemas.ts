@@ -1,6 +1,10 @@
-// The canonical stream event schemas live in iterate/sdk so project-defined
+// The canonical stream event schemas live in iterate so project-defined
 // and platform-defined processors validate the same wire shapes.
-import { StreamEventInputSchema, StreamEventSchema, StreamListItemSchema } from "iterate/sdk";
+import {
+  StreamEventInput as StreamEventInputSchema,
+  StreamEvent as StreamEventSchema,
+  StreamListItem as StreamListItemSchema,
+} from "iterate/stream-events";
 import type {
   StreamEventInput as StreamEventInputType,
   StreamEvent as StreamEventType,

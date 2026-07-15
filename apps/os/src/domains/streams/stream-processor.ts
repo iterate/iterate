@@ -1,2 +1,2 @@
-// Compatibility path for platform code; project processors use the same runtime via iterate/sdk.
-export * from "iterate/sdk";
+// One runtime implementation for platform and project-defined processors.
+export * from "iterate/stream-processor";

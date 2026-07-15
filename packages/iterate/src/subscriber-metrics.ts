@@ -15,7 +15,7 @@
 import { LatencyRing, type LatencyStats } from "./stream-runtime-metrics.js";
 
 /** The `runtime.metrics` slice a host reports through `getRuntimeState()`. */
-export type SubscriberMetricsReport = {
+type SubscriberMetricsReport = {
   /** ISO timestamp when this host runtime started measuring (in-memory; resets on reload). */
   measuredSince: string;
   /**

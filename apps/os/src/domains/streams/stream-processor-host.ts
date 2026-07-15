@@ -1,2 +1,2 @@
-// Compatibility path for platform code; project Durable Objects use the same host via iterate/sdk.
-export * from "iterate/sdk";
+// One Durable Object host for platform and project-defined processors.
+export * from "iterate/stream-processor-host";

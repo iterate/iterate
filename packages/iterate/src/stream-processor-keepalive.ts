@@ -93,11 +93,11 @@ type ProcessorKeepaliveHooks = {
 
 /** How far ahead of in-flight work the alarm is parked. Bounds post-eviction
  * revival latency; a deploy mid-agent-turn recovers within roughly this. */
-export const KEEPALIVE_ALARM_LEAD_MS = 10_000;
+const KEEPALIVE_ALARM_LEAD_MS = 10_000;
 
 /** Revival backoff by attempt number (1-based); past the table, the plateau. */
 const REVIVAL_BACKOFF_MS = [10_000, 60_000, 5 * 60_000, 30 * 60_000];
-export const REVIVAL_BACKOFF_PLATEAU_MS = 6 * 60 * 60_000;
+const REVIVAL_BACKOFF_PLATEAU_MS = 6 * 60 * 60_000;
 
 /** Attempts before the crash-loop evidence fact is appended (once per version). */
 const CRASH_LOOP_EVIDENCE_THRESHOLD = 3;
@@ -110,7 +110,7 @@ const CRASH_LOOP_EVIDENCE_THRESHOLD = 3;
  * legit work never trips it while a wedge decays into the revival backoff
  * instead of re-arming every lead interval forever.
  */
-export const MAX_CONSECUTIVE_BUSY_REFIRES = 90;
+const MAX_CONSECUTIVE_BUSY_REFIRES = 90;
 
 /** The semantic outcome of one platform alarm reaching the keepalive. */
 type ProcessorKeepaliveAlarmAction =
@@ -120,10 +120,6 @@ type ProcessorKeepaliveAlarmAction =
   | "clean_disarmed"
   | "revived"
   | "revival_failed";
-
-export function revivalBackoffMs(revivals: number): number {
-  return REVIVAL_BACKOFF_MS[revivals - 1] ?? REVIVAL_BACKOFF_PLATEAU_MS;
-}
 
 const FRESH_RECORD: Omit<KeepaliveRecord, "version"> = {
   revivals: 0,
@@ -244,7 +240,7 @@ export class ProcessorKeepalive {
       revivals: priorRevivals + 1,
       lastRevivalAt: now,
       version: this.#hooks.version,
-      armedAtMs: now + revivalBackoffMs(priorRevivals + 1),
+      armedAtMs: now + (REVIVAL_BACKOFF_MS[priorRevivals] ?? REVIVAL_BACKOFF_PLATEAU_MS),
     };
     // Mark-before / clear-after: a crash anywhere past this line leaves the
     // incremented mark and an armed retry — the loop can only decay, never

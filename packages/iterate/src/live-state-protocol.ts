@@ -5,7 +5,7 @@
  * since the previous revision. `useLiveState` reassembles these into the live
  * value, so feature code never touches these types directly.
  *
- * See `diff.ts` for how patches are produced (`diff`) and applied (`applyPatch`).
+ * See `live-state-diff.ts` for how patches are produced.
  */
 
 /**
