@@ -14,6 +14,8 @@ import {
   withWorkerFetchDispatchHeader,
 } from "./worker-fetch-dispatch.ts";
 import {
+  invalidateLoadedWorker,
+  isInvalidWorkerLoaderCloneError,
   loadResolvedWorker,
   resolveCachedArtifact,
   resolveWorkerSource,
@@ -197,30 +199,50 @@ export class DynamicWorkerRunner {
       );
     }
 
-    return this.#trace(ref, "call", traceRole, async () => {
-      if (ref.type === "stateful") {
-        // Method replay must happen inside StatefulWorkerDurableObject. Returning
-        // a dynamic facet stub through one DO and then invoking it from another RPC
-        // target has produced opaque internal RPC failures; keeping the replay at
-        // the owning DO boundary also keeps storage affinity explicit. Stateful
-        // refs are also deliberately lazy: mounting a worker capability only
-        // commits the recipe to the stream, while this first real invocation is the
-        // point where source loading, version-marker writes, and facet restarts are
-        // allowed to mutate durable runtime state.
-        return await this.#statefulWorker(ref).invokeCapability({
-          args,
-          buildBudgetMs,
-          flattenNestedPath,
-          path,
-          ref,
-        });
-      }
+    try {
+      return await this.#trace(ref, "call", traceRole, async () => {
+        if (ref.type === "stateful") {
+          // Method replay must happen inside StatefulWorkerDurableObject. Returning
+          // a dynamic facet stub through one DO and then invoking it from another RPC
+          // target has produced opaque internal RPC failures; keeping the replay at
+          // the owning DO boundary also keeps storage affinity explicit. Stateful
+          // refs are also deliberately lazy: mounting a worker capability only
+          // commits the recipe to the stream, while this first real invocation is the
+          // point where source loading, version-marker writes, and facet restarts are
+          // allowed to mutate durable runtime state.
+          return await this.#statefulWorker(ref).invokeCapability({
+            args,
+            buildBudgetMs,
+            flattenNestedPath,
+            path,
+            ref,
+          });
+        }
 
-      const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
-      return flattenNestedPath
-        ? await invokePreferringFlattenedPath({ args, path, target })
-        : await replayPath({ args, path, target });
-    });
+        const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
+        return flattenNestedPath
+          ? await invokePreferringFlattenedPath({ args, path, target })
+          : await replayPath({ args, path, target });
+      });
+    } catch (error) {
+      // A named Loader isolate owns the env Frankenvalue created with it. If
+      // Cloudflare can no longer deserialize that retained value, preserve the
+      // caller-visible rejection but ensure its next attempt mints a new
+      // isolate. Generic capability calls are not retried here: unlike Stream
+      // delivery, they do not promise idempotent side effects.
+      if (ref.type === "stateless" && isInvalidWorkerLoaderCloneError(error)) {
+        const resolved = this.#sourceResolution?.resolved;
+        if (resolved !== undefined) {
+          invalidateLoadedWorker({
+            projectId: this.#projectId,
+            ref,
+            resolved,
+            scopePath: this.#scopePath,
+          });
+        }
+      }
+      throw error;
+    }
   }
 
   /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */

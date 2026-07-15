@@ -65,7 +65,10 @@ import {
   defaultProjectWorkerRef,
   isRepoNotSeededError,
 } from "./domains/repos/utils.ts";
-import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
+import {
+  isInvalidWorkerLoaderCloneError,
+  isWorkerBuildInProgressError,
+} from "./domains/workers/worker-loader.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 import {
   DEFAULT_SANDBOX_INSTANCE_TYPE,
@@ -5459,17 +5462,18 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       });
       return await this.#deliveryWorker.processEventBatch(batch);
     } catch (error) {
-      // The bootstrap window: the worker cannot be MATERIALIZED yet (config
-      // repo unseeded, or its first build still in flight). That is this
-      // receiver being unavailable, not the batch being poison — say so in
-      // the delivery contract's vocabulary so the spine backs off and
-      // redelivers instead of skip-confirming real events. (A skipped
-      // `child-stream-created` is an agent the worker never applies policy
-      // to; this exact race skipped offset 1 of every fresh project's root
-      // stream against the config-repo seed.)
-      if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
+      // Bootstrap failures and a poisoned named Loader isolate are receiver
+      // availability, not evidence that any event is poison. Say so in the
+      // delivery contract's vocabulary so the spine backs off and redelivers
+      // the whole batch instead of skip-confirming healthy events. The runner
+      // rotates a clone-failed Loader identity before this error crosses back.
+      if (
+        isRepoNotSeededError(error) ||
+        isWorkerBuildInProgressError(error) ||
+        isInvalidWorkerLoaderCloneError(error)
+      ) {
         throw new StreamReceiverUnavailableError(
-          `project worker is not ready yet: ${error instanceof Error ? error.message : String(error)}`,
+          `project worker is temporarily unavailable: ${error instanceof Error ? error.message : String(error)}`,
           { cause: error },
         );
       }

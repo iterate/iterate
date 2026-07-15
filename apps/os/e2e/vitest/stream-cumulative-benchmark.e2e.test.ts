@@ -17,6 +17,7 @@ const FOCUS_LIVE_TAILS = process.env.STREAM_BENCH_FOCUS_LIVE_TAILS === "1";
 const FOCUS_WAIT_FOR_EVENT = process.env.STREAM_BENCH_FOCUS_WAIT_FOR_EVENT === "1";
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
 const FOCUS_WAKE_SELECTOR = process.env.STREAM_BENCH_FOCUS_WAKE_SELECTOR === "1";
+const FOCUS_MIXED_RECOVERY = process.env.STREAM_BENCH_FOCUS_MIXED_RECOVERY === "1";
 const FOCUS_CROSSPOST_EXACT_RETRY = process.env.STREAM_BENCH_FOCUS_CROSSPOST_EXACT_RETRY === "1";
 const FOCUS_STORAGE_JOURNAL = process.env.STREAM_BENCH_FOCUS_STORAGE_JOURNAL === "1";
 const FOCUS_WORKER_CONSUMER = process.env.STREAM_BENCH_FOCUS_WORKER_CONSUMER === "1";
@@ -48,6 +49,10 @@ const PROCESSOR_CATCHUP_EVENTS = Number(
 );
 const WAKE_SELECTOR_SAMPLES = Number(process.env.STREAM_BENCH_WAKE_SELECTOR_SAMPLES ?? "5");
 const WAKE_SELECTOR_EVENTS = Number(process.env.STREAM_BENCH_WAKE_SELECTOR_EVENTS ?? "4000");
+const MIXED_RECOVERY_CYCLES = Number(process.env.STREAM_BENCH_MIXED_RECOVERY_CYCLES ?? "12");
+const MIXED_RECOVERY_BATCH_SIZE = Number(
+  process.env.STREAM_BENCH_MIXED_RECOVERY_BATCH_SIZE ?? "16",
+);
 const WORKER_CONSUMER_SAMPLES = Number(process.env.STREAM_BENCH_WORKER_CONSUMER_SAMPLES ?? "30");
 const WORKER_CONSUMER_BATCH_SAMPLES = Number(
   process.env.STREAM_BENCH_WORKER_CONSUMER_BATCH_SAMPLES ?? "12",
@@ -89,6 +94,7 @@ test.skipIf(
     FOCUS_WAIT_FOR_EVENT ||
     FOCUS_PROCESSOR_CATCHUP ||
     FOCUS_WAKE_SELECTOR ||
+    FOCUS_MIXED_RECOVERY ||
     FOCUS_CROSSPOST_EXACT_RETRY ||
     FOCUS_STORAGE_JOURNAL ||
     FOCUS_WORKER_CONSUMER,
@@ -1312,6 +1318,240 @@ test.skipIf(!ENABLED || !FOCUS_WAKE_SELECTOR)(
     console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
   },
   600_000,
+);
+
+test.skipIf(!ENABLED || !FOCUS_MIXED_RECOVERY)(
+  "focused deployed Worker consumer mixed Stream recovery stress",
+  async () => {
+    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
+      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
+    }
+    if (!Number.isInteger(MIXED_RECOVERY_CYCLES) || MIXED_RECOVERY_CYCLES < 1) {
+      throw new Error("STREAM_BENCH_MIXED_RECOVERY_CYCLES must be a positive integer.");
+    }
+    if (
+      !Number.isInteger(MIXED_RECOVERY_BATCH_SIZE) ||
+      MIXED_RECOVERY_BATCH_SIZE < 1 ||
+      MIXED_RECOVERY_CYCLES * MIXED_RECOVERY_BATCH_SIZE > 500
+    ) {
+      throw new Error(
+        "STREAM_BENCH_MIXED_RECOVERY_BATCH_SIZE must be positive and keep the total at 500 events or fewer.",
+      );
+    }
+
+    const runId = crypto.randomUUID().slice(0, 8);
+    const auth = { type: "admin-secret" as const, secret: adminSecret() };
+    const projectId = `prj_${crypto.randomUUID()}`;
+    const sourcePath = `/bench/${runId}/mixed-recovery-source`;
+    const outputPath = `/bench/${runId}/mixed-recovery-output`;
+    const triggerType = `${EVENT_TYPE}/mixed-recovery-trigger`;
+    const forwardedType = `${EVENT_TYPE}/mixed-recovery-forwarded`;
+
+    using session = withItxSession();
+    using itx = session.authenticate(auth);
+    using project = itx.projects.create({
+      projectId,
+      slug: `stream-mixed-recovery-${IMPLEMENTATION}-${runId}`,
+    });
+    console.log(
+      `STREAM_MIXED_RECOVERY_PROJECT ${JSON.stringify({ implementation: IMPLEMENTATION, projectId, runId })}`,
+    );
+    await project.__describe();
+    await project.repo.commitFiles({
+      changes: [
+        {
+          path: "worker.ts",
+          content: `
+            import { IterateWorkerEntrypoint } from "iterate/sdk";
+
+            const SOURCE_PATH = ${JSON.stringify(sourcePath)};
+            const OUTPUT_PATH = ${JSON.stringify(outputPath)};
+            const TRIGGER_TYPE = ${JSON.stringify(triggerType)};
+            const FORWARDED_TYPE = ${JSON.stringify(forwardedType)};
+
+            export default class ProjectWorker extends IterateWorkerEntrypoint {
+              fetch() {
+                return new Response("stream mixed recovery stress");
+              }
+
+              processEvent(event) {
+                if (event.path !== SOURCE_PATH || event.type !== TRIGGER_TYPE) return;
+                return this.#forward(event);
+              }
+
+              async #forward(event) {
+                const project = await this.env.ITX.get();
+                try {
+                  await project.streams.get(OUTPUT_PATH).append({
+                    type: FORWARDED_TYPE,
+                    idempotencyKey: \`mixed-recovery:\${event.path}@\${event.offset}\`,
+                    payload: {
+                      marker: event.payload.marker,
+                      sequence: event.payload.sequence,
+                      sourceOffset: event.offset,
+                    },
+                  });
+                } finally {
+                  project[Symbol.dispose]?.();
+                }
+              }
+            }
+          `,
+        },
+      ],
+      message: "Install mixed Stream recovery stress consumer",
+    });
+
+    let appendRetries = 0;
+    const appendFresh = async (
+      path: string,
+      events: StreamEventInput[],
+      label: string,
+    ): Promise<void> => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 6; attempt += 1) {
+        using freshProject = withItxSession({ auth, projectId });
+        using stream = freshProject.streams.get(path);
+        try {
+          await withHostTimeout(
+            commitDiscardingResult(stream, ...events),
+            `${label} attempt ${attempt}`,
+          );
+          return;
+        } catch (error) {
+          lastError = error;
+          if (attempt === 6) break;
+          appendRetries += 1;
+          await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+        }
+      }
+      throw new Error(`Failed ${label} after six idempotent attempts.`, { cause: lastError });
+    };
+    const readFresh = async (path: string, eventType: string): Promise<StreamEvent[]> => {
+      using freshProject = withItxSession({ auth, projectId });
+      using stream = freshProject.streams.get(path);
+      return await withHostTimeout(
+        stream.getEvents({ afterOffset: 0, eventTypes: [eventType], limit: 500 }),
+        `read ${path}`,
+      );
+    };
+    const pauseOrResumeOutput = async (paused: boolean, cycle: number): Promise<void> => {
+      await appendFresh(
+        outputPath,
+        [
+          {
+            type: paused ? "events.iterate.com/stream/paused" : "events.iterate.com/stream/resumed",
+            payload: { reason: `mixed recovery cycle ${cycle}` },
+          },
+        ],
+        `${paused ? "pause" : "resume"} output cycle ${cycle}`,
+      );
+    };
+    const waitForOutputCount = async (expected: number, cycle: number): Promise<void> => {
+      const deadline = performance.now() + 60_000;
+      for (;;) {
+        const forwarded = await readFresh(outputPath, forwardedType);
+        if (forwarded.length > expected) {
+          throw new Error(
+            `Mixed recovery produced ${forwarded.length} outputs; expected at most ${expected}.`,
+          );
+        }
+        if (forwarded.length === expected) return;
+        if (performance.now() >= deadline) {
+          throw new HostTimeoutError(
+            `Timed out waiting for ${expected} mixed recovery outputs after cycle ${cycle}; saw ${forwarded.length}.`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    };
+
+    const markers: string[] = [];
+    const startedAt = performance.now();
+    for (let cycle = 0; cycle < MIXED_RECOVERY_CYCLES; cycle += 1) {
+      const events = Array.from({ length: MIXED_RECOVERY_BATCH_SIZE }, (_, index) => {
+        const sequence = cycle * MIXED_RECOVERY_BATCH_SIZE + index;
+        const marker = `${runId}-${sequence}`;
+        markers.push(marker);
+        return {
+          type: triggerType,
+          idempotencyKey: `mixed-recovery-source:${runId}:${sequence}`,
+          payload: { cycle, marker, sequence },
+        } satisfies StreamEventInput;
+      });
+
+      switch (cycle % 4) {
+        case 0:
+          await Promise.all([
+            appendFresh(sourcePath, events, `append source cycle ${cycle}`),
+            killStreamForBenchmark(projectId, sourcePath, cycle),
+          ]);
+          break;
+        case 1:
+          await Promise.all([
+            appendFresh(sourcePath, events, `append source cycle ${cycle}`),
+            killStreamForBenchmark(projectId, outputPath, cycle),
+          ]);
+          break;
+        case 2:
+          await pauseOrResumeOutput(true, cycle);
+          await appendFresh(sourcePath, events, `append paused-output source cycle ${cycle}`);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          await Promise.all([
+            killStreamForBenchmark(projectId, sourcePath, cycle),
+            killStreamForBenchmark(projectId, outputPath, cycle),
+          ]);
+          await pauseOrResumeOutput(false, cycle);
+          break;
+        case 3: {
+          using freshProject = withItxSession({ auth, projectId });
+          using stream = freshProject.streams.get(sourcePath);
+          await withHostTimeout(forceIdleTeardown(stream), `idle teardown source cycle ${cycle}`);
+          await appendFresh(sourcePath, events, `append after idle teardown cycle ${cycle}`);
+          break;
+        }
+      }
+      await waitForOutputCount(markers.length, cycle);
+    }
+
+    const [sourceEvents, outputEvents] = await Promise.all([
+      readFresh(sourcePath, triggerType),
+      readFresh(outputPath, forwardedType),
+    ]);
+    expect(sourceEvents.map((entry) => entry.payload?.marker)).toEqual(markers);
+    expect(outputEvents.map((entry) => entry.payload?.marker)).toEqual(markers);
+    expect(outputEvents.map((entry) => entry.payload?.sourceOffset)).toEqual(
+      sourceEvents.map((entry) => entry.offset),
+    );
+    expect(new Set(outputEvents.map((entry) => entry.idempotencyKey))).toMatchObject({
+      size: markers.length,
+    });
+
+    using finalProject = withItxSession({ auth, projectId });
+    using finalSource = finalProject.streams.get(sourcePath);
+    const finalState = (await withHostTimeout(
+      finalSource.runtimeState(),
+      "read final mixed recovery source state",
+    )) as { runtime: { subscriptions: Record<string, { ackedOffset?: number }> } };
+    expect(finalState.runtime.subscriptions["project-worker"]?.ackedOffset).toBeGreaterThanOrEqual(
+      sourceEvents.at(-1)!.offset,
+    );
+
+    console.log(
+      `STREAM_MIXED_RECOVERY_STRESS ${JSON.stringify({
+        appendRetries,
+        batchSize: MIXED_RECOVERY_BATCH_SIZE,
+        cycles: MIXED_RECOVERY_CYCLES,
+        durationMs: performance.now() - startedAt,
+        events: markers.length,
+        implementation: IMPLEMENTATION,
+        projectId,
+        revision: REVISION,
+        runId,
+      })}`,
+    );
+  },
+  900_000,
 );
 
 test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(

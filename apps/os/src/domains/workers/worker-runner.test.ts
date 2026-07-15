@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers-shim.ts";
 import type { DynamicWorkerRef } from "./schemas.ts";
+import {
+  invalidateLoadedWorker,
+  loadResolvedWorker,
+  resolveWorkerSource,
+} from "./worker-loader.ts";
 import { DynamicWorkerRunner, type DynamicWorkerTraceRole } from "./worker-runner.ts";
 
 vi.mock("../itx/utils.ts", () => ({
@@ -13,6 +18,10 @@ vi.mock("../projects/utils.ts", () => ({
 }));
 
 vi.mock("./worker-loader.ts", () => ({
+  invalidateLoadedWorker: vi.fn(),
+  isInvalidWorkerLoaderCloneError: (error: unknown) =>
+    (error as { message?: unknown } | null)?.message ===
+    "Unable to deserialize cloned data due to invalid or unsupported version.",
   loadResolvedWorker: vi.fn(),
   resolveCachedArtifact: vi.fn(),
   resolveWorkerSource: vi.fn(async () => {
@@ -46,7 +55,51 @@ const statefulRef = {
 } satisfies DynamicWorkerRef;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   resetRecordedSpans();
+});
+
+it("rotates a poisoned named loader isolate before propagating Cloudflare's clone error", async () => {
+  const cloneError = new Error(
+    "Unable to deserialize cloned data due to invalid or unsupported version.",
+  );
+  const resolved = {
+    cacheKey: "artifact-v1",
+    mainModule: "worker.js",
+    modules: { "worker.js": "export default {}" },
+  };
+  vi.mocked(resolveWorkerSource).mockResolvedValueOnce({
+    resolved,
+    source: inlineRef.source,
+    version: "artifact-v1",
+  });
+  vi.mocked(loadResolvedWorker).mockReturnValueOnce({
+    getEntrypoint: () => ({
+      processEventBatch: vi.fn().mockRejectedValue(cloneError),
+    }),
+  } as unknown as WorkerStub);
+  const runner = new DynamicWorkerRunner({
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: "/",
+    waitUntil: () => undefined,
+  });
+
+  await expect(
+    runner.invokeCapability({
+      flattenNestedPath: true,
+      path: ["processEventBatch"],
+      ref: inlineRef,
+    }),
+  ).rejects.toBe(cloneError);
+
+  expect(invalidateLoadedWorker).toHaveBeenCalledOnce();
+  expect(invalidateLoadedWorker).toHaveBeenCalledWith({
+    projectId: "prj_private",
+    ref: inlineRef,
+    resolved,
+    scopePath: "/",
+  });
 });
 
 describe("dynamic worker spans", () => {

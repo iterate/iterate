@@ -54,6 +54,26 @@ export type WorkerBindings = Record<string, unknown>;
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
 const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
 
+const INVALID_LOADER_CLONE_MESSAGE =
+  "Unable to deserialize cloned data due to invalid or unsupported version.";
+
+/**
+ * Cloudflare emits this exact error when a named Worker Loader isolate can no
+ * longer deserialize its retained env Frankenvalue. This is loader
+ * infrastructure, not a verdict on the arguments supplied to the worker.
+ */
+export function isInvalidWorkerLoaderCloneError(error: unknown): boolean {
+  return (error as { message?: unknown } | null)?.message === INVALID_LOADER_CLONE_MESSAGE;
+}
+
+// A named Loader isolate retains the env capabilities from the call that
+// created it. In production a source Durable Object restart has left that
+// retained Frankenvalue unreadable even though a fresh isolate with the same
+// artifact works. Only faulted identities get a nonce; healthy hot paths keep
+// the stable key and continue sharing their named isolate.
+const loaderRecoveryNonceByBaseKey = new Map<string, string>();
+const LOADER_RECOVERY_NONCE_LIMIT = 128;
+
 export async function resolveWorkerSource({
   buildBudgetMs,
   previous,
@@ -358,11 +378,54 @@ export function loadResolvedWorker({
   // The Worker Loader cache must separate all runtime-relevant dimensions. In
   // particular `scopePath` prevents a worker loaded for an agent path from
   // reusing a project-root `env.ITX` binding, even if the module bytes match.
+  const baseCacheKey = workerLoaderBaseCacheKey({ projectId, ref, resolved, scopePath });
+  const recoveryNonce = loaderRecoveryNonceByBaseKey.get(baseCacheKey);
+  const cacheKey =
+    recoveryNonce === undefined ? baseCacheKey : `${baseCacheKey}:recovery:${recoveryNonce}`;
+  return env.LOADER.get(cacheKey, () => ({
+    compatibilityDate: WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
+    env: bindings,
+    globalOutbound,
+    mainModule: resolved.mainModule,
+    modules: resolved.modules,
+  }));
+}
+
+/** Force the next load of one exact worker identity onto a fresh named isolate. */
+export function invalidateLoadedWorker(input: {
+  projectId: string;
+  ref: DynamicWorkerRef;
+  resolved: ResolvedWorkerSource;
+  scopePath: string;
+}): void {
+  const baseCacheKey = workerLoaderBaseCacheKey(input);
+  if (
+    !loaderRecoveryNonceByBaseKey.has(baseCacheKey) &&
+    loaderRecoveryNonceByBaseKey.size >= LOADER_RECOVERY_NONCE_LIMIT
+  ) {
+    const oldest = loaderRecoveryNonceByBaseKey.keys().next().value;
+    if (oldest !== undefined) loaderRecoveryNonceByBaseKey.delete(oldest);
+  }
+  loaderRecoveryNonceByBaseKey.set(baseCacheKey, crypto.randomUUID());
+}
+
+function workerLoaderBaseCacheKey({
+  projectId,
+  ref,
+  resolved,
+  scopePath,
+}: {
+  projectId: string;
+  ref: DynamicWorkerRef;
+  resolved: ResolvedWorkerSource;
+  scopePath: string;
+}): string {
   const exportKey =
     ref.type === "stateless"
       ? `entrypoint:${ref.entrypoint ?? "default"}`
       : `durable-object:${ref.className}`;
-  const cacheKey = [
+  return [
     "worker-loader",
     // The hosting worker's own name. Loader caches are shared across parent
     // workers when they run in one workerd (vitest-pool-workers; a future
@@ -377,12 +440,4 @@ export function loadResolvedWorker({
     exportKey,
     resolved.cacheKey,
   ].join(":");
-  return env.LOADER.get(cacheKey, () => ({
-    compatibilityDate: WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-    env: bindings,
-    globalOutbound,
-    mainModule: resolved.mainModule,
-    modules: resolved.modules,
-  }));
 }
