@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ChevronDown,
@@ -22,7 +22,12 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useLiveState } from "~/itx/itx-react.tsx";
+import { agentPathIcon, agentPathLabel } from "~/lib/agent-roster-labels.ts";
+import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+
+/** Coarse tick for relative "ago" labels in the sidebar (matches stream switcher). */
+const CLOCK_TICK_MS = 15_000;
 
 type RosterRow = {
   path: string;
@@ -61,6 +66,7 @@ function useAgentRoster(projectId: string): RosterRow[] {
       .map((row): RosterRow => {
         const state =
           row.status.busy === true ? "busy" : row.status.blocked === true ? "blocked" : "idle";
+        const pathLabel = agentPathLabel(row.path);
         const doing =
           row.status.shortStatus ??
           (state === "busy"
@@ -73,9 +79,9 @@ function useAgentRoster(projectId: string): RosterRow[] {
         return {
           path: row.path,
           state,
-          icon: row.status.icon,
-          title: row.status.title ?? agentPathLabel(row.path),
-          detail: state === "idle" ? row.status.note : `is ${doing}…`,
+          icon: row.status.icon ?? agentPathIcon(row.path),
+          title: row.status.title ?? pathLabel.title,
+          detail: state === "idle" ? (row.status.note ?? pathLabel.subtitle) : `is ${doing}…`,
           lastActivityAt: row.updatedAt,
         };
       })
@@ -83,9 +89,18 @@ function useAgentRoster(projectId: string): RosterRow[] {
   }, [roster.value]);
 }
 
+function useTickingNowMs(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
+    return () => clearInterval(interval);
+  }, []);
+  return now;
+}
+
 /**
  * The agents roster in the project sidebar, newest activity first: a live
- * busy dot, the agent's title, and its expandable status line per agent.
+ * busy dot, the agent's title, last activity, and its expandable status line.
  * Sits in the nav content after the stream links (its own leading divider),
  * so a long list scrolls naturally with the sidebar. Hidden while the
  * sidebar is collapsed to icons, and absent entirely — divider included —
@@ -99,6 +114,7 @@ export function SidebarRecentAgents({
   projectSlug: string;
 }) {
   const rows = useAgentRoster(projectId);
+  const nowMs = useTickingNowMs();
   if (rows.length === 0) return null;
   return (
     <>
@@ -107,7 +123,12 @@ export function SidebarRecentAgents({
         <SidebarGroupContent>
           <SidebarMenu>
             {rows.map((row) => (
-              <AgentRosterMenuItem key={row.path} projectSlug={projectSlug} row={row} />
+              <AgentRosterMenuItem
+                key={row.path}
+                nowMs={nowMs}
+                projectSlug={projectSlug}
+                row={row}
+              />
             ))}
           </SidebarMenu>
         </SidebarGroupContent>
@@ -125,31 +146,41 @@ export function AgentRosterList({
   projectSlug: string;
 }) {
   const rows = useAgentRoster(projectId);
+  const nowMs = useTickingNowMs();
   if (rows.length === 0) return null;
   return (
     <SidebarMenu>
       {rows.map((row) => (
-        <AgentRosterMenuItem key={row.path} projectSlug={projectSlug} row={row} />
+        <AgentRosterMenuItem key={row.path} nowMs={nowMs} projectSlug={projectSlug} row={row} />
       ))}
     </SidebarMenu>
   );
 }
 
-function AgentRosterMenuItem({ projectSlug, row }: { projectSlug: string; row: RosterRow }) {
+function AgentRosterMenuItem({
+  nowMs,
+  projectSlug,
+  row,
+}: {
+  nowMs: number;
+  projectSlug: string;
+  row: RosterRow;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const ago = formatTimeAgo(row.lastActivityAt, nowMs);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        className="h-auto py-1.5 pr-7"
-        tooltip={row.title}
+        className="h-auto py-1 pr-7 text-[12px] leading-tight"
+        tooltip={`${row.title} · ${ago}`}
         render={<Link {...linkOptionsForStreamPath(projectSlug, row.path)} />}
       >
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
             <Circle
               aria-label={row.state}
               className={cn(
-                "size-2 shrink-0",
+                "size-1.5 shrink-0",
                 row.state === "busy"
                   ? "animate-pulse fill-green-500 text-green-500"
                   : row.state === "blocked"
@@ -158,10 +189,21 @@ function AgentRosterMenuItem({ projectSlug, row }: { projectSlug: string; row: R
               )}
             />
             <RosterIcon icon={row.icon} />
-            <span className="min-w-0 flex-1 truncate">{row.title}</span>
+            <span className="min-w-0 flex-1 truncate font-medium">{row.title}</span>
+            <span
+              className="shrink-0 text-[10px] tabular-nums text-muted-foreground/80"
+              title={row.lastActivityAt}
+            >
+              {ago}
+            </span>
           </div>
           {row.detail === undefined ? null : (
-            <span className={cn("text-xs text-muted-foreground", expanded ? "" : "truncate")}>
+            <span
+              className={cn(
+                "pl-3.5 text-[11px] leading-snug text-muted-foreground",
+                expanded ? "" : "truncate",
+              )}
+            >
               {row.detail}
             </span>
           )}
@@ -195,16 +237,10 @@ function RosterIcon({ icon }: { icon: string | undefined }) {
   if (icon === undefined) return null;
   const Builtin = BUILTIN_ROSTER_ICONS[icon];
   if (Builtin !== undefined) {
-    return <Builtin aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />;
+    return <Builtin aria-hidden className="size-3 shrink-0 text-muted-foreground" />;
   }
   if (icon.startsWith("https://")) {
-    return <img alt="" src={icon} className="size-3.5 shrink-0 rounded-sm object-cover" />;
+    return <img alt="" src={icon} className="size-3 shrink-0 rounded-sm object-cover" />;
   }
   return null;
-}
-
-/** "/agents/slack/nustom/c123/ts-1" → "slack/nustom/c123/ts-1" — the path sans its /agents/ prefix. */
-function agentPathLabel(path: string): string {
-  const segments = path.split("/").filter(Boolean);
-  return segments.length > 1 ? segments.slice(1).join("/") : path;
 }

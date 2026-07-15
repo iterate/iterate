@@ -75,7 +75,10 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
 How to open a PR (branch hygiene, body shape, **screenshots that actually
-render**, drafts/previews): **[Pull requests](docs/pull-requests.md)**.
+render**, drafts/previews) — and **after open**: wait for Iterate Review /
+review bots, address **every** CI/review comment (fix or reply + resolve),
+**never leave threads standing**, **never merge on red CI** unless the human
+explicitly said so: **[Pull requests](docs/pull-requests.md)**.
 
 **Browser testing:** use an isolated, headed `agent-browser` Chrome for Testing
 session by default so the developer can watch it. Give every concurrent agent
@@ -130,7 +133,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 
 ### Development
 
-- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, drafts/previews, body hygiene
+- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, drafts/previews, body hygiene; after open: wait for Iterate Review, address every thread, no merge on red CI
 - [Browser testing](docs/browser-testing.md) — isolated agent-browser sessions, visible watch mode, and reusable test logins
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities, opening project-scoped or platform-wide operator sessions, browsers for agents, preview-from-local
 - [Tunnels](docs/tunnels.md) — public HTTPS URLs for local dev, webhooks, OAuth callbacks, and CI/e2e fixtures

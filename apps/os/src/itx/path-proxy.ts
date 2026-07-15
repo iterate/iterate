@@ -1,13 +1,14 @@
 // The client-safe half of the ONE calling convention (Law 6).
 //
 // The kernel (itx.ts) dispatches every capability as `target.call({ path,
-// args })`. This module owns the two pure pieces of that convention that
-// must load OUTSIDE workerd — withItx providers in Node and the browser
-// REPL import them at runtime, so nothing here may touch cloudflare:workers
-// (itx.ts re-exports all of it for server-side imports):
+// args })`. This module owns the pure pieces of that convention that must
+// load OUTSIDE workerd, so nothing here may touch cloudflare:workers:
 //
-//   - PathProxy        dots → data (consumer side, zero round trips)
-//   - replayPathCall   data → dots (receiver-preserving replay)
+//   - replayPathCall     data → dots (receiver-preserving replay)
+//   - isPathMissMessage  recognizes a replay's path-miss error
+//
+// The consumer-side dots → data proxy is createInvokeCapabilityPathProxy
+// (domains/itx/utils.ts).
 //
 // There is deliberately NO callsite wrapper here: a plain object (or bare
 // function) IS a live capability — the core's dispatch replays paths onto
@@ -63,61 +64,6 @@ const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   "toString",
   "valueOf",
 ]);
-
-type PathProxyCall = (input: PathCall) => unknown;
-
-/**
- * Class-shaped constructor that actually returns a callable Proxy: real
- * JavaScript property access accumulates a path locally (zero round trips)
- * and the terminal call invokes the supplied callback once. The class wrapper
- * exists so call sites read as "this is an RPC-able object"; workerd supports
- * Proxy-wrapped functions/targets across RPC since the DataCloneError
- * limitation was fixed (workerd#3184).
- */
-export class PathProxy {
-  constructor(callPath: PathProxyCall) {
-    return pathNode(callPath, []) as unknown as PathProxy;
-  }
-}
-
-function pathNode(callPath: PathProxyCall, path: string[]): Function {
-  return new Proxy((...args: unknown[]) => callPath({ args, path }), {
-    apply(_target, _thisArg, args) {
-      return callPath({ args, path });
-    },
-    get(target, key, receiver) {
-      // `then` must read as undefined so promise assimilation never mistakes
-      // a path node for a thenable mid-chain.
-      if (key === "then") return undefined;
-      // Symbols resolve on the function itself (e.g. Symbol.dispose). String
-      // keys ALWAYS extend the path unless reserved — we never fall through to
-      // Function.prototype, so an SDK method literally named `name`/`call`/
-      // `bind`/`length` still traverses correctly. (The dangerous prototype
-      // names are in RESERVED_PATH_SEGMENTS.)
-      if (typeof key === "symbol") return Reflect.get(target, key, receiver);
-      if (RESERVED_PATH_SEGMENTS.has(key)) return undefined;
-      return pathNode(callPath, [...path, key]);
-    },
-    getOwnPropertyDescriptor(target, key) {
-      const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
-      if (descriptor) return descriptor;
-      if (typeof key === "symbol" || RESERVED_PATH_SEGMENTS.has(key)) return undefined;
-      // Workers RPC probes own-property descriptors when serializing; report
-      // path extensions as readable values so stubs traverse cleanly.
-      return {
-        configurable: true,
-        enumerable: true,
-        value: pathNode(callPath, [...path, key]),
-        writable: false,
-      };
-    },
-    has(target, key) {
-      if (typeof key === "symbol") return key in target;
-      if (RESERVED_PATH_SEGMENTS.has(key)) return false;
-      return true;
-    },
-  });
-}
 
 /**
  * Receiver-preserving path replay — the server-side counterpart of the

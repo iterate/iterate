@@ -1,6 +1,6 @@
 import type { Stream } from "../../itx-api.generated.ts";
 
-export const ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS = 90_000;
+const ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS = 90_000;
 
 export async function ensureMcpSessionAgentReady(input: {
   agentPath: string;
