@@ -49,6 +49,13 @@ describe("ProjectProcessor bootstrap", () => {
       streamMaxOffset: 1,
     });
 
+    const rootBirth = network.eventsAt("/");
+    expect(rootBirth.map((streamEvent) => streamEvent.type)).toEqual([
+      "events.iterate.com/capability-host/ancestor-configured",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
+    expect(rootBirth[0]?.payload).toEqual({ ancestorPath: null });
+
     const configRepo = network.eventsAt("/repos/config");
     expect(configRepo.map((streamEvent) => streamEvent.type)).toEqual([
       "events.iterate.com/stream/subscription-configured",
@@ -122,7 +129,7 @@ describe("ProjectProcessor bootstrap", () => {
 });
 
 describe("ProjectProcessor agent birth", () => {
-  it("appends only processor subscriptions at birth — policy comes from the project worker", async () => {
+  it("declares the capability ancestor before processor subscriptions — policy comes from the project worker", async () => {
     const { network, processor } = makeHarness();
 
     await processor.ingest({
@@ -134,14 +141,46 @@ describe("ProjectProcessor agent birth", () => {
       streamMaxOffset: 1,
     });
 
-    // Mechanics only. System prompt, model selection, capability mounts,
-    // and boot context are appended by the project worker via
-    // itx.agents.defaults (see agents/agent-defaults.test.ts).
-    const born = network.eventsAt("/agents/demo").map((streamEvent) => streamEvent.type);
-    // agent processor + capability-host — no separate LLM provider processors.
-    expect(born).toEqual([
+    // Mechanics only. The capability host's relationship is explicit and
+    // replayable; system prompt, model selection, capability mounts, and boot
+    // context are appended by the project worker via itx.agents.defaults (see
+    // agents/agent-defaults.test.ts).
+    const born = network.eventsAt("/agents/demo");
+    expect(born.map((streamEvent) => streamEvent.type)).toEqual([
+      "events.iterate.com/capability-host/ancestor-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
     ]);
+    expect(born[0]?.payload).toEqual({ ancestorPath: "/" });
+  });
+
+  it("declares routed web conversations under root and real child agents under their parent", async () => {
+    const { network, processor } = makeHarness();
+
+    await processor.ingest({
+      events: [
+        event("events.iterate.com/stream/child-stream-created", {
+          childPath: "/agents/web/2026-07-15t21-56-48-076z",
+        }),
+      ],
+      streamMaxOffset: 1,
+    });
+    await processor.ingest({
+      events: [
+        event(
+          "events.iterate.com/stream/child-stream-created",
+          { childPath: "/agents/web/2026-07-15t21-56-48-076z/researcher" },
+          2,
+        ),
+      ],
+      streamMaxOffset: 2,
+    });
+
+    expect(network.eventsAt("/agents/web/2026-07-15t21-56-48-076z")[0]?.payload).toEqual({
+      ancestorPath: "/",
+    });
+    expect(network.eventsAt("/agents/web/2026-07-15t21-56-48-076z/researcher")[0]?.payload).toEqual(
+      { ancestorPath: "/agents/web/2026-07-15t21-56-48-076z" },
+    );
   });
 });

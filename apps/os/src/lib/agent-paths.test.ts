@@ -11,6 +11,9 @@ describe("childAgentParentPath", () => {
   });
 
   it("works under thread agents (Slack/email/PR shapes)", () => {
+    expect(childAgentParentPath("/agents/web/conversation/helper")).toBe(
+      "/agents/web/conversation",
+    );
     expect(childAgentParentPath("/agents/slack/main/C1/ts-1/helper")).toBe(
       "/agents/slack/main/C1/ts-1",
     );
@@ -45,5 +48,6 @@ describe("childAgentParentPath", () => {
     expect(childAgentParentPath("/agents/email/t1")).toBeNull();
     expect(childAgentParentPath("/agents/repos/root/pull-requests/7")).toBeNull();
     expect(childAgentParentPath("/agents/mcp/session-test")).toBeNull();
+    expect(childAgentParentPath("/agents/web/2026-07-15t21-56-48-076z")).toBeNull();
   });
 });

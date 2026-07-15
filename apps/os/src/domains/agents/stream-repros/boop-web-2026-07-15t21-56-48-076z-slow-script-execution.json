@@ -1,0 +1,104 @@
+{
+  "streamUrl": "https://os.iterate.com/projects/boop/agents/streams/agents/web/2026-07-15t21-56-48-076z",
+  "projectId": "prj_b4da1444483742e49ce3251bc66873c0",
+  "agentPath": "/agents/web/2026-07-15t21-56-48-076z",
+  "events": [
+    {
+      "type": "events.iterate.com/capability-host/script-execution-requested",
+      "payload": {
+        "code": "async (itx) => {\n  await itx.chat.sendMessage(\"Yo dawg 👋 What’s up?\");\n}",
+        "executionId": "agent-output:45",
+        "expiresAt": 1784153516803
+      },
+      "source": {
+        "processor": {
+          "slug": "agent",
+          "version": "1.0.0",
+          "stream": {
+            "path": "/agents/web/2026-07-15t21-56-48-076z",
+            "projectId": "prj_b4da1444483742e49ce3251bc66873c0"
+          },
+          "whileProcessing": {
+            "offset": 45,
+            "type": "events.iterate.com/agents/context-added"
+          }
+        }
+      },
+      "idempotencyKey": "agent/script-execution-requested@/agents/web/2026-07-15t21-56-48-076z:45",
+      "offset": 48,
+      "createdAt": "2026-07-15T21:56:56.905Z",
+      "path": "/agents/web/2026-07-15t21-56-48-076z"
+    },
+    {
+      "type": "events.iterate.com/agent/status-changed",
+      "payload": {
+        "busy": true,
+        "phase": "script",
+        "sinceOffset": 48
+      },
+      "source": {
+        "processor": {
+          "slug": "agent",
+          "version": "1.0.0",
+          "stream": {
+            "path": "/agents/web/2026-07-15t21-56-48-076z",
+            "projectId": "prj_b4da1444483742e49ce3251bc66873c0"
+          }
+        }
+      },
+      "idempotencyKey": "agent/status-changed@48",
+      "offset": 49,
+      "createdAt": "2026-07-15T21:56:57.026Z",
+      "path": "/agents/web/2026-07-15t21-56-48-076z"
+    },
+    {
+      "type": "events.iterate.com/capability-host/script-execution-started",
+      "payload": {
+        "executionId": "agent-output:45"
+      },
+      "source": {
+        "processor": {
+          "slug": "capability-host",
+          "version": "0.1.0",
+          "stream": {
+            "path": "/agents/web/2026-07-15t21-56-48-076z",
+            "projectId": "prj_b4da1444483742e49ce3251bc66873c0"
+          }
+        }
+      },
+      "idempotencyKey": "capability-host/script-execution-started@agent-output:45",
+      "offset": 50,
+      "createdAt": "2026-07-15T21:57:00.675Z",
+      "path": "/agents/web/2026-07-15t21-56-48-076z"
+    },
+    {
+      "type": "events.iterate.com/agents/web-message-sent",
+      "payload": {
+        "message": "Yo dawg 👋 What’s up?"
+      },
+      "offset": 51,
+      "createdAt": "2026-07-15T21:57:02.172Z",
+      "path": "/agents/web/2026-07-15t21-56-48-076z"
+    },
+    {
+      "type": "events.iterate.com/capability-host/script-execution-completed",
+      "payload": {
+        "executionId": "agent-output:45"
+      },
+      "source": {
+        "processor": {
+          "slug": "capability-host",
+          "version": "0.1.0",
+          "stream": {
+            "path": "/agents/web/2026-07-15t21-56-48-076z",
+            "projectId": "prj_b4da1444483742e49ce3251bc66873c0"
+          }
+        }
+      },
+      "idempotencyKey": "capability-host/script-execution-completed@agent-output:45",
+      "offset": 52,
+      "createdAt": "2026-07-15T21:57:02.193Z",
+      "path": "/agents/web/2026-07-15t21-56-48-076z"
+    }
+  ]
+}

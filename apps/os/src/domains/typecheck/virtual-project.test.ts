@@ -127,6 +127,25 @@ const WEATHER_MOUNT: CapabilityDescription = {
   types: "export type Forecast = { forecast(input: { city: string }): Promise<string> };",
 };
 
+test("the generated platform surface is a declaration input, not a source file", async () => {
+  let checkedFiles: Record<string, string> | undefined;
+  const recordingTypechecker: Typechecker = {
+    check: async ({ files }) => {
+      checkedFiles = files;
+      return { diagnostics: [], notes: [] };
+    },
+  };
+
+  await checkItxScript({
+    capabilities: [],
+    code: "async (itx) => itx.chat.sendMessage('hello')",
+    typechecker: recordingTypechecker,
+  });
+
+  expect(checkedFiles).toHaveProperty("itx-types.d.ts");
+  expect(checkedFiles).not.toHaveProperty("itx-types.ts");
+});
+
 test("the platform surface compiles clean without eagerly loading Octokit's package graph", async () => {
   fetchedUrls = [];
   const problems = await checkItxScript({
