@@ -3,12 +3,10 @@
 // is read from the operator's mode-0700 package and sent only to the selected
 // admin recovery target. Only the small restore summary is printed.
 
-const fs = process.getBuiltinModule("node:fs");
-
 const inputFile = String(vars.inputFile ?? "").trim();
 if (!inputFile) throw new Error("vars.inputFile is required");
 
-const input = JSON.parse(fs.readFileSync(inputFile, "utf8"));
+const input = JSON.parse(process.getBuiltinModule("node:fs").readFileSync(inputFile, "utf8"));
 if (input?.format !== "iterate-stream-recovery" || input?.version !== 1) {
   throw new Error("inputFile is not an Iterate stream recovery payload");
 }
