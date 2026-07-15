@@ -1,11 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  GITHUB_LINK,
-  MemoryStream,
-  MemoryStreamNetwork,
-  deliverNewEvents,
-  webhookPayload,
-} from "./github-agent-test-helpers.ts";
+import { describe, expect, test, vi } from "vitest";
+import { eventsOfType, makeProcessorHarness, type MemoryStream } from "../streams/test-helpers.ts";
+import { GITHUB_LINK, webhookPayload } from "./github-agent-test-helpers.ts";
 import type { RepoCommittedFileChange } from "./repo-task-events.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
@@ -30,6 +25,19 @@ function newRepoProcessor(
     createRepoArtifact: async () => {
       throw new Error("not under test");
     },
+  });
+}
+
+/** The suite preamble: the canonical harness (epoch-pinned clock, like the
+ * repo/GitHub suites) building a RepoProcessor over /repos/config. */
+function repoHarness(
+  taskChangesForArtifactPush: Parameters<typeof newRepoProcessor>[1],
+  syncFromGithubPush?: Parameters<typeof newRepoProcessor>[2],
+) {
+  return makeProcessorHarness({
+    build: ({ stream }) => newRepoProcessor(stream, taskChangesForArtifactPush, syncFromGithubPush),
+    now: () => 0,
+    path: "/repos/config",
   });
 }
 
@@ -65,13 +73,13 @@ function artifactPush(branch: string) {
 }
 
 describe("RepoProcessor task change events", () => {
-  it("imports connected GitHub main pushes and waits for the Artifacts queue to emit facts", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/repos/config");
+  test("imports connected GitHub main pushes and waits for the Artifacts queue to emit facts", async () => {
     const syncFromGithubPush = vi.fn(async () => ({ commitOid: "github-head" }));
     const taskChangesForArtifactPush = vi.fn(async () => []);
-    const processor = newRepoProcessor(stream, taskChangesForArtifactPush, syncFromGithubPush);
-    const cursors = new Map<object, number>();
+    const { deliver, processor, stream } = repoHarness(
+      taskChangesForArtifactPush,
+      syncFromGithubPush,
+    );
 
     await stream.append(REPO_CREATED, GITHUB_LINK_CONFIGURED, {
       type: "events.iterate.com/github/webhook-received",
@@ -80,16 +88,14 @@ describe("RepoProcessor task change events", () => {
         "push",
       ),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(syncFromGithubPush).not.toHaveBeenCalled();
     expect(
-      stream.events.some(
-        (event) => event.type === "events.iterate.com/repo/github-import-requested",
-      ),
-    ).toBe(true);
+      eventsOfType(stream, "events.iterate.com/repo/github-import-requested"),
+    ).not.toHaveLength(0);
 
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     await vi.waitFor(() => expect(syncFromGithubPush).toHaveBeenCalledOnce());
 
     expect(syncFromGithubPush).toHaveBeenCalledOnce();
@@ -98,18 +104,14 @@ describe("RepoProcessor task change events", () => {
       branch: "main",
     });
     expect(taskChangesForArtifactPush).not.toHaveBeenCalled();
-    expect(
-      stream.events.some((event) => event.type === "events.iterate.com/repo/commit-completed"),
-    ).toBe(false);
+    expect(eventsOfType(stream, "events.iterate.com/repo/commit-completed")).toHaveLength(0);
 
     await vi.waitFor(() =>
       expect(
-        stream.events.some(
-          (event) => event.type === "events.iterate.com/repo/github-import-completed",
-        ),
-      ).toBe(true),
+        eventsOfType(stream, "events.iterate.com/repo/github-import-completed"),
+      ).not.toHaveLength(0),
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(processor.state.githubImport).toBeNull();
 
     // A full journal refold sees the terminal import fact and must not dial
@@ -118,19 +120,19 @@ describe("RepoProcessor task change events", () => {
       throw new Error("refold must not sync");
     });
     const refolded = newRepoProcessor(stream, taskChangesForArtifactPush, refoldSync);
-    await deliverNewEvents({ cursors: new Map(), processor: refolded, stream });
+    await deliver(refolded);
     expect(refoldSync).not.toHaveBeenCalled();
   });
 
-  it("journals an import failure without pinning later repo events", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/repos/config");
+  test("journals an import failure without pinning later repo events", async () => {
     const syncFromGithubPush = vi.fn(async () => {
       throw new Error("GitHub and Artifacts diverged");
     });
     const taskChangesForArtifactPush = vi.fn(async () => []);
-    const processor = newRepoProcessor(stream, taskChangesForArtifactPush, syncFromGithubPush);
-    const cursors = new Map<object, number>();
+    const { deliver, processor, stream } = repoHarness(
+      taskChangesForArtifactPush,
+      syncFromGithubPush,
+    );
 
     await stream.append(REPO_CREATED, GITHUB_LINK_CONFIGURED, {
       type: "events.iterate.com/github/webhook-received",
@@ -139,37 +141,31 @@ describe("RepoProcessor task change events", () => {
         "push",
       ),
     });
-    await deliverNewEvents({ cursors, processor, stream });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
+    await deliver();
     await vi.waitFor(() =>
-      expect(
-        stream.events.some(
-          (event) => event.type === "events.iterate.com/repo/github-import-failed",
-        ),
-      ).toBe(true),
+      expect(eventsOfType(stream, "events.iterate.com/repo/github-import-failed")).not.toHaveLength(
+        0,
+      ),
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(processor.state.githubImport).toBeNull();
 
     await stream.append(artifactPush("main"));
-    await deliverNewEvents({ cursors, processor, stream });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
+    await deliver();
 
     expect(taskChangesForArtifactPush).toHaveBeenCalledWith({
       afterCommitOid: "after456",
       beforeCommitOid: "before123",
       branch: "main",
     });
-    expect(
-      stream.events.some((event) => event.type === "events.iterate.com/repo/commit-completed"),
-    ).toBe(true);
+    expect(eventsOfType(stream, "events.iterate.com/repo/commit-completed")).not.toHaveLength(0);
   });
 
-  it("re-drives an import whose running incarnation was evicted", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/repos/config");
+  test("re-drives an import whose running incarnation was evicted", async () => {
     const syncFromGithubPush = vi.fn(async () => ({ commitOid: "current-github-head" }));
-    const processor = newRepoProcessor(stream, async () => [], syncFromGithubPush);
+    const { deliver, stream } = repoHarness(async () => [], syncFromGithubPush);
 
     await stream.append(
       REPO_CREATED,
@@ -191,32 +187,27 @@ describe("RepoProcessor task change events", () => {
         },
       },
     );
-    await deliverNewEvents({ cursors: new Map(), processor, stream });
+    await deliver();
 
     await vi.waitFor(() => expect(syncFromGithubPush).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
       expect(
-        stream.events.some(
-          (event) => event.type === "events.iterate.com/repo/github-import-completed",
-        ),
-      ).toBe(true),
+        eventsOfType(stream, "events.iterate.com/repo/github-import-completed"),
+      ).not.toHaveLength(0),
     );
   });
 
-  it("projects default-branch task file changes into subscribable repo/task facts", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/repos/config");
+  test("projects default-branch task file changes into subscribable repo/task facts", async () => {
     const taskChangesForArtifactPush = vi.fn(async () => [
       { kind: "created" as const, path: "tasks/new-task.md" },
       { kind: "updated" as const, path: "apps/os/tasks/board.markdown" },
       { kind: "deleted" as const, path: "packages/ui/tasks/old.md" },
     ]);
-    const processor = newRepoProcessor(stream, taskChangesForArtifactPush);
-    const cursors = new Map<object, number>();
+    const { deliver, stream } = repoHarness(taskChangesForArtifactPush);
 
     await stream.append(REPO_CREATED, artifactPush("main"));
-    await deliverNewEvents({ cursors, processor, stream });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
+    await deliver();
 
     expect(
       stream.events
@@ -241,9 +232,9 @@ describe("RepoProcessor task change events", () => {
       },
     ]);
     expect(
-      stream.events
-        .filter((event) => event.type === "events.iterate.com/repo/commit-completed")
-        .map((event) => event.payload),
+      eventsOfType(stream, "events.iterate.com/repo/commit-completed").map(
+        (event) => event.payload,
+      ),
     ).toEqual([{ beforeCommitOid: "before123", branch: "main", commitOid: "after456" }]);
     expect(taskChangesForArtifactPush).toHaveBeenCalledWith({
       afterCommitOid: "after456",
@@ -252,41 +243,32 @@ describe("RepoProcessor task change events", () => {
     });
   });
 
-  it("ignores pushes to non-default branches", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/repos/config");
+  test("ignores pushes to non-default branches", async () => {
     const taskChangesForArtifactPush = vi.fn(async () => []);
-    const processor = newRepoProcessor(stream, taskChangesForArtifactPush);
+    const { deliver, stream } = repoHarness(taskChangesForArtifactPush);
 
     await stream.append(REPO_CREATED, artifactPush("feature"));
-    await deliverNewEvents({ cursors: new Map(), processor, stream });
+    await deliver();
 
     expect(taskChangesForArtifactPush).not.toHaveBeenCalled();
-    expect(
-      stream.events.some((event) => event.type === "events.iterate.com/repo/commit-completed"),
-    ).toBe(false);
+    expect(eventsOfType(stream, "events.iterate.com/repo/commit-completed")).toHaveLength(0);
   });
 
-  it("is idempotent when a commit fact is refolded", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/repos/config");
+  test("is idempotent when a commit fact is refolded", async () => {
     const taskChangesForArtifactPush = async () => [
       { kind: "created" as const, path: "tasks/new-task.md" },
     ];
-    const processor = newRepoProcessor(stream, taskChangesForArtifactPush);
-    const cursors = new Map<object, number>();
+    const { deliver, stream } = repoHarness(taskChangesForArtifactPush);
 
     await stream.append(REPO_CREATED, artifactPush("main"));
-    await deliverNewEvents({ cursors, processor, stream });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
+    await deliver();
     const journalLength = stream.events.length;
 
     const refolded = newRepoProcessor(stream, taskChangesForArtifactPush);
-    await deliverNewEvents({ cursors: new Map(), processor: refolded, stream });
+    await deliver(refolded);
 
     expect(stream.events).toHaveLength(journalLength);
-    expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/repo/task-created"),
-    ).toHaveLength(1);
+    expect(eventsOfType(stream, "events.iterate.com/repo/task-created")).toHaveLength(1);
   });
 });
