@@ -59,11 +59,17 @@ consequential forks unless they explicitly waive consultation.
 2. Merge, check out the exact merged commit, run
    `pnpm erase-data --env prd --yes-i-mean-prd --preserve-auth`, and manually deploy
    **OS only** from that commit. Stop on unexplained erase or deploy warnings.
-3. Use a temporary itx script to call `restoreFromRecovery()` in this order: project
-   root, secret streams, integration streams, then the global directory. The target
-   code validates and folds the complete journal before replacing storage.
-4. For each project, call `repo.linkGithub()` with the recorded connection/owner/repo,
-   then `repo.syncFromGithub({ force: true })` with no depth. Let GitHub win.
+3. Restore each reduced payload with
+   [`scripts/restore-stream-recovery.itx.js`](scripts/restore-stream-recovery.itx.js),
+   in this order: project root, secret streams, integration streams, then the global
+   directory. Pass `vars.inputFile` as an absolute path. The target code validates and
+   folds the complete journal before replacing storage; never send an unreduced large
+   traffic journal as one restore value.
+4. The erased Artifacts config repo does not come back from root-stream facts alone.
+   For each project, call `await itx.repo.create()`, then `repo.linkGithub()` with the
+   recorded connection/owner/repo, then `repo.syncFromGithub({ force: true })` with no
+   depth. Require the synced local head to equal the recorded GitHub head. Let GitHub
+   win and retain its full history.
 5. Re-enable automatic deployment if it was disabled.
 
 ## Finish only after proof
