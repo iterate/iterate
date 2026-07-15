@@ -2,25 +2,18 @@
 // two durability adapters (stream-processor-runner.ts):
 //
 //   - `durableObjectProgressStore` — the CAS-fenced two-cursor
-//     {@link ProcessorProgressStore} over the DO's synchronous KV facade,
-//     including the read-side conversion of the LEGACY host checkpoint
-//     (`stream-processor:<slug>:snapshot`, `{offset, state}`) so a deploy of
-//     the runner resumes exactly where the host left off — acknowledgement
-//     preserved, effects NOT replayed.
+//     {@link ProcessorProgressStore} over the DO's synchronous KV facade.
 //   - `durableObjectRecovery` — the {@link ProcessorRecovery} adapter for a
 //     durable processor that owns background work: ONE ProcessorKeepalive per
-//     runner (per-runner recovery identity — the legacy shared host record had
-//     none), storage-backed per-slug, with the DO-shaped seams (alarm slice,
+//     runner, storage-backed per-slug, with the DO-shaped seams (alarm slice,
 //     waitUntil) INJECTED so nothing here touches `storage.setAlarm` or a
 //     Cloudflare ctx directly.
 //
-// Nothing wires these in yet — that is the thin-registry slice
-// (docs/stream-processor-runner-redesign.md, Phase 1 step 7). This file is
-// deliberately runtime-light so its tests run in plain-node vitest over an
-// in-memory `storage.kv` fake (durable-object-processor-durability.test.ts).
+// This file is deliberately runtime-light so its tests run in plain-node
+// vitest over an in-memory `storage.kv` fake
+// (durable-object-processor-durability.test.ts).
 
 import type { Stream } from "../../itx-api.generated.ts";
-import type { StreamProcessorSnapshot } from "./stream-processor.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 import type {
   ProcessorProgress,
@@ -29,84 +22,32 @@ import type {
 } from "./stream-processor-runner.ts";
 
 // -----------------------------------------------------------------------------
-// Key layout. Per-slug, all under the `stream-processor:` prefix the host
-// established. `snapshot` is the LEGACY host checkpoint (read + eventually
-// deleted here, never written); `progress` and `keepalive` are the new
-// per-runner records.
+// Key layout. Per-slug, all under the `stream-processor:` prefix.
 // -----------------------------------------------------------------------------
 
-/** The new-format two-cursor progress record ({@link ProcessorProgress}). */
+/** The two-cursor progress record ({@link ProcessorProgress}). */
 export const processorProgressKey = (slug: string) => `stream-processor:${slug}:progress`;
 
-/** The LEGACY host checkpoint (`{offset, state}` — stream-processor-host.ts). */
-export const legacyProcessorSnapshotKey = (slug: string) => `stream-processor:${slug}:snapshot`;
-
-/** The per-runner keepalive record ({@link KeepaliveRecord}). The legacy host
- * kept ONE shared record (`stream-processor-host:keepalive`) for all its
- * processors; per-runner identity gets its own key. */
+/** The per-runner keepalive record ({@link KeepaliveRecord}). */
 export const processorKeepaliveKey = (slug: string) => `stream-processor:${slug}:keepalive`;
-
-/** The LEGACY host's ONE shared keepalive record ({@link KeepaliveRecord} —
- * stream-processor-host.ts). Read + deleted by the registry's one-deploy
- * adoption (stream-processor-registry.ts `handleAlarm`), never written: a
- * revival ARMED by the pre-cutover incarnation fires its durable alarm into
- * the new code, where every per-slug keepalive sees no record of its own —
- * without adoption the fire is consumed and the debt silently dropped. */
-export const LEGACY_HOST_KEEPALIVE_KEY = "stream-processor-host:keepalive";
 
 /**
  * The runner's durable progress store over DO KV (`storage.kv` — synchronous,
- * matching the host's facade usage).
- *
- * Legacy conversion (codex review §2): a read that finds no new-format record
- * but DOES find the legacy `{offset, state}` snapshot converts it on the fly —
- * both cursors at `offset`, `cursorRevision` 0, `reducerVersion` stamped with
- * the CURRENT contract version (the legacy record carries none). The
- * acknowledgement is what must survive: treating the record as absent would
- * replay every effect in history. If the legacy state is stale (fails the
- * current schema), the runner's own load notices and refolds REDUCE-ONLY
- * through the preserved acknowledgement — conversion never refolds here, and
- * `read()` never mutates storage. One conversion this cannot express: a
- * reducer-version change whose old state still parses reads as current
- * (the legacy record has no version to compare) — the first such deploy
- * refolds via the schema mismatch or not at all.
- *
- * Migration is one-way by instruction: the first successful new-format commit
- * deletes the legacy snapshot key, so code rolled back PAST this deploy would
- * find no checkpoint and resume from zero (the old loader rejects the new
- * shape). Roll forward, not back, once a processor has committed here.
+ * single-threaded isolate, so read-check-write is atomic without awaits).
  */
 export function durableObjectProgressStore<State>(args: {
   storage: DurableObjectStorage;
   slug: string;
-  /** The processor contract's CURRENT version — stamped as `reducerVersion`
-   * on converted legacy records (they carry none of their own). */
-  contractVersion: string;
 }): ProcessorProgressStore<State> {
-  const { storage, slug, contractVersion } = args;
+  const { storage, slug } = args;
   const progressKey = processorProgressKey(slug);
-  const legacyKey = legacyProcessorSnapshotKey(slug);
 
   return {
-    read: () => {
-      const progress = storage.kv.get<ProcessorProgress<State>>(progressKey);
-      if (progress !== undefined) return progress;
-      const legacy = storage.kv.get<StreamProcessorSnapshot<State>>(legacyKey);
-      if (legacy === undefined) return undefined; // genuinely fresh
-      return {
-        reduction: {
-          reducerVersion: contractVersion,
-          reducedThroughOffset: legacy.offset,
-          state: legacy.state,
-        },
-        processing: { acknowledgedThroughOffset: legacy.offset, cursorRevision: 0 },
-      };
-    },
+    read: () => storage.kv.get<ProcessorProgress<State>>(progressKey),
     commit: (progress, opts) => {
       // CAS fence: read-check-write with NO intervening awaits — DO storage is
       // synchronous and the isolate single-threaded, so this whole block is
-      // atomic. The persisted revision comes from the NEW-format record only;
-      // absent or legacy-only reads as revision 0 (matching read() above).
+      // atomic. An absent record reads as revision 0.
       const persisted = storage.kv.get<ProcessorProgress<State>>(progressKey);
       const persistedRevision = persisted?.processing.cursorRevision ?? 0;
       if (opts.expectedCursorRevision !== persistedRevision) {
@@ -135,20 +76,15 @@ export function durableObjectProgressStore<State>(args: {
         );
       }
       storage.kv.put(progressKey, progress);
-      // First new-format write: retire the legacy snapshot (one-way — see the
-      // factory doc). Only on the FIRST write so the common commit path stays
-      // two KV ops, and never on a fenced commit (the throw above).
-      if (persisted === undefined) storage.kv.delete(legacyKey);
     },
   };
 }
 
 /**
  * The runner's recovery adapter for a Durable Object: wraps ONE
- * {@link ProcessorKeepalive} for THIS runner (per-runner recovery identity —
- * codex review §2; the legacy host shared one record across every processor it
- * hosted, so a revival could not name which processor owed work). The
- * keepalive machinery — mark-before-work, bounded backoff, quiet-clean reset,
+ * {@link ProcessorKeepalive} for THIS runner (per-runner recovery identity, so
+ * a revival names exactly which processor owed work). The keepalive machinery
+ * — mark-before-work, bounded backoff, quiet-clean reset,
  * deploy-version reset, wedged-work detection — is reused wholesale, never
  * reimplemented.
  *

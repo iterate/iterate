@@ -1,8 +1,7 @@
 // Isolation harness for createStreamProcessorRegistry — REAL registry + REAL
 // runners + REAL durability adapters over a fake DurableObjectState (in-memory
 // storage.kv, alarm cell, waitUntil), the in-memory MemoryStream journal, and
-// a virtual clock; the same style as stream-processor-host.test.ts, which this
-// suite replaces at cutover. Nothing here re-tests runner internals (frame
+// a virtual clock. Nothing here re-tests runner internals (frame
 // semantics live in stream-processor-runner.test.ts); it pins the registry's
 // own jobs:
 //
@@ -13,9 +12,7 @@
 //  - live-state assembly gated on isLoaded (a cold registry publishes
 //    nothing until loaded, then the real fold),
 //  - recovery revival: a runner that died owing work is revived by the alarm,
-//    and on a two-processor DO only the runner that owes work revives,
-//  - one-deploy adoption of the LEGACY host's shared keepalive record (an
-//    alarm armed pre-cutover fires into the new code exactly once).
+//    and on a two-processor DO only the runner that owes work revives.
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -23,10 +20,6 @@ import { defineProcessorContract } from "./processor-contracts.ts";
 import { StreamProcessor } from "./stream-processor.ts";
 import { KEEPALIVE_ALARM_LEAD_MS } from "./stream-processor-keepalive.ts";
 import { MemoryStream } from "./test-helpers.ts";
-import {
-  LEGACY_HOST_KEEPALIVE_KEY,
-  processorKeepaliveKey,
-} from "./durable-object-processor-durability.ts";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
@@ -364,94 +357,6 @@ describe("recovery revival", () => {
     const woken = await h.deliverPending("alpha-proc");
     expect(woken.checkpointOffset).toBe(1);
     expect(processed).toEqual([ALPHA_REVIVED]);
-  });
-});
-
-// =============================================================================
-// Legacy shared-keepalive adoption (the one-deploy cutover seam)
-// =============================================================================
-
-describe("legacy shared-keepalive adoption", () => {
-  /** What the pre-cutover host left behind when it died owing work: its ONE
-   * shared record, alarm desire armed (stream-processor-host.ts). */
-  const armedLegacyRecord = (nowMs: number) => ({
-    revivals: 0,
-    lastRevivalAt: 0,
-    version: "v-legacy",
-    armedAtMs: nowMs - 5_000,
-  });
-
-  it("adopts an armed legacy record exactly once: every recovery runner revives, the record is deleted, a second fire does nothing", async () => {
-    const h = makeHarness({ betaRecovery: true });
-    h.kv.set(LEGACY_HOST_KEEPALIVE_KEY, armedLegacyRecord(h.clock.now));
-
-    // The legacy-armed durable alarm fires into the NEW code. No per-slug
-    // keepalive has a record (they all self-gate to no-ops), so without
-    // adoption the fire would be consumed and the debt silently dropped.
-    await h.registry.handleAlarm();
-    await h.settle();
-
-    // The shared record cannot name WHICH processor owed the work, so every
-    // recovery-enabled runner journals its revival fact (idempotent
-    // over-recovery), and the record is gone — adoption happens exactly once.
-    expect(h.stream.events.filter((event) => event.type === ALPHA_REVIVED)).toHaveLength(1);
-    expect(h.stream.events.filter((event) => event.type === BETA_REVIVED)).toHaveLength(1);
-    expect(h.kv.has(LEGACY_HOST_KEEPALIVE_KEY)).toBe(false);
-
-    // A second fire does NOT re-adopt. Plant a per-slug keepalive record
-    // whose fields would derive a DIFFERENT revival idempotency key, so a
-    // re-adoption could not hide behind the append dedup (disarmed, so the
-    // runner's own keepalive stays a no-op).
-    h.kv.set(processorKeepaliveKey("alpha-proc"), {
-      revivals: 5,
-      lastRevivalAt: 123,
-      version: "v-test",
-      armedAtMs: null,
-    });
-    await h.registry.handleAlarm();
-    await h.settle();
-    expect(h.stream.events.filter((event) => event.type === ALPHA_REVIVED)).toHaveLength(1);
-    expect(h.stream.events.filter((event) => event.type === BETA_REVIVED)).toHaveLength(1);
-  });
-
-  it("keeps the legacy record when an adoption append fails, so the platform retry re-adopts (appends dedupe)", async () => {
-    const h = makeHarness({ betaRecovery: true });
-    h.kv.set(LEGACY_HOST_KEEPALIVE_KEY, armedLegacyRecord(h.clock.now));
-
-    // The first revival append rejects: handleAlarm rethrows (the platform
-    // retries the fire) and the record MUST survive — deleting it here would
-    // consume the debt with nothing journaled.
-    h.stream.failAppendsOfType = ALPHA_REVIVED;
-    await expect(h.registry.handleAlarm()).rejects.toThrow(/injected append failure/);
-    expect(h.kv.has(LEGACY_HOST_KEEPALIVE_KEY)).toBe(true);
-    expect(h.stream.events.filter((event) => event.type === BETA_REVIVED)).toHaveLength(0);
-
-    // The platform's retry re-runs adoption; the keepalive-derived
-    // idempotency keys collapse any duplicate, and the record clears.
-    h.stream.failAppendsOfType = undefined;
-    await h.registry.handleAlarm();
-    await h.settle();
-    expect(h.stream.events.filter((event) => event.type === ALPHA_REVIVED)).toHaveLength(1);
-    expect(h.stream.events.filter((event) => event.type === BETA_REVIVED)).toHaveLength(1);
-    expect(h.kv.has(LEGACY_HOST_KEEPALIVE_KEY)).toBe(false);
-  });
-
-  it("sweeps a DISARMED legacy record without reviving anyone (no debt was owed)", async () => {
-    const h = makeHarness({ betaRecovery: true });
-    // The legacy host's clean disarm wrote the record back (armedAtMs null)
-    // rather than deleting it — most cutover DOs look like this, and a
-    // presence-only adoption would burst revived noise across the fleet.
-    h.kv.set(LEGACY_HOST_KEEPALIVE_KEY, {
-      revivals: 0,
-      lastRevivalAt: 0,
-      version: "v-legacy",
-      armedAtMs: null,
-    });
-
-    await h.registry.handleAlarm();
-    await h.settle();
-    expect(h.stream.events).toHaveLength(0);
-    expect(h.kv.has(LEGACY_HOST_KEEPALIVE_KEY)).toBe(false);
   });
 });
 

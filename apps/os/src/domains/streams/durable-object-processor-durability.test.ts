@@ -5,7 +5,7 @@
 // storage fake deliberately has NO `setAlarm`: any adapter reaching past the
 // injected seam would throw, proving the seam is the only alarm door.
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
@@ -20,7 +20,6 @@ import {
 import {
   durableObjectProgressStore,
   durableObjectRecovery,
-  legacyProcessorSnapshotKey,
   processorKeepaliveKey,
   processorProgressKey,
 } from "./durable-object-processor-durability.ts";
@@ -190,7 +189,6 @@ function makeRunner(args: {
       progress: durableObjectProgressStore<State>({
         storage: args.storage,
         slug: SLUG,
-        contractVersion: VERSION,
       }),
       ...(args.recovery === undefined ? {} : { recovery: args.recovery }),
     },
@@ -203,14 +201,12 @@ function makeRunner(args: {
 // =============================================================================
 
 describe("durableObjectProgressStore", () => {
-  const legacyKey = legacyProcessorSnapshotKey(SLUG);
   const progressKey = processorProgressKey(SLUG);
   const makeStore = () => {
     const { storage, map } = makeStorage();
     const store = durableObjectProgressStore<State>({
       storage,
       slug: SLUG,
-      contractVersion: VERSION,
     });
     return { storage, map, store };
   };
@@ -225,50 +221,17 @@ describe("durableObjectProgressStore", () => {
     expect(map.size).toBe(0);
   });
 
-  it("converts the legacy {offset,state} snapshot to two cursors — acknowledgement preserved, storage untouched", () => {
+  it("CAS: an absent record reads as revision 0 — stale expected rejects, matching accepts", () => {
     const { store, map } = makeStore();
-    map.set(legacyKey, { offset: 7, state: { ids: ["a", "b"] } });
-
-    const converted = {
-      reduction: { reducerVersion: VERSION, reducedThroughOffset: 7, state: { ids: ["a", "b"] } },
-      processing: { acknowledgedThroughOffset: 7, cursorRevision: 0 },
-    };
-    expect(store.read()).toEqual(converted);
-    // Repeatable and side-effect free: read() converts on the fly, never writes.
-    expect(store.read()).toEqual(converted);
-    expect([...map.keys()]).toEqual([legacyKey]);
-  });
-
-  it("CAS: a legacy-only (or absent) record reads as revision 0 — stale expected rejects, matching accepts", () => {
-    const { store, map } = makeStore();
-    map.set(legacyKey, { offset: 3, state: { ids: [] } });
 
     expect(() => store.commit(progressAt(3), { expectedCursorRevision: 1 })).toThrow(
       /expected cursorRevision 1, persisted 0/,
     );
-    // The fenced commit wrote nothing and retired nothing.
+    // The fenced commit wrote nothing.
     expect(map.has(progressKey)).toBe(false);
-    expect(map.has(legacyKey)).toBe(true);
 
     store.commit(progressAt(3), { expectedCursorRevision: 0 });
     expect(store.read()).toEqual(progressAt(3));
-  });
-
-  it("deletes the legacy snapshot key on the first successful new-format write only", () => {
-    const { store, map } = makeStore();
-    map.set(legacyKey, { offset: 3, state: { ids: [] } });
-
-    store.commit(progressAt(4), { expectedCursorRevision: 0 });
-    expect(map.has(legacyKey)).toBe(false);
-    expect(map.has(progressKey)).toBe(true);
-
-    // Later commits must not resurrect or re-delete anything legacy-shaped: a
-    // record written under the legacy key AFTER migration (a rollback artifact)
-    // stays untouched, and read() prefers the new format.
-    map.set(legacyKey, { offset: 999, state: { ids: ["stale"] } });
-    store.commit(progressAt(5), { expectedCursorRevision: 0 });
-    expect(map.has(legacyKey)).toBe(true);
-    expect(store.read()).toEqual(progressAt(5));
   });
 
   it("CAS fences against a rewind-style revision bump (commit lands under the OLD revision, writes the new)", () => {
@@ -303,97 +266,6 @@ describe("durableObjectProgressStore", () => {
     // old expected value (reprocessFrom / skipThrough).
     store.commit(progressAt(4, 1), { expectedCursorRevision: 0 });
     expect(store.read()).toEqual(progressAt(4, 1));
-  });
-
-  it("resumes a real runner from the legacy checkpoint WITHOUT replaying acknowledged effects, then migrates the record", async () => {
-    const journal = makeJournal();
-    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
-    journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2
-    journal.seed({ type: REQUESTED, payload: { id: "c" } }); // 3
-
-    const { storage, map } = makeStorage();
-    map.set(legacyKey, { offset: 2, state: { ids: ["a", "b"] } });
-
-    const processedOffsets: number[] = [];
-    const runner = makeRunner({
-      journal,
-      storage,
-      hooks: {
-        onProcess: (args) => {
-          if (args.event === null) return;
-          processedOffsets.push(args.event.offset);
-        },
-      },
-    });
-
-    const opened = await runner.openDelivery();
-    // The wake handshake resumes from the PRESERVED acknowledgement.
-    expect(opened.checkpointOffset).toBe(2);
-    // A full redelivery (the transport replays from its own cursor) must
-    // re-run nothing at or below the acknowledgement.
-    await opened.sink({ events: journal.rows.slice(), streamMaxOffset: 3 });
-
-    expect(processedOffsets).toEqual([3]);
-    await expect(runner.snapshot()).resolves.toEqual({
-      offset: 3,
-      state: { ids: ["a", "b", "c"] },
-    });
-    expect(map.get(progressKey)).toEqual({
-      reduction: {
-        reducerVersion: VERSION,
-        reducedThroughOffset: 3,
-        state: { ids: ["a", "b", "c"] },
-      },
-      processing: { acknowledgedThroughOffset: 3, cursorRevision: 0 },
-    });
-    expect(map.has(legacyKey)).toBe(false);
-  });
-
-  it("a stale legacy state keeps the acknowledgement and refolds REDUCE-ONLY — no processEvent, no effects", async () => {
-    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const journal = makeJournal();
-      journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
-      journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2
-      journal.seed({ type: REQUESTED, payload: { id: "c" } }); // 3
-
-      const { storage, map } = makeStorage();
-      // A pre-deploy state shape that fails the current schema: the runner
-      // must discard the fold cache but KEEP the acknowledgement.
-      map.set(legacyKey, { offset: 3, state: { ids: "corrupt" } });
-
-      const reducedOffsets: number[] = [];
-      const processedOffsets: number[] = [];
-      const runner = makeRunner({
-        journal,
-        storage,
-        hooks: {
-          onReduce: (offset) => void reducedOffsets.push(offset),
-          onProcess: (args) => {
-            if (args.event === null) return;
-            processedOffsets.push(args.event.offset);
-          },
-        },
-      });
-
-      await expect(runner.snapshot()).resolves.toEqual({
-        offset: 3,
-        state: { ids: ["a", "b", "c"] },
-      });
-      expect(reducedOffsets).toEqual([1, 2, 3]);
-      expect(processedOffsets).toEqual([]); // reduce-only: effects never replay
-      expect(map.get(progressKey)).toEqual({
-        reduction: {
-          reducerVersion: VERSION,
-          reducedThroughOffset: 3,
-          state: { ids: ["a", "b", "c"] },
-        },
-        processing: { acknowledgedThroughOffset: 3, cursorRevision: 0 },
-      });
-      expect(map.has(legacyKey)).toBe(false);
-    } finally {
-      consoleWarn.mockRestore();
-    }
   });
 });
 

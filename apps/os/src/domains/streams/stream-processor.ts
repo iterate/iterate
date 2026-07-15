@@ -147,18 +147,6 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
   };
 
 /**
- * One consistent read of a processor's fold: the reduced state pinned to the
- * highest stream offset folded into it.
- *
- * The canonical shape lives in rpc-types.ts (`ProcessorSnapshot`, the
- * published contract); this is an alias under the engine's historical name so
- * the two can never drift apart. It is also the shape of the LEGACY
- * single-cursor checkpoint record still adopted at load
- * (durable-object-processor-durability.ts).
- */
-export type StreamProcessorSnapshot<State> = ProcessorSnapshot<State>;
-
-/**
  * What the PROCESSOR contributes to the published {@link ProcessorRuntimeState}:
  * the operational `runtime` bag only — subclass debug data, never cursor
  * state. The SNAPSHOT half is supplied by the StreamProcessorRunner (the

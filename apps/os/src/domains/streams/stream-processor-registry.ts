@@ -1,26 +1,20 @@
-// The DO-side "thin registry" over per-processor StreamProcessorRunners — the
-// replacement for the deleted legacy processor host (createStreamProcessorHost),
-// built to the same consumed SURFACE so cutover was a mechanical swap per
-// Durable Object. WIRED INTO: the secret DO (secret-durable-object.ts — the
-// reference cutover), the project DO (multi-processor), the scheduler DO
-// (domain alarm slice), the capability-host DO (the recovery template), the
-// repo DO (reconcile + processEventBatch merged into processEvent's at-head
-// reconcile), and the
+// The DO-side "thin registry" over per-processor StreamProcessorRunners —
+// every processor-hosting Durable Object runs one. WIRED INTO: the secret DO
+// (secret-durable-object.ts — the reference wiring), the project DO
+// (multi-processor), the scheduler DO (domain alarm slice), the
+// capability-host DO (the recovery template), the repo DO (at-head reconcile
+// inside processEvent), and the
 // agent DO (agent-durable-object.ts — multi-processor with per-processor
 // recovery on all five: agent, slack-agent, telegram-agent, email-agent,
 // github-agent; the spine's redelivery alone cannot cover a SIMULTANEOUS
-// Agent+Stream DO death mid-blocker — codex review P1). EVERY
-// processor-hosting DO runs the registry; the legacy host is deleted. Its ONE
-// cross-deploy remnant — the shared `stream-processor-host:keepalive` record
-// a pre-cutover incarnation may have armed — is adopted exactly once by
-// `handleAlarm` (see adoptLegacyHostKeepalive).
+// Agent+Stream DO death mid-blocker — codex review P1).
 //
 // THE WIRING RECIPE (established by the secret DO; the same on every DO):
 //   1. `createStreamProcessorRegistry(this.ctx, { stream, path, projectId,
 //      version: workerVersion(this.env), getLiveState? })`.
 //   2. The DO CONSTRUCTS its processor (`new XProcessor({ stream, path,
-//      projectId, ...deps })` — no host-injected readState/writeState/
-//      keepAliveWhile; the runner owns progress and keepalive) and passes it
+//      projectId, ...deps })` — the runner owns progress and keepalive; the
+//      processor holds no injected durability plumbing) and passes it
 //      to `register`, deciding recovery per the module-doc rule below.
 //   3. READ-YOUR-WRITES REPOINTING: build `#reads = registry.reads(processor)`
 //      and serve every read from it — `new StreamProcessorRpcTarget(this.#reads,
@@ -45,12 +39,12 @@
 //   3. building each runner's `durability` adapters from `ctx`
 //      (durable-object-processor-durability.ts);
 //
-// plus the two host responsibilities that live ABOVE any single runner and so
+// plus the two responsibilities that live ABOVE any single runner and so
 // cannot move into one: the node's LIVE-STATE assembly and the catch-up door.
-// Everything else the host did per processor — sink serialization, offset
+// Everything per-processor — sink serialization, offset
 // dedupe, keepalive tracking of the whole frame attempt, the trailing
 // type-unfiltered catch-up behind a consumes-filtered wake batch, cold-load /
-// schema-refold handling, read-your-writes waiters — lives in the RUNNER now
+// schema-refold handling, read-your-writes waiters — lives in the RUNNER
 // (stream-processor-runner.ts); the registry must not re-implement any of it.
 // If this file grows behavior beyond the jobs above, it has failed.
 //
@@ -81,12 +75,10 @@ import type { StreamEvent } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
-import { StreamProcessorRunner, type ProcessorRecovery } from "./stream-processor-runner.ts";
-import type { KeepaliveRecord } from "./stream-processor-keepalive.ts";
+import { StreamProcessorRunner } from "./stream-processor-runner.ts";
 import {
   durableObjectProgressStore,
   durableObjectRecovery,
-  LEGACY_HOST_KEEPALIVE_KEY,
 } from "./durable-object-processor-durability.ts";
 import {
   announceContract,
@@ -144,10 +136,6 @@ export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitU
 type RegistryEntry = {
   processor: RegisterableProcessor;
   runner: StreamProcessorRunner<any>;
-  /** The runner's recovery adapter when the DO opted in — kept on the entry
-   * so the legacy-keepalive adoption (see `handleAlarm`) can force a revival
-   * without a new shared-core hook. */
-  recovery?: ProcessorRecovery;
 };
 
 export type StreamProcessorRegistry<Live extends object = Record<string, unknown>> = {
@@ -276,9 +264,9 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
   const now = options.now ?? (() => Date.now());
 
   // ---------------------------------------------------------------------------
-  // The shared DO alarm (transplanted from the legacy processor host). A
-  // Durable Object has exactly ONE alarm and setAlarm clobbers
-  // it, so every desire goes through this slice map and the earliest wins.
+  // The shared DO alarm. A Durable Object has exactly ONE alarm and setAlarm
+  // clobbers it, so every desire goes through this slice map and the earliest
+  // wins.
   // Slices are in-memory (an eviction loses them) and that is correct: the
   // durable alarm itself survives, its fire runs every subsystem's handler,
   // and each handler re-derives its own desire — a keepalive from its KV
@@ -367,42 +355,8 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     }
   }
 
-  /**
-   * One-deploy adoption of the LEGACY host's shared keepalive debt (codex
-   * review finding 1). The legacy host tracked EVERY processor's whole ingest
-   * attempt on ONE `stream-processor-host:keepalive` record; a revival it
-   * armed fires its durable alarm into THIS code after the cutover deploy,
-   * where every per-slug keepalive sees no record of its own and no-ops — the
-   * platform alarm is consumed, and a scheduled/started obligation strands
-   * with nothing left to dial it (the exact wedge recovery exists to close).
-   *
-   * So the alarm entry point checks for the legacy record: ARMED
-   * (`armedAtMs !== null` — the legacy invariant "died owing work" IS "died
-   * with the alarm armed") means debt whose owning processor the shared
-   * record cannot name, so EVERY recovery-enabled runner appends its revived
-   * fact (idempotent over-recovery is the accepted cost — each fact's
-   * delivery only re-runs an at-head reconciliation that settles nothing when
-   * nothing is owed). A disarmed record is legacy bookkeeping with no debt
-   * (`#disarmAndReset` wrote it back rather than deleting). Either way the
-   * record is DELETED — after the appends succeed — so adoption happens
-   * exactly once; a failed append rethrows out of `handleAlarm` with the
-   * record intact, the platform retries the fire, and the appends' keepalive-
-   * derived idempotency keys collapse the duplicates.
-   */
-  async function adoptLegacyHostKeepalive(): Promise<void> {
-    const legacy = ctx.storage.kv.get<KeepaliveRecord>(LEGACY_HOST_KEEPALIVE_KEY);
-    if (legacy === undefined) return;
-    if (legacy.armedAtMs !== null) {
-      for (const entry of entries.values()) {
-        if (entry.recovery === undefined) continue;
-        await entry.recovery.appendRevived();
-      }
-    }
-    ctx.storage.kv.delete(LEGACY_HOST_KEEPALIVE_KEY);
-  }
-
-  // The node's live-state engine (transplanted from the legacy processor
-  // host). Seeded empty; assembled from runner state on the first `loadAndRefreshLive`
+  // The node's live-state engine. Seeded empty; assembled from runner state
+  // on the first `loadAndRefreshLive`
   // and kept fresh by each runner's committed-state observer. The empty seed
   // and the primary-runner fallback are the two places the registry must
   // assert `Live` (they only apply when `getLiveState` was omitted, where
@@ -425,8 +379,8 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       [...entries.values()].map((entry) => entry.runner.snapshot().catch(() => undefined)),
     );
     // Still-unloaded after the snapshot read = the load itself failed (the
-    // runner's load performs any pending refold, so unlike the legacy host
-    // there is no loaded-but-stale middle state). Catch up exactly those
+    // runner's load performs any pending refold, so there is no
+    // loaded-but-stale middle state). Catch up exactly those
     // runners — the pull retries the load and folds the journal — so one
     // failing runner never blocks the peer slices assembled in getLiveState.
     await Promise.all(
@@ -481,7 +435,6 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           progress: durableObjectProgressStore({
             storage: ctx.storage,
             slug,
-            contractVersion: processor.contract.version,
           }),
           ...(recovery === undefined ? {} : { recovery }),
         },
@@ -491,7 +444,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         keepAlive: (work) => ctx.waitUntil(work()),
         now,
       });
-      entries.set(slug, { processor, runner, ...(recovery === undefined ? {} : { recovery }) });
+      entries.set(slug, { processor, runner });
       // Any runner's committed-state change reassembles the node's live state.
       runner.observeStateChanges(() => assembleLive());
       return processor;
@@ -538,8 +491,6 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     catchUp,
 
     handleAlarm(alarmInfo) {
-      // Transplanted from the legacy processor host; the one structural change
-      // is that the fire routes to EVERY runner instead of one shared keepalive.
       return tracing.enterSpan("alarm processor keepalive", async (span) => {
         // Entering alarm() means the platform consumed the durable alarm:
         // whatever we believed was armed no longer is, and every reconcile
@@ -561,12 +512,6 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           span.setAttribute("iterate.alarm.retry_count", alarmInfo.retryCount);
         }
         try {
-          // A legacy-armed alarm (pre-cutover incarnation) fires into this
-          // handler with no per-slug keepalive record to claim it — adopt the
-          // shared debt FIRST, before the per-runner fires (which self-gate
-          // to no-ops in that state). A failed adoption append rethrows so
-          // the platform retries with the legacy record intact.
-          await adoptLegacyHostKeepalive();
           // EVERY runner gets the fire — each keepalive self-gates on its own
           // persisted armed time, so a foreign fire is a no-op. Failures are
           // collected (never short-circuit: the runners behind a throwing one
