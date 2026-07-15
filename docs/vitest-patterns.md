@@ -7,26 +7,18 @@ previews / prd, and the canonical env vars — see [Testing](testing.md).
 ## Core Principles
 
 - Use vi mocks and vi fake timers for time-based assertions
-- Prefer `.toMatchInlineSnapshot()` for snapshot tests
+- Prefer table-based tests with hand-written literal expectations (`test.for`
+  with object rows) over snapshots
 - Tests are colocated next to source files as `*.test.ts`
 
-## Table-based Testing with describe.for and test.for
+## Table-based Testing with test.for
 
-Use `describe.for` and `test.for` for table-driven tests. Unlike `.each`, `.for` doesn't spread array elements - it passes the entire element as a single argument:
+Use `test.for` with object rows for table-driven tests: a `name` per row,
+`$name` as the title, inputs and the expected value written out as literals in
+the row. Unlike `.each`, `.for` doesn't spread array elements - it passes the
+entire row as a single argument, so it destructures cleanly:
 
 ```typescript
-describe.for([
-  ["add", 1, 2, 3],
-  ["subtract", 5, 2, 3],
-  ["multiply", 3, 4, 12],
-])("%s(%i, %i) -> %i", ([operation, a, b, expected]) => {
-  test("returns correct result", () => {
-    const result = calculate(operation, a, b);
-    expect(result).toBe(expected);
-  });
-});
-
-// With object cases for better readability
 test.for([
   { user: "Alice", role: "admin", canDelete: true },
   { user: "Bob", role: "user", canDelete: false },
@@ -36,6 +28,17 @@ test.for([
   expect(permissions.canDelete).toBe(canDelete);
 });
 ```
+
+`apps/os/src/ingress.test.ts` is the model at scale: dozens of routing cases
+as data, one assertion body doing `toMatchObject(expected)`, a comment on any
+row whose reason isn't obvious, and helper factories below the table.
+
+Expectations are literals a reviewer can read against the row's inputs — not
+snapshots. `.toMatchInlineSnapshot()` regenerates on demand, which turns
+review into accepting machine output and lets wrong output get ratified; it's
+all but absent from the corpus, and new tests shouldn't add it. When only part
+of a structure matters, assert that part (`toMatchObject`, or pick the fields)
+instead of snapshotting the whole thing.
 
 ## Polling and Waiting for Conditions
 
@@ -50,7 +53,7 @@ test("should eventually return expected value", async () => {
   await expect
     .poll(
       async () => {
-        const events = await orpcClient.getEvents();
+        const events = await stream.getEvents();
         return events.some((e) => e.type === "COMPLETED");
       },
       { timeout: 5000, interval: 100 },
@@ -90,23 +93,5 @@ test("should wait for condition", async () => {
     expect(response.data).toHaveProperty("id");
     return response.data;
   });
-});
-```
-
-### vi.waitUntil() - For custom conditions
-
-Similar to waitFor but returns the first truthy value.
-
-```typescript
-test("should wait until condition is truthy", async () => {
-  const element = await vi.waitUntil(
-    async () => {
-      const elements = await page.findElements(".my-class");
-      return elements.length > 0 ? elements[0] : null;
-    },
-    { timeout: 3000 },
-  );
-
-  expect(element).toBeDefined();
 });
 ```

@@ -3,7 +3,7 @@
 How the test lanes are organized, how to run each against any environment,
 the canonical environment variables, and [the retry/timeout
 policy](#retries-and-timeouts) every lane follows. For unit-test style (fake
-timers, inline snapshots, `test.for` tables), see
+timers, `test.for` tables with hand-written literal expectations), see
 [Vitest patterns](vitest-patterns.md).
 
 ## Philosophy
@@ -422,3 +422,28 @@ retries: ...` (the `RetryTelemetryReporter` in
 
 When telemetry trends up without failures, treat it exactly like a budget
 `::warning::`: find the cause, don't wait for red.
+
+### Parked tests expire
+
+A skip/fixme/todo marker that parks a KNOWN issue is a loan against the
+suite, and it carries its terms in a comment on (or right above) the marker:
+
+```ts
+// parked: <what is broken, with evidence> — revisit by 2026-08-15
+test.fixme(true, "Known regression: ...");
+```
+
+— or it points at a tracking task (`tasks/<name>.md`) that owns the revisit
+instead. Markers without a date are for **structural** reasons only:
+platform- or env-gated suites that cannot run in a given context (the
+email-OTP specs skip on deployments with OTP disabled — that is a property
+of the target, not a parked bug).
+
+`lint/dated-skips.test.ts` enforces this in the unit lane: it scans the
+test corpus for skip/fixme/todo markers and **fails on any `revisit by`
+date in the past**, printing the file and the parked reason. An expired
+date is a decision point, not a nag to bump: fix and un-park the test, or
+renew the date with the reason re-argued. Undated markers must be either
+task-referenced or allowlisted in that guard with a note — structural
+gates live there permanently; parked markers that predate this convention
+are grandfathered there once and the grandfather list only shrinks.
