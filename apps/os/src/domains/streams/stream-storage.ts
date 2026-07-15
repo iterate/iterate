@@ -128,6 +128,22 @@ export class StreamEventLog {
     return byteLengths;
   }
 
+  /**
+   * Replace the complete committed log while preserving the supplied offsets.
+   * This is the recovery primitive, not a normal write path: callers validate
+   * the birth certificate and stream coordinate before reaching storage.
+   */
+  replaceAll(events: readonly StreamEvent[], highestAssignedOffset: number): void {
+    this.sql.exec("delete from event_chunks");
+    this.sql.exec("delete from events");
+    this.sql.exec("delete from sqlite_sequence where name = 'events'");
+    this.insert(events);
+    this.sql.exec(
+      "update sqlite_sequence set seq = ? where name = 'events'",
+      highestAssignedOffset,
+    );
+  }
+
   getByOffset(offset: number): StreamEvent | undefined {
     const row = this.sql
       .exec<{ offset: number }>("select offset from events where offset = ? limit 1", offset)
