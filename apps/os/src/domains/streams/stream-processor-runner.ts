@@ -152,7 +152,7 @@ export type ProcessorRecovery = {
  * background work that must survive eviction. This is deliberately where
  * every runtime-specific concern lives — no Cloudflare `ctx` in the runner.
  */
-export type ProcessorDurability<State> = {
+type ProcessorDurability<State> = {
   progress: ProcessorProgressStore<State>;
   recovery?: ProcessorRecovery;
 };
@@ -211,7 +211,7 @@ export type CheckpointCadence = (args: {
 }) => boolean;
 
 /** The default cadence: one durable commit per delivered frame. */
-export const perFrameCadence: CheckpointCadence = ({ frameEnd }) => frameEnd;
+const perFrameCadence: CheckpointCadence = ({ frameEnd }) => frameEnd;
 
 /**
  * The audit fact appended by the operator cursor controls (`reprocessFrom` /

@@ -26,6 +26,40 @@ import {
 
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 
+/** The runner-backed fold read the REQUIRED `reads` dep serves (the idle
+ * debounce timer's fire-time staleness check). */
+type AgentSnapshotReads = { snapshot(): Promise<{ offset: number; state: AgentState }> };
+
+/** The runner that ended up driving each processor, recorded by `agentRunner`
+ * so `makeAgentProcessor`'s lazily-wired `reads` dep answers from it — the
+ * unit-harness mirror of the DO wiring `registry.reads(processor)` after
+ * registering it. */
+const runnerReadsByProcessor = new WeakMap<AgentProcessor, AgentSnapshotReads>();
+
+/**
+ * AgentProcessor construction for these tests: identical to `new
+ * AgentProcessor(...)` except the REQUIRED runner-backed `reads` dep is wired
+ * lazily to whichever runner `agentRunner` ends up driving this processor
+ * with (the processor instance holds no readable fold under runner drive).
+ */
+function makeAgentProcessor(
+  deps: Omit<ConstructorParameters<typeof AgentProcessor>[0], "reads">,
+): AgentProcessor {
+  const processor: AgentProcessor = new AgentProcessor({
+    ...deps,
+    reads: {
+      snapshot: () => {
+        const reads = runnerReadsByProcessor.get(processor);
+        if (reads === undefined) {
+          throw new Error("no runner drives this processor yet — agentRunner wires reads");
+        }
+        return reads.snapshot();
+      },
+    },
+  });
+  return processor;
+}
+
 /**
  * REAL runner drive (the production registry's driver): the agent's at-head
  * reconciliation — LLM scheduling and obligation settling — lives in
@@ -34,15 +68,23 @@ type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
  * the journal to the head at call time and fires the at-head pulse on the
  * final page; appends made during a pass (renders, scheduled events) fold on
  * its trailing pages. `seeded` pre-loads durable progress — the runner-drive
- * form of the legacy `readState` checkpoint injection.
+ * form of the legacy `readState` checkpoint injection. `readPageSize` shrinks
+ * the pull page so a test can hold delivery at a frame boundary.
  */
 function agentRunner(
   processor: AgentProcessor,
   stream: MemoryStream,
-  opts: { seeded?: { offset: number; state: AgentState } } = {},
+  opts: { seeded?: { offset: number; state: AgentState }; readPageSize?: number } = {},
 ) {
+  const track = <Runner extends AgentSnapshotReads>(runner: Runner): Runner => {
+    runnerReadsByProcessor.set(processor, runner);
+    return runner;
+  };
+  const pageSize = opts.readPageSize === undefined ? {} : { readPageSize: opts.readPageSize };
   const seeded = opts.seeded;
-  if (seeded === undefined) return new StreamProcessorRunner({ processor, stream });
+  if (seeded === undefined) {
+    return track(new StreamProcessorRunner({ processor, stream, ...pageSize }));
+  }
   let record: ProcessorProgress<AgentState> = {
     reduction: {
       reducerVersion: AgentProcessorContract.version,
@@ -51,18 +93,21 @@ function agentRunner(
     },
     processing: { acknowledgedThroughOffset: seeded.offset, cursorRevision: 0 },
   };
-  return new StreamProcessorRunner({
-    processor,
-    stream,
-    durability: {
-      progress: {
-        read: () => record,
-        commit: (progress) => {
-          record = progress;
+  return track(
+    new StreamProcessorRunner({
+      processor,
+      stream,
+      ...pageSize,
+      durability: {
+        progress: {
+          read: () => record,
+          commit: (progress) => {
+            record = progress;
+          },
         },
       },
-    },
-  });
+    }),
+  );
 }
 
 function agentRequestEvents(content: string, model = DEFAULT_AGENT_MODEL): StreamEventInput[] {
@@ -102,7 +147,7 @@ function sseStream(...chunks: unknown[]): ReadableStream<Uint8Array> {
 describe("minimal web-chat agent processors", () => {
   it("feeds a returned script result back as input and schedules another turn", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream);
     const deliver = () => runner.catchUp();
 
@@ -127,7 +172,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("renders string results raw — no JSON escaping, no json fence label", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
@@ -147,7 +192,7 @@ describe("minimal web-chat agent processors", () => {
   it("spills an oversized script result to a workspace file and references it", async () => {
     const stream = new MemoryStream();
     const writes: { content: string; path: string }[] = [];
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -186,7 +231,7 @@ describe("minimal web-chat agent processors", () => {
   it("spills a multi-megabyte result as ONE file (R2 handles the size)", async () => {
     const stream = new MemoryStream();
     const writes: { content: string; path: string }[] = [];
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -212,7 +257,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("falls back to inline truncation when the workspace spill fails", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -237,7 +282,7 @@ describe("minimal web-chat agent processors", () => {
   it("does not spill small script results", async () => {
     const stream = new MemoryStream();
     const writes: { content: string; path: string }[] = [];
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -260,7 +305,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("feeds a thrown script error back as input", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
@@ -277,7 +322,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("ends the loop when a script returns nothing, and ignores foreign executions", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append(
       // The agent's own script returned undefined — the completion event
@@ -310,7 +355,7 @@ describe("minimal web-chat agent processors", () => {
       pendingTriggerOffset: 1,
       pendingTriggerSource: "agent-loop",
     });
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream, { seeded: { offset: 1, state } });
 
     await stream.append({
@@ -340,7 +385,7 @@ describe("minimal web-chat agent processors", () => {
   it("normalizes web input, requests AI by reference, and turns output into script execution", async () => {
     const stream = new MemoryStream();
     const aiCalls: unknown[] = [];
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -408,7 +453,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("extracts the whole script when a string literal embeds a markdown fence", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     // Mirrors a prd incident (agents/web/2026-07-09t14-21-45-359z): a chat
     // message formatted as markdown puts ``` inside the script's string
@@ -432,7 +477,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("rejects a multi-block response with corrective feedback instead of executing the first block", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     // Mirrors a prd incident (agents/web/2026-07-10t05-13-04-967z): the model
     // planned a whole workflow as four sequential scripts in one response.
@@ -465,7 +510,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("rejects mixed-language multi-block responses without executing the TypeScript block", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append({
       type: "events.iterate.com/agent/output-added",
@@ -495,7 +540,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("rejects a fenced block that does not start with async, with corrective feedback", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream);
 
     // Models habitually open code with a comment line; the block used to die
@@ -556,7 +601,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("treats MCP-origin messages like any other inbound user message", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream);
 
     await stream.append({
@@ -582,7 +627,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("coalesces multiple triggering inputs delivered in one batch into one LLM request", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append(
       {
@@ -611,7 +656,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("coalesces triggering inputs even when delivery chunks them across batches", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
 
     await stream.append(
       {
@@ -650,7 +695,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("coalesces multiple MCP-origin user messages replayed through the cold session backlog", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream);
 
     await stream.append(
@@ -683,7 +728,7 @@ describe("minimal web-chat agent processors", () => {
     const firstCallInFlight = new Promise<void>((resolve) => {
       resolveFirstCall = resolve;
     });
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -761,7 +806,7 @@ describe("minimal web-chat agent processors", () => {
       currentRequest: { phase: "scheduled", requestId: "llm-request:1", scheduledOffset: 2 },
       llmConfigConfigured: true,
     });
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream, { seeded: { offset: 2, state: stuckState } });
     // New event arrives after restart — triggers recovery
     await stream.append({
@@ -778,7 +823,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("treats Workers AI terminal stream chunks without choices as successful completion", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -850,7 +895,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("fails LLM requests politely when no AI binding is configured", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -876,7 +921,7 @@ describe("minimal web-chat agent processors", () => {
 
   it("turns a failed LLM request into an error input and schedules a retry", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -932,7 +977,7 @@ describe("minimal web-chat agent processors", () => {
   it("stops auto-retrying after three consecutive failures, with backoff between retries", async () => {
     const stream = new MemoryStream();
     let boom = 0;
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1015,7 +1060,7 @@ describe("minimal web-chat agent processors", () => {
   it("rate-limited failures keep retrying past the generic three-strike cap", async () => {
     const stream = new MemoryStream();
     let attempts = 0;
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1084,7 +1129,7 @@ describe("minimal web-chat agent processors", () => {
     // the window is still hot, the next retry waits the full cap (base × 6)
     // instead of burning the last attempt inside the same minute.
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1226,7 +1271,7 @@ describe("minimal web-chat agent processors", () => {
 
     // Incarnation 2: fresh processor (empty #liveLlmExecutions), catching up.
     // Hang forever if a live execution is wrongly started for the orphan.
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1295,7 +1340,7 @@ describe("minimal web-chat agent processors", () => {
 describe("interrupt and stray-request hygiene", () => {
   it("an interrupt during the debounce window disarms the timer; the cancelled request never fires", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1361,7 +1406,7 @@ describe("interrupt and stray-request hygiene", () => {
       },
     });
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1433,7 +1478,7 @@ describe("interrupt and stray-request hygiene", () => {
   it("settles a stray non-current requested obligation without dialing the AI binding", async () => {
     const stream = new MemoryStream();
     let dials = 0;
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1496,7 +1541,7 @@ describe("refold safety", () => {
     // Live flow to a settled turn: user message → scheduled → requested →
     // started → output → completed, folded by a live processor as it goes.
     const stream = new MemoryStream();
-    const live = new AgentProcessor({
+    const live = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1532,7 +1577,7 @@ describe("refold safety", () => {
     // the runner-drive equivalent of a discarded checkpoint). It must
     // re-execute NOTHING: a dangerous fake proves zero AI dials, the journal
     // gains zero events, and the refolded state equals the live instance's.
-    const refolded = new AgentProcessor({
+    const refolded = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1597,7 +1642,7 @@ describe("file attachments in the LLM request", () => {
 
   it("reflects sent-message attachments back into model-visible history", async () => {
     const stream = new MemoryStream();
-    const processor = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const processor = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     await stream.append({
       type: "events.iterate.com/agents/web-message-sent",
       payload: { message: "Here is your cat!", files: [attachment] },
@@ -1703,7 +1748,7 @@ describe("inter-agent mail", () => {
 describe("token usage and history reset", () => {
   it("reports normalized usage alongside a successful completion, and the fold tallies it", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1771,7 +1816,7 @@ describe("token usage and history reset", () => {
   it("skips the report when the vendor sent no parseable usage, and on failures", async () => {
     const stream = new MemoryStream();
     let fail = false;
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -1922,7 +1967,7 @@ describe("token usage and history reset", () => {
 
   it("a context-length vendor error turns into a completed failure the reset can then clear", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2006,7 +2051,7 @@ describe("token usage and history reset", () => {
     const stream = new MemoryStream();
     const aiCalls: { model: string; messages: { role: string; content: string }[] }[] = [];
     const makeAgent = () =>
-      new AgentProcessor({
+      makeAgentProcessor({
         stream,
         path: stream.path,
         projectId: null,
@@ -2143,7 +2188,7 @@ describe("token usage and history reset", () => {
         },
       });
     const gatewayBodies: { prompt_cache_key?: string; messages: { content: string }[] }[] = [];
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2231,7 +2276,7 @@ describe("token usage and history reset", () => {
 
   it("an under-threshold usage report does not compact", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2271,7 +2316,7 @@ describe("busy/idle status announcements", () => {
 
   it("announces busy immediately when a trigger queues a turn", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const [received] = await stream.append(userMessage());
     await agentRunner(agent, stream).catchUp();
 
@@ -2282,7 +2327,7 @@ describe("busy/idle status announcements", () => {
 
   it("announces a debounced idle once the turn settles, then goes quiet", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2317,7 +2362,7 @@ describe("busy/idle status announcements", () => {
 
   it("new work inside the idle debounce window leaves the blip out of the journal", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2363,10 +2408,112 @@ describe("busy/idle status announcements", () => {
     expect(busyAnnouncements[1]!.sinceOffset).toBeGreaterThan(busyAnnouncements[0]!.sinceOffset);
   });
 
+  it("the armed idle timer reads the committed fold at fire time: a busy event folded before the at-head pass suppresses the stale idle", async () => {
+    // The race this pins: with the idle debounce armed, a new busy-triggering
+    // event is REDUCED AND COMMITTED by the runner while the at-head pass
+    // that would announce the newer busy (and disarm the timer) has not run
+    // yet — a catch-up parked mid-journal. A fire-time check against a
+    // reconciler-refreshed memo still sees the old idle flip and appends a
+    // stale idle, which consuming folds ACCEPT (its sinceOffset is newer than
+    // the last announced busy) — briefly clearing a working agent. The check
+    // must read the CURRENT committed fold (the runner-backed `reads` dep),
+    // which already shows the busy flip.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const stream = new MemoryStream();
+      // A settled, ANNOUNCED turn: the trigger (1), its busy announcement
+      // (2), and the request lifecycle (3-5). The requested event carries the
+      // exact key the replayed scheduled event's re-armed debounce timer
+      // re-derives, so its append dedupes into the seeded journal.
+      const [firstMessage] = await stream.append(userMessage());
+      await stream.append(
+        {
+          type: "events.iterate.com/agent/status-changed",
+          payload: { busy: true, phase: "llm", sinceOffset: firstMessage!.offset },
+        },
+        {
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          payload: { debounceMs: 0, model: "gpt-test", requestId: "llm-request:gen-0" },
+        },
+        {
+          type: "events.iterate.com/agent/llm-request-requested",
+          idempotencyKey: "agent/llm-request-requested@3",
+          payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
+        },
+        {
+          type: "events.iterate.com/agent/llm-request-completed",
+          payload: { durationMs: 10, llmRequestOffset: 4, result: { status: "success" } },
+        },
+      );
+      // Hold the pull's empty tail read while armed, parking the catch-up
+      // right before its final at-head frame — the delivery gap the timer
+      // fires in.
+      let holdTail: Promise<void> | undefined;
+      const realReadEvents = stream.readEvents.bind(stream);
+      stream.readEvents = (input) => {
+        const pager = realReadEvents(input);
+        return {
+          next: async () => {
+            const page = await pager.next();
+            if (page.length === 0 && holdTail !== undefined) await holdTail;
+            return page;
+          },
+          [Symbol.dispose]() {},
+        };
+      };
+      const agent = makeAgentProcessor({
+        stream,
+        path: stream.path,
+        projectId: null,
+        statusIdleDebounceMs: 60_000,
+      });
+      // Page size 1 so the busy event's frame COMMITS before the held tail
+      // read (the at-head pulse fires only on the genuinely final page).
+      const runner = agentRunner(agent, stream, { readPageSize: 1 });
+      // Fold to the idle flip; the at-head pass arms its debounce timer.
+      await runner.catchUp();
+      expect(announcements(stream)).toEqual([
+        { busy: true, phase: "llm", sinceOffset: firstMessage!.offset },
+      ]);
+
+      // The busy trigger lands, with a successor event so its frame is not
+      // the final page; the parked pull reduces AND COMMITS it, then holds
+      // before the at-head pass.
+      const [busyMessage] = await stream.append(userMessage());
+      await stream.append({ type: "events.iterate.com/test/nudge", payload: {} });
+      let releaseTail!: () => void;
+      holdTail = new Promise((resolve) => {
+        releaseTail = resolve;
+      });
+      const pull = runner.catchUp();
+      while ((await runner.snapshot()).offset < busyMessage!.offset) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      // The debounce elapses INSIDE the gap. At fire time the committed fold
+      // already shows the busy flip, so the timer must swallow its idle.
+      await vi.advanceTimersByTimeAsync(60_000);
+      await new Promise((resolve) => setImmediate(resolve));
+      const patches = announcements(stream) as { busy?: boolean }[];
+      expect(patches.filter((patch) => patch.busy === false)).toEqual([]);
+
+      // Release the tail: the at-head pass announces the newer busy. The
+      // idle blip never journals at all.
+      releaseTail();
+      await pull;
+      expect(announcements(stream)).toEqual([
+        { busy: true, phase: "llm", sinceOffset: firstMessage!.offset },
+        { busy: true, phase: "llm", sinceOffset: busyMessage!.offset },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a revived incarnation announces a past-due idle flip immediately", async () => {
     // A live run settles a turn, but dies before its idle debounce fires.
     const stream = new MemoryStream();
-    const live = new AgentProcessor({
+    const live = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2398,7 +2545,7 @@ describe("busy/idle status announcements", () => {
 
     // The revival folds the journal, finds the idle flip past due, and
     // announces it inline — without dialing the AI for the settled request.
-    const revived = new AgentProcessor({
+    const revived = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2440,7 +2587,7 @@ describe("busy/idle status announcements", () => {
         payload: { durationMs: 10, llmRequestOffset: 3, result: { status: "success" } },
       },
     );
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2480,7 +2627,7 @@ describe("busy/idle status announcements", () => {
         payload: { durationMs: 10, llmRequestOffset: 4, result: { status: "success" } },
       },
     );
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2496,7 +2643,7 @@ describe("busy/idle status announcements", () => {
 
   it("folds agent-authored patches into the status record without announcing anything", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream);
     const deliver = () => runner.catchUp();
     await stream.append({
@@ -2523,7 +2670,7 @@ describe("busy/idle status announcements", () => {
 
   it("announces the phase hand-off when a turn starts a script", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -2549,7 +2696,7 @@ describe("busy/idle status announcements", () => {
 
   it("clears an authored blocked flag with the next busy announcement", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream);
     const deliver = () => runner.catchUp();
     // The agent ended a previous turn blocked on the human.

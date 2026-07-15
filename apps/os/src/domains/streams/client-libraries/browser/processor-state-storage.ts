@@ -183,11 +183,36 @@ function progressFenceStatements(args: {
  * legacy checkpoint rows are deleted in the same transaction so old readers
  * cannot resurrect the pre-reset cursor. Rewinds every subscription key for
  * the slug: the projection tables are shared per-slug.
+ *
+ * A subscription key whose ONLY checkpoint is a legacy `processor_state` row
+ * gets a rewound `processor_progress` row MATERIALIZED first (before the
+ * legacy delete): a runner that adopted the legacy checkpoint holds cursor
+ * revision 0 in memory, and against an ABSENT progress row the commit CAS
+ * reads revision 0 too — the stale in-flight frame would land its forward
+ * cursor over the cleared mirror and permanently skip the deleted prefix.
+ * After any reset, EVERY key of the slug therefore has a revision-bumped
+ * fence row.
  */
 export function browserProcessorProgressRewindStatements(
   processorSlug: string,
 ): { sql: string; params: SqlValue[] }[] {
   return [
+    {
+      // Materialize the tombstone-to-be for legacy-only keys at revision 0;
+      // the UPDATE below bumps it to revision 1 alongside the existing rows,
+      // so one statement owns the final rewound values for every key.
+      sql: `
+        INSERT INTO processor_progress (
+          processor_slug, subscription_key, reducer_version, reduced_through_offset,
+          reduced_state, acknowledged_through_offset, cursor_revision
+        )
+        SELECT processor_slug, subscription_key, '${STALE_REDUCER_VERSION}', 0, '{}', 0, 0
+        FROM processor_state
+        WHERE processor_slug = ?
+        ON CONFLICT (processor_slug, subscription_key) DO NOTHING
+      `,
+      params: [processorSlug],
+    },
     {
       sql: `
         UPDATE processor_progress
@@ -226,6 +251,38 @@ export async function resetBrowserProcessorProjection(args: {
     ],
     { transaction: true },
   );
+}
+
+/**
+ * Discard a browser processor's projection with a STABLE owned-table set:
+ * ensure every table the processor owns exists (its own projection schema
+ * ensurer — cheap, memoized per client), then DELETE FROM all of them plus
+ * the fenced cursor rewind in ONE transaction via
+ * {@link resetBrowserProcessorProjection}.
+ *
+ * The ensure-first step is load-bearing, not cosmetic: deriving the delete
+ * set from per-table `sqlite_master` probes instead is NON-ATOMIC — a
+ * follower's clear (no writer lock) can interleave with a writer tab creating
+ * the tables, probe `events` before it exists and `event_type_counts` after,
+ * and delete only the counts. Replay from the rewound cursor then re-inserts
+ * the surviving `events` rows into the identical-replay RAISE(IGNORE) arm, so
+ * the after-insert count trigger never fires for them — `event_type_counts`
+ * stays permanently undercounted. With every owned table guaranteed to exist
+ * up front, the delete set is complete no matter what a concurrent writer
+ * creates in between.
+ */
+export async function discardBrowserProcessorProjection(args: {
+  sql: SqlClient;
+  processorSlug: string;
+  tables: readonly string[];
+  ensureProjectionSchema: (sql: SqlClient) => Promise<void>;
+}): Promise<void> {
+  await args.ensureProjectionSchema(args.sql);
+  await resetBrowserProcessorProjection({
+    sql: args.sql,
+    processorSlug: args.processorSlug,
+    projectionResetStatements: args.tables.map((table) => ({ sql: `DELETE FROM ${table}` })),
+  });
 }
 
 /**

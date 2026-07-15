@@ -27,7 +27,7 @@ import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
-import { AgentProcessor } from "./agent-processor-implementation.ts";
+import { AgentProcessor, type AgentProcessorReads } from "./agent-processor-implementation.ts";
 import { AGENT_REVIVED_EVENT_TYPE, AgentProcessorContract } from "./agent-processor-contract.ts";
 import { parseAgentDurableObjectName } from "./utils.ts";
 
@@ -58,6 +58,7 @@ export class AgentDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
+      reads: this.#agentProcessorReads(),
       ai: this.env.AI,
       // Resolved per attempt (not at construction) so a config problem
       // fails the turn with a journaled error instead of bricking the DO.
@@ -98,9 +99,18 @@ export class AgentDurableObject extends DurableObject<Env> {
   );
   // Runner-backed reads: under runner drive the runner owns the cursors and
   // the processor instance's internal checkpoint never advances, so every
-  // read this DO serves (the processor facade below) goes through the
-  // runner's committed progress.
+  // read this DO serves (the processor facade below, and the processor's own
+  // fold reads via #agentProcessorReads) goes through the runner's committed
+  // progress.
   readonly #agentReads = this.#registry.reads(this.#agentProcessor);
+
+  /** The agent processor's runner-backed fold reads (the idle debounce's
+   * fire-time staleness check) — lazy closures because #agentReads is built
+   * from the registered processor above; the explicit return type breaks the
+   * field-initializer inference cycle. */
+  #agentProcessorReads(): AgentProcessorReads {
+    return { snapshot: () => this.#agentReads.snapshot() };
+  }
 
   // Registered on every agent host; it only wakes on routed Slack agent
   // streams (`/agents/slack/**`) where the project processor configured its

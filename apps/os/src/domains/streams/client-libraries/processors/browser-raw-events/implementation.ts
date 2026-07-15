@@ -76,12 +76,11 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
         `stream browser mirror offset gap: local head ${covered}, delivery continues at ${event.offset} — lost delivery; failing the frame so the self-heal replays it`,
       );
     }
-    const params = [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[];
     this.projectionBuffer.append(event.offset, [
       {
         build: () => ({
           sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-          params,
+          params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
         }),
       },
     ]);

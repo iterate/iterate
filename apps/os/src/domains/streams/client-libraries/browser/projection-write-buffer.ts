@@ -35,9 +35,9 @@
 
 import type { SqlValue } from "./stream-browser-db.ts";
 
-export type BufferedProjectionStatement = { sql: string; params?: SqlValue[] };
+type BufferedProjectionStatement = { sql: string; params?: SqlValue[] };
 
-export type ProjectionWrite = {
+type ProjectionWrite = {
   /** Materialized at drain time (once per commit, after any coalescing). */
   build: () => BufferedProjectionStatement;
   /** Writes sharing a key collapse to one pending statement (last wins). */

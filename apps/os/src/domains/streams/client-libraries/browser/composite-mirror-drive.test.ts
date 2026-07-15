@@ -6,7 +6,7 @@
 // propagation with ahead-member dedupe on replay, primary metrics delegation,
 // and the synthetic union contract.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "../../processor-contracts.ts";
 import { StreamProcessor } from "../../stream-processor.ts";
@@ -139,6 +139,38 @@ describe("CompositeMirrorDrive", () => {
     await opened.sink(frame);
     expect(raw.applied).toEqual([1]);
     expect(feed.applied).toEqual([1, 1]);
+  });
+
+  it("re-stamps fanned frames at their own tail so no member self-pulls a byte-capped frame's remainder", async () => {
+    const stream = new MemoryStream();
+    const readEvents = vi.spyOn(stream, "readEvents");
+    const raw = makeMember("browser-raw-events", stream);
+    const feed = makeMember("browser-feed", stream);
+    const composite = new CompositeMirrorDrive([raw.member, feed.member]);
+    const [first, second] = await stream.append(
+      { type: "example.com/test", payload: {} },
+      { type: "example.com/test", payload: {} },
+    );
+
+    const opened = await composite.openDelivery();
+    // A byte-capped frame: it carries only offset 1 but is stamped with the
+    // full raw head (offset 2), exactly like the server pump's capped frames.
+    await opened.sink({ events: [first!], streamMaxOffset: second!.offset });
+    // Flush the runners' trailing background lane. Pre-fix, EACH member saw
+    // its acknowledged cursor behind the stamped head and self-pulled the
+    // tail over the network — on top of the server pump, which delivers that
+    // same tail anyway, the one download crossed the wire up to three times.
+    // Browser members have no onCaughtUp, so the self-pull bought nothing.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(readEvents).not.toHaveBeenCalled();
+    expect(raw.applied).toEqual([1]);
+    expect(feed.applied).toEqual([1]);
+
+    // The tail still arrives through the single server subscription.
+    await opened.sink({ events: [second!], streamMaxOffset: second!.offset });
+    expect(raw.applied).toEqual([1, 2]);
+    expect(feed.applied).toEqual([1, 2]);
   });
 
   it("delegates subscriber metrics to the primary (first) member", () => {

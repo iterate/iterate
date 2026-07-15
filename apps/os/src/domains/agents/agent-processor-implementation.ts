@@ -16,7 +16,7 @@
 
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor, type ProcessorReads } from "../streams/stream-processor.ts";
 import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
@@ -47,8 +47,20 @@ type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
 /**
+ * RUNNER-backed reads of the committed fold. Under registry drive the runner
+ * owns both cursors and the processor instance's internal checkpoint never
+ * advances, so the one fold read the agent makes OUTSIDE a hook's own args —
+ * the idle debounce timer's fire-time staleness check — must go through the
+ * runner's committed progress. The hosting DO wires this to
+ * `registry.reads(processor)` (lazily — `reads()` needs the registered
+ * processor); the unit harness wires it to the driving StreamProcessorRunner.
+ */
+export type AgentProcessorReads = Pick<ProcessorReads<AgentState>, "snapshot">;
+
+/**
  * Host-provided deps beyond the stream plumbing.
  *
+ * - `reads` — runner-backed fold reads; see {@link AgentProcessorReads}.
  * - `ai` is the Workers AI binding (`env.AI`) used for every LLM turn.
  *   Optional so a host without one fails requests with a journaled error
  *   instead of crashing at construction.
@@ -76,6 +88,7 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  *   tests shrink it.
  */
 type AgentProcessorDeps = {
+  reads: AgentProcessorReads;
   ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
@@ -105,14 +118,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * `cancel()` disarms without firing. A lost timer costs nothing durable:
    * the flip is still in state and the reconciler re-arms it. */
   #idleStatusAnnouncement: { cancel: () => void; sinceOffset: number } | undefined;
-  /** The latest busy/idle flip the at-head reconciler has seen. The runner
-   * owns the fold (the processor instance holds no readable state), so the
-   * armed debounce timer's fire-time staleness check reads this memo —
-   * refreshed on every at-head pass; the consuming folds' sinceOffset guard
-   * is the real protection for the window it cannot cover. */
-  #lastReconciledStatusFlip:
-    | Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0]["state"]["status"]
-    | undefined;
 
   #now(): number {
     return (this.deps.now ?? Date.now)();
@@ -524,11 +529,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     args: Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0],
   ): void {
     const flip = args.state.status;
-    // The runner owns the fold, so the armed timer's fire-time staleness
-    // check below reads the latest flip THIS reconciler has seen (every
-    // at-head pass refreshes it) — the runner-drive stand-in for the legacy
-    // engine's live `this.state` read.
-    this.#lastReconciledStatusFlip = flip;
     // Undefined means the agent has never been busy; genesis idle is not news.
     if (flip === undefined) return;
     const announced = args.state.announcedStatus;
@@ -605,10 +605,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     args.runInBackground(async () => {
       try {
         if (!(await wait)) return;
-        // Best-effort staleness check against the latest reconciled flip
-        // (see #lastReconciledStatusFlip); the consuming folds' sinceOffset
-        // guard is the real protection when newer work lands inside this gap.
-        const current = this.#lastReconciledStatusFlip;
+        // Fire-time staleness check against the CURRENT committed fold (the
+        // runner-backed read the DO wires) — the legacy engine's live
+        // `this.state` read. A busy-triggering event reduced and committed
+        // after this timer armed suppresses the stale idle here, even before
+        // the at-head pass that would announce the newer busy runs. The
+        // consuming folds' sinceOffset guard remains the protection for the
+        // one window this cannot see: an event reduced in a frame whose
+        // commit has not landed yet.
+        const current = (await this.deps.reads.snapshot()).state.status;
         if (current === undefined || current.busy || current.sinceOffset !== attempt.sinceOffset) {
           return;
         }

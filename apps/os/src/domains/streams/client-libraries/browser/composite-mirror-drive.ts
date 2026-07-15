@@ -132,8 +132,24 @@ export class CompositeMirrorDrive implements AnyHostedProcessor {
     return {
       checkpointOffset: Number.isFinite(checkpointOffset) ? checkpointOffset : 0,
       sink: async (batch: MirrorFrame) => {
+        // ONE download: the server byte-caps each frame but stamps it with the
+        // full raw head, and every runner whose acknowledged cursor lands
+        // behind that stamp trails a type-unfiltered self-pull of the tail
+        // (stream-processor-runner.ts). Fanned out verbatim, EACH member would
+        // independently pull the same tail the (unfiltered, "*"-consuming)
+        // server subscription is about to deliver anyway — the remainder
+        // crossing the network once per member plus once for the pump. Browser
+        // members have no onCaughtUp, so that self-pull buys nothing; re-stamp
+        // each fanned frame at its OWN tail so no member enters the
+        // behind-head branch. (An EMPTY frame keeps the server stamp — there
+        // is no tail-continuation coming for it, so the self-pull IS the
+        // catch-up lane.)
+        const memberFrame: MirrorFrame = {
+          events: batch.events,
+          streamMaxOffset: batch.events.at(-1)?.offset ?? batch.streamMaxOffset,
+        };
         for (const open of opened) {
-          await open.sink(batch);
+          await open.sink(memberFrame);
         }
       },
     };

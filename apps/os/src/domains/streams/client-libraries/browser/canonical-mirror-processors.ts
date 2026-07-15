@@ -20,12 +20,14 @@ import {
   BROWSER_RAW_EVENTS_TABLES,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
+  ensureBrowserRawEventsSchema,
 } from "../processors/browser-raw-events/implementation.ts";
 import {
   BROWSER_FEED_SCHEMA_VERSION,
   BROWSER_FEED_TABLE,
   BrowserFeedContract,
   BrowserFeedProcessor,
+  ensureBrowserFeedSchema,
 } from "../processors/browser-feed/implementation.ts";
 import type { BrowserProcessorConfig } from "./stream-browser-store.ts";
 
@@ -43,6 +45,7 @@ export const CANONICAL_MIRROR_PROCESSORS: readonly BrowserProcessorConfig[] = [
     slug: BrowserRawEventsContract.slug,
     schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
     tables: BROWSER_RAW_EVENTS_TABLES,
+    ensureProjectionSchema: ensureBrowserRawEventsSchema,
     createProcessor({ stream, path, projectId, sql }) {
       return new BrowserRawEventsProcessor({ stream, path, projectId, sql });
     },
@@ -54,6 +57,7 @@ export const CANONICAL_MIRROR_PROCESSORS: readonly BrowserProcessorConfig[] = [
     schemaVersion: BROWSER_FEED_SCHEMA_VERSION,
     resetOnSchemaVersionChange: true,
     tables: [BROWSER_FEED_TABLE],
+    ensureProjectionSchema: ensureBrowserFeedSchema,
     createProcessor({ stream, path, projectId, sql }) {
       return new BrowserFeedProcessor({ stream, path, projectId, sql });
     },

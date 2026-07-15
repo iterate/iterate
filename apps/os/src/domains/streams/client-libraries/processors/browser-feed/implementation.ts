@@ -1,6 +1,10 @@
 import { StreamProcessor } from "../../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
-import { deleteBrowserProcessorState } from "../../browser/processor-state-storage.ts";
+import {
+  browserProcessorProgressRewindStatements,
+  deleteBrowserProcessorState,
+  ensureBrowserProcessorProgressSchema,
+} from "../../browser/processor-state-storage.ts";
 import { BrowserProjectionWriteBuffer } from "../../browser/projection-write-buffer.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserFeedContract } from "./contract.ts";
@@ -118,8 +122,11 @@ function feedOpToStatement(op: FeedOp): { sql: string; params: SqlValue[] } {
   };
 }
 
-const ensureBrowserFeedSchema = createSchemaEnsurer({
+export const ensureBrowserFeedSchema = createSchemaEnsurer({
   run: async (sql) => {
+    // The rewind statements below reference processor_progress; make sure the
+    // progress schema exists before the reset transaction can touch it.
+    await ensureBrowserProcessorProgressSchema(sql);
     // No PRAGMA user_version here: feed_items shares the per-stream OPFS
     // database with the raw-events `events` table, which owns user_version.
     // Version resets ride the store's resetOnSchemaVersionChange lane
@@ -137,7 +144,18 @@ const ensureBrowserFeedSchema = createSchemaEnsurer({
     await sql.batch(
       [
         { sql: `DROP TABLE IF EXISTS agent_feed_items` },
-        ...(isLegacyFeedItems ? [{ sql: `DROP TABLE IF EXISTS feed_items` }] : []),
+        ...(isLegacyFeedItems
+          ? [
+              // Dropping the old-shaped table MUST rewind browser-feed's own
+              // cursor in the SAME transaction: a rollback build recreates the
+              // old shape without touching processor_progress, so a surviving
+              // acknowledgement at N over the recreated-empty table would
+              // resume delivery at N+1 and leave feed rows 1..N permanently
+              // missing.
+              ...browserProcessorProgressRewindStatements(BrowserFeedContract.slug),
+              { sql: `DROP TABLE IF EXISTS feed_items` },
+            ]
+          : []),
         {
           sql: `
             -- One row per rendered Feed Item, pretty and raw interleaved in ONE

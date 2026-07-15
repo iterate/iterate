@@ -42,7 +42,7 @@ import type { StreamProcessor } from "../../stream-processor.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
 import {
   browserProcessorProgressStore,
-  resetBrowserProcessorProjection,
+  discardBrowserProcessorProjection,
 } from "./processor-state-storage.ts";
 import type { BrowserProjectionWriteBuffer } from "./projection-write-buffer.ts";
 import {
@@ -139,6 +139,15 @@ export type BrowserProcessorConfig = {
   resetOnSchemaVersionChange?: boolean;
   /** Tables this processor owns, cleared together when the local mirror is discarded. */
   tables: string[];
+  /**
+   * Ensure every owned table exists (the same ensurer the processor's own
+   * `ensureProjectionSchema` runs — module-level, memoized per SqlClient). A
+   * mirror discard runs this BEFORE its transactional delete so the
+   * owned-table set is stable: probing table existence instead races a
+   * concurrent writer's creation and can delete only part of the set (see
+   * discardBrowserProcessorProjection).
+   */
+  ensureProjectionSchema(sql: SqlClient): Promise<void>;
   /** Create the concrete processor once the browser runtime has a stream connection. */
   createProcessor(args: {
     stream: Stream;
@@ -907,7 +916,7 @@ function createStreamRuntime(
   }
 
   // Clear ONE member's projection tables AND rewind its resume cursor in ONE
-  // transaction (resetBrowserProcessorProjection): a crash between the two
+  // transaction (discardBrowserProcessorProjection): a crash between the two
   // could otherwise leave a stale checkpoint over an empty mirror — the
   // silent-hole incident class. Split from the snapshot bump + VACUUM
   // (finishDiscard) so reconcile can discard several members and reclaim
@@ -915,20 +924,18 @@ function createStreamRuntime(
   // slug (its tables are shared per-slug; a leftover row would let readers
   // that pick the highest checkpoint resurrect stale reduced state), and its
   // cursorRevision bump fences any in-flight commit from a stale runner
-  // incarnation out of the rebuilt mirror.
+  // incarnation out of the rebuilt mirror. The delete set is the member's
+  // COMPLETE owned-table list, made stable by ensuring the tables exist
+  // first — a follower's clear (no writer lock) probing sqlite_master
+  // per-table instead could race a writer tab's creation into deleting only
+  // part of the set, leaving `events` rows whose replay dedupes silently and
+  // never re-fires the count trigger.
   async function discardMemberTables(member: BrowserProcessorConfig) {
-    const projectionResetStatements: { sql: string }[] = [];
-    for (const table of member.tables) {
-      const [present] = await sql.exec(
-        `SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?`,
-        [table],
-      );
-      if (present !== undefined) projectionResetStatements.push({ sql: `DELETE FROM ${table}` });
-    }
-    await resetBrowserProcessorProjection({
+    await discardBrowserProcessorProjection({
       sql,
       processorSlug: member.slug,
-      projectionResetStatements,
+      tables: member.tables,
+      ensureProjectionSchema: (client) => member.ensureProjectionSchema(client),
     });
   }
 

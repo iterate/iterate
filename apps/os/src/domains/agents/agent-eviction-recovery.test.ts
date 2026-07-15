@@ -41,6 +41,37 @@ const T = {
 const SLUG = AgentProcessorContract.slug;
 type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 
+/** The runner-backed fold read the REQUIRED `reads` dep serves (the idle
+ * debounce timer's fire-time staleness check). */
+type AgentSnapshotReads = { snapshot(): Promise<{ offset: number; state: AgentState }> };
+
+/** The read surface driving each processor (`registry.reads(...)` in the
+ * harness, the runner itself under `agentRunner`), recorded post-registration
+ * so `makeAgentProcessor`'s lazily-wired `reads` dep answers from it — the
+ * mirror of the DO wiring `registry.reads(processor)`. */
+const runnerReadsByProcessor = new WeakMap<AgentProcessor, AgentSnapshotReads>();
+
+/** Identical to `new AgentProcessor(...)` except the REQUIRED runner-backed
+ * `reads` dep is wired lazily to whatever read surface ends up driving this
+ * processor (see runnerReadsByProcessor). */
+function makeAgentProcessor(
+  deps: Omit<ConstructorParameters<typeof AgentProcessor>[0], "reads">,
+): AgentProcessor {
+  const processor: AgentProcessor = new AgentProcessor({
+    ...deps,
+    reads: {
+      snapshot: () => {
+        const reads = runnerReadsByProcessor.get(processor);
+        if (reads === undefined) {
+          throw new Error("nothing drives this processor yet — register/agentRunner wires reads");
+        }
+        return reads.snapshot();
+      },
+    },
+  });
+  return processor;
+}
+
 function makeHarness() {
   const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
   const stream = new MemoryStream("/agents/test");
@@ -96,29 +127,29 @@ function makeHarness() {
       version: "v-test",
       now: () => clock.now,
     });
-    registry.register(
-      new AgentProcessor({
-        stream: fencedStream,
-        path: stream.path,
-        projectId: null,
-        now: () => clock.now,
-        // Incarnation 1's AI hangs after accept — the request an eviction
-        // kills mid-flight. Incarnation 2 answers with a fenced script.
-        ai: {
-          async run() {
-            if (mine === 1) {
-              await new Promise(() => {});
-              return { response: "unreachable" };
-            }
-            return {
-              response:
-                "```ts\nasync (itx) => {\n  await itx.chat.sendMessage('recovered!');\n}\n```",
-            };
-          },
+    const processor = makeAgentProcessor({
+      stream: fencedStream,
+      path: stream.path,
+      projectId: null,
+      now: () => clock.now,
+      // Incarnation 1's AI hangs after accept — the request an eviction
+      // kills mid-flight. Incarnation 2 answers with a fenced script.
+      ai: {
+        async run() {
+          if (mine === 1) {
+            await new Promise(() => {});
+            return { response: "unreachable" };
+          }
+          return {
+            response:
+              "```ts\nasync (itx) => {\n  await itx.chat.sendMessage('recovered!');\n}\n```",
+          };
         },
-      }),
-      { recovery: { revivedEventType: AGENT_REVIVED_EVENT_TYPE } },
-    );
+      },
+    });
+    registry.register(processor, { recovery: { revivedEventType: AGENT_REVIVED_EVENT_TYPE } });
+    // The DO's `#reads = registry.reads(processor)` wiring, per incarnation.
+    runnerReadsByProcessor.set(processor, registry.reads(processor));
   };
   boot();
 
@@ -294,8 +325,12 @@ function agentRunner(
   stream: MemoryStream,
   opts: { seeded?: { offset: number; state: AgentState } } = {},
 ) {
+  const track = <Runner extends AgentSnapshotReads>(runner: Runner): Runner => {
+    runnerReadsByProcessor.set(processor, runner);
+    return runner;
+  };
   const seeded = opts.seeded;
-  if (seeded === undefined) return new StreamProcessorRunner({ processor, stream });
+  if (seeded === undefined) return track(new StreamProcessorRunner({ processor, stream }));
   let record: ProcessorProgress<AgentState> = {
     reduction: {
       reducerVersion: AgentProcessorContract.version,
@@ -304,18 +339,20 @@ function agentRunner(
     },
     processing: { acknowledgedThroughOffset: seeded.offset, cursorRevision: 0 },
   };
-  return new StreamProcessorRunner({
-    processor,
-    stream,
-    durability: {
-      progress: {
-        read: () => record,
-        commit: (progress) => {
-          record = progress;
+  return track(
+    new StreamProcessorRunner({
+      processor,
+      stream,
+      durability: {
+        progress: {
+          read: () => record,
+          commit: (progress) => {
+            record = progress;
+          },
         },
       },
-    },
-  });
+    }),
+  );
 }
 
 describe("attempt bookkeeping under stream failures", () => {
@@ -330,7 +367,7 @@ describe("attempt bookkeeping under stream failures", () => {
       return realAppend(...inputs);
     };
     let dials = 0;
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -377,7 +414,7 @@ describe("attempt bookkeeping under stream failures", () => {
 describe("staleness policy (only-settle-past-expiry)", () => {
   it("settles an expired request as failure without ever dialing the AI binding", async () => {
     const stream = new MemoryStream();
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -418,7 +455,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
         requestedAt: now - AGENT_LLM_REQUEST_BACKSTOP_MS - 1,
       },
     });
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
@@ -455,7 +492,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     // AND the backstop both want to settle this request in the same at-head
     // pass.
     const now = Date.now() + AGENT_LLM_REQUEST_BACKSTOP_MS + 60_000;
-    const agent = new AgentProcessor({
+    const agent = makeAgentProcessor({
       stream,
       path: stream.path,
       projectId: null,

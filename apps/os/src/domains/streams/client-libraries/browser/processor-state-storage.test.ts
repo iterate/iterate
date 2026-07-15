@@ -25,6 +25,7 @@ import type { StreamProcessor } from "../../stream-processor.ts";
 import { StreamProcessorRunner, type ProcessorProgress } from "../../stream-processor-runner.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
+  BROWSER_RAW_EVENTS_TABLES,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
   ensureBrowserRawEventsSchema,
@@ -37,6 +38,7 @@ import {
 import {
   browserProcessorProgressStore,
   deleteBrowserProcessorState,
+  discardBrowserProcessorProjection,
   ensureBrowserProcessorProgressSchema,
   resetBrowserProcessorProjection,
 } from "./processor-state-storage.ts";
@@ -464,6 +466,62 @@ describe("output-schema reset (fenced rewind)", () => {
     expect(rebuiltProgress).toMatchObject({ acknowledged_through_offset: 3, cursor_revision: 1 });
   });
 
+  it("a reset over a LEGACY-only checkpoint leaves a revision-1 tombstone that fences the in-flight incarnation (regression)", async () => {
+    const db = new DatabaseSync(":memory:");
+    // A pre-runner database: mirror rows + the legacy checkpoint at 2, and NO
+    // new-format processor_progress row.
+    const seedSql = wrap(db);
+    await ensureBrowserRawEventsSchema(seedSql);
+    for (const offset of [1, 2]) {
+      await seedSql.exec(`INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`, [
+        offset - 1,
+        JSON.stringify(rawEvent(offset)),
+      ]);
+    }
+    await ensureBrowserProcessorProgressSchema(seedSql);
+    await seedSql.exec(
+      `INSERT INTO processor_state (processor_slug, subscription_key, reduced_state, max_offset)
+       VALUES (?, '', '{}', 2)`,
+      [BrowserRawEventsContract.slug],
+    );
+
+    // A live runner adopts the legacy checkpoint (acknowledged 2, revision 0);
+    // the adopting read writes no new-format row.
+    const load = rawEventsLoad(db);
+    expect(await load.runner.snapshot()).toMatchObject({ offset: 2 });
+    expect(await readProgressRow(load.sql, BrowserRawEventsContract.slug)).toEqual([]);
+
+    // A reset lands while that incarnation is in flight (another tab clearing
+    // the mirror). Deleting the legacy row is not enough: the reset must
+    // MATERIALIZE a rewound tombstone for the key, or nothing fences the
+    // adopted revision-0 cursor.
+    await resetBrowserProcessorProjection({
+      sql: wrap(db),
+      processorSlug: BrowserRawEventsContract.slug,
+      projectionResetStatements: [
+        { sql: `DELETE FROM events` },
+        { sql: `DELETE FROM event_type_counts` },
+      ],
+    });
+    const [tombstone] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
+    expect(tombstone).toMatchObject({
+      acknowledged_through_offset: 0,
+      cursor_revision: 1,
+      reducer_version: "",
+    });
+    expect(await readLegacyRow(load.sql, BrowserRawEventsContract.slug)).toEqual([]);
+
+    // The stale incarnation's in-flight frame commits with expected revision
+    // 0. Pre-fix the progress row was simply ABSENT (an absent row reads as
+    // revision 0), so the CAS passed: offsets 3..4 landed, the cursor
+    // acknowledged 4, and rows 1..2 were skipped on every future resume —
+    // permanently missing from the mirror. It must FENCE instead.
+    await expect(load.deliver([rawEvent(3), rawEvent(4)])).rejects.toThrow(/fenced/);
+    expect(await mirroredOffsets(load.sql)).toEqual([]);
+    const [after] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
+    expect(after).toMatchObject({ acknowledged_through_offset: 0, cursor_revision: 1 });
+  });
+
   it("a failing reset statement applies nothing at all", async () => {
     const db = new DatabaseSync(":memory:");
     const load = rawEventsLoad(db);
@@ -483,6 +541,57 @@ describe("output-schema reset (fenced rewind)", () => {
     expect(await mirroredOffsets(load.sql)).toEqual([1, 2]);
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({ acknowledged_through_offset: 2, cursor_revision: 0 });
+  });
+});
+
+describe("discardBrowserProcessorProjection", () => {
+  it("resets the COMPLETE owned-table set atomically even when only a subset pre-existed", async () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = wrap(db);
+    // A database caught between another tab's table creations: the counts
+    // table exists (with rows) but `events` does not. Deriving the delete set
+    // from per-table sqlite_master probes could race a concurrent writer into
+    // exactly this shape — probe `events` before the writer created it,
+    // probe `event_type_counts` after — and delete only the counts, leaving
+    // `events` rows whose replay dedupes into RAISE(IGNORE) without ever
+    // re-firing the count trigger: a permanent undercount.
+    db.exec(`PRAGMA user_version = ${BROWSER_RAW_EVENTS_SCHEMA_VERSION}`);
+    db.exec(
+      `CREATE TABLE event_type_counts (type TEXT PRIMARY KEY, n INTEGER NOT NULL) WITHOUT ROWID`,
+    );
+    db.exec(`INSERT INTO event_type_counts (type, n) VALUES ('test/raw', 7)`);
+    await ensureBrowserProcessorProgressSchema(sql);
+    await sql.exec(
+      `INSERT INTO processor_progress (
+         processor_slug, subscription_key, reducer_version, reduced_through_offset,
+         reduced_state, acknowledged_through_offset, cursor_revision
+       ) VALUES (?, '', 'v', 2, '{}', 2, 0)`,
+      [BrowserRawEventsContract.slug],
+    );
+
+    await discardBrowserProcessorProjection({
+      sql,
+      processorSlug: BrowserRawEventsContract.slug,
+      tables: BROWSER_RAW_EVENTS_TABLES,
+      ensureProjectionSchema: (client) => ensureBrowserRawEventsSchema(client),
+    });
+
+    // The delete covered the complete owned set: every owned table now exists
+    // and is empty, and the cursor rewound with the revision bump.
+    for (const table of BROWSER_RAW_EVENTS_TABLES) {
+      expect(await sql.exec(`SELECT * FROM ${table}`)).toEqual([]);
+    }
+    const [progress] = await readProgressRow(sql, BrowserRawEventsContract.slug);
+    expect(progress).toMatchObject({ acknowledged_through_offset: 0, cursor_revision: 1 });
+
+    // The rebuilt mirror's replay from offset 1 recounts from zero — nothing
+    // stale survived for the count trigger to sit on.
+    const load = rawEventsLoad(db);
+    await load.deliver([rawEvent(1), rawEvent(2)]);
+    expect(await mirroredOffsets(sql)).toEqual([1, 2]);
+    expect(await sql.exec(`SELECT type, n FROM event_type_counts`)).toEqual([
+      { type: "test/raw", n: 2 },
+    ]);
   });
 });
 
@@ -616,6 +725,45 @@ describe("browser feed processor under runner drive", () => {
     };
     expect(reduced.agent).toBeDefined();
     expect(reduced.nextLocalIndex).toBe(2);
+  });
+
+  it("dropping a legacy-shaped feed_items rewinds the surviving browser-feed cursor in the same transaction (regression)", async () => {
+    const db = new DatabaseSync(":memory:");
+    const firstLoad = feedLoad(db);
+    await firstLoad.deliver([rawEvent(1, "test/a"), rawEvent(2, "test/a")]);
+    const [before] = await readProgressRow(firstLoad.sql, BrowserFeedContract.slug);
+    expect(before).toMatchObject({ acknowledged_through_offset: 2, cursor_revision: 0 });
+
+    // A rollback to a pre-`kind` build recreates the old table shape. That
+    // build knows nothing about processor_progress, so the browser-feed row
+    // survives with its acknowledgement intact.
+    db.exec(`DROP TABLE feed_items`);
+    db.exec(`
+      CREATE TABLE feed_items (
+        local_index INTEGER PRIMARY KEY,
+        component TEXT NOT NULL,
+        first_offset INTEGER NOT NULL,
+        last_offset INTEGER NOT NULL,
+        event_count INTEGER NOT NULL DEFAULT 1,
+        data BLOB NOT NULL
+      )
+    `);
+
+    // The current build returns: its ensurer drops the old shape and must
+    // rewind the surviving cursor in the SAME transaction. Pre-fix the ack
+    // stayed at 2 over the recreated-empty table, so delivery resumed at 3
+    // and feed rows for offsets 1..2 were permanently missing.
+    const secondLoad = feedLoad(db);
+    expect(await secondLoad.runner.snapshot()).toMatchObject({ offset: 0 });
+    const [after] = await readProgressRow(secondLoad.sql, BrowserFeedContract.slug);
+    expect(after).toMatchObject({ acknowledged_through_offset: 0, cursor_revision: 1 });
+
+    // Replay from offset 1 rebuilds the feed whole.
+    await secondLoad.deliver([rawEvent(1, "test/a"), rawEvent(2, "test/a"), rawEvent(3, "test/a")]);
+    const rows = await secondLoad.sql.exec(
+      `SELECT kind, first_offset, last_offset, event_count FROM feed_items`,
+    );
+    expect(rows).toEqual([{ kind: "raw.group", first_offset: 1, last_offset: 3, event_count: 3 }]);
   });
 
   it("a failed feed commit rolls back item rows and cursor together", async () => {
