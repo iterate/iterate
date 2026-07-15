@@ -25,6 +25,8 @@ export type GithubReviewRule = {
   invariant: string;
 };
 
+export const GITHUB_REVIEW_SUBSCRIPTION_KEY = "userspace/github-review";
+
 const GithubWebhookEvents = {
   "events.iterate.com/github/webhook-received": {
     description: "A signed GitHub webhook routed onto its canonical pull-request agent stream.",
@@ -68,6 +70,21 @@ const GithubReviewTarget = z.object({
 
 type GithubReviewTarget = z.infer<typeof GithubReviewTarget>;
 
+const GithubReviewRequest = z.object({
+  sourceOffset: z.number().int().positive(),
+  target: GithubReviewTarget,
+});
+
+const StreamSubscriptionEvents = {
+  "events.iterate.com/stream/subscription-configured": {
+    description: "A durable stream subscription became active from this journal offset.",
+    payloadSchema: z.looseObject({
+      subscriptionKey: z.string(),
+      params: z.object({ initialRequest: GithubReviewRequest }).optional(),
+    }),
+  },
+} as const;
+
 const GithubReviewEvents = {
   "events.iterate.com/github-review/request-processed": {
     description: "An at-head review obligation reached an idempotent terminal processing outcome.",
@@ -82,24 +99,19 @@ const GithubReviewEvents = {
 /** The ordinary processor contract for userspace pull-request reviews. */
 export const GithubReviewProcessorContract = defineProcessorContract({
   slug: "github-review",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
     "Folds eligible GitHub pull-request webhooks into durable obligations and reconciles them into attributed AI review tasks.",
   stateSchema: z.object({
-    pendingRequests: z
-      .array(
-        z.object({
-          sourceOffset: z.number().int().positive(),
-          target: GithubReviewTarget,
-        }),
-      )
-      .default([]),
+    pendingRequests: z.array(GithubReviewRequest).default([]),
+    subscriptionOffset: z.number().int().positive().optional(),
   }),
   events: GithubReviewEvents,
-  processorDeps: [GithubWebhookEvents, AgentMessageEvents],
+  processorDeps: [GithubWebhookEvents, StreamSubscriptionEvents, AgentMessageEvents],
   consumes: [
     "events.iterate.com/github/webhook-received",
     "events.iterate.com/github-review/request-processed",
+    "events.iterate.com/stream/subscription-configured",
   ],
   emits: [
     "events.iterate.com/agents/message-received",
@@ -121,6 +133,7 @@ export class GithubReviewProcessor extends StreamProcessor<
   }: Parameters<StreamProcessor<GithubReviewProcessorContract>["reduce"]>[0]) {
     if (event.type === "events.iterate.com/github-review/request-processed") {
       return {
+        ...state,
         pendingRequests: state.pendingRequests.filter(
           (request) =>
             request.sourceOffset !== event.payload.sourceOffset ||
@@ -128,12 +141,35 @@ export class GithubReviewProcessor extends StreamProcessor<
         ),
       };
     }
+    if (event.type === "events.iterate.com/stream/subscription-configured") {
+      if (
+        event.payload.subscriptionKey !== GITHUB_REVIEW_SUBSCRIPTION_KEY ||
+        state.subscriptionOffset !== undefined
+      ) {
+        return state;
+      }
+      const initialRequest = event.payload.params?.initialRequest;
+      return {
+        ...state,
+        pendingRequests:
+          initialRequest === undefined
+            ? state.pendingRequests
+            : [...state.pendingRequests, initialRequest],
+        subscriptionOffset: event.offset,
+      };
+    }
+    // Wake subscribers own their checkpoint and initially replay from zero.
+    // The committed subscription fact above carries the one request that
+    // activated this processor, so every earlier webhook remains inert.
+    if (state.subscriptionOffset === undefined) return state;
     const target = githubReviewTarget(event, this.deps.config);
     if (target === null || !this.deps.config.repositories.includes(target.fullName)) return state;
+    const request = { sourceOffset: event.offset, target };
     if (state.pendingRequests.some((request) => request.sourceOffset === event.offset))
       return state;
     return {
-      pendingRequests: [...state.pendingRequests, { sourceOffset: event.offset, target }],
+      ...state,
+      pendingRequests: [...state.pendingRequests, request],
     };
   }
 

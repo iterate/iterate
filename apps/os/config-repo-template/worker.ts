@@ -11,6 +11,7 @@ import {
   type StreamSubscriberWakeResponse,
 } from "iterate/sdk";
 import {
+  GITHUB_REVIEW_SUBSCRIPTION_KEY,
   GithubReviewProcessor,
   GithubReviewProcessorContract,
   githubReviewTarget,
@@ -195,11 +196,14 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
           type: "events.iterate.com/stream/subscription-configured",
           idempotencyKey: `github-review/subscription@${event.path}`,
           payload: {
-            subscriptionKey: "userspace/github-review",
+            subscriptionKey: GITHUB_REVIEW_SUBSCRIPTION_KEY,
             delivery: {
               mode: "wake",
               expression: ["workers", ["get", reviewProcessorRef], "wakeStreamSubscriber"],
               processorSlug: GithubReviewProcessorContract.slug,
+            },
+            params: {
+              initialRequest: { sourceOffset: event.offset, target },
             },
           },
         });

@@ -63,6 +63,21 @@ function webhook(input?: {
   };
 }
 
+function subscriptionConfigured(source = webhook(), offset = 5): StreamEvent {
+  const target = githubReviewTarget(source, CONFIG);
+  if (target === null) throw new Error("test subscription source must be reviewable");
+  return {
+    createdAt: "2026-07-14T08:00:00.500Z",
+    offset,
+    path: REVIEW_PATH,
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      subscriptionKey: "userspace/github-review",
+      params: { initialRequest: { sourceOffset: source.offset, target } },
+    },
+  };
+}
+
 function harness(input?: {
   checkRuns?: (args: { page: number; ref: string }) => unknown[];
   liveDraft?: boolean;
@@ -156,10 +171,13 @@ describe("config-repo GitHub reviews", () => {
       stream: { append: streamAppend } as unknown as Stream,
     });
 
-    await processor.ingest({ events: [webhook()], streamMaxOffset: 4 });
+    await processor.ingest({
+      events: [webhook(), subscriptionConfigured()],
+      streamMaxOffset: 5,
+    });
 
     await expect(processor.snapshot()).resolves.toEqual({
-      offset: 4,
+      offset: 5,
       state: {
         pendingRequests: [
           {
@@ -179,6 +197,7 @@ describe("config-repo GitHub reviews", () => {
             },
           },
         ],
+        subscriptionOffset: 5,
       },
     });
     expect(streamAppend).toHaveBeenNthCalledWith(
@@ -188,7 +207,7 @@ describe("config-repo GitHub reviews", () => {
         source: {
           processor: {
             slug: "github-review",
-            version: "0.1.0",
+            version: "0.2.0",
             stream: { path: REVIEW_PATH, projectId: "prj_test" },
           },
         },
@@ -207,7 +226,7 @@ describe("config-repo GitHub reviews", () => {
         source: {
           processor: {
             slug: "github-review",
-            version: "0.1.0",
+            version: "0.2.0",
             stream: { path: REVIEW_PATH, projectId: "prj_test" },
           },
         },
@@ -216,10 +235,51 @@ describe("config-repo GitHub reviews", () => {
     );
   });
 
+  it("starts with the exact webhook carried by the subscription fact", async () => {
+    const h = harness();
+    const streamAppend = vi.fn().mockResolvedValue([]);
+    const processor = new GithubReviewProcessor({
+      config: CONFIG,
+      itx: h.itx,
+      path: REVIEW_PATH,
+      projectId: "prj_test",
+      stream: { append: streamAppend } as unknown as Stream,
+    });
+
+    const previousWebhook = webhook({ headSha: "head-a", offset: 1 });
+    const triggeringWebhook = webhook({ headSha: "head-b", offset: 2 });
+    const interleavedWebhook = webhook({ headSha: "head-c", offset: 4 });
+    await processor.ingest({
+      events: [
+        previousWebhook,
+        triggeringWebhook,
+        interleavedWebhook,
+        subscriptionConfigured(triggeringWebhook),
+      ],
+      streamMaxOffset: 5,
+    });
+
+    expect(h.getConnection).toHaveBeenCalledOnce();
+    expect(streamAppend).toHaveBeenCalledTimes(2);
+    expect(streamAppend).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        idempotencyKey: "iterate-review:prj_test:42:7:head:head-b",
+      }),
+    );
+    expect(streamAppend).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({ sourceOffset: 2 }),
+        type: "events.iterate.com/github-review/request-processed",
+      }),
+    );
+  });
+
   it("refolds a completed review journal without touching GitHub or appending events", async () => {
     const firstHarness = harness();
-    const journal = [webhook()];
-    let nextOffset = 5;
+    const journal = [webhook(), subscriptionConfigured()];
+    let nextOffset = 6;
     const appendToJournal = vi.fn(async (...inputs: StreamEventInput[]): Promise<StreamEvent[]> => {
       const committed = inputs.map(
         (input): StreamEvent => ({
@@ -242,16 +302,17 @@ describe("config-repo GitHub reviews", () => {
       stream: { append: appendToJournal } as unknown as Stream,
     });
 
-    await firstProcessor.ingest({ events: [journal[0]!], streamMaxOffset: 4 });
+    await firstProcessor.ingest({ events: journal, streamMaxOffset: 5 });
     expect(journal.map((event) => event.type)).toEqual([
       "events.iterate.com/github/webhook-received",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/agents/message-received",
       "events.iterate.com/github-review/request-processed",
     ]);
-    await firstProcessor.ingest({ events: journal.slice(1), streamMaxOffset: 6 });
+    await firstProcessor.ingest({ events: journal.slice(2), streamMaxOffset: 7 });
     await expect(firstProcessor.snapshot()).resolves.toEqual({
-      offset: 6,
-      state: { pendingRequests: [] },
+      offset: 7,
+      state: { pendingRequests: [], subscriptionOffset: 5 },
     });
 
     const refoldHarness = harness();
@@ -264,11 +325,11 @@ describe("config-repo GitHub reviews", () => {
       // The fresh processor only needs append to prove replay emits nothing.
       stream: { append: refoldAppend } as unknown as Stream,
     });
-    await refoldedProcessor.ingest({ events: journal, streamMaxOffset: 6 });
+    await refoldedProcessor.ingest({ events: journal, streamMaxOffset: 7 });
 
     await expect(refoldedProcessor.snapshot()).resolves.toEqual({
-      offset: 6,
-      state: { pendingRequests: [] },
+      offset: 7,
+      state: { pendingRequests: [], subscriptionOffset: 5 },
     });
     expect(refoldHarness.getConnection).not.toHaveBeenCalled();
     expect(refoldAppend).not.toHaveBeenCalled();
