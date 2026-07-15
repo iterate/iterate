@@ -127,7 +127,8 @@ export function CorePrettyState({
                   )}
                   {eventTypes.length === 0 && condition == null ? null : (
                     <div className="mt-1 text-[11px] text-muted-foreground">
-                      {eventTypes.length === 0
+                      {/* `*` anywhere means "all types" — same convention as EventSelector. */}
+                      {eventTypes.length === 0 || eventTypes.includes("*")
                         ? "all events"
                         : eventTypes
                             .map((type) => type.replace("events.iterate.com/", ""))
