@@ -14,7 +14,7 @@ import { test } from "./test-support/test.ts";
 test("can sign up with an email one-time passcode", async ({ page }) => {
   test.skip(
     !(await startEmailOtpSignIn(page)),
-    "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS; both default on).",
+    "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
 
   const slug = uniqueFixtureSlug("signup");

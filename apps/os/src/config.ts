@@ -69,11 +69,7 @@ export const AppConfig = z.object({
       clientSecret: redacted(z.string().trim().min(1)),
       jwks: JSONWebKeySet.optional(),
       resource: publicValue(z.url()).optional(),
-      // Mirror of auth's APP_CONFIG_EMAIL_OTP_ENABLED. Defaults on (same as
-      // auth deploy) so the OS /sign-in "Sign in with email" button is offered
-      // wherever auth actually runs the lane; set Doppler
-      // APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED=false as the rollback.
-      emailOtpEnabled: publicValue(z.boolean().default(true)),
+      emailOtpEnabled: publicValue(z.boolean().default(false)),
     })
     .optional(),
   openAiApiKey: redacted(z.string().trim().min(1)),

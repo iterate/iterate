@@ -140,12 +140,6 @@ export default async function deploy(
         secrets: ctx.secrets,
       });
 
-      // Mirror of auth's APP_CONFIG_EMAIL_OTP_ENABLED (apps/auth/scripts/deploy.ts).
-      // Email OTP defaults on in every env, prd included; an explicit Doppler
-      // "false" is the emergency rollback switch for the OS /sign-in button.
-      secretValues.APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED =
-        ctx.secrets.APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED?.trim() || "true";
-
       // Preview deploys pass their PR head sha (scripts/preview/preview.ts)
       // so projects seeded there install that exact commit's pkg.pr.new build
       // of `iterate` instead of the template's @main — e2e tests then
