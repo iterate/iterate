@@ -11,8 +11,8 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { describe, expect, test } from "vitest";
+import { listenOnFetchSafePort } from "./test/fetch-safe-port.ts";
 import { seedPets } from "./pets.ts";
 import { randomSealKey } from "./seal.ts";
 import { DEFAULT_APP_ID, DEFAULT_INSTALLATION_ID, PetshopStateDurableObject } from "./state.ts";
@@ -259,8 +259,7 @@ describe("GitHub App installation webhooks", () => {
         response.writeHead(200).end("ok");
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const { port } = server.address() as AddressInfo;
+    const port = await listenOnFetchSafePort(server);
     return {
       url: `http://127.0.0.1:${port}/hook`,
       received,
