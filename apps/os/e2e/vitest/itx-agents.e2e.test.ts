@@ -143,12 +143,18 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
         type: "events.iterate.com/capability-host/script-execution-completed",
       }),
       expect.objectContaining({ type: AGENT_WEB_MESSAGE_SENT_TYPE }),
-      expect.objectContaining({
-        type: AGENT_CONTEXT_ADDED_TYPE,
-        payload: expect.objectContaining({ role: "developer" }),
-      }),
     ]),
   );
+
+  const reflectedFilesReply = events.find(
+    (event) =>
+      event.type === AGENT_CONTEXT_ADDED_TYPE &&
+      event.payload?.role === "assistant" &&
+      event.payload.content ===
+        "The assistant sent this visible web-chat message: string form with files",
+  );
+  expect(reflectedFilesReply?.payload).toMatchObject({ role: "assistant" });
+  expect(reflectedFilesReply?.payload).not.toHaveProperty("llmRequestOffset");
 });
 
 test("New agent streams install processors and replay existing child events", async () => {
