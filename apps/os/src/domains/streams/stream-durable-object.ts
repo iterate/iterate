@@ -19,6 +19,8 @@ import {
   STREAM_RECOVERY_VERSION,
   StreamRecoveryRestoreInput as StreamRecoveryRestoreInputSchema,
   type StreamRecoveryExportPage,
+  type StreamRecoveryExportSink,
+  type StreamRecoveryExportSummary,
   type StreamRecoveryRestoreInput,
 } from "./recovery.ts";
 import { compileEventSelector } from "./event-selector.ts";
@@ -44,6 +46,8 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+/** Keep recovery callback frames far below Cap'n Web's 32 MiB value limit. */
+const RECOVERY_EXPORT_PAGE_BYTE_LIMIT = 1024 * 1024;
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -411,19 +415,82 @@ export class StreamDurableObject extends DurableObject<Env> {
         `recovery export throughOffset must be an integer from 0 to ${currentHighestAssignedOffset}`,
       );
     }
-    const events = this.#log.getRange({
+    const sizes = this.#log.getRangeSizes({
       afterOffset,
       beforeOffset: throughOffset + 1,
       limit,
       includeEphemeral: true,
     });
+    let pageLength = sizes.length;
+    let pageBytes = 0;
+    for (let index = 0; index < sizes.length; index += 1) {
+      pageBytes += sizes[index]!.byteLength;
+      // A single event may exceed the soft cap, but is still the smallest
+      // possible recovery unit. Ordinary stream events are already RPC-sized.
+      if (pageBytes > RECOVERY_EXPORT_PAGE_BYTE_LIMIT && index > 0) {
+        pageLength = index;
+        break;
+      }
+    }
+    const events = this.#log.getRange({
+      afterOffset,
+      beforeOffset: throughOffset + 1,
+      limit: pageLength,
+      includeEphemeral: true,
+    });
+    const truncatedByBytes = pageLength < sizes.length;
     return {
       format: STREAM_RECOVERY_FORMAT,
       version: STREAM_RECOVERY_VERSION,
       stream: { projectId: this.name.projectId, path: this.name.path },
       events,
       throughOffset,
-      complete: events.length < limit || events.at(-1)?.offset === throughOffset,
+      complete:
+        !truncatedByBytes && (sizes.length < limit || events.at(-1)?.offset === throughOffset),
+    };
+  }
+
+  /**
+   * Export a fixed recovery window through one acknowledged callback session.
+   * The caller can persist each bounded page before resolving `write`; a
+   * failed session resumes with the same throughOffset and last written
+   * event offset without ever assembling the stream in an RPC value.
+   */
+  async exportToRecovery(args: {
+    sink: StreamRecoveryExportSink;
+    afterOffset?: number;
+    limit?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportSummary> {
+    const throughOffset = args.throughOffset ?? this.#log.highestAssignedOffset();
+    let afterOffset = args.afterOffset ?? 0;
+    let exportedEventCount = 0;
+    let pageCount = 0;
+
+    for (;;) {
+      const page = this.exportForRecovery({
+        afterOffset,
+        limit: args.limit,
+        throughOffset,
+      });
+      await args.sink.write(page);
+      pageCount += 1;
+      exportedEventCount += page.events.length;
+      if (page.complete) break;
+      const nextOffset = page.events.at(-1)?.offset;
+      if (nextOffset === undefined || nextOffset <= afterOffset) {
+        throw new Error("recovery export produced an empty or non-advancing incomplete page");
+      }
+      afterOffset = nextOffset;
+    }
+
+    return {
+      format: STREAM_RECOVERY_FORMAT,
+      version: STREAM_RECOVERY_VERSION,
+      stream: { projectId: this.name.projectId, path: this.name.path },
+      throughOffset,
+      exportedEventCount,
+      pageCount,
     };
   }
 

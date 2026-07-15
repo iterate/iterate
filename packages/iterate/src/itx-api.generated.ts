@@ -1410,6 +1410,17 @@ export interface StreamRecovery {
     limit?: number;
     throughOffset?: number;
   }): Promise<StreamRecoveryExportPage>;
+  /**
+   * Stream a fixed export window to an acknowledged sink in bounded pages.
+   * One call can export logs larger than the RPC value limit; resume with the
+   * returned throughOffset and the last persisted event offset.
+   */
+  exportToRecovery(args: {
+    sink: StreamRecoveryExportSink;
+    afterOffset?: number;
+    limit?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportSummary>;
   restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
     restoredEventCount: number;
     lastImportedOffset: number;
@@ -2990,6 +3001,21 @@ export type StreamRecoveryExportPage = {
   }[];
   throughOffset: number;
   complete: boolean;
+};
+
+/** Acknowledged page sink used by one long-running recovery export RPC. */
+export type StreamRecoveryExportSink = {
+  write(page: StreamRecoveryExportPage): Promise<void>;
+};
+
+/** Small result returned after every exported page has been acknowledged. */
+export type StreamRecoveryExportSummary = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  throughOffset: number;
+  exportedEventCount: number;
+  pageCount: number;
 };
 
 /** A complete normalized stream log accepted by storage-level recovery restore. */

@@ -95,7 +95,7 @@ describe("StreamEventLog.getRange", () => {
     expect(read(log, { afterOffset: 0, eventTypes: [], limit: 3 })).toEqual([]);
   });
 
-  it("insert reports serialized byte lengths and getRangeSized reads the same sizes back", () => {
+  it("insert and range metadata report the stored serialized byte lengths", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
     const committedEvents = [
       event(1, "events.iterate.com/test/sized"),
@@ -116,6 +116,17 @@ describe("StreamEventLog.getRange", () => {
     });
     expect(sized.map((entry) => entry.byteLength)).toEqual(insertedByteLengths);
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
+
+    expect(
+      log.getRangeSizes({
+        afterOffset: 0,
+        beforeOffset: Number.MAX_SAFE_INTEGER,
+        limit: 10,
+      }),
+    ).toEqual([
+      { offset: 1, byteLength: insertedByteLengths[0] },
+      { offset: 2, byteLength: insertedByteLengths[1] },
+    ]);
   });
 
   it("excludes ephemeral rows from range reads unless asked; point reads always return them", () => {

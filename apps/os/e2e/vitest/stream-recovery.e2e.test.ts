@@ -1,3 +1,4 @@
+import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -32,4 +33,40 @@ test("recovery rejects incompatible core events before replacing the live stream
   await expect(
     stream.append({ type: "events.iterate.test/recovery-still-live", payload: {} }),
   ).resolves.toHaveLength(1);
+});
+
+test("recovery streams byte-bounded pages through one acknowledged export", async () => {
+  const path = `/recovery-streamed-${crypto.randomUUID()}`;
+  using transport = withItxSession();
+  using session = transport.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using stream = session.streams.get(path);
+  using recovery = session.streamRecovery.get({ projectId: null, path });
+
+  const [firstLarge, secondLarge] = await stream.append(
+    { type: "events.iterate.test/recovery-large", payload: { value: "a".repeat(600_000) } },
+    { type: "events.iterate.test/recovery-large", payload: { value: "b".repeat(600_000) } },
+  );
+  const firstPage = await recovery.exportForRecovery({ limit: 500 });
+  expect(firstPage).toMatchObject({ complete: false });
+  expect(firstPage.events.some((event) => event.offset === firstLarge?.offset)).toBe(true);
+  expect(firstPage.events.some((event) => event.offset === secondLarge?.offset)).toBe(false);
+
+  const pages: (typeof firstPage)[] = [];
+  const sink = new (class extends RpcTarget {
+    async write(page: typeof firstPage) {
+      pages.push(page);
+    }
+  })();
+  const summary = await recovery.exportToRecovery({ sink, limit: 500 });
+
+  expect(pages.length).toBeGreaterThan(1);
+  expect(pages.at(-1)?.complete).toBe(true);
+  expect(pages.flatMap((page) => page.events).map((event) => event.offset)).toContain(
+    secondLarge?.offset,
+  );
+  expect(summary).toMatchObject({
+    exportedEventCount: pages.reduce((count, page) => count + page.events.length, 0),
+    pageCount: pages.length,
+    throughOffset: pages[0]?.throughOffset,
+  });
 });

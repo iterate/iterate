@@ -33,6 +33,7 @@ const textEncoder = new TextEncoder();
  * cap with these instead of re-stringifying every event on every read.
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
+export type StreamEventSize = { offset: number; byteLength: number };
 
 export class StreamEventLog {
   constructor(
@@ -170,6 +171,50 @@ export class StreamEventLog {
     includeEphemeral?: boolean;
   }): StreamEvent[] {
     return this.getRangeSized(args).map((sized) => sized.event);
+  }
+
+  /**
+   * Read only offsets and serialized sizes for a replay window. Recovery uses
+   * this to choose a byte-bounded page before hydrating any event JSON, so a
+   * large candidate window never becomes one large Durable Object allocation.
+   */
+  getRangeSizes(args: {
+    afterOffset: number;
+    beforeOffset: number;
+    eventTypes?: readonly string[];
+    limit: number;
+    includeEphemeral?: boolean;
+  }): StreamEventSize[] {
+    if (args.eventTypes?.length === 0) return [];
+    const eventTypes =
+      args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
+    const eventTypeClause =
+      eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
+    const ephemeralClause = args.includeEphemeral === true ? "" : "and ephemeral = 0";
+    return this.sql
+      .exec<{ offset: number; byteLength: number }>(
+        `
+          select selected.offset as offset, sum(length(event_chunks.chunk_bytes)) as byteLength
+          from (
+            select offset
+            from events
+            where offset > ?
+              and offset < ?
+              ${ephemeralClause}
+              ${eventTypeClause}
+            order by offset asc
+            limit ?
+          ) selected
+          join event_chunks on event_chunks.offset = selected.offset
+          group by selected.offset
+          order by selected.offset asc
+        `,
+        args.afterOffset,
+        args.beforeOffset,
+        ...(eventTypes ?? []),
+        args.limit,
+      )
+      .toArray();
   }
 
   /**

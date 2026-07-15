@@ -60,6 +60,8 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import type {
   StreamRecoveryExportPage,
+  StreamRecoveryExportSink,
+  StreamRecoveryExportSummary,
   StreamRecoveryRestoreInput,
 } from "./domains/streams/recovery.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
@@ -751,6 +753,20 @@ class StreamRecoveryRpcTarget extends IterateRpcTarget<"StreamRecovery"> {
     throughOffset?: number;
   }): Promise<StreamRecoveryExportPage> {
     return this.#stream.exportForRecovery(args);
+  }
+
+  /**
+   * Stream a fixed export window to an acknowledged sink in bounded pages.
+   * One call can export logs larger than the RPC value limit; resume with the
+   * returned throughOffset and the last persisted event offset.
+   */
+  exportToRecovery(args: {
+    sink: StreamRecoveryExportSink;
+    afterOffset?: number;
+    limit?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportSummary> {
+    return this.#stream.exportToRecovery(args);
   }
 
   restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
