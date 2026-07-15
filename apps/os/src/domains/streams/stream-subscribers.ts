@@ -169,8 +169,8 @@ type Connection = {
   isLive(): boolean;
   /** `true` while a durable sink delivery is dispatched but unsettled. */
   hasPendingDelivery(): boolean;
-  /** Stop the pump, dispose the sink, append the disconnect fact, drop from the table. */
-  close(reason: StreamSubscriberDisconnectReason): void;
+  /** Stop the pump, dispose the sink, optionally append the disconnect fact, drop from the table. */
+  close(reason: StreamSubscriberDisconnectReason, recordFact?: boolean): void;
 };
 
 /** Everything `open()` needs to start one delivery connection. */
@@ -350,7 +350,9 @@ export class StreamSubscribers {
     this.#idleTimer = undefined;
     this.#tearingDown = true;
     try {
-      for (const connection of [...this.#connections.values()]) connection.close("replaced");
+      for (const connection of [...this.#connections.values()]) {
+        connection.close("replaced", false);
+      }
     } finally {
       this.#tearingDown = false;
     }
@@ -1117,7 +1119,7 @@ export class StreamSubscribers {
       wake: () => void pump(),
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
-      close: (reason) => {
+      close: (reason, recordFact = true) => {
         if (!open) return;
         open = false;
         if (this.#connections.get(subscriptionKey) === connection) {
@@ -1128,10 +1130,12 @@ export class StreamSubscribers {
         connection.ping?.[Symbol.dispose]();
         sink[Symbol.dispose]();
         connection.getProcessorRuntimeState?.[Symbol.dispose]();
-        this.#hooks.appendFact({
-          type: "events.iterate.com/stream/subscriber-disconnected",
-          payload: { subscriptionKey, reason },
-        });
+        if (recordFact) {
+          this.#hooks.appendFact({
+            type: "events.iterate.com/stream/subscriber-disconnected",
+            payload: { subscriptionKey, reason },
+          });
+        }
         // A dead durable connection makes its watermark decisive again. Only
         // genuinely-broken closes re-reconcile: idle teardown suppresses
         // reconcile for its turn and advances watermarks itself (see

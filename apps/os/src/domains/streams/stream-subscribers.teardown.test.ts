@@ -362,4 +362,15 @@ describe("StreamSubscribers with a DO-faithful (log-appending) harness", () => {
     expect(h.subscribers.hasConnection("k")).toBe(false);
     expect(h.row("k")?.ackedOffset).not.toBe(999);
   });
+
+  it("recovery closes live connections without appending into the replaced log", () => {
+    const h = makeFaithfulHarness();
+    h.subscribers.openEphemeral({ subscriptionKey: "live", sink: () => undefined });
+    const eventCountBeforeReset = h.log.length;
+
+    h.subscribers.resetForRecovery();
+
+    expect(h.subscribers.hasConnection("live")).toBe(false);
+    expect(h.log).toHaveLength(eventCountBeforeReset);
+  });
 });
