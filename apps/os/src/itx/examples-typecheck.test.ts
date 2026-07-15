@@ -153,8 +153,6 @@ const SURFACE_GAPS: Record<string, string> = {
     "(hello/add) are typed per entry in examples-source.ts, not in the published surface",
   "dynamic-worker-stateful":
     "same as dynamic-worker-stateless: increment()/current() live on the entry's worker, not the surface",
-  "sandbox-exec":
-    "CloudflareSandbox lags the sandbox SDK: exec() exists at runtime but not in the generated declaration",
   "github-read-file":
     "the sidecar's compiler-only structural Octokit shim types request() as Promise<unknown> (the real " +
     "octokit package graph is too large for the in-Worker checker); readme.data is typed in " +

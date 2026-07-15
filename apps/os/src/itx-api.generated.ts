@@ -2758,10 +2758,11 @@ export type SandboxInstanceType =
  * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
  * wrapped on top. Whatever the installed SDK exposes is callable —
  * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
- * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — so this
- * contract deliberately does not re-declare that surface (same stance as
- * `McpClientRpc`); https://developers.cloudflare.com/sandbox/api/ is
- * the authoritative reference. The image is the stock Cloudflare sandbox
+ * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — and this
+ * contract re-declares only the everyday command door, `exec` (the rest
+ * stays undeclared, same stance as `McpClientRpc`, so new SDK methods need
+ * no forwarding code here); https://developers.cloudflare.com/sandbox/api/
+ * is the authoritative reference. The image is the stock Cloudflare sandbox
  * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
  * you need at runtime.
  *
@@ -2787,6 +2788,34 @@ export type SandboxInstanceType =
  *   snapshots cover persistence, and `tunnels` covers public URLs.
  */
 export type CloudflareSandbox = object & {
+  /** Run one shell command to completion and return its captured output —
+   * the SDK's `exec`, declared with the data fields that travel over every
+   * RPC lane (the SDK's streaming callbacks — `stream`, `onOutput`, … —
+   * exist at runtime but are transport-dependent, so they stay out of this
+   * contract). `env` values override the session's for this one command;
+   * `timeout` is milliseconds. */
+  exec(
+    command: string,
+    options?: {
+      cwd?: string;
+      encoding?: string;
+      env?: Record<string, string | undefined>;
+      timeout?: number;
+    },
+  ): Promise<{
+    /** Whether the command succeeded (`exitCode === 0`). */
+    success: boolean;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    /** The command that was executed. */
+    command: string;
+    /** Execution duration in milliseconds. */
+    duration: number;
+    /** ISO timestamp of when the command started. */
+    timestamp: string;
+    sessionId?: string;
+  }>;
   /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
 };

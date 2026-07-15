@@ -421,7 +421,7 @@ return await itx.projects.get(pid).__describe();
       return { current: await counter.current() }; // 2, and it persists under the key
     },
   }),
-  projectExample<SandboxExecGap>({
+  projectExample({
     id: "sandbox-exec",
     title: "Create a sandbox and run shell commands in it",
     description:
@@ -1917,16 +1917,6 @@ type Live<Name extends string, Impl, Mounted = Remoted<Impl>> = Record<Name, Mou
 // fix upstream, then delete the overlay. Every alias is an `Extra` widening,
 // intersected FIRST at its use site so its signatures win resolution for
 // exactly the calls the entry teaches. ──
-
-/** CloudflareSandbox lags the sandbox SDK: exec() exists at runtime (the
- * sandbox-exec entry is about it) but not yet in the generated declaration. */
-type SandboxExecGap = {
-  sandboxes: {
-    get(path: string): Promise<{
-      exec(command: string): Promise<{ stdout: string; exitCode: number }>;
-    }>;
-  };
-};
 
 /** `egress.fetch` genuinely returns a `Response`, but under the app's merged
  * DOM + workers-types globals `response.json()` resolves to `Promise<{}>` —
