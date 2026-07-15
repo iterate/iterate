@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
+import { dummyPetshopEnvs } from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
@@ -1083,6 +1084,15 @@ export type CloudflarePreviewApp = {
   deployCommandArgs: readonly [string, ...string[]];
   destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
+  /**
+   * Resolve non-secret public app config from the repo instead of Doppler.
+   * Most apps mirror this into APP_CONFIG_BASE_URL; apps whose envs.ts entry
+   * is the sole source of truth can opt into that source directly.
+   */
+  resolvePreviewAppConfig?: (dopplerConfig: string) => {
+    baseUrl: string;
+    projectHostnameBases?: string[];
+  };
   paths: string[];
   previewDependencies?: CloudflarePreviewAppSlug[];
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
@@ -1471,6 +1481,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // worker and singleton Durable Object in place.
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "dummy-petshop",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = dummyPetshopEnvs[dopplerConfig as keyof typeof dummyPetshopEnvs];
+      if (!env) {
+        throw new Error(`Unknown dummy-petshop environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return { baseUrl: env.baseUrl };
+    },
     paths: ["apps/dummy-petshop/**"],
     previewReadyUrlPath: "/",
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
@@ -3146,6 +3163,15 @@ async function readPreviewAppConfig(input: {
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
+  const PreviewAppConfig = z.object({
+    baseUrl: z.string().trim().url(),
+    projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
+  });
+  const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
+  if (repoConfig) {
+    return PreviewAppConfig.parse(repoConfig);
+  }
+
   const script = [
     "function parseStringArrayEnv(value) {",
     "  if (!value?.trim()) return [];",
@@ -3186,13 +3212,7 @@ async function readPreviewAppConfig(input: {
     throw new Error(commandFailureMessage(result, "Failed to read preview app config."));
   }
 
-  const parsed = z
-    .object({
-      baseUrl: z.string().trim().url(),
-      projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
-    })
-    .parse(JSON.parse(result.stdout));
-  return parsed;
+  return PreviewAppConfig.parse(JSON.parse(result.stdout));
 }
 
 async function runPreviewDeployCommand(input: {
@@ -4471,6 +4491,7 @@ export const previewInternals = {
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
   readPlaywrightRetryTelemetry,
+  readPreviewAppConfig,
   readVitestRetryTelemetry,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,

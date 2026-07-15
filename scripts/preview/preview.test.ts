@@ -41,6 +41,7 @@ const {
   orderPreviewDeployBatches,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  readPreviewAppConfig,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
@@ -116,7 +117,7 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("patches/**");
   });
 
-  it("runs the dummy-petshop live e2e against its deployed preview", () => {
+  it("runs the dummy-petshop live e2e against its deployed preview", async () => {
     const petshop = cloudflarePreviewApps["dummy-petshop"];
 
     expect(petshop).toMatchObject({
@@ -125,6 +126,17 @@ describe("preview workflow scope", () => {
       previewReadyUrlPath: "/",
       previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
       previewTestCommandArgs: ["pnpm", "test:e2e"],
+    });
+    await expect(
+      readPreviewAppConfig({
+        app: petshop,
+        commandEnvironment: {},
+        dopplerConfig: "preview_3",
+        repositoryRoot: repoRoot,
+      }),
+    ).resolves.toEqual({
+      baseUrl: "https://dummy-petshop.iterate-preview-3.com",
+      projectHostnameBases: [],
     });
     for (const workflow of ["cloudflare-previews.yml", "cloudflare-preview-cleanup.yml"]) {
       expect(readFileSync(resolve(repoRoot, ".depot/workflows", workflow), "utf8")).toContain(
