@@ -499,9 +499,17 @@ export class StreamProcessorRunner<
   /**
    * Resolve once the ACKNOWLEDGED cursor reaches `offset` — the single
    * wait-for-progress door (read-your-writes: append, then wait on the offset
-   * the append returned). The predicate form observes FUTURE deliveries only,
-   * and resolves after the frame that delivered the matching event has
-   * durably committed, so state already reflects it.
+   * the append returned). The offset form never depends on push delivery to
+   * reach an event that ALREADY EXISTS on the stream: when the cursor is
+   * behind, it kicks a chain-serialized self-pull ({@link catchUp}) that
+   * drives the journal tail itself; the parked waiter covers only a genuinely
+   * FUTURE offset the pull cannot reach yet. The predicate form observes
+   * FUTURE deliveries only — an event not yet appended (e.g. runScript's
+   * completion, appended later by `runInBackground` work; that work runs OFF
+   * the runner chain and outside the awaiting handler, so the parked waiter
+   * never gates the append or the delivery that resolves it) — and resolves
+   * after the frame that delivered the matching event has durably committed,
+   * so state already reflects it.
    */
   waitUntilEvent(args: {
     predicate: (event: StreamEvent) => boolean;
@@ -517,9 +525,32 @@ export class StreamProcessorRunner<
       await this.#load();
       if (this.#requireProgress().processing.acknowledgedThroughOffset >= args.offset) return;
       const { offset, timeoutMs } = args;
-      // No await between the check above and registering the waiter below, so
-      // a frame cannot advance the cursor past `offset` in the gap and be missed.
-      return await this.waitUntilEvent({ predicate: (event) => event.offset >= offset, timeoutMs });
+      // No await between the check above and registering the waiter below
+      // (the predicate call registers synchronously), so a frame cannot
+      // advance the cursor past `offset` in the gap and be missed.
+      const reached = this.waitUntilEvent({
+        predicate: (event) => event.offset >= offset,
+        timeoutMs,
+      });
+      // Self-pull, not park-and-hope: this form's contract is read-your-writes
+      // over an append that already committed, and a parked waiter alone would
+      // hold the wait hostage to the push lane's health (a wedged
+      // subscription, a lost wake dial — the orphaned-announcement incident
+      // class). The catch-up rides the runner chain, serialized with delivered
+      // frames — no double-drive against a concurrent live frame, because
+      // redelivered offsets dedupe against the acknowledged cursor — and
+      // resolves the waiter through the ordinary frame commit. A genuinely
+      // future offset stays parked for delivery. Pull failures are logged, not
+      // rethrown: the waiter stays valid (a later frame still resolves it) and
+      // `timeoutMs` stays the caller's bound.
+      this.catchUp().catch((error: unknown) => {
+        console.error(
+          `stream processor "${this.driver.contract.slug}" waitUntilEvent(offset ${offset}) ` +
+            `self-pull failed; the waiter stays parked for delivery`,
+          error,
+        );
+      });
+      return await reached;
     }
     const { predicate, timeoutMs } = args;
     await new Promise<void>((resolve, reject) => {

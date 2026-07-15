@@ -1376,6 +1376,24 @@ describe("StreamProcessorRunner.waitUntilEvent", () => {
       /timed out/,
     );
   });
+
+  it("offset form reaches an already-appended event by SELF-PULL — read-your-writes never depends on push delivery", async () => {
+    const harness = makeHarness();
+    // Read-your-writes: the event is already on the stream, but NO delivery is
+    // scheduled — the harness never opens a sink, so nothing pushes a frame.
+    // The wait must reach the event by pulling the journal itself; parking for
+    // a push that never comes hangs until the bounded timeout (the pre-fix
+    // behavior this test pins out).
+    const committed = harness.journal.seed({ type: REQUESTED, payload: { id: "ryw" } });
+    await expect(
+      harness.runner.waitUntilEvent({ offset: committed.offset, timeoutMs: 500 }),
+    ).resolves.toBeUndefined();
+    // The self-pull is ordinary drive: the committed fold reflects the event.
+    const snapshot = await harness.runner.snapshot();
+    expect(snapshot.offset).toBe(committed.offset);
+    expect(snapshot.state.open).toContain("ryw");
+    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(committed.offset);
+  });
 });
 
 // =============================================================================

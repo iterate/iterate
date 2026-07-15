@@ -144,12 +144,11 @@ export class CompositeMirrorDrive implements AnyHostedProcessor {
         // behind-head branch. (An EMPTY frame keeps the server stamp — there
         // is no tail-continuation coming for it, so the self-pull IS the
         // catch-up lane.)
-        const memberFrame: MirrorFrame = {
-          events: batch.events,
-          streamMaxOffset: batch.events.at(-1)?.offset ?? batch.streamMaxOffset,
-        };
         for (const open of opened) {
-          await open.sink(memberFrame);
+          await open.sink({
+            events: batch.events,
+            streamMaxOffset: batch.events.at(-1)?.offset ?? batch.streamMaxOffset,
+          });
         }
       },
     };
