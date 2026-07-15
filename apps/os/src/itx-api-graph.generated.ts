@@ -750,10 +750,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamRecovery",
     kind: "interface",
     sourceText:
-      "/** Admin-only exact-offset export and replacement of one Stream Durable Object. */\nexport interface StreamRecovery {\n  exportForRecovery(args?: {\n    afterOffset?: number;\n    limit?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportPage>;\n  /**\n   * Stream a fixed export window to an acknowledged sink in bounded pages.\n   * One call can export logs larger than the RPC value limit; resume with the\n   * returned throughOffset and the last persisted event offset.\n   */\n  exportToRecovery(args: {\n    sink: StreamRecoveryExportSink;\n    afterOffset?: number;\n    limit?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportSummary>;\n  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{\n    restoredEventCount: number;\n    lastImportedOffset: number;\n    currentMaxOffset: number;\n  }>;\n}",
+      "/** Admin-only exact-offset export and replacement of one Stream Durable Object. */\nexport interface StreamRecovery {\n  exportForRecovery(args?: {\n    afterOffset?: number;\n    limit?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportPage>;\n  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */\n  exportToRecovery(args: {\n    sink: StreamRecoveryExportSink;\n    afterOffset?: number;\n    limit?: number;\n    maxPages?: number;\n    throughOffset?: number;\n  }): Promise<StreamRecoveryExportSummary>;\n  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{\n    restoredEventCount: number;\n    lastImportedOffset: number;\n    currentMaxOffset: number;\n  }>;\n}",
     summary: "Admin-only exact-offset export and replacement of one Stream Durable Object.",
     memberSummaries: {
-      exportToRecovery: "Stream a fixed export window to an acknowledged sink in bounded pages.",
+      exportToRecovery:
+        "Stream part of a fixed export window to an acknowledged sink in bounded pages.",
     },
     referencedTypeNames: [
       "StreamRecoveryExportPage",
@@ -1799,7 +1800,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamRecoveryExportSummary",
     kind: "typeAlias",
     sourceText:
-      '/** Small result returned after every exported page has been acknowledged. */\nexport type StreamRecoveryExportSummary = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  throughOffset: number;\n  exportedEventCount: number;\n  pageCount: number;\n};',
+      '/** Small result returned after every exported page has been acknowledged. */\nexport type StreamRecoveryExportSummary = {\n  format: "iterate-stream-recovery";\n  version: 1;\n  stream: { projectId: string | null; path: string };\n  throughOffset: number;\n  exportedEventCount: number;\n  pageCount: number;\n  lastExportedOffset: number;\n  complete: boolean;\n};',
     summary: "Small result returned after every exported page has been acknowledged.",
     memberSummaries: {},
     referencedTypeNames: [],

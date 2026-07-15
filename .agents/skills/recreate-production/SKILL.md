@@ -38,9 +38,9 @@ consequential forks unless they explicitly waive consultation.
    config repo. Export the root, every listed `/secrets/**` stream, every built-in
    connection stream, and the global integration directory with
    [`scripts/export-stream-recovery.itx.js`](scripts/export-stream-recovery.itx.js).
-   Its single acknowledged export RPC writes byte-bounded pages atomically at a
-   fixed `throughOffset` and resumes an interrupted output directory. Never combine
-   a large raw journal into one RPC value.
+   Its acknowledged export sessions write byte-bounded pages atomically at one
+   fixed `throughOffset`, stay within Durable Object CPU limits, and resume an
+   interrupted output directory. Never combine a large raw journal into one RPC value.
 4. Reduce the package deliberately: keep bootstrap facts in `/`, secret journals
    intact, current integration lifecycle/subscription facts, and only active global
    claims for retained project IDs. Do not renumber events: encrypted secret material

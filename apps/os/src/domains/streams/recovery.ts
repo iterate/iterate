@@ -53,6 +53,8 @@ export type StreamRecoveryExportSummary = {
   throughOffset: number;
   exportedEventCount: number;
   pageCount: number;
+  lastExportedOffset: number;
+  complete: boolean;
 };
 
 /** A complete normalized stream log accepted by storage-level recovery restore. */

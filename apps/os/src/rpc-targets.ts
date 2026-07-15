@@ -755,15 +755,12 @@ class StreamRecoveryRpcTarget extends IterateRpcTarget<"StreamRecovery"> {
     return this.#stream.exportForRecovery(args);
   }
 
-  /**
-   * Stream a fixed export window to an acknowledged sink in bounded pages.
-   * One call can export logs larger than the RPC value limit; resume with the
-   * returned throughOffset and the last persisted event offset.
-   */
+  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
   exportToRecovery(args: {
     sink: StreamRecoveryExportSink;
     afterOffset?: number;
     limit?: number;
+    maxPages?: number;
     throughOffset?: number;
   }): Promise<StreamRecoveryExportSummary> {
     return this.#stream.exportToRecovery(args);
