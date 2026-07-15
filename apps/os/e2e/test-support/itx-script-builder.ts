@@ -137,6 +137,25 @@ function wrapScriptSource(source: string, vars: Record<string, unknown>): string
 }
 
 /**
+ * Host-free door to `define()`: type-check and stringify a script for
+ * channels that carry script SOURCE somewhere else — agent chat fences,
+ * synthesized output events — instead of executing it against a host here.
+ * Same vars and self-containment contract as `execute()`.
+ */
+export function defineItxScript<
+  Ctx = Project,
+  Vars extends Record<string, unknown> = Record<string, never>,
+>(fn: (itx: Ctx, vars: Vars) => Promise<unknown>, vars?: Vars) {
+  return new ItxScriptBuilder<Ctx, Vars>(defineOnlyHost, (vars ?? {}) as Vars).define(fn);
+}
+
+const defineOnlyHost: RunScriptHost = {
+  runScript() {
+    throw new Error("defineItxScript() carries source only — use itxScript(host) to execute.");
+  },
+};
+
+/**
  * Markers the test-file transform leaves in `fn.toString()` when it had to
  * DOWNLEVEL syntax into module-scope helpers. Those helpers exist only in
  * the test isolate — shipped to the server-side script isolate, the first
