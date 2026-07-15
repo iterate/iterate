@@ -597,22 +597,21 @@ export const CoreProcessorContract = defineProcessorContract({
               processor: {
                 announcement: {
                   slug: "agent",
-                  version: "0.4.0",
+                  version: "1.0.0",
                   description:
-                    "Maintains model-visible web-chat history and requests LLM work from a provider processor.",
+                    "Maintains provider-neutral model context and requests LLM work from a provider processor.",
                   consumes: [
-                    "events.iterate.com/agent/input-added",
-                    "events.iterate.com/agents/message-received",
+                    "events.iterate.com/agents/context-added",
                     "events.iterate.com/agent/llm-request-completed",
                   ],
                   emits: [
-                    "events.iterate.com/agent/input-added",
+                    "events.iterate.com/agents/context-added",
                     "events.iterate.com/agent/llm-request-scheduled",
                   ],
                   ownedEvents: [
                     {
-                      type: "events.iterate.com/agent/input-added",
-                      description: "A normalized model-visible input was added.",
+                      type: "events.iterate.com/agents/context-added",
+                      description: "A provider-neutral model context item was added.",
                     },
                     { type: "events.iterate.com/agent/llm-request-scheduled" },
                   ],
@@ -703,7 +702,7 @@ export const CoreProcessorContract = defineProcessorContract({
             "A processor skipped an event that fails its contract's schema, with the structured cause attached.",
           payload: {
             message:
-              'stream processor "agent" skipped event at offset 42 ("events.iterate.com/agent/input-added"): it fails the contract\'s schema',
+              'stream processor "agent" skipped event at offset 42 ("events.iterate.com/agents/context-added"): it fails the contract\'s schema',
             error: {
               name: "ZodError",
               message: 'Invalid input: expected string, received number at "content"',

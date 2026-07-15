@@ -43,10 +43,10 @@ doppler run --project os --config prd -- pnpm cli itx agent-smoke \
 
 The command connects to the agent over itx and calls
 `agent.ask({ message })` — the server-side send-and-wait: it appends
-`events.iterate.com/agents/message-received` to the agent stream and
-resolves on the `events.iterate.com/agents/web-message-sent` reply. On success
-it prints one JSON object with the assistant message and response event. On
-agent errors or timeout it exits non-zero.
+a user-role `events.iterate.com/agents/context-added` item to the agent stream
+and resolves on the `events.iterate.com/agents/web-message-sent` reply. On
+success it prints one JSON object with the assistant message and response
+event. On agent errors or timeout it exits non-zero.
 
 For a custom timeout:
 
@@ -66,7 +66,7 @@ doppler run --project os --config prd -- pnpm cli itx run \
   -e 'return await itx.streams.get("/agents/smoke").getEvents({ limit: 100 })'
 ```
 
-A healthy turn should include the user-message event, LLM request lifecycle
+A healthy turn should include the user context item, LLM request lifecycle
 events, the generated itx script execution events, and the web-message-sent
 event. Agent replies are itx TypeScript scripts; for the PING prompt a correct
 reply usually calls:

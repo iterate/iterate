@@ -26,7 +26,11 @@ import {
 import { isEmailAgentPath } from "../email/utils.ts";
 import { isGithubAgentPath } from "../repos/github-agent-utils.ts";
 import { isMcpAgentPath } from "../inbound-mcp-server/mcp-session-agent-path.ts";
-import { DEFAULT_AGENT_MODEL, DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
+import {
+  AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+  DEFAULT_AGENT_MODEL,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+} from "./agent-processor-contract.ts";
 
 const TYPESCRIPT_FENCE_INSTRUCTION =
   "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
@@ -255,16 +259,16 @@ export function agentDefaultsForPath(input: {
   const { agentPath, projectId, project } = input;
   const model = input.overrides?.model ?? DEFAULT_AGENT_MODEL;
   // An override replaces the path prompt wholesale. There is no baked-in
-  // child-agent prompt either: child-agent-ness rides on the parent's MESSAGE
-  // (the fold labels agent-sourced messages with the sender's path and how to
-  // reply — see reduceAgentEvent's message-received arm).
+  // child-agent prompt either: child-agent-ness rides on the parent context
+  // item, whose actor records the sender and lets the projection explain how
+  // to reply.
   const systemPrompt = input.overrides?.systemPrompt ?? agentSystemPromptForPath(agentPath);
 
   const events: AgentPolicyEventInput[] = [
     {
-      type: "events.iterate.com/agent/config-updated",
-      idempotencyKey: `agent/config-updated:${projectId}:${agentPath}`,
-      payload: { systemPrompt },
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: `agent/system-context:${projectId}:${agentPath}`,
+      payload: { role: "system", key: AGENT_SYSTEM_PROMPT_CONTEXT_KEY, content: systemPrompt },
     },
     {
       type: "events.iterate.com/agent/llm-provider-selected",
@@ -288,16 +292,18 @@ export function agentDefaultsForPath(input: {
           "To ship your changes: await itx.workspace.git.commit({ message }) — that commits them straight to the config repo's MAIN branch and the project worker/website redeploys automatically. No branches, no push, no other steps.",
       },
     },
-    // Per-agent boot context as a model-visible input (the system prompt is
-    // static; ids and paths are not). Facts and pointers only — everything
-    // per-capability is discoverable through itx.docs / __describe, so this
-    // must not grow back into a capability tour (the prompt budget test
-    // holds the line). dont-trigger-request: this must never wake the LLM
+    // Per-agent boot context as a second durable system item: ids and paths
+    // differ per agent but must survive history compaction. Facts and pointers
+    // only — everything per-capability is discoverable through itx.docs /
+    // __describe, so this must not grow back into a capability tour (the
+    // prompt budget test holds the line). System context never wakes the LLM
     // by itself.
     {
-      type: "events.iterate.com/agent/input-added",
-      idempotencyKey: `agent/boot-context:${projectId}:${agentPath}`,
+      type: "events.iterate.com/agents/context-added",
+      idempotencyKey: `agent/boot-system-context:${projectId}:${agentPath}`,
       payload: {
+        role: "system",
+        key: "agent/boot-context",
         content: [
           "Platform context for this agent:",
           project === undefined
@@ -314,7 +320,6 @@ export function agentDefaultsForPath(input: {
           // section — repetition is the one thing small prompts buy back.
           '- FIRST MOVE for an unfamiliar API: await itx.docs.search({ q: "several related words" }) — working example scripts, type declarations, and this project\'s mounted capabilities; each hit carries a fetchCall string, the ready-made itx.docs.get call that fetches its full doc. For unfamiliar PROJECT facts or history: await itx.search.query({ q }) — conversations, webhooks, events, files, and the repo are all indexed, and each hit carries a ref back to the exact source. Noisy results? Refine the query (drop filler words, quote exact tokens); do not fall back to paging vendor APIs. await itx.__describe() lists everything at your scope.',
         ].join("\n"),
-        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     },
     // The onboarding agent starts the conversation itself; every other agent
@@ -322,9 +327,11 @@ export function agentDefaultsForPath(input: {
     ...(agentPath === ONBOARDING_AGENT_PATH
       ? [
           {
-            type: "events.iterate.com/agent/input-added",
-            idempotencyKey: `project-onboarding-start:${projectId}`,
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: `project/onboarding-context:${projectId}`,
             payload: {
+              role: "developer",
+              key: "agent/onboarding-start",
               content:
                 "Begin onboarding. The project owner just created this project and is looking at the chat. If the user already sent a message above, answer it first, then continue the onboarding script.",
               llmRequestPolicy: { behaviour: "after-current-request" },

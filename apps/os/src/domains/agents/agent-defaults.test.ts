@@ -25,7 +25,7 @@ describe("agentDefaultsForPath", () => {
         ...(project === undefined ? {} : { project }),
       }).events;
       const boot = events.find((event) =>
-        String(event.idempotencyKey).startsWith("agent/boot-context:"),
+        String(event.idempotencyKey).startsWith("agent/boot-system-context:"),
       );
       return String(boot?.payload.content);
     };
@@ -57,10 +57,13 @@ describe("agentDefaultsForPath", () => {
   test("selects the prompt by path and reports it alongside the events", () => {
     const emailDefaults = defaultsFor("/agents/email/t42");
     expect(emailDefaults.systemPrompt).toBe(EMAIL_AGENT_SYSTEM_PROMPT);
-    const config = emailDefaults.events.find(
-      (event) => event.type === "events.iterate.com/agent/config-updated",
+    const systemContext = emailDefaults.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        event.payload.role === "system" &&
+        event.payload.key === "agent/system-prompt",
     );
-    expect(config?.payload.systemPrompt).toBe(EMAIL_AGENT_SYSTEM_PROMPT);
+    expect(systemContext?.payload.content).toBe(EMAIL_AGENT_SYSTEM_PROMPT);
   });
 
   test("gives pull-request agents the GitHub prompt without platform review policy", () => {
@@ -75,10 +78,10 @@ describe("agentDefaultsForPath", () => {
     ).toBe(false);
   });
 
-  test("only the onboarding agent gets the kickoff input", () => {
+  test("only the onboarding agent gets the kickoff context", () => {
     const kickoffTypes = (path: string) =>
       defaultsFor(path).events.filter(
-        (event) => event.idempotencyKey === `project-onboarding-start:${PROJECT_ID}`,
+        (event) => event.idempotencyKey === `project/onboarding-context:${PROJECT_ID}`,
       ).length;
     expect(kickoffTypes(ONBOARDING_AGENT_PATH)).toBe(1);
     expect(kickoffTypes("/agents/demo")).toBe(0);
@@ -90,10 +93,13 @@ describe("agentDefaultsForPath", () => {
       model: "openai/gpt-5.5",
     });
     expect(custom.systemPrompt).toBe("Answer in one short sentence.");
-    const config = custom.events.find(
-      (event) => event.type === "events.iterate.com/agent/config-updated",
+    const systemContext = custom.events.find(
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        event.payload.role === "system" &&
+        event.payload.key === "agent/system-prompt",
     );
-    expect(config?.payload.systemPrompt).toBe("Answer in one short sentence.");
+    expect(systemContext?.payload.content).toBe("Answer in one short sentence.");
     const provider = custom.events.find(
       (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
     );

@@ -229,3 +229,9 @@ export function driveProcessor<Contract extends StreamProcessorContract, Deps ex
     snapshot: () => runner.snapshot(),
   };
 }
+
+/** The events of one type on a stream (or plain event array), in order. */
+export function eventsOfType(source: MemoryStream | StreamEvent[], type: string): StreamEvent[] {
+  const events = Array.isArray(source) ? source : source.events;
+  return events.filter((event) => event.type === type);
+}

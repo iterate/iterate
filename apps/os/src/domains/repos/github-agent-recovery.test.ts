@@ -199,7 +199,11 @@ describe("eviction recovery end to end", () => {
     await h.settle();
     expect(h.alarm.at).not.toBeNull();
     expect(
-      h.stream.events.some((event) => event.type === "events.iterate.com/agents/message-received"),
+      h.stream.events.some(
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          (event.payload as { role?: unknown }).role === "developer",
+      ),
     ).toBe(false);
 
     h.crash(); // the in-flight verification dies; journal, KV, and the alarm survive
@@ -242,7 +246,9 @@ describe("eviction recovery end to end", () => {
       ),
     ).toHaveLength(1);
     const turns = h.stream.events.filter(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        (event.payload as { role?: unknown }).role === "developer",
     );
     expect(turns).toHaveLength(1);
     expect((turns[0]!.payload as { content: string }).content).toContain(
@@ -253,7 +259,9 @@ describe("eviction recovery end to end", () => {
     await h.deliverPending();
     expect(
       h.stream.events.filter(
-        (event) => event.type === "events.iterate.com/agents/message-received",
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          (event.payload as { role?: unknown }).role === "developer",
       ),
     ).toHaveLength(1);
   });

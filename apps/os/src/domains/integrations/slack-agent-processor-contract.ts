@@ -22,7 +22,7 @@ import { SlackProcessorContract } from "./slack-processor-contract.ts";
  *
  * The upstream `slack` processor has already routed raw Slack webhooks to this
  * stream. This processor owns the Slack-specific in-thread behavior: recording
- * route context, transcribing Slack messages into agent input, generating
+ * route context, transcribing Slack messages into agent context, generating
  * bang-command codemode scripts, and painting the agent's announced busy/idle
  * status onto the Slack assistant status through host-provided dependencies.
  *
@@ -36,7 +36,7 @@ import { SlackProcessorContract } from "./slack-processor-contract.ts";
  */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",
-  version: "0.4.0",
+  version: "0.5.0",
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
     /**
@@ -84,7 +84,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
-    "events.iterate.com/agents/message-received",
+    "events.iterate.com/agents/context-added",
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/agent/status-changed",
   ],

@@ -1,12 +1,55 @@
 import { describe, expect, it } from "vitest";
 import {
+  adaptMessagesForModel,
   cloudflareAiGatewayResponseCacheKey,
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
 import { DEFAULT_AGENT_MODEL } from "./agent-processor-contract.ts";
 
+describe("adaptMessagesForModel", () => {
+  const messages = [
+    { role: "system" as const, content: "durable" },
+    { role: "developer" as const, content: "application context" },
+    { role: "user" as const, content: "hello" },
+  ];
+
+  it("preserves developer context for transports that support it", () => {
+    expect(adaptMessagesForModel(messages, { supportsDeveloperRole: true })).toEqual(messages);
+  });
+
+  it("maps developer context to system for transports without that role", () => {
+    expect(adaptMessagesForModel(messages, { supportsDeveloperRole: false })).toEqual([
+      messages[0],
+      { role: "system", content: "application context" },
+      messages[2],
+    ]);
+  });
+});
+
 describe("runWorkersAiAttempt", () => {
+  it("maps developer context to system on the unified Workers AI lane", async () => {
+    let requestBody: unknown;
+
+    await runWorkersAiAttempt({
+      ai: {
+        run: async (_model, body) => {
+          requestBody = body;
+          return { response: "ok" };
+        },
+      },
+      deadlineMs: 1_000,
+      messages: [{ role: "developer", content: "trusted application context" }],
+      model: "openai/gpt-5.6-sol",
+      onChunk: async () => {},
+      transport: { kind: "unified" },
+    });
+
+    expect(requestBody).toMatchObject({
+      messages: [{ role: "system", content: "trusted application context" }],
+    });
+  });
+
   it("cancels the response stream on deadline so no chunk lands after the failure", async () => {
     const encoder = new TextEncoder();
     let cancelled = false;
@@ -167,7 +210,10 @@ describe("the BYOK gateway lane", () => {
     const completion = await runWorkersAiAttempt({
       ai: fake.ai,
       deadlineMs: 1_000,
-      messages: [{ role: "user", content: "hi" }],
+      messages: [
+        { role: "developer", content: "trusted application context" },
+        { role: "user", content: "hi" },
+      ],
       model: DEFAULT_AGENT_MODEL,
       onChunk: async () => {},
       transport: {
@@ -190,6 +236,10 @@ describe("the BYOK gateway lane", () => {
     expect(request.headers["cf-aig-cache-key"]).toMatch(/^[0-9a-f]{64}$/);
     expect(request.query).toMatchObject({
       model: "gpt-5.6-sol",
+      messages: [
+        { role: "developer", content: "trusted application context" },
+        { role: "user", content: "hi" },
+      ],
       prompt_cache_key: "prj_1:/agents/onboarding",
       reasoning_effort: "medium",
       stream: true,

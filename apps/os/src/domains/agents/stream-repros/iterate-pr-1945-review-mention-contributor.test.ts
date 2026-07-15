@@ -26,11 +26,14 @@ describe("production stream repro: iterate PR 1945 review mention was treated as
     await new StreamProcessorRunner({ processor, stream }).catchUp();
 
     const turn = stream.events.find(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        (event.payload as { role?: unknown }).role === "developer",
     );
     expect(turn).toBeDefined();
     expect(turn?.payload).toMatchObject({
-      from: { kind: "github", login: "jonastemplestein", senderType: "User" },
+      role: "developer",
+      actor: { type: "github", login: "jonastemplestein", senderType: "User" },
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
     expect((turn!.payload as { content: string }).content).toContain(
@@ -72,7 +75,11 @@ describe("production stream repro: iterate PR 1945 review mention was treated as
     await runner.catchUp();
 
     expect(
-      stream.events.some((event) => event.type === "events.iterate.com/agents/message-received"),
+      stream.events.some(
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          (event.payload as { role?: unknown }).role === "developer",
+      ),
     ).toBe(false);
     expect(runner.currentState.recentActivity.at(-1)).toMatchObject({
       actor: "jonastemplestein",
@@ -114,13 +121,19 @@ describe("production stream repro: iterate PR 1945 review mention was treated as
     await firstCheckStarted.promise;
     expect(collaboratorChecks).toHaveLength(1);
     expect(
-      stream.events.some((event) => event.type === "events.iterate.com/agents/message-received"),
+      stream.events.some(
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          (event.payload as { role?: unknown }).role === "developer",
+      ),
     ).toBe(false);
     releaseFirstCheck.resolve();
     await delivery;
 
     const turns = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        (event.payload as { role?: unknown }).role === "developer",
     );
     expect(turns).toHaveLength(2);
     const contents = turns.map((event) => (event.payload as { content: string }).content);
@@ -152,7 +165,11 @@ describe("production stream repro: iterate PR 1945 review mention was treated as
     await expect(runner.catchUp()).rejects.toThrow("GitHub unavailable");
     expect((await runner.snapshot()).offset).toBe(0);
     expect(
-      stream.events.some((event) => event.type === "events.iterate.com/agents/message-received"),
+      stream.events.some(
+        (event) =>
+          event.type === "events.iterate.com/agents/context-added" &&
+          (event.payload as { role?: unknown }).role === "developer",
+      ),
     ).toBe(false);
   });
 });

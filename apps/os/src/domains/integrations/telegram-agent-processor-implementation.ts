@@ -4,7 +4,7 @@
 //
 // Side-effect policy mirrors the Slack agent processor (refold-safety
 // included, #1807):
-// - The agent-input append runs inside `blockProcessorWhile` (a failed append
+// - The agent-context append runs inside `blockProcessorWhile` (a failed append
 //   holds the checkpoint and replays). It ALWAYS runs — late webhooks still
 //   reach the agent — and dedupes on its idempotency key across a refold.
 // - The "typing…" chat action is a user-visible ACK ("we just heard you"),
@@ -146,7 +146,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
         const messageText = readRecord(readRecord(event.payload.body)?.message)?.text;
         if (target?.kind === "message" && isTelegramDebugCommand(messageText)) {
           // /debug mirrors Slack's !debug: compiled straight to a script
-          // execution — no LLM turn, no agent input. The script posts the
+          // execution — no LLM turn, no agent context item. The script posts the
           // debug dump back through the journaled send pair on THIS session
           // stream, so it lands in the right thread with provenance like the
           // /new ack. (Slack's general !<expression> compiler is deliberately
@@ -188,8 +188,8 @@ export class TelegramAgentProcessor extends StreamProcessor<
               payload: { text: TELEGRAM_NEW_SESSION_ACK_TEXT },
             });
           }
-          // The unified inbound message event: a Telegram update is a message
-          // FROM its sender, `from` carries the facts (see agents/message-received).
+          // Telegram's normalized content is application-supplied developer
+          // context; actor and refs preserve the untrusted sender and source.
           // The sender's location depends on the update kind: messages carry
           // message.from, button presses callback_query.from, edits
           // edited_message.from.
@@ -201,17 +201,26 @@ export class TelegramAgentProcessor extends StreamProcessor<
           const senderId = sender?.id;
           const senderUsername = readString(sender?.username);
           await append({
-            type: "events.iterate.com/agents/message-received",
-            idempotencyKey: `telegram-agent:webhook-to-agent-input:${event.offset}`,
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: `telegram-agent:webhook-to-agent-context:${event.offset}`,
             payload: {
+              role: "developer",
               content: telegramWebhookAgentInput(event.payload, { newCommand }),
-              from: {
-                kind: "telegram",
+              actor: {
+                type: "telegram",
                 ...(typeof senderId === "number" || typeof senderId === "string"
                   ? { userId: String(senderId) }
                   : {}),
                 ...(senderUsername == null ? {} : { username: senderUsername }),
               },
+              refs: [
+                {
+                  type: "event",
+                  streamPath: event.path,
+                  offset: event.offset,
+                  eventType: event.type,
+                },
+              ],
               ...(triggers ? {} : { llmRequestPolicy: { behaviour: "dont-trigger-request" } }),
             },
           });

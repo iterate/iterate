@@ -10,7 +10,7 @@ import { defineProcessorContract } from "../streams/processor-contracts.ts";
  *
  * This processor is only a Slack webhook router. It owns the raw Slack webhook
  * event and a reduced `channel:thread_ts -> streamPath` lookup table. It does
- * not interpret webhooks as agent input.
+ * not interpret webhooks as agent context.
  *
  * The intended flow is:
  *

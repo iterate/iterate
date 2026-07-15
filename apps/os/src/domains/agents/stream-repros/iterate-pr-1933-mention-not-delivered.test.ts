@@ -79,13 +79,21 @@ describe("production stream repro: iterate PR 1933 mention was never delivered",
     await new StreamProcessorRunner({ processor: githubAgent, stream: agent }).catchUp();
 
     const turn = agent.events.find(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) =>
+        event.type === "events.iterate.com/agents/context-added" &&
+        (event.payload as { role?: unknown }).role === "developer",
     );
     expect(turn).toBeDefined();
     const turnPayload = turn!.payload as {
+      role: "developer";
+      actor: { type: "github"; login?: string };
       content: string;
       llmRequestPolicy: { behaviour: string };
     };
+    expect(turnPayload).toMatchObject({
+      role: "developer",
+      actor: { type: "github", login: "jonastemplestein" },
+    });
     expect(turnPayload.content).toContain("@iterate can you see this?");
     expect(turnPayload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
     expect(reactions).toEqual([

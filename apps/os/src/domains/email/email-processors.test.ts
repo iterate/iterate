@@ -320,7 +320,7 @@ describe("EmailAgentProcessor", () => {
     return { driver, network, processor, stream };
   }
 
-  it("attaches door-stored attachments to the agent input as files", async () => {
+  it("attaches door-stored attachments to the agent context item as files", async () => {
     const resolved = {
       contentType: "application/pdf",
       filename: "report.pdf",
@@ -361,7 +361,7 @@ describe("EmailAgentProcessor", () => {
       ],
     ]);
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) => event.type === "events.iterate.com/agents/context-added",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({ files: [resolved] });
@@ -382,7 +382,7 @@ describe("EmailAgentProcessor", () => {
     await driver.deliver();
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) => event.type === "events.iterate.com/agents/context-added",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).not.toHaveProperty("files");
@@ -392,7 +392,7 @@ describe("EmailAgentProcessor", () => {
     expect(content).toContain("[1 attachment(s) could not be loaded: signing exploded]");
   });
 
-  it("captures thread context and transcribes inbound mail into triggering agent input", async () => {
+  it("captures thread context and transcribes inbound mail into triggering agent context", async () => {
     const { driver, stream } = setup();
 
     await stream.append({
@@ -411,10 +411,28 @@ describe("EmailAgentProcessor", () => {
     await driver.deliver();
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) => event.type === "events.iterate.com/agents/context-added",
     );
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
+    const payload = inputs[0]!.payload as {
+      actor?: unknown;
+      content: string;
+      llmRequestPolicy?: unknown;
+      refs?: unknown;
+      role: string;
+    };
+    expect(payload).toMatchObject({
+      role: "developer",
+      actor: { type: "email", address: "jonas@example.com", name: "Jonas" },
+      refs: [
+        {
+          type: "event",
+          streamPath: "/agents/email/t1",
+          offset: 2,
+          eventType: "events.iterate.com/email/received",
+        },
+      ],
+    });
     expect(payload.content).toContain("email/received");
     expect(payload.content).toContain("jonas@example.com");
     expect(payload.content).toContain("Can you help me with something?");
@@ -439,7 +457,7 @@ describe("EmailAgentProcessor", () => {
     await driver.deliver();
 
     const inputs = stream.events.filter(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) => event.type === "events.iterate.com/agents/context-added",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({
@@ -478,7 +496,7 @@ describe("EmailAgentProcessor", () => {
     await driver.deliver();
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/context-added"),
     ).toHaveLength(1);
     // Our own looped-back mail never becomes the thread counterpart — the
     // human sender stays the reply target.
@@ -508,7 +526,7 @@ describe("EmailAgentProcessor", () => {
     await driver.deliver();
 
     expect(
-      stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
+      stream.events.filter((event) => event.type === "events.iterate.com/agents/context-added"),
     ).toHaveLength(0);
     expect(driver.state.counterpart).toBeUndefined();
   });

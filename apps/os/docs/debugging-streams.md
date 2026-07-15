@@ -19,7 +19,7 @@ Append one event at a time so you can control offsets and timing:
 ```bash
 doppler run --project os --config preview_2 -- pnpm --dir apps/os cli itx run \
   --context <prj_id> \
-  -e 'return await itx.streams.get("/agents/local-debug").append({ type: "events.iterate.com/agents/message-received", payload: { content: "Say hello via itx.chat.sendMessage.", from: { kind: "user", origin: "web" } } })'
+  -e 'return await itx.streams.get("/agents/local-debug").append({ type: "events.iterate.com/agents/context-added", payload: { role: "user", content: "Say hello via itx.chat.sendMessage.", actor: { type: "user", origin: "web" }, llmRequestPolicy: { behaviour: "after-current-request" } } })'
 ```
 
 Then wait for the agent response:

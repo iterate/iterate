@@ -138,8 +138,8 @@ export type AgentUiPresenceEntry = {
  * Token accounting folded from agent/token-usage-reported (the agent
  * processor's normalized per-request reports): lifetime totals plus the most
  * recent report, whose input+output against maxContextTokens is the context
- * fullness the next turn starts from. A history-reset clears the last report
- * — the conversation it measured is gone.
+ * fullness the next turn starts from. A cutoff-bearing compaction context
+ * item clears the last report — the history it measured is gone.
  */
 export type AgentUiTokenUsage = {
   totalInputTokens: number;
@@ -214,11 +214,9 @@ function emitItem(state: AgentUiState, items: AgentUiItem[], item: AgentUiItem):
 const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
 const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
-const AGENT_OUTPUT_ADDED = "events.iterate.com/agent/output-added";
-const AGENT_INPUT_ADDED = "events.iterate.com/agent/input-added";
+const AGENT_CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const AGENT_STATUS_UPDATED = "events.iterate.com/agent/status-updated";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
-const AGENT_HISTORY_RESET = "events.iterate.com/agent/history-reset";
 const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
 const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
 // Historical journals (pre single-agent-processor) still stream under these
@@ -264,86 +262,74 @@ function reduceAgentUiEvent(
   const timestampMs = Date.parse(event.createdAt);
 
   switch (event.type) {
-    // THE inbound message event, every source: `from.kind` picks the
-    // treatment. Users and agents render as chat bubbles (agents with a via
-    // label naming the sender path). Transcribed domain messages carry a
-    // model-facing YAML transcription as content; whether that text shows
-    // depends on whether the domain has a prettier bubble: slack and
-    // telegram render the RAW webhook event as the human-facing copy, so
-    // only their stored attachments surface here — email and github have no
-    // other bubble, so their transcription text stays visible.
-    case "events.iterate.com/agents/message-received": {
+    case AGENT_CONTEXT_ADDED: {
+      const role = readString(event, "role");
       const text = readString(event, "content");
       if (text == null) return state;
-      const from = readRecord(event, "from");
-      const kind = typeof from?.kind === "string" ? from.kind : "user";
+      let contextState = state;
+      const compaction = readRecord(event, "compaction");
+      if (
+        typeof compaction?.replacesHistoryThrough === "number" &&
+        compaction.replacesHistoryThrough < event.offset &&
+        state.tokenUsage.lastReport != null
+      ) {
+        contextState = {
+          ...state,
+          tokenUsage: { ...state.tokenUsage, lastReport: null },
+        };
+      }
+
+      if (role === "assistant") {
+        const llmRequestOffset = readLlmRequestOffset(event);
+        if (llmRequestOffset == null) return contextState;
+        return updateLlmStep(contextState, llmRequestOffset, (step) =>
+          step.status === "running" ? { ...step, responseText: text } : step,
+        );
+      }
+      if (role === "system") return contextState;
+
+      const actor = readRecord(event, "actor");
+      const actorType = typeof actor?.type === "string" ? actor.type : undefined;
       const files = readFileAttachments(event);
-      if (kind === "agent") {
-        const sender = typeof from?.path === "string" ? from.path : undefined;
-        return emitUserMessageItem(state, items, {
+      if (role === "user") {
+        return emitUserMessageItem(contextState, items, {
           kind: "user",
           id: `user-${event.offset}`,
           text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
-          via: { service: "agent", ...(sender === undefined ? {} : { sender }) },
         });
       }
-      if (kind === "slack" || kind === "telegram" || kind === "email" || kind === "github") {
-        const rendersFromRawEvent = kind === "slack" || kind === "telegram";
-        if (rendersFromRawEvent && files.length === 0) return state;
+      if (
+        actorType === "agent" ||
+        actorType === "slack" ||
+        actorType === "telegram" ||
+        actorType === "email" ||
+        actorType === "github"
+      ) {
+        const rendersFromRawEvent = actorType === "slack" || actorType === "telegram";
+        if (rendersFromRawEvent && files.length === 0) return contextState;
         const senderValue =
-          kind === "slack"
-            ? from?.userId
-            : kind === "telegram"
-              ? (from?.username ?? from?.userId)
-              : kind === "email"
-                ? from?.address
-                : from?.login;
+          actorType === "agent"
+            ? actor?.path
+            : actorType === "slack"
+              ? actor?.userId
+              : actorType === "telegram"
+                ? (actor?.username ?? actor?.userId)
+                : actorType === "email"
+                  ? actor?.address
+                  : actor?.login;
         const sender = typeof senderValue === "string" ? senderValue : undefined;
-        return emitUserMessageItem(state, items, {
+        return emitUserMessageItem(contextState, items, {
           kind: "user",
           id: `user-${event.offset}`,
           text: rendersFromRawEvent ? "" : text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
-          via: { service: kind, ...(sender === undefined ? {} : { sender }) },
+          via: { service: actorType, ...(sender === undefined ? {} : { sender }) },
         });
       }
-      return emitUserMessageItem(state, items, {
-        kind: "user",
-        id: `user-${event.offset}`,
-        text,
-        ...(files.length === 0 ? {} : { files }),
-        timestampMs,
-      });
-    }
-
-    case AGENT_INPUT_ADDED: {
-      const text = readString(event, "content");
-      const files = readFileAttachments(event);
-      if (text == null || files.length === 0) return state;
-      // Reflections of the agent's own sent messages (the processor's
-      // "The assistant sent this visible web-chat message" inputs, keyed
-      // agent/render-web-response@<offset>) carry the SAME attachments the
-      // web-message-sent event already rendered as an assistant bubble —
-      // they exist for the model's eyes, not the user's.
-      if (event.idempotencyKey?.startsWith("agent/render-web-response@")) return state;
-      // Pre-unification journals: the slack transcriber used to append its
-      // model-facing YAML dump as input-added under this key (today it emits
-      // agents/message-received). The raw webhook already rendered the
-      // bubble; surface only the stored attachments, exactly as before.
-      const isLegacySlackInput = event.idempotencyKey?.startsWith(
-        "slack-agent:webhook-to-agent-input:",
-      );
-      return emitUserMessageItem(state, items, {
-        kind: "user",
-        id: `user-file-${event.offset}`,
-        text: isLegacySlackInput ? "" : text,
-        files,
-        timestampMs,
-        ...(isLegacySlackInput ? { via: { service: "slack" as const } } : {}),
-      });
+      return contextState;
     }
 
     case "events.iterate.com/agents/web-message-sent":
@@ -439,17 +425,6 @@ function reduceAgentUiEvent(
         thinkingText:
           step.status === "running" ? step.thinkingText + thinkingDelta : step.thinkingText,
       }));
-    }
-
-    case AGENT_OUTPUT_ADDED: {
-      const llmRequestOffset = readLlmRequestOffset(event);
-      const content = readString(event, "content");
-      if (llmRequestOffset == null || content == null) return state;
-      // Authoritative full text: replaces whatever streamed in (or fills it
-      // in for providers that never streamed).
-      return updateLlmStep(state, llmRequestOffset, (step) =>
-        step.status === "running" ? { ...step, responseText: content } : step,
-      );
     }
 
     case AGENT_LLM_REQUEST_COMPLETED: {
@@ -558,14 +533,6 @@ function reduceAgentUiEvent(
           lastReport: { model, maxContextTokens, inputTokens, outputTokens },
         },
       };
-    }
-
-    case AGENT_HISTORY_RESET: {
-      // The last report measured a conversation that no longer exists; a
-      // stale red meter over a freshly compacted history would say the
-      // opposite of what just happened. Lifetime totals stay.
-      if (state.tokenUsage.lastReport === null) return state;
-      return { ...state, tokenUsage: { ...state.tokenUsage, lastReport: null } };
     }
 
     case SLACK_WEBHOOK_RECEIVED: {

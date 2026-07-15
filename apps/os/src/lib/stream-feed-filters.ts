@@ -177,7 +177,7 @@ export function feedItemsFilterFromSearch(
   };
 }
 
-/** `events.iterate.com/agent/input-added` → `agent/input-added` */
+/** `events.iterate.com/agents/context-added` → `agents/context-added` */
 export function shortEventType(type: string): string {
   return type.startsWith("events.iterate.com/") ? type.slice("events.iterate.com/".length) : type;
 }

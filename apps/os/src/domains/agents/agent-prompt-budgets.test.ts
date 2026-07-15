@@ -72,8 +72,10 @@ test("no platform prompt embeds the type surface", () => {
 
 test("the boot-context input stays facts-and-pointers sized", () => {
   const policy = agentDefaultsForPath({ agentPath: "/agents/test", projectId: "prj_test" });
-  const bootContext = policy.events.find((event) =>
-    event.idempotencyKey.startsWith("agent/boot-context:"),
+  const bootContext = policy.events.find(
+    (event) =>
+      event.type === "events.iterate.com/agents/context-added" &&
+      (event.payload as { key?: string }).key === "agent/boot-context",
   );
   expect(bootContext).toBeDefined();
   const content = (bootContext!.payload as { content?: string }).content ?? "";

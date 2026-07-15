@@ -153,24 +153,22 @@ const SURFACE_GAPS: Record<string, string> = {
     "(hello/add) are typed per entry in examples-source.ts, not in the published surface",
   "dynamic-worker-stateful":
     "same as dynamic-worker-stateless: increment()/current() live on the entry's worker, not the surface",
-  "sandbox-exec":
-    "CloudflareSandbox lags the sandbox SDK: exec() exists at runtime but not in the generated declaration",
   "github-read-file":
     "the sidecar's compiler-only structural Octokit shim types request() as Promise<unknown> (the real " +
     "octokit package graph is too large for the in-Worker checker); readme.data is typed in " +
     "examples-source.ts against the real Octokit",
   "gmail-search-inbox":
-    "GmailConnection.request() data is unknown (resource-shaped); the body reads list/get resources " +
-    "dynamically",
-  "cf-ai-to-markdown":
-    "ai.toMarkdown()'s return is the union over all call shapes; the no-arg call's format list is " +
-    "narrowed per entry in examples-source.ts",
+    "GmailConnection.request's data is caller-typed (request<T = unknown>); this plain-JS body " +
+    "cannot instantiate T and reads list/get resources dynamically — its shapes are declared in " +
+    "examples-source.ts",
   "ai-generate-text":
-    "ai.run() returns unknown (model-shaped output); the body reads result.response",
-  "ai-generate-image": "ai.run() returns unknown; the body reads response.image",
-  "ai-generate-audio": "ai.run() returns unknown; the body reads result.audio",
-  "ai-transcribe-audio": "ai.run() returns unknown; the body reads result.text and friends",
-  "ai-generate-video": "ai.run() returns unknown; the body reads result.video",
+    "ai.run's output is caller-typed (run<T = unknown>); this plain-JS body cannot instantiate T " +
+    "and reads result.response — the shape is declared in examples-source.ts",
+  "ai-generate-image": "same run<T> constraint as ai-generate-text; the body reads response.image",
+  "ai-generate-audio": "same run<T> constraint as ai-generate-text; the body reads result.audio",
+  "ai-transcribe-audio":
+    "same run<T> constraint as ai-generate-text; the body reads result.text and friends",
+  "ai-generate-video": "same run<T> constraint as ai-generate-text; the body reads result.video",
   "cf-browser-markdown":
     "browser.quickAction() returns the action-shaped unknown; markdown is a string per entry",
 };

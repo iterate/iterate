@@ -140,7 +140,10 @@ from an ephemeral event"; the durable truth is always its own append:
 // per streamed token: live subscribers paint it; nothing durable ever sees it
 await stream.append({ type: ".../llm-response-chunk", ephemeral: true, payload: { chunk } });
 // once, when the turn settles: THE fact processors fold
-await stream.append({ type: ".../output-added", payload: { text } });
+await stream.append({
+  type: ".../agents/context-added",
+  payload: { role: "assistant", content: text, llmRequestOffset },
+});
 
 await stream.getEvents(); //                          durable events only
 await stream.getEvents({ includeEphemeral: true }); // + surviving ephemeral rows
@@ -164,7 +167,8 @@ copies live on in browser mirrors); and a post-sweep state rebuild counts
 only surviving rows (`eventCount` may decrease — never compare it to
 `maxOffset`). Use ephemeral events for transient signals whose durable truth
 lands separately: the canonical case is LLM streaming chunks
-(`agent/llm-response-chunk`), superseded by the durable `output-added`.
+(`agent/llm-response-chunk`), superseded by the durable assistant
+`agents/context-added` item.
 `stream/*` control facts cannot be ephemeral — config, presence, and park
 state may never be forgotten. One consequence worth naming: a durable
 subscription (cross-post, webhook) whose selector matches only ephemeral

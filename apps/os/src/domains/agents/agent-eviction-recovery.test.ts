@@ -28,13 +28,12 @@ import {
 } from "./agent-processor-contract.ts";
 
 const T = {
-  userMessage: "events.iterate.com/agents/message-received",
+  context: "events.iterate.com/agents/context-added",
   scheduled: "events.iterate.com/agent/llm-request-scheduled",
   requested: "events.iterate.com/agent/llm-request-requested",
   started: "events.iterate.com/agent/llm-request-started",
   completed: "events.iterate.com/agent/llm-request-completed",
   cancelled: "events.iterate.com/agent/llm-request-cancelled",
-  output: "events.iterate.com/agent/output-added",
   revived: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
 } as const;
 
@@ -215,10 +214,16 @@ describe("eviction recovery, end to end", () => {
   beforeEach(async () => {
     h = makeHarness();
     pump = setInterval(() => void h.deliverPending().catch(() => undefined), 10);
-    await h.stream.append({
-      type: "events.iterate.com/agent/llm-provider-selected",
-      payload: { model: "gpt-test" },
-    });
+    await h.stream.append(
+      {
+        type: "events.iterate.com/agent/llm-provider-selected",
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: T.context,
+        payload: { role: "system", key: "agent/system-prompt", content: "You are helpful." },
+      },
+    );
   });
   afterEach(() => {
     clearInterval(pump);
@@ -226,8 +231,13 @@ describe("eviction recovery, end to end", () => {
 
   it("resumes a deploy-killed turn: alarm → revival → durable-object-crashed cancel → fresh request → reply", async () => {
     await h.stream.append({
-      type: T.userMessage,
-      payload: { content: "hello?", from: { kind: "user", origin: "web" } },
+      type: T.context,
+      payload: {
+        role: "user",
+        actor: { type: "user", origin: "web" },
+        content: "hello?",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
     });
 
     // Incarnation 1 accepts the request and hangs on the AI binding.
@@ -276,7 +286,16 @@ describe("eviction recovery, end to end", () => {
       timeoutMs: 5_000,
     });
     expect(resumedRequested.offset).toBeGreaterThan(inFlightRequestOffset);
-    const output = await h.stream.waitForEvent({ eventTypes: [T.output], timeoutMs: 5_000 });
+    const output = await h.stream.waitForEvent({
+      eventTypes: [T.context],
+      predicate: (event) => {
+        const payload = event.payload as { role?: unknown; llmRequestOffset?: unknown } | undefined;
+        return (
+          payload?.role === "assistant" && payload.llmRequestOffset === resumedRequested.offset
+        );
+      },
+      timeoutMs: 5_000,
+    });
     expect(output.payload).toMatchObject({
       content: expect.stringContaining("recovered!"),
       llmRequestOffset: resumedRequested.offset,
@@ -285,8 +304,13 @@ describe("eviction recovery, end to end", () => {
 
   it("recovers a lost debounce timer: revival re-derives the requested event from the fold", async () => {
     await h.stream.append({
-      type: T.userMessage,
-      payload: { content: "are you there?", from: { kind: "user", origin: "web" } },
+      type: T.context,
+      payload: {
+        role: "user",
+        actor: { type: "user", origin: "web" },
+        content: "are you there?",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
     });
     const scheduled = await h.stream.waitForEvent({ eventTypes: [T.scheduled], timeoutMs: 5_000 });
     // The armed debounce is keepalive-tracked work; wait until the runner has
@@ -309,7 +333,11 @@ describe("eviction recovery, end to end", () => {
     const requested = await h.stream.waitForEvent({ eventTypes: [T.requested], timeoutMs: 5_000 });
     expect(requested.idempotencyKey).toBe(`agent/llm-request-requested@${scheduled.offset}`);
 
-    const output = await h.stream.waitForEvent({ eventTypes: [T.output], timeoutMs: 5_000 });
+    const output = await h.stream.waitForEvent({
+      eventTypes: [T.context],
+      predicate: (event) => (event.payload as { role?: unknown } | undefined)?.role === "assistant",
+      timeoutMs: 5_000,
+    });
     expect(output.payload).toMatchObject({
       content: expect.stringContaining("recovered!"),
     });
@@ -472,8 +500,13 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     );
     const runner = agentRunner(agent, stream, { seeded: { offset: 2, state: stuck } });
     await stream.append({
-      type: T.userMessage,
-      payload: { content: "hello? anyone?", from: { kind: "user", origin: "web" } },
+      type: T.context,
+      payload: {
+        role: "user",
+        actor: { type: "user", origin: "web" },
+        content: "hello? anyone?",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
     });
     await runner.catchUp();
 

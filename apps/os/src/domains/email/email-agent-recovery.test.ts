@@ -216,7 +216,7 @@ describe("eviction recovery end to end", () => {
     await h.settle();
     expect(h.alarm.at).not.toBeNull();
     expect(
-      h.stream.events.some((event) => event.type === "events.iterate.com/agents/message-received"),
+      h.stream.events.some((event) => event.type === "events.iterate.com/agents/context-added"),
     ).toBe(false);
 
     h.crash(); // the in-flight transcription dies; journal, KV, and the alarm survive
@@ -240,7 +240,7 @@ describe("eviction recovery end to end", () => {
     // the inbound mail reaches the agent, attachments resolved and attached.
     await h.deliverPending();
     const inputs = h.stream.events.filter(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+      (event) => event.type === "events.iterate.com/agents/context-added",
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).toMatchObject({ files: [RESOLVED_FILE] });
@@ -251,9 +251,7 @@ describe("eviction recovery end to end", () => {
     // The idempotency-keyed transcription settles the obligation for good.
     await h.deliverPending();
     expect(
-      h.stream.events.filter(
-        (event) => event.type === "events.iterate.com/agents/message-received",
-      ),
+      h.stream.events.filter((event) => event.type === "events.iterate.com/agents/context-added"),
     ).toHaveLength(1);
   });
 });

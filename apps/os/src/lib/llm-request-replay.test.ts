@@ -19,8 +19,14 @@ function row(type: string, payload: Record<string, unknown>, offset?: number): s
 function conversationRows(): string[] {
   nextOffset = 1;
   return [
-    row("events.iterate.com/agent/system-prompt-updated", { systemPrompt: "You are **demo**." }),
-    row("events.iterate.com/agent/input-added", {
+    row("events.iterate.com/agents/context-added", {
+      role: "system",
+      key: "agent/system-prompt",
+      content: "You are **demo**.",
+    }),
+    row("events.iterate.com/agents/context-added", {
+      role: "user",
+      actor: { type: "user", origin: "web" },
       content: "hello",
       llmRequestPolicy: { behaviour: "after-current-request" },
     }),
@@ -28,13 +34,19 @@ function conversationRows(): string[] {
       model: "openai/gpt-5.5",
       requestId: "llm-request:gen-0",
     }),
-    row("events.iterate.com/agent/output-added", { content: "hi there", llmRequestOffset: 3 }),
+    row("events.iterate.com/agents/context-added", {
+      role: "assistant",
+      content: "hi there",
+      llmRequestOffset: 3,
+    }),
     row("events.iterate.com/agent/llm-request-completed", {
       durationMs: 1234,
       llmRequestOffset: 3,
       result: { status: "success" },
     }),
-    row("events.iterate.com/agent/input-added", {
+    row("events.iterate.com/agents/context-added", {
+      role: "user",
+      actor: { type: "user", origin: "web" },
       content: "look at this",
       files: [
         {
@@ -60,11 +72,22 @@ describe("replayLlmRequest", () => {
     expect(replay).not.toBeNull();
     expect(replay?.model).toBe("openai/gpt-5.5");
     expect(replay?.messages).toEqual([
-      { id: "3:0", role: "system", content: "You are **demo**." },
-      { id: "3:1", role: "user", content: "hello" },
       {
-        id: "3:2",
+        id: "3:0",
         role: "system",
+        content: expect.stringContaining(
+          "Journal-projected context messages are items from an append-only event stream",
+        ),
+      },
+      {
+        id: "3:1",
+        role: "system",
+        content: '@1 key="agent/system-prompt"\nYou are **demo**.',
+      },
+      { id: "3:2", role: "user", content: "@2 actor=user:web\nhello" },
+      {
+        id: "3:3",
+        role: "developer",
         // The clock rides as the LAST message (prompt-cache prefix safety),
         // stamped from the llm-request-requested event's own append time —
         // replay reproduces it exactly.
@@ -79,11 +102,12 @@ describe("replayLlmRequest", () => {
     const replay = replayLlmRequest({ rawEventJsons: conversationRows(), llmRequestOffset: 7 });
     expect(replay?.messages.map((message) => message.role)).toEqual([
       "system",
+      "system",
       "user",
       "assistant",
       "user",
       // The trailing clock stamp (prompt-cache-safe tail position).
-      "system",
+      "developer",
     ]);
     const lastMessage = replay?.messages.at(-2);
     expect(lastMessage?.content).toContain("look at this");
@@ -156,7 +180,7 @@ describe("replayLlmRequest", () => {
       chunkEventJsons: chunkRows,
       llmRequestOffset: 3,
     });
-    // The committed output-added text is authoritative over the streamed
+    // The committed assistant context text is authoritative over the streamed
     // concatenation; thinking only ever exists in the chunks.
     expect(replay?.response).toEqual({
       text: "hi there",
@@ -323,6 +347,10 @@ describe("replayLlmRequest", () => {
     const rows = ["not json", JSON.stringify({ half: "an event" }), ...conversationRows()];
     const replay = replayLlmRequest({ rawEventJsons: rows, llmRequestOffset: 3 });
     // at(-2): the trailing clock stamp sits after the conversation.
-    expect(replay?.messages.at(-2)).toEqual({ id: "3:1", role: "user", content: "hello" });
+    expect(replay?.messages.at(-2)).toEqual({
+      id: "3:2",
+      role: "user",
+      content: "@2 actor=user:web\nhello",
+    });
   });
 });

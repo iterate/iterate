@@ -101,10 +101,7 @@ export const GithubAgentProcessorContract = defineProcessorContract({
     STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
-    // Route context stays a plain model-visible input; policy-triggered
-    // snapshots are inbound messages from their GitHub sender.
-    "events.iterate.com/agent/input-added",
-    "events.iterate.com/agents/message-received",
+    "events.iterate.com/agents/context-added",
     "events.iterate.com/github-agent/repository-collaborator-verified",
     "events.iterate.com/agent/status-changed",
   ],
