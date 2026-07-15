@@ -698,7 +698,6 @@ function ProcessorEntryButton({
     entry.kind === "core"
       ? "0"
       : (entry.runtimeConnection?.lag ?? entry.runtimeSubscription?.lag ?? null);
-  const filterSummary = configuredFilterSummary(entry.config);
   return (
     <button
       type="button"
@@ -733,11 +732,7 @@ function ProcessorEntryButton({
           >
             {processorEntryStatus(entry, busy)}
           </span>
-          {filterSummary == null ? null : (
-            <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
-              {filterSummary}
-            </span>
-          )}
+          <ConfiguredFilterSummary config={entry.config} />
         </span>
       </span>
       <span className="pt-0.5 text-right font-mono text-xs text-muted-foreground">
@@ -1110,12 +1105,12 @@ function readDeliverPolicy(value: unknown): "all" | "new" | { afterOffset: numbe
 }
 
 /**
- * One-line overview under a durable subscriber row: where it goes and which
- * events it copies. Only when there's something more informative than the
- * delivery label already shown as the title (cross-post destination, a real
- * event-type filter, a condition, or a transform).
+ * Labeled multi-line overview under a durable subscriber row: destination,
+ * event types, condition, transform. Plain "a · b · c" made event types look
+ * like path fragments — explicit labels + chips trade a bit of height for
+ * scannability.
  */
-function configuredFilterSummary(config: ConfiguredSubscriberDetails | undefined): string | null {
+function ConfiguredFilterSummary({ config }: { config: ConfiguredSubscriberDetails | undefined }) {
   if (config == null) return null;
   const hasEventFilter =
     config.eventTypes != null && config.eventTypes.length > 0 && !config.eventTypes.includes("*");
@@ -1126,23 +1121,67 @@ function configuredFilterSummary(config: ConfiguredSubscriberDetails | undefined
     config.transform !== undefined;
   if (!hasExtra) return null;
 
-  const parts: string[] = [];
-  if (config.crossPostDestination !== undefined) {
-    parts.push(`→ ${config.crossPostDestination}`);
-  }
+  const eventTypes = hasEventFilter
+    ? config.eventTypes!
+    : config.crossPostDestination !== undefined ||
+        config.condition !== undefined ||
+        config.transform !== undefined
+      ? null // "all event types" shown as text, not chips
+      : undefined;
 
-  const eventPart = hasEventFilter
-    ? config.eventTypes!.map(shortEventType).join(", ")
-    : "all events";
-  parts.push(eventPart);
-  if (config.condition !== undefined) {
-    // Keep the row scannable: long JSONata expressions belong in the detail.
-    const condition =
-      config.condition.length > 64 ? `${config.condition.slice(0, 61)}…` : config.condition;
-    parts.push(`when ${condition}`);
-  }
-  if (config.transform !== undefined) parts.push("transformed");
-  return parts.join(" · ");
+  return (
+    <span className="mt-1.5 flex flex-col gap-1 text-[11px] leading-snug text-muted-foreground">
+      {config.crossPostDestination == null ? null : (
+        <ConfiguredFilterLine label="to">
+          <span className="break-all font-mono text-foreground/80">
+            {config.crossPostDestination}
+          </span>
+        </ConfiguredFilterLine>
+      )}
+      {eventTypes === undefined ? null : eventTypes == null ? (
+        <ConfiguredFilterLine label="types">
+          <span className="text-foreground/70">all event types</span>
+        </ConfiguredFilterLine>
+      ) : (
+        <ConfiguredFilterLine label="types">
+          <span className="flex min-w-0 flex-wrap gap-1">
+            {eventTypes.map((type) => (
+              <span
+                key={type}
+                title={type}
+                className="rounded-md bg-violet-50 px-1.5 py-0.5 font-mono text-[10px] text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+              >
+                {shortEventType(type)}
+              </span>
+            ))}
+          </span>
+        </ConfiguredFilterLine>
+      )}
+      {config.condition == null ? null : (
+        <ConfiguredFilterLine label="when">
+          <span className="break-all font-mono text-foreground/80">
+            {config.condition.length > 80 ? `${config.condition.slice(0, 77)}…` : config.condition}
+          </span>
+        </ConfiguredFilterLine>
+      )}
+      {config.transform == null ? null : (
+        <ConfiguredFilterLine label="transform">
+          <span className="text-foreground/70">JSONata (see detail)</span>
+        </ConfiguredFilterLine>
+      )}
+    </span>
+  );
+}
+
+function ConfiguredFilterLine({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-start gap-1.5">
+      <span className="w-12 shrink-0 pt-px text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+        {label}
+      </span>
+      <span className="min-w-0">{children}</span>
+    </span>
+  );
 }
 
 function readSubscriptionType(
