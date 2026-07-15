@@ -13,10 +13,10 @@ import { generateItxExamples } from "../../scripts/generate-itx-examples.ts";
 import { ITX_EXAMPLE_SOURCES } from "./examples-source.ts";
 import { ITX_EXAMPLES } from "./examples.ts";
 
-const generatedPath = fileURLToPath(new URL("./examples.generated.ts", import.meta.url));
-
 test("examples.generated.ts is fresh (pnpm generate:itx-examples)", () => {
-  expect(readFileSync(generatedPath, "utf8")).toBe(generateItxExamples());
+  expect(
+    readFileSync(fileURLToPath(new URL("./examples.generated.ts", import.meta.url)), "utf8"),
+  ).toBe(generateItxExamples());
 }, 60_000);
 
 test("every source entry ships: same ids, same order, code everywhere", () => {
