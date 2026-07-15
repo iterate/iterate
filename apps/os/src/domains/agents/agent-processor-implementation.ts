@@ -4,7 +4,7 @@
 //   reduce       — pure fold: journal → AgentState. One switch, in
 //                  `reduceAgentEvent` below, shared with off-runtime refolds.
 //   processEvent — per-event side effects. One switch, nothing else.
-//   reconcile    — at-head only (base-gated): drive or settle open LLM
+//   onCaughtUp   — at-head only (runner-gated): drive or settle open LLM
 //                  obligations, then derive the next scheduling decision.
 //
 // Everything below the class is a pure helper one of the lanes calls: the
@@ -130,8 +130,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   // ---------------------------------------------------------------------------
   // Lane 2: per-event side effects. One switch; every arm is a short append
-  // (blockProcessorWhile) or a droppable attempt whose outcome the reconcile
-  // lane recovers (runInBackground).
+  // (blockProcessorWhile) or a droppable attempt whose outcome the at-head
+  // reconciliation lane recovers (runInBackground).
   // ---------------------------------------------------------------------------
 
   protected override processEvent({
@@ -368,10 +368,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
   }
 
-  /** True while this incarnation has a summary in flight. Blocking work
-   * registered by one batch runs concurrently (the base gathers it in a
-   * Promise.all), so a batch carrying two over-threshold reports would
-   * otherwise summarize twice; one compaction per batch is plenty. */
+  /** True while this incarnation has a summary in flight. The runner's
+   * per-event blocking barrier keeps two over-threshold reports from running
+   * concurrently, but the durable resets-since-measurement guard below only
+   * covers COMMITTED resets — this flag is the cheap same-incarnation
+   * belt-and-braces so back-to-back triggers never summarize twice. */
   #compactionInFlight = false;
 
   /**
@@ -459,13 +460,22 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   // ---------------------------------------------------------------------------
-  // Lane 3: reconciliation. The base calls this only for AT-HEAD batches, so
-  // neither pass needs its own mid-refold gate: a catch-up fold can never
-  // dial env.AI for a long-settled request or journal a false failure.
+  // Lane 3: reconciliation. The runner calls onCaughtUp only when the
+  // processing cursor reaches the observed stream head, so neither pass needs
+  // its own mid-refold gate: a catch-up fold can never dial env.AI for a
+  // long-settled request or journal a false failure. RECOVERY rides this same
+  // hook: `events.iterate.com/agent/revived` — the fact the keepalive's
+  // revival pass journals after an eviction took in-flight work — is consumed
+  // by the contract, so its ordinary delivery is a guaranteed turn that
+  // drives the runner to head and lands here, where the open obligations are
+  // settled or re-driven. Obligation idempotency keys stay bound to the
+  // request's own offsets (never the revival's), so every settle lane —
+  // attempt, backstop, expiry, crash-cancel — collapses to one durable
+  // outcome across revivals.
   // ---------------------------------------------------------------------------
 
-  protected override async reconcile(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
+  protected override async onCaughtUp(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0],
   ): Promise<void> {
     await this.#reconcileLlmObligations(args);
     await this.#reconcileLlmScheduling(args);
@@ -488,7 +498,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    *   fresh request instead of silently dropping the user's question.
    */
   async #reconcileLlmObligations(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0],
   ): Promise<void> {
     const now = this.#now();
     const cancelCrashed: number[] = [];
@@ -571,7 +581,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * event.
    */
   async #reconcileLlmScheduling(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0],
   ): Promise<void> {
     const { state } = args;
     if (state.currentRequest === null) {

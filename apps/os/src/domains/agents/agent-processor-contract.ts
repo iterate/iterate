@@ -209,6 +209,20 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
 ].join("\n");
 
 /**
+ * The processor-scoped revival fact `durableObjectRecovery` appends when an
+ * incarnation died owing background work (stream-processor-runner.ts's
+ * `ProcessorRecovery`) — an in-flight LLM attempt or an armed debounce timer
+ * lost to an eviction. The contract CONSUMES it — the runner's construction
+ * check requires that — but never emits it: the recovery adapter appends it
+ * raw, as the runtime speaking. Its ordinary delivery is the guaranteed turn
+ * that drives the runner to the stream head, where `onCaughtUp` re-drives the
+ * open LLM obligations (crash-cancel `started` attempts, re-fire lost
+ * debounces, settle expired intents); no per-event handling is needed (reduce
+ * ignores it), so there is deliberately no `processEvent` arm for it.
+ */
+export const AGENT_REVIVED_EVENT_TYPE = "events.iterate.com/agent/revived";
+
+/**
  * A file reference riding on an agent input: where the bytes live in project
  * file storage plus the signed public URL minted when it was attached. The
  * URL is stored (not re-minted per read) so history stays deterministic;
@@ -788,6 +802,25 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
     },
+    [AGENT_REVIVED_EVENT_TYPE]: {
+      description:
+        "The agent processor was revived after its incarnation died owing background work (an in-flight LLM attempt or an armed debounce timer lost to an eviction). Appended by the platform's recovery alarm, not by the processor; its delivery guarantees a caught-up pass that re-drives open LLM obligations — orphaned started attempts are cancelled as durable-object-crashed (never re-driven), lost debounce timers re-fire the request, and expired intents settle as failures.",
+      // Loose ON PURPOSE: the payload is authored by the shared recovery
+      // adapter (durableObjectRecovery.appendRevived), and future fields it
+      // grows must not turn historical revivals into parse failures.
+      payloadSchema: z.looseObject({
+        processorSlug: z.string(),
+        revivals: z.number(),
+        version: z.string(),
+      }),
+      examples: [
+        {
+          description:
+            "The keepalive alarm revived this agent after a deploy took an in-flight LLM turn.",
+          payload: { processorSlug: "agent", revivals: 1, version: "2026-07-14.1" },
+        },
+      ],
+    },
   },
   processorDeps: [CapabilityHostProcessorContract, CoreProcessorContract],
   consumes: [
@@ -807,6 +840,10 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/agent/loop-stopped",
     "events.iterate.com/capability-host/script-execution-completed",
+    // The revival fact MUST be consumed (the runner throws at construction
+    // otherwise): a revival nobody consumes recovers nothing. See the
+    // constant's doc for why it is absent from `emits`.
+    AGENT_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/agent/system-prompt-updated",

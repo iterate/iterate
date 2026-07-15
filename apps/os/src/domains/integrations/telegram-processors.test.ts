@@ -9,6 +9,7 @@ import {
   MemoryStreamNetwork as CanonicalMemoryStreamNetwork,
   deliverNewEvents,
 } from "../streams/test-helpers.ts";
+import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import { TelegramProcessor } from "./telegram-processor-implementation.ts";
 import {
   TELEGRAM_NEW_SESSION_ACK_TEXT,
@@ -424,13 +425,13 @@ describe("TelegramProcessor (webhook router)", () => {
 
 describe("TelegramAgentProcessor", () => {
   it("turns a routed human message into triggering agent input, then shows typing", async () => {
-    const { calls, cursors, processor, stream, telegramCalls } = setup();
+    const { calls, deliver, runner, stream, telegramCalls } = setup();
 
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({ text: "hello agent" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -452,11 +453,11 @@ describe("TelegramAgentProcessor", () => {
       "telegram:sendChatAction",
     ]);
 
-    expect(processor.state).toMatchObject({ botId: BOT_ID, chatId: String(CHAT_ID) });
+    expect(runner.currentState).toMatchObject({ botId: BOT_ID, chatId: String(CHAT_ID) });
   });
 
   it("ignores bot-authored updates entirely (no input, no typing)", async () => {
-    const { cursors, processor, stream, telegramCalls } = setup();
+    const { deliver, stream, telegramCalls } = setup();
 
     const payload = humanMessageWebhookPayload({});
     (payload.body.message as Record<string, unknown>).from = {
@@ -465,7 +466,7 @@ describe("TelegramAgentProcessor", () => {
       first_name: "iterate",
     };
     await stream.append({ type: "events.iterate.com/telegram/webhook-received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
@@ -474,14 +475,14 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("records message edits as non-triggering input without typing", async () => {
-    const { cursors, processor, stream, telegramCalls } = setup();
+    const { deliver, stream, telegramCalls } = setup();
 
     const payload = humanMessageWebhookPayload({ text: "edited!" });
     const body = payload.body as Record<string, unknown>;
     body.edited_message = body.message;
     delete body.message;
     await stream.append({ type: "events.iterate.com/telegram/webhook-received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -494,7 +495,7 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("treats callback queries (button presses) as triggering input from the presser", async () => {
-    const { cursors, processor, stream } = setup();
+    const { deliver, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
@@ -518,7 +519,7 @@ describe("TelegramAgentProcessor", () => {
         },
       },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -537,7 +538,7 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("transcribes media as bracketed placeholders", async () => {
-    const { cursors, processor, stream } = setup();
+    const { deliver, stream } = setup();
 
     const payload = humanMessageWebhookPayload({});
     const message = payload.body.message as Record<string, unknown>;
@@ -545,7 +546,7 @@ describe("TelegramAgentProcessor", () => {
     message.photo = [{ file_id: "photo-1", width: 90, height: 90 }];
     message.caption = "look at this";
     await stream.append({ type: "events.iterate.com/telegram/webhook-received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -555,21 +556,21 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("re-sends the typing action while the LLM works, with the chat id from state", async () => {
-    const { cursors, processor, stream, telegramCalls } = setup();
+    const { deliver, stream, telegramCalls } = setup();
 
     // Establish chat context first.
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     telegramCalls.length = 0;
 
     await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     // chat_id goes back as the integer Telegram issued.
     expect(telegramCalls).toEqual([
       { method: "sendChatAction", body: { action: "typing", chat_id: CHAT_ID } },
@@ -577,13 +578,13 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("never sends typing before any webhook established the chat", async () => {
-    const { cursors, processor, stream, telegramCalls } = setup();
+    const { deliver, stream, telegramCalls } = setup();
 
     await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
       payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(telegramCalls).toHaveLength(0);
   });
 
@@ -593,7 +594,7 @@ describe("TelegramAgentProcessor", () => {
     // re-run/dedupe, but the user-visible typing acks are stale — re-typing
     // months-old messages is a rate-limit burst. `now` far in the future
     // makes every event's ~epoch timestamp stale.
-    const { cursors, processor, stream, telegramCalls, sentMessages } = setup({
+    const { deliver, stream, telegramCalls, sentMessages } = setup({
       now: () => 999_999_999_999,
     });
 
@@ -608,7 +609,7 @@ describe("TelegramAgentProcessor", () => {
       },
       { type: "events.iterate.com/telegram/send-requested", payload: { text: "an old reply" } },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     // Durable lanes ran: the message reached the agent, and the reply was
     // delivered (its journal marker is absent on this first pass).
@@ -620,32 +621,33 @@ describe("TelegramAgentProcessor", () => {
     expect(telegramCalls.filter((call) => call.method === "sendChatAction")).toHaveLength(0);
   });
 
-  it("carries an unpainted typing fact across a non-at-head batch to the next at-head one", async () => {
-    const { cursors, processor, stream, telegramCalls } = setup();
+  it("carries an unpainted typing fact across a behind-head frame to the at-head repaint", async () => {
+    // readPageSize 1 makes one catch-up deliver the lifecycle fact in a frame
+    // stamped BEHIND the head (a later stream fact follows it — the lagging
+    // fold), and the frame that reaches head carries no typing-worthy fact at
+    // all (its own event is an unconsumed stream fact). The carried fact is
+    // what paints — exactly once, at the at-head pulse, never per behind
+    // frame.
+    const { deliver, stream, telegramCalls } = setup({ readPageSize: 1 });
     // Establish the chat.
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     telegramCalls.length = 0;
 
-    const [llm] = await stream.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
-    });
-    // Deliver the lifecycle fact while the batch is BEHIND head (a lagging
-    // fold): no repaint yet, the fact is remembered.
-    await processor.ingest({ events: [llm!], streamMaxOffset: stream.events.length + 5 });
-    expect(telegramCalls).toHaveLength(0);
-
-    // The fold catches up: the next batch reaches head (its own event is an
-    // unconsumed stream fact, so the carried lifecycle fact is what paints).
-    const [woken] = await stream.append({
-      type: "events.iterate.com/stream/woken",
-      payload: { reason: "catch-up" },
-    });
-    await processor.ingest({ events: [woken!], streamMaxOffset: stream.events.length });
+    await stream.append(
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+      },
+      {
+        type: "events.iterate.com/stream/woken",
+        payload: { reason: "catch-up" },
+      },
+    );
+    await deliver();
     expect(telegramCalls).toEqual([
       { method: "sendChatAction", body: { action: "typing", chat_id: CHAT_ID } },
     ]);
@@ -653,13 +655,13 @@ describe("TelegramAgentProcessor", () => {
 
   it("delivers a send-requested, marks it, and claims the message on the connection stream", async () => {
     const agentPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-5000`;
-    const { cursors, network, processor, sentMessages, stream } = setup({ agentPath });
+    const { deliver, network, sentMessages, stream } = setup({ agentPath });
 
     const [request] = await stream.append({
       type: "events.iterate.com/telegram/send-requested",
       payload: { text: "hello from the agent" },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     // chat_id came from the stream path — the agent only supplied text.
     expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: "hello from the agent" }]);
@@ -683,7 +685,7 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("holds the checkpoint when delivery fails, then retries into exactly one marker", async () => {
-    const { cursors, processor, sendFailures, sentMessages, stream } = setup();
+    const { deliver, runner, sendFailures, sentMessages, stream } = setup();
     sendFailures.push(new Error("telegram is down"));
 
     const [request] = await stream.append({
@@ -691,19 +693,18 @@ describe("TelegramAgentProcessor", () => {
       payload: { text: "must arrive" },
     });
 
-    // Unmet obligation: the batch rejects and the checkpoint holds, so the
-    // host replays this request until a marker exists.
-    await expect(deliverNewEvents({ cursors, processor, stream })).rejects.toThrow(
-      /telegram is down/,
-    );
-    expect(processor.checkpointOffset).toBe(0);
+    // Unmet obligation: the frame rejects and the cursor holds, so the next
+    // pass replays this request until a marker exists.
+    await expect(deliver()).rejects.toThrow(/telegram is down/);
+    expect((await runner.snapshot()).offset).toBe(0);
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/telegram/message-sent"),
     ).toHaveLength(0);
 
     // Replay: the send goes through this time — one send, one marker.
-    await processor.ingest({ events: [request!], streamMaxOffset: stream.events.length });
+    await deliver();
     expect(sentMessages).toHaveLength(1);
+    expect(request).toBeDefined();
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/telegram/message-sent"),
     ).toHaveLength(1);
@@ -711,7 +712,7 @@ describe("TelegramAgentProcessor", () => {
 
   it("forces the stream's chat over a payload-supplied chat_id/message_thread_id (thread-bound sends)", async () => {
     const agentPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
-    const { cursors, network, processor, sentMessages, stream } = setup({ agentPath });
+    const { deliver, network, sentMessages, stream } = setup({ agentPath });
 
     await stream.append({
       type: "events.iterate.com/telegram/send-requested",
@@ -722,7 +723,7 @@ describe("TelegramAgentProcessor", () => {
       // chat coordinates are ignored (reply_to_message_id stays overridable).
       payload: { chat_id: 999999, message_thread_id: 55, reply_to_message_id: 7, text: "hi" },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(sentMessages).toEqual([
       { chat_id: CHAT_ID, reply_to_message_id: 7, text: "hi" }, // no message_thread_id: the path has no topic
@@ -732,19 +733,21 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("never re-sends a MARKED request on replay (the crash-after-marker case)", async () => {
-    const { cursors, processor, sentMessages, stream } = setup();
+    const { deliver, processor, sentMessages, stream } = setup();
 
     const [request] = await stream.append({
       type: "events.iterate.com/telegram/send-requested",
       payload: { text: "already delivered" },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(sentMessages).toHaveLength(1);
+    expect(request).toBeDefined();
 
-    // Simulate a crash after the marker landed but before the checkpoint
-    // advanced: the host replays the request. The journal shows the marker,
-    // so the send must NOT fire again (the marker is what "satisfied" means).
-    await processor.ingest({ events: [request!], streamMaxOffset: stream.events.length });
+    // Simulate a crash after the marker landed but before the cursor
+    // advanced: a fresh incarnation (new runner, progress lost) replays the
+    // request. The journal shows the marker, so the send must NOT fire again
+    // (the marker is what "satisfied" means).
+    await new StreamProcessorRunner({ processor, stream }).catchUp();
     expect(sentMessages).toHaveLength(1);
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/telegram/message-sent"),
@@ -752,7 +755,7 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("quotes the answered message only when newer messages arrived since (deterministic reply_to)", async () => {
-    const { cursors, processor, sentMessages, stream } = setup();
+    const { deliver, sentMessages, stream } = setup();
 
     // Turn 1: message 10 → LLM turn → send. Message 10 is still the latest
     // inbound, so quoting it would be noise: no reply_to_message_id.
@@ -767,7 +770,7 @@ describe("TelegramAgentProcessor", () => {
       },
       { type: "events.iterate.com/telegram/send-requested", payload: { text: "answer to 10" } },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(sentMessages.at(-1)).not.toHaveProperty("reply_to_message_id");
 
     // Turn 2: message 11 starts a turn, then message 12 arrives BEFORE the
@@ -787,7 +790,7 @@ describe("TelegramAgentProcessor", () => {
       },
       { type: "events.iterate.com/telegram/send-requested", payload: { text: "answer to 11" } },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(sentMessages.at(-1)).toMatchObject({ reply_to_message_id: 11, text: "answer to 11" });
 
     // An explicit reply_to_message_id from the agent always wins.
@@ -795,21 +798,21 @@ describe("TelegramAgentProcessor", () => {
       type: "events.iterate.com/telegram/send-requested",
       payload: { reply_to_message_id: 10, text: "explicitly quoting 10" },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(sentMessages.at(-1)).toMatchObject({ reply_to_message_id: 10 });
   });
 
   it("acknowledges a bare /new with the fixed message and no LLM turn", async () => {
-    const { cursors, processor, sentMessages, stream } = setup();
+    const { deliver, sentMessages, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({ text: "/new" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     // The ack's send-requested landed during the batch; the host wakes again
     // to deliver it (second pass here).
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     // The ack rides the journaled send pair (delivered + marked)…
     expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: TELEGRAM_NEW_SESSION_ACK_TEXT }]);
@@ -824,7 +827,7 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("treats '/new trailing text' as the fresh session's first (triggering) message", async () => {
-    const { cursors, processor, sentMessages, stream } = setup({
+    const { deliver, sentMessages, stream } = setup({
       agentPath: `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-6000`,
     });
 
@@ -832,9 +835,9 @@ describe("TelegramAgentProcessor", () => {
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({ date: 6000, text: "/new plan my week" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     // Second pass: the host wakes again for the ack's send-requested.
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(sentMessages).toEqual([{ chat_id: CHAT_ID, text: TELEGRAM_NEW_SESSION_ACK_TEXT }]);
     const inputs = stream.events.filter(
@@ -855,14 +858,14 @@ describe("TelegramAgentProcessor", () => {
 
   it("compiles /debug into a script execution (no LLM turn) that posts via the journaled send", async () => {
     const agentPath = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-8000`;
-    const { cursors, processor, stream } = setup({ agentPath });
+    const { deliver, stream } = setup({ agentPath });
 
     // Telegram appends @BotUsername to commands in group chats.
     await stream.append({
       type: "events.iterate.com/telegram/webhook-received",
       payload: humanMessageWebhookPayload({ text: "/debug@MishasHelperBot" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const scripts = stream.events.filter(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -887,7 +890,7 @@ describe("TelegramAgentProcessor", () => {
   });
 
   it("renders the router's reply hint in the transcription with the referenced stream path", async () => {
-    const { cursors, processor, stream } = setup({
+    const { deliver, stream } = setup({
       agentPath: `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-7000`,
     });
     const oldSession = `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}/session-1000`;
@@ -898,7 +901,7 @@ describe("TelegramAgentProcessor", () => {
     }) as Record<string, unknown>;
     payload.replyHint = { resolvedBy: "sent-claim", sessionPath: oldSession };
     await stream.append({ type: "events.iterate.com/telegram/webhook-received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -1014,7 +1017,12 @@ function humanMessageWebhookPayload(input: {
   };
 }
 
-function setup(input: { agentPath?: string; now?: () => number } = {}) {
+/** REAL runner drive (the production registry's driver): the "still working"
+ * typing repaint lives in `onCaughtUp`, which ONLY the runner fires — legacy
+ * `ingest` would silently skip it and the repaint tests would assert nothing.
+ * `readPageSize` shrinks the catch-up page so a single `deliver()` exercises
+ * behind-head frames (the typing-fact carry). */
+function setup(input: { agentPath?: string; now?: () => number; readPageSize?: number } = {}) {
   const network = new MemoryStreamNetwork();
   const agentPath = input.agentPath ?? `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;
   const stream = network.get(agentPath);
@@ -1052,8 +1060,22 @@ function setup(input: { agentPath?: string; now?: () => number } = {}) {
       return { messageId: 9000 + sentMessages.length };
     },
   });
-  const cursors = new Map<object, number>();
-  return { calls, cursors, network, processor, sendFailures, sentMessages, stream, telegramCalls };
+  const runner = new StreamProcessorRunner({
+    processor,
+    stream,
+    ...(input.readPageSize === undefined ? {} : { readPageSize: input.readPageSize }),
+  });
+  return {
+    calls,
+    deliver: () => runner.catchUp(),
+    network,
+    processor,
+    runner,
+    sendFailures,
+    sentMessages,
+    stream,
+    telegramCalls,
+  };
 }
 
 /**

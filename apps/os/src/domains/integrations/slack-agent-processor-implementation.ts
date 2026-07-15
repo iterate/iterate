@@ -14,8 +14,8 @@
 // - The Slack calls themselves are acknowledgement/cosmetic lanes and must be
 //   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
 //   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
-//   status is repainted once per at-head batch from the latest lifecycle fact
-//   instead of once per event.
+//   status is repainted once per at-head pass (`onCaughtUp`) from the latest
+//   lifecycle fact instead of once per event.
 //
 // Adaptation from legacy: the itx agent contract has no
 // `agent/status-updated` event. The Slack "is thinking..." status now keys off
@@ -296,8 +296,12 @@ export class SlackAgentProcessor extends StreamProcessor<
         return;
       }
       // LLM/script lifecycle facts drive the assistant status, which is
-      // repainted once per batch in processEventBatch — nothing per event.
+      // repainted once per at-head pass in onCaughtUp — nothing per event
+      // beyond remembering the LATEST fact (later events overwrite earlier
+      // ones, and the memo carries across behind-head frames so a lagging
+      // fold still paints once it catches up).
       default:
+        if (slackAgentStatusForEvent(event) != null) this.#unpaintedLifecycleFact = event;
         return;
     }
   }
@@ -312,21 +316,24 @@ export class SlackAgentProcessor extends StreamProcessor<
     | undefined;
 
   /**
-   * Repaint from folded active work, matching the web UI. An LLM completion
-   * must not clear Slack while a script is running, and idle clears trail
-   * briefly so LLM → script → LLM hand-offs do not flicker.
+   * The at-head pass, in two halves that preserve their legacy order:
+   *
+   * 1. REPAINT from folded active work, matching the web UI ("once at head,
+   *    latest wins"). An LLM completion must not clear Slack while a script
+   *    is running, and idle clears trail briefly so LLM → script → LLM
+   *    hand-offs do not flicker. The latest lifecycle fact accumulates in
+   *    `#unpaintedLifecycleFact` per event, so a fact delivered in a
+   *    behind-head frame still paints exactly once when the cursor reaches
+   *    head.
+   * 2. The STATUS-CLEAR obligation: the fold owns the desired clear until a
+   *    completion fact closes it. A delayed attempt may disappear with an
+   *    isolate; recovery's `slack-agent/revived` delivery lands here in a
+   *    fresh incarnation and re-derives it.
    */
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEventBatch"]>[0],
+  protected override async onCaughtUp(
+    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["onCaughtUp"]>[0],
   ): Promise<void> {
-    await super.processEventBatch(args);
-    const latest =
-      args.reducedEvents.findLast(({ event }) => slackAgentStatusForEvent(event) != null)?.event ??
-      this.#unpaintedLifecycleFact;
-    if (args.checkpointOffset < args.streamMaxOffset) {
-      this.#unpaintedLifecycleFact = latest;
-      return;
-    }
+    const latest = this.#unpaintedLifecycleFact;
     this.#unpaintedLifecycleFact = undefined;
     const { channel, threadTs } = args.state;
     const hasScripts = args.state.activeScriptExecutionIds.length > 0;
@@ -335,40 +342,29 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (hasScripts || hasLlm) {
       this.#cancelStatusClear();
       if (
-        latest == null ||
-        !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)()) ||
-        channel == null ||
-        threadTs == null
+        latest != null &&
+        webhookAckIsFresh(latest, (this.deps.now ?? Date.now)()) &&
+        channel != null &&
+        threadTs != null
       ) {
-        return;
+        const status = hasScripts
+          ? { status: "is using tools...", loading_messages: ["Using tools..."] }
+          : { status: "is thinking...", loading_messages: ["Thinking..."] };
+        args.blockProcessorWhile(() =>
+          this.#callSlackApi("assistant.threads.setStatus", {
+            channel_id: channel,
+            thread_ts: threadTs,
+            ...status,
+          }),
+        );
       }
-      const status = hasScripts
-        ? { status: "is using tools...", loading_messages: ["Using tools..."] }
-        : { status: "is thinking...", loading_messages: ["Thinking..."] };
-      args.blockProcessorWhile(() =>
-        this.#callSlackApi("assistant.threads.setStatus", {
-          channel_id: channel,
-          thread_ts: threadTs,
-          ...status,
-        }),
-      );
     }
-  }
 
-  /**
-   * The fold owns the desired clear until a completion fact closes it. A
-   * delayed attempt may disappear with an isolate; the host's revival pass
-   * calls this reconciler in a fresh incarnation and re-derives it.
-   */
-  protected override async reconcile(
-    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["reconcile"]>[0],
-  ): Promise<void> {
     const pending = args.state.pendingStatusClear;
     if (pending == null) {
       this.#cancelStatusClear();
       return;
     }
-    const { channel, threadTs } = args.state;
     const target =
       channel == null || threadTs == null
         ? null

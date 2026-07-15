@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { GithubAgentProcessor } from "../../repos/github-agent-processor-implementation.ts";
 import type { StreamEvent } from "../../streams/schemas.ts";
-import { deliverNewEvents, MemoryStream } from "../../streams/test-helpers.ts";
+import { MemoryStream } from "../../streams/test-helpers.ts";
+import { StreamProcessorRunner } from "../../streams/stream-processor-runner.ts";
 import fixture from "./iterate-pr-1945-review-mention-contributor.json";
 
 describe("production stream repro: iterate PR 1945 review mention was treated as an outsider", () => {
@@ -22,7 +23,7 @@ describe("production stream repro: iterate PR 1945 review mention was treated as
       },
     });
 
-    await deliverNewEvents({ processor, stream, cursors: new Map() });
+    await new StreamProcessorRunner({ processor, stream }).catchUp();
 
     const turn = stream.events.find(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -67,12 +68,13 @@ describe("production stream repro: iterate PR 1945 review mention was treated as
       isRepositoryCollaborator: async () => false,
     });
 
-    await deliverNewEvents({ processor, stream, cursors: new Map() });
+    const runner = new StreamProcessorRunner({ processor, stream });
+    await runner.catchUp();
 
     expect(
       stream.events.some((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toBe(false);
-    expect(processor.state.recentActivity.at(-1)).toMatchObject({
+    expect(runner.currentState.recentActivity.at(-1)).toMatchObject({
       actor: "jonastemplestein",
       trustedInstructionSource: false,
     });
@@ -108,7 +110,7 @@ describe("production stream repro: iterate PR 1945 review mention was treated as
       },
     });
 
-    const delivery = deliverNewEvents({ processor, stream, cursors: new Map() });
+    const delivery = new StreamProcessorRunner({ processor, stream }).catchUp();
     await firstCheckStarted.promise;
     expect(collaboratorChecks).toHaveLength(1);
     expect(
@@ -146,10 +148,9 @@ describe("production stream repro: iterate PR 1945 review mention was treated as
       },
     });
 
-    await expect(deliverNewEvents({ processor, stream, cursors: new Map() })).rejects.toThrow(
-      "GitHub unavailable",
-    );
-    expect(processor.checkpointOffset).toBe(0);
+    const runner = new StreamProcessorRunner({ processor, stream });
+    await expect(runner.catchUp()).rejects.toThrow("GitHub unavailable");
+    expect((await runner.snapshot()).offset).toBe(0);
     expect(
       stream.events.some((event) => event.type === "events.iterate.com/agents/message-received"),
     ).toBe(false);

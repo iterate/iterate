@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import type { z } from "zod";
 import type { StreamEventInput } from "../streams/schemas.ts";
-import { MemoryStream, deliverNewEvents, type ProcessorLike } from "../streams/test-helpers.ts";
+import { MemoryStream } from "../streams/test-helpers.ts";
+import {
+  StreamProcessorRunner,
+  type ProcessorProgress,
+} from "../streams/stream-processor-runner.ts";
 import {
   AgentProcessor,
   buildAgentCompactionRequestBody,
@@ -17,6 +22,47 @@ import {
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
   DEFAULT_AGENT_SYSTEM_PROMPT,
 } from "./agent-processor-contract.ts";
+
+type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
+
+/**
+ * REAL runner drive (the production registry's driver): the agent's at-head
+ * reconciliation — LLM scheduling and obligation settling — lives in
+ * `onCaughtUp`, which ONLY the runner fires; legacy `ingest` would silently
+ * skip it and these tests would assert nothing. One `catchUp()` pull-pages
+ * the journal to the head at call time and fires the at-head pulse on the
+ * final page; appends made during a pass (renders, scheduled events) fold on
+ * its trailing pages. `seeded` pre-loads durable progress — the runner-drive
+ * form of the legacy `readState` checkpoint injection.
+ */
+function agentRunner(
+  processor: AgentProcessor,
+  stream: MemoryStream,
+  opts: { seeded?: { offset: number; state: AgentState } } = {},
+) {
+  const seeded = opts.seeded;
+  if (seeded === undefined) return new StreamProcessorRunner({ processor, stream });
+  let record: ProcessorProgress<AgentState> = {
+    reduction: {
+      reducerVersion: AgentProcessorContract.version,
+      reducedThroughOffset: seeded.offset,
+      state: seeded.state,
+    },
+    processing: { acknowledgedThroughOffset: seeded.offset, cursorRevision: 0 },
+  };
+  return new StreamProcessorRunner({
+    processor,
+    stream,
+    durability: {
+      progress: {
+        read: () => record,
+        commit: (progress) => {
+          record = progress;
+        },
+      },
+    },
+  });
+}
 
 function agentRequestEvents(content: string, model = DEFAULT_AGENT_MODEL): StreamEventInput[] {
   return [
@@ -81,8 +127,8 @@ describe("minimal web-chat agent processors", () => {
   it("feeds a returned script result back as input and schedules another turn", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
@@ -111,7 +157,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", result: 'line one\nline "two"' },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await agentRunner(agent, stream).catchUp();
 
     const content = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
@@ -139,7 +185,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", result },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await agentRunner(agent, stream).catchUp();
 
     // The scratch dir self-ignores so a workspace git.commit never ships
     // spills to the config repo's main.
@@ -180,7 +226,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", result },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await agentRunner(agent, stream).catchUp();
 
     const files = writes.filter((write) => !write.path.endsWith(".gitignore"));
     // A string result spills as itself — raw text file, no JSON escaping.
@@ -203,7 +249,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", result: { items: "x".repeat(50_000) } },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await agentRunner(agent, stream).catchUp();
 
     const content = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
@@ -228,7 +274,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", result: { ok: true } },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await agentRunner(agent, stream).catchUp();
 
     expect(writes).toEqual([]);
     expect(
@@ -239,13 +285,12 @@ describe("minimal web-chat agent processors", () => {
   it("feeds a thrown script error back as input", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", error: "gmail exploded" },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await agentRunner(agent, stream).catchUp();
 
     const input = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
@@ -257,7 +302,6 @@ describe("minimal web-chat agent processors", () => {
   it("ends the loop when a script returns nothing, and ignores foreign executions", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
 
     await stream.append(
       // The agent's own script returned undefined — the completion event
@@ -272,7 +316,7 @@ describe("minimal web-chat agent processors", () => {
         payload: { executionId: "slack-bang-command-9", result: { noisy: true } },
       },
     );
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await agentRunner(agent, stream).catchUp();
 
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
@@ -290,18 +334,14 @@ describe("minimal web-chat agent processors", () => {
       pendingTriggerOffset: 1,
       pendingTriggerSource: "agent-loop",
     });
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      readState: async () => ({ offset: 1, state }),
-    });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const runner = agentRunner(agent, stream, { seeded: { offset: 1, state } });
 
     await stream.append({
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: "next" },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await runner.catchUp();
 
     const stopped = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/loop-stopped",
@@ -343,8 +383,8 @@ describe("minimal web-chat agent processors", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -406,7 +446,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/agent/output-added",
       payload: { content: `Reading the saved output now.\n\n\`\`\`ts\n${script}\n\`\`\`` },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await agentRunner(agent, stream).catchUp();
 
     const requested = stream.events.find(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -428,7 +468,7 @@ describe("minimal web-chat agent processors", () => {
         content: `${block("return 1;")}\n\n${block("return 2;")}\n\n${block("return 3;")}`,
       },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await agentRunner(agent, stream).catchUp();
 
     const requested = stream.events.filter(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -460,7 +500,7 @@ describe("minimal web-chat agent processors", () => {
         ].join("\n\n"),
       },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await agentRunner(agent, stream).catchUp();
 
     expect(
       stream.events.filter(
@@ -480,6 +520,7 @@ describe("minimal web-chat agent processors", () => {
   it("rejects a fenced block that does not start with async, with corrective feedback", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const runner = agentRunner(agent, stream);
 
     // Models habitually open code with a comment line; the block used to die
     // in total silence (kind "none"), which reads as the platform hanging.
@@ -489,7 +530,7 @@ describe("minimal web-chat agent processors", () => {
         content: "```ts\n// Plan: greet the user first\nasync (itx) => {\n  return 1;\n}\n```",
       },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await runner.catchUp();
 
     const requested = stream.events.filter(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -512,7 +553,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/agent/output-added",
       payload: { content: "```python\nprint('hello')\n```" },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await runner.catchUp();
     expect(
       stream.events.filter(
         (event) =>
@@ -527,7 +568,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/agent/output-added",
       payload: { content: "Just thinking out loud, nothing to run." },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await runner.catchUp();
     const feedbackEvents = stream.events.filter(
       (event) =>
         event.type === "events.iterate.com/agent/input-added" &&
@@ -540,8 +581,7 @@ describe("minimal web-chat agent processors", () => {
   it("treats MCP-origin messages like any other inbound user message", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
-    const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
+    const runner = agentRunner(agent, stream);
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -550,8 +590,8 @@ describe("minimal web-chat agent processors", () => {
         from: { kind: "user", origin: "mcp" },
       },
     });
-    await deliver(agent);
-    await deliver(agent);
+    await runner.catchUp();
+    await runner.catchUp();
 
     // The message folds straight into history (no input-added reflection).
     expect(stream.events.map((event) => event.type)).toEqual([
@@ -583,7 +623,7 @@ describe("minimal web-chat agent processors", () => {
         },
       },
     );
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await agentRunner(agent, stream).catchUp();
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -613,13 +653,16 @@ describe("minimal web-chat agent processors", () => {
       },
     );
 
-    // The first chunk is BEHIND the head (input two exists past it), so the
-    // at-head gate defers scheduling entirely; the second chunk reaches the
-    // head and derives exactly one scheduled event for both inputs. The
+    // The first frame is BEHIND the head (input two exists past it), so the
+    // at-head pulse never fires for it; the second frame reaches the head and
+    // derives exactly one scheduled event for both inputs. The
     // generation-keyed idempotency remains the second line of defense for
-    // batches that raced to the same derivation.
-    await agent.ingest({ events: stream.events.slice(0, 1), streamMaxOffset: 2 });
-    await agent.ingest({ events: stream.events.slice(1, 2), streamMaxOffset: 2 });
+    // passes that raced to the same derivation. Frames go through the REAL
+    // wake-lane sink (openDelivery) so the runner's own offset bookkeeping —
+    // not the test — decides what "behind" means.
+    const { sink } = await agentRunner(agent, stream).openDelivery();
+    await sink({ events: stream.events.slice(0, 1), streamMaxOffset: 2 });
+    await sink({ events: stream.events.slice(1, 2), streamMaxOffset: 2 });
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -631,7 +674,7 @@ describe("minimal web-chat agent processors", () => {
   it("coalesces multiple MCP-origin user messages replayed through the cold session backlog", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+    const runner = agentRunner(agent, stream);
 
     await stream.append(
       {
@@ -644,10 +687,10 @@ describe("minimal web-chat agent processors", () => {
       },
     );
 
-    // Both messages fold straight into history in one batch; the settle pass
-    // derives exactly one scheduled request for the pair.
-    await deliverNewEvents({ processor: agent, stream, cursors });
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    // Both messages fold straight into history in one pass; the at-head
+    // reconciliation derives exactly one scheduled request for the pair.
+    await runner.catchUp();
+    await runner.catchUp();
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -675,8 +718,8 @@ describe("minimal web-chat agent processors", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     // First user message — triggers llm-request-scheduled (with debounce)
     await stream.append({
@@ -741,18 +784,14 @@ describe("minimal web-chat agent processors", () => {
       currentRequest: { phase: "scheduled", requestId: "llm-request:1", scheduledOffset: 2 },
       llmConfigConfigured: true,
     });
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      readState: async () => ({ offset: 2, state: stuckState }),
-    });
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const runner = agentRunner(agent, stream, { seeded: { offset: 2, state: stuckState } });
     // New event arrives after restart — triggers recovery
     await stream.append({
       type: "events.iterate.com/agents/message-received",
       payload: { content: "second message", from: { kind: "user", origin: "web" } },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await runner.catchUp();
     // Recovery should fire llm-request-requested without waiting for a debounce
     await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-requested"],
@@ -814,11 +853,7 @@ describe("minimal web-chat agent processors", () => {
       },
     );
 
-    await deliverNewEvents({
-      processor: agent,
-      stream,
-      cursors: new Map<object, number>(),
-    });
+    await agentRunner(agent, stream).catchUp();
     const completed = await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
@@ -845,7 +880,7 @@ describe("minimal web-chat agent processors", () => {
     });
 
     await stream.append(...agentRequestEvents("hello without ai"));
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await agentRunner(agent, stream).catchUp();
     const completed = await stream.waitForEvent({
       eventTypes: ["events.iterate.com/agent/llm-request-completed"],
       timeoutMs: 2_000,
@@ -874,8 +909,8 @@ describe("minimal web-chat agent processors", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append({
       type: "events.iterate.com/agent/input-added",
@@ -934,8 +969,8 @@ describe("minimal web-chat agent processors", () => {
       // (which waits out each backoff for real) runs inside the test deadline.
       llmRetryBackoffBaseMs: 8,
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     let afterOffset = 0;
     async function driveFailingTurn(failure: number) {
@@ -1017,7 +1052,7 @@ describe("minimal web-chat agent processors", () => {
       // test above) so the backoffs run inside the test deadline.
       llmRetryBackoffBaseMs: 8,
     });
-    const cursors = new Map<object, number>();
+    const runner = agentRunner(agent, stream);
 
     await stream.append({
       type: "events.iterate.com/agent/input-added",
@@ -1034,7 +1069,7 @@ describe("minimal web-chat agent processors", () => {
     let lastScheduledCount = 0;
     let idleRounds = 0;
     while (Date.now() < deadline && idleRounds < 60) {
-      await deliverNewEvents({ processor: agent, stream, cursors });
+      await runner.catchUp();
       const scheduledCount = stream.events.filter(
         (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
       ).length;
@@ -1083,7 +1118,7 @@ describe("minimal web-chat agent processors", () => {
       },
       llmRetryBackoffBaseMs: 8,
     });
-    const cursors = new Map<object, number>();
+    const runner = agentRunner(agent, stream);
 
     await stream.append({
       type: "events.iterate.com/agent/input-added",
@@ -1095,7 +1130,7 @@ describe("minimal web-chat agent processors", () => {
 
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
-      await deliverNewEvents({ processor: agent, stream, cursors });
+      await runner.catchUp();
       const stopped = stream.events.some(
         (event) =>
           event.type === "events.iterate.com/agent/input-added" &&
@@ -1225,12 +1260,10 @@ describe("minimal web-chat agent processors", () => {
         },
       },
     });
+    const runner = agentRunner(agent, stream);
     // At-head fold of the dead incarnation's events: obligation is `started`
-    // with nobody live → reconciler cancels without re-driving AI.
-    await agent.ingest({
-      events: stream.events,
-      streamMaxOffset: stream.events.length,
-    });
+    // with nobody live → the at-head pass cancels without re-driving AI.
+    await runner.catchUp();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const cancellations = stream.events.filter(
@@ -1248,21 +1281,35 @@ describe("minimal web-chat agent processors", () => {
       ),
     ).toBe(false);
 
-    // A LIVE request in this incarnation is never swept: accept a new request
-    // (execution registers synchronously) and deliver the batch — no crash
-    // cancel appears for it while it runs.
-    const [second] = await stream.append({
-      type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", requestId: "llm-request:gen-2" },
+    // A LIVE request in this incarnation is never swept: trigger a fresh
+    // turn, wait for its debounce to fire the requested event, drive it —
+    // the attempt starts (execution registers synchronously) and hangs on
+    // the AI fake above — then nudge another at-head pass: no crash cancel
+    // may appear for the request while it runs.
+    await stream.append({
+      type: "events.iterate.com/agents/message-received",
+      payload: { content: "try again", from: { kind: "user", origin: "web" } },
     });
-    await agent.ingest({
-      events: [second!],
-      streamMaxOffset: stream.events.length,
+    await runner.catchUp(); // folds the message; the at-head pass schedules
+    await runner.catchUp(); // folds the scheduled event; the debounce arms
+    const second = await stream.waitForEvent({
+      afterOffset: cancellations[0]!.offset,
+      eventTypes: ["events.iterate.com/agent/llm-request-requested"],
+      timeoutMs: 2_000,
     });
+    await runner.catchUp();
+    await stream.waitForEvent({
+      eventTypes: ["events.iterate.com/agent/llm-request-started"],
+      predicate: (event) =>
+        (event.payload as { llmRequestOffset: number }).llmRequestOffset === second.offset,
+      timeoutMs: 2_000,
+    });
+    await stream.append({ type: "events.iterate.com/test/nudge", payload: {} });
+    await runner.catchUp();
     const sweptSecond = stream.events.filter(
       (event) =>
         event.type === "events.iterate.com/agent/llm-request-cancelled" &&
-        (event.payload as { llmRequestOffset: number }).llmRequestOffset === second!.offset,
+        (event.payload as { llmRequestOffset: number }).llmRequestOffset === second.offset,
     );
     expect(sweptSecond).toHaveLength(0);
   });
@@ -1281,8 +1328,8 @@ describe("interrupt and stray-request hygiene", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append({
       type: "events.iterate.com/agent/input-added",
@@ -1291,8 +1338,8 @@ describe("interrupt and stray-request hygiene", () => {
         llmRequestPolicy: { behaviour: "after-current-request" },
       },
     });
-    await deliver(); // reconcile schedules gen-0
-    await deliver(); // processEvent arms the gen-0 debounce timer
+    await deliver(); // at-head pass schedules gen-0; processEvent arms the gen-0 debounce timer
+    await deliver();
     const scheduled = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
     )!;
@@ -1347,11 +1394,11 @@ describe("interrupt and stray-request hygiene", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append(...agentRequestEvents("tell me a long story"));
-    await deliver(); // reconcile drives the requested obligation; the attempt starts draining
+    await deliver(); // the at-head pass drives the requested obligation; the attempt starts draining
     sse.enqueue(encoder.encode(`data: ${JSON.stringify({ response: "Once upon a time" })}\n\n`));
     // The chunk event is the evidence the accumulator has seen the text.
     await vi.waitFor(() => {
@@ -1436,7 +1483,7 @@ describe("interrupt and stray-request hygiene", () => {
         payload: { model: "m", requestId: "llm-request:stray" },
       },
     );
-    await agent.ingest({ events: stream.events, streamMaxOffset: stray!.offset });
+    await agentRunner(agent, stream).catchUp();
 
     await vi.waitFor(() => {
       const strayCompletion = stream.events.find(
@@ -1482,14 +1529,14 @@ describe("refold safety", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
+    const liveRunner = agentRunner(live, stream);
     await stream.append({
       type: "events.iterate.com/agents/message-received",
       payload: { content: "hi", from: { kind: "user", origin: "web" } },
     });
     await vi.waitFor(
       async () => {
-        await deliverNewEvents({ processor: live, stream, cursors });
+        await liveRunner.catchUp();
         expect(
           stream.events.some(
             (event) => event.type === "events.iterate.com/agent/llm-request-completed",
@@ -1499,13 +1546,13 @@ describe("refold safety", () => {
       { timeout: 5_000 },
     );
     // Absorb the completion into the live fold and let the journal go quiet.
-    await deliverNewEvents({ processor: live, stream, cursors });
-    expect(live.state.llmRequests).toEqual({});
-    expect(live.state.currentRequest).toBeNull();
+    await liveRunner.catchUp();
+    expect(liveRunner.currentState.llmRequests).toEqual({});
+    expect(liveRunner.currentState.currentRequest).toBeNull();
     const journalLength = stream.events.length;
 
-    // A fresh incarnation refolds the WHOLE journal (a discarded checkpoint —
-    // the normal aftermath of deploying a state-shape change). It must
+    // A fresh incarnation refolds the WHOLE journal (durable progress lost —
+    // the runner-drive equivalent of a discarded checkpoint). It must
     // re-execute NOTHING: a dangerous fake proves zero AI dials, the journal
     // gains zero events, and the refolded state equals the live instance's.
     const refolded = new AgentProcessor({
@@ -1518,16 +1565,14 @@ describe("refold safety", () => {
         },
       },
     });
-    await refolded.ingest({
-      events: stream.events,
-      streamMaxOffset: stream.events.at(-1)!.offset,
-    });
+    const refoldRunner = agentRunner(refolded, stream);
+    await refoldRunner.catchUp();
     // The replayed llm-request-scheduled re-arms a debounce timer; wait past
     // it to prove the re-derived requested event dedups into the original
     // instead of journaling anew.
     await new Promise((resolve) => setTimeout(resolve, 350));
     expect(stream.events.length).toBe(journalLength);
-    expect(refolded.state).toEqual(live.state);
+    expect(refoldRunner.currentState).toEqual(liveRunner.currentState);
   });
 });
 
@@ -1580,7 +1625,7 @@ describe("file attachments in the LLM request", () => {
       type: "events.iterate.com/agents/web-message-sent",
       payload: { message: "Here is your cat!", files: [attachment] },
     });
-    await deliverNewEvents({ processor, stream, cursors: new Map() });
+    await agentRunner(processor, stream).catchUp();
 
     const reflected = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
@@ -1700,8 +1745,8 @@ describe("token usage and history reset", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -1760,8 +1805,8 @@ describe("token usage and history reset", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -1915,8 +1960,8 @@ describe("token usage and history reset", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -2007,8 +2052,8 @@ describe("token usage and history reset", () => {
         },
       });
     const agent = makeAgent();
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -2078,7 +2123,7 @@ describe("token usage and history reset", () => {
     // again: the durable guard sees this trigger's reset and skips before the
     // AI call.
     const revived = makeAgent();
-    await deliverNewEvents({ processor: revived, stream, cursors: new Map<object, number>() });
+    await agentRunner(revived, stream).catchUp();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(compactionCalls()).toHaveLength(1);
     expect(
@@ -2168,8 +2213,8 @@ describe("token usage and history reset", () => {
         openaiPromptCacheKey: "prj_x:/agents/main",
       }),
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+    const runner = agentRunner(agent, stream);
+    const deliver = () => runner.catchUp();
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -2229,7 +2274,7 @@ describe("token usage and history reset", () => {
         outputTokens: 200,
       },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await agentRunner(agent, stream).catchUp();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(
       stream.events.some((event) => event.type === "events.iterate.com/agent/history-reset"),

@@ -3,10 +3,13 @@
 // to the same consumed SURFACE so cutover is a mechanical swap per Durable
 // Object. WIRED INTO: the secret DO (secret-durable-object.ts — the reference
 // cutover), the project DO (multi-processor), the scheduler DO (domain alarm
-// slice), the capability-host DO (the recovery template), and the repo DO
-// (reconcile + processEventBatch merged into onCaughtUp). The ONE remaining
-// processor-hosting DO (agent) still runs the host; the two coexist until
-// that last cutover deletes it.
+// slice), the capability-host DO (the recovery template), the repo DO
+// (reconcile + processEventBatch merged into onCaughtUp), and the agent DO
+// (agent-durable-object.ts — multi-processor with per-processor recovery:
+// agent + slack-agent recover, the telegram/email/github bridges ride the
+// spine's redelivery). EVERY processor-hosting DO now runs the registry; the
+// legacy host survives only for its own tests until a deletion slice retires
+// it.
 //
 // THE CUTOVER RECIPE (established by the secret DO; repeat per DO):
 //   1. `createStreamProcessorRegistry(this.ctx, { stream, path, projectId,
