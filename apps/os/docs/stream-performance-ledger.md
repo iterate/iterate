@@ -4391,3 +4391,56 @@ The experiment remains uncommitted and isolated at
 `/Users/jonastemplestein/.superset/worktrees/iterate/graceful-snowplow-stream-kernel`.
 It is architecture evidence for a gradual claim/checkpoint simplification,
 not a replacement candidate. Nothing was deployed, pushed, or merged.
+
+## 2026-07-15: Independent Claude Kernel Critique
+
+A read-only Claude CLI review independently traced the shipping implementation,
+the coherent-kernel prototype, its tests, and this ledger. It agreed with the
+`continue, do not ship` verdict but found one important collision between the
+performance and redesign tracks: the prototype does not solve idle retention.
+Its `FreshEventCache` unconditionally accepts every append and can retain 8,192
+events per Stream, so it recreates the measured speculative-memory liability at
+a larger per-Stream event bound.
+
+The review also rejected treating all omitted behavior as adapters. Byte-bounded
+frames and never-split-one-event handling belong beside frame construction;
+selectors must remain before the wire to preserve sparse-delivery performance;
+and poison bisection belongs in the durable claim machine because it changes the
+claimed frame. Acknowledgement-only append must also return to any replacement
+kernel, even if its raw-RPC specialization remains private behind the single
+public `append` operation.
+
+Its proposed dependency direction is deliberately small:
+
+```text
+StreamDurableObject shell
+  |-- StreamJournal -> StreamEventLog
+  |-- EphemeralDelivery -> DeliveryFrameReader -> FreshTailCache
+  `-- DurableDelivery -> SubscriptionCursorStore
+                         -> DeliveryFrameReader
+                         -> narrow transport adapters
+```
+
+The journal exclusively owns durable event bytes and head; the fresh-tail cache
+exclusively owns demand-bound parsed objects; the cursor store exclusively owns
+durable claims/checkpoints; and delivery modules own only incarnation-local
+sessions, pumps, and dialed transports. Project Worker, cross-post, and webhook
+behavior can then live behind transport interfaces without teaching the claim
+machine product-specific destinations.
+
+The useful complexity target is therefore below the current 5,085 coordination
+lines but above the prototype's incomplete 1,053. The review proposed a roughly
+2,000-line/35-private-member coordination budget and at most 150 lines per
+transport adapter. Those are design constraints, not measured savings. The
+79.3% prototype reduction is real only for the behavior it implements; byte
+limits, poison isolation, selectors, metrics, lifecycle recovery, timeout
+resubscription, and acknowledgement-only append consume part of it.
+
+The review's incremental order matches the measured risk: demand-bound the
+fresh tail first; add byte-bounded kernel reads; restore acknowledgement-only
+append; prove one real Project Worker transport locally; then exercise durable
+claims under stream/receiver crashes before moving one delivery mode at a time.
+Each step must retain a direct collapse path and pass local correctness,
+current-main cumulative comparison, post-GC heap, and deployed Worker-to-Stream-
+DO validation as applicable. The Claude CLI made no repository edit,
+deployment, push, or production mutation.
