@@ -9,15 +9,14 @@ import { spinnerWaiter } from "middlewright";
  * (organization + first project in one form) → back to OS signed in.
  *
  * The lane only exists where the auth deployment enables it
- * (APP_CONFIG_EMAIL_OTP_ENABLED, default on for dev stages; OS mirrors it as
- * APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED) — check with
- * {@link startEmailOtpSignIn} and skip otherwise.
+ * (APP_CONFIG_EMAIL_OTP_ENABLED, default on every stage including prd; OS
+ * mirrors it as APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED, also default on)
+ * — check with {@link startEmailOtpSignIn} and skip otherwise.
  *
- * Entry is the OS auth handler's login URL with `login_hint=email` rather
- * than the "Sign in with email" button on /sign-in: that button is gated on
- * the public config's `iterateAuth.emailOtpEnabled`, which getPublicConfig
- * currently drops (optional config objects lose their public fields), so the
- * button never renders even when the lane works.
+ * Entry is the OS auth handler's login URL with `login_hint=email`. The
+ * "Sign in with email" button on /sign-in is gated on the same public
+ * config flag (`iterateAuth.emailOtpEnabled`); deep-linking past it keeps
+ * this helper independent of button copy/layout.
  */
 
 export function uniqueSignupEmail(prefix: string) {
