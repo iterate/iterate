@@ -4444,3 +4444,135 @@ Each step must retain a direct collapse path and pass local correctness,
 current-main cumulative comparison, post-GC heap, and deployed Worker-to-Stream-
 DO validation as applicable. The Claude CLI made no repository edit,
 deployment, push, or production mutation.
+
+## 2026-07-15: Demand-Bound Fresh Tail Accepted
+
+Exact Stream revision `886b5ecf1f9b6b5cbf05aca73661727b3f346458`
+keeps the replay-speeding fresh tail only while delivery can consume it. The
+frame reader now releases append-owned and storage-projected event payloads
+when there is no connection with unsent events, push drain, or poke in flight.
+Caught-up connections do not count as payload demand. Scalar head and frame
+hints remain, and SQLite is the canonical reread path when demand returns.
+
+This adds 58 net production lines across the frame reader and subscriber
+coordinator. It does not add an API, protocol, schema, cursor, retry, selector,
+or storage mode. Its failure and eviction story is therefore the existing
+one: released payloads are reconstructed from the committed journal. Focused
+tests cover explicit release, caught-up reread, idle append followed by reread,
+and all previous bounds; 98 focused tests, all 396 Stream tests, OS typecheck,
+targeted lint, formatting, and pre-commit checks passed.
+
+An external DevTools profile repeated the preceding 1,000-Stream,
+500-events-per-Stream replay stress against the exact shipping code. The
+retained-candidate control is the same fresh-tail implementation before
+release; exact current-main is the preceding attribution control.
+
+| 1,000-Stream replay stress | Current main | Retained candidate | Shipping release |
+| -------------------------- | -----------: | -----------------: | ---------------: |
+| Node-host p50              |    10.031 ms |           7.641 ms |         6.841 ms |
+| Node-host p95              |    20.602 ms |          13.031 ms |        10.763 ms |
+| Node-host p99              |    31.405 ms |          28.149 ms |        17.986 ms |
+| Node-host mean             |    11.327 ms |           8.677 ms |         7.383 ms |
+| Node-host maximum          |    55.843 ms |         107.818 ms |        53.592 ms |
+| Post-GC used heap          |     202.4 MB |           321.1 MB |         180.6 MB |
+
+Release improves the retained candidate by 10.47% p50, 17.40% p95, 36.10%
+p99, and 14.92% mean while reducing post-GC heap 43.75%. Against exact main it
+is 31.80% faster p50, 47.76% faster p95, 42.73% faster p99, and 34.82% faster
+on mean while using 10.76% less post-GC heap. Profiled GC totaled 945.9 ms and
+the longest sampled GC run was 43.3 ms. A separate five-process live control
+kept the expected gain: one-subscriber and 25-subscriber p50 improved 13.4%.
+
+Preview 5 then deployed that exact commit as OS Worker version
+`a4952e5d-1407-4f67-bd7c-55f81bb7bdb6`. Four deployment smokes passed. The
+full preview suite's Stream and Worker-consumer checks passed; its only final
+failure was an unrelated `files-roundtrip` example returning 404 in both
+run-script and Node runtimes after retry.
+
+The deployed callback comparison used a fresh project per process and the
+actual Node -> source Stream DO -> Project Worker -> output Stream DO -> Node
+waiter topology. Node-host timers enclosed the whole awaited network/RPC path,
+so the frozen Worker clock cannot bias it. Durable subscriptions contributed
+150 paired observations per arm; ephemeral subscriptions contributed 90 per
+arm and discarded callback promises through `ctx.waitUntil`.
+
+| Deployed callback lane | Batch adapter p50 | Public `processEvent` p50 | Paired median change |   Wins |
+| ---------------------- | ----------------: | ------------------------: | -------------------: | -----: |
+| Durable singleton      |        102.410 ms |                 98.459 ms |         1.95% faster | 89/150 |
+| Durable 1000 x 640 B   |        175.396 ms |                176.997 ms |         0.70% slower | 72/150 |
+| Ephemeral singleton    |         69.398 ms |                 71.386 ms |         0.30% faster |  47/90 |
+| Ephemeral 1000 x 640 B |        142.117 ms |                146.689 ms |         0.97% faster |  48/90 |
+
+The PCM p50 movements are 0.9% slower durable and 3.2% slower ephemeral; paired
+medians and win counts are neutral. Durable PCM p95 is 1.9% slower, while
+ephemeral PCM p95 is 24.4% faster. Both arms inherit occasional multi-second
+platform stalls, so means and isolated upper tails are not used to claim a
+callback win. Every run validated count, order, completion, and exact revision.
+The result supports one public per-event callback with private bounded
+transport batching; a second public batch callback is not justified for PCM.
+
+Raw profile records are
+`/private/tmp/replay-workerd-profile-shipping-release-focused-*`; live records
+are `/tmp/payload-release-live-*`; deployed records are
+`/tmp/payload-release-deployed-{durable,ephemeral}-886b5ecf1-r*.log`. This is
+an elegant collapse: less retained state and one public callback shape, with
+SQLite as the already-proven recovery path. Production remains untouched.
+
+## 2026-07-15: Fifteenth Cumulative Main Comparison
+
+The candidate was exact draft-PR head
+`c00545e8172d5f003a946ec2749d2aef10bb993c`. It includes the accepted
+demand-bound release and a merge of freshly fetched exact current main
+`b560198aa801e229985c62e6d5a0bc60bd708167`. The merge retained the optimized
+append result mode and main's trimmed cross-post description, then regenerated
+the ITX API graph from source. OS typecheck and pre-commit checks passed before
+the merge commit was pushed.
+
+Five fresh Node/Vitest processes per revision ran each of the unmodified full
+suite, enlarged append/reactivation tails, enlarged live delivery, enlarged
+cross-post, and enlarged storage/reactivation lanes. The 50 valid processes ran
+between `2026-07-15T11:11:55Z` and `2026-07-15T11:26:24Z`; every one reported
+the exact expected revision, non-empty finite samples, and a passing semantic
+result. Revision lead alternated by cohort. Two additional Vitest clients
+deadlocked before test discovery with no network socket or result; both were
+terminated and retried against unchanged Worker stacks. They contributed no
+sample. All timers remained on the Node host around awaited network/RPC work or
+host-observed delivery.
+
+| Equal-workload aggregate  | p50 improvement | p95 improvement | Mean improvement |
+| ------------------------- | --------------: | --------------: | ---------------: |
+| Unmodified full suite     |         34.518% |         33.336% |          34.818% |
+| Conservative substitution |         39.619% |         32.229% |          37.648% |
+
+The conservative row applies the established substitution rule: enlarged
+controls replace the full-suite append singleton, 100-event append,
+concurrent-32 append, one-subscriber delivery, and 25-subscriber delivery.
+This remains an equal-workload geometric summary, not production-traffic
+weighting and not a sum of isolated improvements.
+
+Median-of-five focused p50 results improved 73.51% for acknowledgement-only
+1 KiB append, 37.21% for concurrent-32 append, 61.52% for one-subscriber live
+delivery, 9.84% for 25-subscriber delivery, 15.28% for dense reactivation read,
+18.58% for sparse reactivation read, and 50.93% for inline 768 KiB append. The
+previous 100-tiny regression reversed to a 33.12% gain; 100 x 1 KiB and 1,000
+tiny events improved 48.87% and 53.02%. The 1.1 MiB chunked append improved
+11.29% p50 and 13.09% p95.
+
+Explicit tails remain mixed but bounded to known lanes. Concurrent-32 append
+improved 12.97% p95. One-subscriber delivery improved 34.01% p95;
+25-subscriber p95 was neutral at 1.04% slower. Forced-reactivation head was
+19.12% slower p50 and 66.04% slower p95, repeating that control's unstable
+tail. Enlarged dense cross-post improved 9.47% p50 and 15.22% p95; sparse
+cross-post improved 23.81% p50 and 11.36% p95.
+
+The ten-observation full-suite replay row improved 12.34% p50 but was 31.75%
+slower p95. The enlarged-cross-post processes' incidental replay row improved
+8.42% p50 and 1.65% p95. These low-count p95s do not supersede the dedicated
+1,000-observation demand-bound profile above, where candidate improved through
+p99 and eliminated the retained-memory risk.
+
+Raw records are `/tmp/cumulative-15-{full,tail,live,crosspost,storage}-`
+`{main,candidate}-r{1..5}.log`; validated aggregate output is
+`/tmp/cumulative-15-analysis.txt`. Both benchmark servers were stopped.
+Production remains untouched. If active optimization continues, the next
+cumulative comparison is due by `2026-07-15T15:26:24Z`.
