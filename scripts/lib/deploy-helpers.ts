@@ -266,6 +266,18 @@ export const PREVIEW_DISPOSABLE_TTL_SECONDS = 3 * 60 * 60;
 export const SANDBOX_BACKUP_TTL_SECONDS_PRD = 90 * 24 * 60 * 60;
 
 /**
+ * The sandbox workspace backup expiry rule — shared id + `backups/` prefix so
+ * ensure-resources and erase-data install the SAME rule (the ttl differs: 3h on
+ * preview, 90 days on prd). Sandboxes snapshot `/workspace` under `backups/`
+ * and the DO only checks the ttl at restore time, so this rule is what actually
+ * reaps them.
+ */
+export const SANDBOX_BACKUP_EXPIRY_RULE = {
+  ruleId: "expire-sandbox-workspace-backups",
+  prefix: "backups/",
+} as const;
+
+/**
  * The disposable per-slot R2 corpus (the itx.search `-search-index` bucket):
  * pure derived state the worker re-mirrors, which on a churned preview slot
  * grows to thousands of objects. Erasing it object-by-object is the single
