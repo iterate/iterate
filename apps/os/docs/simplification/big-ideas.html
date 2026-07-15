@@ -1,0 +1,1074 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iterate — the big ideas, one verdict at a time</title>
+<style>
+  :root{
+    --bg:#faf9f7; --ink:#1b1a17; --mut:#6b6659; --line:#e4e0d8;
+    --accent:#b5471f; --accent2:#2f6f5e;
+    --pro:#2f6f5e; --con:#a2402a; --pro-bg:#eef5f1; --con-bg:#f8eeea;
+    --card:#fffdf9; --code:#f3efe7; --egbg:#f6f2ea;
+    --adopt:#2f6f5e; --shelve:#b07d18; --kill:#a2402a;
+    --adopt-bg:#e9f3ee; --shelve-bg:#f6efdf; --kill-bg:#f7ebe7;
+    --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{--bg:#16150f;--ink:#ece7dc;--mut:#9c968a;--line:#2c2a22;--accent:#e6764a;
+      --accent2:#6cc0a6;--pro:#6cc0a6;--con:#e08a6e;--pro-bg:#17241f;--con-bg:#271913;
+      --card:#1d1c15;--code:#211f18;--egbg:#20261f;
+      --adopt:#6cc0a6;--shelve:#d6a24a;--kill:#e08a6e;
+      --adopt-bg:#17241f;--shelve-bg:#26200f;--kill-bg:#271913;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.4);}
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;padding-bottom:7rem}
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px}
+  header.top{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 90%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  header.top .wrap{display:flex;align-items:center;gap:10px;padding:10px 20px;flex-wrap:wrap}
+  header.top b{font-size:15px}
+  header.top .sp{flex:1}
+  .btn{font:inherit;font-size:13px;color:var(--mut);background:transparent;border:1px solid var(--line);
+    border-radius:999px;padding:4px 11px;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  h1{font-size:30px;line-height:1.15;margin:34px 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--mut);font-size:15px;margin:0 0 24px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);margin:0 0 4px}
+  h3.blk{font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:var(--accent2);margin:16px 0 4px}
+  .tldr{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:12px;padding:18px 22px;margin:16px 0;box-shadow:var(--shadow)}
+  .breath{font-size:19px;line-height:1.42;font-weight:600;letter-spacing:-.01em;margin:0}
+  .slogan{border-left:3px solid var(--accent2);margin:10px 0;padding:2px 0 2px 14px;
+    font-size:16px;font-weight:600}
+  .slogan.small{font-size:14px;font-weight:500}
+  .legend{font-size:13px;color:var(--mut);margin:10px 0 0}.legend b{color:var(--ink)}
+  details.sec{border:1px solid var(--line);border-radius:12px;margin:12px 0;background:var(--card);
+    box-shadow:var(--shadow);overflow:hidden}
+  details.sec>summary{list-style:none;cursor:pointer;padding:16px 20px 16px 30px;display:block;position:relative}
+  details.sec>summary::-webkit-details-marker{display:none}
+  details.sec>summary::before{content:"▸";position:absolute;left:12px;top:16px;color:var(--accent);
+    transition:transform .15s;font-size:12px}
+  details.sec[open]>summary::before{transform:rotate(90deg)}
+  details.sec>summary .st{font-weight:700;font-size:17px;letter-spacing:-.01em}
+  details.sec>summary .ss{display:block;color:var(--mut);font-size:14px;margin-top:3px}
+  details.sec[open]>summary{border-bottom:1px solid var(--line)}
+  .body{padding:8px 20px 18px}
+  details.sub{border:0;border-left:2px solid var(--line);border-radius:0;margin:10px 0 10px 2px;
+    background:transparent;box-shadow:none}
+  details.sub>summary{padding:8px 0 8px 22px;position:relative;cursor:pointer;list-style:none}
+  details.sub>summary::-webkit-details-marker{display:none}
+  details.sub>summary::before{content:"▸";position:absolute;left:4px;top:9px;color:var(--accent);font-size:11px;transition:transform .15s}
+  details.sub[open]>summary::before{transform:rotate(90deg)}
+  details.sub>summary .st{font-size:15px;font-weight:650}
+  details.sub .body{padding:2px 0 6px 22px}
+  p{margin:.7em 0} ul,ol{margin:.5em 0;padding-left:1.3em} li{margin:.28em 0}
+  code{background:var(--code);padding:.1em .38em;border-radius:5px;font-size:.88em;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:13px 15px;
+    overflow:auto;font-size:12.5px;line-height:1.5}
+  pre code{background:none;padding:0}
+  .eg{background:var(--egbg);border:1px solid var(--line);border-left:3px solid var(--accent2);
+    border-radius:8px;padding:12px 14px;margin:12px 0;font-size:13px}
+  .eg .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent2);font-weight:700;margin-bottom:6px}
+  .eg pre{margin:6px 0;background:transparent;border:0;padding:0;font-size:12.5px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+  @media(max-width:640px){.grid{grid-template-columns:1fr}}
+  .pro,.con{border-radius:10px;padding:11px 14px;font-size:14px}
+  .pro{background:var(--pro-bg);border:1px solid color-mix(in srgb,var(--pro) 30%,transparent)}
+  .con{background:var(--con-bg);border:1px solid color-mix(in srgb,var(--con) 30%,transparent)}
+  .pro h4,.con h4{margin:0 0 5px;font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+  .pro h4{color:var(--pro)} .con h4{color:var(--con)}
+  .pro ul,.con ul{margin:0;padding-left:1.1em} .pro li,.con li{margin:.2em 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--code);font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
+  .badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+  .b-lock{color:#fff;background:var(--accent2);border-color:var(--accent2)}
+  a{color:var(--accent)}
+  .foot{color:var(--mut);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+  .kv{color:var(--mut);font-size:13px}
+  /* perspectives */
+  .persp{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;margin:12px 0;font-size:13.5px}
+  @media(max-width:640px){.persp{grid-template-columns:1fr}}
+  .persp .p{padding:6px 0;border-bottom:1px dashed var(--line)}
+  .persp .p b{color:var(--accent2);text-transform:uppercase;font-size:11px;letter-spacing:.05em}
+  /* fit */
+  .fit{background:var(--code);border-radius:8px;padding:10px 13px;margin:12px 0;font-size:13.5px}
+  .fit .row{margin:.25em 0}
+  .idc{font-weight:700;color:var(--accent);font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:.9em}
+  .obj{border-left:3px solid var(--con);background:var(--con-bg);border-radius:8px;padding:10px 13px;margin:12px 0;font-size:14px}
+  .obj b{color:var(--con)}
+  /* vote pills */
+  .vpill{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:6px;white-space:nowrap}
+  .vpill.b{background:var(--adopt);color:#fff}.vpill.s{background:var(--shelve);color:#fff}.vpill.k{background:var(--kill);color:#fff}
+  .vpill.n{background:transparent;color:var(--mut);border:1px solid var(--line);font-weight:700}
+  /* verdict selector */
+  .verdict-card{border:1px solid var(--line);border-left:5px solid var(--line);border-radius:12px;
+    margin:14px 0;background:var(--card);box-shadow:var(--shadow);overflow:hidden;transition:border-color .15s}
+  .verdict-card.v-adopt{border-left-color:var(--adopt)}
+  .verdict-card.v-shelve{border-left-color:var(--shelve)}
+  .verdict-card.v-kill{border-left-color:var(--kill)}
+  .verdict-card>summary{list-style:none;cursor:pointer;padding:15px 18px 15px 30px;display:block;position:relative}
+  .verdict-card>summary::-webkit-details-marker{display:none}
+  .verdict-card>summary::before{content:"▸";position:absolute;left:12px;top:17px;color:var(--accent);
+    transition:transform .15s;font-size:12px}
+  .verdict-card[open]>summary::before{transform:rotate(90deg)}
+  .verdict-card>summary .st{font-weight:700;font-size:16px;letter-spacing:-.01em}
+  .verdict-card>summary .baam{display:block;color:var(--accent);font-style:italic;font-size:14px;margin-top:4px;font-weight:500}
+  .verdict-card>summary .metaline{display:block;margin-top:7px}
+  .verdict-card[open]>summary{border-bottom:1px solid var(--line)}
+  .selrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 4px}
+  .selrow .lab{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;margin-right:2px}
+  .vbtn{font:inherit;font-size:13px;font-weight:700;border:1.5px solid var(--line);background:transparent;
+    color:var(--mut);border-radius:999px;padding:5px 15px;cursor:pointer;transition:all .12s}
+  .vbtn:hover{border-color:var(--accent)}
+  .vbtn[data-v="adopt"].on{background:var(--adopt);color:#fff;border-color:var(--adopt)}
+  .vbtn[data-v="shelve"].on{background:var(--shelve);color:#fff;border-color:var(--shelve)}
+  .vbtn[data-v="kill"].on{background:var(--kill);color:#fff;border-color:var(--kill)}
+  .recnote{font-size:11.5px;color:var(--mut);margin-left:2px;font-style:italic}
+  .rec{font-size:14px;background:var(--code);border-radius:8px;padding:9px 13px;margin:10px 0 2px}
+  .rec b{color:var(--accent2)}
+  .lands{font-size:13px;color:var(--mut);margin-top:6px}
+  .lands b{color:var(--ink)}
+  /* summary panel */
+  #summary{position:sticky;top:52px;z-index:20;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;box-shadow:var(--shadow);margin:16px 0;overflow:hidden}
+  #summary .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line);
+    background:color-mix(in srgb,var(--card) 80%,var(--code))}
+  #summary .head b{font-size:14px}
+  #summary .tallies{display:flex;gap:6px;flex-wrap:wrap}
+  .tpill{font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px}
+  .tpill.a{background:var(--adopt-bg);color:var(--adopt);border:1px solid color-mix(in srgb,var(--adopt) 35%,transparent)}
+  .tpill.s{background:var(--shelve-bg);color:var(--shelve);border:1px solid color-mix(in srgb,var(--shelve) 35%,transparent)}
+  .tpill.k{background:var(--kill-bg);color:var(--kill);border:1px solid color-mix(in srgb,var(--kill) 35%,transparent)}
+  #summary .sp{flex:1}
+  #summary details>summary{cursor:pointer;font-size:12.5px;color:var(--mut);padding:8px 16px;list-style:none}
+  #summary details>summary::-webkit-details-marker{display:none}
+  #summary details>summary::before{content:"▸ ";color:var(--accent)}
+  #summary details[open]>summary::before{content:"▾ "}
+  #sumlist{padding:2px 16px 12px;font-size:12.5px;max-height:34vh;overflow:auto}
+  #sumlist .li{display:flex;gap:8px;align-items:baseline;padding:3px 0;border-bottom:1px dashed var(--line)}
+  #sumlist .li .nm{flex:1}
+  #sumlist .li .vd{font-size:11px;font-weight:800;padding:1px 7px;border-radius:5px;white-space:nowrap}
+  #sumlist .li .vd.adopt{background:var(--adopt-bg);color:var(--adopt)}
+  #sumlist .li .vd.shelve{background:var(--shelve-bg);color:var(--shelve)}
+  #sumlist .li .vd.kill{background:var(--kill-bg);color:var(--kill)}
+  #sumlist .li .ch{font-size:10px;color:var(--accent);font-weight:700}
+  .copybtn{font:inherit;font-size:13px;font-weight:700;color:#fff;background:var(--accent);border:0;
+    border-radius:999px;padding:6px 15px;cursor:pointer}
+  .copybtn:hover{filter:brightness(1.08)}
+  .copybtn.done{background:var(--adopt)}
+  /* glance table */
+  .gt{font-size:13px}
+  .gt th,.gt td{padding:6px 9px}
+  .gt td.nm{font-weight:600}
+  .gt td.rv{text-align:center;white-space:nowrap}
+  .gt tr.locked td{opacity:.72}
+  .anchor{scroll-margin-top:120px}
+</style>
+</head>
+<body>
+
+<header class="top"><div class="wrap">
+  <b>iterate · big ideas — your verdicts</b>
+  <span class="sp"></span>
+  <button class="btn" onclick="allOpen(true)">Expand all</button>
+  <button class="btn" onclick="allOpen(false)">Collapse all</button>
+  <button class="btn" onclick="resetRecs()">Reset to recommended</button>
+</div></header>
+
+<main class="wrap">
+
+  <h1>The big ideas — <span style="color:var(--accent)">adopt, shelve, or kill</span>, one at a time</h1>
+  <p class="sub">The wild / ambitious ideas from the architecture exploration, each judged against the
+    locked foundation (<code>DESIGN.md</code>). Every card is pre-set to a <b>recommended</b> verdict — you
+    only touch the ones you disagree with. <span class="kv">Compiled 2026‑07‑14.</span></p>
+
+  <div class="tldr">
+    <h2>How to use this page</h2>
+    <p class="breath">Read a card, glance at its recommended verdict, and either leave it or override it with
+      one click. Then hit <b>Copy verdicts</b> and paste the list back to me in chat.</p>
+    <p style="margin:.8em 0 0;color:var(--mut);font-size:14px">Each card carries: what the idea actually is
+      (with a tiny worked example), how it <b>fits the locked foundation</b> (which beliefs/decisions/requirements
+      it serves or violates — the <span class="idc">B/D/R/Q</span> IDs), six one-line perspectives, the earlier
+      6-judge vote, the sharpest objection, and a recommended verdict with <em>where it would land</em>. Where an
+      idea is already <b>substantially locked</b> by the foundation, the card says so and stays short —
+      it's really just asking you to confirm.</p>
+    <p class="legend"><b>Plain-word glosses</b> (no jargon at the front door):
+      <b>attenuation</b> = handing out a <em>narrower</em> version of a power (e.g. "post to this one channel, nothing else");
+      <b>fold / reduce</b> = adding up a log into current state, like <code>Array.reduce</code>;
+      <b>ephemeral append</b> = a log line you don't keep;
+      <b>egress</b> = bytes leaving the project.</p>
+  </div>
+
+  <!-- ===================== SUMMARY / VERDICTS PANEL ===================== -->
+  <div id="summary">
+    <div class="head">
+      <b>My verdicts</b>
+      <span class="tallies">
+        <span class="tpill a" id="t-adopt">0 adopt</span>
+        <span class="tpill s" id="t-shelve">0 shelve</span>
+        <span class="tpill k" id="t-kill">0 kill</span>
+      </span>
+      <span class="sp"></span>
+      <span class="kv" id="changed-note">0 changed from recommended</span>
+      <button class="copybtn" id="copybtn" onclick="copyVerdicts()">Copy verdicts</button>
+    </div>
+    <details open>
+      <summary>Show the full list (updates live as you click)</summary>
+      <div id="sumlist"></div>
+    </details>
+  </div>
+
+  <!-- ===================== ONE-GLANCE TABLE ===================== -->
+  <details class="sec" open>
+    <summary><span class="st">At a glance — every idea, recommended verdict, and the old vote</span>
+      <span class="ss">The 12 ideas, sorted by recommendation. Click a row's idea to jump to its card.</span></summary>
+    <div class="body">
+      <p class="legend">The <b>6-judge vote</b> column is the earlier ballot (3 Claude + 3 codex, each with a
+        different stake — shipper, security, DX, distributed-systems skeptic, founder, cost). It informed but does
+        not dictate the recommendation; the recommendation is a fresh call against the now-locked foundation.
+        Rows marked <span class="badge b-lock">locked</span> are already substantially settled by <code>DESIGN.md</code>.</p>
+      <table class="gt">
+        <tr><th>Idea</th><th>Recommended</th><th>6-judge vote</th><th>Where it lands</th></tr>
+        <tr><td class="nm"><a href="#i-fetch">Just fetch (one door)</a> <span class="badge b-lock">locked</span></td>
+          <td class="rv"><span class="vpill b">ADOPT</span></td><td class="rv"><span class="vpill b">BUILD 6–0</span></td>
+          <td>Confirms <span class="idc">D6</span></td></tr>
+        <tr><td class="nm"><a href="#i-expr">Expressions-as-grants + bind</a></td>
+          <td class="rv"><span class="vpill b">ADOPT</span></td><td class="rv"><span class="vpill b">BUILD 6–0</span></td>
+          <td>Resolves <span class="idc">Q9</span> for <span class="idc">R7</span></td></tr>
+        <tr><td class="nm"><a href="#i-rings">Three rings (how far to userspace)</a></td>
+          <td class="rv"><span class="vpill b">ADOPT</span></td><td class="rv"><span class="vpill n">n/a (test)</span></td>
+          <td>Resolves <span class="idc">Q7</span> under <span class="idc">D2</span></td></tr>
+        <tr><td class="nm"><a href="#i-mind">The mind is a fold (LLM = journaled step)</a> <span class="badge b-lock">locked</span></td>
+          <td class="rv"><span class="vpill b">ADOPT</span></td><td class="rv"><span class="vpill b">BUILD 4–2</span></td>
+          <td>Reinforces <span class="idc">B3 D3 D5</span></td></tr>
+        <tr><td class="nm"><a href="#i-vfs">The project is one virtual filesystem</a></td>
+          <td class="rv"><span class="vpill b">ADOPT</span> <span class="kv">(as a view)</span></td>
+          <td class="rv"><span class="vpill b">BUILD as view 3–3</span></td>
+          <td>A face over <span class="idc">itx</span> / <span class="idc">D8</span></td></tr>
+        <tr><td class="nm"><a href="#i-time">Time is a place</a></td>
+          <td class="rv"><span class="vpill s">SHELVE</span> <span class="kv">(build read-only half)</span></td>
+          <td class="rv"><span class="vpill s">SHELVE 4·1·1</span></td>
+          <td>A tool serving <span class="idc">R5</span></td></tr>
+        <tr><td class="nm"><a href="#i-file">The entity is a file</a></td>
+          <td class="rv"><span class="vpill s">SHELVE</span></td><td class="rv"><span class="vpill s">SHELVE 4·1·1</span></td>
+          <td>Feature serving <span class="idc">R10</span></td></tr>
+        <tr><td class="nm"><a href="#i-rpc">The Last RPC</a></td>
+          <td class="rv"><span class="vpill s">SHELVE</span></td><td class="rv"><span class="vpill s">SHELVE 4·0·2</span></td>
+          <td>A compiler under <span class="idc">D7</span></td></tr>
+        <tr><td class="nm"><a href="#i-shadow">Shadow selves</a></td>
+          <td class="rv"><span class="vpill s">SHELVE</span></td><td class="rv"><span class="vpill s">SHELVE 3·1·2</span></td>
+          <td>A test tool for <span class="idc">B3 B4</span></td></tr>
+        <tr><td class="nm"><a href="#i-hire">Hire software companies (economy of entities)</a></td>
+          <td class="rv"><span class="vpill s">SHELVE</span></td><td class="rv"><span class="vpill s">SHELVE 3·1·2</span></td>
+          <td>Endgame for <span class="idc">R11 Q8</span></td></tr>
+        <tr><td class="nm"><a href="#i-eats">The platform eats itself</a></td>
+          <td class="rv"><span class="vpill s">SHELVE</span></td><td class="rv"><span class="vpill n">not voted</span></td>
+          <td>Userspace UI under <span class="idc">D2</span></td></tr>
+        <tr class="locked"><td class="nm"><a href="#i-streams">Move streams to userspace</a></td>
+          <td class="rv"><span class="vpill k">KILL</span> <span class="kv">(as a move)</span></td>
+          <td class="rv"><span class="vpill k">KILL 4–2</span></td>
+          <td>Stays a true statement, not a migration</td></tr>
+      </table>
+      <p class="tag kv">Vote tallies read Build·Shelve·Kill. "SHELVE 4·1·1" = 4 shelve, 1 build, 1 kill, etc.</p>
+    </div>
+  </details>
+
+  <h2 style="margin:26px 0 2px">The cards</h2>
+  <p class="sub" style="margin:0 0 8px">Grouped by recommendation: <b>adopt</b> first, then <b>shelve</b>, then <b>kill</b>.
+    Each has its own <b>[ADOPT] [SHELVE] [KILL]</b> selector, pre-set to the recommendation.</p>
+
+  <h3 class="blk">Recommend ADOPT — pull into the foundation</h3>
+
+  <!-- =============== JUST FETCH =============== -->
+  <details class="verdict-card anchor" id="i-fetch" data-idea="Just fetch (one door)" data-rec="adopt" open>
+    <summary><span class="st">Just fetch — collapse ingress + egress into one verb</span>
+      <span class="baam">"Ingress fetch" and "egress fetch" become one <code>fetch</code>; the hostname decides everything.</span>
+      <span class="metaline"><span class="badge b-lock">substantially locked → confirm</span>
+        <span class="vpill b" style="margin-left:6px">6-judge: BUILD 6–0</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> There is exactly one network verb. The stateless handler routes by hostname: an
+        internal name is free and un-gated; any external origin passes through the single egress gate.</p>
+      <div class="eg"><div class="lbl">the same verb, two destinations</div>
+<pre>fetch("http://billing.iterate/invoices")          → stays inside the project. free. no checks.
+
+fetch("https://api.stripe.com/charges", {
+  headers:{ Authorization: getSecret("stripe") }  → leaves the project → THE ONE GATE:
+})                                                   swap the real key in, check stripe.com is
+                                                     allowed, maybe ask a human, log it.</pre></div>
+      <p>Security stops being 33 scattered checks and becomes <b>one guard on one door</b>: an agent can run any
+        code and read any internal state, and none of it can hurt anyone until bytes try to leave.</p>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves / IS:</b> <span class="idc">D6</span> (the only real security is the egress door) — this
+          idea <em>is</em> D6's mechanism. Also serves <span class="idc">D8</span> (one universal event/interface),
+          <span class="idc">R1 R2</span> (which D6 says reduce to the egress door), and folds the two-door §7 architecture note into one.</div>
+        <div class="row"><b>Violates:</b> nothing. It strengthens the trust model rather than bending it.</div>
+        <div class="row"><b>Status:</b> already substantially <b>locked</b> — <span class="idc">D6</span> and the §7 "one <code>fetch</code>-shaped door" text
+          state it. This card is a confirm, not a debate.</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — high; the internal-name routing already half-exists (use-my-computer URL-addressable capabilities).</div>
+        <div class="p"><b>Value</b> — very high; fewer verbs <em>and</em> a sharper security story at once.</div>
+        <div class="p"><b>Security</b> — the whole point: confinement becomes one gate on one verb, auditable in one place.</div>
+        <div class="p"><b>Cost @1M</b> — neutral-to-positive; one chokepoint is cheaper to operate than many.</div>
+        <div class="p"><b>DX / legibility</b> — excellent; every dev already knows <code>fetch</code>, nothing new to learn.</div>
+        <div class="p"><b>Vision</b> — pure; "the only way it influences the world is HTTP out" (§1) becomes literally one door.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill b">BUILD 6–0</span> — every judge's #1: fewer verbs, one security door, half-built already.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> Very little bites. The one nuance: internal
+        "free, no gate" must genuinely mean the confinement boundary is airtight — an internal hostname that could
+        be tricked into reaching another project would collapse <span class="idc">R1</span>. And the "is it a human" enclave-attestation
+        question (a special egress requirement) is unresolved — kernel or a very-trusted mount.</div>
+
+      <div class="rec"><b>Recommended: ADOPT.</b> It's already <span class="idc">D6</span>; adopting here means keeping the wording as
+        <em>one</em> verb throughout the architecture rather than "ingress + egress."
+        <div class="lands"><b>Where it lands:</b> confirms <span class="idc">D6</span>; sharpens the §7 architecture line to "one <code>fetch</code>, routed by hostname." No new decision needed.</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: ADOPT</span></div>
+    </div>
+  </details>
+
+  <!-- =============== EXPRESSIONS =============== -->
+  <details class="verdict-card anchor" id="i-expr" data-idea="Expressions-as-grants + bind-as-attenuation" data-rec="adopt" open>
+    <summary><span class="st">Expressions-as-grants + bind-as-attenuation</span>
+      <span class="baam">A stored "call this later" is written as normal TypeScript; binding an argument hands out a <em>narrower</em> power.</span>
+      <span class="metaline"><span class="vpill b">6-judge: BUILD 6–0</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> Today a stored capability is an ugly nested array
+        (<code>["integrations","slack","chat","postMessage"]</code>). Make it writable as ordinary code via a
+        recording proxy, and let you <em>bind</em> (fix) an argument to narrow it. <b>Attenuation</b> = handing
+        out a slice of a power, nothing more.</p>
+      <div class="eg"><div class="lbl">give a helper the power to post to ONE channel, nothing else</div>
+<pre>const postToSupport =
+  grant( itx.slack.postMessage ).bind({ channel:"#support" })
+
+// postToSupport({ text:"hi" })                       ✅ works
+// postToSupport({ text:"hi", channel:"#ceo" })       ❌ rejected — channel is fixed</pre></div>
+      <p>Now <b>one format</b> serves stored subscriptions, tool grants, egress rules, scheduler payloads, and
+        the <code>getSecret</code> placeholder (which is secretly <code>secrets.get(path).material</code> quoted
+        and deferred to the one place allowed to evaluate it). "Everything is an expression."</p>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves:</b> <span class="idc">R7</span> (the capability/grant surface should look like TypeScript) — this is exactly its
+          answer, and directly resolves <span class="idc">Q9</span> (make expressions look like TS while keeping the grammar tiny). Also serves
+          <span class="idc">D10</span> (the secret placeholder is a bound, deferred expression) and <span class="idc">R2</span> (a narrow grant can't over-reach).</div>
+        <div class="row"><b>Strengthens:</b> <span class="idc">D1 R1</span> — evaluation authority comes from the evaluating scope and <em>never</em> travels with the
+          expression, so a persisted grant can't smuggle cross-project reach.</div>
+        <div class="row"><b>Violates:</b> nothing — but only if <code>bind</code> is an enforced <em>constraint</em>, never an object-merge (see objection).</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — high; the recording proxy is ~50 lines and the codebase already has proxy competence.</div>
+        <div class="p"><b>Value</b> — very high; collapses five grant formats into one readable, revocable, inspectable one.</div>
+        <div class="p"><b>Security</b> — strong <em>if</em> bind = constraint; it's the object-capability "facet" move in the system's own grammar.</div>
+        <div class="p"><b>Cost @1M</b> — neutral; expressions are by-value data, cheap to store and replay.</div>
+        <div class="p"><b>DX / legibility</b> — excellent; <code>itx.foo.bar().bind(...)</code> reads like the live call it quotes.</div>
+        <div class="p"><b>Vision</b> — high; "the events ARE the API" + "everything is an expression" compose cleanly.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill b">BUILD 6–0</span> — one readable, revocable way to hand out a slice of a power.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> "Bind" is a security hole if it means
+        deep-merge (a caller could re-open a fixed field). It must be an enforced constraint. Keep the grammar
+        tiny — get + call, JSON args, no loops, no <code>eval</code>. And remember: an expression is a
+        <em>name</em>, not authority — power comes from who evaluates it. Codex round 2 verdict: "excellent
+        intermediate representation, terrible naked grant" — so pair it with a separate revocable grant object.</div>
+
+      <div class="rec"><b>Recommended: ADOPT.</b> Cheap, reduces concepts, and every judge wanted it.
+        <div class="lands"><b>Where it lands:</b> promotes <span class="idc">Q9</span> into a <b>Decision</b> ("the capability/grant grammar is a small
+          quoted-expression algebra: get + call, JSON args, bind-as-constraint"), landing under the future
+          <em>capability</em> domain object. Satisfies <span class="idc">R7</span>.</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: ADOPT</span></div>
+    </div>
+  </details>
+
+  <!-- =============== THREE RINGS =============== -->
+  <details class="verdict-card anchor" id="i-rings" data-idea="Three rings (how far toward userspace)" data-rec="adopt" open>
+    <summary><span class="st">How far toward userspace — the "three rings"</span>
+      <span class="baam">Kernel (can't be userspace) · a few deep first-party modules iterate operates · packages for the leaves. "Everything in userspace" survives as a <em>test</em>, not a mandate.</span>
+      <span class="metaline"><span class="badge b-lock">partly locked (D2)</span>
+        <span class="vpill n" style="margin-left:6px">the reconciliation, not a single vote</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> The night's biggest course-correction. The dream ("ship everything, even agents, as
+        npm packages in every project") lost 6–0 as a <em>mandate</em>. The survivor is a three-layer cut:</p>
+      <table>
+        <tr><th>Ring</th><th>What</th><th>Could a stranger rebuild it without private backdoors?</th></tr>
+        <tr><td><b>① Kernel</b></td><td>The seed: run confined code · durable named storage · the one exit · identity/confinement · billing veto.</td>
+          <td><b>No</b> — it's the thing that runs userspace.</td></tr>
+        <tr><td><b>② Deep first-party modules</b></td><td>agents/conversations · repo/artifacts · secrets/egress · scheduling/obligations · core integration machinery.</td>
+          <td><b>In principle yes</b> — but iterate operates them centrally, with override seams. This is the "userspace <em>test</em>."</td></tr>
+        <tr><td><b>③ Packages</b></td><td>leaf apps, vertical workflows, custom UIs, narrow integrations, remote processors.</td>
+          <td><b>Yes</b> — iterate ships the good ones, privileges none.</td></tr>
+      </table>
+      <p>"Everything in userspace" demotes from a deployment rule to an <em>implementability test</em>: <b>could a
+        third party build this Ring-2 module without secret bindings?</b></p>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves / IS:</b> <span class="idc">D2</span> (everything except a tiny kernel is overridable in userspace) — three rings is
+          the concrete shape of D2. Directly resolves <span class="idc">Q7</span> (how far toward userspace / what to call the layer).
+          Consistent with the <span class="idc">B2</span> "userspace test" spirit.</div>
+        <div class="row"><b>Strengthens:</b> <span class="idc">D2</span> by naming <em>which</em> pieces are Ring-1 vs Ring-2 vs Ring-3 — the "kernel razor"
+          says even streams could be Ring-2 by necessity, kept privileged by <em>choice</em>.</div>
+        <div class="row"><b>Open naming:</b> <span class="idc">Q7</span> still wants a word for Ring-2 that isn't "packages" (implies npm). This card adopts the
+          <em>structure</em>; the <em>name</em> stays flagged.</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — high; it's a labelling and boundary discipline more than new code.</div>
+        <div class="p"><b>Value</b> — high; tells you exactly where iterate will <em>never</em> be extensible (auth, log, recovery, grants, secrets, the door, billing).</div>
+        <div class="p"><b>Security</b> — strong; a non-technical founder trusts iterate's Ring-2, not 20 anonymous strangers.</div>
+        <div class="p"><b>Cost @1M</b> — favourable; Ring-1/2 updates ship once (a deploy), only Ring-3 follows channels.</div>
+        <div class="p"><b>DX / legibility</b> — good; "could a stranger rebuild this?" is a crisp, testable line.</div>
+        <div class="p"><b>Vision</b> — high; "apps/os becomes an OS in the literal sense" without abdicating the deep modules.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> the extreme forms were voted — <span class="vpill k">everything-as-a-package KILLED 6–0</span> and
+        <span class="vpill k">moving streams to userspace KILLED 4–2</span>. Three rings is the <em>reconciliation</em> both votes point at.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> Codex round 3: "extensibility ≠ abdication;
+        npm is transport, not governance." The risk is Ring-2 quietly swelling until "small number of deep modules"
+        stops being small — and the honest ~6k-LOC core becoming an accounting trick (relabel, don't delete). Draw
+        the Ring-1/Ring-2 line in blood, and price the Ring-2 modules honestly.</div>
+
+      <div class="rec"><b>Recommended: ADOPT.</b> It's the settled reconciliation and it's the mainline the
+        synthesis recommends.
+        <div class="lands"><b>Where it lands:</b> resolves <span class="idc">Q7</span> into <span class="idc">D2</span> as three named rings, with "everything in
+          userspace" recorded as a <em>test</em>, not a mandate. Still leaves the <em>name</em> of Ring-2 open (flagged ambiguity).</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: ADOPT</span></div>
+    </div>
+  </details>
+
+  <!-- =============== MIND IS A FOLD =============== -->
+  <details class="verdict-card anchor" id="i-mind" data-idea="The mind is a fold (LLM = journaled step)" data-rec="adopt" open>
+    <summary><span class="st">The mind is a fold — the LLM as a journaled step</span>
+      <span class="baam">There is no "model integration." An LLM is a reducer with temperature; personality is a fold of lived history; compaction is sleep.</span>
+      <span class="metaline"><span class="badge b-lock">substantially locked → confirm the invariant</span>
+        <span class="vpill b" style="margin-left:6px">6-judge: BUILD 4–2</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> Say out loud what the agent processor already does: the prompt is <em>rebuilt by
+        reducing committed history up to an offset</em>, the request id <em>is</em> the offset, the response
+        becomes events. So an LLM is a stream processor's fold step whose transition function is stochastic and
+        whose contract is natural language. Personality = the residue of compactions; compaction = sleep
+        (consolidate episodic events into a semantic prefix, wake shorter with the same self).</p>
+      <div class="eg"><div class="lbl">the sacred invariant that makes replay survive a random step</div>
+<pre>#7  agent/llm-requested   {}                    ← request id = offset #7
+#8  agent/llm-completed   { text:"Sorry! …" }   ← the stochastic answer, WRITTEN DOWN as a fact
+
+// replay READS #8. it never RE-ASKS the model.
+// → a fold over a history that contains non-deterministic facts is still perfectly deterministic.</pre></div>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves / IS:</b> <span class="idc">B3</span> (optimize the substrate for AI-authored, self-modifying code),
+          <span class="idc">D3</span> (event-sourcing purists — the model output is an event on the normal path),
+          <span class="idc">D5</span> (agents produce only code / respond to events). The "journal the answer, replay reads it" rule is <b>already
+          the locked practice</b> (compaction sits in D3's world; the code commits <code>llm-request-completed</code>).</div>
+        <div class="row"><b>Strengthens:</b> <span class="idc">D3</span> — it's the reason the purist equation (state = fold of log) survives a stochastic step.</div>
+        <div class="row"><b>Status:</b> substantially <b>locked</b>. The card asks you to bless the <em>invariant</em> as sacred, and (optionally) to
+          accept the framing "the LLM is a reducer" as canonical language.</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — already built; this is naming, not new machinery.</div>
+        <div class="p"><b>Value</b> — high; makes any coding agent (claude/codex/pi) trivially hostable — they're all "stateful processor + stochastic reducer."</div>
+        <div class="p"><b>Security</b> — neutral; the model is inside the trust boundary like everything else.</div>
+        <div class="p"><b>Cost @1M</b> — neutral; compaction is already prompt-cache-coherent, so consolidation is cheap.</div>
+        <div class="p"><b>DX / legibility</b> — mixed; beautiful to a systems mind, but "personality = a fold" is poetry that must stay out of the front door.</div>
+        <div class="p"><b>Vision</b> — pure; "history is the only substance" — minds are just another view of the journal.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill b">BUILD 4–2</span> — the two shelve votes (security, DX) worried the poetic
+        framing over-promises; the invariant itself is unanimous.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> The equation breaks the instant a model output
+        is <em>recomputed</em> rather than read — so the invariant is load-bearing, never optional. Also
+        "personality is a fold of experience" means <em>trauma</em> is too: one poisoned stretch of journal
+        compacts into a permanently-weird entity, and the fix (editing memory) violates append-only — you'd build
+        "therapy" (re-fold the past as new events). Keep the poetry in the vision doc, not the manual (the Urbit idiolect warning).</div>
+
+      <div class="rec"><b>Recommended: ADOPT.</b> The invariant is non-negotiable and already how the code works;
+        adopting means writing it down as a first-class rule.
+        <div class="lands"><b>Where it lands:</b> a <b>Decision</b> under <span class="idc">D3</span>/<span class="idc">D5</span>: "a stochastic (LLM) step's output is
+          always a journaled fact; replay reads it, never recomputes it." The "mind = fold" framing stays in the vision doc, off the front door.</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: ADOPT</span></div>
+    </div>
+  </details>
+
+  <!-- =============== VIRTUAL FILESYSTEM =============== -->
+  <details class="verdict-card anchor" id="i-vfs" data-idea="The project is one virtual filesystem (as a view)" data-rec="adopt" open>
+    <summary><span class="st">The project is one virtual filesystem — as a <em>view</em></span>
+      <span class="baam">Everything has a path; not everything is a stored file. <code>ls /agents/foo/</code>, <code>cat state.json</code>, <code>grep</code> the history — the most model-legible front door there is.</span>
+      <span class="metaline"><span class="vpill b">6-judge: BUILD as a view 3–3</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> Present the whole project as one navigable tree — a stream is a folder, a durable event
+        is an immutable file, a fold is a generated read-only file, a secret is write-only, live audio is a
+        pipe. The key mutation (from the codex run): <b>"everything is a *file*" KILLED; "everything has a *path*"
+        KEPT.</b> It's a typed namespace whose filesystem <em>interface</em> hides several radically different
+        storage/transport implementations — like Unix's <code>/proc</code>, not a real disk.</p>
+      <div class="eg"><div class="lbl">one tree — but each node has the storage it actually needs</div>
+<pre>/acme
+├── agents/support/events/…      ← regular files  (durable events, retained)
+├── agents/support/state.json    ← generated file (a fold, recomputed — not stored)
+├── repo/worker.ts               ← mutable content-addressed tree (editable code)
+├── secrets/stripe               ← write-only, pinned-egress (can't be read back)
+└── calls/42/audio.pcm           ← a PIPE / device (live PCM flows through; nothing kept)</pre></div>
+      <p>The primary user is an LLM trained on files and folders, not a capability DSL. <code>ls</code>/<code>cat</code>/<code>grep</code>/<code>watch</code>
+        are tools every human and model already own — the same adoption insight Urbit died for lacking.</p>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves:</b> <span class="idc">B2</span> (the primary API user is an LLM; legibility-to-a-model is first-class) — this is arguably
+          its single biggest win. <span class="idc">R5</span> (traceable — "the trace is the events subtree, sorted, with causation as link structure").
+          <span class="idc">D8</span> (one universal interface). The <em>path</em> is exactly what <span class="idc">itx</span> already is (streams live "at a path").</div>
+        <div class="row"><b>Fills a hole:</b> §4 lists only four concepts; the fifth — <b>Project</b> as the one navigable namespace — is precisely the tree. It names the runtime instance.</div>
+        <div class="row"><b>Respects:</b> <span class="idc">D11</span> (durable vs ephemeral) — durable events are files, PCM is a pipe; <span class="idc">R4</span> (voice) survives because audio is a device, not a stored file.
+          <span class="idc">D10</span> — secrets stay write-only.</div>
+        <div class="row"><b>Careful with:</b> <span class="idc">D3</span> — a filesystem tree gives a node one parent, but traceability needs a directed graph (causation via symlinks / a <code>caused-by</code> xattr).</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — the <em>view</em> is feasible (a projection); a literal POSIX FS on Cloudflare is not (no shared persistent FS in Workers).</div>
+        <div class="p"><b>Value</b> — high as legibility; it's a face, so it doesn't change the substrate.</div>
+        <div class="p"><b>Security</b> — fine <em>if</em> secrets stay write-only and capabilities aren't naively "readable files."</div>
+        <div class="p"><b>Cost @1M</b> — modest; it's rendering over existing streams, not new storage (avoid materializing millions of tiny files).</div>
+        <div class="p"><b>DX / legibility</b> — best-in-class; the most LLM-legible front door the system could have.</div>
+        <div class="p"><b>Vision</b> — high; pairs perfectly with "just fetch" (read a file = GET, append = write).</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill b">BUILD as a view 3–3</span> — split down the middle on the literal version, unanimous that the
+        <em>view</em> (path-not-file) is the win; ship the tame slice.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> A literal regular-file model makes secrets
+        readable, capabilities awkward, folds write-heavy, and live media impossible — and callers expect POSIX
+        guarantees a projection can't give (atomic rename, <code>fs.watch</code>, one-parent hierarchy). Keep it a
+        <em>typed view</em>, never claim a real filesystem underneath. "Everything has a path; not everything is a file."</div>
+
+      <div class="rec"><b>Recommended: ADOPT (as a view).</b> The single biggest legibility win for the LLM that
+        has to use this, and it costs nothing structurally because it's a face over what already exists.
+        <div class="lands"><b>Where it lands:</b> adopt <b>Project as the fifth concept</b> — the one stable navigable namespace/tree — into the
+          taxonomy; the filesystem <em>interface</em> becomes a projection over <span class="idc">itx</span> (<span class="idc">D8</span>). Do <em>not</em> adopt a literal VFS as substrate.</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: ADOPT (as a view)</span></div>
+    </div>
+  </details>
+
+  <h3 class="blk">Recommend SHELVE — real north-stars, not now</h3>
+
+  <!-- =============== TIME IS A PLACE =============== -->
+  <details class="verdict-card anchor" id="i-time" data-idea="Time is a place (time-travel debugging)" data-rec="shelve">
+    <summary><span class="st">Time is a place</span>
+      <span class="baam"><code>itx.at(offset)</code> — the entity at any moment of its life, live and queryable. Fork it, feed it a different event, watch the life it didn't lead.</span>
+      <span class="metaline"><span class="vpill s">6-judge: SHELVE 4·1·1 (build read-only half)</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> Because state is a fold, every past self still exists in the journal. Make it
+        addressable: <code>itx.at(#3)</code> returns a real itx whose folds stop at event #3 — a live scope you
+        can <code>__describe()</code>, run scripts against, ask questions of. The counterfactual half: fork at an
+        offset, append the event that didn't happen, replay with egress jailed, diff the two lives.</p>
+      <div class="eg"><div class="lbl">two halves — one safe, one hard</div>
+<pre>SAFE (read-only rewind):   itx.at(#128) → "show me the entity the moment before it wedged"
+                           the trace panel + stream inspector are special cases of this.
+
+HARD (counterfactual):     itx.at(#128).fork().append(reply:"yes") → replay → diff
+                           but the outside world isn't in the log, so it hits a wall at every egress.</pre></div>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves:</b> <span class="idc">R5</span> (everything is traceable — "show me the moment before it broke" becomes a verb) and follows
+          straight from <span class="idc">D3</span>/<span class="idc">D9</span> (state is a fold; reduced state is disposable). The <em>read-only</em> half is almost free.</div>
+        <div class="row"><b>Tension with:</b> the counterfactual half — the external world isn't in the journal (<span class="idc">D9</span> is explicit: you replay streams
+          <em>and</em> resolve references, but effects that left the project are gone), and LLM nondeterminism smears the branches.</div>
+        <div class="row"><b>Needs first:</b> checkpoint snapshots for cheap <code>at()</code> on long journals — engineering, not conceptual.</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — read-only half: high (falls out of "state is a fold"). Counterfactual half: hard (needs snapshots + a frozen world).</div>
+        <div class="p"><b>Value</b> — high for debugging/support ("every incident report is an offset"); speculative for training.</div>
+        <div class="p"><b>Security</b> — read-only is safe; the fork/replay path must keep egress jailed or it acts for real.</div>
+        <div class="p"><b>Cost @1M</b> — replaying 10M events isn't free; needs snapshotting to be affordable.</div>
+        <div class="p"><b>DX / legibility</b> — excellent as a debugger; "rewind to any moment" is instantly graspable.</div>
+        <div class="p"><b>Vision</b> — high; the trace panel and inspector are just renderings of <code>itx.at()</code>.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill s">SHELVE 4·1·1</span> — build the read-only rewind now; shelve the counterfactual engine.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> The deeper lie: the external world isn't in the
+        journal, so counterfactuals hit a wall at every external call — you're replaying decisions against a
+        frozen world, and LLM nondeterminism smears the branches. It's a divination tool, not a physics engine —
+        sell (and build) it as the former.</div>
+
+      <div class="rec"><b>Recommended: SHELVE</b> — but the read-only rewind is the one thing I'd most want to
+        prototype small, because it falls out of "state is a fold" almost for free and is a killer debug tool.
+        <div class="lands"><b>Where it lands:</b> the <em>read-only</em> half becomes tooling serving <span class="idc">R5</span> (a rendering of <span class="idc">D9</span>); the
+          counterfactual engine stays off the roadmap until an exact-replay foundation exists. Not a new decision yet.</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: SHELVE (build the read-only half)</span></div>
+    </div>
+  </details>
+
+  <!-- =============== ENTITY IS A FILE =============== -->
+  <details class="verdict-card anchor" id="i-file" data-idea="The entity is a file (portable tar)" data-rec="shelve">
+    <summary><span class="st">The entity is a file</span>
+      <span class="baam">A project is exactly (repo, streams, blobs). Tar those and you're holding the entire living entity — movable to another account, cloud, laptop, USB stick.</span>
+      <span class="metaline"><span class="vpill s">6-judge: SHELVE 4·1·1</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> The Smalltalk image done right: <b>genome = repo</b> (diffable, forkable, git),
+        <b>memory = streams</b> (append-only, replayable), <b>body = folds</b> (disposable). The one missing
+        piece to make it real: stamp every event with the config-repo commit that processed it, so replay is
+        deterministic <em>across self-modification</em>.</p>
+      <div class="eg"><div class="lbl">what's literally in the tarball</div>
+<pre>acme.tar
+├── repo/       the code (git: worker.ts, package.json)
+├── streams/    the logs (/agents/*, /integrations/*, …)
+├── blobs/      big files, by hash
+└── lock.json   exact package versions + which code-hash processed each event
+NOT inside: secrets, live Slack sessions, emails already sent.</pre></div>
+      <p>Export-to-competitor becomes a product feature and the deepest trust argument: iterate is the only agent
+        platform where a customer can pick up their whole entity and leave. That's the moat, not a risk.</p>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves / IS:</b> <span class="idc">R10</span> (full durable state must be exportable — streams, git repo, referenced blobs — and a
+          project must be able to run on its own dedicated deployment). This idea <em>is</em> R10 taken to its literal conclusion, plus
+          <span class="idc">D9</span> (two stores: streams + git; events reference bigger objects).</div>
+        <div class="row"><b>Respects:</b> <span class="idc">D10</span> — secrets correctly can't ride along; <span class="idc">R1</span> — the tar is one project's state only.</div>
+        <div class="row"><b>Blocked by / needs first:</b> exact replay — build keys currently re-resolve npm ranges and artifacts expire (30 days), so "old images replay forever"
+          needs an immutable lock + longer retention. The codex salvage: downgrade "Organism Image" to an <b>Organism Lock</b> (a small immutable manifest + refs to shared signed artifacts + separate policy/grants/state), materializable into a tarball on export.</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — the <em>export tar</em> is feasible; <em>bit-identical replay across self-modification</em> needs immutable locks + toolchain retention.</div>
+        <div class="p"><b>Value</b> — high; backups, staging, and "leave for a competitor" all become "replay the file."</div>
+        <div class="p"><b>Security</b> — good; secrets excluded by design, one project's bytes only.</div>
+        <div class="p"><b>Cost @1M</b> — the naive "immutable per-project image" is expensive; the Organism Lock is cheap (shared artifacts + tiny manifest).</div>
+        <div class="p"><b>DX / legibility</b> — "your company is a tarball" is a great story once replay is exact.</div>
+        <div class="p"><b>Vision</b> — the deepest trust moat there is; the founder judge's favourite.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill s">SHELVE 4·1·1</span> — real portability moat; needs exact-replay first (the skeptic voted kill on the "monolithic image" reading).</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> The file holds <em>state</em>, not
+        <em>consequences</em> — the sent emails and moved worlds aren't in the tar, only the receipts. And
+        "portable" is only true if <code>iterate/sdk</code> is stable enough to be the entity's POSIX. The
+        immutable-image reading collapses at 1M projects (relinking 12M unique executable graphs); the Organism
+        Lock avoids that.</div>
+
+      <div class="rec"><b>Recommended: SHELVE.</b> A real north-star that <span class="idc">R10</span> already commits us not to foreclose —
+        but it needs the exact-replay foundation (Tier-1 facts + immutable build keys) first. Don't build the monolithic image.
+        <div class="lands"><b>Where it lands:</b> stays a future <em>feature</em> satisfying <span class="idc">R10</span>; the concrete near-term step is the
+          <b>Organism Lock</b> (stamp events with the processing commit + immutable package locks), which unblocks it. Not a new decision.</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: SHELVE</span></div>
+    </div>
+  </details>
+
+  <!-- =============== THE LAST RPC =============== -->
+  <details class="verdict-card anchor" id="i-rpc" data-idea="The Last RPC (call = ephemeral append)" data-rec="shelve">
+    <summary><span class="st">The Last RPC</span>
+      <span class="baam">A call is an ephemeral append; a workflow is a durable one. Retention is the only difference. capnweb stops being a transport and becomes a compiler.</span>
+      <span class="metaline"><span class="badge b-lock">its endpoint is locked (D7/D3)</span>
+        <span class="vpill s" style="margin-left:6px">6-judge: SHELVE 4·0·2</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> Every invocation becomes an event — <code>invocation-requested {path,args}</code>
+        appended, <code>invocation-completed {result}</code> appended back — and the <em>only</em> thing
+        separating "RPC" from "durable workflow" is the retention flag on the row. The ephemeral event lane
+        (already built) makes ephemeral-append-with-a-live-tail-subscriber into request/response at socket
+        latency. Flip the flag and the same call becomes a replayable, audited durable workflow for free. capnweb
+        becomes sugar that compiles <code>itx.foo.bar(x)</code> into appends and folds the completion back into a promise.</p>
+      <div class="eg"><div class="lbl">the entire difference is one boolean</div>
+<pre>quick call:  append EPHEMERAL {invoke:"getUser", args:[7]} → await {result} → row dropped
+workflow:    append DURABLE   {invoke:"getUser", args:[7]} → await {result} → row kept forever</pre></div>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves / aligns with:</b> <span class="idc">D7</span> (one stream + processor abstraction does everything — db, queue, workflow, live streaming),
+          <span class="idc">D3</span> (event-sourcing purists), <span class="idc">D11</span> (events are durable or ephemeral — which is <em>exactly</em> the retention flag this needs), and §2's
+          "the events ARE the API." The <em>endpoint</em> — "in principle the only interaction is appending events" — is already the locked design.</div>
+        <div class="row"><b>Tension with:</b> the honest failure mode below — a call needs timeouts, cancellation, streaming, backpressure; retention isn't the only real difference. So adopt it as a <em>compiler</em>, not a law.</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — the load-bearing piece (ephemeral lane) exists; making every call route through it is a large, risky refactor.</div>
+        <div class="p"><b>Value</b> — high in principle (one mechanism for calls + workflows; replay/audit free), but only if the ephemeral lane is genuinely free.</div>
+        <div class="p"><b>Security</b> — clean; "capability = the right to append to a path" is one invariant instead of a proxy + fallback chain + auth adapter.</div>
+        <div class="p"><b>Cost @1M</b> — the danger zone: one slow fold on the hot path taxes every "call" in the project.</div>
+        <div class="p"><b>DX / legibility</b> — mixed; debugging a promise pipeline through event offsets is its own hell.</div>
+        <div class="p"><b>Vision</b> — pure; it's the most literal form of "history is the only substance."</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill s">SHELVE 4·0·2</span> — beautiful, but the skeptic and cost judge voted kill on a literal "every call is an append" rewrite.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> Kafka-as-database syndrome. Chatty pipelined call
+        graphs become journal choreography; you'd need the ephemeral lane to be genuinely free or this is a 10×
+        latency regression wearing a philosophy costume. A call also needs timeouts, cancellation, streaming,
+        backpressure — "keep it or not" isn't the only difference.</div>
+
+      <div class="rec"><b>Recommended: SHELVE.</b> Keep it as a way to <em>compile</em> calls into appends where
+        it pays, not as a promise that a call and a workflow are identical — they aren't.
+        <div class="lands"><b>Where it lands:</b> a <em>mechanic</em> under <span class="idc">D7</span>/<span class="idc">D11</span> — capnweb-as-compiler over the append/fold substrate,
+          applied selectively. Don't rewrite the whole invocation path onto the log as a law.</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: SHELVE</span></div>
+    </div>
+  </details>
+
+  <!-- =============== SHADOW SELVES =============== -->
+  <details class="verdict-card anchor" id="i-shadow" data-idea="Shadow selves (replay history against candidate code)" data-rec="shelve">
+    <summary><span class="st">Shadow selves — the journal is the fitness function</span>
+      <span class="baam">Self-modification ships as a shadow fold: the mutated <code>worker.ts</code> relives the entity's real recent history, effects jailed, and is promoted only if its life would have gone at least as well.</span>
+      <span class="metaline"><span class="vpill s">6-judge: SHELVE 3·1·2</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> Everyone says "the agent improves its own code" and means "the agent edits a file and
+        we pray." Instead: agent commits a mutation to a branch → builder produces a keyed artifact → a shadow
+        processor subscribes to the live stream <em>and</em> replays the recent past with side effects
+        intercepted → an LLM judge diffs shadow behavior against lived history → <code>genome/promoted</code> or
+        <code>genome/culled</code> is appended, with the diff as evidence. Regression testing without tests,
+        because the test suite is the entity's actual life. A foreign third-party processor auditions as a shadow
+        before it's ever allowed to act.</p>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves:</b> <span class="idc">B3</span> (AI-authored, self-modifying code — this is how you make it <em>safe</em>) and <span class="idc">B4</span>
+          (verification flips — humans review <em>promotions with evidence attached</em>, not diffs in the dark). Leans on <span class="idc">D3</span>/<span class="idc">D9</span> (replay is free because state is a fold) and
+          <span class="idc">R11</span> (a third-party processor auditions as a shadow first).</div>
+        <div class="row"><b>Depends on:</b> the egress jail (<span class="idc">D6</span>/<span class="idc">D10</span>) being airtight — the shadow's "I would have sent this email" must be capturable data, never a sent email.</div>
+        <div class="row"><b>Blocked by:</b> exact replay (same prerequisite as "the entity is a file").</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — the primitives exist (fold-replay, egress intercept, requested/completed pairs); wiring them into a promote/cull loop is real work.</div>
+        <div class="p"><b>Value</b> — high as a <em>test tool</em>; dangerous as an auto-promote button.</div>
+        <div class="p"><b>Security</b> — the ship & security judges voted kill: one effect lane that doesn't route through egress and the shadow bites for real.</div>
+        <div class="p"><b>Cost @1M</b> — replaying weeks of history per candidate is not free; needs snapshots.</div>
+        <div class="p"><b>DX / legibility</b> — appealing ("checked it against real life") but the LLM judge's taste becomes the real fitness function.</div>
+        <div class="p"><b>Vision</b> — the founder judge's build: natural selection over genomes, the soul of self-improvement.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill s">SHELVE 3·1·2</span> — ship + security voted kill (jail risk); founder voted build (the vision); the rest shelve.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> It can't reconstruct the counterfactual world —
+        the customer would have replied differently; the judge shares the agent's blind spots (Goodhart: the
+        entity evolves to ace its own past, not the future). A <b>test tool, never an auto-promote button</b> —
+        always end with a small live canary.</div>
+
+      <div class="rec"><b>Recommended: SHELVE.</b> Genuinely the most visionary idea, and the safe framing of
+        <span class="idc">B4</span> — but it manufactures false confidence unless treated as a testing instrument plus a live canary, and it
+        needs exact replay first.
+        <div class="lands"><b>Where it lands:</b> a future <em>safety instrument</em> for self-modification (serving <span class="idc">B3</span>/<span class="idc">B4</span>), never a truth
+          oracle. Off the roadmap until Tier-1 facts + exact replay exist. Not a new decision.</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: SHELVE</span></div>
+    </div>
+  </details>
+
+  <!-- =============== HIRE SOFTWARE COMPANIES =============== -->
+  <details class="verdict-card anchor" id="i-hire" data-idea="Hire software companies (economy of entities)" data-rec="shelve">
+    <summary><span class="st">Hire software companies — the economy of entities</span>
+      <span class="baam">You don't install a package — you <em>hire a company</em>. Every serious provider is itself an iterate entity at its own domain; you enter a revocable, metered relationship via a bilateral event contract.</span>
+      <span class="metaline"><span class="vpill s">6-judge: SHELVE 3·1·2</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> The synthesis of "everything is a package," the economy-as-stream-topology, and the
+        fleet-update problem — dissolving all three at once. A customer doesn't <code>install tasks@3.2</code>; it
+        appends a contract:</p>
+      <div class="eg"><div class="lbl">hiring a provider = a bilateral chain of signed events</div>
+<pre>service/offered → service/accepted → grant/proposed → grant-approved
+              → work-requested → work-completed → charge-recorded
+
+Both projects journal the relationship. Cross-project delivery is an OUTBOX protocol
+— never shared internal authority.</pre></div>
+      <p>Two placements: <b>hosted employment</b> (the provider's processor runs in the <em>provider's</em>
+        project — patches one running service, not a million customer repos → solves fleet updates outright), or
+        <b>resident employment</b> (a signed artifact runs inside your project). The marketplace shifts from
+        "trust an anonymous tarball" to "enter a revocable, metered relationship with an accountable operating entity."</p>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves:</b> <span class="idc">R11</span> (a stream processor must be hostable anywhere, including by a third party — hosted employment <em>is</em> this),
+          and answers <span class="idc">Q8</span> (updating a million projects — the maintainer patches one running service). Uses <span class="idc">D8</span> (universal event interface) and the
+          cross-post / outbox mechanism from <span class="idc">D3</span>.</div>
+        <div class="row"><b>Respects:</b> <span class="idc">R1</span>/<span class="idc">D1</span> — one project can never access another; the contract is signed cross-post between deployments, never shared internal authority. Grants are attenuated (the expressions idea).</div>
+        <div class="row"><b>Note:</b> the DESIGN.md explicitly <em>deleted</em> "an economy of entities" as a Belief (not meaningful enough as a belief) — but the mechanism can still serve <span class="idc">R11</span>/<span class="idc">Q8</span> as a future capability without being a belief.</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — far out; needs a federation protocol (signed, hash-chained appends between deployments) that doesn't exist yet.</div>
+        <div class="p"><b>Value</b> — potentially enormous; the cost judge singled it out as the <em>real</em> fix for fleet updates + package trust.</div>
+        <div class="p"><b>Security</b> — mixed; accountable entities beat anonymous tarballs, but supply-chain concentration (one popular provider's compromise reaches thousands) is real.</div>
+        <div class="p"><b>Cost @1M</b> — the cost judge's favourite: O(1) updates via hosted employment.</div>
+        <div class="p"><b>DX / legibility</b> — the DX judge voted kill: a non-technical founder managing many vendor contracts is heavy.</div>
+        <div class="p"><b>Vision</b> — "any SaaS is an intelligent company other companies can hire" — the most literal expression of the whole vision.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill s">SHELVE 3·1·2</span> — cost judge build (the fleet fix), ship + DX kill (too heavy now), rest shelve.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> It turns a software platform into an
+        <em>economy</em> — vendor bankruptcy, correlated failure, data-sharing negotiations, service disputes,
+        supply-chain concentration. An open append economy is also an open DDoS (sybil entities, spam
+        subscriptions) — you'd speedrun email's forty years of abuse lessons. The metaphor is load-bearing right
+        up until a lawyer reads it.</div>
+
+      <div class="rec"><b>Recommended: SHELVE.</b> The most beautiful long game and arguably the true answer to
+        fleet updates — but it's an economy, not a feature, and the near-term fleet answer is the boring one
+        (publish a version + channel, don't rebase a million repos).
+        <div class="lands"><b>Where it lands:</b> a north-star that <span class="idc">R11</span> keeps the door open for; the immediate fleet decision under <span class="idc">Q8</span>
+          is the apt/App-Store channel model. Not a new belief (it was deliberately dropped as one).</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: SHELVE</span></div>
+    </div>
+  </details>
+
+  <!-- =============== PLATFORM EATS ITSELF =============== -->
+  <details class="verdict-card anchor" id="i-eats" data-idea="The platform eats itself (dashboard into the config repo)" data-rec="shelve">
+    <summary><span class="st">The platform eats itself</span>
+      <span class="baam">Move the dashboard into the config repo. <code>os.iterate.com</code> dissolves; every entity serves, inspects, and redesigns its own face.</span>
+      <span class="metaline"><span class="vpill n">not on the 6-judge ballot</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> The dashboard already runs the real fold engine in the browser (the same
+        <code>StreamProcessor</code> contracts over OPFS), and the seeded worker already serves HTML apps from the
+        repo with WebSockets and durable state. Put them together: the dashboard is userspace. Seed it into
+        <code>config-repo-template</code> next to <code>worker.ts</code>; the entity serves its own UI from its own
+        genome at its own hostname. "Customize your dashboard" becomes the entity editing itself — "add a chart of
+        our email backlog" is a prompt, and the agent just commits it. <code>apps/os</code> shrinks to the actual
+        platform: streams, builds, egress, auth, billing. Everything with pixels is genome.</p>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>Serves:</b> <span class="idc">D2</span> (everything except a tiny kernel is overridable in userspace — the UI is the ultimate demo of this),
+          <span class="idc">D4</span> (config is a <code>worker.ts</code> web server the platform calls into — it can serve HTML too), <span class="idc">B4</span> (the entity manages its own face).
+          Consistent with the "three rings" (the dashboard is Ring-3 for the parts that can be).</div>
+        <div class="row"><b>Hard boundary:</b> the kernel/genome line must stay drawn in blood — <b>auth, billing, and journal-viewing stay kernel</b> (the "must work when the project is broken" test).
+          A bad self-modification of the login box is why kernels don't let userspace draw it.</div>
+        <div class="row"><b>Relation to <span class="idc">R10</span>:</b> if the UI is genome, the portable tar (the-entity-is-a-file) carries the entity's face too — nicely complete.</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — the pieces exist (browser fold engine + repo-served HTML apps); making it the <em>default</em> face is a large product move.</div>
+        <div class="p"><b>Value</b> — high long-term (per-entity bespoke UI); low urgency vs Tier-1 work.</div>
+        <div class="p"><b>Security</b> — the whole risk: userspace must never draw auth/billing/recovery — those stay a kernel-owned console.</div>
+        <div class="p"><b>Cost @1M</b> — "Windows Update for a million diverged species": fleet-wide UI improvements become a genome-distribution problem; support debugs a thousand mutant dashboards.</div>
+        <div class="p"><b>DX / legibility</b> — great story, but "your dashboard is code the agent rewrites" cuts both ways.</div>
+        <div class="p"><b>Vision</b> — pure D2: the organism serves its own UI; feature requests become prompts.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill n">not voted</span> — it wasn't on the ballot; the closest neighbours (three rings, everything-in-userspace) inform the read.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> You just invented Windows Update for a million
+        diverged species — support means debugging a thousand mutant dashboards, and the day one entity
+        self-modifies its own auth screen badly you rediscover why kernels don't let userspace draw the login box.
+        The kernel/genome line must be drawn in blood (auth, billing, journal-viewing stay kernel) or this eats you.</div>
+
+      <div class="rec"><b>Recommended: SHELVE.</b> The right long-term shape of <span class="idc">D2</span> for pixels — but not now: Tier-1
+        facts and the three-rings boundary come first, and the non-removable kernel console (auth/billing/recovery)
+        must be pinned down before any UI moves to genome.
+        <div class="lands"><b>Where it lands:</b> a future application of <span class="idc">D2</span>/<span class="idc">D4</span> (the dashboard as a Ring-3 userspace app), gated on a
+          firmly-drawn kernel-UI boundary. Not a new decision now.</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: SHELVE</span></div>
+    </div>
+  </details>
+
+  <h3 class="blk">Recommend KILL — rule out (as a code move)</h3>
+
+  <!-- =============== MOVE STREAMS TO USERSPACE =============== -->
+  <details class="verdict-card anchor" id="i-streams" data-idea="Move streams to userspace (the razor, literally)" data-rec="kill">
+    <summary><span class="st">Move streams to userspace — the kernel razor, taken literally</span>
+      <span class="baam">The kernel is only what userspace <em>cannot</em> express. A stream is a library on the seed — so move the ~12k-line streams domain out of the kernel.</span>
+      <span class="metaline"><span class="badge b-lock">the razor is true; the move is rejected</span>
+        <span class="vpill k" style="margin-left:6px">6-judge: KILL (as a move) 4–2</span></span></summary>
+    <div class="body">
+      <p><b>What it is.</b> The kernel razor (§6.12): the kernel is exactly what userspace can't express. Apply it
+        honestly and a stream — durable ordered append + fold + delivery + alarms — is buildable in userspace
+        given confined durable storage, wakeability, and fetch. The genuinely un-userspace-able part isn't the
+        log; it's the <em>confinement of the storage</em>. So, the literal reading goes, the streams domain
+        <em>could</em> move out of the kernel — which is most of how you'd hit a ~5k-LOC core.</p>
+      <p><b>The distinction that matters</b> (from <span class="idc">§6.14</span>): the razor answers "where is the security wall?"
+        (the seed). It says <em>nothing</em> about what the system IS. Streams being userspace-<em>expressible</em>
+        makes them <b>fundamental and portable</b>, not minor — a linked list is expressible in userspace and is
+        still <em>the</em> data structure. So: <b>keep the true statement, reject the migration.</b></p>
+
+      <div class="fit"><b>Fit with the locked foundation.</b>
+        <div class="row"><b>The statement serves:</b> <span class="idc">D2</span> (clarifies the kernel/userspace cut — the load-bearing wall is the <em>seed</em>, and everything above it is negotiable).</div>
+        <div class="row"><b>The move violates:</b> <span class="idc">R6</span> (assume any part can fail and recover uniformly — if streams are userspace, every processor re-implements crash-safety/at-least-once/park-revive),
+          <span class="idc">R4</span> (the substrate must carry real-time PCM — performance the kernel guarantees), <span class="idc">D7</span> (one privileged stream abstraction does everything), <span class="idc">B2</span> (the primary user is an LLM that
+          shouldn't have to reimplement at-least-once). The log's correctness is <em>exactly</em> what must survive a broken userspace.</div>
+        <div class="row"><b>Status:</b> the razor is a <b>true, clarifying statement</b> to keep; the literal <em>code migration</em> is rejected.</div>
+      </div>
+
+      <div class="persp">
+        <div class="p"><b>Feasibility</b> — technically possible; the confinement of storage is the only truly un-userspace bit.</div>
+        <div class="p"><b>Value</b> — negative as a move; it trades a working, correct substrate for purity.</div>
+        <div class="p"><b>Security</b> — worse; the delivery/obligation correctness must hold <em>even when userspace is the thing that crashed</em> — so it can't <em>be</em> userspace.</div>
+        <div class="p"><b>Cost @1M</b> — worse; every processor re-implementing at-least-once is a fleet-wide tax and a bug farm.</div>
+        <div class="p"><b>DX / legibility</b> — worse; the LLM primary user would have to reimplement crash-safety to do anything.</div>
+        <div class="p"><b>Vision</b> — the <em>statement</em> is clarifying (streams are fundamental + portable); the <em>move</em> adds nothing the razor doesn't already say.</div>
+      </div>
+
+      <p><b>6-judge vote:</b> <span class="vpill k">KILL as a code move 4–2</span> — ship/DX/skeptic/cost killed the migration; security &amp; founder shelved. Nobody wanted to actually move it.</p>
+      <div class="obj"><b>Sharpest objection / failure mode.</b> Doing it makes every processor re-implement
+        crash-safety, and the log's correctness is precisely what must survive a broken userspace — so the thing
+        the razor identifies as "expressible in userspace" is the one thing you least want <em>in</em> userspace.
+        Keep it as a true statement, not a migration.</div>
+
+      <div class="rec"><b>Recommended: KILL (as a move).</b> Keep the razor as an analytic tool that tells you the
+        security wall is the tiny seed; keep streams <b>privileged by choice</b>, with a public replacement seam.
+        Don't move the code.
+        <div class="lands"><b>Where it lands:</b> a clarifying line under <span class="idc">D2</span>/<span class="idc">D7</span> ("streams are userspace-<em>expressible</em> but kept
+          kernel-privileged by choice, for <span class="idc">R4</span>/<span class="idc">R6</span>"). The <em>migration</em> is ruled out. The hero framing (<span class="idc">§6.14</span>) also retires "kernel" as the hero noun in favour of "intelligent entity runtime."</div></div>
+
+      <div class="selrow"><span class="lab">Your verdict</span>
+        <button class="vbtn" data-v="adopt">ADOPT</button>
+        <button class="vbtn" data-v="shelve">SHELVE</button>
+        <button class="vbtn" data-v="kill">KILL</button>
+        <span class="recnote">recommended: KILL (the move); keep the statement</span></div>
+    </div>
+  </details>
+
+  <p class="foot">Twelve ideas, each judged against the locked foundation in <code>DESIGN.md</code>.
+    Pre-set to the recommended verdict — change only what you disagree with, then
+    <b>Copy verdicts</b> and paste the list back into chat. The one discipline that outranks the architecture:
+    no word at the front door that a working programmer doesn't already own.</p>
+
+</main>
+
+<script>
+(function(){
+  "use strict";
+  var cards = Array.prototype.slice.call(document.querySelectorAll(".verdict-card"));
+  var labels = { adopt:"ADOPT", shelve:"SHELVE", kill:"KILL" };
+
+  function applyVisual(card, v){
+    card.classList.remove("v-adopt","v-shelve","v-kill");
+    card.classList.add("v-"+v);
+    var btns = card.querySelectorAll(".vbtn");
+    btns.forEach(function(b){ b.classList.toggle("on", b.getAttribute("data-v")===v); });
+  }
+  function setVerdict(card, v){
+    card.setAttribute("data-verdict", v);
+    applyVisual(card, v);
+    refreshSummary();
+  }
+  // wire buttons + default to recommendation
+  cards.forEach(function(card){
+    var rec = card.getAttribute("data-rec");
+    card.querySelectorAll(".vbtn").forEach(function(b){
+      b.addEventListener("click", function(e){
+        e.preventDefault(); e.stopPropagation();
+        setVerdict(card, b.getAttribute("data-v"));
+      });
+    });
+    setVerdict(card, rec);
+  });
+
+  var listEl = document.getElementById("sumlist");
+  function refreshSummary(){
+    var counts = { adopt:0, shelve:0, kill:0 };
+    var changed = 0;
+    var html = "";
+    cards.forEach(function(card){
+      var v = card.getAttribute("data-verdict");
+      var rec = card.getAttribute("data-rec");
+      var name = card.getAttribute("data-idea");
+      counts[v]++;
+      var isChanged = (v !== rec);
+      if(isChanged) changed++;
+      html += '<div class="li"><span class="nm">'+escapeHtml(name)+
+        (isChanged ? ' <span class="ch">changed</span>' : '')+
+        '</span><span class="vd '+v+'">'+labels[v]+'</span></div>';
+    });
+    listEl.innerHTML = html;
+    document.getElementById("t-adopt").textContent = counts.adopt + " adopt";
+    document.getElementById("t-shelve").textContent = counts.shelve + " shelve";
+    document.getElementById("t-kill").textContent = counts.kill + " kill";
+    document.getElementById("changed-note").textContent =
+      changed === 0 ? "all at recommended" :
+      (changed + (changed===1?" changed":" changed") + " from recommended");
+  }
+  function escapeHtml(s){
+    return s.replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  window.allOpen = function(open){
+    document.querySelectorAll("details").forEach(function(d){
+      // keep the summary panel's inner details open regardless
+      if(d.closest("#summary")) return;
+      d.open = open;
+    });
+  };
+  window.resetRecs = function(){
+    cards.forEach(function(card){ setVerdict(card, card.getAttribute("data-rec")); });
+  };
+  window.copyVerdicts = function(){
+    var lines = ["My verdicts on iterate's big ideas:",""];
+    cards.forEach(function(card){
+      var v = card.getAttribute("data-verdict");
+      var rec = card.getAttribute("data-rec");
+      var name = card.getAttribute("data-idea");
+      var tag = (v !== rec) ? "  [changed from recommended "+labels[rec]+"]" : "";
+      lines.push("- " + name + " -> " + labels[v] + tag);
+    });
+    var counts = { adopt:0, shelve:0, kill:0 };
+    cards.forEach(function(c){ counts[c.getAttribute("data-verdict")]++; });
+    lines.push("");
+    lines.push("Totals: "+counts.adopt+" adopt, "+counts.shelve+" shelve, "+counts.kill+" kill.");
+    var text = lines.join("\n");
+    var btn = document.getElementById("copybtn");
+    function done(){ btn.textContent = "Copied ✓"; btn.classList.add("done");
+      setTimeout(function(){ btn.textContent = "Copy verdicts"; btn.classList.remove("done"); }, 1800); }
+    function fallback(){
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.style.position="fixed"; ta.style.opacity="0";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      try{ document.execCommand("copy"); done(); }
+      catch(e){ btn.textContent = "Press ⌘C"; window.prompt("Copy the verdicts:", text); }
+      document.body.removeChild(ta);
+    }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else { fallback(); }
+  };
+
+  refreshSummary();
+})();
+</script>
+</body>
+</html>

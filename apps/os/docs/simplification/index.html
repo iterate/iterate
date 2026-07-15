@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iterate — the simplification, in one page</title>
+<style>
+  :root{
+    --bg:#faf9f7; --ink:#1b1a17; --mut:#6b6659; --line:#e4e0d8;
+    --accent:#b5471f; --accent2:#2f6f5e;
+    --pro:#2f6f5e; --con:#a2402a; --pro-bg:#eef5f1; --con-bg:#f8eeea;
+    --card:#fffdf9; --code:#f3efe7; --egbg:#f6f2ea;
+    --build:#2f6f5e; --shelve:#b07d18; --kill:#a2402a;
+    --build-bg:#e9f3ee; --shelve-bg:#f6efdf; --kill-bg:#f7ebe7;
+    --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{--bg:#16150f;--ink:#ece7dc;--mut:#9c968a;--line:#2c2a22;--accent:#e6764a;
+      --accent2:#6cc0a6;--pro:#6cc0a6;--con:#e08a6e;--pro-bg:#17241f;--con-bg:#271913;
+      --card:#1d1c15;--code:#211f18;--egbg:#20261f;
+      --build:#6cc0a6;--shelve:#d6a24a;--kill:#e08a6e;
+      --build-bg:#17241f;--shelve-bg:#26200f;--kill-bg:#271913;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.4);}
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;padding-bottom:6rem}
+  .wrap{max-width:920px;margin:0 auto;padding:0 20px}
+  header.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  header.top .wrap{display:flex;align-items:center;gap:10px;padding:10px 20px;flex-wrap:wrap}
+  header.top b{font-size:15px}
+  header.top .sp{flex:1}
+  .btn{font:inherit;font-size:13px;color:var(--mut);background:transparent;border:1px solid var(--line);
+    border-radius:999px;padding:4px 11px;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  h1{font-size:30px;line-height:1.15;margin:34px 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--mut);font-size:15px;margin:0 0 24px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);margin:0 0 4px}
+  .tldr{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:12px;padding:18px 22px;margin:16px 0;box-shadow:var(--shadow)}
+  .breath{font-size:20px;line-height:1.4;font-weight:600;letter-spacing:-.01em;margin:0}
+  .slogan{border-left:3px solid var(--accent2);margin:10px 0;padding:2px 0 2px 14px;
+    font-size:16px;font-weight:600}
+  .slogan.small{font-size:14px;font-weight:500}
+  .wall{font-size:15px;line-height:1.55;background:var(--code);border-radius:10px;padding:14px 16px;margin:12px 0}
+  .legend{font-size:13px;color:var(--mut);margin:10px 0 0}.legend b{color:var(--ink)}
+  details.sec{border:1px solid var(--line);border-radius:12px;margin:12px 0;background:var(--card);
+    box-shadow:var(--shadow);overflow:hidden}
+  details.sec>summary{list-style:none;cursor:pointer;padding:16px 20px 16px 30px;display:block;position:relative}
+  details.sec>summary::-webkit-details-marker{display:none}
+  details.sec>summary::before{content:"▸";position:absolute;left:12px;top:16px;color:var(--accent);
+    transition:transform .15s;font-size:12px}
+  details.sec[open]>summary::before{transform:rotate(90deg)}
+  details.sec>summary .st{font-weight:700;font-size:17px;letter-spacing:-.01em}
+  details.sec>summary .ss{display:block;color:var(--mut);font-size:14px;margin-top:3px}
+  details.sec[open]>summary{border-bottom:1px solid var(--line)}
+  .body{padding:8px 20px 18px}
+  details.sub{border:0;border-left:2px solid var(--line);border-radius:0;margin:10px 0 10px 2px;
+    background:transparent;box-shadow:none}
+  details.sub>summary{padding:8px 0 8px 22px;position:relative;cursor:pointer;list-style:none}
+  details.sub>summary::-webkit-details-marker{display:none}
+  details.sub>summary::before{content:"▸";position:absolute;left:4px;top:9px;color:var(--accent);font-size:11px;transition:transform .15s}
+  details.sub[open]>summary::before{transform:rotate(90deg)}
+  details.sub>summary .st{font-size:15px;font-weight:650}
+  details.sub .body{padding:2px 0 6px 22px}
+  p{margin:.7em 0} ul,ol{margin:.5em 0;padding-left:1.3em} li{margin:.28em 0}
+  code{background:var(--code);padding:.1em .38em;border-radius:5px;font-size:.88em;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:13px 15px;
+    overflow:auto;font-size:12.5px;line-height:1.5}
+  pre code{background:none;padding:0}
+  .eg{background:var(--egbg);border:1px solid var(--line);border-left:3px solid var(--accent2);
+    border-radius:8px;padding:12px 14px;margin:12px 0;font-size:13px}
+  .eg .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent2);font-weight:700;margin-bottom:6px}
+  .eg pre{margin:6px 0;background:transparent;border:0;padding:0;font-size:12.5px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+  @media(max-width:640px){.grid{grid-template-columns:1fr}}
+  .pro,.con{border-radius:10px;padding:11px 14px;font-size:14px}
+  .pro{background:var(--pro-bg);border:1px solid color-mix(in srgb,var(--pro) 30%,transparent)}
+  .con{background:var(--con-bg);border:1px solid color-mix(in srgb,var(--con) 30%,transparent)}
+  .pro h4,.con h4{margin:0 0 5px;font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+  .pro h4{color:var(--pro)} .con h4{color:var(--con)}
+  .pro ul,.con ul{margin:0;padding-left:1.1em} .pro li,.con li{margin:.2em 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--code);font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
+  .badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+  .b-x{color:#fff;background:var(--accent);border-color:var(--accent)}
+  .b-do{color:#fff;background:var(--accent2);border-color:var(--accent2)}
+  .idea{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:10px 0;background:var(--card)}
+  .idea .baam{font-weight:700;color:var(--accent);font-size:15px;margin:0 0 6px}
+  .fork{border:1px solid var(--line);border-left:4px solid var(--accent2);border-radius:10px;
+    padding:14px 16px;margin:12px 0;background:var(--card)}
+  .fork .q{font-weight:700;margin:0 0 8px}
+  .rec{font-size:14px;background:var(--code);border-radius:8px;padding:8px 12px;margin-top:8px}
+  .rec b{color:var(--accent2)}
+  .tag{font-size:12px;color:var(--mut)}
+  a{color:var(--accent)}
+  .foot{color:var(--mut);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+  .kv{color:var(--mut);font-size:13px}
+  /* vote */
+  .vt{font-size:12.5px}
+  .vt th,.vt td{padding:5px 6px;text-align:center}
+  .vt td.idc{text-align:left;font-weight:600;white-space:nowrap}
+  .vt td.vr{text-align:left;color:var(--mut);font-size:12px}
+  .vb{background:var(--build-bg);color:var(--build);font-weight:700}
+  .vs{background:var(--shelve-bg);color:var(--shelve);font-weight:700}
+  .vk{background:var(--kill-bg);color:var(--kill);font-weight:700}
+  .vpill{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:6px}
+  .vpill.b{background:var(--build);color:#fff}.vpill.s{background:var(--shelve);color:#fff}.vpill.k{background:var(--kill);color:#fff}
+  .verdict{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;font-size:14px}
+  .verdict.b{border-left:4px solid var(--build)} .verdict.s{border-left:4px solid var(--shelve)} .verdict.k{border-left:4px solid var(--kill)}
+</style>
+</head>
+<body>
+
+<header class="top"><div class="wrap">
+  <b>iterate · the simplification</b>
+  <span class="sp"></span>
+  <button class="btn" onclick="allOpen(true)">Expand all</button>
+  <button class="btn" onclick="allOpen(false)">Collapse all</button>
+</div></header>
+
+<main class="wrap">
+
+  <h1>How to make <span style="color:var(--accent)">apps/os</span> beautifully simple</h1>
+  <p class="sub">One page, pyramid-style: the tip first, then wider sections you can skip. Concrete examples,
+    not abstractions. Includes a real vote — six independent judges (3 Claude, 3 codex) rating which bold
+    ideas to build, shelve, or kill. <span class="kv">Compiled 2026‑07‑14.</span></p>
+
+  <div class="tldr">
+    <h2>The whole thing in one breath</h2>
+    <p class="breath">An iterate project is a fenced-off computer that writes down everything that lastingly
+      happens, runs code in response, can rewrite that code, and can only touch the outside world through
+      one door you’re watching.</p>
+    <p style="margin:.8em 0 0;color:var(--mut);font-size:14px">It <em>feels</em> heavy because the whole idea
+      is ~5 words but the front door makes you learn 33, and the same handful of jobs got built five times
+      over. Almost everything else is a library you could’ve written yourself.</p>
+  </div>
+
+  <div class="tldr">
+    <h2>Watch one thing actually happen</h2>
+    <p>A customer messages your support agent on Slack. Here is literally what the system does — it just adds
+      lines to a log, and everything else is a way of reading that log.</p>
+    <div class="eg"><div class="lbl">The log at <code>/agents/support</code> — each line is one event (a fact that happened)</div>
+<pre>#1  agent/created            { parent: "/agents" }
+#2  slack/message-received    { text: "my order is late", user: "U123" }
+#3  agent/llm-requested       {}          ← the request is "event #3"; the prompt is rebuilt by
+                                             folding #1..#2, so we don't copy it into the row
+#4  agent/output-added        { text: "Sorry! Let me check your order…" }
+#5  slack/message-sent        { text: "Sorry! Let me check your order…" }</pre>
+    </div>
+    <p><b>State is just those lines added up.</b> “Add them up” = <code>reduce</code>, the same
+      <code>Array.reduce</code> you already know:</p>
+    <div class="eg"><div class="lbl">state = fold(the log)</div>
+<pre>state = events.reduce((s, e) =&gt; {
+  if (e.type === "slack/message-received") s.messages.push(e.text)
+  if (e.type === "agent/output-added")     s.lastReply = e.text
+  return s
+}, { messages: [], lastReply: null })
+
+// → { messages: ["my order is late"], lastReply: "Sorry! Let me check your order…" }</pre>
+    </div>
+    <p>That’s the whole engine. <b>The only way to change anything is to add a line (append). The only way to
+      read anything is to replay the lines (follow &amp; fold).</b> Delete the computed state and you rebuild
+      it by replaying — the log is the truth, the state is a throwaway cache.</p>
+    <div class="slogan">Everything durable is a line you add. Everything alive is someone reading the lines.</div>
+  </div>
+
+  <p class="legend"><b>How to read the rest.</b> Every section below is collapsed and shows a one-line summary
+    — click to open, or skip it. They get wider as you go down. Ideas show
+    <span style="color:var(--pro)">pros</span> and <span style="color:var(--con)">cons</span> side by side.
+    <b>The vote is §7 — that’s the “what should we actually do with the wild ideas” answer.</b></p>
+
+  <!-- 1 · FIVE CONCEPTS -->
+  <details class="sec" open>
+    <summary><span class="st">1 · The five words (each with a real example)</span>
+      <span class="ss">Project = a company · Stream = a log · Processor = something that reads a log and reacts · Capability = a phone number · Repo = a git repo.</span></summary>
+    <div class="body">
+      <p>The rule that outranks everything: <b>each word must be explainable in one line using words a
+        programmer already owns.</b> No new vocabulary to do your first useful thing.</p>
+      <table>
+        <tr><th>Word</th><th>In one line</th><th>A concrete instance</th></tr>
+        <tr><td><b>Project</b></td><td>a company / a fenced-off world</td>
+          <td><code>acme</code> — its own logs, its own code, its own secrets. Code in <code>acme</code> can
+            never touch <code>globex</code>.</td></tr>
+        <tr><td><b>Stream</b></td><td>a log (append-only list at a path)</td>
+          <td><code>/agents/support</code> is a log; every Slack message is a new line. So is
+            <code>/scheduler</code>, <code>/integrations/slack</code>, and the repo’s history.</td></tr>
+        <tr><td><b>Processor</b></td><td>something that reads a log and reacts</td>
+          <td>The support agent: it folds the log into a conversation, calls a model, and appends the reply.
+            <b>An agent is just a processor with a prompt.</b> So is the scheduler, the Slack router, repo-sync.</td></tr>
+        <tr><td><b>Capability</b></td><td>a phone number you can call (a reference)</td>
+          <td><code>itx.slack.postMessage(...)</code>. You can do it because you <em>hold</em> the reference,
+            not because a permission check waved you through. Can’t hold it → can’t call it.</td></tr>
+        <tr><td><b>Repo</b></td><td>a git repo — the project’s own source</td>
+          <td><code>worker.ts</code> that the project can read and rewrite. This is how it improves itself.</td></tr>
+      </table>
+      <p class="tag">A processor is really three small functions: <code>reduce</code> (fold the log into
+        state), <code>processEvent</code> (do a side effect — send the Slack reply), and <code>reconcile</code>
+        (after a crash, finish any half-done work). That’s the entire programming model.</p>
+    </div>
+  </details>
+
+  <!-- 2 · THE ONE SHAPE -->
+  <details class="sec" open>
+    <summary><span class="st">2 · The one shape everyone converged on</span>
+      <span class="ss">A tiny “seed” you can’t avoid, the five words as a library on top, packages for the rest — and three honest ways to name the whole thing.</span></summary>
+    <div class="body">
+      <p>Six independent reviews (parallel code-readers, four rounds of a second model, a skeptic, prior-art
+        scholars) all landed here: there’s a tiny core you truly can’t build in userspace, and everything
+        else sits on top of it.</p>
+      <div class="slogan">The kernel isn’t the hero. It’s the floor.</div>
+      <table>
+        <tr><th>Layer</th><th>What it is</th><th>Could a user write it themselves?</th></tr>
+        <tr><td><b>The seed</b></td><td>Run untrusted code · give it storage that survives crashes · watch
+          the one door bytes leave by · know which project owns what.</td>
+          <td><b>No</b> — it’s the thing that <em>runs</em> user code. This, and only this, is the real kernel.</td></tr>
+        <tr><td><b>The five words</b></td><td>project · stream · processor · capability · repo</td>
+          <td><b>In principle yes</b> — a “log” is just storage + a rule. Kept fast &amp; built-in so nobody
+            has to reinvent crash-safety.</td></tr>
+        <tr><td><b>Packages</b></td><td>agents, integrations, scheduler, tasks, dashboards</td>
+          <td><b>Yes</b> — leaf features. iterate ships the good ones but keeps none of them privileged.</td></tr>
+      </table>
+      <p>This answers the question “if streams aren’t in the kernel, is the kernel even the point?” — <b>no.</b>
+        “Kernel” answers a security question (what can’t be userspace). It doesn’t answer <em>what is this</em>.
+        That has three good answers, for three different people:</p>
+      <table>
+        <tr><th>Who’s asking</th><th>Best answer</th><th>Said plainly</th></tr>
+        <tr><td>A recruit / the website</td><td><b>An intelligent-entity runtime</b></td>
+          <td>“A program whose loop lives in storage and survives its own crashes. A normal program’s loop
+            dies with the process; this one keeps going.”</td></tr>
+        <tr><td>An engineer</td><td><b>One log and a fold</b></td>
+          <td>“One write: add a line. One read: replay the lines. State is the replay; the database is a
+            cache you can throw away.”</td></tr>
+        <tr><td>Security / ops</td><td><b>An operating system</b></td>
+          <td>“A tiny locked kernel, a few modules we run, packages for the rest — with two screens: one to
+            run a company from outside, one where the company lives.”</td></tr>
+      </table>
+      <p class="tag">A referee scored these and refused to crown one: “any framing claiming to be universal
+        loses — they’re three photos of one building.”</p>
+    </div>
+  </details>
+
+  <!-- 3 · WHY HEAVY -->
+  <details class="sec" open>
+    <summary><span class="st">3 · Why it feels heavy (the honest diagnosis)</span>
+      <span class="ss">The same five jobs got built five separate times, and the front door shows you all the plumbing.</span></summary>
+    <div class="body">
+      <div class="slogan">Every new feature arrived as a new thing, instead of another use of the old things.</div>
+      <p>That was reasonable one feature at a time. But look what happens when you count how many times the
+        <em>same job</em> got solved:</p>
+      <table>
+        <tr><th>One job</th><th>Times it’s built</th></tr>
+        <tr><td>“fold a log into state”</td><td><b>2</b> engines (a generic one, and a hand-written copy
+          inside the stream itself).</td></tr>
+        <tr><td>“deliver events to a reader”</td><td><b>4</b> lanes (wake, push, webhook, and the browser
+          hand-rolls a 5th).</td></tr>
+        <tr><td>“a durable job that must finish after a crash”</td><td><b>5</b> hand-rolled copies (LLM calls,
+          scripts, scheduler, repo-create, sends) + 2 more recovery machines.</td></tr>
+        <tr><td>“a chat channel → an agent”</td><td><b>4</b> near-identical copies (Slack, Telegram, email,
+          GitHub) — the files literally say “shaped after the Slack one.”</td></tr>
+        <tr><td>“a place to keep files”</td><td><b>3</b> (repo, workspace, sandbox) that dial each other in a
+          circle.</td></tr>
+        <tr><td>“walk a dotted path and call it”</td><td><b>4</b> copies + 3 different “reserved word” lists,
+          held together by matching error-message text.</td></tr>
+      </table>
+      <p>Then the public API shows you all of it. The project object has <b>33</b> members; the contract has
+        <b>46</b> interfaces; the vision needs <b>5</b>. And the file that lists them, <code>rpc-targets.ts</code>,
+        is <b>6,014 lines</b> — <b>2.35×</b> its size three weeks earlier, when a review already said “split
+        this up.” The “elegant” streams layer is the <em>biggest</em> directory at ~17k lines — which the
+        skeptic calls a gotcha and the design calls the point (streams are a library, not the kernel).</p>
+      <p>And three things that <em>should</em> be facts aren’t: <b>a repo commit, a file write, and a build
+        failure all happen with no event</b> — so nothing can react to them or trace them. That’s the one hole
+        that makes the log feel like a lie.</p>
+    </div>
+  </details>
+
+  <!-- 4 · WHAT TO DO -->
+  <details class="sec" open>
+    <summary><span class="st">4 · What to actually do — three tiers</span>
+      <span class="ss">Tier 1 needs no decision (delete + add the missing facts). Tier 2 is the real collapse. Tier 3 needs your call (§8).</span></summary>
+    <div class="body">
+      <details class="sub" open><summary><span class="st"><span class="badge b-do">just do it</span> Tier 1 — everybody agreed, no philosophy needed</span></summary>
+        <div class="body">
+          <ul>
+            <li><b>Add the 3 missing facts.</b> <code>repo/commit-landed</code>, <code>file/put→pointer-landed</code>,
+              <code>build→succeeded|failed</code>. Now commits, writes, and failures are traceable and
+              reactable. Cheap.</li>
+            <li><b>Make email a two-step fact</b> (request → sent). Today it sends first and maybe records
+              after — a crash in between = a lost email with no trace.</li>
+            <li><b>One egress door.</b> Slack goes through the door; gmail and github secretly don’t. Route
+              them through it.</li>
+            <li><b>Fix the build-cache bug.</b> “Immutable” builds re-resolve npm versions at build time, so
+              the same input can produce different bytes. That quietly breaks replay.</li>
+            <li><b>Delete the dead docs</b> (a 951-line doc teaching class names that no longer exist, plus a
+              QA playground shipped as a real route).</li>
+            <li><b>Collapse the duplicates from §3:</b> 2 fold engines → 1; 4 delivery lanes → 1; 5 durable-job
+              recoveries → 1 primitive — and make a <code>-requested</code> event refuse to compile without
+              its “how do I finish this after a crash” handler.</li>
+          </ul>
+          <p class="tag">This is most of the felt heaviness gone, with zero framing decisions. Could start Monday.</p>
+        </div>
+      </details>
+      <details class="sub"><summary><span class="st"><span class="badge b-x">bigger</span> Tier 2 — the real collapse (most leverage first)</span></summary>
+        <div class="body">
+          <ol>
+            <li><b>Make built-in tools ordinary mounts</b> on the one capability table → dissolves most of the
+              6k-line god-file and the whole code-generator that exists to document it.</li>
+            <li><b>One channel mechanism</b> — Slack/Telegram/email/GitHub become one small parameterized thing
+              (ideally living in the project’s own repo). ~2,500 lines.</li>
+            <li><b>Repo becomes the one filesystem</b> — workspace &amp; builder fold in; a sandbox becomes just
+              a mounted computer.</li>
+            <li><b>Fewer hops on the hot path</b> — merge two durable objects that fold the same log; resolve
+              mounts in-process (6 network hops → 2).</li>
+          </ol>
+          <p class="tag">Honest target: the core lands near <b>~6k lines</b>, not 5k. “5,000” was always
+            shorthand for <em>small enough that one person holds the whole thing in their head</em>.</p>
+        </div>
+      </details>
+      <details class="sub"><summary><span class="st">Tier 3 — the forks that need you (see §8)</span></summary>
+        <div class="body"><p>How far toward packages; how to update a million projects; births; expressions;
+          self-improvement. These are real choices, laid out in §8.</p></div>
+      </details>
+    </div>
+  </details>
+
+  <!-- 5 · THE THREE FRAMINGS -->
+  <details class="sec">
+    <summary><span class="st">5 · The three ways to explain it, scored (pros &amp; cons)</span>
+      <span class="ss">Runtime wins the pitch, one-log wins engineering, OS wins governance. Don’t pick one — use each where it fits.</span></summary>
+    <div class="body">
+      <p>Three full write-ups exist, each committing to one framing and attacking the other two. They’re not
+        rivals to choose between; each leads for a different audience.</p>
+
+      <details class="sub"><summary><span class="st">“Intelligent-entity runtime” — the vision pitch</span></summary>
+        <div class="body">
+          <p><b>Plain version:</b> a normal program’s loop runs inside one process and dies with it. This loop
+            lives in the log, so the program can crash, restart, and keep going — and some of its steps are a
+            model being asked a question. <i>A normal loop is around promises; this one is around lives.</i></p>
+          <div class="grid">
+            <div class="pro"><h4>Pro</h4><ul><li>The only framing that names what’s actually <b>new</b>.</li>
+              <li>Explains the key trick: a model answer is written down as a fact, so a replay <em>reads</em>
+                it — a program with a random step is still perfectly repeatable.</li></ul></div>
+            <div class="con"><h4>Con</h4><ul><li>“A story about the interesting 5%” — silent on updates,
+              billing, recovery.</li><li>Its weak word is “intelligent”: rip out the model and the same
+              runtime remains.</li></ul></div></div>
+        </div></details>
+
+      <details class="sub"><summary><span class="st">“One log and a fold” — for engineers &amp; the LLM</span></summary>
+        <div class="body">
+          <p><b>Plain version:</b> it’s a database turned inside out. Normally the table is the truth and the
+            log is a backup; here the log is the truth and the table is the backup. One write (add a line),
+            one read (replay). A quick call is a line you don’t keep; a workflow is a line you do.</p>
+          <div class="grid">
+            <div class="pro"><h4>Pro</h4><ul><li>The words become API calls immediately — the most plain of
+              the three.</li><li>Best for the model that has to <em>use</em> it: “add a fact, follow for the
+              result, fold for state.”</li></ul></div>
+            <div class="con"><h4>Con</h4><ul><li>Taken literally it’s false: audio, big files, and live
+              connections can’t all be log lines (the honest fix: one log of <em>truth</em> + a few typed
+              “devices”).</li><li>“A log says what happened; a runtime is still happening” — it hides the
+              crash-recovery work.</li></ul></div></div>
+        </div></details>
+
+      <details class="sub"><summary><span class="st">“An operating system” — for security &amp; ops</span></summary>
+        <div class="body">
+          <p><b>Plain version:</b> a tiny locked kernel, a few modules iterate runs, and packages for
+            everything else — plus two screens: <code>os.iterate.com</code> to run a company from the outside,
+            and the company’s own domain where it lives.</p>
+          <div class="grid">
+            <div class="pro"><h4>Pro</h4><ul><li>The only framing that answers who-owns-what, security
+              patches, and updating a million projects — with real arithmetic.</li><li>Clean rule: “if it has
+              to work when the project is broken, it lives outside the project.”</li></ul></div>
+            <div class="con"><h4>Con</h4><ul><li>Doesn’t explain the special part (a filesystem that’s
+              append-only, a scheduler that asks a model).</li><li>Familiar words that secretly mean something
+              different = highest confusion risk.</li></ul></div></div>
+        </div></details>
+      <p class="rec"><b>Verdict:</b> pitch with the runtime, teach with the log, govern with the OS. And for
+        all three: <b>first say what the programmer does, then reach for the metaphor.</b></p>
+    </div>
+  </details>
+
+  <!-- 6 · THE BIG IDEAS -->
+  <details class="sec">
+    <summary><span class="st">6 · The directional ideas, with concrete examples</span>
+      <span class="ss">Just-fetch · the one-door security model · config-as-code · births · expressions-as-grants · sandboxes-as-mounts · the three rings · updating a million projects.</span></summary>
+    <div class="body">
+
+      <details class="sub"><summary><span class="st">One <code>fetch</code> for everything — and it’s the whole security story</span></summary>
+        <div class="body">
+          <p>Instead of separate “incoming” and “outgoing” machinery, there’s one <code>fetch</code>. The
+            hostname decides what happens:</p>
+          <div class="eg"><div class="lbl">the same verb, two destinations</div>
+<pre>fetch("http://billing.iterate/invoices")            → stays inside the project. free. no checks.
+
+fetch("https://api.stripe.com/charges", {
+  headers: { Authorization: getSecret("stripe") }   → leaves the project → THE ONE GATE:
+})                                                     swap the real key in, check it's allowed
+                                                       to reach stripe.com, maybe ask a human, log it.</pre>
+          </div>
+          <p>Why this matters: an agent can run <em>any</em> code, message anything internal, read any
+            internal state — and none of it can hurt anyone until bytes try to leave. So security isn’t 33
+            scattered checks; it’s <b>one guard on one door.</b></p>
+          <div class="slogan small">Inside the house is free. The only thing that matters is what goes out the door.</div>
+        </div></details>
+
+      <details class="sub"><summary><span class="st">Config is a <code>worker.ts</code> that can override any default</span></summary>
+        <div class="body">
+          <p>Every project is born with a <code>worker.ts</code> that already sees every event and can react.
+            The clever part is how it overrides platform defaults without a fight — <b>both</b> the platform
+            and your code append with the <em>same</em> key, and the log keeps the last one:</p>
+          <div class="eg"><div class="lbl">how "override the default model" actually works</div>
+<pre>platform appends:  agent/config { model: "gpt-5.6", key: "defaults@birth" }
+your worker adds:  agent/config { model: "claude",  key: "defaults@birth" }  ← same key
+
+fold keeps last-by-key  →  model = "claude".   No callback, no waiting, no fight.
+To override: just append first, or re-append. To keep the default: do nothing.</pre>
+          </div>
+          <div class="grid"><div class="pro"><h4>Pro</h4><ul><li>Every default is overridable in the project’s
+            own code, without shipping code into a million repos.</li></ul></div>
+            <div class="con"><h4>Con</h4><ul><li>The dumb version — platform calls your code and <em>waits</em>
+              — is wrong; your code reacts <em>after</em> the fact and can never block the log.</li>
+              <li>Two judges warned: don’t run user code on <em>every</em> event (fleet tax); make it react
+                only to events it selected.</li></ul></div></div>
+        </div></details>
+
+      <details class="sub"><summary><span class="st">Expressions + “bind” = a safe way to hand out narrow powers</span></summary>
+        <div class="body">
+          <p>Today a stored “call this later” is an ugly nested array. Make it writable as normal code, and
+            let you <em>bind</em> an argument to narrow it:</p>
+          <div class="eg"><div class="lbl">give a helper the power to post to ONE channel, nothing else</div>
+<pre>const postToSupport =
+  grant( itx.slack.postMessage ).bind({ channel: "#support" })
+
+// postToSupport({ text: "hi" })   ✅ works
+// postToSupport({ text: "hi", channel: "#ceo-private" })   ❌ rejected — channel is fixed
+</pre>
+          </div>
+          <p>Now one format works for stored subscriptions, tool grants, egress rules, and secret
+            placeholders — “everything is an expression.”</p>
+          <div class="grid"><div class="pro"><h4>Pro</h4><ul><li>One readable, inspectable, revocable way to
+            hand out a <em>slice</em> of a capability.</li></ul></div>
+            <div class="con"><h4>Con</h4><ul><li>“Bind” must be an enforced <em>constraint</em>, not a
+              merge-the-objects (that’s a security hole). Keep the grammar tiny: get + call, no loops, no
+              eval.</li><li>An expression is a name, not authority — power still comes from who runs it.</li></ul></div></div>
+        </div></details>
+
+      <details class="sub"><summary><span class="st">Sandboxes are nothing special — just a mount</span></summary>
+        <div class="body">
+          <p>A “sandbox” is a computer you plug in. There’s no reason it needs its own subsystem — it’s a
+            capability like any other, and the provider is just which one you mounted:</p>
+          <div class="eg"><div class="lbl">the whole world's compute, one grammar</div>
+<pre>itx.mount("machines/fly",   { region: "lhr" })
+itx.mount("machines/e2b",   {})
+itx.mount("machines/my-mac", {})   // a laptop in a menu bar
+// then: box.exec("python train.py")   — egress still goes through the one door</pre>
+          </div>
+          <p class="tag">Deletes a whole “domain.” All the world’s machines become addressable the same way
+            all the world’s SaaS is.</p>
+        </div></details>
+
+      <details class="sub"><summary><span class="st">Everything in userspace? — the reversal, and “three rings”</span></summary>
+        <div class="body">
+          <p>The night’s biggest course-correction. The dream: ship <em>everything</em> (even agents) as npm
+            packages in each project. The counter is strong enough that the panel killed the mandate 6–0.</p>
+          <div class="grid"><div class="pro"><h4>Pro (the dream)</h4><ul><li>Userspace-first is the vision:
+            self-improvement, portability, a real marketplace.</li></ul></div>
+            <div class="con"><h4>Con (why 6/6 judges killed the mandate)</h4><ul><li>npm is a file-download
+              service, not trust or billing or support.</li><li>A non-technical founder can’t audit 20
+              strangers’ access grants — that’s trusting 20 employees you never met.</li><li>The agent code
+              is a deep, cohesive module — splitting it up buys a support nightmare, not simplicity.</li></ul></div></div>
+          <p class="rec"><b>The survivor — three rings:</b> ① a locked kernel · ② a few deep modules iterate
+            runs (agents, repo, secrets, scheduling) · ③ packages for leaf apps. “Everything in userspace”
+            survives as a <em>test</em> (“could a stranger rebuild this without secret backdoors?”) — not as a
+            rule that everything must ship as a package.</p>
+        </div></details>
+
+      <details class="sub"><summary><span class="st">Updating a million projects without breaking them</span></summary>
+        <div class="body">
+          <p>You can’t re-edit a million git repos every time you fix something. The math is brutal, but the
+            answer is the one every OS already uses.</p>
+          <div class="eg"><div class="lbl">the numbers</div>
+<pre>Rebase every repo on each change:   1 weekly update × 1,000,000 repos = 52,000,000 repo edits/year
+                                    even at 99.999% success = 10 broken projects EVERY release.
+
+Give each project its own worker:   ~$20,000/month just to hold a million scripts,
+                                    ~69 hours to upload them all.
+
+Publish a version + a "channel":    projects that follow "stable" pick it up on their next build.
+                                    Pinned projects don't. Nobody rebases. ← this is apt / the App Store.</pre>
+          </div>
+          <p class="rec"><b>Verdict:</b> per layer — kernel updates ship instantly (one deploy); third-party
+            things follow a channel + version-lock; only the code a project truly owns lives in its repo.
+            <b>Don’t build the million-repo rebaser.</b></p>
+        </div></details>
+
+    </div>
+  </details>
+
+  <!-- 7 · THE VOTE -->
+  <details class="sec" open>
+    <summary><span class="st">7 · The vote — build / shelve / kill the wild ideas</span>
+      <span class="ss">6 independent judges (3 Claude + 3 codex, each a different stake). Unanimous: BUILD “just fetch” &amp; “expressions-as-grants”; KILL “everything-as-a-package.”</span></summary>
+    <div class="body">
+      <p>Six judges voted independently, each with a different job to protect: a <b>shipper</b> (what a small
+        team can build this quarter), a <b>security</b> reviewer, a <b>developer-experience</b> judge
+        (can an LLM and a normal dev use it day one), a <b>distributed-systems skeptic</b> (does it survive
+        crashes &amp; replay), a <b>ten-year founder</b> (the vision), and a <b>cost/ops</b> judge (what
+        happens at a million projects). Green = build now, amber = shelve as a north-star, red = rule out.</p>
+      <table class="vt">
+        <tr><th class="idc">Idea</th><th>Ship</th><th>Sec</th><th>DX</th><th>Skep</th><th>Found</th><th>Cost</th><th>Verdict</th></tr>
+        <tr><td class="idc">D1 · Just fetch (one door)</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td><span class="vpill b">BUILD 6–0</span></td></tr>
+        <tr><td class="idc">D5 · Expressions + bind-as-grant</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td><span class="vpill b">BUILD 6–0</span></td></tr>
+        <tr><td class="idc">C6 · LLM = a journaled step</td><td class="vb">B</td><td class="vs">S</td><td class="vs">S</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td><span class="vpill b">BUILD 4–2</span></td></tr>
+        <tr><td class="idc">D4 · Config overrides defaults</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td class="vk">K</td><td class="vb">B</td><td class="vk">K</td><td><span class="vpill b">BUILD 4–2*</span></td></tr>
+        <tr><td class="idc">C5 · Present as a filesystem</td><td class="vs">S</td><td class="vs">S</td><td class="vb">B</td><td class="vb">B</td><td class="vb">B</td><td class="vs">S</td><td><span class="vpill b">BUILD as a view 3–3</span></td></tr>
+        <tr><td class="idc">C2 · The entity is a file</td><td class="vs">S</td><td class="vs">S</td><td class="vs">S</td><td class="vk">K</td><td class="vb">B</td><td class="vs">S</td><td><span class="vpill s">SHELVE 4·1·1</span></td></tr>
+        <tr><td class="idc">C1 · The Last RPC</td><td class="vs">S</td><td class="vs">S</td><td class="vs">S</td><td class="vk">K</td><td class="vs">S</td><td class="vk">K</td><td><span class="vpill s">SHELVE 4·0·2</span></td></tr>
+        <tr><td class="idc">C7 · Time is a place</td><td class="vs">S</td><td class="vs">S</td><td class="vs">S</td><td class="vk">K</td><td class="vb">B</td><td class="vs">S</td><td><span class="vpill s">SHELVE 4·1·1</span></td></tr>
+        <tr><td class="idc">C3 · Shadow-self self-improvement</td><td class="vk">K</td><td class="vk">K</td><td class="vs">S</td><td class="vs">S</td><td class="vb">B</td><td class="vs">S</td><td><span class="vpill s">SHELVE 3·1·2</span></td></tr>
+        <tr><td class="idc">C4 · Hire software companies</td><td class="vk">K</td><td class="vs">S</td><td class="vk">K</td><td class="vs">S</td><td class="vs">S</td><td class="vb">B</td><td><span class="vpill s">SHELVE 3·1·2</span></td></tr>
+        <tr><td class="idc">D2 · Move streams to userspace</td><td class="vk">K</td><td class="vs">S</td><td class="vk">K</td><td class="vk">K</td><td class="vs">S</td><td class="vk">K</td><td><span class="vpill k">KILL (as a move) 4–2</span></td></tr>
+        <tr><td class="idc">D3 · Everything-as-a-package (mandate)</td><td class="vk">K</td><td class="vk">K</td><td class="vk">K</td><td class="vk">K</td><td class="vk">K</td><td class="vk">K</td><td><span class="vpill k">KILL 6–0</span></td></tr>
+      </table>
+      <p class="tag">* D4 splits: build it, but as the skeptic &amp; cost judge insist — the config reacts only
+        to events it <em>selected</em>, not a callback on every event; the winning race must be by a fixed key,
+        not luck.</p>
+
+      <h2 style="margin-top:22px">What that means, idea by idea</h2>
+
+      <div class="verdict b"><b>Build now.</b> <b>Just fetch</b> (every judge’s #1 — fewer verbs, one security
+        door, half-built already). <b>Expressions + bind-as-grant</b> (one readable, revocable way to hand out
+        a slice of a power). <b>Config-overrides-defaults</b> (already shipped; just make overrides
+        <em>selective</em> and <em>loud</em>). <b>“The model is a step you write down”</b> — not really a
+        build, more a rule to make sacred: journal every model answer so replay reads it.</div>
+
+      <div class="verdict b"><b>Build, but only the tame slice.</b> <b>Present the project as a filesystem</b>
+        (<code>ls</code>/<code>cat</code>/<code>grep</code> is the most LLM-legible front door there is) — but
+        as a <em>view</em>, where a log is a folder, a fold is a generated file, and live audio is a pipe, not
+        a stored file. And a <b>read-only “rewind to any past moment” debugger</b> (the safe half of “time is a
+        place”).</div>
+
+      <div class="verdict s"><b>Shelve as north-stars — real, but not now.</b> <b>The entity is a file</b>
+        (portability moat; needs exact-replay first). <b>The Last RPC</b> (keep it as a way to <em>compile</em>
+        calls, not a promise that a call and a workflow are identical — they aren’t). <b>Shadow-self
+        self-improvement</b> (a testing tool, never an auto-promote button — it can’t simulate how the real
+        world would have replied). <b>Hire software companies</b> (the most beautiful long game — and the one
+        the cost judge singled out as the real fix for fleet updates — but it turns a platform into an
+        economy, with vendor bankruptcy and supply-chain risk).</div>
+
+      <div class="verdict k"><b>Rule out.</b> <b>Everything-as-a-package as a mandate (D3)</b> — killed 6–0,
+        the “kill hardest” pick of four judges: it hands a non-technical founder 20 strangers to trust and
+        turns one coherent company into an un-auditable dependency graph. <b>Moving streams out of the kernel
+        (D2)</b> — killed 4–2 <em>as a code move</em>: the razor is right that streams <em>could</em> be
+        userspace, but doing it makes every processor re-implement crash-safety, and the log’s correctness is
+        exactly what must survive a broken userspace. Keep it as a true statement, not a migration.</div>
+
+      <h2 style="margin-top:22px">My own read (where I’d come down)</h2>
+      <p><b>Include immediately:</b> D1, D5, D4 (selective), and the C6 invariant — these are cheap, they
+        <em>reduce</em> concepts, and every seat at the table wanted them. <b>Include as a view:</b> C5 (the
+        filesystem face) — it’s the single biggest legibility win for the LLM that has to use this, and it
+        pairs perfectly with “just fetch.” <b>Rule out for real:</b> D3 and D2-as-a-move — not because they’re
+        wrong in spirit, but because they trade a working thing for a purity that the panel showed costs more
+        than it saves. <b>Keep alive but off the roadmap:</b> C2, C1, C7, C3, C4 — they’re the vision’s soul;
+        they just shouldn’t touch production until the boring facts (Tier 1) and one exact-replay foundation
+        exist. The one I’d most want to prototype small is <b>C7’s read-only rewind</b> — it’s a killer debug
+        tool and it falls out of “state is a fold” almost for free.</p>
+
+      <h2 style="margin-top:22px">What the judges said was MISSING from the ballot</h2>
+      <ul>
+        <li><b>Ship judge:</b> the Tier-1 deletions themselves deserve a vote — they’re the highest-leverage,
+          lowest-risk work and they weren’t even on the list.</li>
+        <li><b>Security:</b> a tamper-proof, hash-chained record of every access granted, narrowed, or revoked,
+          and every egress decision — “the one door is only trustworthy if its history can’t be forged.”</li>
+        <li><b>DX:</b> a build-breaking lint that fails CI if any concept or public name can’t be explained in
+          one line of ordinary words — Urbit’s lesson turned into a merge gate.</li>
+        <li><b>Skeptic &amp; Cost (agree):</b> first-class durable jobs + fleet-native version channels with
+          content locks, staged rollout, and auto-rollback — i.e. bless the obligation primitive and the
+          “publish-a-channel” update model as real features, not afterthoughts.</li>
+        <li><b>Founder:</b> “collective evolution” — let entities distill proven improvements into signed,
+          privacy-preserving patches that other entities can choose to inherit.</li>
+      </ul>
+      <p class="tag">Two of these (durable jobs, version channels) are already Tier-1/§6; two are genuinely
+        new and good (the audit log; the CI legibility lint); one is a fresh north-star (collective evolution).</p>
+    </div>
+  </details>
+
+  <!-- 8 · THE WILD IDEAS -->
+  <details class="sec">
+    <summary><span class="st">8 · The wild ideas in full (with a concrete example each)</span>
+      <span class="ss">The vote in §7 rated these; here’s what each one actually is, plus why it’s beautiful and how it bites.</span></summary>
+    <div class="body">
+
+      <div class="idea"><p class="baam">A call is a line you don’t keep; a workflow is a line you do. <span class="badge">shelve</span></p>
+        <div class="eg"><pre>quick call:   add EPHEMERAL {invoke:"getUser", args:[7]}  →  wait for {result}  →  line is dropped
+workflow:     add DURABLE   {invoke:"getUser", args:[7]}  →  wait for {result}  →  line kept forever
+the only difference: one boolean, "keep it or not."</pre></div>
+        <div class="grid"><div class="pro"><h4>Beautiful</h4><ul><li>One mechanism for calls and workflows;
+          replay, audit, and history come free.</li></ul></div><div class="con"><h4>But…</h4><ul><li>A call
+          also needs timeouts, cancellation, streaming, backpressure — “keep it or not” isn’t the only
+          difference. Use it as a <em>compiler</em>, not a law.</li></ul></div></div></div>
+
+      <div class="idea"><p class="baam">The entity is a file. <span class="badge">shelve</span></p>
+        <div class="eg"><div class="lbl">what's literally in the tarball</div>
+<pre>acme.tar
+├── repo/       the code (git: worker.ts, package.json)
+├── streams/    the logs (/agents/*, /integrations/*, …)
+├── blobs/      big files, by hash
+└── lock.json   exact package versions + which code-hash processed each event
+NOT inside: secrets, live Slack sessions, emails already sent.</pre></div>
+        <div class="grid"><div class="pro"><h4>Beautiful</h4><ul><li>Backups, staging, and “leave for a
+          competitor” all become “replay the file.” The deepest trust moat there is.</li></ul></div>
+          <div class="con"><h4>But…</h4><ul><li>It holds state, not <em>consequences</em> — the sent emails and
+            moved worlds aren’t in the tar, only the receipts.</li></ul></div></div></div>
+
+      <div class="idea"><p class="baam">Rehearse new code against your own past before it goes live. <span class="badge">shelve</span></p>
+        <p>Before promoting a change, replay the entity’s last week of real events through the new code with
+          the outside world blocked, and compare what it <em>would</em> have done.</p>
+        <div class="grid"><div class="pro"><h4>Beautiful</h4><ul><li>Turns “the agent edited its own code and
+          we prayed” into “we checked it against real life.”</li></ul></div><div class="con"><h4>But…</h4><ul>
+          <li>It can’t know how the customer would have replied differently; the judge shares the agent’s
+            blind spots. A <b>test tool, never an auto-promote button</b> — always end with a small live
+            trial.</li></ul></div></div></div>
+
+      <div class="idea"><p class="baam">Don’t install software — hire a company. <span class="badge">shelve</span></p>
+        <p>A tasks app isn’t a tarball; it’s a live provider at <code>tasks.vendor.com</code>. You don’t
+          install it — you <em>hire</em> it with a contract made of signed events, and it runs in <em>its</em>
+          project, not yours.</p>
+        <div class="grid"><div class="pro"><h4>Beautiful</h4><ul><li>Solves fleet updates outright: the
+          provider patches <em>one</em> running service, not a million repos. Vendors become accountable
+          companies, not anonymous package names. (The cost judge’s favorite idea.)</li></ul></div>
+          <div class="con"><h4>But…</h4><ul><li>Turns a platform into an economy — bankruptcy, correlated
+            failure, supply-chain concentration.</li></ul></div></div></div>
+
+      <div class="idea"><p class="baam">The whole project is one tree — but not every leaf is a stored file. <span class="badge">build as a view</span></p>
+        <div class="eg"><pre>/acme
+├── agents/support/log/…      ← real files (durable events)
+├── agents/support/state.json ← a generated file (a fold; recomputed, not stored)
+├── repo/worker.ts            ← editable code
+├── secrets/stripe            ← write-only, can't be read back
+└── calls/42/audio.pcm        ← a PIPE (live audio flows through; nothing is kept)</pre></div>
+        <div class="grid"><div class="pro"><h4>Beautiful</h4><ul><li>One namespace; <code>ls</code>/<code>cat</code>/<code>grep</code>/<code>watch</code>
+          — the tools every human and every model already knows. The most legible possible front door.</li></ul></div>
+          <div class="con"><h4>But…</h4><ul><li>Not a real filesystem underneath — a typed view hiding several
+            kinds of storage. “Everything has a path; not everything is a file.”</li></ul></div></div></div>
+
+      <div class="idea"><p class="baam">Rewind to any moment of the entity’s life. <span class="badge">shelve (build the read-only half)</span></p>
+        <p>Because state is just the log replayed, every past self still exists. Make it addressable:
+          <code>itx.at(offset:#3)</code> gives you the entity exactly as it was after event #3 — debugging
+          becomes time travel.</p>
+        <div class="grid"><div class="pro"><h4>Beautiful</h4><ul><li>The trace panel and inspector are just
+          special cases of this; “show me the moment before it broke” becomes a verb.</li></ul></div>
+          <div class="con"><h4>But…</h4><ul><li>Replaying 10M events isn’t free (needs snapshots), and the
+            outside world isn’t in the log, so “what if” hits a wall at every external call.</li></ul></div></div></div>
+
+    </div>
+  </details>
+
+  <!-- 9 · THE CASE AGAINST -->
+  <details class="sec">
+    <summary><span class="st">9 · The case against all of this (steelmanned)</span>
+      <span class="ss">The boring-tech skeptic, the “code as content-addressed values” lens, and Urbit — the warning that outranks the architecture.</span></summary>
+    <div class="body">
+      <details class="sub"><summary><span class="st">The skeptic: “just use Postgres, a queue, and cron”</span></summary>
+        <div class="body">
+          <ol>
+            <li><b>“Log-everything” is a known trap, and the repo is already in it:</b> 122 event types you can
+              now never change; the core format is on version 14 (each bump replays everything); and mutable
+              caches are quietly creeping back in — the classic tell that pure event-sourcing didn’t hold.</li>
+            <li><b>The 5,000-line kernel is an accounting trick:</b> the honest number is ~6k, reached by
+              relabeling 63k lines of other code as “packages.” Moving it isn’t deleting it.</li>
+            <li><b>A startup wants boring parts:</b> Postgres + a durable queue (Temporal <em>is</em> the
+              durable-job primitive) + cron + an LLM API, with hireable engineers and a debugger that shows a
+              table — not a home-grown system only its authors can run.</li>
+            <li><b>“Any SaaS as an npm package” buys a supply-chain attack surface</b> for a marketplace that
+              may never have sellers.</li>
+          </ol>
+          <p class="rec"><b>Even the skeptic keeps:</b> the durable-job pattern (maybe via Temporal),
+            config-as-overridable-data, and log-sourcing the <em>one</em> thing that truly fits — the agent
+            conversation.</p>
+        </div></details>
+      <details class="sub"><summary><span class="st">Content-addressed code (Unison/Nix): the fleet-update answer</span></summary>
+        <div class="body">
+          <p>Make the repo point at code <em>by hash</em>, like a lockfile. A platform update publishes new
+            hashes; a project follows a channel or pins a version; <b>nobody rebases, because behavior is a
+            name you follow, not code copied into your repo.</b> iterate already does ~60% of this (its build
+            key is a content hash that collapses a million identical repos to one build).</p>
+          <p class="tag">Catch: the pure version is hostile to humans and to an LLM trained on files-and-git.
+            Answer: content-address <em>inside</em>, keep git <em>outside</em>.</p>
+        </div></details>
+      <details class="sub"><summary><span class="st">Urbit: the warning that outranks the architecture</span></summary>
+        <div class="body">
+          <p>Urbit is the closest thing that already exists (state = a fold of a log, boot = replay, upgrades
+            = events) and it’s been technically beautiful and adoption-irrelevant for 20 years. It didn’t die
+            of bad architecture.</p>
+          <div class="slogan">Urbit died of a private language only its authors spoke.</div>
+          <p>This exploration is already growing one (organ, attenuation, worldline…). Fine as private notes;
+            never at the front door.</p>
+          <p class="rec"><b>The one discipline that outranks everything:</b> every concept explains in one line
+            of ordinary words, and nobody learns a new word to do their first useful thing. (The DX judge
+            wants this as a build-breaking CI check.)</p>
+        </div></details>
+    </div>
+  </details>
+
+  <!-- 10 · THE FORKS -->
+  <details class="sec">
+    <summary><span class="st">10 · The decisions that are yours to make</span>
+      <span class="ss">The forks where analysis runs out and it’s a judgment call — each with the options and a recommendation.</span></summary>
+    <div class="body">
+      <div class="fork"><p class="q">Which one-liner leads the website?</p>
+        <div class="rec"><b>Recommend:</b> “intelligent-entity runtime,” grounded immediately by the plain
+          version. But decide: is “intelligent entity” the category you sell, or the first use of a more
+          general durable runtime?</div></div>
+      <div class="fork"><p class="q">How far toward packages?</p>
+        <div class="rec"><b>Recommend (and the vote backs it):</b> three rings; “everything in userspace” as a
+          test, not a mandate. Decide out loud where iterate will <em>never</em> be extensible (auth, the log,
+          crash-recovery, grants, secrets, the door, billing, recovery).</div></div>
+      <div class="fork"><p class="q">Is the model a first-class part of the runtime, or just another tool?</p>
+        <div class="rec"><b>Decide:</b> does the runtime <em>know</em> what a model call is (and give it
+          request-ids, streaming, accounting), or just enforce the general rule “write down anything you can’t
+          recompute”?</div></div>
+      <div class="fork"><p class="q">Streams: privileged and built-in, or replaceable userspace?</p>
+        <div class="rec"><b>Recommend:</b> “privileged, with a public replacement seam.” The vote killed
+          actually moving them. Pick your poison: a slightly bigger trusted core, or a smaller one with
+          crash-safety re-implemented above it.</div></div>
+      <div class="fork"><p class="q">Is the substrate overengineered?</p>
+        <div class="rec"><b>The test:</b> can you defend it to a skeptical senior hire? If not yet, close the
+          gap by adopting Urbit’s version-migration discipline (the concrete answer to “the log format
+          changed”).</div></div>
+    </div>
+  </details>
+
+  <!-- 11 · THE API -->
+  <details class="sec">
+    <summary><span class="st">11 · The whole core on one page</span>
+      <span class="ss">Four verbs, a handful of types, and an honest budget (~14.4k lines today → ~6k after the collapse).</span></summary>
+    <div class="body">
+      <p>If the collapse lands, the entire API is four verbs. Everything else — subscribe, mount, call,
+        obligation, birth — is built from them.</p>
+<pre><code>authenticate(credentials)  →  a project-scoped handle   // the only way to get authority
+append(path, events)       →  { offset }                // the only write
+follow(path, opts)         →  events | state            // the only read
+fetch(request)             →  Response                  // in by hostname, out through the one door
+
+// everything else is just these:
+subscribe   = append a "please deliver to me" fact       call      = append (don't keep) + follow til done
+mount a tool= append a "capability here" fact            workflow  = append (keep) + follow til done
+birth       = the first append to a path                 an agent  = a processor with a prompt</code></pre>
+      <table>
+        <tr><th>Core piece</th><th>Today</th><th>After</th></tr>
+        <tr><td>Log engine (append / read / fold)</td><td>~1,300</td><td>~900</td></tr>
+        <tr><td>Processor engine + durable jobs</td><td>~2,400</td><td>~1,400</td></tr>
+        <tr><td>Delivery (one lane; browser too)</td><td>~2,800</td><td>~800</td></tr>
+        <tr><td>Expressions (quote / bind / run)</td><td>~1,700</td><td>~600</td></tr>
+        <tr><td>Auth + confinement</td><td>~1,200</td><td>~700</td></tr>
+        <tr><td>The one door + secret-swap</td><td>~1,700</td><td>~700</td></tr>
+        <tr><td>Repo + build/load of the config worker</td><td>~3,300</td><td>~900</td></tr>
+        <tr><td><b>Total</b></td><td><b>~14,400</b></td><td><b>~6,000</b></td></tr>
+      </table>
+      <div class="slogan small">The core is four verbs. If a file doesn’t implement one of them, it’s a package.</div>
+    </div>
+  </details>
+
+  <!-- 12 · SOURCES -->
+  <details class="sec">
+    <summary><span class="st">12 · Where the full detail (and the code proof) lives</span>
+      <span class="ss">This page is the tip. Every number here is grounded in code in these files.</span></summary>
+    <div class="body">
+      <p>In <code>apps/os/docs/</code>:</p>
+      <ul>
+        <li><code>simplification-ruminations-2026-07.md</code> — the full notebook (vision, the verified
+          collapse list, the big ideas, the crazy corner, and the second-model rounds verbatim).</li>
+        <li><code>simplification/synthesis.md</code> — the cook-down · <code>open-questions-and-interview.md</code>
+          — the interview agenda · <code>explain-plain.md</code> — the whole thing in plain words.</li>
+        <li><code>simplification/explain-{entity-runtime,one-log,operating-system}.md</code> — the three
+          framings in full · <code>explain-referee.md</code> — scored.</li>
+        <li><code>simplification/devils-advocate.md</code> · <code>lens-content-addressed.md</code> ·
+          <code>lens-sovereign-computer.md</code> · <code>crazy-vfs-and-entity-runtime.md</code> ·
+          <code>debate-log.md</code> (the running notes — start at its “Morning status” block).</li>
+      </ul>
+    </div>
+  </details>
+
+  <p class="foot">Four things to remember: <b>the seed confines · the log remembers · processors keep going ·
+    the OS model governs who may change what.</b> And the rule that outranks the architecture:
+    <b>no word at the front door that a working programmer doesn’t already own.</b></p>
+
+</main>
+
+<script>
+  function allOpen(open){document.querySelectorAll('details').forEach(d=>d.open=open);}
+</script>
+</body>
+</html>
