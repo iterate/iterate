@@ -172,6 +172,40 @@ describe("script execution reconciliation", () => {
     });
   });
 
+  it("settles and cancels a started script when its absolute deadline passes", async () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.parse("2026-07-15T20:30:12.077Z");
+      vi.setSystemTime(now);
+      const stream = new MemoryStream();
+      const run = new Promise<unknown>(() => {}) as Promise<unknown> & {
+        [Symbol.dispose]: ReturnType<typeof vi.fn>;
+      };
+      run[Symbol.dispose] = vi.fn();
+      const processor = makeProcessor({ stream, run: () => run });
+      const [requested] = await stream.append({
+        type: T.requested,
+        payload: {
+          code: 'async (itx) => { const sandbox = await itx.sandboxes.get("/sandboxes/iterate-live-clocks"); return sandbox.exec("pnpm typecheck", { timeout: 1200000 }); }',
+          executionId: "agent-output:13980",
+          expiresAt: now + 1_000,
+        },
+      });
+
+      await processor.ingest({ events: stream.events, streamMaxOffset: requested!.offset });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const completed = stream.events.find((event) => event.type === T.completed);
+      expect(completed?.payload).toMatchObject({
+        executionId: "agent-output:13980",
+        error: expect.stringContaining("deadline"),
+      });
+      expect(run[Symbol.dispose]).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a completion settles the obligation for good: replayed batches change nothing", async () => {
     const stream = new MemoryStream();
     const processor = makeProcessor({ stream, run: async () => "done" });
