@@ -65,6 +65,8 @@ const WORKER_CONSUMER_PROCESS_EVENT =
   process.env.STREAM_BENCH_WORKER_CONSUMER_PROCESS_EVENT === "1";
 const WORKER_CONSUMER_PAIRED = process.env.STREAM_BENCH_WORKER_CONSUMER_PAIRED === "1";
 const WORKER_CONSUMER_EPHEMERAL = process.env.STREAM_BENCH_WORKER_CONSUMER_EPHEMERAL === "1";
+const WORKER_CONSUMER_CANDIDATE_FIRST =
+  process.env.STREAM_BENCH_WORKER_CONSUMER_CANDIDATE_FIRST === "1";
 const WORKER_CONSUMER_PAYLOAD_BYTES = Number(
   process.env.STREAM_BENCH_WORKER_CONSUMER_PAYLOAD_BYTES ?? "0",
 );
@@ -1905,14 +1907,14 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
             (event) => event.path === SOURCE_PATH && event.type === TRIGGER_TYPE,
           )?.payload.mode;
           if (mode === "baseline") {
-            for (const event of batch.events) await this.processEvent(event);
+            for (const event of batch.events) {
+              const result = this.processEvent(event);
+              if (result !== undefined) await result;
+            }
             return;
           }
           if (mode !== "candidate") throw new Error(\`Unknown processEvent mode: \${mode}.\`);
-          for (const event of batch.events) {
-            const result = this.processEvent(event);
-            if (result !== undefined) await result;
-          }
+          await super.processEventBatch(batch);
         }`
             : ""
         }
@@ -1986,29 +1988,41 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           });
           this.#project = await this.env.ITX.get();
           const source = this.#project.streams.get(SOURCE_PATH);
-          this.#handles.push(
-            await source.subscribe({
-              eventTypes: [BASELINE_TRIGGER_TYPE],
-              processEventBatch: async (batch) => {
-                let finalEvent;
-                for (const event of batch.events) {
-                  if (this.#accept(event, "baseline")) finalEvent = event;
-                }
-                if (finalEvent !== undefined) await this.#complete(finalEvent, "baseline");
-              },
-            }),
-          );
-          this.#handles.push(
-            await subscribe(source, {
-              eventTypes: [CANDIDATE_TRIGGER_TYPE],
-              processEvent: (event) => this.#processEvent(event),
-            }),
-          );
+          if (${JSON.stringify(WORKER_CONSUMER_CANDIDATE_FIRST)}) {
+            await this.#installCandidate(source);
+            await this.#installBaseline(source);
+          } else {
+            await this.#installBaseline(source);
+            await this.#installCandidate(source);
+          }
           await this.#project.streams.get(OUTPUT_PATH).append({
             type: READY_TYPE,
             payload: { expectedCompletions },
           });
           return await lifetime;
+        }
+
+        async #installBaseline(source) {
+          this.#handles.push(
+            await source.subscribe({
+              eventTypes: [BASELINE_TRIGGER_TYPE],
+              processEventBatch: async (batch) => {
+                for (const event of batch.events) {
+                  const result = this.#processEvent(event, "baseline");
+                  if (result !== undefined) await result;
+                }
+              },
+            }),
+          );
+        }
+
+        async #installCandidate(source) {
+          this.#handles.push(
+            await subscribe(source, {
+              eventTypes: [CANDIDATE_TRIGGER_TYPE],
+              processEvent: (event) => this.#processEvent(event, "candidate"),
+            }),
+          );
         }
 
         #accept(event, mode) {
@@ -2038,9 +2052,9 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           return true;
         }
 
-        #processEvent(event) {
-          if (this.#accept(event, "candidate")) {
-            return this.#complete(event, "candidate");
+        #processEvent(event, mode) {
+          if (this.#accept(event, mode)) {
+            return this.#complete(event, mode);
           }
         }
 

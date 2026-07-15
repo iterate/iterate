@@ -3637,3 +3637,199 @@ across isolate churn. If the local map is lost, correctness collapses to extra
 reads, conditional-write retries, and explicit full reindex, not event loss or
 Stream unavailability. The accepted implementation entered the draft PR at
 commits `58a812143` and `0e568690c`. Production was not deployed or erased.
+
+## 2026-07-15: Twelfth Current-Main Cumulative Checkpoint
+
+The twelfth checkpoint pinned candidate
+`b65e30af314ac0922dea2d8150c5beaa2bd7e788` against freshly fetched main
+`7b106d623ca1d814304443c0ad34f8e36ac0b0bb`. Separate local workerd servers
+ran those exact revisions. Node-host timers enclosed awaited network/RPC work
+or host-observed output, so Cloudflare's frozen isolate clock cannot create a
+false speedup.
+
+Five fresh processes per revision ran each of the complete suite, enlarged
+storage/reactivation controls, append-tail controls, live-delivery controls,
+and enlarged cross-post controls. All 50 processes and every semantic
+assertion passed. The unmodified full-suite geometric result was 38.177%
+lower p50, 35.911% lower p95, and 36.498% lower mean latency.
+
+The conservative headline preserves the checkpoint-eight through eleven
+substitution rule rather than choosing controls after seeing this result. It
+replaces singleton append, 100-event append, concurrent-32 append,
+one-subscriber live delivery, and 25-subscriber live delivery with their
+larger focused controls, then takes an equal-workload geometric mean:
+
+| Equal-workload statistic | Improvement versus current main |
+| ------------------------ | ------------------------------: |
+| p50                      |                     **34.312%** |
+| p95                      |                     **29.007%** |
+| mean                     |                     **32.771%** |
+
+This is a branch-versus-main result for equally weighted workloads, not a sum
+of prior percentages and not a production-traffic weighting. The unusually
+large change includes all accepted work through the search rewrite coalescer;
+one checkpoint does not establish that every environment will reproduce a
+stable 34% aggregate win.
+
+Focused median-of-five-run results were:
+
+| Focused workload                     | P50 change | P95 change | Mean change |
+| ------------------------------------ | ---------: | ---------: | ----------: |
+| Append one 1 KiB event               |     70.76% |     69.43% |      66.08% |
+| Append 100 tiny events               |     22.60% |      9.96% |      27.03% |
+| Append 100 1 KiB events              |     36.65% |     22.74% |      31.93% |
+| Append 1,000 tiny events             |     36.86% |     13.63% |      32.11% |
+| Append 100 keyed tiny events         |     16.06% |     12.89% |      21.87% |
+| Append 32 concurrent singleton calls |     28.98% |     17.84% |      28.13% |
+| Deliver to one live subscriber       |     52.08% |     32.34% |      34.76% |
+| Deliver to 25 live subscribers       |      3.04% |     -2.37% |       3.69% |
+| Dense post-reactivation replay       |     21.79% |      8.50% |      19.83% |
+| Sparse post-reactivation replay      |      9.93% |      2.33% |      14.20% |
+| Dense one-event cross-post           |     13.53% |     14.29% |      12.75% |
+| Sparse cross-post, 1 of 100 events   |     29.54% |     18.73% |      26.33% |
+| Append one inline 768 KiB event      |     50.29% |     40.34% |      43.55% |
+| Append one chunked 1.1 MiB event     |      8.26% |      9.24% |       7.87% |
+
+The 25-subscriber row remains neutral under the 5% rule. The first
+forced-reactivation collection reported 1.17% lower p50 but 71.61% higher p95;
+the larger clean control below did not reproduce it. Raw records are
+`/tmp/cumulative-12-{full,storage,tail,live,crosspost}-{main,candidate}-r{1..5}.log`.
+Collection ended at `2026-07-15T03:25:24.355Z`; if active optimization
+continues, the next current-main checkpoint is due by
+`2026-07-15T07:25:24.355Z`. Production was not deployed or erased.
+
+## 2026-07-15: Restored-Lag Threshold Tightening Rejected
+
+The forced-reactivation tail warning received an isolated 1,500-observation
+control per revision. Fresh main measured 2.354/2.729/2.989 ms at pooled
+p50/p90/p95 and 2.465 ms mean. Exact current head measured
+2.192/2.583/2.771 ms and 2.285 ms mean: 6.86% lower p50, 5.35% lower p90,
+7.29% lower p95, and 7.30% lower mean. Its p99 was 20.87% higher, but its
+maximum was 34.57% lower. The checkpoint's 71.61% p95 regression was therefore
+transient noise, not a current branch regression.
+
+A candidate then tightened the restored-lag checkpoint threshold from 64 to
+16 events. Across another 1,500 observations it measured 2.188 ms p50,
+2.818 ms p95, and 2.299 ms mean versus current head's 2.192/2.771/2.285 ms.
+The central differences were below 1%, p95 moved 1.70% in the wrong direction,
+and the tighter threshold performs more checkpoint writes. It is rejected.
+
+Raw records are `/tmp/reactivation-fresh-main-r{1..3}.log`,
+`/tmp/reactivation-16-parent-r{1..3}.log`, and
+`/tmp/reactivation-16-candidate-r{1..3}.log`. No production code, schema, or
+deployment changed.
+
+## 2026-07-15: Fair Deployed `processEvent` Parity Proof
+
+Preview 5 ran exact branch revision
+`b65e30af314ac0922dea2d8150c5beaa2bd7e788` as Worker version
+`0c3e023b-4bb6-4202-b88c-5030faa92028`. Every measured sample appended 1,000
+640-byte PCM-shaped frames through the public OS Worker into a source Stream
+Durable Object, delivered one private batch to a project Worker, appended a
+completion to an output Stream Durable Object, and stopped a Node-host clock
+only after observing and validating that completion. No Worker-local elapsed
+clock supplied wall time.
+
+The durable baseline explicitly looped the delivered batch, called the same
+`processEvent` handler, and awaited only non-undefined results. Candidate mode
+delegated the exact same batch to `IterateWorkerEntrypoint`'s real
+`super.processEventBatch(batch)` adapter. Thirteen fresh projects contributed
+390 valid paired batches:
+
+| Durable push statistic | Explicit batch loop | SDK `processEvent` | Candidate change |
+| ---------------------- | ------------------: | -----------------: | ---------------: |
+| p50                    |          118.555 ms |         120.115 ms |     1.32% slower |
+| p90                    |          275.745 ms |         268.465 ms |     2.64% faster |
+| p95                    |          308.605 ms |         291.899 ms |     5.41% faster |
+| p99                    |        1,455.080 ms |       1,282.602 ms |    11.85% faster |
+| mean                   |          173.676 ms |         158.059 ms |     8.99% faster |
+| p50-derived throughput |        8,434.9 ev/s |       8,325.4 ev/s |      1.30% lower |
+
+The paired median favored the adapter by 0.25%, and it won 196 of 390 pairs.
+This establishes durable central parity. The observed p90/p95/p99 do not show
+an adapter regression, but their positive differences are not claimed as
+intrinsic wins.
+
+The ephemeral comparison installed both subscriptions on one physical source
+Stream Durable Object and one project Worker. The baseline supplied an
+explicit `processEventBatch`; the candidate used the exported
+`subscribe(stream, { processEvent })` helper. Both called the same handler and
+used the same conditional-await fast path. Because subscriber installation
+order itself affected scheduling, eight baseline-first and eight
+candidate-first fresh projects were balanced, contributing 480 paired
+batches:
+
+| Ephemeral push statistic | Explicit batch loop | SDK `processEvent` | Candidate change |
+| ------------------------ | ------------------: | -----------------: | ---------------: |
+| p50                      |          134.968 ms |         133.710 ms |     0.93% faster |
+| p90                      |          178.387 ms |         174.057 ms |     2.43% faster |
+| p95                      |          241.984 ms |         206.858 ms |    14.52% faster |
+| p99                      |          618.458 ms |         824.153 ms |    33.26% slower |
+| mean                     |          149.702 ms |         149.599 ms |     0.07% faster |
+| p50-derived throughput   |        7,409.2 ev/s |       7,478.9 ev/s |     0.94% higher |
+
+The paired median differed by 0.06%, and the adapter won 241 of 480 pairs.
+With baseline installed first, candidate p95 looked 26.34% worse; with
+candidate installed first, it looked 36.22% better. The tail direction follows
+installation order and platform stalls, so neither p95 nor p99 is claimed as
+an adapter win or regression. Central throughput and mean are equivalent.
+
+One additional durable attempt failed before measurement on its baseline
+warmup. Trace `331953fc4e43583139f14ad53161dbe6` showed the Stream persist a
+nack and arm retry while preview 5 emitted ten failing `ItxEntrypoint.get`
+RPCs; Cloudflare then terminated the OS Worker for exceeding its memory limit.
+The host's 60-second network-backed `waitForEvent` correctly timed out. That
+attempt is excluded from latency data and retained as a separate shared-preview
+resource/recovery signal, not attributed to either callback arm.
+
+Raw valid records are
+`/tmp/process-event-preview5-b65-durable-super-r{1..13}.log`,
+`/tmp/process-event-preview5-b65-ephemeral-fair-r{1..8}.log`, and
+`/tmp/process-event-preview5-b65-ephemeral-candidate-first-r{1..8}.log`.
+The result supports a single public `processEvent(event)` callback for both
+durable and ephemeral subscriptions. It does not support replacing internal
+batch transport, storage materialization, cursor acknowledgement, or retry
+frames with one RPC per event. Production was not deployed or erased.
+
+## 2026-07-15: Three Parallel Redesign Tracks Consolidated
+
+Three independent redesign tracks converged on the same external vocabulary:
+`append`, `subscribe`, `read`, and `waitForEvent`. None found a reason to add a
+separate append-ack operation or retain `processEventBatch` as the ordinary
+user callback.
+
+Track A independently audited the existing implementation and Cloudflare RPC
+constraints. Its recommendation is the smallest shipping API: public
+per-event callbacks over private bounded batches. The deployed parity proof
+above closes its main performance risk without adding production code.
+
+Track B built an executable receiver-owned pull-cursor kernel. The source owns
+the synchronous SQLite journal, bounded reads, race-free head waits, and a
+coalesced monotonic head notification. The receiver owns its cursor and one
+serial bounded-page drain. With 100,000 memory events, page size 1 reached
+14.55m events/s, page 256 reached 84.93m/s, and page 1,000 reached 89.47m/s.
+A blocked 100,000-append burst retained one in-flight page; the source notifier
+collapsed 100,000 published heads to `notifyHead(1)` and
+`notifyHead(100000)`. This is promising architecture research, but it still
+needs a durable receiver target-head store, cross-object watermark protocol,
+retention fencing, selectors, adapters, and deployed RPC/storage proof. It is
+preserved locally, outside the shipping PR, on branch
+`experiment/stream-pull-kernel-track-b` at commit `3416ea6b0`; all 12 focused
+tests pass.
+
+Track C rechecked storage and overload alternatives. True legacy KV remained
+2.3% to 36.6% slower than synchronous SQLite while requiring the application
+to own segmentation, indexes, crash recovery, and flush scheduling. Segmented
+journals were 9% to 22% slower and normalization was neutral. Actor-level
+append coalescing improved concurrent-32 and concurrent-128 throughput by
+22.5% and 26.5%, but made singleton append 8.8% slower. It is therefore only a
+possible overload-specific mechanism, not a default append path.
+
+The coherent collapse is small at the API boundary and deliberately batched
+inside: one append, one subscribe callback shape, bounded private pages, and
+explicit read/wait utilities. The pull redesign could eventually simplify
+source delivery state substantially, but shipping it now would exchange known
+complexity for an unproven cross-object durable protocol. The current
+recommendation is to ship the callback simplification and accepted local
+optimizations, preserve pull cursors as the next architectural prototype, and
+keep synchronous SQLite.
