@@ -49,6 +49,7 @@ const {
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
@@ -150,11 +151,12 @@ describe("preview workflow scope", () => {
       baseUrl: "https://dummy-petshop.iterate-preview-3.com",
       projectHostnameBases: [],
     });
-    for (const workflow of ["cloudflare-previews.yml", "cloudflare-preview-cleanup.yml"]) {
-      expect(readFileSync(resolve(repoRoot, ".depot/workflows", workflow), "utf8")).toContain(
-        "- apps/dummy-petshop/**",
-      );
-    }
+    // Only the deploy workflow is path-filtered; cleanup deliberately has no
+    // paths list (it must run for every closed PR — see the cleanup-trigger
+    // test below), so it is not asserted here.
+    expect(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ).toContain("- apps/dummy-petshop/**");
   });
 
   it("deploys OS after Petshop and passes that exact preview URL to OS e2e", () => {
@@ -270,6 +272,24 @@ describe("preview workflow scope", () => {
     // cleanup tooling must come from the default branch.
     expect(cleanupWorkflowText).toContain("github.event.repository.default_branch");
     expect(cleanupWorkflowText).not.toContain("github.event.pull_request.head.sha");
+  });
+
+  it("sweeps expired leases on a schedule from default-branch tooling", () => {
+    const gcWorkflowText = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-preview-gc.yml"),
+      "utf8",
+    );
+    const gcWorkflow = parseYaml(gcWorkflowText) as {
+      on?: { schedule?: { cron: string }[] };
+    };
+
+    // The GC is scheduled (the lazy half of the lifecycle), not triggered by a
+    // PR event.
+    expect(gcWorkflow.on?.schedule?.length).toBeGreaterThan(0);
+    expect(gcWorkflowText).toContain("pnpm preview gc");
+    // Runs current tooling, and needs no GitHub token — lease expiry is the
+    // only signal.
+    expect(gcWorkflowText).toContain("github.event.repository.default_branch");
   });
 });
 
@@ -1781,6 +1801,61 @@ describe("preview fleet capacity diagnosis", () => {
     expect(diagnosis.reasons.some((reason) => reason.includes("#2008"))).toBe(true);
     expect(diagnosis.reasons.some((reason) => reason.includes("#1983"))).toBe(true);
     expect(diagnosis.summary).toContain("orphaned");
+  });
+});
+
+describe("gc expired-lease selection", () => {
+  const now = 1_000_000_000_000;
+  const base = { data: {}, lastReleasedAt: null, lastAcquiredAt: null };
+
+  it("selects only leased slots whose lease is at or past expiry", () => {
+    const selected = selectExpiredLeasesForGc(
+      [
+        // Live lease — a PR is still using it, skip.
+        {
+          ...base,
+          slug: "preview-1",
+          leaseState: "leased",
+          leasedUntil: now + 60_000,
+          holder: "pr-1",
+        },
+        // Expired lease — reclaim.
+        {
+          ...base,
+          slug: "preview-2",
+          leaseState: "leased",
+          leasedUntil: now - 60_000,
+          holder: "pr-2",
+        },
+        // Exactly at expiry — reclaim (<=).
+        { ...base, slug: "preview-3", leaseState: "leased", leasedUntil: now, holder: "pr-3" },
+        // Available slots are cleaned by their next acquirer, never by gc.
+        { ...base, slug: "preview-4", leaseState: "available", leasedUntil: null, holder: null },
+      ],
+      now,
+    );
+
+    expect(selected.map((slot) => slot.slug)).toEqual(["preview-2", "preview-3"]);
+  });
+
+  it("resolves the doppler config from lease data, else derives it from the slug", () => {
+    const selected = selectExpiredLeasesForGc(
+      [
+        {
+          ...base,
+          slug: "preview-5",
+          leaseState: "leased",
+          leasedUntil: now - 1,
+          holder: "pr-5",
+          data: { dopplerConfig: "preview_5" },
+        },
+        // No payload yet → slug-derived (preview-6 → preview_6).
+        { ...base, slug: "preview-6", leaseState: "leased", leasedUntil: now - 1, holder: null },
+      ],
+      now,
+    );
+
+    expect(selected.map((slot) => slot.dopplerConfig)).toEqual(["preview_5", "preview_6"]);
   });
 });
 

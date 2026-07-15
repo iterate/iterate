@@ -36,6 +36,7 @@ import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from
 import { envs } from "../../../envs.ts";
 import {
   ensureR2ObjectExpiryLifecycle,
+  PREVIEW_FILES_OBJECT_EXPIRY,
   PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
   wipeD1Tables,
 } from "../../../scripts/lib/deploy-helpers.ts";
@@ -176,38 +177,38 @@ export default async function eraseData(options: {
   // alone deliberately — container teardown is broken upstream, see the DO
   // section, and its backups expire on a lifecycle rule.)
   //
-  // Preview slots take the search-index bucket off this hot path: it's pure
-  // derived state that churns to thousands of objects, and walking it with one
-  // DELETE per object is the biggest source of the cleanup 429 storm that
-  // leaked leases (2026-07-15: 1521 objects). Instead we guarantee its
-  // server-side expiry rule and let Cloudflare GC the objects — releasing the
-  // slot immediately. AI Search above has no equivalent (namespace-delete
-  // needs an empty namespace), so its per-instance sweep stays — but with R2
-  // off the path it no longer competes for the ~1200 req/5min budget. If the
-  // rule can't be ensured we fall back to walking the bucket as before.
+  // Preview slots take BOTH disposable buckets off this hot path. The
+  // search-index especially is pure derived state that churns to thousands of
+  // objects, and walking it with one DELETE per object is the biggest source
+  // of the cleanup 429 storm that leaked leases (2026-07-15: 1521 objects).
+  // Instead we guarantee each bucket's 3h server-side expiry rule and let
+  // Cloudflare GC the objects — releasing the slot immediately. AI Search above
+  // has no equivalent (namespace-delete needs an empty namespace), so its
+  // per-instance sweep stays — but with R2 off the path it no longer competes
+  // for the ~1200 req/5min budget. Any bucket whose rule can't be ensured falls
+  // back to being walked as before. Prd always walks (its data has no expiry).
   const searchIndexBucket = `${env.osWorkerName}-search-index`;
   const filesBucket = `${env.osWorkerName}-files`;
-  let searchIndexHandledByLifecycle = false;
+  const reapedByLifecycle = new Set<string>();
   if (ctx.name.startsWith("preview")) {
-    try {
-      await ensureR2ObjectExpiryLifecycle(
-        ctx,
-        searchIndexBucket,
-        PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
-      );
-      searchIndexHandledByLifecycle = true;
-      console.log(
-        `R2 ${searchIndexBucket}: left to ${PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ttlSeconds}s lifecycle expiry, not walked`,
-      );
-    } catch (error) {
-      console.warn(
-        `R2 ${searchIndexBucket} lifecycle ensure failed — falling back to walking it: ${String(error).slice(0, 200)}`,
-      );
+    for (const [bucket, expiry] of [
+      [searchIndexBucket, PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY],
+      [filesBucket, PREVIEW_FILES_OBJECT_EXPIRY],
+    ] as const) {
+      try {
+        await ensureR2ObjectExpiryLifecycle(ctx, bucket, expiry);
+        reapedByLifecycle.add(bucket);
+        console.log(`R2 ${bucket}: left to ${expiry.ttlSeconds}s lifecycle expiry, not walked`);
+      } catch (error) {
+        console.warn(
+          `R2 ${bucket} lifecycle ensure failed — falling back to walking it: ${String(error).slice(0, 200)}`,
+        );
+      }
     }
   }
-  const bucketsToWalk = searchIndexHandledByLifecycle
-    ? [filesBucket]
-    : [searchIndexBucket, filesBucket];
+  const bucketsToWalk = [searchIndexBucket, filesBucket].filter(
+    (bucket) => !reapedByLifecycle.has(bucket),
+  );
   for (const bucket of bucketsToWalk) {
     // Per-bucket budget: a churn-refilled search-index must not starve the
     // files pass (Bugbot). 90s each + 90s instances stays well inside the

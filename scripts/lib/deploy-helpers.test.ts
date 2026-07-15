@@ -3,7 +3,10 @@ import {
   assertWorkerSecretAbsent,
   buildR2ObjectExpiryLifecycleRules,
   ensureR2ObjectExpiryLifecycle,
+  PREVIEW_DISPOSABLE_TTL_SECONDS,
+  PREVIEW_FILES_OBJECT_EXPIRY,
   PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  SANDBOX_BACKUP_TTL_SECONDS_PRD,
   smokeResponse,
 } from "./deploy-helpers.ts";
 import { CloudflareApiError } from "./env-context.ts";
@@ -82,7 +85,7 @@ describe("smokeResponse", () => {
 });
 
 describe("R2 object-expiry lifecycle", () => {
-  it("builds one Age rule scoped to every object in the bucket", () => {
+  it("builds one Age rule scoped to every object by default (empty prefix)", () => {
     const rules = buildR2ObjectExpiryLifecycleRules({ ruleId: "r", ttlSeconds: 3600 });
 
     expect(rules).toEqual([
@@ -96,11 +99,29 @@ describe("R2 object-expiry lifecycle", () => {
     ]);
   });
 
-  it("keeps the preview search-index expiry a stable, short (1 day) TTL", () => {
-    // Guards against an accidental bump: erase-data relies on this expiring
-    // the corpus promptly so it can skip the per-object delete on previews.
-    expect(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ttlSeconds).toBe(24 * 60 * 60);
+  it("scopes to a prefix when given one (e.g. the sandbox backups/ rule)", () => {
+    const rules = buildR2ObjectExpiryLifecycleRules({
+      ruleId: "expire-sandbox-workspace-backups",
+      ttlSeconds: SANDBOX_BACKUP_TTL_SECONDS_PRD,
+      prefix: "backups/",
+    });
+
+    expect(rules[0]?.conditions).toEqual({ prefix: "backups/" });
+    expect(rules[0]?.deleteObjectsTransition.condition).toEqual({
+      type: "Age",
+      maxAge: 90 * 24 * 60 * 60,
+    });
+  });
+
+  it("expires all preview disposable data 3h after write", () => {
+    // Guards against an accidental bump: erase-data relies on this expiring the
+    // corpus/files promptly so it can skip the per-object delete on previews,
+    // and the whole point is cost — abandoned data must not linger a full day.
+    expect(PREVIEW_DISPOSABLE_TTL_SECONDS).toBe(3 * 60 * 60);
+    expect(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ttlSeconds).toBe(PREVIEW_DISPOSABLE_TTL_SECONDS);
+    expect(PREVIEW_FILES_OBJECT_EXPIRY.ttlSeconds).toBe(PREVIEW_DISPOSABLE_TTL_SECONDS);
     expect(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ruleId).toBe("expire-preview-search-index");
+    expect(PREVIEW_FILES_OBJECT_EXPIRY.ruleId).toBe("expire-preview-files");
   });
 
   it("PUTs the rule to the bucket's lifecycle endpoint", async () => {

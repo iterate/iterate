@@ -1076,6 +1076,142 @@ export async function reclaim(options: ReclaimOptions = {}) {
   };
 }
 
+/** A slot whose lease has passed its expiry — a GC sweep candidate. */
+type ExpiredLeaseForGc = {
+  slug: string;
+  holder: string | null;
+  dopplerConfig: string;
+  leasedUntil: number;
+};
+
+/**
+ * Pure selection for {@link gc}: the slots whose lease is leased but past its
+ * expiry. Lease expiry is the sole GC signal — an expired lease means no live
+ * tenant, so the whole slot is fair game (available slots are cleaned by their
+ * next acquirer, not here). See docs/preview-resource-gc.md.
+ */
+function selectExpiredLeasesForGc(
+  resources: ReadonlyArray<{
+    data: Record<string, unknown>;
+    holder?: string | null;
+    leaseState: "available" | "leased";
+    leasedUntil: number | null;
+    slug: string;
+  }>,
+  now: number,
+): ExpiredLeaseForGc[] {
+  const expired: ExpiredLeaseForGc[] = [];
+  for (const resource of resources) {
+    if (resource.leaseState !== "leased" || resource.leasedUntil === null) continue;
+    if (resource.leasedUntil > now) continue;
+    expired.push({
+      slug: resource.slug,
+      holder: resource.holder ?? null,
+      // Same fallback classifyEnvironmentConfigLeases uses: the slug-derived
+      // config (preview-3 → preview_3) for a slot with no data payload yet.
+      dopplerConfig:
+        typeof resource.data.dopplerConfig === "string" && resource.data.dopplerConfig.trim()
+          ? resource.data.dopplerConfig.trim()
+          : resource.slug.replaceAll("-", "_"),
+      leasedUntil: resource.leasedUntil,
+    });
+  }
+  return expired;
+}
+
+/** Report what would be reclaimed without touching anything, or hold length. */
+type GcOptions = {
+  /** Print the plan without acquiring, erasing, or releasing anything. */
+  dryRun?: boolean;
+  /** Minutes to hold each slot while erasing it (default 30). */
+  holdMinutes?: number;
+};
+
+/**
+ * Garbage-collect preview slots whose lease has expired: for each, take it
+ * under a fresh lease, erase its data, and release it — unattended and
+ * rate-limited (runs sequentially). This is the lazy half of the model in
+ * docs/preview-resource-gc.md: releasing a slot never waits on teardown, and
+ * this scheduled sweep (the Cloudflare Preview GC Depot cron) reclaims whatever
+ * the fast path — PR-close cleanup — did not.
+ *
+ * Lease expiry is the ONLY signal; the take is a NON-force acquire, which
+ * succeeds only while the slot is genuinely free. So if a PR re-leased the slot
+ * between our snapshot and the take, the acquire returns null and we skip it
+ * (that PR's own erase-on-acquire cleans it) — no race, no verdict logic. An
+ * erase failure still releases the slot: its next taker erases first, so a
+ * half-wiped slot is self-healing and must not be parked out of the pool.
+ */
+export async function gc(options: GcOptions = {}) {
+  const runtime = createPreviewRuntime();
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const now = Date.now();
+  const resources = await semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
+  const expired = selectExpiredLeasesForGc(resources, now);
+  const holdMs = (options.holdMinutes ?? 30) * 60_000;
+  const eraseSlotData = makePreviewSlotDataEraser(runtime);
+
+  const outcomes: Array<{
+    slug: string;
+    action: "reclaimed" | "skipped" | "erase-failed" | "would-reclaim";
+    holder: string | null;
+    error?: string;
+  }> = [];
+  for (const slot of expired) {
+    if (options.dryRun) {
+      outcomes.push({ slug: slot.slug, action: "would-reclaim", holder: slot.holder });
+      continue;
+    }
+    const taken = await semaphore.acquireSpecific({
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      slug: slot.slug,
+      leaseMs: holdMs,
+      holder: "gc",
+    });
+    if (!taken) {
+      logPreview(`gc: ${slot.slug} was re-leased since the snapshot — leaving it to its tenant`);
+      outcomes.push({ slug: slot.slug, action: "skipped", holder: slot.holder });
+      continue;
+    }
+    try {
+      logPreview(
+        `gc: reclaiming ${slot.slug} — lease from ${slot.holder ?? "unknown"} expired ${formatDurationMs(now - slot.leasedUntil)} ago; erasing`,
+      );
+      await eraseSlotData({ dopplerConfig: slot.dopplerConfig, slug: slot.slug });
+      outcomes.push({ slug: slot.slug, action: "reclaimed", holder: slot.holder });
+    } catch (error) {
+      logPreview(
+        `gc: erase failed for ${slot.slug}; releasing it for its next taker to re-erase: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      outcomes.push({
+        slug: slot.slug,
+        action: "erase-failed",
+        holder: slot.holder,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      await semaphore.release({
+        slug: slot.slug,
+        type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+        leaseId: taken.leaseId,
+      });
+    }
+  }
+
+  const reclaimedCount = outcomes.filter((outcome) => outcome.action === "reclaimed").length;
+  logPreview(
+    `gc: ${expired.length} slot(s) past lease expiry, ${reclaimedCount} reclaimed${options.dryRun ? " (dry-run — nothing erased)" : ""}`,
+  );
+  return {
+    checkedAt: new Date(now).toISOString(),
+    leaseTtlHours: defaultPreviewLeaseMs / 3_600_000,
+    dryRun: options.dryRun ?? false,
+    expiredCount: expired.length,
+    reclaimedCount,
+    outcomes,
+  };
+}
+
 /**
  * Check live Semaphore environment config leases against Doppler configs and Cloudflare preview domain zones.
  */
@@ -1563,9 +1699,12 @@ const defaultRepositoryFullName = "iterate/iterate";
 // A preview slot belongs to its PR for the PR's whole life: every `preview
 // deploy` and `preview test` run renews the lease for this long, and closing
 // the PR releases it. Expiry is only the safety valve for abandoned PRs — a
-// PR that pushes nothing for this long may lose its slot to another PR.
-// While a lease is live, nothing takes the slot without a human --force.
-const defaultPreviewLeaseMs = 24 * 60 * 60 * 1000;
+// PR that pushes nothing for this long loses its slot (the GC sweep reclaims
+// it; see docs/preview-resource-gc.md). While a lease is live, nothing takes
+// the slot without a human --force. 3h keeps idle slots (and the Cloudflare
+// resources behind them) from costing us for a full day after a PR goes quiet;
+// a deploy/e2e cycle is minutes, so an active PR never lapses mid-run.
+const defaultPreviewLeaseMs = 3 * 60 * 60 * 1000;
 // Routed previews can be healthy before Cloudflare has finished issuing edge
 // certificates for newly-created hostnames. Some apps record a separate
 // project-subdomain URL; wait on that URL only when it is expected to be
@@ -3432,8 +3571,10 @@ function resolveSlotWaitTotalMs(env: NodeJS.ProcessEnv) {
 
 // A hold with no deploy/test renewal for this long counts as idle in
 // `preview reclaim` verdicts. Renewals happen on every deploy/test run, so
-// idle means "that PR/person hasn't touched the slot in this window".
-const defaultReclaimMinIdleHours = 6;
+// idle means "that PR/person hasn't touched the slot in this window". Matches
+// the lease TTL (defaultPreviewLeaseMs, 3h): a slot idle this long has a lease
+// at or past expiry, and the GC sweep will reclaim it.
+const defaultReclaimMinIdleHours = 3;
 
 /** `unknown` = the check itself failed; distinct from "not checked" (null downstream). */
 type PullRequestStateFetcher = (
@@ -4737,6 +4878,7 @@ export const previewInternals = {
   requireExplicitReclaimForce,
   retakeRecordedSlotIfFree,
   resolveSlotWaitTotalMs,
+  selectExpiredLeasesForGc,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
   parseCloudflarePreviewState,
