@@ -29,10 +29,18 @@
  * build where a method-returned surface is a Proxy.
  */
 import { test } from "vitest";
+import type { Agent, CapabilityHost, StreamEvent } from "../../src/itx-api.generated.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
+import { itxScript } from "../test-support/itx-script-builder.ts";
 
 const PROOF_STREAM = "/e2e/handle-pipelining-proof";
 const PROOF_TYPE = "events.iterate.test/handle-pipelining-proof";
+
+/** The dynamic capability mounted on the agent scope below: unknown to the
+ * static surface (that is the point of the test), so the scripts type it
+ * explicitly — `proofAppend` resolves via the prototype-chain fallback on
+ * the agent handle, its capabilityHost, and the capabilityHosts.get() hop. */
+type ProofAppend = (event: { type: string; payload: { marker: string } }) => Promise<StreamEvent[]>;
 
 test(
   "itx.agents.get(...) pipelines: .message(), .<dynamic capability>(), and .capabilityHost.<dynamic capability>()",
@@ -60,43 +68,48 @@ test(
     // if agents.get() returns anything workerd cannot pipeline on, these
     // throw "The RPC receiver does not implement the method ...".
     using projectHost = itx.capabilityHosts.get("/");
-    const run = await projectHost.runScript(`
-      async (itx) => {
+    const scripted = await itxScript(projectHost)
+      .context<{
+        agents: {
+          get(path: string): Agent & {
+            proofAppend: ProofAppend;
+            capabilityHost: CapabilityHost & { proofAppend: ProofAppend };
+          };
+        };
+        capabilityHosts: { get(path: string): CapabilityHost & { proofAppend: ProofAppend } };
+      }>()
+      .vars({ agentPath, marker, proofType: PROOF_TYPE })
+      .execute(async (itx, vars) => {
         // 1. THE one-liner every prompt teaches. message() on the pipelined
         //    result of get(); the first message also births the agent.
-        const sent = await itx.agents.get(${JSON.stringify(agentPath)})
-          .message("pipelined hello");
+        const sent = await itx.agents.get(vars.agentPath).message("pipelined hello");
 
         // 2. A dynamic capability DIRECTLY on the fetched handle: proofAppend
         //    is an unknown member, resolved by the prototype-chain fallback
         //    and dispatched through the agent scope's capability host —
         //    all one un-awaited chain.
-        const [appended] = await itx.agents.get(${JSON.stringify(agentPath)})
-          .proofAppend({
-            type: ${JSON.stringify(PROOF_TYPE)},
-            payload: { marker: ${JSON.stringify(marker)} },
-          });
+        const [appended] = await itx.agents.get(vars.agentPath).proofAppend({
+          type: vars.proofType,
+          payload: { marker: vars.marker },
+        });
 
         // 3. The same capability through the explicit capabilityHost door —
         //    equivalent spelling, also pipelined (capabilityHost is a
         //    property hop, proofAppend the dynamic name).
-        const [appendedViaHost] = await itx.agents.get(${JSON.stringify(agentPath)})
-          .capabilityHost.proofAppend({
-            type: ${JSON.stringify(PROOF_TYPE)},
-            payload: { marker: ${JSON.stringify(marker)} + "-via-host" },
-          });
+        const [appendedViaHost] = await itx.agents.get(vars.agentPath).capabilityHost.proofAppend({
+          type: vars.proofType,
+          payload: { marker: vars.marker + "-via-host" },
+        });
 
         // 4. Another method-returned surface entirely: capabilityHosts.get()
         //    used to hand back a Proxy too — a declared CLASS method must
         //    pipeline (__describe), and so must a DYNAMIC capability name
         //    resolved by the same hop (proofAppend, mounted above).
-        const hostDescription = await itx.capabilityHosts.get(${JSON.stringify(agentPath)})
-          .__describe();
-        const [appendedViaHostsGet] = await itx.capabilityHosts.get(${JSON.stringify(agentPath)})
-          .proofAppend({
-            type: ${JSON.stringify(PROOF_TYPE)},
-            payload: { marker: ${JSON.stringify(marker)} + "-via-hosts-get" },
-          });
+        const hostDescription = await itx.capabilityHosts.get(vars.agentPath).__describe();
+        const [appendedViaHostsGet] = await itx.capabilityHosts.get(vars.agentPath).proofAppend({
+          type: vars.proofType,
+          payload: { marker: vars.marker + "-via-hosts-get" },
+        });
 
         return {
           messageOffset: sent.offset,
@@ -107,8 +120,8 @@ test(
           proofViaHostsGetOffset: appendedViaHostsGet.offset,
           hostPath: hostDescription.path,
         };
-      }
-    `);
+      });
+    const run = scripted.execution;
 
     expect(run.result).toMatchObject({
       messageType: "events.iterate.com/agents/message-received",
@@ -168,8 +181,16 @@ test(
 
     // The same pattern on the WORKERD lane (script isolate over env.ITX),
     // written with a `using` declaration exactly as prompts/examples teach.
+    // executeSource (not the typed execute): the script must keep its `using`
+    // declaration verbatim — the server runtime supports it natively, while
+    // the test-file transform would downlevel a typed function's `using` into
+    // module-scope helpers that do not exist in the script isolate.
     using projectHost = itx.capabilityHosts.get("/");
-    const run = await projectHost.runScript(`
+    const scripted = await itxScript(projectHost).executeSource<{
+      a: number;
+      b: number;
+      path: string;
+    }>(`
       async (itx) => {
         using agent = itx.agents.get("/agents/fanout-workerd");
         const [a, b, desc] = await Promise.all([
@@ -180,6 +201,7 @@ test(
         return { a: a.offset, b: b.offset, path: desc.agentPath };
       }
     `);
+    const run = scripted.execution;
     expect(run.result).toMatchObject({ path: "/agents/fanout-workerd" });
     const result = run.result as { a: number; b: number };
     expect(result).not.toMatchObject({ a: result.b });
@@ -199,13 +221,11 @@ test(
     // paths against it and message() stamps the parent as the sender — the
     // verbatim delegation idiom from the subagent system prompt.
     using parentHost = itx.capabilityHosts.get(parentPath);
-    const run = await parentHost.runScript(`
-      async (itx) => {
-        const sent = await itx.agents.get("researcher")
-          .message("pipelined delegation");
-        return { offset: sent.offset, from: sent.payload.from, path: sent.path };
-      }
-    `);
+    const scripted = await itxScript(parentHost).execute(async (itx) => {
+      const sent = await itx.agents.get("researcher").message("pipelined delegation");
+      return { offset: sent.offset, from: sent.payload?.from, path: sent.path };
+    });
+    const run = scripted.execution;
 
     expect(run.result).toMatchObject({
       // Relative resolution against the calling scope…
