@@ -1,45 +1,12 @@
-// The itx example catalogue, AUTHORED AS TYPED FUNCTIONS. This module is the
-// single place examples are written and edited; the committed artifact the
-// app actually ships (src/itx/examples.generated.ts, re-exported through
-// src/itx/examples.ts) is derived from THIS file's original source text by
+// The itx example catalogue, AUTHORED AS TYPED FUNCTIONS: the entries in
+// ITX_EXAMPLE_SOURCES just below ARE this file — edit them there. The
+// artifact the app ships (src/itx/examples.generated.ts, re-exported through
+// src/itx/examples.ts) is derived from THIS file's source text by
 // scripts/generate-itx-examples.ts (`pnpm generate:itx-examples`), which
-// extracts each `fn` body verbatim — comments, blank lines, and embedded
-// template strings byte-intact — and emits it as the entry's plain-JS `code`
-// string.
-//
-// Why functions here but strings in the artifact: authored functions give
-// the catalogue real types (a typo against the itx surface is a compile
-// error in THIS file), while every runtime consumes plain-JS body strings
-// (the REPL, AsyncFunction in node, runScript, worker.ts baking). Deriving
-// the string at GENERATION time in Node is load-bearing: production bundles
-// minify, so `fn.toString()` in the built app would return mangled code —
-// never derive catalogue strings in the browser.
-//
-// Authoring rules (the generator enforces the mechanical ones):
-// - `fn` must be a BLOCK-BODIED arrow: `async (itx) => { … }` or
-//   `async (itx, vars: { … }) => { … }`, with an explicit `return`.
-// - The BODY must be plain JavaScript — no annotations, casts, `satisfies`,
-//   or non-null `!` inside (the generator parses the body with the JS-only
-//   AsyncFunction constructor and fails on TS residue). TypeScript lives in
-//   the parameter annotations and the per-entry widenings, which the
-//   generator never emits.
-// - Bodies must be SELF-CONTAINED: only `itx`, `vars`, and runtime globals
-//   exist where they run. The typecheck guard (examples-typecheck.test.ts)
-//   fails on a body that reaches for module scope.
-// - Dynamic capabilities an entry provides and then calls (`itx.answer.…`)
-//   are typed per entry via the helper's `Extra` widening — the mount types
-//   double as documentation.
-// - `vars` is JSON-serialized into the script by every runtime; type exactly
-//   what the body reads (all fields optional — the REPL runs entries with no
-//   vars at all), loose only where genuinely dynamic.
-// - Entries that CANNOT be expressed as a typed function without changing
-//   their body text go through `stringExample` with a comment saying why —
-//   the recurring reason is capnweb promise pipelining (`connect(...).tool()`
-//   chains a call onto an un-awaited Promise, which the published
-//   Promise-based types cannot express).
-//
-// Catalogue semantics (what the fields mean, which runtimes run what) are
-// documented on the public types in src/itx/examples.ts.
+// extracts each `fn` body verbatim as the entry's plain-JS `code` string.
+// The authoring rules, the per-context helpers (projectExample & co.), and
+// the shared type machinery live at the BOTTOM of this file, below the
+// entries.
 
 import type {
   Agent,
@@ -57,18 +24,9 @@ import type {
 } from "../itx-api.generated.ts";
 import type { ItxExample, ItxExampleRuntime } from "./examples.ts";
 
-/** A typed catalogue entry: the metadata of {@link ItxExample} with the
- * script authored as a function (`fn`) or, for entries the type surface
- * cannot express, as the literal body string (`code`). Exactly one of the
- * two is present; the generator derives the artifact's `code` from `fn`'s
- * original source text. */
-type ItxExampleSource = Omit<ItxExample, "code"> & {
-  fn?: (itx: never, vars: never) => Promise<unknown>;
-  code?: string;
-};
-
-type ExampleMeta = Omit<ItxExampleSource, "context" | "fn" | "code">;
-
+// The only bindings the array evaluation needs before it (const initializers
+// do not hoist); the helper FUNCTIONS the entries call are declared below the
+// array and do.
 const ALL_RUNTIMES: ItxExampleRuntime[] = [
   "browser",
   "node",
@@ -79,54 +37,6 @@ const ALL_RUNTIMES: ItxExampleRuntime[] = [
 
 /** Live providers must outlive the calls, so these stay in caller-owned sessions. */
 const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
-
-/** A project-context entry. `Extra` types the dynamic capabilities the body
- * itself mounts and then calls — intersected FIRST so its signatures win. */
-function projectExample<Extra extends object = {}>(
-  entry: ExampleMeta & { fn: (itx: Extra & Project, vars: never) => Promise<unknown> },
-): ItxExampleSource {
-  return { ...entry, context: "project" };
-}
-
-/** An agent-scoped itx: the project surface with the agent-only members
- * guaranteed present (`Project` declares `agent`/`chat` optional because
- * they exist only on itxs scoped under /agents/**). The agent's
- * birth-mounted `itx.workspace` is a dynamic capability with no static
- * member — an entry using it would widen via `Extra`. */
-function agentExample<Extra extends object = {}>(
-  entry: ExampleMeta & {
-    fn: (itx: Extra & Project & { agent: Agent; chat: AgentChat }, vars: never) => Promise<unknown>;
-  },
-): ItxExampleSource {
-  return { ...entry, context: "agent" };
-}
-
-// The OS Session (what `authenticate()` returns): NOT an itx — a catalog
-// that vends project itxs (`__describe` with `principal`, `projects`).
-// eslint-disable-next-line iterate/no-single-use-helpers -- one of the catalogue's three uniform per-context authoring doors; only one session entry is currently fn-authored (list-projects is string-authored), but the pattern is the API.
-function sessionExample(
-  entry: ExampleMeta & { fn: (itx: Session, vars: never) => Promise<unknown> },
-): ItxExampleSource {
-  return { ...entry, context: "session" };
-}
-
-/** Shared `Extra` widenings — loose overlays for surfaces the generated
- * types deliberately leave `unknown` (model-shaped outputs) or that lag the
- * runtime. Each is intersected FIRST, so its signatures win resolution for
- * exactly the calls the entry teaches. */
-
-/** `itx.ai.run` returns `unknown` in the generated surface (outputs are
- * model-shaped); entries that read a specific model's response fields use
- * this per-entry overlay instead of casting inside the body. */
-type LooseAiRun = { ai: { run(model: string, body: unknown): Promise<any> } };
-
-/** The escape hatch: a string-authored entry, for bodies the published types
- * cannot express without changing their text (each use says why). */
-function stringExample(
-  entry: ExampleMeta & { context: ItxExample["context"]; code: string },
-): ItxExampleSource {
-  return entry;
-}
 
 export const ITX_EXAMPLE_SOURCES: ItxExampleSource[] = [
   sessionExample({
@@ -288,25 +198,15 @@ return await itx.projects.get(pid).__describe();
       };
     },
   }),
-  projectExample<{
-    // The live arm's `capability` is `unknown` in the published input type
-    // (the platform never constrains provider objects); typing it per entry
-    // gives the mounted object's methods their parameter types — and the
-    // same shape then types the mounted calls below.
-    provideCapability(input: {
-      capability: {
+  projectExample<
+    Live<
+      "answer",
+      {
         ultimate(): number;
         deep: { thought(question: string): Promise<{ answer: number; question: string }> };
-      };
-      instructions?: string;
-      path: string[];
-      type: "live";
-    }): Promise<CapabilityProvision>;
-    answer: {
-      ultimate(): Promise<number>;
-      deep: { thought(question: string): Promise<{ answer: number; question: string }> };
-    };
-  }>({
+      }
+    >
+  >({
     id: "provide-live-capability",
     title: "Provide a live capability — your object IS the capability",
     description:
@@ -343,28 +243,28 @@ return await itx.projects.get(pid).__describe();
       return { deep, revoked, ultimate };
     },
   }),
-  projectExample<{
-    provideCapability(input: {
-      capability: {
+  projectExample<
+    Live<
+      "fakeSlack",
+      {
         invokeCapability(call: { args: unknown[]; path: string[] }): {
           args: unknown[];
           method: string;
           provider: string;
         };
-      };
-      flattenNestedPaths: true;
-      path: string[];
-      type: "live";
-    }): Promise<CapabilityProvision>;
-    fakeSlack: {
-      chat: {
-        postMessage(message: {
-          channel: string;
-          text: string;
-        }): Promise<{ args: unknown[]; method: string; provider: string }>;
-      };
-    };
-  }>({
+      },
+      // flattenNestedPaths rewires the mounted method tree, so the mounted
+      // shape is declared explicitly instead of Remoted<Impl>.
+      {
+        chat: {
+          postMessage(message: {
+            channel: string;
+            text: string;
+          }): Promise<{ args: unknown[]; method: string; provider: string }>;
+        };
+      }
+    >
+  >({
     id: "provide-live-flattened",
     title: "Provide an SDK-shaped capability (flattened paths)",
     description:
@@ -521,15 +421,7 @@ return await itx.projects.get(pid).__describe();
       return { current: await counter.current() }; // 2, and it persists under the key
     },
   }),
-  projectExample<{
-    // CloudflareSandbox lags the SDK here: exec() exists at runtime (the
-    // whole entry is about it) but not yet in the generated declaration.
-    sandboxes: {
-      get(path: string): Promise<{
-        exec(command: string): Promise<{ stdout: string; exitCode: number }>;
-      }>;
-    };
-  }>({
+  projectExample<SandboxExecGap>({
     id: "sandbox-exec",
     title: "Create a sandbox and run shell commands in it",
     description:
@@ -800,17 +692,7 @@ return await itx.projects.get(pid).__describe();
       return { status: response.status, bodyStart: body.slice(0, 200) };
     },
   }),
-  projectExample<{
-    // Loose Response overlay: the body reads the echoed JSON dynamically.
-    egress: {
-      fetch(request: Request): Promise<{
-        ok: boolean;
-        status: number;
-        text(): Promise<string>;
-        json(): Promise<any>;
-      }>;
-    };
-  }>({
+  projectExample<EgressJsonGap>({
     id: "secret-postman-echo",
     e2eProven: false,
     title: "Use a stored secret in a Postman Echo request",
@@ -1451,23 +1333,7 @@ return {
       return { copied: copied.payload, provenance: copied.source?.crossPostedFrom };
     },
   }),
-  projectExample<{
-    // The generated GmailConnection types response `data` as unknown (it is
-    // whatever the REST resource returns); the entry reads it dynamically.
-    integrations: {
-      gmail: {
-        get(connection?: string): {
-          request(input: { path: string; query?: Record<string, unknown> }): Promise<{
-            data: {
-              messages?: Array<{ id: string }>;
-              resultSizeEstimate?: number;
-              payload?: { headers?: Array<{ name: string; value?: string }> };
-            };
-          }>;
-        };
-      };
-    };
-  }>({
+  projectExample<GmailDataGap>({
     id: "gmail-search-inbox",
     e2eProven: false,
     title: "Search the inbox through the built-in Gmail integration",
@@ -1627,11 +1493,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
       };
     },
   }),
-  projectExample<{
-    // The no-argument call returns the supported-format list; the generated
-    // union covers all call shapes at once.
-    ai: { toMarkdown(): Promise<CfMarkdownSupportedFormat[]> };
-  }>({
+  projectExample<ToMarkdownNoArgGap>({
     id: "cf-ai-to-markdown",
     e2eProven: false,
     title: "Convert a document to Markdown with Workers AI",
@@ -1937,3 +1799,173 @@ export default class ProjectWorker extends WorkerEntrypoint {
     },
   }),
 ];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MACHINERY — the types and helpers the entries above are authored with, and
+// the rules for writing new ones.
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Why functions here but strings in the artifact: authored functions give
+// the catalogue real types (a typo against the itx surface is a compile
+// error in THIS file), while every runtime consumes plain-JS body strings
+// (the REPL, AsyncFunction in node, runScript, worker.ts baking). Deriving
+// the string at GENERATION time in Node is load-bearing: production bundles
+// minify, so `fn.toString()` in the built app would return mangled code —
+// never derive catalogue strings in the browser.
+//
+// Authoring rules (the generator enforces the mechanical ones):
+// - `fn` must be a BLOCK-BODIED arrow: `async (itx) => { … }` or
+//   `async (itx, vars: { … }) => { … }`, with an explicit `return`.
+// - The BODY must be plain JavaScript — no annotations, casts, `satisfies`,
+//   or non-null `!` inside (the generator parses the body with the JS-only
+//   AsyncFunction constructor and fails on TS residue). TypeScript lives in
+//   the parameter annotations and the per-entry widenings, which the
+//   generator never emits.
+// - Bodies must be SELF-CONTAINED: only `itx`, `vars`, and runtime globals
+//   exist where they run. The typecheck guard (examples-typecheck.test.ts)
+//   fails on a body that reaches for module scope.
+// - Dynamic capabilities an entry provides and then calls (`itx.answer.…`)
+//   are typed per entry via the helper's `Extra` widening — the mount types
+//   double as documentation.
+// - `vars` is JSON-serialized into the script by every runtime; type exactly
+//   what the body reads (all fields optional — the REPL runs entries with no
+//   vars at all), loose only where genuinely dynamic.
+// - Entries that CANNOT be expressed as a typed function without changing
+//   their body text go through `stringExample` with a comment saying why —
+//   the recurring reason is capnweb promise pipelining (`connect(...).tool()`
+//   chains a call onto an un-awaited Promise, which the published
+//   Promise-based types cannot express).
+//
+// Catalogue semantics (what the fields mean, which runtimes run what) are
+// documented on the public types in src/itx/examples.ts.
+
+/** A typed catalogue entry: the metadata of {@link ItxExample} with the
+ * script authored as a function (`fn`) or, for entries the type surface
+ * cannot express, as the literal body string (`code`). Exactly one of the
+ * two is present; the generator derives the artifact's `code` from `fn`'s
+ * original source text. */
+type ItxExampleSource = Omit<ItxExample, "code"> & {
+  fn?: (itx: never, vars: never) => Promise<unknown>;
+  code?: string;
+};
+
+type ExampleMeta = Omit<ItxExampleSource, "context" | "fn" | "code">;
+
+/** A project-context entry. `Extra` types the dynamic capabilities the body
+ * itself mounts and then calls — intersected FIRST so its signatures win. */
+function projectExample<Extra extends object = {}>(
+  entry: ExampleMeta & { fn: (itx: Extra & Project, vars: never) => Promise<unknown> },
+): ItxExampleSource {
+  return { ...entry, context: "project" };
+}
+
+/** An agent-scoped itx: the project surface with the agent-only members
+ * guaranteed present (`Project` declares `agent`/`chat` optional because
+ * they exist only on itxs scoped under /agents/**). The agent's
+ * birth-mounted `itx.workspace` is a dynamic capability with no static
+ * member — an entry using it would widen via `Extra`. */
+function agentExample<Extra extends object = {}>(
+  entry: ExampleMeta & {
+    fn: (itx: Extra & Project & { agent: Agent; chat: AgentChat }, vars: never) => Promise<unknown>;
+  },
+): ItxExampleSource {
+  return { ...entry, context: "agent" };
+}
+
+// The OS Session (what `authenticate()` returns): NOT an itx — a catalog
+// that vends project itxs (`__describe` with `principal`, `projects`).
+// eslint-disable-next-line iterate/no-single-use-helpers -- one of the catalogue's three uniform per-context authoring doors; only one session entry is currently fn-authored (list-projects is string-authored), but the pattern is the API.
+function sessionExample(
+  entry: ExampleMeta & { fn: (itx: Session, vars: never) => Promise<unknown> },
+): ItxExampleSource {
+  return { ...entry, context: "session" };
+}
+
+/** The escape hatch: a string-authored entry, for bodies the published types
+ * cannot express without changing their text (each use says why). */
+function stringExample(
+  entry: ExampleMeta & { context: ItxExample["context"]; code: string },
+): ItxExampleSource {
+  return entry;
+}
+
+/** A live provider object as its callers see it: every function, at any
+ * depth, comes back promise-wrapped (calls replay over the open session). */
+type Remoted<T> = {
+  [K in keyof T]: T[K] extends (...args: infer A) => infer R
+    ? (...args: A) => Promise<Awaited<R>>
+    : Remoted<T[K]>;
+};
+
+/** Types one live mount end to end: the provideCapability call that installs
+ * `Impl` (as written locally — the published input type leaves the live arm's
+ * `capability` as `unknown`, so the entry's declared shape is the doc) and
+ * the mounted member at `Name`, whose calls come back promise-wrapped. Pass
+ * `Mounted` explicitly when `flattenNestedPaths` makes the mounted method
+ * tree differ from `Impl`. */
+type Live<Name extends string, Impl, Mounted = Remoted<Impl>> = Record<Name, Mounted> & {
+  provideCapability(input: {
+    capability: Impl;
+    flattenNestedPaths?: true;
+    instructions?: string;
+    path: [Name];
+    type: "live";
+  }): Promise<CapabilityProvision>;
+};
+
+// ── PUBLISHED-TYPE GAPS — each of these is an itx-api.generated.ts weakness;
+// fix upstream, then delete the overlay. Every alias is an `Extra` widening,
+// intersected FIRST at its use site so its signatures win resolution for
+// exactly the calls the entry teaches. ──
+
+/** CloudflareSandbox lags the sandbox SDK: exec() exists at runtime (the
+ * sandbox-exec entry is about it) but not yet in the generated declaration. */
+type SandboxExecGap = {
+  sandboxes: {
+    get(path: string): Promise<{
+      exec(command: string): Promise<{ stdout: string; exitCode: number }>;
+    }>;
+  };
+};
+
+/** `egress.fetch` genuinely returns a `Response`, but under the app's merged
+ * DOM + workers-types globals `response.json()` resolves to `Promise<{}>` —
+ * useless to a body that reads the echoed JSON dynamically. */
+type EgressJsonGap = {
+  egress: {
+    fetch(request: Request): Promise<{
+      ok: boolean;
+      status: number;
+      text(): Promise<string>;
+      json(): Promise<any>;
+    }>;
+  };
+};
+
+/** The generated GmailConnection types response `data` as unknown (it is
+ * whatever the REST resource returns); the gmail entry reads it dynamically. */
+type GmailDataGap = {
+  integrations: {
+    gmail: {
+      get(connection?: string): {
+        request(input: { path: string; query?: Record<string, unknown> }): Promise<{
+          data: {
+            messages?: Array<{ id: string }>;
+            resultSizeEstimate?: number;
+            payload?: { headers?: Array<{ name: string; value?: string }> };
+          };
+        }>;
+      };
+    };
+  };
+};
+
+/** `ai.toMarkdown()`'s no-argument call returns the supported-format list;
+ * the generated union covers all call shapes at once, so the no-arg arity
+ * needs this narrowing. */
+type ToMarkdownNoArgGap = { ai: { toMarkdown(): Promise<CfMarkdownSupportedFormat[]> } };
+
+/** `itx.ai.run` returns `unknown` in the generated surface (outputs are
+ * model-shaped); entries that read a specific model's response fields use
+ * this per-entry overlay instead of casting inside the body. */
+type LooseAiRun = { ai: { run(model: string, body: unknown): Promise<any> } };
