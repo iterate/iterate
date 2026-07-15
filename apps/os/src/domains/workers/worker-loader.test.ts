@@ -16,19 +16,10 @@ describe("Worker Loader infrastructure errors", () => {
 });
 
 describe("Worker Loader cache identity", () => {
-  it("is opaque, stable within a deploy, and changes across parent deploys", async () => {
+  it("is opaque and shared across export selections for one artifact and authority scope", async () => {
     const privateMarker = "customer@example.com/private-worker";
     const input = {
-      deploymentVersion: "deploy-a",
       projectId: `prj_${privateMarker}`,
-      ref: {
-        entrypoint: privateMarker,
-        path: `/${privateMarker}`,
-        source: {
-          files: { files: { "worker.js": "export default {}" }, type: "inline" as const },
-        },
-        type: "stateless" as const,
-      },
       resolved: {
         cacheKey: "artifact-v1",
         mainModule: "worker.js",
@@ -38,11 +29,16 @@ describe("Worker Loader cache identity", () => {
     };
 
     const first = await workerLoaderCacheKey(input);
-    const sameDeploy = await workerLoaderCacheKey(input);
-    const nextDeploy = await workerLoaderCacheKey({ ...input, deploymentVersion: "deploy-b" });
+    const sameIdentity = await workerLoaderCacheKey(input);
+    const otherArtifact = await workerLoaderCacheKey({
+      ...input,
+      resolved: { ...input.resolved, cacheKey: "artifact-v2" },
+    });
+    const otherScope = await workerLoaderCacheKey({ ...input, scopePath: "/other" });
 
-    expect(first).toBe(sameDeploy);
-    expect(nextDeploy).not.toBe(first);
+    expect(first).toBe(sameIdentity);
+    expect(otherArtifact).not.toBe(first);
+    expect(otherScope).not.toBe(first);
     expect(first).toMatch(/^worker-loader:[0-9a-f]{64}$/);
     expect(first).not.toContain(privateMarker);
   });

@@ -97,7 +97,7 @@ it("does not retry a poisoned named loader isolate for a generic capability call
   expect(loadResolvedWorkerAnonymous).not.toHaveBeenCalled();
 });
 
-it("retries an at-least-once call once through an anonymous loader isolate", async () => {
+it("retries one exact artifact and sticks to its recovered anonymous isolate", async () => {
   const cloneError = new Error(
     "Unable to deserialize cloned data due to invalid or unsupported version.",
   );
@@ -136,10 +136,32 @@ it("retries an at-least-once call once through an anonymous loader isolate", asy
 
   expect(first).toHaveBeenCalledOnce();
   expect(recovered).toHaveBeenCalledOnce();
+  expect(resolveWorkerSource).toHaveBeenCalledOnce();
   expect(loadResolvedWorker).toHaveBeenCalledOnce();
   expect(loadResolvedWorkerAnonymous).toHaveBeenCalledOnce();
   expect(recordedSpans[1]?.attributes).toMatchObject({
+    "iterate.worker.invocation_attempt": 2,
     "iterate.worker.loader_recovery": "anonymous",
+    "iterate.worker.loader_mode": "anonymous",
+  });
+
+  await expect(
+    runner.invokeAtLeastOnceCapability({
+      flattenNestedPath: true,
+      path: ["processEventBatch"],
+      ref: inlineRef,
+    }),
+  ).resolves.toBe("delivered");
+
+  expect(first).toHaveBeenCalledOnce();
+  expect(recovered).toHaveBeenCalledTimes(2);
+  expect(resolveWorkerSource).toHaveBeenCalledTimes(2);
+  expect(loadResolvedWorker).toHaveBeenCalledOnce();
+  expect(loadResolvedWorkerAnonymous).toHaveBeenCalledOnce();
+  expect(recordedSpans[2]?.attributes).toMatchObject({
+    "iterate.worker.invocation_attempt": 1,
+    "iterate.worker.loader_recovery": "anonymous",
+    "iterate.worker.loader_mode": "anonymous",
   });
 });
 
@@ -224,6 +246,12 @@ describe("dynamic worker spans", () => {
       {
         name: `dynamic_worker.${fixture.expectedKind}.call`,
         attributes: {
+          ...(fixture.ref.type === "stateless"
+            ? {
+                "iterate.worker.invocation_attempt": 1,
+                "iterate.worker.loader_mode": "named",
+              }
+            : {}),
           "iterate.worker.kind": fixture.expectedKind,
           "iterate.worker.operation": "call",
           "iterate.worker.source": fixture.ref.source.files.type,

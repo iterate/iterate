@@ -5092,7 +5092,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
   readonly #props: ProjectRpcTargetProps;
-  #deliveryRunner: DynamicWorkerRunner | undefined;
+  #deliveryWorker:
+    | { ref: ReturnType<typeof defaultProjectWorkerRef>; runner: DynamicWorkerRunner }
+    | undefined;
 
   constructor(props: ProjectRpcTargetProps) {
     super();
@@ -5457,21 +5459,28 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     this.#indexAgentStatus(batch);
     this.#indexStreamSearch(batch);
     try {
-      const ref = defaultProjectWorkerRef();
-      this.#deliveryRunner ??= new DynamicWorkerRunner({
-        exports: this.#props.ctx.exports,
-        projectId: this.#props.projectId,
-        scopePath: ref.path,
-        waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
-      });
+      let deliveryWorker = this.#deliveryWorker;
+      if (deliveryWorker === undefined) {
+        const ref = defaultProjectWorkerRef();
+        deliveryWorker = {
+          ref,
+          runner: new DynamicWorkerRunner({
+            exports: this.#props.ctx.exports,
+            projectId: this.#props.projectId,
+            scopePath: ref.path,
+            waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
+          }),
+        };
+        this.#deliveryWorker = deliveryWorker;
+      }
       // Configured Stream delivery is already at-least-once and requires
       // idempotent subscriber effects. The dedicated runner operation may
       // recover a poisoned named Loader once through an anonymous isolate.
-      await this.#deliveryRunner.invokeAtLeastOnceCapability({
+      await deliveryWorker.runner.invokeAtLeastOnceCapability({
         args: [batch],
         flattenNestedPath: true,
         path: ["processEventBatch"],
-        ref,
+        ref: deliveryWorker.ref,
       });
     } catch (error) {
       // Bootstrap failures and a poisoned named Loader isolate are receiver

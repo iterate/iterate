@@ -18,6 +18,7 @@ const FOCUS_WAIT_FOR_EVENT = process.env.STREAM_BENCH_FOCUS_WAIT_FOR_EVENT === "
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
 const FOCUS_WAKE_SELECTOR = process.env.STREAM_BENCH_FOCUS_WAKE_SELECTOR === "1";
 const FOCUS_MIXED_RECOVERY = process.env.STREAM_BENCH_FOCUS_MIXED_RECOVERY === "1";
+const FOCUS_LOADER_RECOVERY = process.env.STREAM_BENCH_FOCUS_LOADER_RECOVERY === "1";
 const FOCUS_CROSSPOST_EXACT_RETRY = process.env.STREAM_BENCH_FOCUS_CROSSPOST_EXACT_RETRY === "1";
 const FOCUS_STORAGE_JOURNAL = process.env.STREAM_BENCH_FOCUS_STORAGE_JOURNAL === "1";
 const FOCUS_WORKER_CONSUMER = process.env.STREAM_BENCH_FOCUS_WORKER_CONSUMER === "1";
@@ -95,6 +96,7 @@ test.skipIf(
     FOCUS_PROCESSOR_CATCHUP ||
     FOCUS_WAKE_SELECTOR ||
     FOCUS_MIXED_RECOVERY ||
+    FOCUS_LOADER_RECOVERY ||
     FOCUS_CROSSPOST_EXACT_RETRY ||
     FOCUS_STORAGE_JOURNAL ||
     FOCUS_WORKER_CONSUMER,
@@ -1447,8 +1449,9 @@ test.skipIf(!ENABLED || !FOCUS_MIXED_RECOVERY)(
         `${paused ? "pause" : "resume"} output cycle ${cycle}`,
       );
     };
-    const waitForOutputCount = async (expected: number, cycle: number): Promise<void> => {
-      const deadline = performance.now() + 60_000;
+    const waitForOutputCount = async (expected: number, cycle: number): Promise<number> => {
+      const startedAt = performance.now();
+      const deadline = startedAt + 90_000;
       for (;;) {
         const forwarded = await readFresh(outputPath, forwardedType);
         if (forwarded.length > expected) {
@@ -1456,7 +1459,7 @@ test.skipIf(!ENABLED || !FOCUS_MIXED_RECOVERY)(
             `Mixed recovery produced ${forwarded.length} outputs; expected at most ${expected}.`,
           );
         }
-        if (forwarded.length === expected) return;
+        if (forwarded.length === expected) return performance.now() - startedAt;
         if (performance.now() >= deadline) {
           throw new HostTimeoutError(
             `Timed out waiting for ${expected} mixed recovery outputs after cycle ${cycle}; saw ${forwarded.length}.`,
@@ -1467,8 +1470,16 @@ test.skipIf(!ENABLED || !FOCUS_MIXED_RECOVERY)(
     };
 
     const markers: string[] = [];
+    const cycleRecords: Array<{
+      cycle: number;
+      durationMs: number;
+      kills: Array<{ durationMs: number; role: "output" | "source" }>;
+      mode: "idle-control" | "output-kill-race" | "paused-dual-kill" | "source-kill-race";
+      settleMs: number;
+    }> = [];
     const startedAt = performance.now();
     for (let cycle = 0; cycle < MIXED_RECOVERY_CYCLES; cycle += 1) {
+      const cycleStartedAt = performance.now();
       const events = Array.from({ length: MIXED_RECOVERY_BATCH_SIZE }, (_, index) => {
         const sequence = cycle * MIXED_RECOVERY_BATCH_SIZE + index;
         const marker = `${runId}-${sequence}`;
@@ -1480,30 +1491,48 @@ test.skipIf(!ENABLED || !FOCUS_MIXED_RECOVERY)(
         } satisfies StreamEventInput;
       });
 
+      let mode: (typeof cycleRecords)[number]["mode"] = "idle-control";
+      let kills: (typeof cycleRecords)[number]["kills"] = [];
       switch (cycle % 4) {
         case 0:
-          await Promise.all([
+          mode = "source-kill-race";
+          kills = await Promise.all([
             appendFresh(sourcePath, events, `append source cycle ${cycle}`),
-            killStreamForBenchmark(projectId, sourcePath, cycle),
-          ]);
+            killStreamAndVerifyForBenchmark(projectId, sourcePath, cycle).then((result) => ({
+              ...result,
+              role: "source" as const,
+            })),
+          ]).then(([, kill]) => [kill]);
           break;
         case 1:
-          await Promise.all([
+          mode = "output-kill-race";
+          kills = await Promise.all([
             appendFresh(sourcePath, events, `append source cycle ${cycle}`),
-            killStreamForBenchmark(projectId, outputPath, cycle),
-          ]);
+            killStreamAndVerifyForBenchmark(projectId, outputPath, cycle).then((result) => ({
+              ...result,
+              role: "output" as const,
+            })),
+          ]).then(([, kill]) => [kill]);
           break;
         case 2:
+          mode = "paused-dual-kill";
           await pauseOrResumeOutput(true, cycle);
           await appendFresh(sourcePath, events, `append paused-output source cycle ${cycle}`);
           await new Promise((resolve) => setTimeout(resolve, 250));
-          await Promise.all([
-            killStreamForBenchmark(projectId, sourcePath, cycle),
-            killStreamForBenchmark(projectId, outputPath, cycle),
+          kills = await Promise.all([
+            killStreamAndVerifyForBenchmark(projectId, sourcePath, cycle).then((result) => ({
+              ...result,
+              role: "source" as const,
+            })),
+            killStreamAndVerifyForBenchmark(projectId, outputPath, cycle).then((result) => ({
+              ...result,
+              role: "output" as const,
+            })),
           ]);
           await pauseOrResumeOutput(false, cycle);
           break;
         case 3: {
+          mode = "idle-control";
           using freshProject = withItxSession({ auth, projectId });
           using stream = freshProject.streams.get(sourcePath);
           await withHostTimeout(forceIdleTeardown(stream), `idle teardown source cycle ${cycle}`);
@@ -1511,7 +1540,14 @@ test.skipIf(!ENABLED || !FOCUS_MIXED_RECOVERY)(
           break;
         }
       }
-      await waitForOutputCount(markers.length, cycle);
+      const settleMs = await waitForOutputCount(markers.length, cycle);
+      cycleRecords.push({
+        cycle,
+        durationMs: performance.now() - cycleStartedAt,
+        kills,
+        mode,
+        settleMs,
+      });
     }
 
     const [sourceEvents, outputEvents] = await Promise.all([
@@ -1537,10 +1573,12 @@ test.skipIf(!ENABLED || !FOCUS_MIXED_RECOVERY)(
       sourceEvents.at(-1)!.offset,
     );
 
+    const settleLatency = summarize(cycleRecords.map((record) => record.settleMs));
     console.log(
       `STREAM_MIXED_RECOVERY_STRESS ${JSON.stringify({
         appendRetries,
         batchSize: MIXED_RECOVERY_BATCH_SIZE,
+        cycleRecords,
         cycles: MIXED_RECOVERY_CYCLES,
         durationMs: performance.now() - startedAt,
         events: markers.length,
@@ -1548,10 +1586,254 @@ test.skipIf(!ENABLED || !FOCUS_MIXED_RECOVERY)(
         projectId,
         revision: REVISION,
         runId,
+        settleLatency,
+      })}`,
+    );
+    expect(settleLatency.maxMs).toBeLessThan(30_000);
+    if (cycleRecords.length >= 20) expect(settleLatency.p95Ms).toBeLessThanOrEqual(15_000);
+  },
+  900_000,
+);
+
+test.skipIf(!ENABLED || !FOCUS_LOADER_RECOVERY)(
+  "focused deployed Worker Loader exact-message recovery",
+  async () => {
+    if (IMPLEMENTATION !== "candidate") {
+      throw new Error("The Loader recovery proof only applies to the candidate implementation.");
+    }
+
+    const runId = crypto.randomUUID().slice(0, 8);
+    const auth = { type: "admin-secret" as const, secret: adminSecret() };
+    const projectId = `prj_${crypto.randomUUID()}`;
+    const sourcePath = `/bench/${runId}/loader-recovery-source`;
+    const outputPath = `/bench/${runId}/loader-recovery-output`;
+    const probePath = `/bench/${runId}/loader-recovery-probe`;
+    const triggerType = `${EVENT_TYPE}/loader-recovery-trigger`;
+    const forwardedType = `${EVENT_TYPE}/loader-recovery-forwarded`;
+    const visitType = `${EVENT_TYPE}/loader-recovery-visit`;
+    const faultType = `${EVENT_TYPE}/loader-recovery-fault`;
+    const completionType = `${EVENT_TYPE}/loader-recovery-completion`;
+
+    using session = withItxSession();
+    using itx = session.authenticate(auth);
+    using project = itx.projects.create({
+      projectId,
+      slug: `stream-loader-recovery-candidate-${runId}`,
+    });
+    console.log(
+      `STREAM_LOADER_RECOVERY_PROJECT ${JSON.stringify({ projectId, revision: REVISION, runId })}`,
+    );
+    await project.__describe();
+    await project.repo.commitFiles({
+      changes: [
+        {
+          path: "worker.ts",
+          content: `
+            import { IterateWorkerEntrypoint } from "iterate/sdk";
+
+            const SOURCE_PATH = ${JSON.stringify(sourcePath)};
+            const OUTPUT_PATH = ${JSON.stringify(outputPath)};
+            const PROBE_PATH = ${JSON.stringify(probePath)};
+            const TRIGGER_TYPE = ${JSON.stringify(triggerType)};
+            const FORWARDED_TYPE = ${JSON.stringify(forwardedType)};
+            const VISIT_TYPE = ${JSON.stringify(visitType)};
+            const FAULT_TYPE = ${JSON.stringify(faultType)};
+            const COMPLETION_TYPE = ${JSON.stringify(completionType)};
+            const INVALID_LOADER_CLONE_MESSAGE =
+              "Unable to deserialize cloned data due to invalid or unsupported version.";
+
+            export default class ProjectWorker extends IterateWorkerEntrypoint {
+              fetch() {
+                return new Response("stream loader recovery proof");
+              }
+
+              async processEventBatch(batch) {
+                if (batch.path !== SOURCE_PATH) return;
+                const events = batch.events.filter((event) => event.type === TRIGGER_TYPE);
+                if (events.length === 0) return;
+
+                const project = await this.env.ITX.get();
+                try {
+                  const output = project.streams.get(OUTPUT_PATH);
+                  try {
+                    if (events.every((event) => event.payload.injectRecovery !== true)) {
+                      await output.append(...events.map((event) => ({
+                        type: FORWARDED_TYPE,
+                        idempotencyKey: \`loader-recovery-output:\${event.path}@\${event.offset}\`,
+                        payload: { marker: event.payload.marker, sourceOffset: event.offset },
+                      })));
+                      return;
+                    }
+
+                    const probe = project.streams.get(PROBE_PATH);
+                    try {
+                      const faults = await probe.getEvents({
+                        afterOffset: 0,
+                        eventTypes: [FAULT_TYPE],
+                        limit: 10,
+                      });
+                      const recovered = faults.length > 0;
+                      const firstOffset = events[0].offset;
+                      const lastOffset = events[events.length - 1].offset;
+                      const delivery = \`\${firstOffset}-\${lastOffset}\`;
+                      await probe.append(...events.map((event) => ({
+                        type: VISIT_TYPE,
+                        idempotencyKey: \`loader-recovery-visit:\${delivery}:\${recovered ? "recovered" : "named"}:\${event.offset}\`,
+                        payload: {
+                          batchAttempt: batch.attempt,
+                          delivery,
+                          phase: recovered ? "recovered" : "named",
+                          sourceOffset: event.offset,
+                        },
+                      })));
+                      if (!recovered) {
+                        await probe.append({
+                          type: FAULT_TYPE,
+                          idempotencyKey: "loader-recovery-fault-once",
+                          payload: { delivery },
+                        });
+                        throw new Error(INVALID_LOADER_CLONE_MESSAGE);
+                      }
+
+                      await output.append(...events.map((event) => ({
+                        type: FORWARDED_TYPE,
+                        idempotencyKey: \`loader-recovery-output:\${event.path}@\${event.offset}\`,
+                        payload: { marker: event.payload.marker, sourceOffset: event.offset },
+                      })));
+                      await probe.append({
+                        type: COMPLETION_TYPE,
+                        idempotencyKey: \`loader-recovery-complete:\${delivery}\`,
+                        payload: { delivery },
+                      });
+                    } finally {
+                      probe[Symbol.dispose]?.();
+                    }
+                  } finally {
+                    output[Symbol.dispose]?.();
+                  }
+                } finally {
+                  project[Symbol.dispose]?.();
+                }
+              }
+            }
+          `,
+        },
+      ],
+      message: "Install exact-message Worker Loader recovery proof",
+    });
+
+    const readType = async (path: string, eventType: string): Promise<StreamEvent[]> => {
+      using freshProject = withItxSession({ auth, projectId });
+      using stream = freshProject.streams.get(path);
+      return await withHostTimeout(
+        stream.getEvents({ afterOffset: 0, eventTypes: [eventType], limit: 500 }),
+        `read Loader recovery ${eventType}`,
+      );
+    };
+    const waitForCount = async (
+      path: string,
+      eventType: string,
+      expected: number,
+      label: string,
+    ): Promise<number> => {
+      const startedAt = performance.now();
+      const deadline = startedAt + 30_000;
+      for (;;) {
+        const events = await readType(path, eventType);
+        if (events.length > expected) {
+          throw new Error(`${label} produced ${events.length} events; expected ${expected}.`);
+        }
+        if (events.length === expected) return performance.now() - startedAt;
+        if (performance.now() >= deadline) {
+          throw new HostTimeoutError(`Timed out waiting for ${expected} events: ${label}.`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    };
+    const appendSource = async (events: StreamEventInput[], label: string): Promise<number> => {
+      using freshProject = withItxSession({ auth, projectId });
+      using source = freshProject.streams.get(sourcePath);
+      const startedAt = performance.now();
+      await withHostTimeout(commitDiscardingResult(source, ...events), label);
+      return performance.now() - startedAt;
+    };
+
+    await appendSource(
+      [{ type: triggerType, payload: { injectRecovery: false, marker: `${runId}-warm` } }],
+      "append Loader recovery warmup",
+    );
+    const warmSettleMs = await waitForCount(outputPath, forwardedType, 1, "Loader recovery warmup");
+
+    const recoveryEvents = Array.from({ length: 4 }, (_, index) => ({
+      type: triggerType,
+      idempotencyKey: `loader-recovery-source:${runId}:recovery:${index}`,
+      payload: { injectRecovery: true, marker: `${runId}-recovery-${index}` },
+    }));
+    const recoveryStartedAt = performance.now();
+    const recoveryAppendMs = await appendSource(recoveryEvents, "append Loader recovery batch");
+    await waitForCount(outputPath, forwardedType, 5, "Loader recovery batch");
+    const recoverySettleMs = performance.now() - recoveryStartedAt;
+
+    const stickyEvents = Array.from({ length: 4 }, (_, index) => ({
+      type: triggerType,
+      idempotencyKey: `loader-recovery-source:${runId}:sticky:${index}`,
+      payload: { injectRecovery: true, marker: `${runId}-sticky-${index}` },
+    }));
+    const stickyStartedAt = performance.now();
+    const stickyAppendMs = await appendSource(stickyEvents, "append sticky Loader recovery batch");
+    await waitForCount(outputPath, forwardedType, 9, "sticky Loader recovery batch");
+    const stickySettleMs = performance.now() - stickyStartedAt;
+
+    const [sourceEvents, outputEvents, visits, faults, completions] = await Promise.all([
+      readType(sourcePath, triggerType),
+      readType(outputPath, forwardedType),
+      readType(probePath, visitType),
+      readType(probePath, faultType),
+      readType(probePath, completionType),
+    ]);
+    expect(sourceEvents).toHaveLength(9);
+    expect(outputEvents).toHaveLength(9);
+    expect(outputEvents.map((event) => event.payload?.sourceOffset)).toEqual(
+      sourceEvents.map((event) => event.offset),
+    );
+    expect(new Set(outputEvents.map((event) => event.idempotencyKey))).toMatchObject({ size: 9 });
+    expect(visits).toHaveLength(12);
+    expect(visits.filter((event) => event.payload?.phase === "named")).toHaveLength(4);
+    expect(visits.filter((event) => event.payload?.phase === "recovered")).toHaveLength(8);
+    expect(new Set(visits.map((event) => event.payload?.batchAttempt))).toEqual(new Set([1]));
+    expect(faults).toHaveLength(1);
+    expect(completions).toHaveLength(2);
+
+    using finalProject = withItxSession({ auth, projectId });
+    using finalSource = finalProject.streams.get(sourcePath);
+    const finalState = (await withHostTimeout(
+      finalSource.runtimeState(),
+      "read Loader recovery source state",
+    )) as { runtime: { subscriptions: Record<string, { ackedOffset?: number }> } };
+    expect(finalState.runtime.subscriptions["project-worker"]?.ackedOffset).toBeGreaterThanOrEqual(
+      sourceEvents.at(-1)!.offset,
+    );
+    expect(recoverySettleMs).toBeLessThan(30_000);
+    expect(stickySettleMs).toBeLessThan(15_000);
+
+    console.log(
+      `STREAM_LOADER_RECOVERY_PROOF ${JSON.stringify({
+        completionCount: completions.length,
+        faultCount: faults.length,
+        outputCount: outputEvents.length,
+        projectId,
+        recoveryAppendMs,
+        recoverySettleMs,
+        revision: REVISION,
+        runId,
+        stickyAppendMs,
+        stickySettleMs,
+        visitCount: visits.length,
+        warmSettleMs,
       })}`,
     );
   },
-  900_000,
+  300_000,
 );
 
 test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
@@ -2225,7 +2507,48 @@ async function killStreamForBenchmark(
     await withHostTimeout(stream.kill(), `forced Stream kill iteration ${iteration}`);
   } catch (error) {
     if (error instanceof HostTimeoutError) throw error;
+    if (!(error instanceof Error) || !error.message.includes("kill requested")) throw error;
   }
+}
+
+async function killStreamAndVerifyForBenchmark(
+  projectId: string,
+  path: string,
+  iteration: number,
+): Promise<{ durationMs: number }> {
+  const startedAt = performance.now();
+  const previousIncarnation = await readStreamIncarnation(projectId, path, iteration);
+  await killStreamForBenchmark(projectId, path, iteration);
+  const deadline = performance.now() + 30_000;
+  for (;;) {
+    const incarnation = await readStreamIncarnation(projectId, path, iteration);
+    if (incarnation !== previousIncarnation) return { durationMs: performance.now() - startedAt };
+    if (performance.now() >= deadline) {
+      throw new HostTimeoutError(
+        `Timed out verifying Stream incarnation changed after kill iteration ${iteration}: ${path}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function readStreamIncarnation(
+  projectId: string,
+  path: string,
+  iteration: number,
+): Promise<string> {
+  const auth = { type: "admin-secret" as const, secret: adminSecret() };
+  using project = withItxSession({ auth, projectId });
+  using stream = project.streams.get(path);
+  const state = await withHostTimeout(
+    stream.runtimeState(),
+    `read Stream incarnation iteration ${iteration}`,
+  );
+  const incarnationId = (state.coreProcessorState as { incarnationId?: unknown }).incarnationId;
+  if (typeof incarnationId !== "string") {
+    throw new Error(`Stream runtime state omitted incarnationId for ${path}.`);
+  }
+  return incarnationId;
 }
 
 async function measureProcessorCatchup(projectId: string, samples: number): Promise<number[]> {

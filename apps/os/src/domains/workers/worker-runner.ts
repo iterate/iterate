@@ -65,6 +65,7 @@ export class DynamicWorkerRunner {
   readonly #projectId: string;
   readonly #scopePath: string;
   readonly #waitUntil: (promise: Promise<unknown>) => void;
+  #anonymousRecovery: { cacheKey: string; worker: WorkerStub } | undefined;
   #sourceResolution: WorkerSourceResolution | undefined;
 
   constructor(props: {
@@ -101,6 +102,29 @@ export class DynamicWorkerRunner {
     return worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T;
   }
 
+  #getStatelessEntrypointFromResolved<T = unknown>(
+    ref: StatelessDynamicWorkerRef,
+    resolved: ResolvedWorkerSource,
+    loader: "anonymous" | "named",
+  ): Promise<T> | T {
+    if (loader === "anonymous") {
+      let recovery = this.#anonymousRecovery;
+      if (recovery?.cacheKey !== resolved.cacheKey) {
+        recovery = {
+          cacheKey: resolved.cacheKey,
+          worker: this.#loadResolvedAnonymous(resolved),
+        };
+        this.#anonymousRecovery = recovery;
+      }
+      return recovery.worker.getEntrypoint(ref.entrypoint, {
+        props: ref.props ?? {},
+      }) as T;
+    }
+    return this.#loadResolved(resolved).then(
+      (worker) => worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T,
+    );
+  }
+
   /**
    * Stateful refs resolve only to a class plus source identity. The outer
    * Durable Object owns storage/facet lifetime and is the only place that should
@@ -125,7 +149,7 @@ export class DynamicWorkerRunner {
   ): Promise<{ klass: T; resolved: ResolvedWorkerSource } | null> {
     const resolved = await resolveCachedArtifact(cacheKey);
     if (resolved === null) return null;
-    const worker = await this.#loadResolved(ref, resolved);
+    const worker = await this.#loadResolved(resolved);
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
   }
 
@@ -218,11 +242,9 @@ export class DynamicWorkerRunner {
       );
     }
 
-    const invoke = (loader: "anonymous" | "named") =>
+    let resolvedForAttempt: ResolvedWorkerSource | undefined;
+    const invoke = (requestedLoader: "anonymous" | "named", attempt: number) =>
       this.#trace(ref, "call", traceRole, async (span) => {
-        if (loader === "anonymous") {
-          span.setAttribute("iterate.worker.loader_recovery", "anonymous");
-        }
         if (ref.type === "stateful") {
           // Method replay must happen inside StatefulWorkerDurableObject. Returning
           // a dynamic facet stub through one DO and then invoking it from another RPC
@@ -241,14 +263,29 @@ export class DynamicWorkerRunner {
           });
         }
 
-        const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs, loader);
+        resolvedForAttempt ??= await this.#resolve(ref, buildBudgetMs);
+        const loader =
+          recoverInvalidLoaderClone &&
+          this.#anonymousRecovery?.cacheKey === resolvedForAttempt.cacheKey
+            ? "anonymous"
+            : requestedLoader;
+        span.setAttribute("iterate.worker.invocation_attempt", attempt);
+        span.setAttribute("iterate.worker.loader_mode", loader);
+        if (loader === "anonymous") {
+          span.setAttribute("iterate.worker.loader_recovery", "anonymous");
+        }
+        const target = await this.#getStatelessEntrypointFromResolved(
+          ref,
+          resolvedForAttempt,
+          loader,
+        );
         return flattenNestedPath
           ? await invokePreferringFlattenedPath({ args, path, target })
           : await replayPath({ args, path, target });
       });
 
     try {
-      return await invoke("named");
+      return await invoke("named", 1);
     } catch (error) {
       // Generic calls preserve the rejection because they make no idempotency
       // promise. Stream delivery is already at-least-once, so it can recover
@@ -260,7 +297,7 @@ export class DynamicWorkerRunner {
       ) {
         throw error;
       }
-      return await invoke("anonymous");
+      return await invoke("anonymous", 2);
     }
   }
 
@@ -274,6 +311,11 @@ export class DynamicWorkerRunner {
     buildBudgetMs?: number,
     loader: "anonymous" | "named" = "named",
   ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
+    const resolved = await this.#resolve(ref, buildBudgetMs);
+    return { resolved, worker: await this.#loadResolved(resolved, loader) };
+  }
+
+  async #resolve(ref: DynamicWorkerRef, buildBudgetMs?: number): Promise<ResolvedWorkerSource> {
     const resolution = await resolveWorkerSource({
       buildBudgetMs,
       previous: this.#sourceResolution,
@@ -282,12 +324,10 @@ export class DynamicWorkerRunner {
       waitUntil: this.#waitUntil,
     });
     this.#sourceResolution = resolution;
-    const { resolved } = resolution;
-    return { resolved, worker: await this.#loadResolved(ref, resolved, loader) };
+    return resolution.resolved;
   }
 
   async #loadResolved(
-    ref: DynamicWorkerRef,
     resolved: ResolvedWorkerSource,
     loader: "anonymous" | "named" = "named",
   ): Promise<WorkerStub> {
@@ -295,13 +335,22 @@ export class DynamicWorkerRunner {
       bindings: this.#bindings,
       globalOutbound: this.#globalOutbound,
       projectId: this.#projectId,
-      ref,
       resolved,
       scopePath: this.#scopePath,
     };
     return loader === "anonymous"
       ? loadResolvedWorkerAnonymous(input)
       : await loadResolvedWorker(input);
+  }
+
+  #loadResolvedAnonymous(resolved: ResolvedWorkerSource): WorkerStub {
+    return loadResolvedWorkerAnonymous({
+      bindings: this.#bindings,
+      globalOutbound: this.#globalOutbound,
+      projectId: this.#projectId,
+      resolved,
+      scopePath: this.#scopePath,
+    });
   }
 
   #statefulWorker(ref: StatefulDynamicWorkerRef): StatefulWorkerRpc {

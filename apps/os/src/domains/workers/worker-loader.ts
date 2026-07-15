@@ -1,6 +1,6 @@
-import { itxEnv as env, workerVersion } from "../../env.ts";
+import { itxEnv as env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { DynamicWorkerRef, DynamicWorkerSource, WorkerBuildOptions } from "./schemas.ts";
+import type { DynamicWorkerSource, WorkerBuildOptions } from "./schemas.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
 import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
@@ -361,7 +361,6 @@ type LoadResolvedWorkerInput = {
   bindings: WorkerBindings;
   globalOutbound: Fetcher;
   projectId: string;
-  ref: DynamicWorkerRef;
   resolved: ResolvedWorkerSource;
   scopePath: string;
 };
@@ -370,20 +369,19 @@ export async function loadResolvedWorker({
   bindings,
   globalOutbound,
   projectId,
-  ref,
   resolved,
   scopePath,
 }: LoadResolvedWorkerInput): Promise<WorkerStub> {
-  // The Worker Loader cache must separate all runtime-relevant dimensions. In
-  // particular `scopePath` prevents a worker loaded for an agent path from
-  // reusing a project-root `env.ITX` binding, even if the module bytes match.
-  // The parent deploy version is equally important: a named isolate retains
-  // the env Frankenvalue created by that parent. Reusing it after a deploy can
-  // fail deserialization even when the dynamic worker artifact is unchanged.
+  // One isolate is determined by exact code plus its authority-bearing host
+  // scope. Export selection happens after WorkerStub lookup, so entrypoint,
+  // class, and ref path must not fragment the named isolate cache.
+  //
+  // Keep this identity stable across parent deployments. workerd retains
+  // named identities without a deletion API, so deployment-versioned names
+  // grow without bound. A retained env that no longer deserializes is handled
+  // by DynamicWorkerRunner's bounded sticky anonymous recovery instead.
   const cacheKey = await workerLoaderCacheKey({
-    deploymentVersion: workerVersion(env),
     projectId,
-    ref,
     resolved,
     scopePath,
   });
@@ -418,20 +416,13 @@ function workerLoaderCode({
   };
 }
 
-/** Opaque, deployment-scoped identity for one exact named Loader isolate. */
+/** Opaque identity for one exact named Loader isolate and authority scope. */
 export async function workerLoaderCacheKey(input: {
-  deploymentVersion: string;
   projectId: string;
-  ref: DynamicWorkerRef;
   resolved: ResolvedWorkerSource;
   scopePath: string;
 }): Promise<string> {
-  const exportIdentity =
-    input.ref.type === "stateless"
-      ? { entrypoint: input.ref.entrypoint ?? "default", type: "entrypoint" as const }
-      : { className: input.ref.className, type: "durable-object" as const };
   const identity = {
-    deploymentVersion: input.deploymentVersion,
     // The hosting worker's own name. Loader caches are shared across parent
     // workers when they run in one workerd (vitest-pool-workers; a future
     // second LOADER holder), and a cached isolate only works for the parent
@@ -439,11 +430,8 @@ export async function workerLoaderCacheKey(input: {
     // opaque "internal error" (#1614).
     hostingWorker: env.WORKER_SELF,
     projectId: input.projectId,
-    refPath: input.ref.path,
     resolvedCacheKey: input.resolved.cacheKey,
-    runtimeType: input.ref.type,
     scopePath: input.scopePath,
-    exportIdentity,
     type: "worker-loader" as const,
   };
   const unhashed = JSON.stringify(identity);
