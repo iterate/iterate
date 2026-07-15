@@ -6,8 +6,8 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { listenOnFetchSafePort } from "./test/fetch-safe-port.ts";
 import { seedPets } from "./pets.ts";
 import { pkceS256, randomSealKey } from "./seal.ts";
 import {
@@ -473,8 +473,7 @@ describe("webhooks", () => {
         response.writeHead(200).end("ok");
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const { port } = server.address() as AddressInfo;
+    const port = await listenOnFetchSafePort(server);
     return {
       url: `http://127.0.0.1:${port}/hook`,
       received,
