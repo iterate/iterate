@@ -30,8 +30,12 @@ function createTickingClock(intervalMs: number) {
     subscribe(onStoreChange: () => void) {
       listeners.add(onStoreChange);
       // Fresh snapshot so a late subscriber is not stuck on a stale `now`.
+      // Notify after subscribe returns — useSyncExternalStore re-reads
+      // getSnapshot on notification; updating `now` alone without notifying
+      // leaves the render-time snapshot in place until the next interval tick.
       now = Date.now();
       ensureTimer();
+      queueMicrotask(onStoreChange);
       return () => {
         listeners.delete(onStoreChange);
         maybeStopTimer();
