@@ -235,11 +235,7 @@ export class StreamSegmentIndexCoalescer {
       };
       entry = createdEntry;
       this.#entries.set(key, createdEntry);
-      createdEntry.promise = Promise.resolve()
-        .then(() => this.#drain(key, createdEntry))
-        .finally(() => {
-          if (this.#entries.get(key) === createdEntry) this.#entries.delete(key);
-        });
+      createdEntry.promise = Promise.resolve().then(() => this.#drain(key, createdEntry));
     } else if (input.throughOffset >= entry.requestedThroughOffset) {
       entry.requestedThroughOffset = input.throughOffset;
       entry.loadEvents = input.loadEvents;
@@ -248,40 +244,47 @@ export class StreamSegmentIndexCoalescer {
   }
 
   async #drain(key: string, entry: StreamSegmentIndexEntry): Promise<void> {
-    let completedThroughOffset = -1;
-    while (completedThroughOffset < entry.requestedThroughOffset) {
-      const targetThroughOffset = entry.requestedThroughOffset;
-      const loadEvents = entry.loadEvents;
-      const events = await loadEvents();
-      const observedThroughOffset = events.reduce(
-        (highest, event) => Math.max(highest, event.offset),
-        -1,
-      );
-      if (observedThroughOffset < targetThroughOffset) {
-        throw new Error(
-          `stream segment read stopped at ${observedThroughOffset}; expected ${targetThroughOffset}`,
+    try {
+      let completedThroughOffset = -1;
+      while (completedThroughOffset < entry.requestedThroughOffset) {
+        const targetThroughOffset = entry.requestedThroughOffset;
+        const loadEvents = entry.loadEvents;
+        const events = await loadEvents();
+        const observedThroughOffset = events.reduce(
+          (highest, event) => Math.max(highest, event.offset),
+          -1,
         );
-      }
+        if (observedThroughOffset < targetThroughOffset) {
+          throw new Error(
+            `stream segment read stopped at ${observedThroughOffset}; expected ${targetThroughOffset}`,
+          );
+        }
 
-      const document = renderStreamSegmentDocument({
-        events,
-        segment: entry.request.segment,
-        streamPath: entry.request.path,
-      });
-      let wrote = false;
-      if (document !== null) {
-        wrote = await this.#putMonotonically({
-          document,
-          key,
-          request: entry.request,
-          throughOffset: observedThroughOffset,
+        const document = renderStreamSegmentDocument({
+          events,
+          segment: entry.request.segment,
+          streamPath: entry.request.path,
         });
-      }
+        let wrote = false;
+        if (document !== null) {
+          wrote = await this.#putMonotonically({
+            document,
+            key,
+            request: entry.request,
+            throughOffset: observedThroughOffset,
+          });
+        }
 
-      completedThroughOffset = observedThroughOffset;
-      if (wrote && completedThroughOffset < entry.requestedThroughOffset) {
-        await this.#paceSameKeyWrite();
+        completedThroughOffset = observedThroughOffset;
+        if (wrote && completedThroughOffset < entry.requestedThroughOffset) {
+          await this.#paceSameKeyWrite();
+        }
       }
+    } finally {
+      // Remove the entry before this async drain resolves. A later mark must
+      // either extend the still-running loop or create a fresh drain; it must
+      // never attach to a completed promise waiting for an outer finally.
+      if (this.#entries.get(key) === entry) this.#entries.delete(key);
     }
   }
 
@@ -317,6 +320,8 @@ export class StreamSegmentIndexCoalescer {
           onlyIf: current === null ? { etagDoesNotMatch: "*" } : { etagMatches: current.etag },
         });
         if (result !== null) return true;
+        const winner = await bucket.head(input.key);
+        if (persistedStreamThroughOffset(winner) >= input.throughOffset) return false;
       } catch (error) {
         if (!isSameKeyRateLimit(error) || rateLimitRetries >= MAX_SAME_KEY_RATE_LIMIT_RETRIES) {
           throw error;

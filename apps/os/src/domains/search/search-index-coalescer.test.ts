@@ -236,6 +236,48 @@ describe("StreamSegmentIndexCoalescer", () => {
     expect(stored.body).toContain("offset 8");
   });
 
+  it("does not pace after a conditional write loses to a newer snapshot", async () => {
+    const bucket = new ConditionalBucket();
+    const olderPut = deferred<void>();
+    const newerPut = deferred<void>();
+    const olderStarted = deferred<void>();
+    const newerStarted = deferred<void>();
+    bucket.beforePut = async (call) => {
+      if (call.options.customMetadata?.streamThroughOffset === "1") {
+        olderStarted.resolve();
+        await olderPut.promise;
+      } else {
+        newerStarted.resolve();
+        await newerPut.promise;
+      }
+    };
+    let olderPaces = 0;
+    const olderIsolate = new StreamSegmentIndexCoalescer({
+      bucket: () => bucket,
+      paceSameKeyWrite: async () => {
+        olderPaces += 1;
+      },
+    });
+    const newerIsolate = coalescer(bucket);
+
+    const older = olderIsolate.index(request({ loadEvents: async () => [event(1)], offset: 1 }));
+    await olderStarted.promise;
+    const newer = newerIsolate.index(
+      request({
+        loadEvents: async () => Array.from({ length: 8 }, (_, offset) => event(offset + 1)),
+        offset: 8,
+      }),
+    );
+    await newerStarted.promise;
+    newerPut.resolve();
+    await newer;
+    olderPut.resolve();
+    await older;
+
+    expect(olderPaces).toBe(0);
+    expect([...bucket.objects.values()][0]!.customMetadata?.streamThroughOffset).toBe("8");
+  });
+
   it("leaves a concurrently-created append-only segment intact after a null render", async () => {
     const bucket = new ConditionalBucket();
     const nullRead = deferred<StreamEvent[]>();
