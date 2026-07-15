@@ -3,9 +3,13 @@
 > **Status: historical (pre-itx-v4 procedure).** The Slack integration was
 > rebuilt on itx in the itx-v4 replacement (PR #1585) — Durable Object names
 > and event routes below describe the pre-migration stack and no longer
-> exist. For current real Slack testing, preview app setup, and internal
-> duplicate-bot caveats, start with [slack-testing.md](slack-testing.md).
-> Recover the old implementation from git history if ever needed.
+> exist.
+>
+> **Current instructions:** [slack-testing.md](slack-testing.md) — including
+> `SLACK_CI_BOT_TOKEN` as the scripted trigger actor, `#slack-agent-e2e-test`,
+> joining the product bot via `itx.integrations.slack`, and ambient vs
+> `@mention` smokes. Recover the old implementation from git history if ever
+> needed.
 
 This note describes the manual production smoke test for proving that a Slack
 thread can wake a routed Slack agent and produce a real Slack reply.

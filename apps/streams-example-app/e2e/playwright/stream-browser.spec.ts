@@ -1153,9 +1153,17 @@ async function holdLegacyWriterLock(page: Page, streamPath: string) {
 
 async function holdCurrentWriterLock(page: Page, streamPath: string) {
   await page.evaluate(async (path) => {
+    // Must match the lock a live mirror runtime requests, or the fresh tab below
+    // would elect itself leader and this "empty follower" test would be vacuous.
+    // Source of truth: streamMirrorWriterLockName + mirrorLockVersionVector in
+    // apps/os/.../browser/stream-leader.ts. Format:
+    //   stream-writer:<projectId>:<path>:browser-stream-mirror:<versionVector>
+    // versionVector = the canonical members' `<slug>@<schemaVersion>` sorted and
+    // joined by "|" (browser-feed@1, browser-raw-events@6). Bump here whenever a
+    // member's schemaVersion changes — that bump is exactly what this lock guards.
     await new Promise<void>((resolve) => {
       void navigator.locks.request(
-        `next-stream-writer:default:${path}:browser-raw-events:v4`,
+        `stream-writer:default:${path}:browser-stream-mirror:browser-feed@1|browser-raw-events@6`,
         async () => {
           resolve();
           await new Promise(() => {});
