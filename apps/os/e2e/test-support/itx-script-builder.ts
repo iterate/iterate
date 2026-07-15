@@ -146,20 +146,23 @@ function wrapScriptSource(source: string, vars: Record<string, unknown>): string
  * `__using(`/`__async(`/`__await(` forms are esbuild's spellings of the same
  * helpers, kept so a toolchain swap fails loudly here instead of server-side.
  */
+// Identifier-boundary matches (not bare substrings): a lookbehind rejects a
+// preceding identifier character so e.g. a user variable `not_usingCtx` or a
+// string literal mentioning these names mid-word never false-positives.
 const TRANSFORM_HELPER_MARKERS = [
-  "__vite_ssr_import_",
-  "_usingCtx",
-  "__using(",
-  "__async(",
-  "__await(",
+  /(?<![\w$])__vite_ssr_import_/,
+  /(?<![\w$])_usingCtx(?![\w$])/,
+  /(?<![\w$])__using\s*\(/,
+  /(?<![\w$])__async\s*\(/,
+  /(?<![\w$])__await\s*\(/,
 ] as const;
 
 function assertSelfContainedScriptSource(source: string): void {
-  const marker = TRANSFORM_HELPER_MARKERS.find((needle) => source.includes(needle));
+  const marker = TRANSFORM_HELPER_MARKERS.find((needle) => needle.test(source));
   if (!marker) return;
   throw new Error(
-    `itxScript function is not self-contained: its compiled source references the ` +
-      `transform helper \`${marker}\`. The function ships as compiled JavaScript into a ` +
+    `itxScript function is not self-contained: its compiled source matches the ` +
+      `transform-helper pattern ${String(marker)}. The function ships as compiled JavaScript into a ` +
       `server-side isolate where only \`itx\`, \`vars\`, and runtime globals exist — ` +
       `module-scope helpers injected by the test-file transform (e.g. for \`using\` ` +
       `declarations) do not. Rewrite without the downleveled syntax (try/finally or an ` +

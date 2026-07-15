@@ -80,13 +80,10 @@ const ALL_RUNTIMES: ItxExampleRuntime[] = [
 /** Live providers must outlive the calls, so these stay in caller-owned sessions. */
 const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
 
-/** The `itx` surface of a project-context entry. */
-type ProjectExampleItx = Project;
-
 /** A project-context entry. `Extra` types the dynamic capabilities the body
  * itself mounts and then calls — intersected FIRST so its signatures win. */
 function projectExample<Extra extends object = {}>(
-  entry: ExampleMeta & { fn: (itx: Extra & ProjectExampleItx, vars: never) => Promise<unknown> },
+  entry: ExampleMeta & { fn: (itx: Extra & Project, vars: never) => Promise<unknown> },
 ): ItxExampleSource {
   return { ...entry, context: "project" };
 }
