@@ -33,10 +33,6 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     );
   }
 
-  function newGithubAgentProcessor(stream: MemoryStream) {
-    return new GithubAgentProcessor({ stream, path: stream.path, projectId: null });
-  }
-
   function agentSetup(
     makeDeps?: (
       stream: MemoryStream,
