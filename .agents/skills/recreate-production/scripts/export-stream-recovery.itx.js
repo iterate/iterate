@@ -22,10 +22,9 @@ if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
 fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });
 fs.chmodSync(outputDir, 0o700);
 
-const pageNamePattern = /^\d{8}\.json$/;
 const pageFiles = fs
   .readdirSync(outputDir)
-  .filter((name) => pageNamePattern.test(name))
+  .filter((name) => /^\d{8}\.json$/.test(name))
   .sort();
 let throughOffset;
 let previousOffset = 0;
