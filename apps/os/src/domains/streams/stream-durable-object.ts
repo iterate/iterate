@@ -24,7 +24,7 @@ import type {
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "./rpc-types.ts";
-import { StreamOffsetConflictError } from "./rpc-types.ts";
+import { StreamOffsetConflictError, StreamReceiverUnavailableError } from "./rpc-types.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
@@ -640,7 +640,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       case "events.iterate.com/stream/subscription-parked":
         return;
       default:
-        throw new Error(`stream paused: ${args.state.pauseReason ?? "unknown reason"}`);
+        // A pause is an operator-controlled outage of the whole stream, not
+        // evidence that this particular event is poison. Preserve that fact
+        // across Workers RPC so an upstream `onPoison: "skip"` subscription
+        // backs off the intact batch instead of permanently stepping over a
+        // healthy event while its destination is paused.
+        throw new StreamReceiverUnavailableError(
+          `stream paused: ${args.state.pauseReason ?? "unknown reason"}`,
+        );
     }
   }
 

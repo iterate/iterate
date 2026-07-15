@@ -762,7 +762,10 @@ test("exact cross-post retries fall back without losing newly eligible events", 
     payload: { reason: "exercise failed cross-post acknowledgement" },
   });
   const afterFailure = batch({ configuredOffset: 12, offsets: [4] });
-  await expect(acceptCrossPostDirect(target, afterFailure)).rejects.toThrow(/paused/);
+  await expect(acceptCrossPostDirect(target, afterFailure)).rejects.toMatchObject({
+    name: "StreamReceiverUnavailableError",
+    message: expect.stringMatching(/paused/),
+  });
   await target.append({
     type: "events.iterate.com/stream/resumed",
     payload: { reason: "retry after failed cross-post acknowledgement" },
