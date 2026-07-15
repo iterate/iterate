@@ -93,21 +93,19 @@ function projectExample<Extra extends object = {}>(
  * they exist only on itxs scoped under /agents/**). The agent's
  * birth-mounted `itx.workspace` is a dynamic capability with no static
  * member — an entry using it would widen via `Extra`. */
-type AgentExampleItx = Project & { agent: Agent; chat: AgentChat };
-
 function agentExample<Extra extends object = {}>(
-  entry: ExampleMeta & { fn: (itx: Extra & AgentExampleItx, vars: never) => Promise<unknown> },
+  entry: ExampleMeta & {
+    fn: (itx: Extra & Project & { agent: Agent; chat: AgentChat }, vars: never) => Promise<unknown>;
+  },
 ): ItxExampleSource {
   return { ...entry, context: "agent" };
 }
 
-/** The OS Session (what `authenticate()` returns): NOT an itx — a catalog
- * that vends project itxs (`__describe` with `principal`, `projects`). */
-type SessionExampleItx = Session;
-
+// The OS Session (what `authenticate()` returns): NOT an itx — a catalog
+// that vends project itxs (`__describe` with `principal`, `projects`).
 // eslint-disable-next-line iterate/no-single-use-helpers -- one of the catalogue's three uniform per-context authoring doors; only one session entry is currently fn-authored (list-projects is string-authored), but the pattern is the API.
 function sessionExample(
-  entry: ExampleMeta & { fn: (itx: SessionExampleItx, vars: never) => Promise<unknown> },
+  entry: ExampleMeta & { fn: (itx: Session, vars: never) => Promise<unknown> },
 ): ItxExampleSource {
   return { ...entry, context: "session" };
 }
