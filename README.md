@@ -133,7 +133,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 
 ### Development
 
-- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, drafts/previews, body hygiene
+- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, drafts/previews, body hygiene; after open: wait for Iterate Review, address every thread, no merge on red CI
 - [Browser testing](docs/browser-testing.md) — isolated agent-browser sessions, visible watch mode, and reusable test logins
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities, opening project-scoped or platform-wide operator sessions, browsers for agents, preview-from-local
 - [Tunnels](docs/tunnels.md) — public HTTPS URLs for local dev, webhooks, OAuth callbacks, and CI/e2e fixtures
