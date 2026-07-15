@@ -15,11 +15,9 @@ export function agentPathLabel(path: string): { title: string; subtitle?: string
     segments[4] !== undefined &&
     segments[6] !== undefined
   ) {
-    const pr = segments[4];
-    const checkId = segments[6];
     return {
-      title: `PR #${pr} review`,
-      subtitle: `Check ${checkId}`,
+      title: `PR #${segments[4]} review`,
+      subtitle: `Check ${segments[6]}`,
     };
   }
   // /agents/repos/<id>/pull-requests/<n>
