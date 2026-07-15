@@ -6,6 +6,10 @@ incidental implementation. During an active optimization run, repeat the
 branch-versus-current-main suite at least once every four hours and append a
 dated entry here.
 
+For the decision-oriented status, architecture map, artifact inventory, and
+second-opinion brief, start with the
+[Stream performance handoff](./stream-performance-handoff.md).
+
 ## Benchmark Rules
 
 - Measure from a Node host around an awaited RPC or a host-observed delivery.
@@ -4576,3 +4580,46 @@ Raw records are `/tmp/cumulative-15-{full,tail,live,crosspost,storage}-`
 `/tmp/cumulative-15-analysis.txt`. Both benchmark servers were stopped.
 Production remains untouched. If active optimization continues, the next
 cumulative comparison is due by `2026-07-15T15:26:24Z`.
+
+## 2026-07-15: Landing Snapshot And Evidence Archive
+
+Freshly fetched `origin/main` at `eefc9d1e3` was merged as `9af5f02ce`. The two
+conflicts were test-only and retained the branch's Stream checkpoint/currency
+coverage while accepting main's redundant-test deletion and ack-only append
+mock shape. The affected two files passed 64 tests. No Stream runtime changed;
+`886b5ecf1` remains the final runtime revision measured by checkpoint 15 and
+the deployed callback comparison.
+
+Every raw path referenced by this ledger was audited before landing. There are
+1,130 surviving logs, profiles, and analyses totaling 24,280,568 bytes: 1,114
+logs, 11 DevTools CPU profiles, and five JSON/text analyses. Checkpoints 14 and
+15 retain every one of their 50 raw process logs and validation outputs. The
+only genuinely missing group is the local `/tmp/payload-release-live-*` pool;
+its final deployed samples, focused replay profile, summary JSON, and recorded
+result remain.
+
+The surviving evidence is archived outside temporary storage at
+`/Users/jonastemplestein/stream-performance-evidence-2026-07-15.tar.gz`. The
+archive contains all 1,130 files, is 6.1 MB compressed, and has SHA-256
+`da898b32fd4dcdd169da08bf16c64b75aca7ef4337d9bca9f9d06f45918da903`.
+Volatile source experiments remain in 40 `/private/tmp/iterate-stream-*`
+worktrees. The coherent-kernel, pull-kernel, and storage-explorer worktrees
+contain untracked or uncommitted work and must be inspected before cleanup.
+
+Fresh independent reviews converged on a landing decision rather than more
+speculative mechanisms. The current implementation has real measured gains
+but roughly 5,085 delivery-coordination lines and about 13 state machines. A
+feature-complete replacement should target about 3,300-3,600 coordination
+lines and eight state machines while preserving the current tests and
+benchmarks as its oracle. The only credible delivery follow-up is a stricter
+deployed rerun of the direct Project Worker lane: its first PCM sample improved
+p50 9.5% but regressed p95 13.8%, and subsequent evidence was contaminated.
+The bounded remaining storage ideas are one activation record, one
+discriminated SQL bootstrap query, a derived fully keyed batch insert, and
+bulk acknowledgement-cache population. None is accepted and none should
+delay choosing ship-current versus replace-now.
+
+The decision-oriented architecture, measurement summary, rejected directions,
+artifact inventory, and second-opinion reading brief are now captured in the
+[Stream performance handoff](./stream-performance-handoff.md). Production
+remains untouched.
