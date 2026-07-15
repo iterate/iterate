@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ChevronDown,
@@ -26,6 +26,7 @@ import { agentPathIcon, agentPathLabel } from "~/lib/agent-roster-labels.ts";
 import { agentBusyPhaseLabel } from "~/lib/feed-format.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 /** Coarse tick for relative "ago" labels in the sidebar (matches stream switcher). */
 const CLOCK_TICK_MS = 15_000;
@@ -88,15 +89,6 @@ function useAgentRoster(projectId: string): RosterRow[] {
   }, [roster.value]);
 }
 
-function useTickingNowMs(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
-    return () => clearInterval(interval);
-  }, []);
-  return now;
-}
-
 /**
  * The agents roster in the project sidebar, newest activity first: a live
  * busy dot, the agent's title, last activity, and its expandable status line.
@@ -113,7 +105,7 @@ export function SidebarRecentAgents({
   projectSlug: string;
 }) {
   const rows = useAgentRoster(projectId);
-  const nowMs = useTickingNowMs();
+  const nowMs = useTickingNowMs(CLOCK_TICK_MS);
   if (rows.length === 0) return null;
   return (
     <>
@@ -145,7 +137,7 @@ export function AgentRosterList({
   projectSlug: string;
 }) {
   const rows = useAgentRoster(projectId);
-  const nowMs = useTickingNowMs();
+  const nowMs = useTickingNowMs(CLOCK_TICK_MS);
   if (rows.length === 0) return null;
   return (
     <SidebarMenu>
