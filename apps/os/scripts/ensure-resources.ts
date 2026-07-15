@@ -17,7 +17,15 @@
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs } from "../../../envs.ts";
-import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
+import {
+  ensureD1,
+  ensureProxiedDnsRecord,
+  ensureR2ObjectExpiryLifecycle,
+  PREVIEW_DISPOSABLE_TTL_SECONDS,
+  PREVIEW_FILES_OBJECT_EXPIRY,
+  PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  SANDBOX_BACKUP_TTL_SECONDS_PRD,
+} from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 import { emailDomainForDeployment } from "../src/domains/email/utils.ts";
@@ -114,48 +122,53 @@ export default async function ensureResources(
   const kv = await ensureKv(`${env.osWorkerName}-project-directory`);
   const buildCacheKv = await ensureKv(`${env.osWorkerName}-worker-build-cache`);
 
-  // ---- R2: sandbox workspace backups --------------------------------------
-  // Sandboxes snapshot /workspace into this bucket when they idle out and
-  // restore it on the next start (container disk is ephemeral). Addressed by
-  // name (`${osWorkerName}-sandboxes`), so — unlike KV/D1 — there is no id to
-  // reconcile into envs.ts; create-if-missing is the whole story. Wiping a
-  // sandbox's data is erase-data's job, never this create-only script's.
-  const r2BucketName = `${env.osWorkerName}-sandboxes`;
-  await ensureR2Bucket(cf, r2BucketName);
-  // Project file storage (FILES_BUCKET, domains/files/project-files.ts). No
-  // lifecycle rule: files live until deleted. Also ensured by deploy.ts
-  // prepare() so existing envs pick the bucket up on their next deploy.
-  await ensureR2Bucket(cf, `${env.osWorkerName}-files`);
-  // The Sandbox SDK checks its backup ttl only at RESTORE time and never
-  // deletes expired objects from R2 — without a lifecycle rule the bucket
-  // grows forever under e2e churn (a fresh sandbox per test). Expire the
-  // SDK's `backups/` prefix at 90 days, matching SANDBOX_BACKUP_TTL_SECONDS
-  // in cloudflare-sandbox-durable-object.ts (keep the two aligned). PUT is
-  // idempotent; it replaces this bucket's lifecycle config wholesale, which
-  // is fine while this is the only rule we want.
-  await cf(`/r2/buckets/${r2BucketName}/lifecycle`, {
-    method: "PUT",
-    body: JSON.stringify({
-      rules: [
-        {
-          id: "expire-sandbox-workspace-backups",
-          enabled: true,
-          conditions: { prefix: "backups/" },
-          deleteObjectsTransition: { condition: { type: "Age", maxAge: 90 * 24 * 60 * 60 } },
-        },
-      ],
-    }),
-  });
-  console.log(`R2 bucket ${r2BucketName} lifecycle: backups/ expire at 90d`);
-
-  // ---- R2 + AI Search: the itx.search corpus ------------------------------
-  // The worker mirrors stream events / itx.files / repo snapshots /
-  // itx.search.index() documents into this bucket
-  // (domains/search/search-index.ts); itx.search creates ONE AI Search
-  // INSTANCE PER PROJECT (structural tenancy) inside the deployment's
+  // ---- R2 buckets + AI Search namespace -----------------------------------
+  // Sandboxes snapshot /workspace into the `-sandboxes` bucket when they idle
+  // out and restore it on the next start (container disk is ephemeral). The
+  // worker mirrors stream events / itx.files / repo snapshots /
+  // itx.search.index() documents into `-search-index`, and itx.search creates
+  // ONE AI Search INSTANCE PER PROJECT (structural tenancy) in the deployment's
   // namespace, each indexing only that project's `{projectId}/**` slice.
+  // `-files` is itx.files project storage. All are name-addressed, so — unlike
+  // KV/D1 — there is nothing to reconcile into envs.ts; create-if-missing is
+  // the whole story. Wiping their data is erase-data's / lifecycle's job.
+  const isPreview = ctx.name.startsWith("preview");
+  const sandboxesBucket = `${env.osWorkerName}-sandboxes`;
+  await ensureR2Bucket(cf, sandboxesBucket);
+  await ensureR2Bucket(cf, `${env.osWorkerName}-files`);
   await ensureR2Bucket(cf, `${env.osWorkerName}-search-index`);
   await ensureAiSearchNamespace(cf, { namespaceName: env.osWorkerName });
+
+  // R2 lifecycle: Cloudflare expires objects server-side so cleanup never has
+  // to delete them one-by-one — the 429 storm that used to leak preview leases
+  // (see erase-data.ts and docs/preview-resource-gc.md). The SDK/worker only
+  // CHECK ttls at read/restore time and never delete from R2, so these rules
+  // are the actual reaper. PUT replaces each bucket's lifecycle wholesale —
+  // fine while these are the only rules per bucket.
+  //
+  // Preview slots expire everything disposable 3h after last write (synthetic
+  // data; pure cost). Prd keeps its data — sandbox backups at 90 days, the
+  // search corpus + files with no rule at all. A preview sandbox's DO still
+  // writes its backup with the 90-day ttl, but this 3h rule deletes it first;
+  // restoring a reaped backup degrades to an empty workspace, so the sandbox
+  // simply comes back fresh after ~3h of no use.
+  await ensureR2ObjectExpiryLifecycle(ctx, sandboxesBucket, {
+    ruleId: "expire-sandbox-workspace-backups",
+    ttlSeconds: isPreview ? PREVIEW_DISPOSABLE_TTL_SECONDS : SANDBOX_BACKUP_TTL_SECONDS_PRD,
+    prefix: "backups/",
+  });
+  if (isPreview) {
+    await ensureR2ObjectExpiryLifecycle(
+      ctx,
+      `${env.osWorkerName}-search-index`,
+      PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+    );
+    await ensureR2ObjectExpiryLifecycle(
+      ctx,
+      `${env.osWorkerName}-files`,
+      PREVIEW_FILES_OBJECT_EXPIRY,
+    );
+  }
 
   // ---- Queues: deployment event queue + Cloudflare Artifacts subscriptions -
   // One general-purpose queue per OS worker. Artifacts event subscriptions are

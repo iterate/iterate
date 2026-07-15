@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertWorkerSecretAbsent, smokeResponse } from "./deploy-helpers.ts";
+import {
+  assertWorkerSecretAbsent,
+  buildR2ObjectExpiryLifecycleRules,
+  ensureR2ObjectExpiryLifecycle,
+  PREVIEW_DISPOSABLE_TTL_SECONDS,
+  PREVIEW_FILES_OBJECT_EXPIRY,
+  PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  SANDBOX_BACKUP_TTL_SECONDS_PRD,
+  smokeResponse,
+} from "./deploy-helpers.ts";
 import { CloudflareApiError } from "./env-context.ts";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -72,5 +81,64 @@ describe("smokeResponse", () => {
     ).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("R2 object-expiry lifecycle", () => {
+  it("builds one Age rule scoped to every object by default (empty prefix)", () => {
+    const rules = buildR2ObjectExpiryLifecycleRules({ ruleId: "r", ttlSeconds: 3600 });
+
+    expect(rules).toEqual([
+      {
+        id: "r",
+        enabled: true,
+        // Empty prefix = all objects; deleting after an Age in seconds.
+        conditions: { prefix: "" },
+        deleteObjectsTransition: { condition: { type: "Age", maxAge: 3600 } },
+      },
+    ]);
+  });
+
+  it("scopes to a prefix when given one (e.g. the sandbox backups/ rule)", () => {
+    const rules = buildR2ObjectExpiryLifecycleRules({
+      ruleId: "expire-sandbox-workspace-backups",
+      ttlSeconds: SANDBOX_BACKUP_TTL_SECONDS_PRD,
+      prefix: "backups/",
+    });
+
+    expect(rules[0]?.conditions).toEqual({ prefix: "backups/" });
+    expect(rules[0]?.deleteObjectsTransition.condition).toEqual({
+      type: "Age",
+      maxAge: 90 * 24 * 60 * 60,
+    });
+  });
+
+  it("expires all preview disposable data 3h after write", () => {
+    // Guards against an accidental bump: erase-data relies on this expiring the
+    // corpus/files promptly so it can skip the per-object delete on previews,
+    // and the whole point is cost — abandoned data must not linger a full day.
+    expect(PREVIEW_DISPOSABLE_TTL_SECONDS).toBe(3 * 60 * 60);
+    expect(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ttlSeconds).toBe(PREVIEW_DISPOSABLE_TTL_SECONDS);
+    expect(PREVIEW_FILES_OBJECT_EXPIRY.ttlSeconds).toBe(PREVIEW_DISPOSABLE_TTL_SECONDS);
+    expect(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ruleId).toBe("expire-preview-search-index");
+    expect(PREVIEW_FILES_OBJECT_EXPIRY.ruleId).toBe("expire-preview-files");
+  });
+
+  it("PUTs the rule to the bucket's lifecycle endpoint", async () => {
+    const cf = vi.fn(async () => ({}));
+
+    await ensureR2ObjectExpiryLifecycle(
+      { cf, cfV4: vi.fn() } as never,
+      "os-preview-7-search-index",
+      PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+    );
+
+    expect(cf).toHaveBeenCalledOnce();
+    const [path, init] = cf.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe("/r2/buckets/os-preview-7-search-index/lifecycle");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({
+      rules: buildR2ObjectExpiryLifecycleRules(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY),
+    });
   });
 });
