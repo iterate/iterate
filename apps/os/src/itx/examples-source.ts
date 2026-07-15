@@ -691,7 +691,7 @@ return await itx.projects.get(pid).__describe();
       return { status: response.status, bodyStart: body.slice(0, 200) };
     },
   }),
-  projectExample<EgressJsonGap>({
+  projectExample({
     id: "secret-postman-echo",
     e2eProven: false,
     title: "Use a stored secret in a Postman Echo request",
@@ -728,7 +728,9 @@ return await itx.projects.get(pid).__describe();
         throw new Error(`Postman Echo returned ${response.status}: ${await response.text()}`);
       }
 
-      const body = await response.json();
+      // json() resolves the honest `unknown`; parsing the text keeps this
+      // plain-JS body's dynamic reads over the echoed shape typecheckable.
+      const body = JSON.parse(await response.text());
       const after = await secret.__describe();
       const echoedSecret = body?.headers?.["x-itx-secret"];
 
@@ -1916,20 +1918,6 @@ type Live<Name extends string, Impl, Mounted = Remoted<Impl>> = Record<Name, Mou
 // fix upstream, then delete the overlay. Every alias is an `Extra` widening,
 // intersected FIRST at its use site so its signatures win resolution for
 // exactly the calls the entry teaches. ──
-
-/** `egress.fetch` genuinely returns a `Response`, but under the app's merged
- * DOM + workers-types globals `response.json()` resolves to `Promise<{}>` —
- * useless to a body that reads the echoed JSON dynamically. */
-type EgressJsonGap = {
-  egress: {
-    fetch(request: Request): Promise<{
-      ok: boolean;
-      status: number;
-      text(): Promise<string>;
-      json(): Promise<any>;
-    }>;
-  };
-};
 
 /** The generated GmailConnection types response `data` as unknown (it is
  * whatever the REST resource returns); the gmail entry reads it dynamically. */

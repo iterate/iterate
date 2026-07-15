@@ -569,7 +569,7 @@ export interface AgentCollection {
 export interface ProjectEgress {
   __describe(): Promise<Description>;
   /** Outbound fetch with the project's identity and secret substitution. */
-  fetch(request: Request): Promise<Response>;
+  fetch(request: Request): Promise<EgressResponse>;
   /** Install a live egress interceptor (last writer wins); returns a release handle. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
 }
@@ -2516,6 +2516,23 @@ export type ItxExpression = ItxExpressionStep[];
 /** One known stream in a project's reduced state — the entry shape the
  * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
+
+/**
+ * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned
+ * to `Promise<unknown>` ahead of the ambient signature. Pinned because the
+ * ambient resolution is a compiler-settings artifact — which `lib`/`types` a
+ * consumer compiles with decides whether `await response.json()` is `any`
+ * (DOM lib alone), `unknown` (the current DOM + workers-types merge), or the
+ * useless `Promise<{}>` (older merges, where workers-types'
+ * `json<T>(): Promise<T>` inferred `{}`). The first-position member makes
+ * every consumer see the same honest `unknown`: narrow or cast it to the
+ * shape you expect, or `JSON.parse(await response.text())` in plain-JS
+ * scripts that read the body dynamically.
+ */
+export type EgressResponse = {
+  /** The parsed JSON body — honestly `unknown`; the caller supplies the shape. */
+  json(): Promise<unknown>;
+} & Response;
 
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;

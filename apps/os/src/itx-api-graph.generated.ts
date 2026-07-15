@@ -376,13 +376,18 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectEgress",
     kind: "interface",
     sourceText:
-      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with the project's identity and secret substitution. */\n  fetch(request: Request): Promise<Response>;\n  /** Install a live egress interceptor (last writer wins); returns a release handle. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
+      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with the project's identity and secret substitution. */\n  fetch(request: Request): Promise<EgressResponse>;\n  /** Install a live egress interceptor (last writer wins); returns a release handle. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
     summary: "Public project egress facet.",
     memberSummaries: {
       fetch: "Outbound fetch with the project's identity and secret substitution.",
       intercept: "Install a live egress interceptor (last writer wins); returns a release handle.",
     },
-    referencedTypeNames: ["Description", "ProjectEgressInterceptor", "ProjectEgressIntercept"],
+    referencedTypeNames: [
+      "Description",
+      "EgressResponse",
+      "ProjectEgressInterceptor",
+      "ProjectEgressIntercept",
+    ],
   },
   {
     name: "EmailCapability",
@@ -1293,6 +1298,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "/** One known stream in a project's reduced state — the entry shape the\n * collection `list()` methods return: stream path plus creation time. */\nexport type StreamListItem = { createdAt: string; path: string };",
     summary:
       "One known stream in a project's reduced state — the entry shape the collection `list()` methods return: stream path plus creation time.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "EgressResponse",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned\n * to `Promise<unknown>` ahead of the ambient signature. Pinned because the\n * ambient resolution is a compiler-settings artifact — which `lib`/`types` a\n * consumer compiles with decides whether `await response.json()` is `any`\n * (DOM lib alone), `unknown` (the current DOM + workers-types merge), or the\n * useless `Promise<{}>` (older merges, where workers-types'\n * `json<T>(): Promise<T>` inferred `{}`). The first-position member makes\n * every consumer see the same honest `unknown`: narrow or cast it to the\n * shape you expect, or `JSON.parse(await response.text())` in plain-JS\n * scripts that read the body dynamically.\n */\nexport type EgressResponse = {\n  /** The parsed JSON body — honestly `unknown`; the caller supplies the shape. */\n  json(): Promise<unknown>;\n} & Response;",
+    summary:
+      "What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned to `Promise<unknown>` ahead of the ambient signature.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

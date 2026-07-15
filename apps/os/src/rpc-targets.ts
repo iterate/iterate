@@ -263,6 +263,7 @@ import { beginMcpOAuth, fetchLikeFromFetcher } from "./domains/itx/mcp-oauth.ts"
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
 import type { ProjectListEntry } from "./project-deployment-status.ts";
 import type {
+  EgressResponse,
   ProjectEgressIntercept,
   ProjectEgressInterceptor,
 } from "./domains/projects/egress.ts";
@@ -6020,7 +6021,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   }
 
   /** Outbound fetch with the project's identity and secret substitution. */
-  fetch(request: Request): Promise<Response> {
+  fetch(request: Request): Promise<EgressResponse> {
     return projectStub(env.PROJECT, this.props.projectId).fetch(request);
   }
 
