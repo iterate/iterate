@@ -4233,3 +4233,75 @@ Raw records are `/tmp/cumulative-14-{full,tail,live,crosspost,storage}-`
 draft-PR checks passed, including preview deploy/e2e. Production remained
 untouched. If active optimization continues, the next cumulative comparison
 is due by `2026-07-15T13:00:08Z`.
+
+## 2026-07-15: Replay Tail Speed Confirmed, Idle Retention Is the Next Gate
+
+The enlarged replay investigation first tested two narrower allocation
+hypotheses against exact candidate Stream code `147758b867b454292c550038e5f9c73fd103227c`.
+That Stream-domain code is unchanged at the current draft-PR head. Five fresh
+workerd/Node processes per arm contributed 2,500 observations to each control,
+with every timer on the Node host around awaited RPC/network work and validated
+delivery.
+
+Restoring append's full `{ return: "events" }` result did not remove the tail.
+Acknowledgement-only replay had p50/p95/p99 of 6.904/12.272/30.856 ms; the
+allocating result had 6.347/13.203/37.456 ms. Both arms produced 40-67 ms
+process-local pauses. The cheaper append result therefore did not merely shift
+client allocation into the later subscription.
+
+Omitting the event-type selector also did not remove the tail. Its pooled
+p50/p95/p99 were 6.963/12.556/25.082 ms, with a 51.841 ms p99.5 and 85.015 ms
+maximum. It improved three process-local p99 values and worsened two; every
+process still produced a 40-85 ms pause. Selector projection work may
+contribute, but it is not the root cause and does not justify deleting the
+throughput cache.
+
+An external Chrome DevTools Protocol profile then measured 1,000 complete
+500-event replay subscriptions in a fresh local workerd process. The exact
+current-main control was `f02de82f1ce8557d9d47ae2dffde06e70ce3aaf9`.
+Both revisions began from the same 1.47 MB lazy-isolate heap, and an explicit
+post-run collection separated retained state from merely uncollected garbage.
+
+| 1,000-Stream replay stress | Current main |  Candidate | Candidate change |
+| -------------------------- | -----------: | ---------: | ---------------: |
+| Node-host p50              |    10.031 ms |   7.641 ms |   23.829% faster |
+| Node-host p95              |    20.602 ms |  13.031 ms |   36.751% faster |
+| Node-host p99              |    31.405 ms |  28.149 ms |   10.370% faster |
+| Node-host mean             |    11.327 ms |   8.677 ms |   23.400% faster |
+| Node-host maximum          |    55.843 ms | 107.818 ms |   93.080% slower |
+| Post-GC used heap          |     202.4 MB |   321.1 MB |   58.643% higher |
+| Profiled work duration     |      52.30 s |    32.48 s |  37.900% shorter |
+| Profiled GC total          |       1.66 s |     2.12 s |   28.084% higher |
+| Longest sampled GC run     |     49.64 ms |  594.01 ms |             risk |
+
+The larger distribution clears the candidate-specific central replay-tail
+warning: candidate is faster through p99, and its nine samples at or above
+30 ms compare with main's thirteen. It does not clear the single-maximum or
+memory risk. After collection the candidate retained 118,693,792 more bytes
+(113.2 MiB) than main. CPU profiling spans append setup as well as each timed
+subscription, so its sampled GC runs identify pressure but cannot be assigned
+one-for-one to Node latency samples.
+
+Source shape explains the retained delta. `StreamDeliveryFrameReader` keeps
+the latest parsed `#freshTail` after every append even when the Stream has no
+live connection, push drain, or poke in flight. This stress creates 1,000
+separate Streams and appends 500 events to each, so the candidate can retain
+roughly 500,000 parsed event objects merely to accelerate a possible future
+replay. Current main instead pays SQLite read/parse cost, which explains both
+its lower retained heap and its slower replay.
+
+The split decision is therefore explicit. The fresh-tail path earns its replay
+latency and throughput, while unconditional idle retention does not yet earn
+its 58.6% post-GC heap cost or rare maximum. The next gate is a demand-bound
+release experiment: preserve the tail while a live/configured delivery can
+consume it, release it when delivery becomes idle, and measure both replay and
+live PCM before integrating. No storage, selector, protocol, or production
+change follows from the attribution alone.
+
+Raw allocation records are
+`/private/tmp/replay-attribution-{ack,events}-r{1..5}.log` and
+`/private/tmp/replay-selector-omit-r{1..5}.log`. Profile records are
+`/private/tmp/replay-workerd-profile-{candidate-postgc,main-f02-postgc}-benchmark.log`
+and their adjacent `.cpuprofile` files. The temporary inspector configuration
+was not added to the shipping branch. Both benchmark servers were stopped;
+production remained untouched.
