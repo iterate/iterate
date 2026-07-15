@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   AGENT_OUTPUT_ADDED_TYPE,
@@ -406,7 +407,9 @@ test('An agent scope provides a capability to the whole project via capabilityHo
   // The provide runs INSIDE the agent scope: the script's `itx` fronts the
   // agent's own capability host and mounts on the project root by addressing
   // it through `capabilityHosts.get("/")`.
-  const execution = await agent.capabilityHost.runScript(`async (itx) => {
+  const executed = await itxScript(agent.capabilityHost)
+    .context<{ crossScopeProbe: { ping(): Promise<string> } }>()
+    .execute(async (itx) => {
       // capabilityHosts.get() pipelines; a handle is kept here only because
       // the script calls the root host twice (provide + invoke below).
       const host = await itx.capabilityHosts.get("/");
@@ -427,10 +430,9 @@ test('An agent scope provides a capability to the whole project via capabilityHo
         .map((capability) => capability.scope);
       await provision.revoke();
       return { viaRoot, viaChain, describedScopes };
-    }`);
+    });
 
-  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: the script returns exactly these keys; toMatchObject would subset-match and hide extras
-  expect(execution.result).toEqual({
+  expect(executed.success()).toEqual({
     viaRoot: "pong-from-agent-mount",
     viaChain: "pong-from-agent-mount",
     describedScopes: ["/"],
