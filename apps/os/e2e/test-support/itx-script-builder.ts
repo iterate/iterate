@@ -61,8 +61,7 @@ export class ItxScriptBuilder<Ctx, Vars extends Record<string, unknown>> {
   }
 
   async execute<Result>(fn: (itx: Ctx, vars: Vars) => Promise<Result>) {
-    const defined = this.define(fn);
-    const execution = await this.host.runScript(defined.code);
+    const execution = await this.host.runScript(this.define(fn).code);
     return {
       /** Raw envelope from `runScript` (completedEvent, executionId, result). */
       execution,
