@@ -3502,3 +3502,138 @@ this should reduce eight reads/writes to about two or three, cutting same-key
 R2 operations and bytes by 62.5% to 75%. It is not yet a shipping claim; the
 prototype must prove final highest-offset content under controlled races and a
 deployed burst before integration.
+
+## 2026-07-15: True Legacy KV Rewrite Rejected
+
+The earlier `ctx.storage.kv` observation was not enough because that API is
+implemented over the same SQLite engine. A separate true legacy-class Durable
+Object prototype therefore rebuilt the event store over asynchronous legacy KV
+and compared it with a synchronous SQLite class under one otherwise identical
+Worker. Three independent trials contributed 75 Node-host samples per workload
+and implementation. Timers enclosed the complete HTTP, Worker-to-DO RPC,
+storage output-gate, and response path; no Worker-local elapsed clock was used.
+
+| Host-timed workload           | SQLite p50 | Legacy KV p50 | Regression |
+| ----------------------------- | ---------: | ------------: | ---------: |
+| One 1 KiB append              |   0.941 ms |      0.962 ms |       2.3% |
+| 1,000 tiny events             |   3.330 ms |      3.493 ms |       4.9% |
+| 100 x 1 KiB                   |   1.535 ms |      1.643 ms |       7.0% |
+| One 768 KiB event             |   4.086 ms |      4.506 ms |      10.3% |
+| Read 500 of 5,000             |   1.945 ms |      2.184 ms |      12.3% |
+| Filter 10 of 1,000            |   0.890 ms |      1.216 ms |      36.6% |
+| 32 concurrent singleton calls |  11.515 ms |     11.865 ms |       3.0% |
+
+Derived throughput fell from about 300k to 286k events/s for 1,000-event
+batches, 65.1k to 60.9k events/s for 100 x 1 KiB, 183.5 to 166.4 MiB/s for the
+768 KiB path, and 2.78k to 2.70k calls/s under 32-way concurrency.
+`storage.sync()` produced no repeatable benefit: workerd already schedules one
+flush for the dirty set and attaches confirmed writes to the output gate;
+`sync()` only waits for that scheduled flush.
+
+The code cost is also categorically worse. A production replacement would own
+segmentation, chunks, head metadata, idempotency indexes, pagination, filtered
+scans, cleanup, eviction recovery, crash testing, and asynchronous reentrancy.
+Removing backward compatibility eliminates migration work, but none of those
+runtime invariants. The prototype passed its implemented correctness checks,
+82 existing Stream storage tests, TypeScript, and a Wrangler dry run, but does
+not implement the additional crash, cursor, eviction-floor, and frozen-clock
+timeout machinery required for shipping.
+
+The rejection is preserved locally on branch
+`experiment/stream-legacy-kv-yolo` at commit `8f2011a3d`. It changes no
+shipping code, schema, deployment, or production data.
+
+## 2026-07-15: Direct Project-Worker Delivery Preserved, Not Shipped
+
+An isolated redesign bypassed generic ITX root minting and expression
+evaluation for the exact built-in `project-worker` / `["processEventBatch"]`
+subscription. It dispatches through a shared `ProjectStreamConsumer`; custom
+expressions retain the generic evaluator. Worker invocation, stream activity,
+agent status, search indexing, bounded Loader fallback, paused-destination
+classification, cursor acknowledgement, and poison handling all remain shared
+between the two routes.
+
+The branch passed 448 broad tests, 120 focused tests, OS typecheck, lint,
+format, and deployed Loader and mixed-recovery proofs. The deployed mixed soak
+delivered all 192 events through 24 forced-recovery cycles with zero append
+retries. The first three 20-sample Worker-to-Stream-DO processes looked
+promising when pooled:
+
+| 1,000 x 640-byte callback | Generic route | Direct route | Change |
+| ------------------------- | ------------: | -----------: | -----: |
+| p50                       |    141.005 ms |   127.541 ms |  -9.5% |
+| mean                      |    146.282 ms |   131.199 ms | -10.3% |
+| p50-derived capacity      |     7,091.9/s |    7,840.6/s | +10.6% |
+| p95                       |    178.239 ms |   202.763 ms | +13.8% |
+
+That result did not survive a larger alternating-deployment check. A later
+50-sample direct period measured 110.812 ms p50, 221.694 ms p95, and 151.658 ms
+mean, while the following 50-sample generic period measured 93.631 ms p50,
+120.474 ms p95, and 98.746 ms mean. The final direct repeat then failed when
+Cloudflare reset a Durable Object for an internal storage error, reference
+`d99an1rdute4id703mlsh1jd`.
+
+These periods were not isolated infrastructure. Telemetry showed unrelated
+high-volume Cloudflare API scans, R2 same-key throttling, multi-second
+`touchStreamActivity` and `getHead` RPCs, and 60-second force-closed spans on
+the same preview. The storage reset is therefore not attributed to the direct
+route, but neither is the earlier central win accepted. The optimization is
+not shipping without a clean, interleaved experiment that reproduces the
+median gain and removes the p95 regression.
+
+The coherent refactor remains useful architecture research: it reduces the
+generic RPC-target implementation while centralizing built-in consumer side
+effects. It is preserved locally on branch `experiment/stream-direct-lane` at
+commit `9fd1cbbb3`. Preview 5 was restored to exact shipping head `cddbaa18c`
+after the experiment. Production was not deployed or erased.
+
+## 2026-07-15: Search Rewrite Coalescer Accepted After Deployed Race
+
+The search race identified above now has a clean isolated prototype. One
+isolate-local writer per project/path/segment shares an active drain, retains
+the highest pending source offset, and lets different segment keys proceed in
+parallel. The R2 object records `streamThroughOffset`; conditional writes use
+the current ETag, and a failed compare-and-swap rereads the winner so an older
+isolate cannot replace a newer snapshot. Automatic indexing and explicit full
+reindex use the same writer. A null automatic render is a no-op rather than a
+delete, and R2 code 10058 retries use `scheduler.wait(1100)` instead of a
+Worker-local elapsed clock.
+
+The 37 focused tests cover eight same-key races collapsing to at most one
+active and one trailing rewrite, same-key serialization, different-key
+parallelism, two-isolate stale-write rejection, null-render ordering, 10058
+pacing/retry, failed-drain cleanup, completed-drain lifecycle, and immediate
+recognition of a newer conditional-write winner. OS typecheck, targeted lint,
+format, and diff checks pass.
+
+The prototype was then deployed as Worker version
+`27f2aa79-30c0-4e09-b02e-88a4f615d48a` and exercised through the real
+deployed topology: a Worker consumer receiving from a Stream Durable Object,
+forwarding into another Stream Durable Object, with source/output kills and
+paused-destination recovery. All 96 events arrived exactly once in the final
+assertion over 12 cycles, with zero append retries. Node-host timings around
+the complete deployed calls measured 815.522 ms p50, 4,841.336 ms p95/max,
+and 1,605.104 ms mean settle latency. The long observations were the expected
+paused dual-kill backoff paths; no Worker-local elapsed clock was used.
+
+Cloudflare telemetry for the exact project and Worker version showed the hot
+output segment completing 27 successful puts with maximum put concurrency one,
+zero overlapping put pairs, and zero 10058 failures. The snapshots jumped over
+event bursts instead of attempting one rewrite per delivered event. The final
+R2 document was fetched independently and contained the highest committed
+offset 100. The old implementation's captured eight-event collision attempted
+15 puts to one segment, reached concurrency eight with 32 overlapping pairs,
+and failed six puts with R2 code 10058. It also demonstrated the correctness
+failure: an older 6,720-byte snapshot completed after and replaced a newer
+6,979-byte snapshot.
+
+This is accepted primarily as a correctness fix, with the expected throughput
+and R2-cost benefit now observed rather than extrapolated. It adds 162 net
+production lines and 342 test lines, all confined to derived search indexing;
+Stream storage, delivery, callback, cursor, and public API paths do not branch
+on it. The isolate-local coalescer is only an optimization: ETag-conditional
+puts and the persisted source-offset watermark preserve monotonic snapshots
+across isolate churn. If the local map is lost, correctness collapses to extra
+reads, conditional-write retries, and explicit full reindex, not event loss or
+Stream unavailability. The accepted implementation entered the draft PR at
+commits `58a812143` and `0e568690c`. Production was not deployed or erased.
