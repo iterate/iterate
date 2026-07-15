@@ -780,8 +780,10 @@ export function AgentLiveActivity({
   const runningCodeStartedAtMs =
     runningSteps.find((step) => step.kind === "code")?.startedAtMs ?? null;
   const codeElapsed = useElapsedLabel(runningCodeStartedAtMs);
-  const statusLabel = liveActivityLabel(runningSteps);
-  const statusWithElapsed = codeElapsed == null ? statusLabel : `${statusLabel} ${codeElapsed}`;
+  const statusWithElapsed =
+    codeElapsed == null
+      ? liveActivityLabel(runningSteps)
+      : `${liveActivityLabel(runningSteps)} ${codeElapsed}`;
 
   if (!working && activityWasInterrupted(live)) {
     return (
