@@ -246,7 +246,9 @@ import type {
   CfImageTransformInput,
   CfAiRunOptions,
   CfMarkdownConversionArgs,
+  CfMarkdownConversionOptions,
   CfMarkdownConversionResult,
+  CfMarkdownDocument,
   CfMarkdownSupportedFormat,
   CfVideoTransformInput,
 } from "./domains/itx/cf-capabilities.ts";
@@ -261,6 +263,7 @@ import { beginMcpOAuth, fetchLikeFromFetcher } from "./domains/itx/mcp-oauth.ts"
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
 import type { ProjectListEntry } from "./project-deployment-status.ts";
 import type {
+  EgressResponse,
   ProjectEgressIntercept,
   ProjectEgressInterceptor,
 } from "./domains/projects/egress.ts";
@@ -2688,16 +2691,33 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   }
 
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
-   * The optional third argument is the binding's own options object — e.g.
-   * `{ gateway: { id: "default", skipCache: true } }` — passed through to
-   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
-  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown> {
+   * Outputs are model-shaped: instantiate `run<T>` with the response shape you
+   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
+   * `unknown`. The optional third argument is the binding's own options object
+   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
     const gateway = options?.gateway ?? this.props.gateway;
     const merged = gateway === undefined ? options : { ...options, gateway };
-    return env.AI.run(model, body as Record<string, unknown>, merged as AiRunOptions | undefined);
+    return env.AI.run(
+      model,
+      body as Record<string, unknown>,
+      merged as AiRunOptions | undefined,
+    ) as Promise<T>;
   }
 
-  /** Convert documents (`{ name, blob }`) to Markdown; call with no args for the supported-format list. */
+  /** Calling with no arguments lists the file formats the converter accepts. */
+  toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
+  /** Convert one document (`{ name, blob }`) to Markdown. */
+  toMarkdown(
+    document: CfMarkdownDocument,
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult>;
+  /** Convert a batch of documents to Markdown; results come back in input order. */
+  toMarkdown(
+    documents: CfMarkdownDocument[],
+    options?: CfMarkdownConversionOptions,
+  ): Promise<CfMarkdownConversionResult[]>;
   toMarkdown(
     ...args: CfMarkdownConversionArgs
   ): Promise<
@@ -3364,9 +3384,10 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "  path: string;",
         "  query?: Record<string, boolean | number | string | null | undefined>;",
         "};",
-        "// itx.integrations.gmail.get() exposes:",
+        "// itx.integrations.gmail.get() exposes (data is the addressed REST resource's",
+        "// shape — supply it via request<T>; uninstantiated it stays unknown):",
         "interface GmailConnection {",
-        "  request(input: GmailRequestInput): Promise<{ data: unknown; headers: Record<string, string>; status: number; statusText: string }>;",
+        "  request<T = unknown>(input: GmailRequestInput): Promise<{ data: T; headers: Record<string, string>; status: number; statusText: string }>;",
         "}",
         "// Exact package type; Iterate supplies auth and transport. See https://github.com/octokit/octokit.js.",
         'type GithubConnection = { octokit: import("octokit").Octokit };',
@@ -6007,7 +6028,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   }
 
   /** Outbound fetch with the project's identity and secret substitution. */
-  fetch(request: Request): Promise<Response> {
+  fetch(request: Request): Promise<EgressResponse> {
     return projectStub(env.PROJECT, this.props.projectId).fetch(request);
   }
 

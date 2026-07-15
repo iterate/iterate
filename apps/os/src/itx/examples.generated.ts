@@ -661,7 +661,9 @@ if (!response.ok) {
   throw new Error(\`Postman Echo returned \${response.status}: \${await response.text()}\`);
 }
 
-const body = await response.json();
+// json() resolves the honest \`unknown\`; parsing the text keeps this
+// plain-JS body's dynamic reads over the echoed shape typecheckable.
+const body = JSON.parse(await response.text());
 const after = await secret.__describe();
 const echoedSecret = body?.headers?.["x-itx-secret"];
 
