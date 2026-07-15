@@ -12,6 +12,7 @@ mkdir -p "$artifact_root"
   echo "Source paths:"
   echo "- test-results"
   echo "- apps/os/test-results"
+  echo "- apps/streams-example-app/test-results"
   echo "- /tmp/os-e2e-*"
   echo "- /tmp/os-preview-*.log"
   echo "- /tmp/marathon"
@@ -51,6 +52,9 @@ copy_files() {
 # upload root, and fold absolute/temp outputs underneath it so Depot does not
 # need to upload from mixed workspace and /tmp paths.
 copy_dir_contents "apps/os/test-results" "$artifact_root/apps-os-test-results"
+# The streams example app's Playwright lane writes traces and its JSON report
+# under its own app directory (app-local playwright.config.ts).
+copy_dir_contents "apps/streams-example-app/test-results" "$artifact_root/apps-streams-example-app-test-results"
 copy_dir_contents "/tmp/marathon" "$artifact_root/marathon"
 
 shopt -s nullglob
