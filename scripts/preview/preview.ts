@@ -379,6 +379,38 @@ async function deployPreviewApps({
   return result;
 }
 
+function resolvePreviewTestBaseUrlEnvironment({
+  app,
+  apps,
+  headSha,
+}: {
+  app: CloudflarePreviewApp;
+  apps: Partial<
+    Record<CloudflarePreviewAppSlug, { headSha?: string | null; publicUrl?: string | null }>
+  >;
+  headSha: string;
+}): string[] {
+  const requiredUrls = new Map<CloudflarePreviewAppSlug, string>();
+  requiredUrls.set(app.slug, app.previewTestBaseUrlEnvVar);
+  for (const [dependencySlug, environmentVariable] of Object.entries(
+    app.previewTestDependencyBaseUrlEnvVars ?? {},
+  )) {
+    if (environmentVariable) {
+      requiredUrls.set(CloudflarePreviewAppSlug.parse(dependencySlug), environmentVariable);
+    }
+  }
+
+  return [...requiredUrls].map(([appSlug, environmentVariable]) => {
+    const entry = apps[appSlug];
+    if (!entry?.publicUrl || entry.headSha !== headSha) {
+      throw new Error(
+        `Cannot test ${app.slug}: ${environmentVariable} requires ${appSlug} deployed at head ${headSha.slice(0, 7)}. Re-run preview deploy.`,
+      );
+    }
+    return `${environmentVariable}=${entry.publicUrl}`;
+  });
+}
+
 async function testPreviewApps({
   context,
   runtime,
@@ -527,6 +559,12 @@ async function testPreviewApps({
       return null;
     }
 
+    const baseUrlEnvironment = resolvePreviewTestBaseUrlEnvironment({
+      app,
+      apps: recorded.apps,
+      headSha: context.pullRequestHeadSha,
+    });
+
     const startedAt = Date.now();
     logPreview(
       `test start: ${app.slug} against ${existingEntry.publicUrl} (doppler config ${environmentConfigLease.dopplerConfig})`,
@@ -543,7 +581,7 @@ async function testPreviewApps({
         environmentConfigLease.dopplerConfig,
         "--",
         "env",
-        `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
+        ...baseUrlEnvironment,
         ...app.previewTestCommandArgs,
       ],
       command: "doppler",
@@ -1095,6 +1133,13 @@ export type CloudflarePreviewApp = {
   };
   paths: string[];
   previewDependencies?: CloudflarePreviewAppSlug[];
+  /**
+   * Public URLs of deployed preview dependencies that the app's e2e command
+   * must receive. Values come from this PR's recorded deployment at the
+   * current head; a missing/stale dependency fails the lane instead of
+   * silently pointing at another environment.
+   */
+  previewTestDependencyBaseUrlEnvVars?: Partial<Record<CloudflarePreviewAppSlug, string>>;
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
   previewTestBaseUrlEnvVar: string;
@@ -1315,16 +1360,21 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/os/**",
       "apps/auth/**",
       "apps/auth-contract/**",
+      "apps/dummy-petshop/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS bakes auth JWKS and binds auth's default RPC entrypoint, so auth must
+    // OS bakes auth JWKS and binds auth's default RPC entrypoint, and its
+    // integration e2e talks to the slot's deployed dummy Petshop. Both must
     // finish deploying before OS starts.
-    previewDependencies: ["auth"],
+    previewDependencies: ["auth", "dummy-petshop"],
     // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
     // ~60s as of 2026-07-02). Crossing them warns, never fails.
     previewDeployBudgetMs: 55_000,
     previewTestBudgetMs: 80_000,
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
+    previewTestDependencyBaseUrlEnvVars: {
+      "dummy-petshop": "PETSHOP_BASE_URL",
+    },
     // The apps/os e2e Vitest suite runs its `node` project (engine + itx
     // catalogue matrix; the `browser` project is skipped here — the root
     // Playwright REPL specs cover the catalogue in-browser). It reads
@@ -4500,6 +4550,7 @@ export const previewInternals = {
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
+  resolvePreviewTestBaseUrlEnvironment,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
