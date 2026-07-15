@@ -58,6 +58,8 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   protected override processEvent(
     args: Parameters<StreamProcessor<BrowserFeedContract>["processEvent"]>[0],
   ): undefined {
+    // Event-less at-head pass: this processor has no at-head reconcile, so nothing to do.
+    if (args.event === null) return;
     const { ops } = planBrowserFeedOps(args.previousState, [args.event]);
     if (ops.length === 0) return;
     const open = args.state.open;

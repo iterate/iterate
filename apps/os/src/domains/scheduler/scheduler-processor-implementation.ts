@@ -28,9 +28,10 @@ export type SchedulerProcessorDeps = {
   now: () => number;
   /**
    * Repoint (or, with null, delete) the scheduler's slice of the platform
-   * alarm. Called at the head of every delivery (`onCaughtUp`) and after
-   * every triggerDue(). The onCaughtUp await is load-bearing: a failed
-   * repoint must fail the frame so the transport redelivers it.
+   * alarm. Called at the head of every delivery (`processEvent` under
+   * `delivery.caughtUp`, as a blockProcessorWhile closure) and after every
+   * triggerDue(). The at-head await is load-bearing: a failed repoint must
+   * fail the frame so the transport redelivers it.
    */
   repointAlarm: (atMs: number | null) => void | Promise<void>;
   /** Next armed alarm time, for runtime-state inspection only. */
@@ -160,9 +161,27 @@ export class SchedulerProcessor extends StreamProcessor<
     }
   }
 
-  protected override processEvent({
-    event,
-  }: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEvent"]>[0]): undefined {
+  protected override processEvent(
+    args: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    const { event } = args;
+    // AT-HEAD alarm derivation (was `onCaughtUp`): fires only when this event
+    // was the observed stream head at delivery, so `args.state` is the whole
+    // fold. It rides a `blockProcessorWhile` closure, which the runner awaits
+    // BEFORE the frame's final commit — the alarm always reflects the fold
+    // that is about to be acknowledged, and a failed repoint fails the frame
+    // so the transport redelivers it (the await is as load-bearing as the old
+    // per-batch repoint's was; a bare synchronous call here would NOT be
+    // awaited). Re-arming an unchanged time is a no-op in the registry's
+    // slice reconcile, so the every-at-head-frame cadence is cheap.
+    if (args.delivery.caughtUp) {
+      args.blockProcessorWhile(async () => {
+        await this.deps.repointAlarm(nextWakeAtMs(args.state, this.deps.now()));
+      });
+    }
+    // Event-less at-head pass (a head-reaching batch that consumed nothing):
+    // only the alarm repoint above runs.
+    if (event === null) return;
     if (event.type !== "events.iterate.com/scheduler/trigger-requested") return;
     // No gate here — #execute does all the gating after its barrier: pending
     // recheck against committed state, plus a completion-existence read so a
@@ -170,20 +189,6 @@ export class SchedulerProcessor extends StreamProcessor<
     // the execution wait for this frame's commit (latest-code-wins reads the
     // runner's committed fold via deps.reads).
     this.#launchExecution(event.payload.executionId, event.offset);
-  }
-
-  protected override async onCaughtUp({
-    state,
-  }: Parameters<
-    StreamProcessor<typeof SchedulerProcessorContract>["onCaughtUp"]
-  >[0]): Promise<void> {
-    // At the head of every delivery. The runner awaits this hook BEFORE the
-    // frame's final commit, so the alarm always reflects the fold that is
-    // about to be acknowledged, and a failed repoint fails the frame so the
-    // transport redelivers it — the await is as load-bearing as the old
-    // per-batch repoint's was. Re-arming an unchanged time is a no-op in the
-    // registry's slice reconcile, so the every-at-head-frame cadence is cheap.
-    await this.deps.repointAlarm(nextWakeAtMs(state, this.deps.now()));
   }
 
   // The processor-contributed runtime bag only — the hosting registry pins

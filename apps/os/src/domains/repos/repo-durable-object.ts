@@ -108,9 +108,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   // `runInBackground` work (journaled requested/started obligations whose
   // OUTCOME matters), and repo creation is a blocking at-head obligation — an
   // incarnation that dies owing either must be revived. The keepalive alarm
-  // appends `repo/revived`, whose ordinary delivery drives the runner to head
-  // and `onCaughtUp` re-drives the obligations (see the registry module doc's
-  // recovery rule).
+  // appends `repo/revived`, whose ordinary delivery lands at head and
+  // `processEvent`'s at-head reconcile (`delivery.caughtUp`) re-drives the
+  // obligations (see the registry module doc's recovery rule).
   readonly #repoProcessor = this.#registry.register(
     new RepoProcessor({
       stream: this.#stream,

@@ -61,8 +61,9 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   // `runInBackground` work (journaled requested/started obligations whose
   // OUTCOME matters), so an incarnation that dies owing one must be revived —
   // the keepalive alarm appends `capability-host/revived`, whose ordinary
-  // delivery drives the runner to head and `onCaughtUp` re-drives the
-  // obligations (see the registry module doc's recovery rule).
+  // delivery lands at head and `processEvent`'s at-head reconcile
+  // (`delivery.caughtUp`) re-drives the obligations (see the registry module
+  // doc's recovery rule).
   readonly #capabilityHostProcessor = this.#registry.register(
     new CapabilityHostProcessor({
       stream: this.#stream,

@@ -96,6 +96,9 @@ export function processCustomDomainEvent({
   projectId: string;
   state: ProjectProcessEventArgs["state"];
 }): boolean {
+  // The event-less at-head pass carries no event: this helper handles only
+  // real consumed events (the caller's processEvent has no at-head reconcile).
+  if (event === null) return false;
   switch (event.type) {
     case "events.iterate.com/project/custom-domain-add-requested":
     case "events.iterate.com/project/custom-domain-refresh-requested": {

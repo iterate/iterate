@@ -4,7 +4,8 @@
 // Durable Object. WIRED INTO: the secret DO (secret-durable-object.ts — the
 // reference cutover), the project DO (multi-processor), the scheduler DO
 // (domain alarm slice), the capability-host DO (the recovery template), the
-// repo DO (reconcile + processEventBatch merged into onCaughtUp), and the
+// repo DO (reconcile + processEventBatch merged into processEvent's at-head
+// reconcile), and the
 // agent DO (agent-durable-object.ts — multi-processor with per-processor
 // recovery on all five: agent, slack-agent, telegram-agent, email-agent,
 // github-agent; the spine's redelivery alone cannot cover a SIMULTANEOUS
@@ -242,12 +243,15 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
   ctx: DurableObjectState,
   options: {
     stream: Stream;
-    /** Path of the hosted stream. Carried for options-bag symmetry (the DO
-     * still needs path/projectId to construct its processors); the registry
-     * itself does not consume them — provenance stamping lives in the
-     * processors. */
+    /** Path of the hosted stream. The registry fences every
+     * `wakeStreamSubscriber` against this exact `(projectId, path)`: a wake
+     * carrying a matching processor slug but a DIFFERENT coordinate is
+     * rejected, so a stale or miswired subscription can never fold a foreign
+     * stream into this processor. (Provenance stamping still lives in the
+     * processors; this is the delivery-side isolation check.) */
     path: string;
-    /** Owning project, or null on a global (deployment-root) stream. */
+    /** Owning project, or null on a global (deployment-root) stream. The other
+     * half of the wake coordinate fence (see `path`). */
     projectId: string | null;
     /** Worker deploy version; a change resets each keepalive's crash-loop
      * budget (the antidote deploy). Pass `workerVersion(env)`. REQUIRED: a
@@ -593,6 +597,21 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     getAlarmSlice: (name) => alarmSlices.get(name) ?? null,
 
     async wakeStreamSubscriber(args) {
+      // Coordinate fence. A wake is only legitimate from the EXACT stream this
+      // registry hosts, `(projectId, path)`. The poke is a trusted-internal
+      // RPC, but a stale, malformed, hand-configured, or copied subscription
+      // can still target this registry's slug from a DIFFERENT coordinate —
+      // and the delivery spine would invoke it. Without this fence the mismatch
+      // is accepted: foreign events fold into this processor's state, its
+      // consequences run against this processor's fixed Stream capability, and
+      // its checkpoint advances on foreign offsets. Reject before resolving the
+      // processor or opening delivery. (Selecting by `processorSlug` alone is
+      // the gap this closes — the slug is not unique across streams.)
+      if (args.stream.projectId !== options.projectId || args.stream.path !== options.path) {
+        throw new Error(
+          `wakeStreamSubscriber coordinate mismatch: wake for ${args.stream.projectId ?? "null"}:${args.stream.path} does not match registry ${options.projectId ?? "null"}:${options.path}`,
+        );
+      }
       const name = resolveProcessorName(args);
       const entry = requireEntry(name);
       // The runner's sink IS the handshake sink: it already serializes and

@@ -68,9 +68,10 @@ export const DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS = 15 * 60_000;
  * `ProcessorRecovery`). The contract CONSUMES it — the runner's construction
  * check requires that — but never emits it: the recovery adapter appends it
  * raw, as the runtime speaking. Its ordinary delivery is the guaranteed turn
- * that drives the runner to the stream head, where `onCaughtUp` re-drives
- * open script obligations; no per-event handling is needed (reduce ignores
- * it), so there is deliberately no `processEvent` arm for it.
+ * that lands at the stream head, where `processEvent`'s at-head reconcile
+ * (`delivery.caughtUp`) re-drives open script obligations. Reduce ignores it
+ * and the `processEvent` switch has no arm for its type — the at-head
+ * reconcile its delivery guarantees is the whole point.
  */
 export const CAPABILITY_HOST_REVIVED_EVENT_TYPE = "events.iterate.com/capability-host/revived";
 

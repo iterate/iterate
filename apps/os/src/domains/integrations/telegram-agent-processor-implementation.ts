@@ -11,10 +11,11 @@
 //   so it fires only for FRESH webhooks (webhookAckIsFresh): a state-schema
 //   deploy discards the checkpoint and refolds the whole journal, and typing
 //   on months-old messages would be a rate-limit burst. The arrival typing
-//   stays per-event (gated); the "still working" typing repaint lives in
-//   `onCaughtUp` — latest lifecycle fact only, at-head, once — so a refold
-//   (reduce-only under the runner) can never replay historical status flips
-//   and behind-head frames carry the fact instead of painting stale.
+//   stays per-event (gated); the "still working" typing repaint runs at head
+//   (`processEvent` under `delivery.caughtUp`) — latest lifecycle fact only,
+//   once per at-head pass — so a refold (reduce-only under the runner) can
+//   never replay historical status flips and behind-head frames carry the
+//   fact instead of painting stale.
 // - The journaled send (`telegram/send-requested` → Bot API → `message-sent`
 //   marker + connection-stream claim) is a DURABLE OBLIGATION, NOT an ack, so
 //   it is NOT freshness-gated: it must retry until marked. It is inherently
@@ -106,13 +107,37 @@ export class TelegramAgentProcessor extends StreamProcessor<
     }
   }
 
-  protected override processEvent({
+  protected override processEvent(
+    args: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    this.#perEventSideEffects(args);
+    // The at-head typing repaint (was `onCaughtUp`): fires only for the last
+    // consumed event of a batch that reached head (`delivery.caughtUp`), and
+    // only AFTER the per-event switch above, so a typing-worthy head event has
+    // already landed in the memo when the repaint reads it. ONE blocking
+    // closure registered here; the former inner
+    // `blockProcessorWhile(#sendTyping…)` is a direct await inside it — a
+    // nested registration would land after the runner's per-event blocker
+    // snapshot and never be awaited.
+    if (args.delivery.caughtUp) {
+      args.blockProcessorWhile(async () => {
+        await this.#repaintTypingAtHead(args);
+      });
+    }
+  }
+
+  /** The per-event side-effect switch (repaint memo included) — behavior
+   * unchanged from before the at-head pass moved into `processEvent`. */
+  #perEventSideEffects({
     append,
     appendTo,
     blockProcessorWhile,
     event,
     state,
   }: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0]): undefined {
+    // The event-less at-head pass has no per-event work here (only the typing
+    // repaint in processEvent); the switch runs for real consumed events only.
+    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/telegram/webhook-received": {
         const target = telegramUpdateTarget(event.payload.body);
@@ -251,11 +276,12 @@ export class TelegramAgentProcessor extends StreamProcessor<
         return;
       }
       // llm-request-requested / script-execution-requested drive the "still
-      // working" typing repaint — handled once per at-head pass in onCaughtUp
-      // (below), not per-event, so a refold cannot replay every historical
-      // flip. Per event we only remember the LATEST typing-worthy fact
-      // (an earlier one is already stale), carried across behind-head frames
-      // so a lagging fold still paints once it catches up.
+      // working" typing repaint — handled once per at-head pass in
+      // #repaintTypingAtHead (processEvent under `delivery.caughtUp`), not
+      // per-event, so a refold cannot replay every historical flip. Per event
+      // we only remember the LATEST typing-worthy fact (an earlier one is
+      // already stale), carried across behind-head frames so a lagging fold
+      // still paints once it catches up.
       default:
         if (isTelegramTypingLifecycleFact(event)) this.#unpaintedTypingFact = event;
         return;
@@ -263,23 +289,25 @@ export class TelegramAgentProcessor extends StreamProcessor<
   }
 
   /**
-   * The at-head typing repaint. The "still working" typing indicator
-   * auto-expires after ~5s; one repaint per at-head pass keeps it roughly
-   * alive while the agent works, painted from the latest typing-worthy fact
-   * seen since the last pass ("once at head, latest wins" — behind-head
-   * frames only accumulate the memo above).
+   * The at-head typing repaint (formerly the `onCaughtUp` hook), invoked from
+   * `processEvent` under `delivery.caughtUp` inside that event's blocking
+   * closure. The "still working" typing indicator auto-expires after ~5s; one
+   * repaint per at-head pass keeps it roughly alive while the agent works,
+   * painted from the latest typing-worthy fact seen since the last pass
+   * ("once at head, latest wins" — behind-head frames only accumulate the
+   * memo above). The memo is read and cleared FIRST, unconditionally: a stale
+   * fact must not survive into the next pass just because this one skipped
+   * painting.
    */
-  protected override async onCaughtUp(
-    args: Parameters<StreamProcessor<TelegramAgentProcessorContract>["onCaughtUp"]>[0],
+  async #repaintTypingAtHead(
+    args: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const latest = this.#unpaintedTypingFact;
     this.#unpaintedTypingFact = undefined;
     if (latest == null || !webhookAckIsFresh(latest, (this.deps.now ?? Date.now)())) return;
     const { chatId, messageThreadId } = args.state;
     if (chatId == null) return;
-    args.blockProcessorWhile(async () => {
-      await this.#sendTyping({ chatId, messageThreadId });
-    });
+    await this.#sendTyping({ chatId, messageThreadId });
   }
 
   /** Deliver one send-requested to the Bot API; returns Telegram's message_id. */

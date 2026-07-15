@@ -287,6 +287,26 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   readonly #liveExecutions = new Set<string>();
 
   /**
+   * The at-head reconcile (was `onCaughtUp`): `processEvent` invokes it under
+   * `delivery.caughtUp`, so this processor has no per-event side effects — all
+   * of its work is the obligation reconciliation. It runs ONLY for the last
+   * consumed event of a batch that reached head (the at-head gate the legacy
+   * `processEventBatch` override carried lives in the runner now), so a
+   * mid-catch-up fold never re-runs a settled script.
+   */
+  protected override processEvent(
+    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    // ONE outer blocking closure per at-head pass — the settle appends inside
+    // #reconcileScriptObligations are awaited (holding this head event's
+    // deferred commit); a nested blockProcessorWhile would register after the
+    // runner's per-event blocker snapshot and never be awaited.
+    if (args.delivery.caughtUp) {
+      args.blockProcessorWhile(() => this.#reconcileScriptObligations(args));
+    }
+  }
+
+  /**
    * At-head reconciliation of desired (open script obligations in the head
    * fold) against actual (this incarnation's live executions) — the
    * obligation doctrine, with one policy difference from the LLM providers: a
@@ -295,18 +315,15 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
    * and scripts are not assumed idempotent. The agent renders the failure and
    * the model decides whether to retry.
    *
-   * The runner calls this only when the processing cursor reaches the
-   * observed stream head (the at-head gate the legacy `processEventBatch`
-   * override carried lives in the runner now). RECOVERY rides this same
-   * hook: `events.iterate.com/capability-host/revived` — the fact the
-   * keepalive's revival pass journals after an eviction took in-flight work —
-   * is consumed by the contract, so its ordinary delivery is a guaranteed
-   * turn that drives the runner to head and lands here, where the undriven
-   * obligations are re-driven. No `processEvent` arm for it exists or is
-   * needed.
+   * RECOVERY rides this same path: `events.iterate.com/capability-host/revived`
+   * — the fact the keepalive's revival pass journals after an eviction took
+   * in-flight work — is consumed by the contract, so its ordinary delivery is
+   * a guaranteed turn that lands at head and runs this reconcile, where the
+   * undriven obligations are re-driven. The `processEvent` switch has no arm
+   * for its type; the at-head reconcile is the whole point.
    */
-  protected override async onCaughtUp(
-    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["onCaughtUp"]>[0],
+  async #reconcileScriptObligations(
+    args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const now = (this.#now ?? Date.now)();
     const settle: { executionId: string; error: string }[] = [];
@@ -314,7 +331,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       if (this.#liveExecutions.has(executionId)) continue;
       if (execution.status === "requested" && now < execution.expiresAt) {
         this.#liveExecutions.add(executionId);
-        // The head fold handed to this hook, NOT an instance read: the
+        // The head fold handed to this reconcile, NOT an instance read: the
         // typecheck gate must see capabilities provided in the same delivery
         // as the request or it would judge the script against a stale scope.
         const capabilities = args.state.capabilities;
@@ -331,16 +348,15 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
             : "Script execution expired before any attempt started (the host was down past the request's expiry). It never ran.",
       });
     }
-    if (settle.length === 0) return;
-    args.blockProcessorWhile(async () => {
-      for (const { executionId, error } of settle) {
-        console.error("[capability-host] settling undriven script execution", {
-          executionId,
-          error,
-        });
-        await this.#appendCompletion({ executionId, error });
-      }
-    });
+    // Settle inline — this runs inside the head event's outer blocking closure
+    // (see processEvent), so awaiting the completions holds the frame.
+    for (const { executionId, error } of settle) {
+      console.error("[capability-host] settling undriven script execution", {
+        executionId,
+        error,
+      });
+      await this.#appendCompletion({ executionId, error });
+    }
   }
 
   async provideCapability(input: ProvideCapabilityInput) {

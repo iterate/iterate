@@ -99,8 +99,9 @@ type ReduceArgs<Contract> = {
  * - `runInBackground` — a DROPPABLE ATTEMPT. The cursor advances
  *   immediately; an eviction loses the closure silently. Every callsite must
  *   answer "what recovers the OUTCOME if this attempt drops?" — legitimate
- *   answers are "an at-head reconciliation (`onCaughtUp`), via journaled
- *   requested/completed evidence" (LLM calls, scripts, debounce timers) or
+ *   answers are "an at-head reconciliation (`processEvent` under
+ *   `delivery.caughtUp`), via journaled requested/completed evidence" (LLM
+ *   calls, scripts, debounce timers) or
  *   "nothing, the outcome genuinely doesn't matter" (telemetry). A naked
  *   runInBackground around consequential work with no reconciler is the bug
  *   class the 2026-06-10 / 2026-07-07 incidents came from.
@@ -118,12 +119,22 @@ type SideEffectHelpers = {
 };
 
 /** What `processEvent` receives: one reduction result plus delivery context and helpers. */
-type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
+type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
   SideEffectHelpers & {
+    /**
+     * The consumed event being processed — or `null` for an EVENT-LESS at-head
+     * pass (`delivery.caughtUp` is then true). The runner runs that pass when a
+     * batch reached head but consumed nothing (a self-pull that folded only an
+     * unconsumed durable tail): there is no source event, so the reconcile runs
+     * over the head fold (`state`). A per-event switch MUST guard on
+     * `event !== null`; the at-head reconcile reads `state` and needs no event.
+     */
+    event: ReducedEvent<Contract>["event"] | null;
     /**
      * Append one or more events listed in `contract.emits` to this stream,
      * stamped with `source.processor` provenance pointing at THIS event as
-     * `whileProcessing`. The binding is a closure, so appends made later from
+     * `whileProcessing` (unstamped on the event-less at-head pass). The binding
+     * is a closure, so appends made later from
      * `blockProcessorWhile`/`runInBackground` work scheduled here still stamp
      * the event that was being processed.
      */
@@ -144,22 +155,6 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
      */
     delivery: DeliveryContext;
   };
-
-/**
- * What `onCaughtUp` receives: the final fold at the runner's observed head,
- * the at-head delivery context, and the same side-effect helpers/append lanes
- * as `processEvent` — minus any single event: appends made here are derived
- * from the whole fold, so they carry no `whileProcessing` stamp, and
- * `delivery.idempotencyKey` binds no source offset (obligation keys must stay
- * stable across passes; only an operator `reprocessFrom` rotates them).
- */
-type OnCaughtUpArgs<Contract> = SideEffectHelpers & {
-  /** The fold through the runner's acknowledged cursor, which reached the observed head. */
-  state: ProcessorState<Contract>;
-  delivery: DeliveryContext;
-  append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
-  appendTo: (path: string, ...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
-};
 
 /**
  * One consistent read of a processor's fold: the reduced state pinned to the
@@ -216,8 +211,9 @@ type ProcessorSourceStamp = NonNullable<NonNullable<StreamEvent["source"]>["proc
  * protected hooks and append lanes the delivery loop needs, nothing an author
  * or operator could reach for. This is how the runner invokes protected
  * members without widening the author-facing surface — authors still only
- * implement `validate`/`reduce`/`processEvent`/`onCaughtUp`, and the runner
- * never sees processor-internal state (it owns its own two-cursor progress).
+ * implement `validate`/`reduce`/`processEvent` (the at-head reconcile is
+ * `processEvent` under `delivery.caughtUp`), and the runner never sees
+ * processor-internal state (it owns its own two-cursor progress).
  */
 export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
   readonly contract: Contract;
@@ -232,10 +228,9 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
     event: StreamEvent;
     state: ProcessorState<Contract>;
   }): ReducedEvent<Contract> | ConsumedEventParseFailure | undefined;
-  /** The synchronous per-event side-effect hook (virtual — subclass overrides dispatch). */
+  /** The synchronous per-event side-effect hook (virtual — subclass overrides
+   * dispatch). The at-head reconcile rides it under `delivery.caughtUp`. */
   processEvent(args: ProcessEventArgs<Contract>): undefined;
-  /** The at-head hook (virtual); default is a no-op. */
-  onCaughtUp(args: OnCaughtUpArgs<Contract>): Promise<void>;
   /**
    * Feed the processor's self-measured consumption metrics
    * (`subscriberMetrics.noteBatchIngested`) after a durably committed frame.
@@ -276,14 +271,15 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
  * hooks, and owns cursors, checkpoints, retry, and recovery — the processor
  * itself is only the hooks.
  *
- * Subclasses override up to four hooks:
+ * Subclasses override up to three hooks:
  *
  * - `reduce` — pure projection of one consumed event into the next state
  * - `processEvent` — synchronous per-event side effects; what most processors
- *   implement
- * - `onCaughtUp` — desired-vs-actual reconciliation over the fold at the
- *   observed head; the runner calls it only for at-head passes, so overrides
- *   never need their own mid-refold gate
+ *   implement. It is ALSO the at-head reconcile: gated on
+ *   `args.delivery.caughtUp` (this event was the observed head), an obligation
+ *   processor drives undriven obligations and settles dead ones over the whole
+ *   fold. The runner never sets `caughtUp` behind head, so that branch never
+ *   needs its own mid-refold gate.
  * - `validate` — the optional pre-commit gate (inline Phase-2 runner only)
  *
  * Every hook runs inside the runner's serialized delivery chain: a later
@@ -349,7 +345,6 @@ export abstract class StreamProcessor<
       },
       reduceRawEvent: (args) => processor.#reduceRawEvent(args),
       processEvent: (args) => processor.processEvent(args),
-      onCaughtUp: (args) => processor.onCaughtUp(args),
       noteBatchIngested: (args) => processor.subscriberMetrics.noteBatchIngested(args),
       idempotencyKey: (key, whileProcessing) => processor.idempotencyKey(key, whileProcessing),
       processorStamp: (whileProcessing) => processor.#processorStamp(whileProcessing),
@@ -421,20 +416,19 @@ export abstract class StreamProcessor<
     return args.state;
   }
 
-  /** Synchronous per-event side-effect hook, called by the runner once per consumed event. */
-  protected processEvent(_args: ProcessEventArgs<Contract>): undefined {}
-
   /**
-   * At-head hook: the runner calls it after a frame whose PROCESSING cursor
-   * reaches the observed head, with the final fold. This is where obligation
-   * processors drive undriven obligations and settle dead ones (idempotent
-   * appends keyed by stable obligation keys, NOT by any event offset — see
-   * {@link OnCaughtUpArgs}). A mid-catch-up fold shows obligations whose
-   * outcomes sit in later pages, so the runner never calls this behind the
-   * observed head — no override needs its own gate. Simple processors never
-   * implement it. Defaults to a no-op.
+   * Synchronous per-event side-effect hook, called by the runner once per
+   * consumed event. It is ALSO the at-head reconcile: when
+   * `args.delivery.caughtUp` is true (this event was the observed head when
+   * delivered, so `args.state` is the whole fold), an obligation processor
+   * drives its undriven obligations and settles dead ones — scheduling that
+   * async work via `args.blockProcessorWhile`, keyed by STABLE obligation keys
+   * (`this.idempotencyKey(<obligation>)`, never `args.delivery.idempotencyKey`,
+   * so a redelivery/revival does not rotate the key and re-run the effect).
+   * The runner never sets `caughtUp` behind the observed head — no override
+   * needs its own mid-catch-up gate. Simple processors ignore the flag.
    */
-  protected async onCaughtUp(_args: OnCaughtUpArgs<Contract>): Promise<void> {}
+  protected processEvent(_args: ProcessEventArgs<Contract>): undefined {}
 
   /**
    * Reduce one raw stream event against explicit state, without touching any
@@ -473,9 +467,8 @@ export abstract class StreamProcessor<
   /**
    * Fire-and-forget async work backed by the injected keep-alive, with
    * failures logged. For work launched OUTSIDE a delivery hook (DO verbs,
-   * alarm handlers); inside `processEvent`/`onCaughtUp`, use the
-   * `runInBackground` helper from the hook args — that one rides the runner's
-   * recovery keepalive.
+   * alarm handlers); inside `processEvent`, use the `runInBackground` helper
+   * from the hook args — that one rides the runner's recovery keepalive.
    */
   protected runInBackground(work: () => Promise<unknown>): void {
     this.#runKeepAliveBackedWork(work).catch((error: unknown) => {

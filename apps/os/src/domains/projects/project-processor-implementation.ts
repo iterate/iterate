@@ -106,6 +106,8 @@ export class ProjectProcessor extends StreamProcessor<
     append,
     appendTo,
   }: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]): undefined {
+    // Event-less at-head pass: this processor has no at-head reconcile, so nothing to do.
+    if (event === null) return;
     // Project worker delivery is NOT here: every project stream (this one
     // included) pumps its own events into the worker's `processEventBatch`
     // with a durable checkpoint (see streams/project-worker-delivery.ts).

@@ -111,13 +111,20 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     }
   }
 
-  protected override processEvent({
-    blockProcessorWhile,
-    event,
-    state,
-    append,
-    appendTo,
-  }: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0]): undefined {
+  protected override processEvent(
+    args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    const { blockProcessorWhile, event, state, append, appendTo } = args;
+    // AT-HEAD reconcile (was onCaughtUp): drive the repo's two durable
+    // obligations (create, github-import) from the whole fold. ONE outer
+    // blocking closure so the create seed+append is awaited before this head
+    // event's deferred commit; a mid-catch-up fold never reaches it.
+    if (args.delivery.caughtUp) {
+      blockProcessorWhile(() => this.#reconcileObligations(args));
+    }
+    // Event-less at-head pass (a head-reaching batch that consumed nothing):
+    // only the obligation reconcile above runs.
+    if (event === null) return;
     if (event.type === "events.iterate.com/repo/cloudflare-artifact-event-received") {
       const push = repoArtifactPushFromEventPayload(event.payload);
       const commitOid = push?.afterCommitOid;
@@ -268,7 +275,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (event.type !== "events.iterate.com/repo/create-requested") return;
     // Address validation stays per-event (a mis-addressed request is a loud
     // error); the creation itself is reconciled from the at-head fold in
-    // onCaughtUp.
+    // #reconcileObligations (processEvent under delivery.caughtUp).
     this.#assertOwnCreateRequest(event);
   }
 
@@ -282,46 +289,49 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 
   /**
    * At-head reconciliation of the repo's two durable obligations against the
-   * final fold. The runner calls this only when the processing cursor reaches
-   * the observed stream head (the `checkpointOffset >= streamMaxOffset` gate
-   * the legacy `processEventBatch` override carried lives in the runner now);
-   * the refold path runs reduce-only — no onCaughtUp, no effects. RECOVERY
-   * rides this same hook: `events.iterate.com/repo/revived` — the fact the
-   * keepalive's revival pass journals after an eviction took in-flight work —
-   * is consumed by the contract, so its ordinary delivery is a guaranteed
-   * turn that drives the runner to head and lands here, where the undriven
-   * obligations are re-driven. No `processEvent` arm for it exists or is
-   * needed.
+   * final fold. `processEvent` invokes it under `delivery.caughtUp` (the last
+   * consumed event of a batch that reached head — the `checkpointOffset >=
+   * streamMaxOffset` gate the legacy `processEventBatch` override carried lives
+   * in the runner now); the refold path runs reduce-only, so it never reaches
+   * this reconcile. RECOVERY rides this same path:
+   * `events.iterate.com/repo/revived` — the fact the keepalive's revival pass
+   * journals after an eviction took in-flight work — is consumed by the
+   * contract, so its ordinary delivery is a guaranteed turn that lands at head
+   * and runs this reconcile, where the undriven obligations are re-driven.
    *
    * CREATION is an OBLIGATION driven from the at-head fold, never a per-event
    * reaction: a journal refold (the normal aftermath of a state-schema
    * deploy) replays `create-requested` with event-time state in which
-   * `created` is still false, but the at-head fold has already absorbed the
-   * journaled `repo/created` fact — so `createRepoArtifact`, whose seeding
-   * force-pushes the seed commit and would clobber user commits, provably
-   * never re-runs. No expiry on purpose: "this repo should exist" does not go
-   * stale, and the vendor call is idempotent (get-or-create + re-seed of a
-   * fresh repo folds to a no-op), so a create-succeeded/append-failed retry
-   * is safe.
+   * `created` is still false, but the at-head fold (`args.state`, NOT
+   * `previousState`) has already absorbed the journaled `repo/created` fact —
+   * so `createRepoArtifact`, whose seeding force-pushes the seed commit and
+   * would clobber user commits, provably never re-runs. The `created`
+   * idempotency key binds NO event offset (`this.idempotencyKey("created")`),
+   * so a redelivery/revival cannot rotate it and re-seed. No expiry on
+   * purpose: "this repo should exist" does not go stale, and the vendor call
+   * is idempotent (get-or-create + re-seed of a fresh repo folds to a no-op),
+   * so a create-succeeded/append-failed retry is safe.
    */
-  protected override async onCaughtUp(
-    args: Parameters<StreamProcessor<RepoProcessorContract>["onCaughtUp"]>[0],
+  async #reconcileObligations(
+    args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     if (args.state.createRequested && !args.state.created) {
-      args.blockProcessorWhile(async () => {
-        const payload = await this.deps.createRepoArtifact({
+      // Create inline — this runs inside the head event's outer blocking
+      // closure (see processEvent), so awaiting the seed + `created` append
+      // holds the frame; a nested blockProcessorWhile would register after the
+      // runner's per-event blocker snapshot and never be awaited.
+      const payload = await this.deps.createRepoArtifact({
+        path: this.path,
+        projectId: this.projectId,
+      });
+      await args.append({
+        type: "events.iterate.com/repo/created",
+        idempotencyKey: this.idempotencyKey("created"),
+        payload: {
+          ...payload,
           path: this.path,
           projectId: this.projectId,
-        });
-        await args.append({
-          type: "events.iterate.com/repo/created",
-          idempotencyKey: this.idempotencyKey("created"),
-          payload: {
-            ...payload,
-            path: this.path,
-            projectId: this.projectId,
-          },
-        });
+        },
       });
     }
 

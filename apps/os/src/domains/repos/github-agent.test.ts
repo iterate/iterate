@@ -35,8 +35,10 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
   }
 
   /** REAL runner drive (the production registry's driver): the same-drive
-   * conversation bridge rides the runner's strict per-event ordering, and
-   * `onCaughtUp` (its reset boundary) fires only under the runner. */
+   * conversation bridge rides the runner's strict per-event ordering, and its
+   * reset boundary — `processEvent` under `delivery.caughtUp`, i.e. the
+   * consumed event delivered at the observed head — fires only under the
+   * runner. */
   function drive(processor: GithubAgentProcessor, stream: MemoryStream) {
     const runner = new StreamProcessorRunner({ processor, stream });
     return { deliver: () => runner.catchUp(), state: () => runner.currentState };

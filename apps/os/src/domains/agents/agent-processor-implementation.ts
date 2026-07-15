@@ -3,10 +3,11 @@
 //
 //   reduce       — pure fold: journal → AgentState. One switch, in
 //                  `reduceAgentEvent` below, shared with off-runtime refolds.
-//   processEvent — per-event side effects. One switch, nothing else.
-//   onCaughtUp   — at-head only (runner-gated): drive or settle open LLM
-//                  obligations, derive the next scheduling decision, then
-//                  announce busy/idle status flips.
+//   processEvent — per-event side effects (one switch) AND, under
+//                  `delivery.caughtUp` (this event was the observed head), the
+//                  at-head reconcile: drive or settle open LLM obligations,
+//                  derive the next scheduling decision, then announce
+//                  busy/idle status flips.
 //
 // Everything below the class is a pure helper one of the lanes calls: the
 // fold switch, chat-request building, and codemode script-result rendering.
@@ -160,14 +161,28 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   // reconciliation lane recovers (runInBackground).
   // ---------------------------------------------------------------------------
 
-  protected override processEvent({
-    append,
-    blockProcessorWhile,
-    event,
-    previousState,
-    runInBackground,
-    state,
-  }: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0]): undefined {
+  protected override processEvent(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    const { append, blockProcessorWhile, event, previousState, runInBackground, state } = args;
+    // AT-HEAD reconcile (was `onCaughtUp`): fires only for the last consumed
+    // event of a batch that reached head (`delivery.caughtUp`), so `state` is
+    // the whole fold — drive or settle open LLM obligations, derive the next
+    // scheduling decision, then announce busy/idle flips. ONE blocking closure
+    // so the whole pass is awaited as this head event's own work before its
+    // deferred commit; a failure fails the frame and the transport replays it.
+    // A mid-catch-up fold never reaches this branch, so nothing dials env.AI
+    // for a long-settled request.
+    if (args.delivery.caughtUp) {
+      blockProcessorWhile(async () => {
+        await this.#reconcileLlmObligations(args);
+        await this.#reconcileLlmScheduling(args);
+        await this.#reconcileStatusAnnouncement(args);
+      });
+    }
+    // Event-less at-head pass (a head-reaching batch that consumed nothing):
+    // only the reconcile above runs; there is no event for the per-event switch.
+    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/agent/config-updated": {
         if (event.payload.systemPrompt === undefined) return;
@@ -486,27 +501,19 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   // ---------------------------------------------------------------------------
-  // Lane 3: reconciliation. The runner calls onCaughtUp only when the
-  // processing cursor reaches the observed stream head, so neither pass needs
-  // its own mid-refold gate: a catch-up fold can never dial env.AI for a
-  // long-settled request or journal a false failure. RECOVERY rides this same
-  // hook: `events.iterate.com/agent/revived` — the fact the keepalive's
-  // revival pass journals after an eviction took in-flight work — is consumed
-  // by the contract, so its ordinary delivery is a guaranteed turn that
-  // drives the runner to head and lands here, where the open obligations are
-  // settled or re-driven. Obligation idempotency keys stay bound to the
-  // request's own offsets (never the revival's), so every settle lane —
-  // attempt, backstop, expiry, crash-cancel — collapses to one durable
-  // outcome across revivals.
+  // Lane 3: reconciliation. Invoked from `processEvent` under
+  // `delivery.caughtUp` (the last consumed event of a batch that reached
+  // head), so neither pass needs its own mid-refold gate: a catch-up fold can
+  // never dial env.AI for a long-settled request or journal a false failure.
+  // RECOVERY rides this same path: `events.iterate.com/agent/revived` — the
+  // fact the keepalive's revival pass journals after an eviction took
+  // in-flight work — is consumed by the contract, so its ordinary delivery is
+  // a guaranteed turn that lands at head and runs this reconcile, where the
+  // open obligations are settled or re-driven. Obligation idempotency keys
+  // stay bound to the request's own offsets (never the revival's, never the
+  // triggering delivery's), so every settle lane — attempt, backstop, expiry,
+  // crash-cancel — collapses to one durable outcome across revivals.
   // ---------------------------------------------------------------------------
-
-  protected override async onCaughtUp(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0],
-  ): Promise<void> {
-    await this.#reconcileLlmObligations(args);
-    await this.#reconcileLlmScheduling(args);
-    this.#reconcileStatusAnnouncement(args);
-  }
 
   /**
    * Announce the fold's busy/idle flips as status-changed events for
@@ -525,9 +532,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * corrected by the busy announcement this pass already made for the newer
    * flip.
    */
-  #reconcileStatusAnnouncement(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0],
-  ): void {
+  async #reconcileStatusAnnouncement(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
+  ): Promise<void> {
     const flip = args.state.status;
     // Undefined means the agent has never been busy; genesis idle is not news.
     if (flip === undefined) return;
@@ -576,8 +583,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const debounceMs = this.deps.statusIdleDebounceMs ?? DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS;
     const delay = flip.busy ? 0 : Math.max(0, Date.parse(flip.since) + debounceMs - this.#now());
     if (delay === 0) {
+      // Inline await, not a nested blockProcessorWhile: this runs inside the
+      // head event's blocking closure already (see #reconcileLlmObligations).
       this.#cancelIdleStatusAnnouncement();
-      args.blockProcessorWhile(appendAnnouncement);
+      await appendAnnouncement();
       return;
     }
     if (this.#idleStatusAnnouncement?.sinceOffset === flip.sinceOffset) return;
@@ -646,7 +655,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    *   fresh request instead of silently dropping the user's question.
    */
   async #reconcileLlmObligations(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const now = this.#now();
     const cancelCrashed: number[] = [];
@@ -686,37 +695,38 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       cancelCrashed.push(llmRequestOffset);
     }
+    // The settle appends run inline: this reconcile is itself invoked inside
+    // the head event's blocking closure (processEvent under `delivery.caughtUp`),
+    // so awaiting the appends here holds the frame — a nested `blockProcessorWhile`
+    // would register after the runner's per-event blocker snapshot and NOT be
+    // awaited, stranding the settle.
     if (cancelCrashed.length === 0 && settleAsFailed.length === 0) return;
-    args.blockProcessorWhile(async () => {
-      for (const llmRequestOffset of cancelCrashed) {
-        console.error("[agent] cancelling in-flight llm request after durable-object crash", {
+    for (const llmRequestOffset of cancelCrashed) {
+      console.error("[agent] cancelling in-flight llm request after durable-object crash", {
+        llmRequestOffset,
+      });
+      await args.append({
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        idempotencyKey: this.idempotencyKey(`llm-request-cancelled@requested:${llmRequestOffset}`),
+        payload: {
+          phase: "requested",
+          reason: "durable-object-crashed",
           llmRequestOffset,
-        });
-        await args.append({
-          type: "events.iterate.com/agent/llm-request-cancelled",
-          idempotencyKey: this.idempotencyKey(
-            `llm-request-cancelled@requested:${llmRequestOffset}`,
-          ),
-          payload: {
-            phase: "requested",
-            reason: "durable-object-crashed",
-            llmRequestOffset,
-          },
-        });
-      }
-      for (const { llmRequestOffset, message } of settleAsFailed) {
-        console.error("[agent] settling undriven llm request", { llmRequestOffset, message });
-        await args.append({
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
-          payload: {
-            durationMs: 0,
-            llmRequestOffset,
-            result: { status: "failure", error: { message } },
-          },
-        });
-      }
-    });
+        },
+      });
+    }
+    for (const { llmRequestOffset, message } of settleAsFailed) {
+      console.error("[agent] settling undriven llm request", { llmRequestOffset, message });
+      await args.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
+        payload: {
+          durationMs: 0,
+          llmRequestOffset,
+          result: { status: "failure", error: { message } },
+        },
+      });
+    }
   }
 
   /**
@@ -729,7 +739,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * event.
    */
   async #reconcileLlmScheduling(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const { state } = args;
     if (state.currentRequest === null) {

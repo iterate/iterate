@@ -318,7 +318,12 @@ describe("durableObjectProgressStore", () => {
     const runner = makeRunner({
       journal,
       storage,
-      hooks: { onProcess: (args) => void processedOffsets.push(args.event.offset) },
+      hooks: {
+        onProcess: (args) => {
+          if (args.event === null) return;
+          processedOffsets.push(args.event.offset);
+        },
+      },
     });
 
     const opened = await runner.openDelivery();
@@ -364,7 +369,10 @@ describe("durableObjectProgressStore", () => {
         storage,
         hooks: {
           onReduce: (offset) => void reducedOffsets.push(offset),
-          onProcess: (args) => void processedOffsets.push(args.event.offset),
+          onProcess: (args) => {
+            if (args.event === null) return;
+            processedOffsets.push(args.event.offset);
+          },
         },
       });
 
@@ -526,7 +534,12 @@ describe("durableObjectRecovery", () => {
     const runner2 = makeRunner({
       journal,
       storage,
-      hooks: { onProcess: (args) => void processedTypes.push(args.event.type) },
+      hooks: {
+        onProcess: (args) => {
+          if (args.event === null) return;
+          processedTypes.push(args.event.type);
+        },
+      },
       recovery: fixture.build(),
     });
     fixture.clock.now = fixture.readRecord()!.armedAtMs! + 1;

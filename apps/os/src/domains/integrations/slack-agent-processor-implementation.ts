@@ -14,8 +14,9 @@
 // - The Slack calls themselves are acknowledgement/cosmetic lanes and must be
 //   REFOLD-SAFE (docs/writing-stream-processors.md, "Refold safety"): the 👀
 //   ack only fires for fresh webhooks (webhookAckIsFresh), and the assistant
-//   status is repainted once per at-head pass (`onCaughtUp`) from the latest
-//   announced status instead of once per event.
+//   status is repainted once per at-head pass (`processEvent` under
+//   `delivery.caughtUp`) from the latest announced status instead of once per
+//   event.
 //
 // The "is thinking..." status is a pure PAINT of the agent processor's own
 // `agent/status-changed` announcements. The agent owns the busy/idle
@@ -109,12 +110,33 @@ export class SlackAgentProcessor extends StreamProcessor<
     }
   }
 
-  protected override processEvent({
-    append,
-    blockProcessorWhile,
-    event,
-    state,
-  }: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0]): undefined {
+  protected override processEvent(
+    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    const { append, blockProcessorWhile, event, state } = args;
+    // Status announcements drive the assistant status, which is repainted
+    // once per at-head pass — nothing per event beyond remembering the
+    // LATEST announcement (later events overwrite earlier ones, and the memo
+    // carries across behind-head frames so a lagging fold still paints once
+    // it catches up). The memo is written BEFORE the at-head registration
+    // below: `blockProcessorWhile` may start its closure synchronously, so a
+    // head event's own announcement must already be memoized when the
+    // repaint reads it.
+    if (event !== null && event.type === "events.iterate.com/agent/status-changed") {
+      this.#unpaintedStatusFact = event;
+    }
+    // AT-HEAD repaint (was `onCaughtUp`): fires for the last consumed event of
+    // a batch that reached head (`delivery.caughtUp`), so `args.state` is the
+    // whole fold. ONE blocking closure — the runner awaits it as this head
+    // event's own work before the frame's deferred commit, so a failed paint
+    // fails the frame and the transport replays it (the memo re-accumulates on
+    // redelivery).
+    if (args.delivery.caughtUp) {
+      blockProcessorWhile(() => this.#reconcileStatus(args));
+    }
+    // Event-less at-head pass (a head-reaching batch that consumed nothing):
+    // only the repaint above runs.
+    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured": {
         // Route context (channel/thread_ts/streamPath) is captured in
@@ -272,15 +294,10 @@ export class SlackAgentProcessor extends StreamProcessor<
         });
         return;
       }
-      // Status announcements drive the assistant status, which is repainted
-      // once per at-head pass in onCaughtUp — nothing per event beyond
-      // remembering the LATEST announcement (later events overwrite earlier
-      // ones, and the memo carries across behind-head frames so a lagging
-      // fold still paints once it catches up).
+      // Status announcements were memoized above the switch; the revival
+      // fact needs no per-event handling (its delivery only guarantees the
+      // at-head repaint pass).
       default:
-        if (event.type === "events.iterate.com/agent/status-changed") {
-          this.#unpaintedStatusFact = event;
-        }
         return;
     }
   }
@@ -298,7 +315,10 @@ export class SlackAgentProcessor extends StreamProcessor<
   /**
    * Paint the agent's announced status onto the assistant thread, once per
    * at-head pass (never per event, so a refold cannot replay historical
-   * flips). The latest announcement accumulates in `#unpaintedStatusFact`
+   * flips). Invoked from `processEvent` under `delivery.caughtUp` inside ONE
+   * `blockProcessorWhile` closure, so every Slack call below is awaited —
+   * sequentially, title before status — as the head event's own blocking
+   * work. The latest announcement accumulates in `#unpaintedStatusFact`
    * per event, so a fact delivered in a behind-head frame still paints
    * exactly once when the cursor reaches head. Both directions are
    * freshness-gated like every other acknowledgement — a refold's months-old
@@ -307,8 +327,8 @@ export class SlackAgentProcessor extends StreamProcessor<
    * incarnation painted. Recovery's `slack-agent/revived` delivery lands here
    * too: a fresh incarnation's caught-up pass repaints from the fold.
    */
-  protected override async onCaughtUp(
-    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["onCaughtUp"]>[0],
+  async #reconcileStatus(
+    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const latest = this.#unpaintedStatusFact;
     this.#unpaintedStatusFact = undefined;
@@ -321,18 +341,16 @@ export class SlackAgentProcessor extends StreamProcessor<
     // what this incarnation painted — freshness-gated with everything else,
     // so a refold never replays historical renames. The painted-title record
     // is written only AFTER the call succeeds: a rejected call fails the
-    // batch, and the redelivered batch must retry the rename instead of
+    // frame, and the redelivered frame must retry the rename instead of
     // seeing it as already painted.
     const title = args.state.status?.title;
     if (fresh && title !== undefined && title !== this.#paintedTitle) {
-      args.blockProcessorWhile(async () => {
-        await this.#callSlackApi("assistant.threads.setTitle", {
-          channel_id: channel,
-          thread_ts: threadTs,
-          title,
-        });
-        this.#paintedTitle = title;
+      await this.#callSlackApi("assistant.threads.setTitle", {
+        channel_id: channel,
+        thread_ts: threadTs,
+        title,
       });
+      this.#paintedTitle = title;
     }
 
     if (status?.busy) {
@@ -342,15 +360,13 @@ export class SlackAgentProcessor extends StreamProcessor<
       const text =
         status.shortStatus ??
         (status.phase === "script" ? "running a script" : "making an LLM request");
-      args.blockProcessorWhile(async () => {
-        await this.#callSlackApi("assistant.threads.setStatus", {
-          channel_id: channel,
-          thread_ts: threadTs,
-          status: `is ${text}...`,
-          loading_messages: [`${text}...`],
-        });
-        this.#paintedBusyStatus = true;
+      await this.#callSlackApi("assistant.threads.setStatus", {
+        channel_id: channel,
+        thread_ts: threadTs,
+        status: `is ${text}...`,
+        loading_messages: [`${text}...`],
       });
+      this.#paintedBusyStatus = true;
       return;
     }
     // Only an EXPLICIT idle clears. An authored-only record (title/note/
@@ -364,33 +380,29 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (status.blocked === true) {
       if (!fresh && !this.#paintedBusyStatus) return;
       const text = status.shortStatus ?? "waiting for input";
-      args.blockProcessorWhile(async () => {
-        await this.#callSlackApi("assistant.threads.setStatus", {
-          channel_id: channel,
-          thread_ts: threadTs,
-          status: `is ${text}...`,
-          loading_messages: [`${text}...`],
-        });
-        if (latestMessageTs != null) {
-          await this.#callSlackApi("reactions.remove", {
-            channel,
-            name: "eyes",
-            timestamp: latestMessageTs,
-          });
-        }
-        this.#paintedBusyStatus = true;
+      await this.#callSlackApi("assistant.threads.setStatus", {
+        channel_id: channel,
+        thread_ts: threadTs,
+        status: `is ${text}...`,
+        loading_messages: [`${text}...`],
       });
+      if (latestMessageTs != null) {
+        await this.#callSlackApi("reactions.remove", {
+          channel,
+          name: "eyes",
+          timestamp: latestMessageTs,
+        });
+      }
+      this.#paintedBusyStatus = true;
       return;
     }
     if (!fresh && !this.#paintedBusyStatus) return;
-    args.blockProcessorWhile(async () => {
-      await this.#clearStatus({
-        channel,
-        ...(latestMessageTs == null ? {} : { latestMessageTs }),
-        threadTs,
-      });
-      this.#paintedBusyStatus = false;
+    await this.#clearStatus({
+      channel,
+      ...(latestMessageTs == null ? {} : { latestMessageTs }),
+      threadTs,
     });
+    this.#paintedBusyStatus = false;
   }
 
   async #clearStatus(target: { channel: string; latestMessageTs?: string; threadTs: string }) {

@@ -204,6 +204,7 @@ describe("StreamProcessor provenance stamping", () => {
       appendTo,
       blockProcessorWhile,
     }: Parameters<StreamProcessor<typeof EchoContract>["processEvent"]>[0]): undefined {
+      if (event === null) return; // event-less at-head pass: no per-event echo
       const echo = {
         type: "events.iterate.com/test/echoed" as const,
         idempotencyKey: this.idempotencyKey("echo", event),
@@ -221,19 +222,26 @@ describe("StreamProcessor provenance stamping", () => {
   }
 
   // At-head appends are derived from the whole fold, not one event — the
-  // onCaughtUp lane stamps them WITHOUT `whileProcessing` (the successor of
-  // the legacy batch-level append lane).
+  // at-head reconcile (processEvent under `delivery.caughtUp`) runs them. On the
+  // EVENT-LESS at-head pass (a head-reaching batch that consumed nothing) the
+  // append carries no `whileProcessing` stamp — the successor of the legacy
+  // batch-level append lane.
   class CaughtUpEchoProcessor extends StreamProcessor<typeof EchoContract> {
     readonly contract = EchoContract;
 
-    protected override async onCaughtUp(
-      args: Parameters<StreamProcessor<typeof EchoContract>["onCaughtUp"]>[0],
-    ): Promise<void> {
-      await args.append({
-        type: "events.iterate.com/test/echoed",
-        idempotencyKey: this.idempotencyKey(`at-head-summary:${args.delivery.observedHeadOffset}`),
-        payload: { id: "at-head" },
-      });
+    protected override processEvent(
+      args: Parameters<StreamProcessor<typeof EchoContract>["processEvent"]>[0],
+    ): undefined {
+      if (!args.delivery.caughtUp) return;
+      args.blockProcessorWhile(() =>
+        args.append({
+          type: "events.iterate.com/test/echoed",
+          idempotencyKey: this.idempotencyKey(
+            `at-head-summary:${args.delivery.observedHeadOffset}`,
+          ),
+          payload: { id: "at-head" },
+        }),
+      );
     }
   }
 
@@ -306,11 +314,26 @@ describe("StreamProcessor provenance stamping", () => {
     });
   });
 
-  it("stamps at-head (onCaughtUp) appends without whileProcessing", async () => {
+  it("stamps event-less at-head appends without whileProcessing", async () => {
     const { appends, stream } = recordingNetwork();
     const { deliver } = drive(new CaughtUpEchoProcessor({ stream, ...HOME }), stream);
 
-    await deliver({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
+    // A head-reaching batch that consumes NOTHING (this contract does not
+    // consume `unrelated`) triggers the runner's event-less at-head pass — the
+    // reconcile runs over the fold with no source event, so its append is
+    // unstamped.
+    await deliver({
+      events: [
+        {
+          type: "events.iterate.com/test/unrelated",
+          offset: 7,
+          createdAt: new Date(7).toISOString(),
+          path: HOME.path,
+          payload: {},
+        },
+      ],
+      streamMaxOffset: 7,
+    });
 
     const summary = appends.find(({ event }) => event.idempotencyKey?.includes("at-head-summary"));
     expect(summary?.event.idempotencyKey).toBe("test-echo/at-head-summary:7");

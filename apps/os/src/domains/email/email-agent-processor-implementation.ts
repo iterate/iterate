@@ -76,6 +76,8 @@ export class EmailAgentProcessor extends StreamProcessor<
   }: Parameters<
     StreamProcessor<typeof EmailAgentProcessorContract>["processEvent"]
   >[0]): undefined {
+    // Event-less at-head pass: this processor has no at-head reconcile, so nothing to do.
+    if (event === null) return;
     if (event.type !== "events.iterate.com/email/received") return;
 
     // Never transcribe the project's own mail: a copy of our outbound looping

@@ -32,12 +32,12 @@ const RepoCommitCompletedPayload = z.object({
  * `ProcessorRecovery`). The contract CONSUMES it — the runner's construction
  * check requires that — but never emits it: the recovery adapter appends it
  * raw, as the runtime speaking. Its ordinary delivery is the guaranteed turn
- * that drives the runner to the stream head, where `onCaughtUp` re-drives the
- * repo's open obligations — an unfinished creation (never re-run once
- * `repo/created` folded; see the onCaughtUp doc) and an open GitHub import
- * (safely re-driven: the sync is an idempotent current-head fast-forward). No
- * per-event handling is needed (reduce ignores it), so there is deliberately
- * no `processEvent` arm for it.
+ * that lands at the stream head, where `processEvent`'s at-head reconcile
+ * (`delivery.caughtUp`) re-drives the repo's open obligations — an unfinished
+ * creation (never re-run once `repo/created` folded; see #reconcileObligations)
+ * and an open GitHub import (safely re-driven: the sync is an idempotent
+ * current-head fast-forward). Reduce ignores it and the `processEvent` switch
+ * has no arm for its type — the at-head reconcile is the whole point.
  */
 export const REPO_REVIVED_EVENT_TYPE = "events.iterate.com/repo/revived";
 
@@ -49,7 +49,8 @@ export const RepoProcessorContract = defineProcessorContract({
   stateSchema: z.object({
     artifactName: z.string().nullable().default(null),
     /** An open creation OBLIGATION: `create-requested` folded, `created` not
-     * yet. The at-head `onCaughtUp` pass compares this pair over the final
+     * yet. The at-head reconcile (processEvent under `delivery.caughtUp`)
+     * compares this pair over the final
      * fold — never event-time state, which a journal refold replays with
      * `created` still false (docs/writing-stream-processors.md, "Refold
      * safety"). */
@@ -58,9 +59,9 @@ export const RepoProcessorContract = defineProcessorContract({
     defaultBranch: z.string().nullable().default(null),
     github: GithubLinkPayload.nullable().default(null),
     /** A GitHub default-branch import obligation. The webhook is first
-     * normalized into `github-import-requested`; the at-head `onCaughtUp`
-     * pass then drives the vendor sync without holding the stream
-     * checkpoint. */
+     * normalized into `github-import-requested`; the at-head reconcile
+     * (processEvent under `delivery.caughtUp`) then drives the vendor sync
+     * without holding the stream checkpoint. */
     githubImport: z
       .object({
         branch: z.string(),

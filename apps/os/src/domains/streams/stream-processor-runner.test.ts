@@ -72,11 +72,19 @@ type TaskState = { count: number; open: string[] };
  * so the module-level hook types below can reference them. Never instantiated. */
 abstract class HookArgTypes extends StreamProcessor<TaskContract> {
   declare readonly processArgs: Parameters<StreamProcessor<TaskContract>["processEvent"]>[0];
-  declare readonly headArgs: Parameters<StreamProcessor<TaskContract>["onCaughtUp"]>[0];
 }
+type ProcessArgs = HookArgTypes["processArgs"];
+/** processEvent args narrowed to a real consumed event (`onProcess` only fires
+ * for those; the at-head reconcile rides `onHead` and may have a null event). */
+type ConsumedProcessArgs = ProcessArgs & { event: NonNullable<ProcessArgs["event"]> };
 type TaskHooks = {
-  onProcess?: (args: HookArgTypes["processArgs"]) => void;
-  onHead?: (args: HookArgTypes["headArgs"]) => void | Promise<void>;
+  onProcess?: (args: ConsumedProcessArgs) => void;
+  /** The at-head reconcile (was `onCaughtUp`): `processEvent` under
+   * `delivery.caughtUp`. `args.event` is the last consumed event of a
+   * head-reaching batch, or `null` for an event-less at-head pass. `stableKey`
+   * is `this.idempotencyKey` (binds NO offset) — the way a real reconcile
+   * mints obligation keys that survive redelivery/revival unchanged. */
+  onHead?: (args: ProcessArgs, stableKey: (key: string) => string) => void | Promise<void>;
 };
 
 class TaskProcessor extends StreamProcessor<
@@ -100,16 +108,16 @@ class TaskProcessor extends StreamProcessor<
     return state;
   }
 
-  protected override processEvent(
-    args: Parameters<StreamProcessor<TaskContract>["processEvent"]>[0],
-  ): undefined {
-    this.deps.hooks.onProcess?.(args);
-  }
-
-  protected override async onCaughtUp(
-    args: Parameters<StreamProcessor<TaskContract>["onCaughtUp"]>[0],
-  ): Promise<void> {
-    await this.deps.hooks.onHead?.(args);
+  protected override processEvent(args: ProcessArgs): undefined {
+    if (args.event !== null) this.deps.hooks.onProcess?.(args as ConsumedProcessArgs);
+    // The at-head reconcile: fires for the last consumed event of a
+    // head-reaching batch, or the runner's event-less at-head pass. onHead
+    // registers its blocking work synchronously (the runner awaits it before
+    // the deferred frame-end commit), so invoking it here — not awaiting — is
+    // the faithful fold-in of the old awaited `onCaughtUp`.
+    if (args.delivery.caughtUp) {
+      void this.deps.hooks.onHead?.(args, (key) => this.idempotencyKey(key));
+    }
   }
 
   /** The LEGACY key derivation, exposed for the byte-identity assertion. */
@@ -436,12 +444,12 @@ describe("StreamProcessorRunner batch-division invariance", () => {
         }),
       );
     },
-    onHead: (args) => {
+    onHead: (args, stableKey) => {
       for (const id of args.state.open) {
         args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: DRIVEN,
-            idempotencyKey: args.delivery.idempotencyKey(`drive:${id}`),
+            idempotencyKey: stableKey(`drive:${id}`),
             payload: { id },
           }),
         );
@@ -1082,11 +1090,13 @@ describe("StreamProcessorRunner skipThrough validation", () => {
 });
 
 // =============================================================================
-// 7. onCaughtUp at head — including the requested-N / unconsumed-N+1 wedge
+// 7. At-head reconcile (`delivery.caughtUp`) — the last consumed event of a
+//    head-reaching batch, or an EVENT-LESS pass when the batch consumed nothing
+//    (the requested-N / unconsumed-tail wedge; codex bug #1)
 // =============================================================================
 
-describe("StreamProcessorRunner onCaughtUp", () => {
-  it("fires only at the observed head and drives obligations whose trigger arrived mid-catch-up", async () => {
+describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
+  it("fires at head via an event-less pass when the head-reaching batch consumed nothing", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // N: opens the obligation
     journal.seed({ type: NOISE, payload: {} }); // N+1: unconsumed, reaches head
@@ -1099,13 +1109,13 @@ describe("StreamProcessorRunner onCaughtUp", () => {
           `${args.event.offset}:${args.delivery.phase}:${args.delivery.eventsBehindObservedHead}`,
         );
       },
-      onHead: (args) => {
+      onHead: (args, stableKey) => {
         headCalls.push({ open: [...args.state.open], phase: args.delivery.phase });
         for (const id of args.state.open) {
           args.blockProcessorWhile(() =>
             args.appendTo(SIBLING, {
               type: DRIVEN,
-              idempotencyKey: args.delivery.idempotencyKey(`drive:${id}`),
+              idempotencyKey: stableKey(`drive:${id}`),
               payload: { id },
             }),
           );
@@ -1149,7 +1159,7 @@ describe("StreamProcessorRunner onCaughtUp", () => {
     const processedOffsets: number[] = [];
     const hooks: TaskHooks = {
       onProcess: (args) => void processedOffsets.push(args.event.offset),
-      onHead: (args) => {
+      onHead: (args, stableKey) => {
         headAttempts += 1;
         if (headAttempts === 1) {
           // The at-head pass's own blocking work fails (or the incarnation
@@ -1160,7 +1170,7 @@ describe("StreamProcessorRunner onCaughtUp", () => {
         args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: DRIVEN,
-            idempotencyKey: args.delivery.idempotencyKey("drive:a"),
+            idempotencyKey: stableKey("drive:a"),
             payload: { id: "a" },
           }),
         );
@@ -1204,13 +1214,13 @@ describe("StreamProcessorRunner onCaughtUp", () => {
 
     const headCalls: { open: string[] }[] = [];
     const hooks: TaskHooks = {
-      onHead: (args) => {
+      onHead: (args, stableKey) => {
         headCalls.push({ open: [...args.state.open] });
         for (const id of args.state.open) {
           args.blockProcessorWhile(() =>
             args.appendTo(SIBLING, {
               type: DRIVEN,
-              idempotencyKey: args.delivery.idempotencyKey(`drive:${id}`),
+              idempotencyKey: stableKey(`drive:${id}`),
               payload: { id },
             }),
           );
@@ -1259,30 +1269,35 @@ describe("StreamProcessorRunner idempotency keys", () => {
       onProcess: (args) => {
         eventKeys.push(args.delivery.idempotencyKey("foo"));
       },
-      onHead: (args) => {
-        headKeys.push(args.delivery.idempotencyKey("bar"));
+      onHead: (_args, stableKey) => {
+        headKeys.push(stableKey("bar"));
       },
     };
     const harness = makeHarness({ journal, hooks });
     await harness.deliverFrames([journal.rows().slice()]);
 
     const requestedEvent = journal.rows().at(-1)!;
+    // A PER-EVENT effect key binds this event's offset AND the revision
+    // (`delivery.idempotencyKey`) — so an operator rewind re-runs it.
     expect(eventKeys).toEqual([harness.processor.legacyIdempotencyKey("foo", requestedEvent)]);
     expect(eventKeys).toEqual(["test-task/foo@/tests/runner:7"]);
-    // The at-head derivation binds no offset (obligation keys stay stable
-    // across passes) — byte-identical to the legacy no-whileProcessing form.
+    // An OBLIGATION key (the at-head reconcile) is minted via
+    // `this.idempotencyKey(<obligation>)`: it binds NO offset AND no revision,
+    // so it survives a redelivery/revival — and a rewind — UNCHANGED. That is
+    // the point: a re-fold must not re-drive an obligation the journal already
+    // settled (the completion fact deduplicates against the same stable key).
     expect(headKeys).toEqual([harness.processor.legacyIdempotencyKey("bar")]);
     expect(headKeys).toEqual(["test-task/bar"]);
 
-    // An operator rewind bumps the revision: same offsets, NEW keys — the
-    // crash-retry/redrive distinction the design demands.
+    // An operator rewind bumps the revision: the PER-EVENT key rotates (re-run
+    // the effect), the OBLIGATION key does not (the settled fact still stands).
     await harness.runner.reprocessFrom({
       offset: 7,
       expectedCursorRevision: 0,
       reason: "redrive",
     });
     expect(eventKeys).toEqual(["test-task/foo@/tests/runner:7", "test-task/foo@/tests/runner:7#1"]);
-    expect(headKeys.at(-1)).toBe("test-task/bar#1");
+    expect(headKeys.at(-1)).toBe("test-task/bar");
   });
 });
 

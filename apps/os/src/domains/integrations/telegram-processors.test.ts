@@ -624,9 +624,11 @@ describe("TelegramAgentProcessor", () => {
   it("carries an unpainted typing fact across a behind-head frame to the at-head repaint", async () => {
     // readPageSize 1 makes one catch-up deliver the lifecycle fact in a frame
     // stamped BEHIND the head (a later stream fact follows it — the lagging
-    // fold), and the frame that reaches head carries no typing-worthy fact at
-    // all (its own event is an unconsumed stream fact). The carried fact is
-    // what paints — exactly once, at the at-head pulse, never per behind
+    // fold), and the frame that reaches head carries no typing-worthy fact of
+    // its own: a bot-authored webhook — CONSUMED (the at-head pass is
+    // `processEvent` under `delivery.caughtUp`, so only a consumed head event
+    // fires it) but inert (no input, no typing of its own). The carried fact
+    // is what paints — exactly once, at the at-head pulse, never per behind
     // frame.
     const { deliver, stream, telegramCalls } = setup({ readPageSize: 1 });
     // Establish the chat.
@@ -637,15 +639,18 @@ describe("TelegramAgentProcessor", () => {
     await deliver();
     telegramCalls.length = 0;
 
+    const botEcho = humanMessageWebhookPayload({ messageId: 2 });
+    (botEcho.body.message as Record<string, unknown>).from = {
+      id: 999,
+      is_bot: true,
+      first_name: "iterate",
+    };
     await stream.append(
       {
         type: "events.iterate.com/agent/llm-request-requested",
         payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
       },
-      {
-        type: "events.iterate.com/stream/woken",
-        payload: { reason: "catch-up" },
-      },
+      { type: "events.iterate.com/telegram/webhook-received", payload: botEcho },
     );
     await deliver();
     expect(telegramCalls).toEqual([
@@ -1018,10 +1023,11 @@ function humanMessageWebhookPayload(input: {
 }
 
 /** REAL runner drive (the production registry's driver): the "still working"
- * typing repaint lives in `onCaughtUp`, which ONLY the runner fires — legacy
- * `ingest` would silently skip it and the repaint tests would assert nothing.
- * `readPageSize` shrinks the catch-up page so a single `deliver()` exercises
- * behind-head frames (the typing-fact carry). */
+ * typing repaint fires in `processEvent` under `delivery.caughtUp`, which
+ * ONLY the runner sets — legacy `ingest` would silently skip it and the
+ * repaint tests would assert nothing. `readPageSize` shrinks the catch-up
+ * page so a single `deliver()` exercises behind-head frames (the typing-fact
+ * carry). */
 function setup(input: { agentPath?: string; now?: () => number; readPageSize?: number } = {}) {
   const network = new MemoryStreamNetwork();
   const agentPath = input.agentPath ?? `/agents/telegram/${CONNECTION}/chat-${CHAT_ID}`;

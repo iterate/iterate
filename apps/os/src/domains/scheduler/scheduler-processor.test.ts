@@ -55,19 +55,28 @@ function makeProgressStore() {
 
 // The processor is driven by a REAL StreamProcessorRunner — the same driver
 // the SchedulerDurableObject's registry runs in production — so the at-head
-// alarm derivation (onCaughtUp) and the runner-backed fold reads (deps.reads)
-// are exercised exactly as deployed. `state()` reads the runner's committed
-// fold; the processor instance's own checkpoint never advances under runner
-// drive.
+// alarm derivation (processEvent under `delivery.caughtUp`) and the
+// runner-backed fold reads (deps.reads) are exercised exactly as deployed.
+// `state()` reads the runner's committed fold; the processor instance's own
+// checkpoint never advances under runner drive.
 function makeHarness(options?: {
   invokeCapability?: SchedulerProcessorDeps["dynamicWorkers"]["invokeCapability"];
   repointAlarm?: SchedulerProcessorDeps["repointAlarm"];
   progressStore?: ReturnType<typeof makeProgressStore>;
-  /** Park the runner's background lanes (the trailing self-pull) so a test
-   * can hold delivery exactly at a frame boundary. */
+  /** Park the runner's keepAlive-backed lanes so a test can hold delivery
+   * exactly at a frame boundary: parked work is DEFERRED, and `deliver()`
+   * unparks + flushes before driving. Deferral (not dropping) matters — the
+   * at-head alarm repoint (processEvent under `delivery.caughtUp`) rides the
+   * same keepAlive lane as a frame-blocking closure, so a dropped blocker
+   * would wedge its frame's commit (and the runner chain behind it) forever. */
   parkRunnerBackground?: boolean;
 }) {
   const clock = { now: T0 };
+  let runnerBackgroundParked = options?.parkRunnerBackground === true;
+  const parkedRunnerWork: Array<() => Promise<unknown>> = [];
+  // Failures already reach the real waiter through the runner's keepalive
+  // bridge (reject-then-rethrow); swallow the duplicate rethrow here.
+  const runRunnerWork = (work: () => Promise<unknown>) => void work().catch(() => {});
   // createdAt comes from the same fake clock the processor's `now` dep reads,
   // so reduce-time math (`Date.parse(event.createdAt)`) is exact in assertions.
   const stream = new MemoryStream("/scheduler/primary");
@@ -98,9 +107,20 @@ function makeHarness(options?: {
     stream,
     durability: { progress: progressStore },
     now: () => clock.now,
-    ...(options?.parkRunnerBackground === true ? { keepAlive: () => {} } : {}),
+    ...(options?.parkRunnerBackground === true
+      ? {
+          keepAlive: (work: () => Promise<unknown>) => {
+            if (runnerBackgroundParked) parkedRunnerWork.push(work);
+            else runRunnerWork(work);
+          },
+        }
+      : {}),
   });
   const deliver = async () => {
+    if (runnerBackgroundParked) {
+      runnerBackgroundParked = false;
+      for (const work of parkedRunnerWork.splice(0)) runRunnerWork(work);
+    }
     // Drive until quiet: executions append events that need delivering too.
     for (;;) {
       const head = stream.events.at(-1)?.offset ?? 0;

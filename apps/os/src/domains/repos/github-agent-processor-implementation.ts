@@ -72,10 +72,10 @@ export class GithubAgentProcessor extends StreamProcessor<
    * mention's async collaborator check to immediate follow-ups delivered in
    * the same drive, before the mention's durable verification fact has come
    * back around through delivery; durable activation still comes only from
-   * that verified audit fact. Reset at the at-head pulse (`onCaughtUp`) and
-   * at route boundaries — from head onward, follow-ups are gated by the
-   * FOLDED `conversationActive`, which the verified fact's own delivery has
-   * had time to establish. */
+   * that verified audit fact. Reset at the head event (`processEvent` under
+   * `delivery.caughtUp`) and at route boundaries — from head onward,
+   * follow-ups are gated by the FOLDED `conversationActive`, which the
+   * verified fact's own delivery has had time to establish. */
   #batchConversation = newBatchConversation();
 
   protected override reduce({
@@ -107,29 +107,41 @@ export class GithubAgentProcessor extends StreamProcessor<
   }
 
   /**
-   * The end of one drive: from here the mention's verified audit fact has its
-   * own delivery turn to fold `conversationActive` before any post-head
-   * follow-up arrives, so the same-drive bridge must not outlive the pulse —
-   * an unbounded bridge would let this incarnation's in-memory trust answer
-   * for follow-ups the DURABLE fold should be gating. (The legacy
-   * processEventBatch override cleared it per delivered batch; per drive is
-   * the runner's equivalent boundary, and the strict per-event ordering the
+   * Dispatch, then — at head — the end of one drive: from there the mention's
+   * verified audit fact has its own delivery turn to fold
+   * `conversationActive` before any post-head follow-up arrives, so the
+   * same-drive bridge must not outlive the drive — an unbounded bridge would
+   * let this incarnation's in-memory trust answer for follow-ups the DURABLE
+   * fold should be gating. (The legacy processEventBatch override cleared it
+   * per delivered batch; the head event under `delivery.caughtUp` is the
+   * runner's equivalent boundary, and the strict per-event ordering the
    * runner guarantees replaces that override's hand-rolled sequential
    * execution of the collected blocking work.)
    */
-  protected override async onCaughtUp(
-    _args: Parameters<StreamProcessor<GithubAgentProcessorContract>["onCaughtUp"]>[0],
-  ): Promise<void> {
-    this.#batchConversation = newBatchConversation();
+  protected override processEvent(
+    args: Parameters<StreamProcessor<GithubAgentProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    this.#dispatchEvent(args);
+    // At head: bound the same-drive trust bridge to this drive. Runs AFTER
+    // the dispatch switch captured its bridge reference, so the head event's
+    // own (follow-up-less) collaborator-check closures keep mutating the old
+    // bridge while the NEXT drive starts clean. A batch whose tail is a type
+    // this processor does not consume defers the reset to the next
+    // consumed-at-head event; that is benign — the durable verified fact
+    // folds `conversationActive` either way.
+    if (args.delivery.caughtUp) this.#batchConversation = newBatchConversation();
   }
 
-  protected override processEvent({
+  #dispatchEvent({
     append,
     blockProcessorWhile,
     event,
     previousState,
     state,
   }: Parameters<StreamProcessor<GithubAgentProcessorContract>["processEvent"]>[0]): undefined {
+    // The event-less at-head pass has no per-event work here (only the bridge
+    // reset in processEvent); the switch runs for real consumed events only.
+    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/github-agent/route-configured": {
         if (!hasCurrentRoute(previousState) || !sameRoute(previousState, event.payload)) {

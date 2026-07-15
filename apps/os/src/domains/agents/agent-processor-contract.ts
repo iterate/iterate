@@ -232,10 +232,11 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
  * lost to an eviction. The contract CONSUMES it — the runner's construction
  * check requires that — but never emits it: the recovery adapter appends it
  * raw, as the runtime speaking. Its ordinary delivery is the guaranteed turn
- * that drives the runner to the stream head, where `onCaughtUp` re-drives the
- * open LLM obligations (crash-cancel `started` attempts, re-fire lost
- * debounces, settle expired intents); no per-event handling is needed (reduce
- * ignores it), so there is deliberately no `processEvent` arm for it.
+ * that lands at the stream head, where `processEvent`'s at-head reconcile
+ * (`delivery.caughtUp`) re-drives the open LLM obligations (crash-cancel
+ * `started` attempts, re-fire lost debounces, settle expired intents). Reduce
+ * ignores it and the `processEvent` switch has no arm for its type — the whole
+ * point is the at-head reconcile its delivery guarantees, not per-event work.
  */
 export const AGENT_REVIVED_EVENT_TYPE = "events.iterate.com/agent/revived";
 
@@ -968,7 +969,7 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     [AGENT_REVIVED_EVENT_TYPE]: {
       description:
-        "The agent processor was revived after its incarnation died owing background work (an in-flight LLM attempt or an armed debounce timer lost to an eviction). Appended by the platform's recovery alarm, not by the processor; its delivery guarantees a caught-up pass that re-drives open LLM obligations — orphaned started attempts are cancelled as durable-object-crashed (never re-driven), lost debounce timers re-fire the request, and expired intents settle as failures.",
+        "The agent processor was revived after its incarnation died owing background work (an in-flight LLM attempt or an armed debounce timer lost to an eviction). Appended by the platform's recovery alarm, not by the processor; its delivery guarantees a caught-up reconcile (processEvent under delivery.caughtUp) that re-drives open LLM obligations — orphaned started attempts are cancelled as durable-object-crashed (never re-driven), lost debounce timers re-fire the request, and expired intents settle as failures.",
       // Loose ON PURPOSE: the payload is authored by the shared recovery
       // adapter (durableObjectRecovery.appendRevived), and future fields it
       // grows must not turn historical revivals into parse failures.

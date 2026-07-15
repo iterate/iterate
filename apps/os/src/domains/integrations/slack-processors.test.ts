@@ -437,10 +437,11 @@ describe("SlackProcessor (webhook router)", () => {
 
 describe("SlackAgentProcessor", () => {
   // REAL runner drive (the production registry's driver): the status repaint
-  // lives in `onCaughtUp`, which ONLY the runner fires — legacy `ingest`
-  // would silently skip it and every status assertion here would test
-  // nothing. `readPageSize` shrinks the catch-up page so a single
-  // `deliver()` exercises behind-head frames (the carry).
+  // is `processEvent` under `delivery.caughtUp`, and only the runner stamps
+  // an honest delivery context — a hand-rolled drive would never mark a head
+  // event and every status assertion here would test nothing. `readPageSize`
+  // shrinks the catch-up page so a single `deliver()` exercises behind-head
+  // frames (the carry).
   function setup(deps?: {
     callSlackApi?: (method: string, body: Record<string, unknown>) => Promise<void>;
     fetchSlackChannelName?: (channel: string) => Promise<string | null>;
@@ -1054,11 +1055,15 @@ describe("SlackAgentProcessor", () => {
 
   it("carries a behind-head announcement to the at-head repaint", async () => {
     // readPageSize 1 makes one catch-up deliver the idle announcement in a
-    // frame stamped BEHIND the head (a render/input event follows it — the
+    // frame stamped BEHIND the head (a trailing event follows it — the
     // wake-lane shape) while the frame that reaches head contains no
     // announcements at all. The repaint must not lose it OR run per behind
     // frame: exactly one clear pair, painted at the at-head pulse. Without
     // the carry, Slack keeps "is thinking..." and the eyes reaction forever.
+    // The at-head pulse is `processEvent` under `delivery.caughtUp`, so the
+    // trailing event must be CONSUMED — the platform's revival fact is
+    // exactly that guaranteed at-head turn (an unconsumed tail defers the
+    // repaint to the next consumed head event).
     const { deliver, slackCalls, stream } = setup({ readPageSize: 1 });
 
     await stream.append({
@@ -1074,10 +1079,10 @@ describe("SlackAgentProcessor", () => {
         payload: { busy: false, sinceOffset: 1 },
       },
       {
-        // Not consumed by slack-agent: stands in for the renders/inputs that
-        // typically trail a completion.
-        type: "events.iterate.com/agent/input-added",
-        payload: { content: "render" },
+        // Consumed by slack-agent but carrying no announcement: the revival
+        // fact's ordinary delivery is the at-head pulse the repaint rides.
+        type: "events.iterate.com/slack-agent/revived",
+        payload: { processorSlug: "slack-agent", revivals: 1, version: "2026-07-14.1" },
       },
     );
     await deliver();

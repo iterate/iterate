@@ -51,8 +51,9 @@ export class AgentDurableObject extends DurableObject<Env> {
   // the debounce timer is a droppable attempt whose loss must not strand a
   // scheduled turn. An incarnation that dies owing either must be revived —
   // the keepalive alarm appends `agent/revived`, whose ordinary delivery
-  // drives the runner to head and `onCaughtUp` settles/re-drives the open
-  // obligations (see the registry module doc's recovery rule).
+  // lands at head and `processEvent`'s at-head reconcile (`delivery.caughtUp`)
+  // settles/re-drives the open obligations (see the registry module doc's
+  // recovery rule).
   readonly #agentProcessor = this.#registry.register(
     new AgentProcessor({
       stream: this.#stream,

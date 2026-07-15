@@ -139,7 +139,8 @@ export class CompositeMirrorDrive implements AnyHostedProcessor {
         // independently pull the same tail the (unfiltered, "*"-consuming)
         // server subscription is about to deliver anyway — the remainder
         // crossing the network once per member plus once for the pump. Browser
-        // members have no onCaughtUp, so that self-pull buys nothing; re-stamp
+        // members have no at-head reconcile (no `delivery.caughtUp` work), so
+        // that self-pull buys nothing; re-stamp
         // each fanned frame at its OWN tail so no member enters the
         // behind-head branch. (An EMPTY frame keeps the server stamp — there
         // is no tail-continuation coming for it, so the self-pull IS the

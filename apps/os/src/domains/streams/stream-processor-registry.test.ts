@@ -299,6 +299,7 @@ describe("alarm multiplex", () => {
   it("routes one platform fire to EVERY runner: both died owing work, one fire revives both", async () => {
     const h = makeHarness({ betaRecovery: true });
     const hangOnRequested: RecorderHooks["onProcess"] = (args) => {
+      if (args.event === null) return;
       if (args.event.type === REQUESTED) args.runInBackground(hang);
     };
     h.hooks.alpha.onProcess = hangOnRequested;
@@ -331,6 +332,7 @@ describe("recovery revival", () => {
   it("revives ONLY the runner that owes work, and its revived fact reaches its processor through ordinary delivery", async () => {
     const h = makeHarness(); // beta has NO recovery — the registry routes it the fire anyway
     h.hooks.alpha.onProcess = (args) => {
+      if (args.event === null) return;
       if (args.event.type === REQUESTED) args.runInBackground(hang);
     };
     await h.stream.append({ type: REQUESTED, payload: { id: "a" } });
@@ -346,7 +348,10 @@ describe("recovery revival", () => {
     expect(h.alarm.at).toBe(armedAt);
 
     const processed: string[] = [];
-    h.hooks.alpha.onProcess = (args) => void processed.push(args.event.type);
+    h.hooks.alpha.onProcess = (args) => {
+      if (args.event === null) return;
+      processed.push(args.event.type);
+    };
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
 
     // Only the runner that owed work journaled a revival fact.
@@ -495,6 +500,48 @@ describe("wakeStreamSubscriber", () => {
     // A fresh wake resumes from the durably committed cursor.
     const rewoken = await h.wake("alpha-proc");
     expect(rewoken.checkpointOffset).toBe(1);
+  });
+
+  it("rejects a wake whose stream coordinate does not match the registry's own (isolation fence)", async () => {
+    const h = makeHarness();
+    await h.registry.loadAndRefreshLive();
+
+    // A valid slug from the WRONG path — a stale, copied, or miswired
+    // subscription pointing a sibling stream at this registry. Must be
+    // rejected before it can fold foreign events into this processor.
+    await expect(
+      h.registry.wakeStreamSubscriber({
+        stream: { projectId: null, path: "/agents/someone-else", streamMaxOffset: 5 },
+        subscriptionKey: "wake:alpha-proc",
+        processorSlug: "alpha-proc",
+      }),
+    ).rejects.toThrow(/coordinate mismatch/);
+
+    // A valid slug from the WRONG project (same path, foreign tenant).
+    await expect(
+      h.registry.wakeStreamSubscriber({
+        stream: { projectId: "prj_intruder", path: HOME, streamMaxOffset: 5 },
+        subscriptionKey: "wake:alpha-proc",
+        processorSlug: "alpha-proc",
+      }),
+    ).rejects.toThrow(/coordinate mismatch/);
+
+    // The fence runs BEFORE slug resolution: a mismatched coordinate is
+    // rejected as a mismatch, never as a missing/unknown slug.
+    await expect(
+      h.registry.wakeStreamSubscriber({
+        stream: { projectId: null, path: "/agents/someone-else", streamMaxOffset: 5 },
+        subscriptionKey: "wake:unspecified",
+      }),
+    ).rejects.toThrow(/coordinate mismatch/);
+
+    // The matching coordinate still works (control).
+    const woken = await h.registry.wakeStreamSubscriber({
+      stream: { projectId: null, path: HOME, streamMaxOffset: 0 },
+      subscriptionKey: "wake:alpha-proc",
+      processorSlug: "alpha-proc",
+    });
+    expect(woken.checkpointOffset).toBe(0);
   });
 });
 
