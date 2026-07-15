@@ -64,9 +64,9 @@
 // existing subscription spine still backs off and eventually PARKS the
 // subscription as a durable fact (stream-subscribers.ts). The registry does
 // NOT deliver the redesign's "retry blockers indefinitely" policy — transport
-// park semantics are deliberately unchanged in this slice, and
-// `runner.skipThrough` (plus the spine's park-resume controls) remains the
-// operator escape. Do not read this file as retry-forever.
+// park semantics are deliberately unchanged in this slice, and the spine's
+// park-resume controls remain the operator escape. Do not read this file as
+// retry-forever.
 
 import { tracing } from "cloudflare:workers";
 import type { Stream } from "../../itx-api.generated.ts";

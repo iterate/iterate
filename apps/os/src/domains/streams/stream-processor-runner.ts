@@ -51,7 +51,7 @@ import {
  * The reduction half of a processor's durable progress: a disposable CACHE of
  * the fold (the journal is the authority). `reducerVersion` is the cache key —
  * a deploy that changes it invalidates the cache and triggers an automatic
- * `reReduce`, which re-runs `reduce` ONLY. That is the whole point of splitting
+ * reduce-only refold at load, which re-runs `reduce` ONLY. That is the whole point of splitting
  * this from {@link ProcessingProgress}: today's single `{offset, state}` cursor
  * makes a routine state-schema deploy refold history AND re-run `processEvent`
  * across it, re-driving real vendor calls.
@@ -68,17 +68,17 @@ export type ReductionProgress<State> = {
 /**
  * The processing half of a processor's durable progress: the AUTHORITATIVE
  * effect-acknowledgement cursor. Unlike the reduction cache it is never
- * discarded — rewinding it re-runs side effects, which only an explicit,
- * audited operator `reprocessFrom` may do. `cursorRevision` is the CAS fence
- * for exactly those rewinds: every commit asserts it, and a bump makes every
- * in-flight continuation of the old cursor position stale (it also feeds
- * {@link DeliveryContext.idempotencyKey}, so an operator redrive genuinely
- * re-emits where a crash retry dedupes).
+ * discarded — rewinding it re-runs side effects. `cursorRevision` is the CAS
+ * fence for exactly those rewinds: every commit asserts it, and a bump makes
+ * every in-flight continuation of the old cursor position stale (the browser
+ * projection reset rewinds this way — see
+ * browserProcessorProgressRewindStatements in processor-state-storage.ts).
  */
 export type ProcessingProgress = {
   /** Every effect at or below this offset is acknowledged (durably settled). */
   acknowledgedThroughOffset: number;
-  /** Monotonic fencing token; bumped by cursor rewinds (`reprocessFrom`/`skipThrough`). */
+  /** Monotonic fencing token; a bump is the only sanctioned way to move
+   * `acknowledgedThroughOffset` backward. */
   cursorRevision: number;
 };
 
@@ -87,9 +87,9 @@ export type ProcessingProgress = {
  * (when persisted): `reduction.reducedThroughOffset <=
  * processing.acknowledgedThroughOffset` — the fold cache may lag the effect
  * cursor (it is rebuildable), but a fold AHEAD of acknowledged effects would
- * let `snapshot()` show state derived from events whose effects an operator
+ * let `snapshot()` show state derived from events whose effects a cursor
  * rewind is about to re-run. Core (Phase 2) is the graceful degradation:
- * reduction only, no processing cursor — same structure, same `reReduce`.
+ * reduction only, no processing cursor — same structure, same reduce-only refold.
  */
 export type ProcessorProgress<State> = {
   reduction: ReductionProgress<State>;
@@ -98,10 +98,10 @@ export type ProcessorProgress<State> = {
 
 /**
  * Durable progress store, CAS-fenced by `cursorRevision`. The runner reads
- * once at open, then commits per its cadence policy; `commit` rejects
+ * once at open, then commits once per delivered frame; `commit` rejects
  * (throws) if `expectedCursorRevision` no longer matches the persisted
  * revision — the fence that stops a stale incarnation (or a continuation
- * outliving an operator `reprocessFrom`) from clobbering the rewound cursor.
+ * outliving a cursor rewind) from clobbering the rewound cursor.
  * An absent record reads as revision 0. Backends: DO KV, browser SQLite
  * (where the committer folds projection writes and this record into ONE
  * transaction), or a plain object in tests.
@@ -171,17 +171,10 @@ export type DeliveryPhase = "catching-up" | "live";
  * Honest event-time context handed to `processEvent`. Head and lag are POLICY
  * inputs (skip the stale typing indicator, debounce the status repaint), never
  * correctness — the observed head can be behind the real head the moment it
- * is read. `idempotencyKey` derives a deterministic effect key from the
- * author's key + this event's source offset + the current `cursorRevision`,
- * so a crash retry of the same event dedupes (same offset, same revision)
- * while an operator `reprocessFrom` re-emits (same offset, NEW revision) — no
- * random id. At revision 0 the derivation is BYTE-IDENTICAL to the legacy
- * `StreamProcessor.idempotencyKey(key, whileProcessing)` format
- * (`<slug>/<key>@<path>:<offset>`): an effect committed under the old code
- * must dedupe, not duplicate, when the new runner replays it post-deploy.
- * Obligation-derived stable keys are a SEPARATE concept — those keep using
- * the processor's own `idempotencyKey(key)` with the deciding state folded
- * into `key`, exactly as today.
+ * is read. Effect keys are minted via the processor's own
+ * `idempotencyKey(key, whileProcessing?)`: bind the event for per-event
+ * effects (a redelivered frame dedupes), or fold the deciding state into
+ * `key` with no event bound for obligation-derived stable keys.
  */
 export type DeliveryContext = {
   phase: DeliveryPhase;
@@ -202,39 +195,7 @@ export type DeliveryContext = {
   caughtUp: boolean;
   /** The processing cursor's current fencing token (see {@link ProcessingProgress}). */
   cursorRevision: number;
-  /** Derive a deterministic effect key: `authorKey + sourceOffset + cursorRevision`. */
-  idempotencyKey(key: string): string;
 };
-
-/**
- * When to durably persist progress. Consulted after every completed event
- * (`frameEnd: false`) and once at the end of each frame (`frameEnd: true`).
- * The gap between the in-memory completed cursor and the last persisted
- * acknowledgement is the deliberate at-least-once replay window; a policy
- * that commits less often widens it, never breaks it (appends stay
- * idempotency-keyed). Ship default: {@link perFrameCadence} — persist once
- * per frame after all its events' blocking work completes, matching the
- * legacy batch checkpoint window exactly.
- */
-export type CheckpointCadence = (args: {
-  /** True for the end-of-frame consult (after every event's blocking work settled). */
-  frameEnd: boolean;
-  /** Events completed since the last durable commit. */
-  eventsSinceCommit: number;
-}) => boolean;
-
-/** The default cadence: one durable commit per delivered frame. */
-const perFrameCadence: CheckpointCadence = ({ frameEnd }) => frameEnd;
-
-/**
- * The audit fact appended by the operator cursor controls (`reprocessFrom` /
- * `skipThrough`). Evidence, not enforcement: the CAS-fenced progress commit is
- * authoritative (the same KV-over-journal inversion the keepalive documents);
- * the fact narrates the episode in the journal and dedupes per revision, so a
- * platform retry never journals a duplicate.
- */
-export const STREAM_PROCESSOR_CURSOR_CONTROL_EVENT_TYPE =
-  "events.iterate.com/stream-processor/cursor-control";
 
 /** One transport frame as delivered to the sink. */
 type SinkFrame = { events: readonly StreamEvent[]; streamMaxOffset: number };
@@ -250,7 +211,7 @@ type EventWaiter = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-/** The in-flight fold/cursor context of one frame, committed per cadence. */
+/** The in-flight fold/cursor context of one frame, committed at frame end. */
 type FrameContext<State> = {
   /** The revision every commit in this frame asserts (fixed at frame start). */
   revision: number;
@@ -275,10 +236,10 @@ type FrameContext<State> = {
  * the "host" of old survives only as a thin registry that builds adapters and
  * routes wakes/alarms to the right runner.
  *
- * Serialization: frames and operator controls share ONE in-memory chain, so a
- * cursor rewind never interleaves with a half-processed frame. Cross-
- * incarnation races (a stale runner outliving a rewind made elsewhere) are
- * fenced durably instead, by the progress store's `cursorRevision` CAS.
+ * Serialization: frames and self-pulls share ONE in-memory chain, so a
+ * catch-up never interleaves with a half-processed frame. Cross-incarnation
+ * races (a stale runner outliving progress made elsewhere) are fenced durably
+ * instead, by the progress store's `cursorRevision` CAS + monotonic fence.
  */
 export class StreamProcessorRunner<
   Contract extends StreamProcessorContract,
@@ -290,7 +251,6 @@ export class StreamProcessorRunner<
   private readonly durability: ProcessorDurability<ProcessorState<Contract>> | undefined;
   private readonly keepAlive: ((work: () => Promise<unknown>) => void) | undefined;
   private readonly now: () => number;
-  private readonly cadence: CheckpointCadence;
   private readonly readPageSize: number;
 
   /** Memoized load; cleared on failure so the next call retries (legacy #loadState). */
@@ -306,7 +266,7 @@ export class StreamProcessorRunner<
   #progress: ProcessorProgress<ProcessorState<Contract>> | undefined;
   /** Highest stream offset observed across all frames this incarnation. */
   #observedHeadOffset = 0;
-  /** Serializes frames + operator controls; failures are contained per entry. */
+  /** Serializes frames + self-pulls; failures are contained per entry. */
   #chain: Promise<void> = Promise.resolve();
   #disposed = false;
   readonly #eventWaiters = new Set<EventWaiter>();
@@ -327,8 +287,6 @@ export class StreamProcessorRunner<
     keepAlive?: (work: () => Promise<unknown>) => void;
     /** Injected clock for the test harness; production uses Date.now. */
     now?: () => number;
-    /** Durable-commit cadence policy; default = once per frame. */
-    cadence?: CheckpointCadence;
     /** Journal read page size (refold/catch-up paging); tests shrink it. */
     readPageSize?: number;
   }) {
@@ -338,7 +296,6 @@ export class StreamProcessorRunner<
     this.durability = args.durability;
     this.keepAlive = args.keepAlive;
     this.now = args.now ?? (() => Date.now());
-    this.cadence = args.cadence ?? perFrameCadence;
     this.readPageSize = args.readPageSize ?? 500;
 
     if (this.durability?.recovery !== undefined) {
@@ -466,26 +423,12 @@ export class StreamProcessorRunner<
   }
 
   /**
-   * External confirmation that published state IS the fold — the legacy
-   * zero-batch caught-up confirmation. With the
-   * runner this is almost always redundant (`#load` performs any pending
-   * refold itself, so `isLoaded` is true after every successful load); it
-   * survives for a host that confirmed the fold through its own delivery
-   * machinery, mirroring the legacy host's catch-up contract.
-   */
-  markLoaded(): void {
-    this.#hasLoaded = true;
-  }
-
-  /**
    * Observe committed reduced-state changes IN-PROCESS: the observer is a
    * local function (the hosting registry wires it to reassemble its
    * live-state engine), never a retained RPC stub. It fires after a frame
    * commit lands durably AND the committed state changed identity — the
    * runner's home for the legacy `StreamProcessor.observeStateChanges` +
-   * post-persist notify. Operator cursor
-   * controls (`reReduce`/`reprocessFrom`/`skipThrough`) do NOT notify —
-   * callers of those refresh live state themselves. Returns an unsubscribe.
+   * post-persist notify. Returns an unsubscribe.
    */
   observeStateChanges(
     observer: (snapshot: { offset: number; state: ProcessorState<Contract> }) => void,
@@ -576,174 +519,6 @@ export class StreamProcessorRunner<
           reject(new Error(`waitUntilEvent timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }
-    });
-  }
-
-  /**
-   * Rebuild the reduction cache through the acknowledged cursor by re-running
-   * `reduce` ONLY — no effects, no cursor movement, no revision bump (the
-   * cache is disposable; rebuilding it rewinds nothing). Fires automatically
-   * on a `reducerVersion` mismatch at load; callable by operators to heal a
-   * corrupt cache. The rebuild stages into locals and swaps in atomically
-   * after the durable commit — a partial refold is never observable.
-   */
-  reReduce(): Promise<void> {
-    return this.#enqueue(async () => {
-      await this.#load();
-      const progress = this.#requireProgress();
-      const reduction = await this.#rebuildReduction(progress.processing.acknowledgedThroughOffset);
-      const next: ProcessorProgress<ProcessorState<Contract>> = {
-        reduction,
-        processing: progress.processing,
-      };
-      await this.#commit(next, progress.processing.cursorRevision);
-      this.#progress = next;
-    });
-  }
-
-  /**
-   * Operator rewind of the EFFECT cursor: CAS on `expectedCursorRevision`,
-   * set acknowledged = `offset - 1`, bump `cursorRevision` (staling in-flight
-   * continuations' commits and rotating `idempotencyKey` derivations so
-   * effects genuinely re-emit), reconstruct the fold through `offset - 1`
-   * (reduce only), then re-run `reduce` + `processEvent` from `offset` by
-   * self-pulling the journal. `snapshot()` honestly rewinds while it catches
-   * back up. Appends a `cursor-control` audit fact (evidence; the CAS commit
-   * is authoritative). The rewind is durable once the commit lands even if
-   * the catch-up replay then fails — the transport's redelivery (or the next
-   * call) resumes from the rewound cursor.
-   */
-  reprocessFrom(args: {
-    offset: number;
-    expectedCursorRevision: number;
-    reason: string;
-  }): Promise<{ cursorRevision: number }> {
-    return this.#enqueue(async () => {
-      await this.#load();
-      const progress = this.#requireProgress();
-      if (!Number.isInteger(args.offset) || args.offset < 1) {
-        throw new Error(`reprocessFrom offset must be a positive integer, got ${args.offset}`);
-      }
-      if (args.offset > progress.processing.acknowledgedThroughOffset + 1) {
-        throw new Error(
-          `reprocessFrom(${args.offset}) would SKIP past acknowledged offset ` +
-            `${progress.processing.acknowledgedThroughOffset}; use skipThrough for that`,
-        );
-      }
-      this.#assertExpectedRevision("reprocessFrom", progress, args.expectedCursorRevision);
-      const cursorRevision = args.expectedCursorRevision + 1;
-      const reduction = await this.#rebuildReduction(args.offset - 1);
-      const next: ProcessorProgress<ProcessorState<Contract>> = {
-        reduction,
-        processing: { acknowledgedThroughOffset: args.offset - 1, cursorRevision },
-      };
-      // The CAS commit IS the fence: it lands under the OLD revision and
-      // writes the new one, so any in-flight continuation of the old cursor
-      // fails its own commit from here on.
-      await this.#commit(next, args.expectedCursorRevision);
-      this.#progress = next;
-      this.#appendCursorControlAudit({
-        control: "reprocess-from",
-        offset: args.offset,
-        reason: args.reason,
-        cursorRevision,
-      });
-      await this.#selfCatchUp();
-      return { cursorRevision };
-    });
-  }
-
-  /**
-   * The audited escape hatch past a poison event: advance the acknowledged
-   * cursor through `offset` WITHOUT running its effects, CAS-fenced and
-   * revision-bumping like `reprocessFrom`. The skipped events are still
-   * REDUCED (best-effort — a reduce that itself throws is logged and its
-   * event's fold contribution dropped; the journal remains the authority),
-   * because what is being skipped is the EFFECT, not the fact. The only exit
-   * from the block-retry-forever failure policy — there is deliberately no
-   * auto-DLQ.
-   */
-  skipThrough(args: {
-    offset: number;
-    expectedCursorRevision: number;
-    reason: string;
-  }): Promise<{ cursorRevision: number }> {
-    return this.#enqueue(async () => {
-      await this.#load();
-      const progress = this.#requireProgress();
-      // Integer guard FIRST: NaN fails every `<=` comparison, so without it a
-      // NaN offset would sail past the already-acknowledged check and persist
-      // NaN cursors.
-      if (!Number.isInteger(args.offset) || args.offset < 1) {
-        throw new Error(`skipThrough offset must be a positive integer, got ${args.offset}`);
-      }
-      if (args.offset <= progress.processing.acknowledgedThroughOffset) {
-        throw new Error(
-          `skipThrough(${args.offset}) is already acknowledged ` +
-            `(through ${progress.processing.acknowledgedThroughOffset}); nothing to skip`,
-        );
-      }
-      this.#assertExpectedRevision("skipThrough", progress, args.expectedCursorRevision);
-      const cursorRevision = args.expectedCursorRevision + 1;
-
-      let state = progress.reduction.state;
-      // Track the highest journal offset the reduce pass actually READ: a
-      // skip past the durable head must throw, not persist cursors past
-      // events that do not exist (they would read as pre-acknowledged when
-      // they later arrive — silently never processed).
-      let highestReadOffset = progress.reduction.reducedThroughOffset;
-      if (progress.reduction.reducedThroughOffset < args.offset) {
-        using pager = this.stream.readEvents({
-          afterOffset: progress.reduction.reducedThroughOffset,
-          beforeOffset: args.offset + 1,
-          limit: this.readPageSize,
-        });
-        let page = await pager.next();
-        while (page.length > 0) {
-          for (const event of page) {
-            if (event.offset > args.offset) continue;
-            highestReadOffset = Math.max(highestReadOffset, event.offset);
-            try {
-              const reduction = this.driver.reduceRawEvent({ event, state });
-              if (reduction !== undefined && !("parseError" in reduction)) {
-                state = reduction.state;
-              }
-            } catch (error) {
-              console.error(
-                `stream processor "${this.driver.contract.slug}" reduce failed on skipped ` +
-                  `offset ${event.offset}; the fold proceeds without it`,
-                error,
-              );
-            }
-          }
-          page = await pager.next();
-        }
-      }
-      if (highestReadOffset < args.offset) {
-        throw new Error(
-          `skipThrough(${args.offset}) is past the durable head — the journal's highest ` +
-            `readable offset is ${highestReadOffset}; refusing to persist cursors past ` +
-            `events that do not exist`,
-        );
-      }
-
-      const next: ProcessorProgress<ProcessorState<Contract>> = {
-        reduction: {
-          reducerVersion: this.driver.contract.version,
-          reducedThroughOffset: args.offset,
-          state,
-        },
-        processing: { acknowledgedThroughOffset: args.offset, cursorRevision },
-      };
-      await this.#commit(next, args.expectedCursorRevision);
-      this.#progress = next;
-      this.#appendCursorControlAudit({
-        control: "skip-through",
-        offset: args.offset,
-        reason: args.reason,
-        cursorRevision,
-      });
-      return { cursorRevision };
     });
   }
 
@@ -840,12 +615,6 @@ export class StreamProcessorRunner<
             eventsBehindObservedHead: Math.max(0, observedHeadOffset - event.offset),
             caughtUp,
             cursorRevision: ctx.revision,
-            // Per-event effect key: binds THIS event's offset. An at-head
-            // reconcile must NOT use this for obligation keys — it derives
-            // stable keys via `this.idempotencyKey(<obligation>)` (no offset),
-            // so a redelivery/revival never rotates them (the event-less
-            // at-head pass below binds no offset for the same reason).
-            idempotencyKey: (key) => this.#effectIdempotencyKey(key, event, ctx.revision),
           };
           const eventBlockers: Promise<unknown>[] = [];
           const whileProcessing = reduction.event;
@@ -878,20 +647,6 @@ export class StreamProcessorRunner<
         ctx.completedThroughOffset = event.offset;
         ctx.eventsSinceCommit += 1;
         ctx.uncommittedEvents.push(event);
-
-        // The head-reaching event's acknowledgement is DEFERRED to the
-        // frame-end commit: a mid-frame commit of the head event would let a
-        // failure in that event's own at-head reconcile — which a processor
-        // schedules via `blockProcessorWhile` under `delivery.caughtUp`, and
-        // which is awaited (above) as part of THIS event's blocking work —
-        // strand with the cursor already at head, redelivery empty, the pass
-        // never retried. Holding the commit keeps the whole frame retryable.
-        if (
-          ctx.completedThroughOffset < observedHeadOffset &&
-          this.cadence({ frameEnd: false, eventsSinceCommit: ctx.eventsSinceCommit })
-        ) {
-          await this.#commitFrameContext(ctx);
-        }
       }
       // The at-head reconcile rides `processEvent` for the LAST CONSUMED event
       // of a head-reaching batch (`delivery.caughtUp`). A head-reaching batch
@@ -910,10 +665,16 @@ export class StreamProcessorRunner<
       throw error;
     }
 
-    if (
-      ctx.eventsSinceCommit > 0 &&
-      this.cadence({ frameEnd: true, eventsSinceCommit: ctx.eventsSinceCommit })
-    ) {
+    // FIXED CADENCE: one durable commit per delivered frame, after EVERY
+    // event's blocking work — the at-head reconcile's included — has settled
+    // (the legacy batch checkpoint window exactly). The gap between the
+    // in-memory cursor and the last persisted acknowledgement is the
+    // deliberate at-least-once replay window (appends stay
+    // idempotency-keyed). Committing only at frame end is also what keeps a
+    // failed at-head reconcile retryable: a mid-frame commit of the head
+    // event would strand its at-head pass with the cursor already at head
+    // and redelivery empty.
+    if (ctx.eventsSinceCommit > 0) {
       await this.#commitFrameContext(ctx);
     }
   }
@@ -988,7 +749,7 @@ export class StreamProcessorRunner<
       this.#runInBackground(() =>
         this.stream.append({
           type: "events.iterate.com/stream/error-occurred",
-          idempotencyKey: this.#effectIdempotencyKey("event-parse-failed", event, ctx.revision),
+          idempotencyKey: this.driver.idempotencyKey("event-parse-failed", event),
           source: { processor: this.driver.processorStamp(event) },
           payload: {
             message,
@@ -1147,8 +908,8 @@ export class StreamProcessorRunner<
   }
 
   /**
-   * Re-run `reduce` + `processEvent` from the (rewound) acknowledged cursor
-   * by self-pulling the journal — reprocessFrom cannot rely on the transport
+   * Re-run `reduce` + `processEvent` from the acknowledged cursor by
+   * self-pulling the journal — a catch-up cannot rely on the transport
    * pump, whose cursor was fixed at wake handshake. One page of lookahead so
    * every non-final frame carries a streamMaxOffset PAST its own tail (the
    * at-head pulse fires only on the genuinely final page), mirroring the
@@ -1173,47 +934,6 @@ export class StreamProcessorRunner<
   // ---------------------------------------------------------------------------
   // Small shared machinery.
   // ---------------------------------------------------------------------------
-
-  /**
-   * `<slug>/<key>[@<path>:<offset>]` (the LEGACY derivation, byte-identical),
-   * plus `#<cursorRevision>` only when the revision is nonzero — so effects
-   * committed under pre-runner code dedupe across the deploy, and only an
-   * operator rewind rotates keys.
-   */
-  #effectIdempotencyKey(
-    key: string,
-    whileProcessing: Pick<StreamEvent, "offset" | "path"> | undefined,
-    cursorRevision: number,
-  ): string {
-    const base = this.driver.idempotencyKey(key, whileProcessing);
-    return cursorRevision === 0 ? base : `${base}#${cursorRevision}`;
-  }
-
-  #appendCursorControlAudit(args: {
-    control: "reprocess-from" | "skip-through";
-    offset: number;
-    reason: string;
-    cursorRevision: number;
-  }): void {
-    // Background + best-effort: the CAS-fenced progress commit is
-    // authoritative; this fact is evidence (the keepalive's KV-over-journal
-    // inversion). Keyed per revision so a platform retry never duplicates.
-    this.#runInBackground(() =>
-      this.stream.append({
-        type: STREAM_PROCESSOR_CURSOR_CONTROL_EVENT_TYPE,
-        idempotencyKey: `${this.driver.contract.slug}/cursor-control:${args.control}:${args.cursorRevision}`,
-        source: { processor: this.driver.processorStamp() },
-        payload: {
-          control: args.control,
-          processorSlug: this.driver.contract.slug,
-          offset: args.offset,
-          reason: args.reason,
-          cursorRevision: args.cursorRevision,
-          requestedAtMs: this.now(),
-        },
-      }),
-    );
-  }
 
   /** Fire-and-forget async work backed by the keepalive, with failures logged. */
   #runInBackground(work: () => Promise<unknown>): void {
@@ -1246,7 +966,7 @@ export class StreamProcessorRunner<
     });
   }
 
-  /** Serialize frames + operator controls; the chain swallows each entry's
+  /** Serialize frames + self-pulls; the chain swallows each entry's
    * failure so one failed frame never wedges the entries behind it. */
   #enqueue<T>(work: () => Promise<T>): Promise<T> {
     const next = this.#chain.then(() => {
@@ -1264,19 +984,6 @@ export class StreamProcessorRunner<
     if (this.#disposed) {
       throw new Error(
         `StreamProcessorRunner for "${this.driver.contract.slug}" is disposed; it accepts no new work`,
-      );
-    }
-  }
-
-  #assertExpectedRevision(
-    control: string,
-    progress: ProcessorProgress<ProcessorState<Contract>>,
-    expectedCursorRevision: number,
-  ): void {
-    if (progress.processing.cursorRevision !== expectedCursorRevision) {
-      throw new Error(
-        `${control} expected cursorRevision ${expectedCursorRevision} but the cursor is at ` +
-          `${progress.processing.cursorRevision} — refusing a stale cursor control`,
       );
     }
   }

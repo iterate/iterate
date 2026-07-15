@@ -154,8 +154,8 @@ function progressFenceStatements(args: {
  * The fenced cursor REWIND, as statements for composition into a caller's
  * transaction (a projection reset must drop rows and rewind the cursor
  * atomically — a crash between the two is exactly the stale-checkpoint-over-
- * empty-mirror hole this file exists to prevent). Semantics match an operator
- * `reprocessFrom(1)`: acknowledgement to 0, `cursor_revision + 1` so every
+ * empty-mirror hole this file exists to prevent). Semantics: a full rewind —
+ * acknowledgement to 0, `cursor_revision + 1` so every
  * in-flight continuation of the old cursor fails its commit's CAS fence, and
  * the fold cache marked stale (the runner's next load rebuilds reduce-only —
  * through offset 0 that is just the schema default, no journal reads).

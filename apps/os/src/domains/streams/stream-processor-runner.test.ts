@@ -9,9 +9,8 @@
 //  3. runInBackground overtaking
 //  4. crash() at every boundary → at-least-once, never lost work
 //  5. reduce-only refold (reducerVersion bump: reduce yes, processEvent no)
-//  6. stale-cursorRevision fencing of pre-reprocessFrom continuations
+//  6. stale-incarnation commits rejected by the monotonic progress fence
 //  7. onCaughtUp at head, including the requested-N / unconsumed-N+1 wedge
-//  8. delivery.idempotencyKey byte-identical to the legacy format at revision 0
 
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -22,8 +21,6 @@ import { StreamProcessor } from "./stream-processor.ts";
 import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
 import {
   StreamProcessorRunner,
-  STREAM_PROCESSOR_CURSOR_CONTROL_EVENT_TYPE,
-  type CheckpointCadence,
   type ProcessorProgress,
   type ProcessorProgressStore,
   type ProcessorRecovery,
@@ -81,7 +78,10 @@ abstract class HookArgTypes extends StreamProcessor<TaskContract> {
 }
 type ProcessArgs = HookArgTypes["processArgs"];
 type TaskHooks = {
-  onProcess?: (args: ProcessArgs) => void;
+  /** `eventKey` is `this.idempotencyKey(key, event)` — the per-event effect
+   * key a real processor mints for deterministic-consequence appends, so a
+   * redelivered frame dedupes instead of double-appending. */
+  onProcess?: (args: ProcessArgs, eventKey: (key: string) => string) => void;
   /** The at-head reconcile (was `onCaughtUp`): `processEvent` under
    * `delivery.caughtUp` — the last consumed event of a head-reaching batch.
    * `stableKey` is `this.idempotencyKey` (binds NO offset) — the way a real
@@ -112,20 +112,15 @@ class TaskProcessor extends StreamProcessor<
   }
 
   protected override processEvent(args: ProcessArgs): undefined {
-    this.deps.hooks.onProcess?.(args);
+    this.deps.hooks.onProcess?.(args, (key) => this.idempotencyKey(key, args.event));
     // The at-head reconcile: fires for the last consumed event of a
     // head-reaching batch. onHead registers its blocking work synchronously
-    // (the runner awaits it before the deferred frame-end commit), so invoking
+    // (the runner awaits it before the frame-end commit), so invoking
     // it here — not awaiting — is the faithful fold-in of the old awaited
     // `onCaughtUp`.
     if (args.delivery.caughtUp) {
       void this.deps.hooks.onHead?.(args, (key) => this.idempotencyKey(key));
     }
-  }
-
-  /** The LEGACY key derivation, exposed for the byte-identity assertion. */
-  legacyIdempotencyKey(key: string, whileProcessing?: Pick<StreamEvent, "offset" | "path">) {
-    return this.idempotencyKey(key, whileProcessing);
   }
 }
 
@@ -258,7 +253,7 @@ function makeProgressStore() {
       }
       // MONOTONIC fence (mirrors durableObjectProgressStore): a same-revision
       // backward acknowledgement is a stale incarnation rolling the cursor
-      // back; only a revision bump (reprocessFrom/skipThrough) may rewind.
+      // back; only a revision-bumping rewind may move it backward.
       if (
         record !== undefined &&
         progress.processing.acknowledgedThroughOffset <
@@ -307,7 +302,6 @@ type HarnessArgs = {
   store?: ReturnType<typeof makeProgressStore>;
   contract?: TaskContract;
   hooks?: TaskHooks;
-  cadence?: CheckpointCadence;
   readPageSize?: number;
   recovery?: ProcessorRecovery;
   now?: () => number;
@@ -333,7 +327,6 @@ function makeHarness(args: HarnessArgs = {}) {
       ...(args.recovery === undefined ? {} : { recovery: args.recovery }),
     },
     now: args.now ?? (() => 0),
-    ...(args.cadence === undefined ? {} : { cadence: args.cadence }),
     ...(args.readPageSize === undefined ? {} : { readPageSize: args.readPageSize }),
   });
 
@@ -438,11 +431,11 @@ describe("StreamProcessorRunner batch-division invariance", () => {
 
   /** Effect-per-event + obligation-drive-at-head hooks (all onto the sibling). */
   const effectHooks: TaskHooks = {
-    onProcess: (args) => {
+    onProcess: (args, eventKey) => {
       args.blockProcessorWhile(() =>
         args.appendTo(SIBLING, {
           type: ECHOED,
-          idempotencyKey: args.delivery.idempotencyKey("echo"),
+          idempotencyKey: eventKey("echo"),
           payload: { id: args.event.payload.id },
         }),
       );
@@ -589,14 +582,14 @@ describe("StreamProcessorRunner crash/redelivery", () => {
   /** Echo-effect hooks whose event-2 blocker can be wedged open. */
   function gatedEchoHooks(state: { gateOffset?: number; gate?: Promise<void> }): TaskHooks {
     return {
-      onProcess: (args) => {
+      onProcess: (args, eventKey) => {
         args.blockProcessorWhile(async () => {
           if (args.event.offset === state.gateOffset && state.gate !== undefined) {
             await state.gate;
           }
           await args.appendTo(SIBLING, {
             type: ECHOED,
-            idempotencyKey: args.delivery.idempotencyKey("echo"),
+            idempotencyKey: eventKey("echo"),
             payload: { id: args.event.payload.id },
           });
         });
@@ -708,12 +701,12 @@ describe("StreamProcessorRunner reduce-only refold", () => {
 
     let effectCalls = 0;
     const hooks: TaskHooks = {
-      onProcess: (args) => {
+      onProcess: (args, eventKey) => {
         effectCalls += 1;
         args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: ECHOED,
-            idempotencyKey: args.delivery.idempotencyKey("echo"),
+            idempotencyKey: eventKey("echo"),
             payload: { id: args.event.payload.id },
           }),
         );
@@ -850,142 +843,7 @@ describe("StreamProcessorRunner load-time reduction catch-up", () => {
 });
 
 // =============================================================================
-// 6. Stale-cursorRevision fencing
-// =============================================================================
-
-describe("StreamProcessorRunner cursor-revision fencing", () => {
-  it("a commit from a pre-reprocessFrom continuation is rejected", async () => {
-    const journal = makeJournal();
-    for (const id of ["a", "b"]) journal.seed({ type: REQUESTED, payload: { id } });
-
-    // Incarnation A: wedges mid-frame on event 2's blocker.
-    const gate = deferred();
-    const hooksA: TaskHooks = {
-      onProcess: (args) => {
-        if (args.event.offset === 2) {
-          args.blockProcessorWhile(() => gate.promise);
-        }
-      },
-    };
-    const a = makeHarness({ journal, hooks: hooksA });
-    const { sink } = await a.runner.openDelivery();
-    const frameA = sink({ events: journal.rows().slice(), streamMaxOffset: 2 });
-    await tick();
-
-    // Incarnation B (a fresh runner over the same store): operator redrive.
-    const keys: string[] = [];
-    const hooksB: TaskHooks = {
-      onProcess: (args) => {
-        keys.push(args.delivery.idempotencyKey("echo"));
-      },
-    };
-    const b = a.crash({ hooks: hooksB });
-    const { cursorRevision } = await b.runner.reprocessFrom({
-      offset: 1,
-      expectedCursorRevision: 0,
-      reason: "operator redrive",
-    });
-    expect(cursorRevision).toBe(1);
-    // The rewind re-ran reduce + processEvent from offset 1 with ROTATED keys.
-    expect(keys).toEqual(["test-task/echo@/tests/runner:1#1", "test-task/echo@/tests/runner:2#1"]);
-    const committedAfterB = structuredClone(b.store.record);
-    expect(committedAfterB?.processing.cursorRevision).toBe(1);
-
-    // A's continuation resumes and tries to commit under revision 0: FENCED.
-    gate.resolve();
-    await expect(frameA).rejects.toThrow(/fenced/);
-    expect(b.store.record).toEqual(committedAfterB); // the stale commit changed nothing
-
-    // The audit fact landed (background, keyed per revision).
-    await vi.waitFor(() => {
-      const audits = journal
-        .rows()
-        .filter((row) => row.type === STREAM_PROCESSOR_CURSOR_CONTROL_EVENT_TYPE);
-      expect(audits).toHaveLength(1);
-      expect(audits[0]!.payload).toMatchObject({
-        control: "reprocess-from",
-        offset: 1,
-        reason: "operator redrive",
-        cursorRevision: 1,
-      });
-    });
-  });
-
-  it("skipThrough advances past a poison effect, audited and revision-fenced", async () => {
-    const journal = makeJournal();
-    journal.seed({ type: REQUESTED, payload: { id: "a" } });
-    journal.seed({ type: REQUESTED, payload: { id: "poison" } });
-
-    const hooks: TaskHooks = {
-      onProcess: (args) => {
-        if (args.event.payload.id === "poison") {
-          args.blockProcessorWhile(() => Promise.reject(new Error("vendor down")));
-        } else {
-          args.blockProcessorWhile(() =>
-            args.appendTo(SIBLING, {
-              type: ECHOED,
-              idempotencyKey: args.delivery.idempotencyKey("echo"),
-              payload: { id: args.event.payload.id },
-            }),
-          );
-        }
-      },
-    };
-    // Per-event cadence, so the healthy event 1 commits before the poison —
-    // this also exercises the mid-frame commit path of the cadence seam.
-    const harness = makeHarness({
-      journal,
-      hooks,
-      cadence: ({ eventsSinceCommit }) => eventsSinceCommit >= 1,
-    });
-
-    const { sink } = await harness.runner.openDelivery();
-    const frame = { events: journal.rows().slice(), streamMaxOffset: 2 };
-    await expect(sink(frame)).rejects.toThrow("vendor down");
-    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(1);
-
-    // Retry-forever is the policy; the redelivered frame fails the same way.
-    await expect(sink(frame)).rejects.toThrow("vendor down");
-
-    // The audited escape hatch: skip the EFFECT, keep the fact in the fold.
-    const skipped = await harness.runner.skipThrough({
-      offset: 2,
-      expectedCursorRevision: 0,
-      reason: "vendor rejects this payload permanently",
-    });
-    expect(skipped.cursorRevision).toBe(1);
-    expect(harness.store.record?.processing).toEqual({
-      acknowledgedThroughOffset: 2,
-      cursorRevision: 1,
-    });
-    // The skipped event IS reduced — what was skipped is its effect.
-    await expect(harness.runner.snapshot()).resolves.toEqual({
-      offset: 2,
-      state: { count: 2, open: ["a", "poison"] },
-    });
-    expect(journal.rows(SIBLING).filter((row) => row.payload?.id === "poison")).toHaveLength(0);
-
-    // The stale expected revision is refused thereafter.
-    await expect(
-      harness.runner.skipThrough({ offset: 3, expectedCursorRevision: 0, reason: "stale" }),
-    ).rejects.toThrow(/stale cursor control/);
-
-    // Redelivery of the poison frame is now a silent skip.
-    await sink(frame);
-    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
-
-    await vi.waitFor(() => {
-      const audits = journal
-        .rows()
-        .filter((row) => row.type === STREAM_PROCESSOR_CURSOR_CONTROL_EVENT_TYPE);
-      expect(audits).toHaveLength(1);
-      expect(audits[0]!.payload).toMatchObject({ control: "skip-through", offset: 2 });
-    });
-  });
-});
-
-// =============================================================================
-// 6b. Monotonic progress fence (codex bug #4) — the revision CAS alone cannot
+// 6. Monotonic progress fence (codex bug #4) — the revision CAS alone cannot
 // stop a stale incarnation at the SAME revision from rolling the cursor back.
 // =============================================================================
 
@@ -1009,8 +867,8 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
     );
     expect(store.record).toEqual(progressAt(10)); // the fenced commit wrote nothing
 
-    // A rewind lands under the OLD revision and writes the bumped one
-    // (reprocessFrom/skipThrough) — the ONLY sanctioned backward move.
+    // A rewind lands under the OLD revision and writes the bumped one (the
+    // browser projection reset's shape) — the ONLY sanctioned backward move.
     store.store.commit(progressAt(4, 1), { expectedCursorRevision: 0 });
     expect(store.record).toEqual(progressAt(4, 1));
   });
@@ -1019,12 +877,12 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
     const journal = makeJournal();
     for (const id of ["a", "b"]) journal.seed({ type: REQUESTED, payload: { id } });
 
-    // Incarnation A: per-event cadence, wedges on event 1's blocker BEFORE
-    // any durable commit, holding a frame that will later commit acked=1.
+    // Incarnation A: wedges on event 1's blocker BEFORE any durable commit,
+    // holding a single-event frame whose frame-end commit will later try to
+    // land acked=1.
     const gate = deferred();
     const a = makeHarness({
       journal,
-      cadence: ({ eventsSinceCommit }) => eventsSinceCommit >= 1,
       hooks: {
         onProcess: (args) => {
           if (args.event.offset === 1) args.blockProcessorWhile(() => gate.promise);
@@ -1032,7 +890,7 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
       },
     });
     const { sink } = await a.runner.openDelivery();
-    const frameA = sink({ events: journal.rows().slice(), streamMaxOffset: 2 });
+    const frameA = sink({ events: journal.rows().slice(0, 1), streamMaxOffset: 2 });
     await tick();
     expect(a.store.record).toBeUndefined();
 
@@ -1047,48 +905,6 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
     gate.resolve();
     await expect(frameA).rejects.toThrow(/backward/);
     expect(b.store.record?.processing).toEqual({ acknowledgedThroughOffset: 2, cursorRevision: 0 });
-  });
-});
-
-// =============================================================================
-// 6c. skipThrough input validation (codex bug #5)
-// =============================================================================
-
-describe("StreamProcessorRunner skipThrough validation", () => {
-  it("rejects NaN, non-integer, non-positive, and past-the-durable-head offsets, persisting nothing", async () => {
-    const journal = makeJournal();
-    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
-    journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2
-    const harness = makeHarness({ journal });
-
-    for (const offset of [Number.NaN, 2.5, 0, -3, Number.POSITIVE_INFINITY]) {
-      await expect(
-        harness.runner.skipThrough({ offset, expectedCursorRevision: 0, reason: "typo" }),
-      ).rejects.toThrow(/positive integer/);
-    }
-
-    // Past the durable head (the operator typo: 1000 for 2): the highest
-    // offset the reduce pass actually read bounds the skip — cursors must
-    // never be persisted past events that do not exist, or offsets 3..1000
-    // would read as pre-acknowledged when they later arrive.
-    await expect(
-      harness.runner.skipThrough({ offset: 1000, expectedCursorRevision: 0, reason: "typo" }),
-    ).rejects.toThrow(/past the durable head/);
-
-    // Nothing persisted, no revision burned, published state untouched...
-    expect(harness.store.record).toBeUndefined();
-    await expect(harness.runner.snapshot()).resolves.toEqual({
-      offset: 0,
-      state: { count: 0, open: [] },
-    });
-    // ...and a bounded skip at the same expected revision still lands.
-    await expect(
-      harness.runner.skipThrough({ offset: 2, expectedCursorRevision: 0, reason: "real skip" }),
-    ).resolves.toEqual({ cursorRevision: 1 });
-    expect(harness.store.record?.processing).toEqual({
-      acknowledgedThroughOffset: 2,
-      cursorRevision: 1,
-    });
   });
 });
 
@@ -1182,7 +998,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     expect(headCalls).toEqual([["a"]]);
   });
 
-  it("defers the head event's commit past onCaughtUp: a failing blocker leaves it UNcommitted and retried (codex bug #2)", async () => {
+  it("commits only after onCaughtUp's blocking work: a failing at-head blocker leaves the frame UNcommitted and retried (codex bug #2)", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1
     journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2 — the head event
@@ -1208,30 +1024,28 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
         );
       },
     };
-    // Per-event cadence is the sharpest version of the bug: without the head
-    // deferral the head event durably commits BEFORE onCaughtUp runs, so a
-    // failed at-head blocker leaves redelivery with zero pending events and
-    // the at-head work is lost forever.
-    const harness = makeHarness({
-      journal,
-      hooks,
-      cadence: ({ eventsSinceCommit }) => eventsSinceCommit >= 1,
-    });
+    // The bug this pins out: if the head event's acknowledgement could land
+    // BEFORE onCaughtUp's blocking work settled, a failed at-head blocker
+    // would leave redelivery with zero pending events and the at-head work
+    // lost forever. The frame-end-only commit runs after EVERY event's
+    // blocking work — the at-head reconcile's included — so the failed pass
+    // leaves the whole frame uncommitted and retryable.
+    const harness = makeHarness({ journal, hooks });
 
     const { sink } = await harness.runner.openDelivery();
     const frame = { events: journal.rows().slice(), streamMaxOffset: 2 };
     await expect(sink(frame)).rejects.toThrow("at-head work failed");
 
-    // Event 1 committed mid-frame; the HEAD event did NOT — frame retryable.
-    expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(1);
+    // NOTHING committed — the head event (and its at-head pass) stays retryable.
+    expect(harness.store.record).toBeUndefined();
     await expect(harness.runner.snapshot()).resolves.toEqual({
-      offset: 1,
-      state: { count: 1, open: ["a"] },
+      offset: 0,
+      state: { count: 0, open: [] },
     });
 
-    // The transport's redelivery re-runs the head event AND the at-head pass.
+    // The transport's redelivery re-runs the frame AND the at-head pass.
     await sink(frame);
-    expect(processedOffsets).toEqual([1, 2, 2]); // at-least-once on the uncommitted head
+    expect(processedOffsets).toEqual([1, 2, 1, 2]); // at-least-once on the uncommitted frame
     expect(headAttempts).toBe(2);
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
@@ -1292,54 +1106,6 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
       { type: DRIVEN, idempotencyKey: "test-task/drive:b", payload: { id: "b" } },
     ]);
-  });
-});
-
-// =============================================================================
-// 8. Idempotency-key byte-compatibility
-// =============================================================================
-
-describe("StreamProcessorRunner idempotency keys", () => {
-  it("delivery.idempotencyKey at revision 0 is byte-identical to the legacy format; a rewind rotates it", async () => {
-    const journal = makeJournal();
-    for (let i = 0; i < 6; i += 1) journal.seed({ type: NOISE, payload: {} }); // 1..6
-    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 7
-
-    const eventKeys: string[] = [];
-    const headKeys: string[] = [];
-    const hooks: TaskHooks = {
-      onProcess: (args) => {
-        eventKeys.push(args.delivery.idempotencyKey("foo"));
-      },
-      onHead: (_args, stableKey) => {
-        headKeys.push(stableKey("bar"));
-      },
-    };
-    const harness = makeHarness({ journal, hooks });
-    await harness.deliverFrames([journal.rows().slice()]);
-
-    const requestedEvent = journal.rows().at(-1)!;
-    // A PER-EVENT effect key binds this event's offset AND the revision
-    // (`delivery.idempotencyKey`) — so an operator rewind re-runs it.
-    expect(eventKeys).toEqual([harness.processor.legacyIdempotencyKey("foo", requestedEvent)]);
-    expect(eventKeys).toEqual(["test-task/foo@/tests/runner:7"]);
-    // An OBLIGATION key (the at-head reconcile) is minted via
-    // `this.idempotencyKey(<obligation>)`: it binds NO offset AND no revision,
-    // so it survives a redelivery/revival — and a rewind — UNCHANGED. That is
-    // the point: a re-fold must not re-drive an obligation the journal already
-    // settled (the completion fact deduplicates against the same stable key).
-    expect(headKeys).toEqual([harness.processor.legacyIdempotencyKey("bar")]);
-    expect(headKeys).toEqual(["test-task/bar"]);
-
-    // An operator rewind bumps the revision: the PER-EVENT key rotates (re-run
-    // the effect), the OBLIGATION key does not (the settled fact still stands).
-    await harness.runner.reprocessFrom({
-      offset: 7,
-      expectedCursorRevision: 0,
-      reason: "redrive",
-    });
-    expect(eventKeys).toEqual(["test-task/foo@/tests/runner:7", "test-task/foo@/tests/runner:7#1"]);
-    expect(headKeys.at(-1)).toBe("test-task/bar");
   });
 });
 

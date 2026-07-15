@@ -238,7 +238,8 @@ describe("durableObjectProgressStore", () => {
     const { store } = makeStore();
     store.commit(progressAt(10), { expectedCursorRevision: 0 });
 
-    // reprocessFrom-style: asserts the old revision, persists the bumped one.
+    // Rewind-style: asserts the old revision, persists the bumped one (the
+    // browser projection reset rewinds this way).
     store.commit(progressAt(4, 1), { expectedCursorRevision: 0 });
 
     // A continuation of the pre-rewind cursor is now stale.
@@ -263,7 +264,7 @@ describe("durableObjectProgressStore", () => {
     expect(map.get(progressKey)).toEqual(progressAt(10));
 
     // The sanctioned backward move: a rewind bumps the revision under the
-    // old expected value (reprocessFrom / skipThrough).
+    // old expected value.
     store.commit(progressAt(4, 1), { expectedCursorRevision: 0 });
     expect(store.read()).toEqual(progressAt(4, 1));
   });

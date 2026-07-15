@@ -140,8 +140,8 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
     checkpointOffset: number;
     /**
      * Honest event-time context (delivery phase, lag behind the observed
-     * head, cursor revision, deterministic effect keys) supplied by the
-     * StreamProcessorRunner, the only driver.
+     * head, cursor revision) supplied by the StreamProcessorRunner, the only
+     * driver.
      */
     delivery: DeliveryContext;
   };
@@ -407,8 +407,9 @@ export abstract class StreamProcessor<
    * delivered, so `args.state` is the whole fold), an obligation processor
    * drives its undriven obligations and settles dead ones — scheduling that
    * async work via `args.blockProcessorWhile`, keyed by STABLE obligation keys
-   * (`this.idempotencyKey(<obligation>)`, never `args.delivery.idempotencyKey`,
-   * so a redelivery/revival does not rotate the key and re-run the effect).
+   * (`this.idempotencyKey(<obligation>)` with the deciding state folded into
+   * the key and NO event bound, so a redelivery/revival does not rotate the
+   * key and re-run the effect).
    * The runner never sets `caughtUp` behind the observed head — no override
    * needs its own mid-catch-up gate. Simple processors ignore the flag.
    */

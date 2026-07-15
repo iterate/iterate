@@ -61,7 +61,7 @@ export function durableObjectProgressStore<State>(args: {
       // incarnation at the SAME revision from rolling acknowledgement (and
       // state) backward past progress a newer incarnation already committed —
       // re-running effects that were durably acknowledged. Only an explicit
-      // revision bump (reprocessFrom / skipThrough) may move acked backward.
+      // revision-bumping cursor rewind may move acked backward.
       if (
         persisted !== undefined &&
         progress.processing.acknowledgedThroughOffset <
