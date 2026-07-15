@@ -3381,3 +3381,124 @@ tail investigation rather than a shipping win. Raw records are
 The collection ended at `2026-07-15T01:23:09Z`; if active optimization
 continues, the next current-main checkpoint is due by
 `2026-07-15T05:23:09Z`. Production was not deployed or erased.
+
+## 2026-07-15: Bounded Dynamic Worker Recovery Deployed
+
+Preview 5 deployed exact runtime head `2a69d0eb20156c558acc45798c37f956dbf00aac`
+after the local Loader recovery proof described above. Three independent
+deployed runs crossed the real topology from the Node host through the OS
+Worker, source Stream Durable Object, project Worker Loader, and output/probe
+Stream Durable Objects. Each synthetic exact clone failure recovered through
+one anonymous Loader, delivered the exact event once at the idempotent output,
+advanced the source subscription cursor, and reused the recovered Loader for
+the following delivery.
+
+This closes the preview gate for the bounded recovery mechanism. It does not
+claim that a synthetic message classifier reproduces Cloudflare's internal
+Loader fault; the production observation remains the evidence for that fault,
+and the deterministic injection proves only our handling once that exact error
+crosses the boundary. The runtime cost remains one stable named Loader, one
+exact resolved artifact shared by both attempts, and at most one sticky
+anonymous fallback per runner/artifact. Production was not deployed or erased.
+
+## 2026-07-15: Paused Destination Cannot Poison-Skip Healthy Events
+
+The first deployed 24-cycle mixed recovery soak on earlier head `937ac2e5c`
+failed after delivering 23 of 24 events in cycle 2. Durable inspection proved
+that source offset 21, sequence 16, had not been lost by append or storage. The
+source had instead committed
+`push-poison-skipped:project-worker:21` after three attempts and advanced its
+cursor through the later events.
+
+The target Stream was intentionally paused while the source project-worker
+subscription delivered. Its ordinary append rejected with a generic
+`Error("stream paused ...")`; the source subscription's `onPoison: "skip"`
+policy therefore classified an operator-controlled whole-destination outage
+as evidence that the healthy source event itself was poison. That distinction
+is now explicit: paused ordinary append throws
+`StreamReceiverUnavailableError`, so Workers RPC keeps the batch behind the
+same cursor and the existing availability backoff retries it after resume.
+Cap'n Web still reconstructs a generic public error, so the public E2E asserts
+the message while the durable upstream regression asserts cursor behavior and
+the absence of a poison fact.
+
+The deployed regression configured an actual durable push subscription over
+Workers RPC with `onPoison: "skip"`, paused its target, waited through at least
+three attempts, and proved that the source cursor stayed immediately before
+the healthy event. After target resume the exact cross-post arrived and the
+source cursor advanced, with no poison-skip fact before or after recovery.
+
+Two independent deployed mixed soaks then ran 24 alternating source-kill,
+output-kill, paused-dual-kill, and idle-control cycles with batches of eight.
+All 384 events arrived exactly, in order, with zero append retries:
+
+| 24-cycle deployed soak |   Run 1 |   Run 2 |
+| ---------------------- | ------: | ------: |
+| events delivered       |     192 |     192 |
+| settle p50             | 0.801 s | 1.001 s |
+| settle p95             | 4.309 s | 4.749 s |
+| maximum settle         | 4.722 s | 5.393 s |
+
+These are forced-eviction recovery timings, not ordinary delivery latency.
+The multi-second tail is the deliberate retry/backoff cost of preserving the
+whole batch across unavailability. Raw records are
+`/tmp/stream-mixed-recovery-preview5-2a69d0e-r{1,2}.log`. Production was not
+deployed or erased.
+
+## 2026-07-15: Deployed 640-Byte PCM `processEvent` Reconfirmation
+
+Exact preview head `2a69d0eb2` re-ran the actual Worker-consumer topology with
+1,000 640-byte PCM-shaped frames per append. Node-host timers enclosed source
+append through output completion, so the result does not depend on a Worker
+clock advancing without network I/O. Durable delivery used one source Stream
+DO, the project Worker, and one output Stream DO. Ephemeral delivery installed
+both callbacks on one physical source Stream DO and used the same output.
+
+For the durable paired callback, the baseline awaited every
+`processEvent(event)` result and the candidate discarded undefined returns,
+awaiting only the final asynchronous completion. For the ephemeral pair, the
+baseline supplied `processEventBatch` and the candidate used the exported
+`subscribe(..., { processEvent })` helper over the same transport.
+
+| 1,000 x 640-byte deployed path | Previous loop | `processEvent` |       Change |
+| ------------------------------ | ------------: | -------------: | -----------: |
+| durable p50                    |    138.510 ms |     138.242 ms | 0.19% faster |
+| durable mean                   |    141.955 ms |     145.799 ms | 2.71% slower |
+| durable throughput             |     7,219.7/s |      7,233.7/s | 0.19% faster |
+| ephemeral p50                  |    145.735 ms |     147.101 ms | 0.94% slower |
+| ephemeral mean                 |    147.575 ms |     150.795 ms | 2.18% slower |
+| ephemeral throughput           |     6,861.8/s |      6,798.0/s | 0.93% slower |
+
+With 20 batch samples per side, the observed p95 values were 199.522 versus
+232.225 ms durable and 271.566 versus 277.115 ms ephemeral. Those small
+collections are too noisy for a tail claim, but they do not change the central
+result: 1,000 user-level per-event calls are within about 1% at p50 and
+throughput in both real deployed push modes. This reconfirms the accepted API
+boundary: external subscriptions can expose `processEvent`; batching remains
+an internal transport, persistence, acknowledgement, and cursor concern.
+
+Raw records are
+`/tmp/stream-worker-consumer-pcm-durable-preview5-2a69d0e.log` and
+`/tmp/stream-worker-consumer-pcm-ephemeral-preview5-2a69d0e.log`. Production
+was not deployed or erased.
+
+## 2026-07-15: Search Segment Rewrite Race Identified
+
+Trace `2a88f158a4e8a696b83304a21a648138` ruled out the observed R2 code 10058
+as the cause of Stream delivery loss: search indexing is caught under
+`waitUntil`, while project Worker delivery is the only awaited acknowledgement.
+It did expose an independent correctness defect in the derived search corpus.
+Eight delivery batches launched eight reads and up to seven concurrent writes
+to the same R2 segment in 1.4 seconds. A newer 6,979-byte snapshot completed
+first; an older 6,720-byte snapshot completed later and became the final
+object. A quiet stream could therefore remain permanently regressed until a
+later delivery or explicit reindex.
+
+The next isolated experiment coalesces work by project/path/segment, uses
+source offsets as the ordering watermark, serializes same-key rewrites, leaves
+different keys parallel, and uses an R2 conditional write if the Workers API
+can robustly prevent cross-isolate stale replacement. On the exact trace shape
+this should reduce eight reads/writes to about two or three, cutting same-key
+R2 operations and bytes by 62.5% to 75%. It is not yet a shipping claim; the
+prototype must prove final highest-offset content under controlled races and a
+deployed burst before integration.

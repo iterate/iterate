@@ -762,16 +762,92 @@ test("exact cross-post retries fall back without losing newly eligible events", 
     payload: { reason: "exercise failed cross-post acknowledgement" },
   });
   const afterFailure = batch({ configuredOffset: 12, offsets: [4] });
-  await expect(acceptCrossPostDirect(target, afterFailure)).rejects.toMatchObject({
-    name: "StreamReceiverUnavailableError",
-    message: expect.stringMatching(/paused/),
-  });
+  await expect(acceptCrossPostDirect(target, afterFailure)).rejects.toThrow(/paused/);
   await target.append({
     type: "events.iterate.com/stream/resumed",
     payload: { reason: "retry after failed cross-post acknowledgement" },
   });
   await acceptCrossPostDirect(target, afterFailure);
   expect(await target.getEvents({ eventTypes: [CROSS_POST_EVENT_TYPE] })).toHaveLength(6);
+});
+
+test("a paused destination cannot poison-skip a healthy source event", async () => {
+  const marker = crypto.randomUUID();
+  const sourcePath = `/e2e/os-port/paused-destination/source/${marker}`;
+  const targetPath = `/e2e/os-port/paused-destination/target/${marker}`;
+  const subscriptionKey = `paused-destination-${marker}`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = itx.projects.create({
+    slug: `os-stream-paused-destination-${RUN_SUFFIX}-${marker}`,
+  });
+  const projectId = (await project.__describe()).projectId;
+  using source = project.streams.get(sourcePath);
+  using target = project.streams.get(targetPath);
+
+  await source.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      subscriptionKey,
+      delivery: {
+        mode: "push",
+        expression: ["streams", ["get", targetPath], "acceptCrossPost"],
+      },
+      selector: { eventTypes: [CROSS_POST_EVENT_TYPE] },
+      onPoison: "skip",
+    },
+  });
+  const [paused] = await appendEvents(target, {
+    type: "events.iterate.com/stream/paused",
+    payload: { reason: "exercise upstream poison classification" },
+  });
+  const [sourceEvent] = await appendEvents(source, {
+    type: CROSS_POST_EVENT_TYPE,
+    payload: { marker },
+  });
+  const poisonKey = `push-poison-skipped:${subscriptionKey}:${sourceEvent!.offset}`;
+
+  await waitForCondition(
+    async () => {
+      const [runtime, poison] = await Promise.all([
+        source.runtimeState(),
+        source.getEvent({ idempotencyKey: poisonKey }),
+      ]);
+      return (runtime.runtime.subscriptions[subscriptionKey]?.attempt ?? 0) >= 3 || poison != null;
+    },
+    {
+      description: "three paused-destination attempts without advancing the source cursor",
+      intervalMs: 100,
+      timeoutMs: 15_000,
+    },
+  );
+  expect(await source.getEvent({ idempotencyKey: poisonKey })).toBeUndefined();
+  expect((await source.runtimeState()).runtime.subscriptions[subscriptionKey]).toMatchObject({
+    ackedOffset: sourceEvent!.offset - 1,
+    attempt: expect.any(Number),
+  });
+
+  const copied = target.waitForEvent({
+    afterOffset: paused!.offset,
+    eventTypes: [CROSS_POST_EVENT_TYPE],
+    timeoutMs: 20_000,
+  });
+  await target.append({
+    type: "events.iterate.com/stream/resumed",
+    payload: { reason: "destination is available again" },
+  });
+  expect(await copied).toMatchObject({
+    idempotencyKey: `xpost:${subscriptionKey}:${projectId}:${sourcePath}:${sourceEvent!.offset}`,
+    payload: { marker },
+  });
+  await waitForCondition(
+    async () =>
+      ((await source.runtimeState()).runtime.subscriptions[subscriptionKey]?.ackedOffset ?? 0) >=
+      sourceEvent!.offset,
+    { description: "source cursor to acknowledge the recovered delivery" },
+  );
+  expect(await source.getEvent({ idempotencyKey: poisonKey })).toBeUndefined();
 });
 
 test("cross-post conditions gate cross-posting on event content", async () => {
