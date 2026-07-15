@@ -16,6 +16,7 @@ const FOCUS_TAILS = process.env.STREAM_BENCH_FOCUS_TAILS === "1";
 const FOCUS_LIVE_TAILS = process.env.STREAM_BENCH_FOCUS_LIVE_TAILS === "1";
 const FOCUS_WAIT_FOR_EVENT = process.env.STREAM_BENCH_FOCUS_WAIT_FOR_EVENT === "1";
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
+const FOCUS_WAKE_SELECTOR = process.env.STREAM_BENCH_FOCUS_WAKE_SELECTOR === "1";
 const FOCUS_CROSSPOST_EXACT_RETRY = process.env.STREAM_BENCH_FOCUS_CROSSPOST_EXACT_RETRY === "1";
 const FOCUS_STORAGE_JOURNAL = process.env.STREAM_BENCH_FOCUS_STORAGE_JOURNAL === "1";
 const FOCUS_WORKER_CONSUMER = process.env.STREAM_BENCH_FOCUS_WORKER_CONSUMER === "1";
@@ -45,6 +46,8 @@ const PROCESSOR_CATCHUP_SAMPLES = Number(process.env.STREAM_BENCH_PROCESSOR_CATC
 const PROCESSOR_CATCHUP_EVENTS = Number(
   process.env.STREAM_BENCH_PROCESSOR_CATCHUP_EVENTS ?? "8000",
 );
+const WAKE_SELECTOR_SAMPLES = Number(process.env.STREAM_BENCH_WAKE_SELECTOR_SAMPLES ?? "5");
+const WAKE_SELECTOR_EVENTS = Number(process.env.STREAM_BENCH_WAKE_SELECTOR_EVENTS ?? "4000");
 const WORKER_CONSUMER_SAMPLES = Number(process.env.STREAM_BENCH_WORKER_CONSUMER_SAMPLES ?? "30");
 const WORKER_CONSUMER_BATCH_SAMPLES = Number(
   process.env.STREAM_BENCH_WORKER_CONSUMER_BATCH_SAMPLES ?? "12",
@@ -85,6 +88,7 @@ test.skipIf(
     FOCUS_LIVE_TAILS ||
     FOCUS_WAIT_FOR_EVENT ||
     FOCUS_PROCESSOR_CATCHUP ||
+    FOCUS_WAKE_SELECTOR ||
     FOCUS_CROSSPOST_EXACT_RETRY ||
     FOCUS_STORAGE_JOURNAL ||
     FOCUS_WORKER_CONSUMER,
@@ -1232,6 +1236,84 @@ test.skipIf(!ENABLED || !FOCUS_PROCESSOR_CATCHUP)(
   600_000,
 );
 
+test.skipIf(!ENABLED || !FOCUS_WAKE_SELECTOR)(
+  "focused exact-type wake processor catch-up",
+  async () => {
+    if (IMPLEMENTATION !== "candidate" && IMPLEMENTATION !== "main") {
+      throw new Error("STREAM_BENCH_IMPLEMENTATION must be candidate or main.");
+    }
+    if (!Number.isInteger(WAKE_SELECTOR_SAMPLES) || WAKE_SELECTOR_SAMPLES < 1) {
+      throw new Error("STREAM_BENCH_WAKE_SELECTOR_SAMPLES must be a positive integer.");
+    }
+    if (!Number.isInteger(WAKE_SELECTOR_EVENTS) || WAKE_SELECTOR_EVENTS < 1) {
+      throw new Error("STREAM_BENCH_WAKE_SELECTOR_EVENTS must be a positive integer.");
+    }
+
+    const runId = crypto.randomUUID().slice(0, 8);
+    const auth = { type: "admin-secret" as const, secret: adminSecret() };
+    const projectId = `prj_${crypto.randomUUID()}`;
+    using session = withItxSession();
+    using itx = session.authenticate(auth);
+    using project = itx.projects.create({
+      projectId,
+      slug: `stream-wake-selector-${IMPLEMENTATION}-${runId}`,
+    });
+    await project.__describe();
+    const agentPath = `/agents/wake-selector-${runId}`;
+    using agent = project.agents.get(agentPath);
+    const defaults = await project.agents.defaults.forPath(agentPath);
+    await agent.stream.append(...defaults.events);
+    await agent.processor.snapshot();
+
+    const metrics: Record<string, Metric> = {};
+    for (const density of ["sparse", "dense"] as const) {
+      const samples: number[] = [];
+      for (let iteration = -1; iteration < WAKE_SELECTOR_SAMPLES; iteration += 1) {
+        await killAgentForBenchmark(projectId, agentPath, iteration);
+        using iterationProject = withItxSession({ auth, projectId });
+        using iterationAgent = iterationProject.agents.get(agentPath);
+        const initialHead = (
+          await withHostTimeout(
+            iterationAgent.stream.head(),
+            `wake selector head ${density} iteration ${iteration}`,
+          )
+        ).maxOffset;
+        const events = Array.from({ length: WAKE_SELECTOR_EVENTS }, (_, index) =>
+          density === "sparse"
+            ? event({ marker: `wake-sparse-${iteration}-${index}`, payload: "x" })
+            : ({
+                type: "events.iterate.com/agent/status-changed",
+                payload: { title: `wake-dense-${iteration}-${index}` },
+              } satisfies StreamEventInput),
+        );
+        const startedAt = performance.now();
+        await withHostTimeout(
+          commitDiscardingResult(iterationAgent.stream, ...events),
+          `wake selector append ${density} iteration ${iteration}`,
+        );
+        await withHostTimeout(
+          iterationAgent.processor.waitUntilEvent({
+            offset: initialHead + WAKE_SELECTOR_EVENTS,
+            timeoutMs: 30_000,
+          }),
+          `wake selector checkpoint ${density} iteration ${iteration}`,
+        );
+        if (iteration >= 0) samples.push(performance.now() - startedAt);
+      }
+      metrics[`wake_selector_${density}_catchup`] = summarize(samples, WAKE_SELECTOR_EVENTS);
+    }
+
+    const output: BenchmarkOutput = {
+      implementation: IMPLEMENTATION,
+      metrics,
+      revision: REVISION,
+      timestamp: new Date().toISOString(),
+    };
+    console.log(`STREAM_CUMULATIVE_BENCHMARK ${JSON.stringify(output)}`);
+  },
+  600_000,
+);
+
 test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
   "focused deployed Worker consumer to Stream DO forwarding",
   async () => {
@@ -1848,6 +1930,22 @@ async function killProject(project: { kill(): Promise<void> }): Promise<void> {
   try {
     await project.kill();
   } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("kill requested")) throw error;
+  }
+}
+
+async function killAgentForBenchmark(
+  projectId: string,
+  agentPath: string,
+  iteration: number,
+): Promise<void> {
+  const auth = { type: "admin-secret" as const, secret: adminSecret() };
+  using project = withItxSession({ auth, projectId });
+  using agent = project.agents.get(agentPath);
+  try {
+    await withHostTimeout(agent.kill(), `forced Agent kill iteration ${iteration}`);
+  } catch (error) {
+    if (error instanceof HostTimeoutError) throw error;
     if (!(error instanceof Error) || !error.message.includes("kill requested")) throw error;
   }
 }

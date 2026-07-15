@@ -3270,3 +3270,56 @@ Raw deployed records are `/tmp/stream-reset-soak-preview5-r{1..10}.log` and
 `/tmp/stream-retry-soak-preview5-r{1..10}.log`. This soak changed no production
 code, schema, protocol, or preview configuration. Production was not deployed
 or erased.
+
+## 2026-07-15: Exact-Type Wake Storage Preselection Rejected
+
+### Hypothesis And Real Consumer Lane
+
+Configured wake processors publish exact `consumes` lists, but their backlog
+connection currently reads each bounded raw page and applies that selector in
+JavaScript. The prototype passed those exact types into the existing
+push-oriented storage frame scan, which advances the raw cursor while
+materializing only matching durable payloads. Ephemeral subscriptions stayed
+on the raw reader because they must see transient rows.
+
+The focused benchmark uses a real agent Durable Object as the configured wake
+consumer. Before every sample it kills that consumer through a fresh control
+session, appends 4,000 events to the agent's Stream Durable Object, and waits
+for the replacement agent processor to checkpoint through the appended head.
+Sparse samples match none of the agent processor's declared types; dense
+samples match all of them. Every timer runs on the Node host around append
+through observed processor checkpoint recovery.
+
+An initial collection exposed the same Cap'n Web harness rule as forced Stream
+reactivation: reusing an agent capability created before the first `kill()`
+could leave the host client unsettled after the server had completed append and
+`waitUntilEvent`. Those provisional samples were invalidated. The retained
+benchmark creates a fresh session and agent capability for every destructive
+kill and measured iteration and places 30-second host deadlines around kill,
+head, append, and checkpoint observation.
+
+### Exact-Parent Result And Decision
+
+Candidate and exact parent `cb7ce6055c060897d30dbc8ea0a0d458f51d348a`
+ran in separate local workerd servers in
+`C,P,P,C,C,P,P,C,C,P` process order. Five processes per implementation each
+contributed five sparse and five dense samples; all 50 corrected scenarios
+passed their offset/checkpoint assertions.
+
+| 4,000-event configured catch-up | Parent p50 | Candidate p50 |        P50 change |    P95 change |   Mean change |
+| ------------------------------- | ---------: | ------------: | ----------------: | ------------: | ------------: |
+| Sparse, 0% selected             |  43.564 ms |     45.802 ms |  **5.14% slower** | 15.10% slower |  6.76% slower |
+| Dense, 100% selected            |  60.812 ms |     67.205 ms | **10.51% slower** | 11.82% faster | 10.10% slower |
+
+Median-of-five-run p50 agreed: sparse was 5.14% slower and dense was 14.18%
+slower. The existing selected-frame SQL plan pays for raw-boundary and
+byte-window CTEs that durable push needs; avoiding nonmatching JSON parsing did
+not repay that plan cost in this wake topology. The production prototype and
+its unit test are rejected and removed. No second wake query, type index,
+heuristic branch, schema, or migration is retained.
+
+The 98-line opt-in benchmark remains because exact-type configured catch-up was
+previously absent from the cumulative harness and because its fresh-capability
+kill discipline prevents false hangs in later experiments. Raw corrected
+records are `/tmp/stream-wake-selector-{main,candidate}-r{1..5}.log`.
+Production was not deployed or erased.
