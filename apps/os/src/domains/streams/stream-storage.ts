@@ -173,6 +173,50 @@ export class StreamEventLog {
   }
 
   /**
+   * Read only offsets and serialized sizes for a replay window. Recovery uses
+   * this to choose a byte-bounded page before hydrating any event JSON, so a
+   * large candidate window never becomes one large Durable Object allocation.
+   */
+  getRangeSizes(args: {
+    afterOffset: number;
+    beforeOffset: number;
+    eventTypes?: readonly string[];
+    limit: number;
+    includeEphemeral?: boolean;
+  }): { offset: number; byteLength: number }[] {
+    if (args.eventTypes?.length === 0) return [];
+    const eventTypes =
+      args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
+    const eventTypeClause =
+      eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
+    const ephemeralClause = args.includeEphemeral === true ? "" : "and ephemeral = 0";
+    return this.sql
+      .exec<{ offset: number; byteLength: number }>(
+        `
+          select selected.offset as offset, sum(length(event_chunks.chunk_bytes)) as byteLength
+          from (
+            select offset
+            from events
+            where offset > ?
+              and offset < ?
+              ${ephemeralClause}
+              ${eventTypeClause}
+            order by offset asc
+            limit ?
+          ) selected
+          join event_chunks on event_chunks.offset = selected.offset
+          group by selected.offset
+          order by selected.offset asc
+        `,
+        args.afterOffset,
+        args.beforeOffset,
+        ...(eventTypes ?? []),
+        args.limit,
+      )
+      .toArray();
+  }
+
+  /**
    * `getRange` plus each event's serialized byte length, summed from the
    * chunk rows already in hand — so delivery batching can enforce its byte
    * cap without re-stringifying every event it just parsed.

@@ -34,11 +34,13 @@ consequential forks unless they explicitly waive consultation.
    `session.streamRecovery.get({ projectId, path }).exportForRecovery()` read-only
    through `pnpm cli itx run` in production.
    A breaking PR cannot introduce and use this plumbing in the same deployment.
-3. Create a temporary itx script rather than adding a permanent orchestrator. For
-   each selected project, inventory secrets, built-in integrations, and the config
-   repo. Export the root, every listed `/secrets/**` stream, every built-in connection
-   stream, and the global integration directory. Page with a fixed `throughOffset`;
-   save `{format, version, stream, events, highestAssignedOffset: throughOffset}`.
+3. For each selected project, inventory secrets, built-in integrations, and the
+   config repo. Export the root, every listed `/secrets/**` stream, every built-in
+   connection stream, and the global integration directory with
+   [`scripts/export-stream-recovery.itx.js`](scripts/export-stream-recovery.itx.js).
+   Its single acknowledged export RPC writes byte-bounded pages atomically at a
+   fixed `throughOffset` and resumes an interrupted output directory. Never combine
+   a large raw journal into one RPC value.
 4. Reduce the package deliberately: keep bootstrap facts in `/`, secret journals
    intact, current integration lifecycle/subscription facts, and only active global
    claims for retained project IDs. Do not renumber events: encrypted secret material
@@ -67,8 +69,9 @@ consequential forks unless they explicitly waive consultation.
 ## Finish only after proof
 
 Verify project IDs/routing, every secret through a harmless real consumer, every
-integration's connected status and external ID, active directory claims, Slack
-webhook delivery, an authenticated GitHub request, equal local/remote config heads,
+integration's connected status and external ID, active directory claims,
+[Slack webhook delivery](../../../docs/slack-testing.md#post-recreation-proof), the
+complete [GitHub production smoke](../../../docs/github-smoke-testing.md),
 project-worker boot, and AI Search reindexing. Add PR-specific checks for whatever
 changed. Do not trigger externally visible provider actions without approval.
 
