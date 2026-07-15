@@ -4686,8 +4686,27 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
               },
             )
             .then(() => undefined);
-    const [[, , , createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
-      Promise.all([appendRootEvents(), seedEmailAllowlist()]),
+    const [[ancestorConfigured, , , createRequested]] = await timedStep(
+      "create-timing",
+      timing,
+      "root-append",
+      () => Promise.all([appendRootEvents(), seedEmailAllowlist()]),
+    );
+    const project = itxForScope({
+      auth: this.props.auth,
+      ctx: this.props.ctx,
+      path: "/",
+      projectId: args.projectId,
+    });
+    // Appending the birth certificate is the durable commit point, but stream
+    // delivery into the capability-host processor is asynchronous. Fence on
+    // the exact ancestor event before returning the project handle so a
+    // pipelined __describe()/invoke/run cannot observe a half-born root.
+    await timedStep("create-timing", timing, "root-capability-ready", () =>
+      project.capabilityHost.processor.waitUntilEvent({
+        offset: ancestorConfigured.offset,
+        timeoutMs: 10_000,
+      }),
     );
     // The project now EXISTS (identity, directory, bootstrap events); whether
     // to also wait for the saga to finish is the caller's choice — the
@@ -4706,12 +4725,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       );
     }
 
-    return itxForScope({
-      auth: this.props.auth,
-      ctx: this.props.ctx,
-      path: "/",
-      projectId: args.projectId,
-    });
+    return project;
   }
 
   /**
