@@ -58,6 +58,7 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "./domains/capability-host/capability-host-processor-contract.ts";
 import type {
   StreamRecoveryExportPage,
   StreamRecoveryExportSink,
@@ -4608,11 +4609,31 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       projectId: args.projectId,
     });
 
+    // A project root exists only with its complete birth certificate: its
+    // capability host is explicitly terminal (no ancestor), both processors
+    // are subscribed, and creation is requested in one append. In particular,
+    // waitUntilCreated: false callers pipeline through the returned root itx
+    // immediately, so ancestor configuration cannot be deferred to the
+    // asynchronous bootstrap saga.
+    //
     // The config repo (its processor subscription, its cross-post rule onto
-    // `/`, and its create request) is armed by the project processor's
+    // `/`, and its create request) is armed later by the project processor's
     // create-requested lane, on the repo's own stream at CONFIG_REPO_PATH.
     const appendRootEvents = () =>
       stream.append(
+        CapabilityHostProcessorContract.buildEvent({
+          type: "events.iterate.com/capability-host/ancestor-configured",
+          idempotencyKey: `capability-host/ancestor-configured:${registered.projectId}:/`,
+          payload: { ancestorPath: null },
+        }),
+        buildDurableObjectProcessorSubscriptionConfiguredEvent({
+          durableObjectName: streamDurableObjectName({
+            projectId: registered.projectId,
+            path: "/",
+          }),
+          processor: ["capabilityHosts", ["get", "/"], "processor"],
+          processorSlug: CapabilityHostProcessorContract.slug,
+        }),
         buildDurableObjectProcessorSubscriptionConfiguredEvent({
           durableObjectName: streamDurableObjectName({
             projectId: registered.projectId,
@@ -4665,7 +4686,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
               },
             )
             .then(() => undefined);
-    const [[, createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
+    const [[, , , createRequested]] = await timedStep("create-timing", timing, "root-append", () =>
       Promise.all([appendRootEvents(), seedEmailAllowlist()]),
     );
     // The project now EXISTS (identity, directory, bootstrap events); whether

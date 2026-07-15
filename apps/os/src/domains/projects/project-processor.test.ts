@@ -49,12 +49,10 @@ describe("ProjectProcessor bootstrap", () => {
       streamMaxOffset: 1,
     });
 
-    const rootBirth = network.eventsAt("/");
-    expect(rootBirth.map((streamEvent) => streamEvent.type)).toEqual([
-      "events.iterate.com/capability-host/ancestor-configured",
-      "events.iterate.com/stream/subscription-configured",
-    ]);
-    expect(rootBirth[0]?.payload).toEqual({ ancestorPath: null });
+    // Root capability-host birth is synchronous in projects.create(), not a
+    // delayed responsibility of this bootstrap saga. Fast-path callers can
+    // therefore pipeline through the returned root itx safely.
+    expect(network.eventsAt("/")).toEqual([]);
 
     const configRepo = network.eventsAt("/repos/config");
     expect(configRepo.map((streamEvent) => streamEvent.type)).toEqual([

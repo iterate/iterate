@@ -119,9 +119,12 @@ export class ProjectProcessor extends StreamProcessor<
         }
         blockProcessorWhile(async () => {
           const timing = { projectId: this.deps.itx.projectId };
-          // The root saga, the config repo, and the email router arm in
-          // parallel — each is one batched append, cutting the create
-          // round-trips (see tasks/os-cold-create-latency.md). The Slack
+          // The config repo and email router arm in parallel — each is one
+          // batched append, cutting the create round-trips (see
+          // tasks/os-cold-create-latency.md). The root capability host was
+          // born synchronously in projects.create(), before this saga could
+          // run, because fast-path callers may use the returned root itx
+          // immediately. The Slack
           // webhook router is NOT armed here: connection streams
           // (/integrations/slack/{connection}) are born at connect time by
           // recordSlackConnection. The onboarding agent is not born during
@@ -143,23 +146,6 @@ export class ProjectProcessor extends StreamProcessor<
             );
           });
           await Promise.all([
-            timedStep("create-timing", timing, "root-saga-append", () =>
-              append(
-                CapabilityHostProcessorContract.buildEvent({
-                  type: "events.iterate.com/capability-host/ancestor-configured",
-                  idempotencyKey: `capability-host/ancestor-configured:${this.deps.itx.projectId}:/`,
-                  payload: { ancestorPath: null },
-                }),
-                buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                  durableObjectName: DurableObjectNameCodec.stringify({
-                    projectId: this.deps.itx.projectId,
-                    path: "/",
-                  }),
-                  processor: ["capabilityHosts", ["get", "/"], "processor"],
-                  processorSlug: CapabilityHostProcessorContract.slug,
-                }),
-              ),
-            ),
             // The config repo is an ordinary repo on its own stream. Its
             // birth batch is: the repo processor subscription, the
             // cross-post rule that copies EVERY config-repo event onto the
