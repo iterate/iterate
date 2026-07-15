@@ -2499,8 +2499,9 @@ describe("busy/idle status announcements", () => {
       // already shows the busy flip, so the timer must swallow its idle.
       await vi.advanceTimersByTimeAsync(60_000);
       await new Promise((resolve) => setImmediate(resolve));
-      const patches = announcements(stream) as { busy?: boolean }[];
-      expect(patches.filter((patch) => patch.busy === false)).toEqual([]);
+      expect(
+        (announcements(stream) as { busy?: boolean }[]).filter((patch) => patch.busy === false),
+      ).toEqual([]);
 
       // Release the tail: the at-head pass announces the newer busy. The
       // idle blip never journals at all.

@@ -797,10 +797,15 @@ export class StreamProcessorRunner<
     // processor at head). `caughtUp` is the at-head reconcile signal — see
     // DeliveryContext.
     const batchReachesHead = pending.at(-1)!.offset >= observedHeadOffset;
+    // A `"*"` contract consumes EVERY type (matching `getConsumedEventDefinition`),
+    // so every event counts toward the last-consumed offset; otherwise only
+    // exact type matches do. Without the wildcard arm a `"*"` processor
+    // (project, browser feed/raw-events) would never see `caughtUp`.
+    const consumesAllTypes = this.driver.contract.consumes.includes("*");
     const consumedTypes = new Set(this.driver.contract.consumes);
     let lastConsumedOffset: number | null = null;
     for (const event of pending) {
-      if (consumedTypes.has(event.type)) lastConsumedOffset = event.offset;
+      if (consumesAllTypes || consumedTypes.has(event.type)) lastConsumedOffset = event.offset;
     }
 
     const ctx: FrameContext<ProcessorState<Contract>> = {

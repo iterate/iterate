@@ -44,7 +44,10 @@ const SIBLING = "/tests/runner-sibling";
 // test's hooks decide, so each test states its own semantics inline.
 // -----------------------------------------------------------------------------
 
-function taskContract(version: string) {
+function taskContract(
+  version: string,
+  consumes: readonly string[] = [REQUESTED, COMPLETED, REVIVED],
+) {
   return defineProcessorContract({
     slug: "test-task",
     version,
@@ -60,7 +63,10 @@ function taskContract(version: string) {
       [DRIVEN]: { payloadSchema: z.object({ id: z.string() }) },
       [REVIVED]: { payloadSchema: z.object({}) },
     },
-    consumes: [REQUESTED, COMPLETED, REVIVED],
+    // Cast: the runner reads `consumes` structurally (a string list + a `"*"`
+    // check), so a runtime-supplied list is what the wildcard test needs; the
+    // literal-union type the builder infers is irrelevant to the runner.
+    consumes: consumes as unknown as [typeof REQUESTED, typeof COMPLETED, typeof REVIVED],
     emits: [ECHOED, DRIVEN],
   });
 }
@@ -1154,6 +1160,26 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
       { type: DRIVEN, idempotencyKey: "test-task/drive:b", payload: { id: "b" } },
     ]);
+  });
+
+  it("fires caughtUp for a wildcard (`*`) consumer — every delivered event counts as consumed", async () => {
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1: consumed, opens obligation
+    journal.seed({ type: NOISE, payload: {} }); // 2: a `*` consumer DOES consume this — it is head
+
+    const headCalls: string[][] = [];
+    const hooks: TaskHooks = {
+      onHead: (args) => {
+        headCalls.push([...args.state.open]);
+      },
+    };
+    // A `*` contract reduces every type; the head event (NOISE) is one it
+    // consumes, so it is the last consumed event of a head-reaching batch and
+    // MUST carry caughtUp. Before the wildcard fix, `consumes.has("NOISE")`
+    // was false and caughtUp never fired for `*` processors.
+    const harness = makeHarness({ journal, hooks, contract: taskContract("0.0.1", ["*"]) });
+    await harness.deliverFrames([journal.rows().slice()]);
+    expect(headCalls).toEqual([["a"]]);
   });
 
   it("defers the head event's commit past onCaughtUp: a failing blocker leaves it UNcommitted and retried (codex bug #2)", async () => {
