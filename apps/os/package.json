@@ -24,10 +24,8 @@
     "test": "pnpm test:unit",
     "test:unit": "vitest run",
     "e2e": "vitest --config e2e/vitest.config.ts",
-    "playwright": "playwright test",
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
-    "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -103,12 +101,10 @@
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260624.1",
     "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/browser-playwright": "^4.1.7",
     "esbuild": "^0.27.4",
     "iterate": "workspace:*",
     "jsdom": "27.4.0",
     "miniflare": "catalog:cloudflare",
-    "tinyexec": "^1.0.2",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",

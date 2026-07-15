@@ -11,26 +11,11 @@ import type {
 import type { Stream } from "../itx-api.generated.ts";
 import { parseBrowserCoreProcessorState } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
-import { useStreamProcessorStore } from "~/domains/streams/client-libraries/browser/hooks/use-stream-processor-store.ts";
+import { useStreamMirror } from "~/domains/streams/client-libraries/browser/hooks/use-stream-mirror.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import {
-  asBrowserStreamClient,
-  type StreamBrowserStore,
-} from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
-import {
-  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  BROWSER_RAW_EVENTS_TABLES,
-  BrowserRawEventsContract,
-  BrowserRawEventsProcessor,
-  type BrowserRawEventsState,
-} from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
-import {
-  BROWSER_FEED_SCHEMA_VERSION,
-  BROWSER_FEED_TABLE,
-  BrowserFeedContract,
-  BrowserFeedProcessor,
-  type BrowserFeedState,
-} from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
+import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
+import { asBrowserStreamClient } from "~/domains/streams/client-libraries/browser/stream-transport.ts";
+import { BrowserFeedContract } from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
@@ -184,32 +169,18 @@ export function ProjectStreamView({
     [resetStreamSourceTransport, streamConnectionAddress, streamSource],
   );
 
-  // Two browser-hosted processors share the stream's per-path SQLite mirror:
-  // the verbatim raw-event `events` log (also the composer's append target)
-  // and the browser-feed projector, whose single `feed_items` table backs
-  // every mode (pretty chat rows and raw rows in one total order) and whose
-  // reduced state carries the live activity + presence the header derives
-  // presence/busy from — which is why it mounts here, not in the feed body.
-  const { store, snapshot } = useStreamProcessorStore<BrowserRawEventsState>({
+  // The stream mirror: one download of this stream into the shared per-path
+  // SQLite mirror, fanned out to the canonical processors — the verbatim
+  // raw-event `events` log (also the composer's append target) and the
+  // browser-feed projector, whose single `feed_items` table backs every mode
+  // (pretty chat rows and raw rows in one total order) and whose reduced state
+  // carries the live activity + presence the header derives presence/busy from.
+  // All four tables live in the one `store.streamDatabase`.
+  const { store, snapshot } = useStreamMirror({
     createStreamClient: streamClientFactory,
     ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
     streamPath,
-    slug: BrowserRawEventsContract.slug,
-    schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-    tables: BROWSER_RAW_EVENTS_TABLES,
-    Processor: BrowserRawEventsProcessor,
-  });
-  const { store: feedStore, snapshot: feedSnapshot } = useStreamProcessorStore<BrowserFeedState>({
-    createStreamClient: streamClientFactory,
-    ...(resetTransport === undefined ? {} : { resetTransport }),
-    projectId: streamRuntimeProjectKey,
-    streamPath,
-    slug: BrowserFeedContract.slug,
-    schemaVersion: BROWSER_FEED_SCHEMA_VERSION,
-    resetOnSchemaVersionChange: true,
-    tables: [BROWSER_FEED_TABLE],
-    Processor: BrowserFeedProcessor,
   });
 
   // Trigger-maintained counts (O(#types)) instead of COUNT(*) (full mirror
@@ -220,7 +191,7 @@ export function ProjectStreamView({
     `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const agentUiState = useAgentUiReducedState(feedStore.streamDatabase);
+  const agentUiState = useAgentUiReducedState(store.streamDatabase);
   // Real, browser-measured: transport RTT from RPCs the store already makes,
   // plus the hosted processor's self-measured consumption report.
   const metrics = useBrowserStreamMetrics(store);
@@ -239,8 +210,7 @@ export function ProjectStreamView({
   // the user's message not appearing until the next paced probe (or a reload).
   const nudgeDeliveries = useCallback(() => {
     void store.nudge();
-    void feedStore.nudge();
-  }, [store, feedStore]);
+  }, [store]);
 
   const runningLlmRequestId =
     agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestOffset ?? null;
@@ -251,10 +221,7 @@ export function ProjectStreamView({
   });
 
   async function clearClientDatabases() {
-    // Sequential on purpose: the two runtimes share one per-path SQLite
-    // mirror, and each clear deletes its tables and VACUUMs — interleaving
-    // them would race writes and compactions on the same file.
-    await feedStore.clearLocalDatabase();
+    // One mirror now: clear all canonical tables + checkpoints and reload.
     await store.clearLocalDatabase();
     window.location.reload();
   }
@@ -288,7 +255,7 @@ export function ProjectStreamView({
       <StreamFeedFilterRow
         eventCount={eventCount}
         connectionStatus={snapshot.connectionStatus}
-        feedDatabase={feedStore.streamDatabase}
+        feedDatabase={store.streamDatabase}
         streamPath={streamPath}
       />
     );
@@ -299,8 +266,8 @@ export function ProjectStreamView({
   const modeBody = (
     <StreamFeedView
       // Fresh virtualizer state per stream mirror + mode (see StreamFeedView docs).
-      key={`${feedStore.streamDatabase.databasePath}:${activeMode}`}
-      database={feedStore.streamDatabase}
+      key={`${store.streamDatabase.databasePath}:${activeMode}`}
+      database={store.streamDatabase}
       filter={{
         agent: caps.agentFeed
           ? { showDebug: caps.agentShowDebug, searchQuery: feedSearch === "" ? null : feedSearch }
@@ -312,7 +279,7 @@ export function ProjectStreamView({
       {...(caps.agentFeed ? { onInspectLlmRequest: panels.inspectLlmRequest } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
-      isPending={agentUiState == null && feedSnapshot.connectionStatus !== "subscribed"}
+      isPending={agentUiState == null && snapshot.connectionStatus !== "subscribed"}
     />
   );
 

@@ -98,15 +98,46 @@ export function CorePrettyState({
               const mode = typeof delivery?.mode === "string" ? delivery.mode : "unknown";
               const runtimeSub = readRuntimeRecord(runtimeSubscriptions[key]);
               const lag = readNumber(runtimeSub, "lag");
+              const selector = readRuntimeRecord(payload?.selector);
+              const eventTypes = Array.isArray(selector?.eventTypes)
+                ? selector.eventTypes.filter((t): t is string => typeof t === "string")
+                : [];
+              const condition =
+                typeof selector?.condition === "string" ? selector.condition : undefined;
+              const destination = readAcceptCrossPostPath(delivery?.expression);
+              const deliveryHint =
+                typeof delivery?.url === "string"
+                  ? `POST ${delivery.url}`
+                  : destination != null
+                    ? `cross-post → ${destination}`
+                    : formatItxExpressionHint(delivery?.expression);
               return (
                 <div key={key} className="rounded-xl bg-muted/40 px-3 py-2">
                   <div className="flex items-baseline justify-between gap-2">
-                    <div className="min-w-0 truncate font-mono text-xs">{key}</div>
+                    <div className="min-w-0 break-all font-mono text-xs">{key}</div>
                     <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
                       {mode}
                       {lag == null ? "" : ` · lag ${lag}`}
                     </div>
                   </div>
+                  {deliveryHint == null ? null : (
+                    <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
+                      {deliveryHint}
+                    </div>
+                  )}
+                  {eventTypes.length === 0 && condition == null ? null : (
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      {/* `*` anywhere means "all types" — same convention as EventSelector. */}
+                      {eventTypes.length === 0 || eventTypes.includes("*")
+                        ? "all events"
+                        : eventTypes
+                            .map((type) => type.replace("events.iterate.com/", ""))
+                            .join(", ")}
+                      {condition == null
+                        ? ""
+                        : ` when ${condition.length > 48 ? `${condition.slice(0, 45)}…` : condition}`}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -299,4 +330,41 @@ function previewChatMessage(message: Record<string, unknown>): { role: string; t
   text = text.replace(/\s+/g, " ").trim();
   if (text.length > 160) text = `${text.slice(0, 157)}…`;
   return { role, text: text || "(empty)" };
+}
+
+/** `["streams", ["get", path], "acceptCrossPost"]` → path. */
+function readAcceptCrossPostPath(expression: unknown): string | null {
+  if (!Array.isArray(expression) || expression.length < 3) return null;
+  if (expression[0] !== "streams") return null;
+  if (expression[expression.length - 1] !== "acceptCrossPost") return null;
+  const getStep = expression[1];
+  if (!Array.isArray(getStep) || getStep[0] !== "get") return null;
+  return typeof getStep[1] === "string" ? getStep[1] : null;
+}
+
+/** Compact itx expression for core-state list rows. */
+function formatItxExpressionHint(expression: unknown): string | null {
+  if (!Array.isArray(expression) || expression.length === 0) return null;
+  const steps: string[] = [];
+  for (const step of expression) {
+    if (typeof step === "string") {
+      steps.push(step);
+    } else if (Array.isArray(step) && typeof step[0] === "string") {
+      const args = step
+        .slice(1)
+        .map((arg) => {
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return "…";
+          }
+        })
+        .join(", ");
+      steps.push(`${step[0]}(${args})`);
+    } else {
+      return null;
+    }
+  }
+  const call = steps.join(".");
+  return `itx.${call.endsWith(")") ? call : `${call}()`}`;
 }

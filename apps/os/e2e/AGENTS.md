@@ -26,10 +26,10 @@ How to target local dev / previews / prd and the canonical env vars
 (`APP_CONFIG_BASE_URL`, `APP_CONFIG_ADMIN_API_SECRET`, the `OS_E2E_*` harness knobs) are documented
 in [docs/testing.md](../../../docs/testing.md).
 
-- Live deployment tests: `pnpm e2e` (one config, `e2e/vitest.config.ts`, two projects). The
-  `node` project runs the engine suites in `e2e/vitest/` (agents, admin-project, preview
-  smoke) and the cross-runtime example matrix in `e2e/examples/`; the `browser` project runs
-  that matrix in a real browser. `pnpm e2e --project node` skips the browser lane.
+- Live deployment tests: `pnpm e2e` (one config, `e2e/vitest.config.ts`, one project named
+  `node`). It runs the engine suites in `e2e/vitest/` (agents, admin-project, preview
+  smoke) and the cross-runtime example matrix in `e2e/examples/`. Browser coverage for the
+  catalogue lives in `specs/repl-examples.spec.ts`, which drives the real REPL.
 - Egress + secret substitution coverage lives in `e2e/vitest/itx-egress.e2e.test.ts`
   (the old `itx.e2e.test.ts` monolith was split across the `itx-*.e2e.test.ts` files).
 - Preview smoke: `pnpm e2e -t "OS preview smoke"` (`preview-smoke.e2e.test.ts`) exercises a

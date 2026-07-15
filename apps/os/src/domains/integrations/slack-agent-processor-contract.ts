@@ -21,6 +21,14 @@ import { SlackProcessorContract } from "./slack-processor-contract.ts";
  * route context, transcribing Slack messages into agent input, generating
  * bang-command codemode scripts, and painting the agent's announced busy/idle
  * status onto the Slack assistant status through host-provided dependencies.
+ *
+ * LLM turns are mention-gated (mirrors github-agent): a human must @mention the
+ * bot (or Slack must deliver `app_mention`) before the agent is woken. After
+ * that activation, later messages in the same thread also queue turns so
+ * multi-turn conversation does not require re-mentioning on every reply.
+ * Unmentioned traffic before activation is still transcribed as
+ * `dont-trigger-request` history so a later mention has thread context — it
+ * never spends model tokens by itself.
  */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",
@@ -38,6 +46,12 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     botBotId: z.string().optional(),
     botUserId: z.string().optional(),
     channel: z.string().optional(),
+    /**
+     * True after this thread has seen an @mention / app_mention of our bot.
+     * Unlocks follow-up turns without re-mentioning (same shape as
+     * github-agent's conversationActive).
+     */
+    conversationActive: z.boolean().default(false),
     latestMessageTs: z.string().optional(),
     streamPath: z.string().optional(),
     threadTs: z.string().optional(),

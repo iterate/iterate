@@ -72,28 +72,30 @@ function osSmokes(env: DeployedEnv) {
   ];
 }
 
+/**
+ * The post-deploy auth Workers RPC proof predicate: only the exact OS
+ * project-miss answer counts — status 404 with the JSON body
+ * `{"error":"not found"}`. A fresh hostname cannot hit KV or the isolate's
+ * short negative memo, so this body proves ingress reached
+ * getProjectBySlug() on auth's default RPC entrypoint; an edge/router 404
+ * (any other body) must fail the deploy. Exported narrowly for the
+ * security-kernel test in deploy.test.ts.
+ */
+export async function isExactOsProjectMiss(response: Response): Promise<boolean> {
+  if (response.status !== 404) return false;
+  const body: unknown = await response.json().catch(() => null);
+  return typeof body === "object" && body !== null && "error" in body && body.error === "not found";
+}
+
 async function smokeAuthRpc(env: DeployedEnv, label: string) {
   const projectHostnameBase = env.projectHostnameBases[0];
   if (!projectHostnameBase) {
     throw new Error(`Cannot smoke AUTH RPC for ${env.osWorkerName}: no project hostname base.`);
   }
 
-  // A fresh hostname cannot hit KV or the isolate's short negative memo. The
-  // exact OS 404 body therefore proves ingress reached getProjectBySlug() on
-  // auth's default RPC entrypoint; an edge/router 404 is not accepted.
   const slug = `auth-rpc-smoke-${crypto.randomUUID().replaceAll("-", "")}`;
   const url = `https://${slug}.${projectHostnameBase}/`;
-  await smokeResponse(
-    url,
-    async (response) => {
-      if (response.status !== 404) return false;
-      const body: unknown = await response.json().catch(() => null);
-      return (
-        typeof body === "object" && body !== null && "error" in body && body.error === "not found"
-      );
-    },
-    label,
-  );
+  await smokeResponse(url, isExactOsProjectMiss, label);
 }
 
 /** Deploy apps/os to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */

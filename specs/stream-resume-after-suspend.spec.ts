@@ -6,7 +6,7 @@ import { test } from "./test-support/test.ts";
 // Regression suite for the "stream feed wedges after browser suspend" bug:
 // the stream view's runtime factory used to close over the itx capnweb handle
 // captured at mount (project-stream-view.tsx), acquireStreamRuntime deduped by
-// (projectId, streamPath, slug) and ignored fresh factories on re-acquire
+// (projectId, streamPath) and ignored fresh factories on re-acquire
 // (stream-browser-store.ts), so once the /api WebSocket died the runtime's
 // reconnect loop kept dialing through the dead capnweb session forever. The
 // itx socket map itself re-dialed fine — only the stream runtimes stayed
@@ -334,14 +334,12 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     .toBeLessThanOrEqual(socketsBaseline);
 });
 
-// The stream view mounts two browser runtimes on the agent stream (raw events
-// mirror + feed projector); the feed one paints the chat. Debug-registry keys
-// are `${projectId} ${streamPath} ${slug}` (stream-browser-store.ts).
+// The stream view mounts ONE browser mirror runtime on the agent stream — it
+// downloads once and fans out to the canonical processors (raw events cache +
+// feed projector). Its debug-registry key is `${projectId} ${streamPath}
+// browser-stream-mirror` (stream-browser-store.ts).
 function runtimeDebugKeys(projectId: string) {
-  return [
-    `${projectId} ${ONBOARDING_AGENT_PATH} browser-raw-events`,
-    `${projectId} ${ONBOARDING_AGENT_PATH} browser-feed`,
-  ];
+  return [`${projectId} ${ONBOARDING_AGENT_PATH} browser-stream-mirror`];
 }
 
 type RuntimeDebug = {
