@@ -687,7 +687,8 @@ test("expanding the tail event row at stream end stays above the composer", asyn
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  await expect(page.getByTestId("event-count")).toHaveText("123", { timeout: 30_000 });
+  // 124 = birth certificate (3) + subscriber-connected + 120 random events.
+  await expect(page.getByTestId("event-count")).toHaveText("124", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
   const tailRow = page.locator("[data-testid='virtual-row']").last().getByTestId("event-meta");
