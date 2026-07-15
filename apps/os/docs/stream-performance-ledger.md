@@ -3910,3 +3910,127 @@ callers can already obtain with explicit variadic `append(...events)`.
 The candidate is rejected and was not deployed. Raw records are
 `/tmp/follower-batch-{baseline,candidate}-r{1..5}.log`. The exact-head preview
 and production were untouched; no data was erased.
+
+## 2026-07-15: Thirteenth Current-Main Cumulative Checkpoint
+
+The thirteenth checkpoint pinned exact candidate
+`5a4a0c350f14d06a521a814bb4ac637a9ac73af1` against freshly fetched main
+`7b106d623ca1d814304443c0ad34f8e36ac0b0bb`. Separate local workerd servers
+ran those immutable revisions. Node-host timers enclosed awaited network/RPC
+work or host-observed delivery, so Cloudflare's frozen isolate clock cannot
+manufacture a latency improvement.
+
+Five fresh processes per revision ran each of the complete suite, enlarged
+storage/reactivation controls, append-tail controls, live-delivery controls,
+and enlarged cross-post controls. Process order alternated within each family.
+All 50 processes, exact-revision checks, and semantic assertions passed. The
+unmodified full-suite geometric result was 24.999% lower p50, 12.425% lower
+p95, and 23.194% lower mean latency.
+
+The conservative headline uses the same substitution rule declared for
+checkpoints eight through twelve. It replaces singleton append, 100-event
+append, concurrent-32 append, one-subscriber live delivery, and 25-subscriber
+live delivery with their larger focused controls, then takes an
+equal-workload geometric mean:
+
+| Equal-workload statistic | Improvement versus current main |
+| ------------------------ | ------------------------------: |
+| p50                      |                     **30.291%** |
+| p95                      |                     **21.993%** |
+| mean                     |                     **28.639%** |
+
+This is a branch-versus-main result for equally weighted benchmark workloads,
+not a sum of earlier percentages and not a production-traffic weighting. It
+repeats a large cumulative central win, but the change from checkpoint twelve
+also demonstrates that one local checkpoint is not a stable estimate of the
+exact production aggregate.
+
+Focused median-of-five-run results were:
+
+| Focused workload                     | P50 change | P95 change | Mean change |
+| ------------------------------------ | ---------: | ---------: | ----------: |
+| Append one 1 KiB event               |     72.51% |     70.11% |      66.96% |
+| Append 100 tiny events               |     41.23% |     31.83% |      42.42% |
+| Append 100 1 KiB events              |     53.88% |     36.96% |      51.09% |
+| Append 1,000 tiny events             |     59.73% |     41.51% |      56.23% |
+| Append 100 keyed tiny events         |     38.13% |     28.57% |      39.93% |
+| Append 32 concurrent singleton calls |     35.76% |     24.06% |      37.55% |
+| Deliver to one live subscriber       |     63.38% |     59.39% |      60.32% |
+| Deliver to 25 live subscribers       |     15.48% |     11.50% |      14.40% |
+| Dense post-reactivation replay       |     21.94% |     16.39% |      20.20% |
+| Sparse post-reactivation replay      |      9.95% |      2.38% |      14.30% |
+| Dense one-event cross-post           |     15.05% |      6.85% |      11.51% |
+| Sparse cross-post, 1 of 100 events   |     20.63% |     19.57% |      23.70% |
+| Append one inline 768 KiB event      |     49.10% |     35.50% |      41.70% |
+| Append one chunked 1.1 MiB event     |     14.35% |     -7.55% |       2.81% |
+
+The focused forced-reactivation head control again disagreed with its own full
+suite row: the focused p50 improved 2.07%, while p95 and mean regressed 60.41%
+and 11.29%; the full row was neutral at -0.21%/+1.06%/+0.83%. No current-head
+reactivation regression is inferred from that unstable tail, especially after
+the clean 1,500-observation control above, but it remains an explicit soak
+risk. The full suite's 500-event replay row was 1.05% slower at p50, 33.18%
+slower at p95, and 5.63% slower at mean across only 50 observations per
+revision. It needs a larger isolated control before the tail is accepted or
+attributed. The chunked append p95 also moved 7.55% in the wrong direction,
+while its p50 improved 14.35% and its mean remained within the 5% gate.
+
+Raw records are
+`/tmp/cumulative-13-{full,storage,tail,live,crosspost}-{main,candidate}-r{1..5}.log`.
+Collection ended at `2026-07-15T05:37:32.334Z`; if active optimization
+continues, the next exact-current-main checkpoint is due by
+`2026-07-15T09:37:32.334Z`. Both benchmark servers were stopped. Production
+was not deployed or erased.
+
+## 2026-07-15: Current-Head Legacy KV Rewrite Rejected
+
+A fresh isolated experiment reimplemented the narrow Stream API on a true
+legacy Durable Object KV namespace at exact shipping head `5a4a0c350`. This is
+not `ctx.storage.kv` on a SQLite-backed class, which still uses SQLite under
+workerd; the experiment declared a separate legacy class and compared its
+automatic dirty-set flush and explicit `storage.sync()` variants with
+synchronous SQLite.
+
+Three trials ran the correctness suite first, then contributed 225 Node-host
+samples per ordinary workload and 111 for the 768 KiB workload. Timings include
+HTTP, Worker-to-Durable-Object RPC, the storage output gate, and the response
+body. Every automatic legacy-KV p50 was slower:
+
+| Workload                          | SQLite p50 | Legacy KV p50 | Regression |
+| --------------------------------- | ---------: | ------------: | ---------: |
+| Append one 1 KiB event            |   0.941 ms |      0.983 ms |       4.4% |
+| Append 100 tiny events            |   1.247 ms |      1.259 ms |       0.9% |
+| Append 1,000 tiny events          |   3.408 ms |      3.605 ms |       5.8% |
+| Append 100 x 1 KiB events         |   1.572 ms |      1.699 ms |       8.0% |
+| Append one 768 KiB event          |   4.083 ms |      4.582 ms |      12.2% |
+| Repeat 100 keyed acknowledgements |   1.017 ms |      1.125 ms |      10.7% |
+| Read 500 of 5,000                 |   1.960 ms |      2.189 ms |      11.7% |
+| Select 10 of 1,000 by type        |   0.898 ms |      1.221 ms |      35.9% |
+| 32 concurrent singleton appends   |  11.565 ms |     11.990 ms |       3.7% |
+| Subscribe and deliver one event   |   1.004 ms |      1.048 ms |       4.3% |
+| Positive `waitForEvent` delivery  |   1.049 ms |      1.071 ms |       2.1% |
+
+P50-derived throughput fell from 293k to 277k events/s for 1,000 tiny events,
+63.6k to 58.9k events/s for 100 x 1 KiB, 183.7 to 163.7 MiB/s for the 768 KiB
+event, and 2.77k to 2.67k calls/s at concurrency 32. Explicit `storage.sync()`
+was slower than SQLite in every p50 lane as well. Source inspection explains
+why it cannot provide manual flush control: ActorCache already schedules the
+dirty-set transaction, and `sync()` waits for that flush rather than initiating
+or shaping it. `allowUnconfirmed` can let an acknowledgement escape durability
+and is invalid for Stream append acknowledgements.
+
+The narrow prototype is already 668 implementation lines and still omits
+crash injection, durable subscription cursors, ephemeral eviction floors,
+alarm recovery, descending reads, selector cursor advancement, corruption
+checks, and frozen-clock-safe timeout rearming. Legacy KV also limits values to
+128 KiB and writes to 128 keys per transport batch, has no indexed selector or
+range queries, and makes the application own segmentation, chunks, cleanup,
+and crash recovery. Erasing production removes migration work; it does not
+remove any of those runtime obligations.
+
+The experiment and raw evidence remain isolated on
+`experiment/stream-kv-yolo` at commits `153ae59fe` and `cc827aa70`. Its 85
+focused tests, three prototype correctness runs, OS typecheck, and Wrangler
+dry-run pass. It was not deployed. The experiment collapses by deleting one
+branch and directory; shipping it would materially increase complexity while
+reducing throughput. Synchronous SQLite remains the accepted journal.
