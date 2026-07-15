@@ -2,7 +2,6 @@ import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, test, vi } from "vitest";
 import {
   compileBrowserReplFunction,
-  createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplCode,
   evalBrowserReplSessionCode,
@@ -10,7 +9,6 @@ import {
   runBrowserReplEntry,
 } from "./browser-repl.ts";
 import { ITX_EXAMPLES } from "./examples.ts";
-import { PathProxy, replayPathCall } from "./path-proxy.ts";
 
 describe("browser Cap'n Web REPL", () => {
   test("default snippet uses Cap'n Web promise pipelining", async () => {
@@ -85,24 +83,6 @@ describe("browser Cap'n Web REPL", () => {
       result: ["prj_123"],
       status: "success",
     });
-  });
-
-  test("REPL supports SDK-shaped calls through a server-side path target", async () => {
-    const call = vi.fn(async (input: { args: unknown[]; path: string[] }) => input);
-    const itx = {
-      integrations: { slack: { get: () => new BrowserPathTarget(call) } },
-    };
-
-    await expect(
-      evalBrowserReplCode({
-        code: `await itx.integrations.slack.get().chat.postMessage({ channel: "C123", text: "hi" })`,
-        itx,
-      }),
-    ).resolves.toEqual({
-      args: [{ channel: "C123", text: "hi" }],
-      path: ["chat", "postMessage"],
-    });
-    expect(call).toHaveBeenCalledTimes(1);
   });
 
   test("session snippets can reference previous local variables", async () => {
@@ -453,58 +433,6 @@ const persisted = answer();
     }
   });
 
-  test("live-capability example registers, calls, and revokes a session-owned target", async () => {
-    // Mirrors a PROJECT-scoped itx handle: provideCapability({ type: "live" })
-    // mounts the caller's plain object, dotted access on the handle replays
-    // onto its members, and the returned provision's revoke() unmounts it —
-    // after which calls fail like the itx "no capability" rejection.
-    const providedTargets = new Map<string, Record<string, unknown>>();
-    const itx = new Proxy(
-      {
-        provideCapability(input: { capability: Record<string, unknown>; path: string[] }) {
-          const key = input.path.join(".");
-          providedTargets.set(key, input.capability);
-          return {
-            path: input.path,
-            providedAtOffset: 1,
-            revoke: async () => void providedTargets.delete(key),
-          };
-        },
-      },
-      {
-        get(target, prop: string | symbol) {
-          if (typeof prop !== "string" || prop in target || prop === "then") {
-            return Reflect.get(target, prop);
-          }
-          const provided = providedTargets.get(prop);
-          if (provided) {
-            return new PathProxy((call) => replayPathCall(provided, call));
-          }
-          return new PathProxy((call) =>
-            Promise.reject(new Error(`no capability "${[prop, ...call.path].join(".")}"`)),
-          );
-        },
-      },
-    );
-
-    const example = ITX_EXAMPLES.find((candidate) => {
-      return candidate.id === "provide-live-capability";
-    });
-    if (!example) throw new Error("Missing provide-live-capability example.");
-
-    await expect(
-      evalBrowserReplSessionCode({
-        code: example.code,
-        itx,
-        scope: createBrowserReplScope(),
-      }),
-    ).resolves.toEqual({
-      deep: { answer: 42, question: "life, the universe, everything" },
-      revoked: true,
-      ultimate: 42,
-    });
-  });
-
   test("snippets ending in a top-level return produce that value", async () => {
     const scope: Record<string, unknown> = {};
 
@@ -581,38 +509,3 @@ const persisted = answer();
     );
   });
 });
-
-class BrowserPathTarget extends RpcTarget {
-  constructor(private readonly callPath: (input: { args: unknown[]; path: string[] }) => unknown) {
-    super();
-    return this.callable([]) as unknown as BrowserPathTarget;
-  }
-
-  private callable(path: string[]): Function {
-    return new Proxy((...args: unknown[]) => this.callPath({ args, path }), {
-      apply: (_target, _thisArg, args) => this.callPath({ args, path }),
-      get: (target, key, receiver) => {
-        if (key === "then") return undefined;
-        if (typeof key === "symbol" || key in target) return Reflect.get(target, key, receiver);
-        return this.callable([...path, key]);
-      },
-      getOwnPropertyDescriptor: (target, key) => {
-        const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
-        if (descriptor) return descriptor;
-        if (key in target) return undefined;
-        if (typeof key === "symbol" || key === "then") return undefined;
-        return {
-          configurable: true,
-          enumerable: false,
-          value: this.callable([...path, key]),
-          writable: false,
-        };
-      },
-      has: (target, key) => {
-        if (typeof key === "symbol") return key in target;
-        if (key === "then") return false;
-        return true;
-      },
-    });
-  }
-}

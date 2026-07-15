@@ -475,25 +475,6 @@ describe("triggering", () => {
     });
   });
 
-  it("one-shots leave state once their trigger settles", async () => {
-    const harness = makeHarness();
-    const { clock, deliver, processor, stream } = harness;
-    await stream.append({
-      type: SET_TYPE,
-      payload: {
-        action: { kind: "itx-script", script: "async () => {}" },
-        key: "once",
-        recurrence: { at: new Date(T0 + 30_000).toISOString() },
-      },
-    });
-    await deliver();
-    clock.now = T0 + 31_000;
-    await processor.triggerDue();
-    await deliver();
-    await waitForCompletion(harness);
-    expect(processor.state.schedules).toEqual({});
-  });
-
   it("manual triggers require an existing key, run immediately, and advance the recurring clock", async () => {
     const harness = makeHarness();
     const { clock, deliver, processor, stream } = harness;

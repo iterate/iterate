@@ -1,0 +1,69 @@
+# Cloudflare Preview GC — the lazy, scheduled half of the preview resource
+# lifecycle (see docs/preview-resource-gc.md). Releasing a slot never waits on
+# teardown: PR-close cleanup (cloudflare-preview-cleanup.yml) is the fast path,
+# and this sweep reclaims whatever it did not — a lease that expired because a
+# PR went quiet for 3h, or a slot whose cleanup failed. It is idempotent and
+# safe to run as often as we like: `pnpm preview gc` only touches slots whose
+# lease has already expired, takes each under a NON-force lease (so it can never
+# steal a live tenant's slot), erases it, and releases it.
+#
+# Lease expiry is the only signal — no GitHub token needed. R2 data reaps itself
+# via lifecycle rules; this sweep's real job is the Durable Object / D1 / KV
+# wipe and the AI Search per-instance delete (which has no server-side expiry).
+#
+# Depot registers automatic triggers when this file is on the default branch —
+# branch-only changes to the `on:` block do not take effect until merged.
+#
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
+
+name: Cloudflare Preview GC (Depot CI)
+
+on:
+  # Hourly, offset off the top of the hour to avoid contending with deploys.
+  # The lease TTL is 3h, so an abandoned slot is reclaimed within ~1h of expiry.
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Report what would be reclaimed without erasing anything
+        type: boolean
+        default: false
+
+concurrency:
+  # Never run two sweeps at once; a run in progress wins (the next tick catches
+  # anything it missed).
+  group: cloudflare-preview-gc
+  cancel-in-progress: false
+
+jobs:
+  gc:
+    name: Preview / gc
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Run the sweep from the default branch so it always carries the
+          # latest tooling, like cleanup does.
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+      - name: Preview / gc
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |-
+          set -euo pipefail
+          doppler run --project _shared --config prd -- pnpm preview gc \
+            ${{ (github.event.inputs.dry-run == 'true') && '--dry-run' || '' }}

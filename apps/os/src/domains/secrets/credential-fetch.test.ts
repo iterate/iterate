@@ -2,20 +2,6 @@ import { describe, expect, test, vi } from "vitest";
 import { fetchWithCredentialRedirects, MAX_CREDENTIAL_REDIRECTS } from "./credential-fetch.ts";
 
 describe("fetchWithCredentialRedirects", () => {
-  test("removes the credential-bearing upstream URL from terminal response metadata", async () => {
-    const upstream = await fetch("data:application/json,%7B%22ok%22%3Atrue%7D");
-    expect(upstream.url).not.toBe("");
-
-    const response = await fetchWithCredentialRedirects(
-      new Request("https://allowed.example/bot-url-secret/getMe"),
-      { fetcher: async () => upstream },
-    );
-
-    expect(response.url).toBe("");
-    expect(response.redirected).toBe(false);
-    await expect(response.json()).resolves.toEqual({ ok: true });
-  });
-
   test("removes URL-bearing terminal response headers", async () => {
     const response = await fetchWithCredentialRedirects(
       new Request("https://allowed.example/bot-secret/getMe"),

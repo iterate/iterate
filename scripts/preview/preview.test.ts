@@ -49,6 +49,7 @@ const {
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
@@ -116,9 +117,10 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
     expect(cloudflarePreviewSharedPaths).toContain("packages/ui/**");
     expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/iterate-com/**");
-    // The preview deploy + e2e lifecycle is one Depot CI workflow (cleanup
-    // has its own, with mirrored paths); a change to it triggers a full-fleet
-    // preview and must be mirrored in that file's own paths list.
+    // The preview deploy + e2e lifecycle is one Depot CI workflow; a change to
+    // it triggers a full-fleet preview. Cleanup is a separate closed-event
+    // workflow with no paths filter (it must run for every closed PR that
+    // might hold a lease, including full reverts).
     expect(cloudflarePreviewSharedPaths).toContain(".depot/workflows/cloudflare-previews.yml");
     // Dependency manifests can change every app's build output; a diff that
     // touches only them must select the full fleet, not "no apps affected"
@@ -149,11 +151,12 @@ describe("preview workflow scope", () => {
       baseUrl: "https://dummy-petshop.iterate-preview-3.com",
       projectHostnameBases: [],
     });
-    for (const workflow of ["cloudflare-previews.yml", "cloudflare-preview-cleanup.yml"]) {
-      expect(readFileSync(resolve(repoRoot, ".depot/workflows", workflow), "utf8")).toContain(
-        "- apps/dummy-petshop/**",
-      );
-    }
+    // Only the deploy workflow is path-filtered; cleanup deliberately has no
+    // paths list (it must run for every closed PR — see the cleanup-trigger
+    // test below), so it is not asserted here.
+    expect(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ).toContain("- apps/dummy-petshop/**");
   });
 
   test("deploys OS after Petshop and passes that exact preview URL to OS e2e", () => {
@@ -250,6 +253,43 @@ describe("preview workflow scope", () => {
     });
     expect(deployWorkflowText).not.toContain("cloudflare-preview-fleet-auth-rpc-cutover");
     expect(cleanupWorkflowText).not.toContain("cloudflare-preview-fleet-auth-rpc-cutover");
+  });
+
+  it("always runs cleanup on close with default-branch tooling (no paths filter)", () => {
+    const cleanupWorkflowText = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-preview-cleanup.yml"),
+      "utf8",
+    );
+    const cleanupWorkflow = parseYaml(cleanupWorkflowText) as {
+      on?: { pull_request?: { types?: string[]; paths?: string[] } };
+    };
+
+    expect(cleanupWorkflow.on?.pull_request?.types).toEqual(["closed"]);
+    // A paths filter skips cleanup when the final PR diff is empty (full
+    // revert) or no longer matches deploy paths — which leaks the lease.
+    expect(cleanupWorkflow.on?.pull_request?.paths).toBeUndefined();
+    // PR-head checkout reintroduces old bugs (e.g. bail-before-release);
+    // cleanup tooling must come from the default branch.
+    expect(cleanupWorkflowText).toContain("github.event.repository.default_branch");
+    expect(cleanupWorkflowText).not.toContain("github.event.pull_request.head.sha");
+  });
+
+  it("sweeps expired leases on a schedule from default-branch tooling", () => {
+    const gcWorkflowText = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-preview-gc.yml"),
+      "utf8",
+    );
+    const gcWorkflow = parseYaml(gcWorkflowText) as {
+      on?: { schedule?: { cron: string }[] };
+    };
+
+    // The GC is scheduled (the lazy half of the lifecycle), not triggered by a
+    // PR event.
+    expect(gcWorkflow.on?.schedule?.length).toBeGreaterThan(0);
+    expect(gcWorkflowText).toContain("pnpm preview gc");
+    // Runs current tooling, and needs no GitHub token — lease expiry is the
+    // only signal.
+    expect(gcWorkflowText).toContain("github.event.repository.default_branch");
   });
 });
 
@@ -1651,6 +1691,151 @@ describe("lease reclaim verdicts", () => {
         now,
       }),
     ).toBe("active");
+  });
+});
+
+describe("preview fleet capacity diagnosis", () => {
+  const { diagnosePreviewFleetCapacity, pullRequestWouldClaimPreviewSlot } = previewInternals;
+
+  it("treats ready PRs and preview-labeled drafts as slot-eligible", () => {
+    expect(pullRequestWouldClaimPreviewSlot({ isDraft: false, labels: [] })).toBe(true);
+    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: ["preview"] })).toBe(true);
+    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: [] })).toBe(false);
+  });
+
+  it("does not call a label-less draft slot-less when it actually holds one (--allow-draft)", () => {
+    const diagnosis = diagnosePreviewFleetCapacity({
+      openPullRequests: [
+        {
+          number: 4242,
+          title: "draft dispatched with --allow-draft",
+          url: "https://github.com/iterate/iterate/pull/4242",
+          isDraft: true,
+          labels: [],
+        },
+      ],
+      slots: [
+        {
+          slug: "preview-1",
+          verdict: "active",
+          holder: "pr-4242",
+          pullRequestUrl: "https://github.com/iterate/iterate/pull/4242",
+          pullRequestState: "open",
+          leasedUntil: "2026-07-16T09:20:18.639Z",
+          lastUsedAgo: "2m ago",
+        },
+      ],
+    });
+
+    // It holds a slot, so it must not be reported as "correctly claims no slot".
+    expect(diagnosis.holdersWithOpenPrs).toContain(4242);
+    expect(diagnosis.reasons.some((reason) => reason.includes("claim no slot"))).toBe(false);
+  });
+
+  it("explains a full fleet held mostly by closed PRs despite few open ones", () => {
+    const diagnosis = diagnosePreviewFleetCapacity({
+      openPullRequests: [
+        {
+          number: 2008,
+          title: "ready pr without a slot",
+          url: "https://github.com/iterate/iterate/pull/2008",
+          isDraft: false,
+          labels: [],
+        },
+        {
+          number: 1983,
+          title: "draft without opt-in",
+          url: "https://github.com/iterate/iterate/pull/1983",
+          isDraft: true,
+          labels: [],
+        },
+      ],
+      slots: [
+        {
+          slug: "preview-1",
+          verdict: "orphaned",
+          holder: "pr-1990",
+          pullRequestUrl: "https://github.com/iterate/iterate/pull/1990",
+          pullRequestState: "closed",
+          leasedUntil: "2026-07-15T13:53:39.946Z",
+          lastUsedAgo: "19h ago",
+        },
+        {
+          slug: "preview-2",
+          verdict: "active",
+          holder: "pr-2006",
+          pullRequestUrl: "https://github.com/iterate/iterate/pull/2006",
+          pullRequestState: "open",
+          leasedUntil: "2026-07-16T09:20:18.639Z",
+          lastUsedAgo: "2m ago",
+        },
+      ],
+    });
+
+    expect(diagnosis.availableCount).toBe(0);
+    expect(diagnosis.leasedCount).toBe(2);
+    expect(diagnosis.orphanedCount).toBe(1);
+    expect(diagnosis.previewEligibleWithoutSlotCount).toBe(1);
+    expect(diagnosis.reclaimCommands).toEqual(["pnpm preview reclaim --slot preview-1 --force"]);
+    expect(diagnosis.reasons.some((reason) => reason.includes("closed/merged"))).toBe(true);
+    expect(diagnosis.reasons.some((reason) => reason.includes("#2008"))).toBe(true);
+    expect(diagnosis.reasons.some((reason) => reason.includes("#1983"))).toBe(true);
+    expect(diagnosis.summary).toContain("orphaned");
+  });
+});
+
+describe("gc expired-lease selection", () => {
+  const now = 1_000_000_000_000;
+  const base = { data: {}, lastReleasedAt: null, lastAcquiredAt: null };
+
+  it("selects only leased slots whose lease is at or past expiry", () => {
+    const selected = selectExpiredLeasesForGc(
+      [
+        // Live lease — a PR is still using it, skip.
+        {
+          ...base,
+          slug: "preview-1",
+          leaseState: "leased",
+          leasedUntil: now + 60_000,
+          holder: "pr-1",
+        },
+        // Expired lease — reclaim.
+        {
+          ...base,
+          slug: "preview-2",
+          leaseState: "leased",
+          leasedUntil: now - 60_000,
+          holder: "pr-2",
+        },
+        // Exactly at expiry — reclaim (<=).
+        { ...base, slug: "preview-3", leaseState: "leased", leasedUntil: now, holder: "pr-3" },
+        // Available slots are cleaned by their next acquirer, never by gc.
+        { ...base, slug: "preview-4", leaseState: "available", leasedUntil: null, holder: null },
+      ],
+      now,
+    );
+
+    expect(selected.map((slot) => slot.slug)).toEqual(["preview-2", "preview-3"]);
+  });
+
+  it("resolves the doppler config from lease data, else derives it from the slug", () => {
+    const selected = selectExpiredLeasesForGc(
+      [
+        {
+          ...base,
+          slug: "preview-5",
+          leaseState: "leased",
+          leasedUntil: now - 1,
+          holder: "pr-5",
+          data: { dopplerConfig: "preview_5" },
+        },
+        // No payload yet → slug-derived (preview-6 → preview_6).
+        { ...base, slug: "preview-6", leaseState: "leased", leasedUntil: now - 1, holder: null },
+      ],
+      now,
+    );
+
+    expect(selected.map((slot) => slot.dopplerConfig)).toEqual(["preview_5", "preview_6"]);
   });
 });
 
