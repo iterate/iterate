@@ -59,7 +59,7 @@ beforeEach(() => {
   resetRecordedSpans();
 });
 
-it("rotates a poisoned named loader isolate before propagating Cloudflare's clone error", async () => {
+it("rotates a poisoned named loader isolate without retrying a generic capability call", async () => {
   const cloneError = new Error(
     "Unable to deserialize cloned data due to invalid or unsupported version.",
   );
@@ -100,6 +100,96 @@ it("rotates a poisoned named loader isolate before propagating Cloudflare's clon
     resolved,
     scopePath: "/",
   });
+  expect(loadResolvedWorker).toHaveBeenCalledOnce();
+});
+
+it("retries an at-least-once call once on the rotated named loader isolate", async () => {
+  const cloneError = new Error(
+    "Unable to deserialize cloned data due to invalid or unsupported version.",
+  );
+  const resolved = {
+    cacheKey: "artifact-v1",
+    mainModule: "worker.js",
+    modules: { "worker.js": "export default {}" },
+  };
+  vi.mocked(resolveWorkerSource).mockResolvedValue({
+    resolved,
+    source: inlineRef.source,
+    version: "artifact-v1",
+  });
+  const first = vi.fn().mockRejectedValue(cloneError);
+  const recovered = vi.fn().mockResolvedValue("delivered");
+  vi.mocked(loadResolvedWorker)
+    .mockReturnValueOnce({
+      getEntrypoint: () => ({ processEventBatch: first }),
+    } as unknown as WorkerStub)
+    .mockReturnValueOnce({
+      getEntrypoint: () => ({ processEventBatch: recovered }),
+    } as unknown as WorkerStub);
+  const runner = new DynamicWorkerRunner({
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: "/",
+    waitUntil: () => undefined,
+  });
+
+  await expect(
+    runner.invokeCapability({
+      flattenNestedPath: true,
+      path: ["processEventBatch"],
+      ref: inlineRef,
+      retryInvalidLoaderClone: true,
+    }),
+  ).resolves.toBe("delivered");
+
+  expect(first).toHaveBeenCalledOnce();
+  expect(recovered).toHaveBeenCalledOnce();
+  expect(loadResolvedWorker).toHaveBeenCalledTimes(2);
+  expect(invalidateLoadedWorker).toHaveBeenCalledOnce();
+});
+
+it("bounds at-least-once clone recovery to one retry", async () => {
+  const firstCloneError = new Error(
+    "Unable to deserialize cloned data due to invalid or unsupported version.",
+  );
+  const secondCloneError = new Error(
+    "Unable to deserialize cloned data due to invalid or unsupported version.",
+  );
+  const resolved = {
+    cacheKey: "artifact-v1",
+    mainModule: "worker.js",
+    modules: { "worker.js": "export default {}" },
+  };
+  vi.mocked(resolveWorkerSource).mockResolvedValue({
+    resolved,
+    source: inlineRef.source,
+    version: "artifact-v1",
+  });
+  vi.mocked(loadResolvedWorker)
+    .mockReturnValueOnce({
+      getEntrypoint: () => ({ processEventBatch: vi.fn().mockRejectedValue(firstCloneError) }),
+    } as unknown as WorkerStub)
+    .mockReturnValueOnce({
+      getEntrypoint: () => ({ processEventBatch: vi.fn().mockRejectedValue(secondCloneError) }),
+    } as unknown as WorkerStub);
+  const runner = new DynamicWorkerRunner({
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: "/",
+    waitUntil: () => undefined,
+  });
+
+  await expect(
+    runner.invokeCapability({
+      flattenNestedPath: true,
+      path: ["processEventBatch"],
+      ref: inlineRef,
+      retryInvalidLoaderClone: true,
+    }),
+  ).rejects.toBe(secondCloneError);
+
+  expect(loadResolvedWorker).toHaveBeenCalledTimes(2);
+  expect(invalidateLoadedWorker).toHaveBeenCalledTimes(2);
 });
 
 describe("dynamic worker spans", () => {

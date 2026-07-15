@@ -172,6 +172,7 @@ export class DynamicWorkerRunner {
     flattenNestedPath = false,
     path,
     ref,
+    retryInvalidLoaderClone = false,
     traceRole,
   }: {
     args?: unknown[];
@@ -180,6 +181,9 @@ export class DynamicWorkerRunner {
     flattenNestedPath?: boolean;
     path: string[];
     ref: DynamicWorkerRef;
+    /** Retry once after rotating a poisoned named Loader isolate. Only valid
+     * for callers whose operation already promises at-least-once delivery. */
+    retryInvalidLoaderClone?: boolean;
     traceRole?: DynamicWorkerTraceRole;
   }): Promise<unknown> {
     // Capability dispatch is method calls; no name is protocol-special here,
@@ -199,8 +203,8 @@ export class DynamicWorkerRunner {
       );
     }
 
-    try {
-      return await this.#trace(ref, "call", traceRole, async () => {
+    const invoke = () =>
+      this.#trace(ref, "call", traceRole, async () => {
         if (ref.type === "stateful") {
           // Method replay must happen inside StatefulWorkerDurableObject. Returning
           // a dynamic facet stub through one DO and then invoking it from another RPC
@@ -224,25 +228,39 @@ export class DynamicWorkerRunner {
           ? await invokePreferringFlattenedPath({ args, path, target })
           : await replayPath({ args, path, target });
       });
+
+    try {
+      return await invoke();
     } catch (error) {
       // A named Loader isolate owns the env Frankenvalue created with it. If
-      // Cloudflare can no longer deserialize that retained value, preserve the
-      // caller-visible rejection but ensure its next attempt mints a new
-      // isolate. Generic capability calls are not retried here: unlike Stream
-      // delivery, they do not promise idempotent side effects.
-      if (ref.type === "stateless" && isInvalidWorkerLoaderCloneError(error)) {
-        const resolved = this.#sourceResolution?.resolved;
-        if (resolved !== undefined) {
-          invalidateLoadedWorker({
-            projectId: this.#projectId,
-            ref,
-            resolved,
-            scopePath: this.#scopePath,
-          });
-        }
+      // Cloudflare can no longer deserialize that retained value, rotate the
+      // exact identity. Generic capability calls preserve the rejection:
+      // unlike Stream delivery, they do not promise idempotent side effects.
+      const invalidated = this.#invalidateCloneFailedLoader(ref, error);
+      if (!invalidated || !retryInvalidLoaderClone) throw error;
+
+      try {
+        return await invoke();
+      } catch (retryError) {
+        // Leave a second bad identity rotated for the next durable redelivery,
+        // but never spin inside one request.
+        this.#invalidateCloneFailedLoader(ref, retryError);
+        throw retryError;
       }
-      throw error;
     }
+  }
+
+  #invalidateCloneFailedLoader(ref: DynamicWorkerRef, error: unknown): boolean {
+    if (ref.type !== "stateless" || !isInvalidWorkerLoaderCloneError(error)) return false;
+    const resolved = this.#sourceResolution?.resolved;
+    if (resolved === undefined) return false;
+    invalidateLoadedWorker({
+      projectId: this.#projectId,
+      ref,
+      resolved,
+      scopePath: this.#scopePath,
+    });
+    return true;
   }
 
   /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */

@@ -4404,6 +4404,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   readonly #flattenNestedPaths: boolean;
   readonly #props: { ctx: CfExecutionContext; projectId: string };
   readonly #ref: DynamicWorkerRef;
+  readonly #retryInvalidLoaderClone: boolean;
   readonly #traceRole: DynamicWorkerTraceRole | undefined;
   #lazyRunner: DynamicWorkerRunner | undefined;
 
@@ -4413,6 +4414,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
+    retryInvalidLoaderClone?: boolean;
     traceRole?: DynamicWorkerTraceRole;
   }) {
     super();
@@ -4420,6 +4422,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
+    this.#retryInvalidLoaderClone = props.retryInvalidLoaderClone === true;
     this.#traceRole = props.traceRole;
   }
 
@@ -4503,6 +4506,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       flattenNestedPath,
       path,
       ref: this.#ref,
+      retryInvalidLoaderClone: this.#retryInvalidLoaderClone,
       traceRole: this.#traceRole,
     });
   }
@@ -5457,9 +5461,17 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     this.#indexAgentStatus(batch);
     this.#indexStreamSearch(batch);
     try {
-      this.#deliveryWorker ??= this.workers.get<ProjectWorker>(defaultProjectWorkerRef(), {
+      this.#deliveryWorker ??= new DynamicWorkerRpcTarget({
+        ctx: this.#props.ctx,
         flattenNestedPaths: true,
-      });
+        projectId: this.#props.projectId,
+        ref: defaultProjectWorkerRef(),
+        // Configured Stream delivery is already at-least-once and requires
+        // idempotent subscriber effects. Recover a poisoned Loader in this
+        // same fronting Worker request before fleet-wide retries accumulate
+        // exponential backoff across activation-local Loader caches.
+        retryInvalidLoaderClone: true,
+      }) as unknown as DynamicWorkerCapability<ProjectWorker>;
       return await this.#deliveryWorker.processEventBatch(batch);
     } catch (error) {
       // Bootstrap failures and a poisoned named Loader isolate are receiver
