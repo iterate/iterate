@@ -209,25 +209,41 @@ export async function processGithubReviewEvent(input: {
       }),
     }),
   ]);
-  await input.itx.streams.get(reviewAgentPath).append(...defaults.events, {
-    type: "events.iterate.com/agents/message-received",
-    idempotencyKey: externalId,
-    payload: {
-      content: githubReviewTask({
-        ...target,
-        checkId: check.id,
-        checkUrl: check.html_url ?? undefined,
-        externalId,
-        rules: rulesFile.content,
-        skipLabel: input.config.skipLabel,
-        sourceOffset: input.event.offset,
-        streamPath: input.event.path,
-        timeoutScheduleKey,
-      }),
-      from: { kind: "github" },
-      llmRequestPolicy: { behaviour: "after-current-request" },
+  await input.itx.streams.get(reviewAgentPath).append(
+    ...defaults.events,
+    {
+      // Roster identity for the sidebar: same shape the conversational PR
+      // agent stamps on route-configured, so review children do not fall back
+      // to a truncated repos/g~… path label.
+      type: "events.iterate.com/agent/status-changed",
+      idempotencyKey: `status-identity:${externalId}`,
+      payload: {
+        icon: "github",
+        title: `${target.fullName}#${target.number}`,
+        note: `Review of PR #${target.number} in ${target.fullName}`,
+        shortStatus: "reviewing the pull request",
+      },
     },
-  });
+    {
+      type: "events.iterate.com/agents/message-received",
+      idempotencyKey: externalId,
+      payload: {
+        content: githubReviewTask({
+          ...target,
+          checkId: check.id,
+          checkUrl: check.html_url ?? undefined,
+          externalId,
+          rules: rulesFile.content,
+          skipLabel: input.config.skipLabel,
+          sourceOffset: input.event.offset,
+          streamPath: input.event.path,
+          timeoutScheduleKey,
+        }),
+        from: { kind: "github" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    },
+  );
   return "queued";
 }
 
