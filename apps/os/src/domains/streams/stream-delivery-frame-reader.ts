@@ -113,6 +113,21 @@ export class StreamDeliveryFrameReader {
     this.#freshTailSizedProjection = undefined;
   }
 
+  /** Release append-owned payloads once no delivery turn can consume them. */
+  releaseFreshTail(): void {
+    this.#freshTail = [];
+    this.#freshTailByteLength = 0;
+    this.#freshTailProjection = undefined;
+    this.#freshTailSizedProjection = undefined;
+  }
+
+  /** Release parsed payload caches while retaining scalar storage-read hints. */
+  releaseRetainedPayloads(): void {
+    this.releaseFreshTail();
+    this.#storageReadCachesByByteLimit.clear();
+    this.#storageReadProjectionsByByteLimit.clear();
+  }
+
   /**
    * Answer an ascending public read only when the retained tail proves the
    * complete result. A miss is deliberately `undefined`: callers must fall

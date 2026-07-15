@@ -96,4 +96,36 @@ describe("StreamDeliveryFrameReader.tryReadFreshEvents", () => {
       }),
     ).toEqual([]);
   });
+
+  it("explicitly releases an idle append tail", () => {
+    const { reader } = readerWith([event(1), event(2)]);
+    reader.releaseFreshTail();
+
+    expect(
+      reader.tryReadFreshEvents({
+        afterOffset: 0,
+        throughOffset: 2,
+        includeEphemeral: true,
+        limit: 500,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("explicitly releases storage-backed parsed projections", () => {
+    const readEvents = vi
+      .fn()
+      .mockReturnValueOnce([1, 2, 3].map((offset) => ({ event: event(offset), byteLength: 64 })))
+      .mockReturnValue([]);
+    const reader = new StreamDeliveryFrameReader({ readEvents });
+
+    expect(
+      reader
+        .read({ afterOffset: 0, throughOffset: 3, limit: 3 })
+        .events.map((entry) => entry.offset),
+    ).toEqual([1, 2, 3]);
+    reader.releaseRetainedPayloads();
+
+    expect(reader.read({ afterOffset: 0, throughOffset: 3, limit: 3 }).events).toEqual([]);
+    expect(readEvents).toHaveBeenCalledTimes(2);
+  });
 });

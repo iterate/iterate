@@ -1852,6 +1852,31 @@ describe("StreamSubscribers", () => {
     ]);
   });
 
+  it("n0. caught-up replay connections release parsed storage frames", async () => {
+    const h = makeHarness();
+    h.append(evt(1, "a"), evt(2, "b"), evt(3, "c"));
+
+    const first = h.subscribers.openEphemeral({
+      subscriptionKey: "first",
+      sink: () => {},
+      replayAfterOffset: 0,
+    });
+    expect(h.storageReads()).toBe(1);
+    await h.settle();
+
+    // A caught-up connection is not payload demand. A second replay parses
+    // storage again instead of pinning the first replay's shared frame.
+    const second = h.subscribers.openEphemeral({
+      subscriptionKey: "second",
+      sink: () => {},
+      replayAfterOffset: 0,
+    });
+    expect(h.storageReads()).toBe(2);
+
+    first.close("unsubscribed");
+    second.close("unsubscribed");
+  });
+
   it("n1. subscriber-connected wake cannot start a second connection pump", async () => {
     const h = makeHarness();
     const batches: number[][] = [];
@@ -2338,7 +2363,7 @@ describe("StreamSubscribers", () => {
     expect(h.storageReads()).toBe(0);
   });
 
-  it("w0a. idle appends retain only the latest fresh tail", async () => {
+  it("w0a. idle appends release the parsed tail and replay from storage", async () => {
     const h = makeHarness();
     const first = evt(1, "a");
     h.append(first);
@@ -2354,6 +2379,8 @@ describe("StreamSubscribers", () => {
       replayAfterOffset: 0,
     });
 
+    // With no delivery in flight, retaining either append payload would pin
+    // user data indefinitely. Replay therefore reconstructs both from storage.
     expect(sink.batches.map((batch) => batch.events.map((event) => event.offset))).toEqual([
       [1, 2],
     ]);

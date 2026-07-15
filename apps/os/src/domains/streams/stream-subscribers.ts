@@ -190,6 +190,8 @@ type Connection = {
   isLive(): boolean;
   /** `true` while a durable sink delivery is dispatched but unsettled. */
   hasPendingDelivery(): boolean;
+  /** Whether this pump still needs parsed payloads below its newest notified head. */
+  needsRetainedPayloads(): boolean;
   /** Stop the pump, dispose the sink, append the disconnect fact, drop from the table. */
   close(reason: StreamSubscriberDisconnectReason): void;
 };
@@ -350,6 +352,8 @@ export class StreamSubscribers {
    */
   readonly #idleTeardownMs: number;
   readonly #connections = new Map<string, Connection>();
+  /** Live pumps whose cursor is still below their newest notified head. */
+  readonly #connectionsRetainingPayloads = new Set<Connection>();
   #configuredConnectionCount = 0;
   #idleTimer: ReturnType<typeof setTimeout> | undefined;
   #idleDeadlineMs: number | undefined;
@@ -440,6 +444,23 @@ export class StreamSubscribers {
     return this.#lastParsedCreatedAtMs!;
   }
 
+  /** Release parsed frames once no asynchronous delivery turn can consume them. */
+  #releaseRetainedPayloadsIfIdle(): void {
+    if (
+      this.#connectionsRetainingPayloads.size > 0 ||
+      this.#pushDrains.size > 0 ||
+      this.#pokesInFlight.size > 0
+    ) {
+      return;
+    }
+    this.#deliveryFrameReader.releaseRetainedPayloads();
+  }
+
+  #syncConnectionPayloadDemand(connection: Connection): void {
+    if (connection.needsRetainedPayloads()) this.#connectionsRetainingPayloads.add(connection);
+    else this.#connectionsRetainingPayloads.delete(connection);
+  }
+
   // ===========================================================================
   // The one wake-up: called post-commit and from the DO alarm.
   // ===========================================================================
@@ -481,9 +502,15 @@ export class StreamSubscribers {
     });
     if (this.#connections.size > 0) {
       const state = this.#readWakeState();
-      for (const connection of this.#connections.values()) connection.notify(state);
+      for (const connection of this.#connections.values()) {
+        connection.notify(state);
+        this.#syncConnectionPayloadDemand(connection);
+      }
     }
-    if (this.#tearingDown) return;
+    if (this.#tearingDown) {
+      this.#releaseRetainedPayloadsIfIdle();
+      return;
+    }
     try {
       // Config side effects close stale wake connections before this final
       // post-commit wake and invalidate the identity-keyed entry snapshot.
@@ -509,6 +536,10 @@ export class StreamSubscribers {
     } catch (error) {
       console.error("stream durable subscription reconcile failed", error);
     }
+    // Keep the append tail only while a delivery has crossed an asynchronous
+    // boundary and can still consume it. Idle Streams otherwise pin the last
+    // append's parsed envelopes indefinitely.
+    this.#releaseRetainedPayloadsIfIdle();
   }
 
   /** Reuse the already-retained append tail when it proves a complete public read. */
@@ -722,6 +753,7 @@ export class StreamSubscribers {
         }
       } finally {
         this.#pokesInFlight.delete(subscriptionKey);
+        this.#releaseRetainedPayloadsIfIdle();
       }
     })();
     this.#hooks.keepAlive(work);
@@ -1025,6 +1057,7 @@ export class StreamSubscribers {
         }
       } finally {
         this.#pushDrains.delete(subscriptionKey);
+        this.#releaseRetainedPayloadsIfIdle();
       }
     })();
     this.#hooks.keepAlive(
@@ -1602,6 +1635,9 @@ export class StreamSubscribers {
         }
       } finally {
         draining = false;
+        const retainedPayloads = this.#connectionsRetainingPayloads.has(connection);
+        this.#syncConnectionPayloadDemand(connection);
+        if (retainedPayloads) this.#releaseRetainedPayloadsIfIdle();
       }
     };
 
@@ -1635,11 +1671,13 @@ export class StreamSubscribers {
       },
       isLive: () => open,
       hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
+      needsRetainedPayloads: () => open && cursor < notifiedHead,
       close: (reason) => {
         if (!open) return;
         open = false;
         if (this.#connections.get(subscriptionKey) === connection) {
           this.#connections.delete(subscriptionKey);
+          this.#connectionsRetainingPayloads.delete(connection);
           if (subscriptionType === "configured") {
             this.#configuredConnectionCount -= 1;
             if (this.#configuredConnectionCount === 0) this.#clearIdleTimer();
@@ -1654,6 +1692,7 @@ export class StreamSubscribers {
           type: "events.iterate.com/stream/subscriber-disconnected",
           payload: { subscriptionKey, reason },
         });
+        this.#releaseRetainedPayloadsIfIdle();
         // A dead durable connection makes its watermark decisive again. Only
         // genuinely-broken closes re-reconcile: idle teardown suppresses
         // reconcile for its turn and advances watermarks itself (see
@@ -1677,6 +1716,8 @@ export class StreamSubscribers {
     });
     sink.onRpcBroken?.(() => connection.close("rpc-broken"));
     void pump();
+    this.#syncConnectionPayloadDemand(connection);
+    this.#releaseRetainedPayloadsIfIdle();
     return connection;
   }
 
