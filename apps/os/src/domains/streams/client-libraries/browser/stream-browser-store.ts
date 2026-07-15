@@ -1276,7 +1276,6 @@ function createStreamRuntime(
             sql,
             processorSlug: member.slug,
             subscriptionKey: memberSubscriptionKey(member.slug),
-            contractVersion: processor.contract.version,
             ensureProjectionSchema: (client) => processor.ensureProjectionSchema(client),
             projection: processor.projectionBuffer,
           });

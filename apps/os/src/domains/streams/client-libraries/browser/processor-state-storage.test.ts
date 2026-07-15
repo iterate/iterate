@@ -1,8 +1,7 @@
 // Tests for the browser processors' durable state against real SQLite via
-// node:sqlite, driven the way production drives them since the runner cutover:
-// a StreamProcessorRunner per processor whose progress lives in the
-// transactional browser progress store (`processor_progress` + the legacy
-// `processor_state` dual-write), with projection writes and the two-cursor
+// node:sqlite, driven the way production drives them: a StreamProcessorRunner
+// per processor whose progress lives in the transactional browser progress
+// store (`processor_progress`), with projection writes and the two-cursor
 // record committed in ONE transaction.
 //
 // The load-bearing regressions pinned here:
@@ -12,10 +11,7 @@
 //     rebuild without the skipped prefix (the gap-tolerant trigger accepts
 //     the hole);
 //   - a commit that fails for ANY reason (revision fence, projection trigger)
-//     rolls back the projection writes AND the progress record together;
-//   - a legacy `{reduced_state, max_offset}` checkpoint is adopted with its
-//     acknowledgement preserved — never replayed — and the legacy row keeps
-//     being dual-written (the stream view reads reduced_state from it).
+//     rolls back the projection writes AND the progress record together.
 
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -107,7 +103,6 @@ function rawEventsLoad(db: DatabaseSync) {
   const progress = browserProcessorProgressStore<BrowserRawEventsState>({
     sql,
     processorSlug: BrowserRawEventsContract.slug,
-    contractVersion: processor.contract.version,
     ensureProjectionSchema: (client) => processor.ensureProjectionSchema(client),
     projection: processor.projectionBuffer,
   });
@@ -136,11 +131,6 @@ const readProgressRow = (sql: SqlClient, slug: string) =>
     [slug],
   );
 
-const readLegacyRow = (sql: SqlClient, slug: string) =>
-  sql.exec(`SELECT reduced_state, max_offset FROM processor_state WHERE processor_slug = ?`, [
-    slug,
-  ]);
-
 const mirroredOffsets = async (sql: SqlClient) =>
   (await sql.exec(`SELECT offset FROM events ORDER BY offset`)).map((row) => Number(row.offset));
 
@@ -148,17 +138,19 @@ describe("deleteBrowserProcessorState", () => {
   it("deletes one subscription key, or every row for a slug when the key is omitted", async () => {
     const sql = wrap(new DatabaseSync(":memory:"));
     await ensureBrowserProcessorProgressSchema(sql);
-    // Raw legacy-table rows (the retired-slug lane this function exists for).
+    // Raw progress rows (the retired-slug lane this function exists for).
     const write = (slug: string, key: string) =>
       sql.exec(
-        `INSERT INTO processor_state (processor_slug, subscription_key, reduced_state, max_offset)
-         VALUES (?, ?, '{}', 1)`,
+        `INSERT INTO processor_progress (
+           processor_slug, subscription_key, reducer_version, reduced_through_offset,
+           reduced_state, acknowledged_through_offset, cursor_revision
+         ) VALUES (?, ?, 'v', 1, '{}', 1, 0)`,
         [slug, key],
       );
     const read = async (slug: string, key: string) =>
       (
         await sql.exec(
-          `SELECT 1 AS present FROM processor_state
+          `SELECT 1 AS present FROM processor_progress
            WHERE processor_slug = ? AND subscription_key = ?`,
           [slug, key],
         )
@@ -189,11 +181,6 @@ describe("browser raw events schema version reset", () => {
     expect(await mirroredOffsets(load.sql)).toEqual([1, 2]);
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({ acknowledged_through_offset: 2, cursor_revision: 0 });
-    // The legacy checkpoint row is dual-written in the same transaction: the
-    // stream view reads reduced_state from it reactively, and pre-runner code
-    // rolled back onto this database resumes from it.
-    const [legacy] = await readLegacyRow(load.sql, BrowserRawEventsContract.slug);
-    expect(legacy).toMatchObject({ max_offset: 2 });
   });
 
   it("rewinds the cursor together with the dropped table on a version bump (regression)", async () => {
@@ -319,8 +306,6 @@ describe("transactional projection commit", () => {
     expect(Number(counts[0]?.n)).toBe(2);
     const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
     expect(progress).toMatchObject({ acknowledged_through_offset: 2, cursor_revision: 1 });
-    const [legacy] = await readLegacyRow(load.sql, BrowserRawEventsContract.slug);
-    expect(legacy).toMatchObject({ max_offset: 2 });
   });
 
   it("a mid-transaction projection failure rolls back the cursor with it and stays retryable", async () => {
@@ -384,48 +369,6 @@ describe("transactional projection commit", () => {
   });
 });
 
-describe("legacy checkpoint migration", () => {
-  it("adopts a legacy {reduced_state, max_offset} checkpoint without replaying acknowledged rows", async () => {
-    const db = new DatabaseSync(":memory:");
-    // A database written entirely by pre-runner code: mirror rows + the
-    // legacy checkpoint, no processor_progress row.
-    const seedSql = wrap(db);
-    await ensureBrowserRawEventsSchema(seedSql);
-    for (const offset of [1, 2]) {
-      await seedSql.exec(`INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`, [
-        offset - 1,
-        JSON.stringify(rawEvent(offset)),
-      ]);
-    }
-    await ensureBrowserProcessorProgressSchema(seedSql);
-    await seedSql.exec(
-      `INSERT INTO processor_state (processor_slug, subscription_key, reduced_state, max_offset)
-       VALUES (?, '', '{}', 2)`,
-      [BrowserRawEventsContract.slug],
-    );
-
-    const load = rawEventsLoad(db);
-    // The read CONVERTS the legacy record — acknowledgement preserved, never
-    // replayed — and does not write anything by itself.
-    expect(await load.progress.read()).toMatchObject({
-      reduction: { reducerVersion: load.processor.contract.version, reducedThroughOffset: 2 },
-      processing: { acknowledgedThroughOffset: 2, cursorRevision: 0 },
-    });
-    expect(await readProgressRow(load.sql, BrowserRawEventsContract.slug)).toEqual([]);
-
-    // A replay overlap (server redelivers from the acknowledged cursor) skips
-    // the acknowledged rows entirely and appends only the new one.
-    await load.deliver([rawEvent(2), rawEvent(3)]);
-    expect(await mirroredOffsets(load.sql)).toEqual([1, 2, 3]);
-    const [progress] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
-    expect(progress).toMatchObject({ acknowledged_through_offset: 3, cursor_revision: 0 });
-    // The legacy row keeps being dual-written — the stream view's reactive
-    // reduced-state read and a pre-runner rollback both stay live.
-    const [legacy] = await readLegacyRow(load.sql, BrowserRawEventsContract.slug);
-    expect(legacy).toMatchObject({ max_offset: 3 });
-  });
-});
-
 describe("output-schema reset (fenced rewind)", () => {
   it("clears the projection and rewinds the cursor in one transaction, fencing stale commits", async () => {
     const db = new DatabaseSync(":memory:");
@@ -447,9 +390,6 @@ describe("output-schema reset (fenced rewind)", () => {
       cursor_revision: 1,
       reducer_version: "",
     });
-    // The legacy checkpoint rows go with it — old readers must not resurrect
-    // the pre-reset cursor.
-    expect(await readLegacyRow(load.sql, BrowserRawEventsContract.slug)).toEqual([]);
 
     // The pre-reset runner incarnation still holds revision 0 in memory: its
     // next commit is fenced, and its projection write rolls back WITH it —
@@ -464,62 +404,6 @@ describe("output-schema reset (fenced rewind)", () => {
     expect(await mirroredOffsets(rebuilt.sql)).toEqual([1, 2, 3]);
     const [rebuiltProgress] = await readProgressRow(rebuilt.sql, BrowserRawEventsContract.slug);
     expect(rebuiltProgress).toMatchObject({ acknowledged_through_offset: 3, cursor_revision: 1 });
-  });
-
-  it("a reset over a LEGACY-only checkpoint leaves a revision-1 tombstone that fences the in-flight incarnation (regression)", async () => {
-    const db = new DatabaseSync(":memory:");
-    // A pre-runner database: mirror rows + the legacy checkpoint at 2, and NO
-    // new-format processor_progress row.
-    const seedSql = wrap(db);
-    await ensureBrowserRawEventsSchema(seedSql);
-    for (const offset of [1, 2]) {
-      await seedSql.exec(`INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`, [
-        offset - 1,
-        JSON.stringify(rawEvent(offset)),
-      ]);
-    }
-    await ensureBrowserProcessorProgressSchema(seedSql);
-    await seedSql.exec(
-      `INSERT INTO processor_state (processor_slug, subscription_key, reduced_state, max_offset)
-       VALUES (?, '', '{}', 2)`,
-      [BrowserRawEventsContract.slug],
-    );
-
-    // A live runner adopts the legacy checkpoint (acknowledged 2, revision 0);
-    // the adopting read writes no new-format row.
-    const load = rawEventsLoad(db);
-    expect(await load.runner.snapshot()).toMatchObject({ offset: 2 });
-    expect(await readProgressRow(load.sql, BrowserRawEventsContract.slug)).toEqual([]);
-
-    // A reset lands while that incarnation is in flight (another tab clearing
-    // the mirror). Deleting the legacy row is not enough: the reset must
-    // MATERIALIZE a rewound tombstone for the key, or nothing fences the
-    // adopted revision-0 cursor.
-    await resetBrowserProcessorProjection({
-      sql: wrap(db),
-      processorSlug: BrowserRawEventsContract.slug,
-      projectionResetStatements: [
-        { sql: `DELETE FROM events` },
-        { sql: `DELETE FROM event_type_counts` },
-      ],
-    });
-    const [tombstone] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
-    expect(tombstone).toMatchObject({
-      acknowledged_through_offset: 0,
-      cursor_revision: 1,
-      reducer_version: "",
-    });
-    expect(await readLegacyRow(load.sql, BrowserRawEventsContract.slug)).toEqual([]);
-
-    // The stale incarnation's in-flight frame commits with expected revision
-    // 0. Pre-fix the progress row was simply ABSENT (an absent row reads as
-    // revision 0), so the CAS passed: offsets 3..4 landed, the cursor
-    // acknowledged 4, and rows 1..2 were skipped on every future resume —
-    // permanently missing from the mirror. It must FENCE instead.
-    await expect(load.deliver([rawEvent(3), rawEvent(4)])).rejects.toThrow(/fenced/);
-    expect(await mirroredOffsets(load.sql)).toEqual([]);
-    const [after] = await readProgressRow(load.sql, BrowserRawEventsContract.slug);
-    expect(after).toMatchObject({ acknowledged_through_offset: 0, cursor_revision: 1 });
   });
 
   it("a failing reset statement applies nothing at all", async () => {
@@ -675,7 +559,6 @@ describe("browser feed processor under runner drive", () => {
     const progress = browserProcessorProgressStore({
       sql,
       processorSlug: BrowserFeedContract.slug,
-      contractVersion: processor.contract.version,
       ensureProjectionSchema: (client) => processor.ensureProjectionSchema(client),
       projection: processor.projectionBuffer,
     });
@@ -714,12 +597,16 @@ describe("browser feed processor under runner drive", () => {
       { local_index: 1, kind: "raw.group", first_offset: 4, last_offset: 4, event_count: 1 },
     ]);
 
-    // The reduced state (the live agent tail's source) is dual-written to the
-    // legacy checkpoint row in the same transaction — the stream view reads
-    // it reactively via `SELECT reduced_state FROM processor_state ...`.
-    const [legacy] = await readLegacyRow(load.sql, BrowserFeedContract.slug);
-    expect(legacy).toMatchObject({ max_offset: 4 });
-    const reduced = JSON.parse(String(legacy!.reduced_state)) as {
+    // The reduced state (the live agent tail's source) is committed onto the
+    // progress row in the same transaction — the stream view reads it
+    // reactively via `SELECT reduced_state FROM processor_progress ...`.
+    const [committed] = await load.sql.exec(
+      `SELECT reduced_state, acknowledged_through_offset FROM processor_progress
+       WHERE processor_slug = ?`,
+      [BrowserFeedContract.slug],
+    );
+    expect(committed).toMatchObject({ acknowledged_through_offset: 4 });
+    const reduced = JSON.parse(String(committed!.reduced_state)) as {
       agent?: unknown;
       nextLocalIndex?: number;
     };
