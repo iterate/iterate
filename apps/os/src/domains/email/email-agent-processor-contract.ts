@@ -78,7 +78,7 @@ export const EmailAgentProcessorContract = defineProcessorContract({
     // constant's doc for why it is absent from `emits`.
     EMAIL_AGENT_REVIVED_EVENT_TYPE,
   ],
-  emits: ["events.iterate.com/agents/message-received"],
+  emits: ["events.iterate.com/agents/message-received", "events.iterate.com/agent/status-changed"],
 });
 
 export type EmailAgentProcessorState = z.infer<typeof EmailAgentProcessorContract.stateSchema>;

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { buttonVariants } from "@iterate-com/ui/components/button";
+import { AgentRosterList } from "~/components/agent-roster.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTree } from "~/components/stream-tree.tsx";
@@ -56,6 +57,9 @@ function ProjectAgentsIndexContent() {
       >
         New agent
       </Link>
+      {/* Every agent's live status record (busy dot, title, what it's doing),
+          newest activity first — fed by the project's agents roster slice. */}
+      <AgentRosterList projectId={project.id} projectSlug={params.projectSlug} />
       {/* Anything under /agents is an agent and opens the chat view —
           linkOptionsForStreamPath encodes that. */}
       <StreamTree

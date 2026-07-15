@@ -5,7 +5,8 @@
 //                  `reduceAgentEvent` below, shared with off-runtime refolds.
 //   processEvent — per-event side effects. One switch, nothing else.
 //   onCaughtUp   — at-head only (runner-gated): drive or settle open LLM
-//                  obligations, then derive the next scheduling decision.
+//                  obligations, derive the next scheduling decision, then
+//                  announce busy/idle status flips.
 //
 // Everything below the class is a pure helper one of the lanes calls: the
 // fold switch, chat-request building, and codemode script-result rendering.
@@ -23,9 +24,13 @@ import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
   AGENT_LLM_RETRY_BACKOFF_BASE_MS,
   AgentProcessorContract,
+  DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS,
   DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS,
   DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS,
   DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
+  deriveAgentBusy,
+  deriveAgentPhase,
+  mergeAgentStatusPatch,
   type AgentFileAttachment,
 } from "./agent-processor-contract.ts";
 import {
@@ -66,12 +71,16 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  * - `resolveModelFileUrl` remints a short-lived, immutable URL for a project
  *   file immediately before a model request. Production hosts provide it;
  *   bare tests without it retain the stored attachment URL.
+ * - `statusIdleDebounceMs` scales the trailing delay before a busy→idle
+ *   flip is announced (default DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS);
+ *   tests shrink it.
  */
 type AgentProcessorDeps = {
   ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
   llmRetryBackoffBaseMs?: number;
+  statusIdleDebounceMs?: number;
   cloudflareAiGatewayTransport?: () => CloudflareAiGatewayTransport;
   resolveModelFileUrl?: (file: AgentFileAttachment) => Promise<string>;
 };
@@ -92,6 +101,18 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * hands back to the model as its "response so far". Incarnation-local best
    * effort: an eviction loses it, and the crash-cancel path never had it. */
   readonly #partialLlmResponseTexts = new Map<number, string>();
+  /** The armed idle-announcement debounce, keyed by the idle flip's offset;
+   * `cancel()` disarms without firing. A lost timer costs nothing durable:
+   * the flip is still in state and the reconciler re-arms it. */
+  #idleStatusAnnouncement: { cancel: () => void; sinceOffset: number } | undefined;
+  /** The latest busy/idle flip the at-head reconciler has seen. The runner
+   * owns the fold (the processor instance holds no readable state), so the
+   * armed debounce timer's fire-time staleness check reads this memo —
+   * refreshed on every at-head pass; the consuming folds' sinceOffset guard
+   * is the real protection for the window it cannot cover. */
+  #lastReconciledStatusFlip:
+    | Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0]["state"]["status"]
+    | undefined;
 
   #now(): number {
     return (this.deps.now ?? Date.now)();
@@ -479,6 +500,128 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   ): Promise<void> {
     await this.#reconcileLlmObligations(args);
     await this.#reconcileLlmScheduling(args);
+    this.#reconcileStatusAnnouncement(args);
+  }
+
+  /**
+   * Announce the fold's busy/idle flips as status-changed events for
+   * downstream surfaces (Slack assistant status, typing indicators). Desired
+   * is the latest flip (`state.status`); actual is the last accepted
+   * announcement (`state.announcedStatus`); equal means done.
+   *
+   * A flip to busy announces immediately. The flip to idle waits out a
+   * trailing debounce first, because the fold passes through idle for one
+   * append round-trip at every turn hand-off (see
+   * DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS). The timer is a droppable
+   * attempt: a lost incarnation still holds the unannounced flip in state, so
+   * the revival pass lands here and re-arms (or, past due, appends directly).
+   * A timer whose idle append raced newer work appends a STALE announcement —
+   * neutralized by the sinceOffset guard every consuming fold applies, and
+   * corrected by the busy announcement this pass already made for the newer
+   * flip.
+   */
+  #reconcileStatusAnnouncement(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["onCaughtUp"]>[0],
+  ): void {
+    const flip = args.state.status;
+    // The runner owns the fold, so the armed timer's fire-time staleness
+    // check below reads the latest flip THIS reconciler has seen (every
+    // at-head pass refreshes it) — the runner-drive stand-in for the legacy
+    // engine's live `this.state` read.
+    this.#lastReconciledStatusFlip = flip;
+    // Undefined means the agent has never been busy; genesis idle is not news.
+    if (flip === undefined) return;
+    const announced = args.state.announcedStatus;
+    // Busy is due unless already announced AT THIS GENERATION; idle is due
+    // ONLY when a busy announcement stands.
+    //
+    // The generation comparison on the busy side closes a race: with busy
+    // announced at generation A, an idle flip B arms its timer, and newer
+    // busy work C supersedes it. A boolean-only comparison would skip
+    // announcing C — and if B's timer append was already in flight past its
+    // best-effort staleness check, consumers holding generation A would
+    // accept B's idle and clear a working agent. Announcing C's newer
+    // sinceOffset makes every consuming fold reject B's racing append. (A
+    // busy generation only changes by toggling through idle, so this adds
+    // one announcement exactly when a pending idle was superseded.)
+    //
+    // An idle flip with no busy in the journal — the record is undefined OR
+    // authored-only (title/note/shortStatus patches never carry busy) —
+    // means no surface ever painted anything (a whole turn folded in one
+    // at-head page: a replayed pre-announcement journal or a synthetically
+    // seeded lifecycle), so there is nothing to clear; announcing it would
+    // append one idle event to every historical agent journal on the first
+    // refold after a contract deploy.
+    const announcementDue = flip.busy
+      ? announced?.busy !== true || announced.sinceOffset !== flip.sinceOffset
+      : announced?.busy === true;
+    if (!announcementDue) {
+      this.#cancelIdleStatusAnnouncement();
+      return;
+    }
+    const appendAnnouncement = () =>
+      args.append({
+        type: "events.iterate.com/agent/status-changed",
+        idempotencyKey: this.idempotencyKey(`status-changed@${flip.sinceOffset}`),
+        payload: {
+          busy: flip.busy,
+          ...(flip.phase === undefined ? {} : { phase: flip.phase }),
+          sinceOffset: flip.sinceOffset,
+          // The human responding IS the unblock: new busy work clears an
+          // agent-authored blocked flag in the same patch. Still waiting,
+          // the agent sets it again when it ends that turn.
+          ...(flip.busy && announced?.blocked === true ? { blocked: false } : {}),
+        },
+      });
+    const debounceMs = this.deps.statusIdleDebounceMs ?? DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS;
+    const delay = flip.busy ? 0 : Math.max(0, Date.parse(flip.since) + debounceMs - this.#now());
+    if (delay === 0) {
+      this.#cancelIdleStatusAnnouncement();
+      args.blockProcessorWhile(appendAnnouncement);
+      return;
+    }
+    if (this.#idleStatusAnnouncement?.sinceOffset === flip.sinceOffset) return;
+    this.#cancelIdleStatusAnnouncement();
+    let settle!: (fire: boolean) => void;
+    let settled = false;
+    const wait = new Promise<boolean>((resolve) => {
+      settle = resolve;
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      settle(true);
+    }, delay);
+    const attempt = {
+      sinceOffset: flip.sinceOffset,
+      cancel: () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        settle(false);
+      },
+    };
+    this.#idleStatusAnnouncement = attempt;
+    args.runInBackground(async () => {
+      try {
+        if (!(await wait)) return;
+        // Best-effort staleness check against the latest reconciled flip
+        // (see #lastReconciledStatusFlip); the consuming folds' sinceOffset
+        // guard is the real protection when newer work lands inside this gap.
+        const current = this.#lastReconciledStatusFlip;
+        if (current === undefined || current.busy || current.sinceOffset !== attempt.sinceOffset) {
+          return;
+        }
+        await appendAnnouncement();
+      } finally {
+        if (this.#idleStatusAnnouncement === attempt) this.#idleStatusAnnouncement = undefined;
+      }
+    });
+  }
+
+  #cancelIdleStatusAnnouncement() {
+    this.#idleStatusAnnouncement?.cancel();
+    this.#idleStatusAnnouncement = undefined;
   }
 
   /**
@@ -888,10 +1031,34 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 }
 
 // =============================================================================
-// The fold: one pure switch per consumed event.
+// The fold: one pure switch per consumed event (reduceAgentEventCore), plus
+// one post-switch stamp that records busy/idle flips of the DERIVED status
+// so the announcement reconciler can key and time them.
 // =============================================================================
 
 function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
+  const state = reduceAgentEventCore(input);
+  const busy = deriveAgentBusy(state);
+  const phase = busy ? deriveAgentPhase(state) : undefined;
+  // Genesis idle is not a flip: `status` stays undefined until the agent is
+  // first busy, so a freshly born agent never announces anything. A phase
+  // change while busy (LLM turn hands off to a script) IS a flip — surfaces
+  // show what the agent is doing, not just that it is.
+  const flipped =
+    state.status === undefined ? busy : state.status.busy !== busy || state.status.phase !== phase;
+  if (!flipped) return state;
+  return {
+    ...state,
+    status: {
+      busy,
+      ...(phase === undefined ? {} : { phase }),
+      sinceOffset: input.event.offset,
+      since: input.event.createdAt,
+    },
+  };
+}
+
+function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
   const { event, state } = input;
   switch (event.type) {
     case "events.iterate.com/agent/config-updated":
@@ -1115,6 +1282,35 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
         pendingTriggerOffset: null,
         pendingTriggerSource: null,
       };
+    case "events.iterate.com/capability-host/script-execution-requested":
+      return state.activeScriptExecutionIds.includes(event.payload.executionId)
+        ? state
+        : {
+            ...state,
+            activeScriptExecutionIds: [
+              ...state.activeScriptExecutionIds,
+              event.payload.executionId,
+            ],
+          };
+    case "events.iterate.com/capability-host/script-execution-completed":
+      return state.activeScriptExecutionIds.includes(event.payload.executionId)
+        ? {
+            ...state,
+            activeScriptExecutionIds: state.activeScriptExecutionIds.filter(
+              (executionId) => executionId !== event.payload.executionId,
+            ),
+          }
+        : state;
+    case "events.iterate.com/agent/status-changed": {
+      // The shared merge fold: platform busy patches (sinceOffset-guarded)
+      // and agent-authored title/note/shortStatus patches land in one record.
+      const announcedStatus = mergeAgentStatusPatch(state.announcedStatus, event.payload);
+      if (announcedStatus === state.announcedStatus) return state;
+      return {
+        ...state,
+        ...(announcedStatus === undefined ? {} : { announcedStatus }),
+      };
+    }
     default:
       return state;
   }

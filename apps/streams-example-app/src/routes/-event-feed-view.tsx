@@ -24,12 +24,7 @@ import {
   type StreamBrowserStore,
 } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import {
-  BROWSER_FEED_SCHEMA_VERSION,
-  BROWSER_FEED_TABLE,
-  BrowserFeedContract,
-  BrowserFeedProcessor,
-} from "~/domains/streams/client-libraries/processors/browser-feed/implementation.ts";
+import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 type FeedItemRow = {
@@ -54,15 +49,7 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
         streamPath: streamView.path,
         projectId: streamView.projectId,
         createStreamClient: createCapnwebStreamClient,
-        slug: BrowserFeedContract.slug,
-        schemaVersion: BROWSER_FEED_SCHEMA_VERSION,
-        tables: [BROWSER_FEED_TABLE],
-        // The runtime drives the processor with a StreamProcessorRunner
-        // whose progress lives in the transactional browser progress store —
-        // no per-processor checkpoint wiring here.
-        createProcessor({ stream, path, projectId, sql }) {
-          return new BrowserFeedProcessor({ stream, path, projectId, sql });
-        },
+        processors: CANONICAL_MIRROR_PROCESSORS,
       }),
     [streamView.projectId, streamView.path],
   );

@@ -313,6 +313,55 @@ processors never hold raw DO stubs. The browser stream mirror
 real `StreamProcessor` subclasses against wa-sqlite with the same
 announcements and checkpoints.
 
+## The browser mirror: one download, many processors
+
+The browser mirrors a stream into a per-`(projectId, path)` OPFS SQLite file so
+React views query projections (`events`, `feed_items`, …) reactively instead of
+holding history in memory. There is exactly **one** way to do it:
+
+```ts
+const { store, snapshot } = useStreamMirror({
+  projectId,
+  streamPath,
+  createStreamClient,
+});
+// store.streamDatabase carries EVERY canonical table; views query what they need
+```
+
+**One runtime per stream, one download.** `acquireStreamRuntime` is keyed by
+`(projectId, path)` — every view of a stream, on every page, joins the same
+runtime and its single capnweb subscription. That runtime downloads the stream
+once (client-paced `getEvents` catch-up while far behind the head, then the live
+tail — the server pump is one-directional and would otherwise outrun wa-sqlite;
+see the flow-control note in `stream-browser-store.ts`) and fans every batch out
+to a **fixed canonical set of processors** — the raw-events cache
+(`events` + `event_type_counts`) and the feed projection (`feed_items`). Views
+do not choose processors; the set lives in `canonical-mirror-processors.ts`, and
+adding a browser projection is an edit there, not a per-view decision.
+
+**Fan-out is a composite, so the runtime stays single-drive.**
+`CompositeMirrorDrive` (`composite-mirror-drive.ts`) holds one
+`StreamProcessorRunner` per member and answers the runtime's wake handshake as
+one unit, so the runtime's race-critical machinery (connection epochs,
+half-open transport eviction, liveness probe, ingest self-heal) never learns
+about processor lists. Its sink fans each frame to the members **sequentially**
+(they share one SQLite connection — parallel commit transactions would
+interleave) and it reports the **minimum** member checkpoint as the replay
+cursor, so catch-up covers the least-caught-up member. Over-delivery is free:
+every member's runner offset-dedupes delivered events against its own durable
+acknowledged cursor (`stream-processor-runner.ts`), so a member that is already
+ahead cheaply no-ops. Each member's projection writes and its two-cursor
+progress record commit in **one SQLite transaction** per frame
+(`processor-state-storage.ts`), so a member's mirror rows and resume cursor can
+never disagree.
+
+**Members stay independent where it matters.** Reconcile and mirror discard are
+per-member: each member keeps its own tables, schema version, and durable
+progress row **keyed by its real slug** — so a member's schema bump rebuilds
+only its tables, and unifying the download never invalidated an existing local
+cache. Only the _server subscription key_ and the _writer-lock name_ (versioned
+by a compatibility vector over all members) are mirror-level.
+
 ## File map
 
 | File                         | Role                                                                                                                                |

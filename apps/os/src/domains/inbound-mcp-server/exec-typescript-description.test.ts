@@ -1,39 +1,13 @@
+// Positional truncation invariants for the exec_typescript tool description.
+// MCP clients truncate tool descriptions aggressively, so WHERE guidance sits
+// is a real client-facing constraint: the fence contract, source pointers,
+// and a runnable discovery example must survive the first truncation windows.
+// (Phrase-by-phrase copy pinning of the prompt's prose was deliberately
+// deleted — docs/testing.md "What earns a test".)
 import { describe, expect, it } from "vitest";
-import {
-  EXEC_TYPESCRIPT_DESCRIPTION,
-  inboundMcpServerInstructions,
-} from "./exec-typescript-description.ts";
+import { EXEC_TYPESCRIPT_DESCRIPTION } from "./exec-typescript-description.ts";
 
 describe("inbound MCP client guidance", () => {
-  it("puts the itx execution and discovery contract on both client-visible surfaces", () => {
-    const serverInstructions = inboundMcpServerInstructions({ withAgent: false });
-
-    for (const guidance of [serverInstructions, EXEC_TYPESCRIPT_DESCRIPTION]) {
-      expect(guidance).toContain("async (itx) => { ... }");
-      expect(guidance).toContain("itx.docs.search");
-      expect(guidance).toContain("itx.docs.get");
-      expect(guidance).toContain("__describe()");
-      expect(guidance).toContain("itx.repo");
-    }
-  });
-
-  it("teaches the full research ladder and representative scripts", () => {
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("itx.docs.typecheck");
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("fetchCall");
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("AGENTS.md");
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("https://github.com/iterate/iterate");
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("apps/os/src/README.md");
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("apps/os/docs/");
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("apps/os/src/itx/examples.ts");
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("itx.integrations.list()");
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("itx.mcp.exa.web_search_exa");
-
-    const representativeScripts = EXEC_TYPESCRIPT_DESCRIPTION.match(/async \(itx\) => \{/g) ?? [];
-    expect(representativeScripts.length).toBeGreaterThanOrEqual(4);
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("```ts");
-    expect(EXEC_TYPESCRIPT_DESCRIPTION).not.toMatch(/JavaScript|```js(?:\s|$)|\bITX\b/);
-  });
-
   it("puts the fence contract and source pointers before aggressively truncated previews", () => {
     const clientPreview = EXEC_TYPESCRIPT_DESCRIPTION.slice(0, 600);
 
@@ -53,20 +27,8 @@ describe("inbound MCP client guidance", () => {
     expect(clientPreview).toContain("itx.docs.typecheck");
   });
 
-  it("keeps platform-agent turn-taking mechanics out of MCP guidance", () => {
-    const corpus = [
-      inboundMcpServerInstructions({ withAgent: true }),
-      EXEC_TYPESCRIPT_DESCRIPTION,
-    ].join("\n");
-
-    expect(corpus).not.toContain("respond with exactly ONE fenced");
-    expect(corpus).not.toContain("arrives as your next input");
-    expect(corpus).not.toContain("you get another turn");
-    expect(corpus).not.toContain("itx.chat.sendMessage");
-  });
-
-  it("only advertises ask_assistant when the MCP surface enables it", () => {
-    expect(inboundMcpServerInstructions({ withAgent: false })).not.toContain("ask_assistant");
-    expect(inboundMcpServerInstructions({ withAgent: true })).toContain("ask_assistant");
+  it("speaks exactly one fence dialect: ts", () => {
+    expect(EXEC_TYPESCRIPT_DESCRIPTION).toContain("```ts");
+    expect(EXEC_TYPESCRIPT_DESCRIPTION).not.toMatch(/JavaScript|```js(?:\s|$)|\bITX\b/);
   });
 });

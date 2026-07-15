@@ -106,10 +106,12 @@ export class AgentDurableObject extends DurableObject<Env> {
   // streams (`/agents/slack/**`) where the project processor configured its
   // subscription. Slack-facing side effects are best effort: a failed status
   // update or reaction must not wedge the processor checkpoint. Registered
-  // WITH recovery: the status-clear debounce timer is `runInBackground` work
-  // whose outcome matters (the pendingStatusClear obligation in the fold) —
-  // an incarnation that dies with the timer armed would otherwise leave the
-  // thread showing "is thinking..." forever on a quiet stream.
+  // WITH recovery (codex review P1): the status paints and 👀 acks are
+  // blocking work, and the held cursor alone only helps while something still
+  // dials — a SIMULTANEOUS Agent+Stream DO death mid-blocker (a deploy evicts
+  // both) leaves nothing armed to redeliver. The alarm's
+  // `slack-agent/revived` append cold-boots the stream; the unacknowledged
+  // frame redelivers and the freshness-gated paint re-derives from the fold.
   readonly slackAgentProcessor = this.#registry.register(
     new SlackAgentProcessor({
       stream: this.#stream,
@@ -143,6 +145,27 @@ export class AgentDurableObject extends DurableObject<Env> {
             method,
             path: this.#name.path,
           });
+        }
+      },
+      fetchSlackChannelName: async (channel) => {
+        const connection = slackConnectionFromAgentPath(this.#name.path);
+        if (connection === null) return null;
+        try {
+          const result = (await callProjectSlackWebApi({
+            body: { channel },
+            connection,
+            method: "conversations.info",
+            projectId: this.#name.projectId,
+          })) as { channel?: { name?: unknown } };
+          const name = result.channel?.name;
+          return typeof name === "string" && name.length > 0 ? name : null;
+        } catch (error) {
+          console.warn("[slack-agent] conversations.info failed; falling back to channel id", {
+            channel,
+            error,
+            path: this.#name.path,
+          });
+          return null;
         }
       },
       storeSlackFiles: (input) => {

@@ -94,9 +94,13 @@ otherwise:
   events. Slack's docs describe `message.channels` as the public-channel message
   event with `channels:history` as the required scope; they recommend
   `app_mention` when an app should receive only messages sent to that app.
-- The current OS Slack processor routes normal Slack `message.*` events. It
-  does not require the mentioned user ID to match the deployment's bot user
-  before starting the agent.
+- The OS Slack **router** still forwards normal Slack `message.*` events onto
+  the thread agent stream (so history is complete). The **slack-agent**
+  processor mention-gates LLM wakes: it only triggers a model turn when the
+  message @mentions the authorized bot user (`<@U…>`), when Slack delivers
+  `app_mention`, or on later messages in a thread that was already activated
+  by a mention. Ambient channel traffic is transcribed as
+  `dont-trigger-request` history and never spends model tokens by itself.
 - The app scope `chat:write.public` lets a Slack app post into public channels,
   so a bot user not appearing as a channel member does not rule out its app
   posting a reply.

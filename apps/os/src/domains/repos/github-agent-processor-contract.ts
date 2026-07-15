@@ -132,6 +132,7 @@ export const GithubAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agents/message-received",
     "events.iterate.com/github-agent/repository-collaborator-verified",
+    "events.iterate.com/agent/status-changed",
   ],
 });
 
