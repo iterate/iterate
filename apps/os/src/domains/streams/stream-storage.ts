@@ -33,7 +33,6 @@ const textEncoder = new TextEncoder();
  * cap with these instead of re-stringifying every event on every read.
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
-export type StreamEventSize = { offset: number; byteLength: number };
 
 export class StreamEventLog {
   constructor(
@@ -184,7 +183,7 @@ export class StreamEventLog {
     eventTypes?: readonly string[];
     limit: number;
     includeEphemeral?: boolean;
-  }): StreamEventSize[] {
+  }): { offset: number; byteLength: number }[] {
     if (args.eventTypes?.length === 0) return [];
     const eventTypes =
       args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
