@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
-import { MemoryStreamNetwork, deliverNewEvents } from "../streams/test-helpers.ts";
+import {
+  MemoryStreamNetwork,
+  deliverNewEvents,
+  eventsOfType,
+  makeProcessorHarness,
+} from "../streams/test-helpers.ts";
+import {
+  SLACK_TEAM_ID as TEAM_ID,
+  slackBotMessageWebhookPayload as botMessageWebhookPayload,
+  slackHumanMessageWebhookPayload as humanMessageWebhookPayload,
+} from "./webhook-fixtures.ts";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,
@@ -9,87 +19,17 @@ import {
   eyesReactionTargetFromWebhookPayload,
 } from "./slack-agent-processor-implementation.ts";
 
-const TEAM_ID = "T0TEAM";
 const CONNECTION = "nustom";
 
-function connectedEvent() {
-  return {
-    type: "events.iterate.com/slack/connected" as const,
-    payload: {
-      connection: CONNECTION,
-      externalId: TEAM_ID,
-      projectId: "prj_1",
-      teamId: TEAM_ID,
-      teamName: "acme",
-    },
-  };
-}
-
-function humanMessageWebhookPayload(input: {
-  channel?: string;
-  eventId?: string;
-  /** When true (default), the message @mentions the authorized bot so the
-   * mention-gate wakes the LLM. Pass false for ambient channel traffic. */
-  mentionBot?: boolean;
-  text?: string;
-  threadTs?: string;
-  ts?: string;
-}) {
-  const mentionBot = input.mentionBot !== false;
-  const defaultText = mentionBot ? "<@UBOT> hello agent" : "hello agent";
-  return {
-    slackTeamId: TEAM_ID,
-    headers: { slackEventId: input.eventId ?? "Ev123", slackRequestTimestamp: "1" },
-    body: {
-      type: "event_callback",
-      // Real webhooks carry the verification secret; the transcriber must
-      // strip it (asserted below) while the router still reads the rest.
-      token: "verification-secret",
-      team_id: TEAM_ID,
-      event_id: input.eventId ?? "Ev123",
-      authorizations: [{ is_bot: true, user_id: "UBOT", bot_id: "BBOT" }],
-      event: {
-        type: "message",
-        channel: input.channel ?? "C123",
-        user: "UHUMAN",
-        text: input.text ?? defaultText,
-        ts: input.ts ?? "111.222",
-        blocks: [{ type: "rich_text", elements: [] }],
-        ...(input.threadTs === undefined ? {} : { thread_ts: input.threadTs }),
-      },
-    },
-  };
-}
-
-function botMessageWebhookPayload() {
-  const payload = humanMessageWebhookPayload({});
-  const event = payload.body.event as Record<string, unknown>;
-  event.bot_id = "BBOT";
-  delete event.user;
-  return payload;
-}
-
 describe("SlackProcessor (webhook router)", () => {
-  it("creates a route and forwards the webhook to the routed agent stream", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/integrations/slack/nustom");
-    const acked: unknown[] = [];
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
-      acknowledgeRoutedWebhook: ({ payload }) => {
-        acked.push(payload);
-      },
-    });
-    const cursors = new Map<object, number>();
+  test("creates a route and forwards the webhook to the routed agent stream", async () => {
+    const { network, stream, acked, deliver } = routerSetup();
 
     await stream.append(connectedEvent(), {
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     // The route fact lands on the router's own stream…
     const routeEvents = stream.events.filter(
@@ -114,25 +54,17 @@ describe("SlackProcessor (webhook router)", () => {
     expect(acked).toHaveLength(1);
   });
 
-  it("routes webhooks that arrive before the connected fact folds", async () => {
+  test("routes webhooks that arrive before the connected fact folds", async () => {
     // The connection is a projection of the host DO's name, not folded state,
     // so routing is total from the very first webhook — event ordering cannot
     // produce a window where a message is dropped.
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
-    });
-    const cursors = new Map<object, number>();
+    const { network, stream, deliver } = routerSetup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const routed = network.eventsAt("/agents/slack/nustom/c123/ts-111-222");
     expect(routed.map((event) => event.type)).toEqual([
@@ -141,16 +73,8 @@ describe("SlackProcessor (webhook router)", () => {
     ]);
   });
 
-  it("forwards follow-up webhooks through the reduced routing table", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
-    });
-    const cursors = new Map<object, number>();
+  test("forwards follow-up webhooks through the reduced routing table", async () => {
+    const { network, stream, deliver } = routerSetup();
 
     await stream.append({
       type: "events.iterate.com/slack/thread-route-configured",
@@ -164,7 +88,7 @@ describe("SlackProcessor (webhook router)", () => {
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({ eventId: "Ev456", threadTs: "111.222", ts: "333.444" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const routed = network.eventsAt("/agents/slack/custom-route");
     expect(routed.map((event) => event.type)).toEqual([
@@ -178,16 +102,8 @@ describe("SlackProcessor (webhook router)", () => {
     ).toHaveLength(1);
   });
 
-  it("drops item-keyed events (reactions) whose thread has no route", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
-    });
-    const cursors = new Map<object, number>();
+  test("drops item-keyed events (reactions) whose thread has no route", async () => {
+    const { network, stream, deliver } = routerSetup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
@@ -203,7 +119,7 @@ describe("SlackProcessor (webhook router)", () => {
         },
       },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(network.streams.size).toBe(1); // nothing forwarded anywhere
     expect(
@@ -213,39 +129,23 @@ describe("SlackProcessor (webhook router)", () => {
     ).toHaveLength(0);
   });
 
-  it("ignores connected/disconnected lifecycle facts (status is a journal fold, not router state)", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/integrations/slack/nustom");
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
-    });
-    const cursors = new Map<object, number>();
+  test("ignores connected/disconnected lifecycle facts (status is a journal fold, not router state)", async () => {
+    const { stream, processor, deliver } = routerSetup();
 
     await stream.append(connectedEvent(), {
       type: "events.iterate.com/slack/disconnected",
       payload: { projectId: "prj_1", teamId: TEAM_ID },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     // The router's whole state is its routing table; connection status is read
     // straight off the journal by getConnectionStatus, so lifecycle facts
     // reduce to nothing here.
     expect(processor.state).toEqual({ routes: {} });
   });
 
-  it("errors loudly instead of routing when the host stream carries no connection", async () => {
-    const network = new MemoryStreamNetwork();
+  test("errors loudly instead of routing when the host stream carries no connection", async () => {
     // A mis-armed subscription: slack router woken on a non-connection path.
-    const stream = network.get("/integrations/slack");
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: null,
-    });
-    const cursors = new Map<object, number>();
+    const { network, stream, deliver } = routerSetup({ connection: null });
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
@@ -253,24 +153,12 @@ describe("SlackProcessor (webhook router)", () => {
     });
     // Throwing (not dropping) holds the checkpoint so the webhook stays
     // replayable — a silent drop here is the 2026-06-15 outage shape.
-    await expect(deliverNewEvents({ cursors, processor, stream })).rejects.toThrow(/no connection/);
+    await expect(deliver()).rejects.toThrow(/no connection/);
     expect(network.streams.size).toBe(1);
   });
 
-  it("acknowledges webhooks forwarded through existing routes", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/integrations/slack/nustom");
-    const acked: unknown[] = [];
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
-      acknowledgeRoutedWebhook: ({ payload }) => {
-        acked.push(payload);
-      },
-    });
-    const cursors = new Map<object, number>();
+  test("acknowledges webhooks forwarded through existing routes", async () => {
+    const { network, stream, acked, deliver } = routerSetup();
 
     await stream.append({
       type: "events.iterate.com/slack/thread-route-configured",
@@ -284,36 +172,23 @@ describe("SlackProcessor (webhook router)", () => {
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({ threadTs: "111.222", ts: "333.444" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     // The fast ack fires on the known-route path too, not just route creation.
     expect(acked).toHaveLength(1);
     expect(network.eventsAt("/agents/slack/custom-route")).toHaveLength(1);
   });
 
-  it("refold: replaying the journal neither re-acknowledges nor duplicates forwards", async () => {
+  test("refold: replaying the journal neither re-acknowledges nor duplicates forwards", async () => {
     // THE refold test (docs/writing-stream-processors.md, "Refold safety").
     const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
-    const network = new MemoryStreamNetwork(() => clock.now);
-    const stream = network.get("/integrations/slack/nustom");
-    const acked: unknown[] = [];
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
-      acknowledgeRoutedWebhook: ({ payload }) => {
-        acked.push(payload);
-      },
-      now: () => clock.now,
-    });
-    const cursors = new Map<object, number>();
+    const { network, stream, acked, deliver } = routerSetup({ now: () => clock.now });
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(acked).toHaveLength(1);
     const routedPath = "/agents/slack/nustom/c123/ts-111-222";
     expect(network.eventsAt(routedPath)).toHaveLength(2);
@@ -330,7 +205,7 @@ describe("SlackProcessor (webhook router)", () => {
       },
       now: () => clock.now,
     });
-    await deliverNewEvents({ cursors, processor: refolded, stream });
+    await deliver(refolded);
 
     // The stale ack is skipped; the durable forwards replay and dedupe at the
     // append layer (idempotency keys), leaving the routed stream unchanged.
@@ -343,26 +218,14 @@ describe("SlackProcessor (webhook router)", () => {
     ).toHaveLength(1);
   });
 
-  it("ignores and never acknowledges webhooks that cannot be keyed as channel:thread_ts", async () => {
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/integrations/slack/nustom");
-    const acked: unknown[] = [];
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
-      acknowledgeRoutedWebhook: ({ payload }) => {
-        acked.push(payload);
-      },
-    });
-    const cursors = new Map<object, number>();
+  test("ignores and never acknowledges webhooks that cannot be keyed as channel:thread_ts", async () => {
+    const { network, stream, acked, deliver } = routerSetup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: { body: { type: "url_verification", challenge: "x" } },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(network.streams.size).toBe(1); // nothing forwarded anywhere
     expect(
@@ -373,15 +236,14 @@ describe("SlackProcessor (webhook router)", () => {
     expect(acked).toEqual([]);
   });
 
-  it("replays the webhook when the forward append fails instead of dropping it", async () => {
+  test("replays the webhook when the forward append fails instead of dropping it", async () => {
     // Regression for the 2026-06-15 prd loss: the first message on a fresh
     // project reached the project stream but the agent never saw it — the
     // fire-and-forget forward threw once and the only copy was dropped. The
     // forward is a durable obligation under `blockProcessorWhile`: a failed
     // cross-stream append rejects the batch and HOLDS the checkpoint so the
     // host replays the webhook until it lands.
-    const network = new MemoryStreamNetwork();
-    const stream = network.get("/integrations/slack/nustom");
+    const { network, stream, processor } = routerSetup();
     const routed = network.get("/agents/slack/nustom/c123/ts-111-222");
     const originalRoutedAppend = routed.append.bind(routed);
     let failNextForward = true;
@@ -392,12 +254,6 @@ describe("SlackProcessor (webhook router)", () => {
       }
       return originalRoutedAppend(...inputs);
     };
-    const processor = new SlackProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
-    });
     // The connected fact folds first (the connection names new thread paths).
     const [connected] = await stream.append(connectedEvent());
     await processor.ingest({ events: [connected!], streamMaxOffset: 1 });
@@ -434,35 +290,8 @@ describe("SlackProcessor (webhook router)", () => {
 });
 
 describe("SlackAgentProcessor", () => {
-  function setup(deps?: {
-    callSlackApi?: (method: string, body: Record<string, unknown>) => Promise<void>;
-    fetchSlackChannelName?: (channel: string) => Promise<string | null>;
-    storeSlackFiles?: ConstructorParameters<typeof SlackAgentProcessor>[0]["storeSlackFiles"];
-  }) {
-    const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
-    const network = new MemoryStreamNetwork(() => clock.now);
-    const stream = network.get("/agents/slack/nustom/c123/ts-111-222");
-    const slackCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
-    const processor = new SlackAgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
-      callSlackApi: async (method, body) => {
-        slackCalls.push({ body, method });
-        await deps?.callSlackApi?.(method, body);
-      },
-      now: () => clock.now,
-      ...(deps?.fetchSlackChannelName === undefined
-        ? {}
-        : { fetchSlackChannelName: deps.fetchSlackChannelName }),
-      ...(deps?.storeSlackFiles === undefined ? {} : { storeSlackFiles: deps.storeSlackFiles }),
-    });
-    const cursors = new Map<object, number>();
-    return { clock, cursors, network, processor, slackCalls, stream };
-  }
-
-  it("turns a routed @mention into triggering agent input and adds the eyes reaction", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("turns a routed @mention into triggering agent input and adds the eyes reaction", async () => {
+    const { deliver, processor, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/thread-route-configured",
@@ -476,7 +305,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -513,14 +342,14 @@ describe("SlackAgentProcessor", () => {
     });
   });
 
-  it("records unmentioned human messages as non-triggering history without eyes", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("records unmentioned human messages as non-triggering history without eyes", async () => {
+    const { deliver, processor, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({ mentionBot: false, text: "just humans talking" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -534,8 +363,8 @@ describe("SlackAgentProcessor", () => {
     expect(processor.state.conversationActive).toBe(false);
   });
 
-  it("wakes on app_mention without requiring the text form <@bot>", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("wakes on app_mention without requiring the text form <@bot>", async () => {
+    const { deliver, processor, slackCalls, stream } = setup();
 
     const payload = humanMessageWebhookPayload({ text: "hey iterate, status?" });
     (payload.body.event as Record<string, unknown>).type = "app_mention";
@@ -543,7 +372,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/slack/webhook-received",
       payload,
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -559,8 +388,8 @@ describe("SlackAgentProcessor", () => {
     expect(processor.state.conversationActive).toBe(true);
   });
 
-  it("after a mention, later unmentioned thread messages still trigger the LLM", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("after a mention, later unmentioned thread messages still trigger the LLM", async () => {
+    const { deliver, processor, slackCalls, stream } = setup();
 
     await stream.append(
       {
@@ -577,7 +406,7 @@ describe("SlackAgentProcessor", () => {
         }),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -595,7 +424,7 @@ describe("SlackAgentProcessor", () => {
     expect(processor.state.conversationActive).toBe(true);
   });
 
-  it("materializes shared files and attaches them to the agent input", async () => {
+  test("materializes shared files and attaches them to the agent input", async () => {
     const stored: Array<{ files: unknown; storageKey: string }> = [];
     const attachment = {
       contentType: "image/png",
@@ -604,7 +433,7 @@ describe("SlackAgentProcessor", () => {
       size: 3,
       url: "https://iterate-files--demo.iterate.app/x?sig=y",
     };
-    const { cursors, processor, stream } = setup({
+    const { deliver, stream } = setup({
       storeSlackFiles: async (input) => {
         stored.push(input);
         return [attachment];
@@ -622,7 +451,7 @@ describe("SlackAgentProcessor", () => {
       { no_url: true }, // malformed entries are skipped, not fatal
     ];
     await stream.append({ type: "events.iterate.com/slack/webhook-received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(stored).toHaveLength(1);
     expect(stored[0]!.files).toEqual([
@@ -637,8 +466,8 @@ describe("SlackAgentProcessor", () => {
     expect(inputs[0]!.payload).toMatchObject({ files: [attachment] });
   });
 
-  it("degrades to a plain agent input when file storage fails", async () => {
-    const { cursors, processor, stream } = setup({
+  test("degrades to a plain agent input when file storage fails", async () => {
+    const { deliver, stream } = setup({
       storeSlackFiles: async () => {
         throw new Error("slack download exploded");
       },
@@ -649,7 +478,7 @@ describe("SlackAgentProcessor", () => {
       { name: "cat.png", url_private: "https://files.slack.com/f1" },
     ];
     await stream.append({ type: "events.iterate.com/slack/webhook-received", payload });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -659,14 +488,14 @@ describe("SlackAgentProcessor", () => {
     expect((inputs[0]!.payload as { content: string }).content).toContain("cat.png");
   });
 
-  it("ignores our own bot's messages entirely", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("ignores our own bot's messages entirely", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: botMessageWebhookPayload(),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
@@ -674,8 +503,8 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toHaveLength(0);
   });
 
-  it("records non-message events as non-triggering input without an eyes reaction", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("records non-message events as non-triggering input without an eyes reaction", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
@@ -692,7 +521,7 @@ describe("SlackAgentProcessor", () => {
         },
       },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -704,14 +533,14 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
 
-  it("compiles bang commands into itx script executions instead of agent input", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("compiles bang commands into itx script executions instead of agent input", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({ text: "!whoami" }),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const scripts = stream.events.filter(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -727,22 +556,22 @@ describe("SlackAgentProcessor", () => {
     });
   });
 
-  it("paints the agent's announced status onto the Slack assistant thread", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("paints the agent's announced status onto the Slack assistant thread", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     // Establish thread context first.
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     await stream.append({
       type: "events.iterate.com/agent/status-changed",
       payload: { busy: true, sinceOffset: 1 },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
@@ -760,7 +589,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/agent/status-changed",
       payload: { busy: false, sinceOffset: 2 },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
@@ -773,14 +602,14 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("repaints the status once per batch — the latest announcement wins", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("repaints the status once per batch — the latest announcement wins", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     // Busy and idle land in ONE batch: the status is a repaint of current
@@ -796,7 +625,7 @@ describe("SlackAgentProcessor", () => {
         payload: { busy: false, sinceOffset: 2 },
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
@@ -809,14 +638,14 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("paints the agent's shortStatus verbatim and its title via setTitle", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("paints the agent's shortStatus verbatim and its title via setTitle", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     // The agent authored a title and shortStatus mid-work; the busy patch
@@ -832,7 +661,7 @@ describe("SlackAgentProcessor", () => {
         payload: { busy: true, sinceOffset: 2 },
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setTitle",
@@ -855,7 +684,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/agent/status-changed",
       payload: { shortStatus: "booking the winner" },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
@@ -869,9 +698,9 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("retries a failed title paint on batch redelivery", async () => {
+  test("retries a failed title paint on batch redelivery", async () => {
     let failNext = true;
-    const { cursors, processor, slackCalls, stream } = setup({
+    const { deliver, processor, slackCalls, stream } = setup({
       callSlackApi: async (method) => {
         if (method !== "assistant.threads.setTitle" || !failNext) return;
         failNext = false;
@@ -883,7 +712,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     const [patch] = await stream.append({
@@ -893,7 +722,7 @@ describe("SlackAgentProcessor", () => {
     // The failed call fails the batch (checkpoint held) — the painted-title
     // record must NOT be written, or the redelivered batch would see the
     // rename as already painted and skip it forever.
-    await expect(deliverNewEvents({ cursors, processor, stream })).rejects.toThrow("slack blew up");
+    await expect(deliver()).rejects.toThrow("slack blew up");
 
     slackCalls.length = 0;
     await processor.ingest({ events: [patch!], streamMaxOffset: patch!.offset });
@@ -905,21 +734,21 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("paints the script phase and a blocked wait in the agent's own words", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("paints the script phase and a blocked wait in the agent's own words", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     await stream.append({
       type: "events.iterate.com/agent/status-changed",
       payload: { busy: true, phase: "script", sinceOffset: 1 },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
@@ -945,7 +774,7 @@ describe("SlackAgentProcessor", () => {
         payload: { busy: false, sinceOffset: 2 },
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(slackCalls).toEqual([
       {
         method: "assistant.threads.setStatus",
@@ -963,14 +792,14 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("an authored-only patch (busy never announced) paints the title but clears nothing", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("an authored-only patch (busy never announced) paints the title but clears nothing", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     // The agent set its title before any busy flip was announced. That says
@@ -979,7 +808,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/agent/status-changed",
       payload: { title: "Trip planning" },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(slackCalls).toEqual([
       {
@@ -989,21 +818,21 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("ignores a stale idle announcement that lost its race with newer work", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("ignores a stale idle announcement that lost its race with newer work", async () => {
+    const { deliver, processor, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     await stream.append({
       type: "events.iterate.com/agent/status-changed",
       payload: { busy: true, sinceOffset: 5 },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     // The agent's debounced idle append can land AFTER a newer busy
@@ -1014,7 +843,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/agent/status-changed",
       payload: { busy: false, sinceOffset: 3 },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(processor.state.status).toMatchObject({ busy: true, sinceOffset: 5 });
     expect(slackCalls).toEqual([
@@ -1030,14 +859,14 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("carries a behind-batch announcement to the at-head repaint", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("carries a behind-batch announcement to the at-head repaint", async () => {
+    const { deliver, processor, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     // The idle announcement lands in a batch stamped BEHIND the head (a
@@ -1073,19 +902,19 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("clears a status this incarnation painted even when the idle announcement is stale", async () => {
-    const { clock, cursors, processor, slackCalls, stream } = setup();
+  test("clears a status this incarnation painted even when the idle announcement is stale", async () => {
+    const { clock, deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     await stream.append({
       type: "events.iterate.com/agent/status-changed",
       payload: { busy: true, sinceOffset: 1 },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     slackCalls.length = 0;
 
     // The idle announcement exists but is only DELIVERED past the freshness
@@ -1096,7 +925,7 @@ describe("SlackAgentProcessor", () => {
       payload: { busy: false, sinceOffset: 2 },
     });
     clock.now += 16 * 60_000;
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(slackCalls).toEqual([
       {
@@ -1110,8 +939,8 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("skips the stale 👀 ack on a late wake but still lands the agent input", async () => {
-    const { clock, cursors, processor, slackCalls, stream } = setup();
+  test("skips the stale 👀 ack on a late wake but still lands the agent input", async () => {
+    const { clock, deliver, slackCalls, stream } = setup();
 
     // The webhook arrived while the processor's host was down; delivery
     // happens 16 minutes later. The durable lane (agent input) must land —
@@ -1121,7 +950,7 @@ describe("SlackAgentProcessor", () => {
       payload: humanMessageWebhookPayload({}),
     });
     clock.now += 16 * 60_000;
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
@@ -1129,28 +958,28 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
 
-  it("refold: replaying the full journal re-executes no Slack calls and appends nothing new", async () => {
+  test("refold: replaying the full journal re-executes no Slack calls and appends nothing new", async () => {
     // THE refold test (docs/writing-stream-processors.md, "Refold safety"):
     // a state-schema deploy discards the checkpoint and replays the journal
     // from offset 0 into a fresh instance. Durable lanes dedupe via
     // idempotency keys; acknowledgement/cosmetic lanes must not re-fire.
-    const { clock, cursors, processor, slackCalls, stream } = setup();
+    const { clock, deliver, processor, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     await stream.append({
       type: "events.iterate.com/agent/status-changed",
       payload: { busy: true, sinceOffset: 1 },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     await stream.append({
       type: "events.iterate.com/agent/status-changed",
       payload: { busy: false, sinceOffset: 2 },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
     expect(slackCalls.length).toBeGreaterThan(0);
     const journalBeforeRefold = stream.events.length;
 
@@ -1165,7 +994,7 @@ describe("SlackAgentProcessor", () => {
       },
       now: () => clock.now,
     });
-    await deliverNewEvents({ cursors, processor: refolded, stream });
+    await deliver(refolded);
 
     expect(refoldCalls).toEqual([]);
     expect(stream.events).toHaveLength(journalBeforeRefold);
@@ -1173,8 +1002,8 @@ describe("SlackAgentProcessor", () => {
     expect(refolded.state).toEqual(processor.state);
   });
 
-  it("captures route context and stamps the thread's roster identity once", async () => {
-    const { cursors, processor, slackCalls, stream } = setup({
+  test("captures route context and stamps the thread's roster identity once", async () => {
+    const { deliver, processor, slackCalls, stream } = setup({
       fetchSlackChannelName: async () => "trip-planning",
     });
 
@@ -1186,7 +1015,7 @@ describe("SlackAgentProcessor", () => {
         streamPath: "/agents/slack/nustom/c123/ts-111-222",
       },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(processor.state).toMatchObject({
       channel: "C123",
@@ -1209,8 +1038,8 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toHaveLength(0);
   });
 
-  it("compiles the !debug bang command into a Slack-posting debug script", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("compiles the !debug bang command into a Slack-posting debug script", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     await stream.append(
       {
@@ -1229,7 +1058,7 @@ describe("SlackAgentProcessor", () => {
         payload: humanMessageWebhookPayload({ text: "!debug" }),
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const scripts = stream.events.filter(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -1254,7 +1083,7 @@ describe("SlackAgentProcessor", () => {
     });
   });
 
-  it("commits the agent input before adding the Slack eyes reaction", async () => {
+  test("commits the agent input before adding the Slack eyes reaction", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/agents/slack/nustom/c123/ts-111-222");
     await stream.append({
@@ -1288,8 +1117,8 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("turns raw Slack interactivity payloads into triggering agent input", async () => {
-    const { cursors, processor, stream } = setup();
+  test("turns raw Slack interactivity payloads into triggering agent input", async () => {
+    const { deliver, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
@@ -1305,7 +1134,7 @@ describe("SlackAgentProcessor", () => {
         },
       },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const inputs = stream.events.filter(
       (event) => event.type === "events.iterate.com/agents/message-received",
@@ -1326,8 +1155,8 @@ describe("SlackAgentProcessor", () => {
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
   });
 
-  it("ignores webhook events performed by our own bot user (e.g. our bot adding a reaction)", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("ignores webhook events performed by our own bot user (e.g. our bot adding a reaction)", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
@@ -1346,7 +1175,7 @@ describe("SlackAgentProcessor", () => {
         },
       },
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agents/message-received"),
@@ -1354,62 +1183,42 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toHaveLength(0);
   });
 
-  it("forwards other-bot @mentions as triggering agent input without eyes", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test.for([
+    {
+      name: "forwards other-bot @mentions as triggering agent input without eyes",
+      payload: botMessageWebhookPayload({
+        botId: "BOTHERBOT", // not our authorized bot (BBOT)
+        subtype: "bot_message",
+        text: "<@UBOT> I am another bot mentioning iterate",
+      }),
+      expectedPolicy: { behaviour: "after-current-request" },
+    },
+    {
+      name: "records other-bot messages without an @mention as non-triggering history",
+      payload: botMessageWebhookPayload({
+        botId: "BOTHERBOT",
+        subtype: "bot_message",
+        text: "I am another bot chatting ambiently",
+      }),
+      expectedPolicy: { behaviour: "dont-trigger-request" },
+    },
+  ])("$name", async ({ payload, expectedPolicy }) => {
+    const { deliver, slackCalls, stream } = setup();
 
-    const payload = humanMessageWebhookPayload({
-      text: "<@UBOT> I am another bot mentioning iterate",
-    });
-    const event = payload.body.event as Record<string, unknown>;
-    event.subtype = "bot_message";
-    event.bot_id = "BOTHERBOT"; // not our authorized bot (BBOT)
-    delete event.user;
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload,
-    });
-    await deliverNewEvents({ cursors, processor, stream });
+    await stream.append({ type: "events.iterate.com/slack/webhook-received", payload });
+    await deliver();
 
-    const inputs = stream.events.filter((streamEvent) => {
-      return streamEvent.type === "events.iterate.com/agents/message-received";
-    });
+    const inputs = eventsOfType(stream, "events.iterate.com/agents/message-received");
     expect(inputs).toHaveLength(1);
-    expect((inputs[0]!.payload as { llmRequestPolicy?: unknown }).llmRequestPolicy).toEqual({
-      behaviour: "after-current-request",
-    });
+    expect((inputs[0]!.payload as { llmRequestPolicy?: unknown }).llmRequestPolicy).toEqual(
+      expectedPolicy,
+    );
     // Bot-authored messages never get the eyes reaction, even when forwarded.
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
 
-  it("records other-bot messages without an @mention as non-triggering history", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
-
-    const payload = humanMessageWebhookPayload({
-      mentionBot: false,
-      text: "I am another bot chatting ambiently",
-    });
-    const event = payload.body.event as Record<string, unknown>;
-    event.subtype = "bot_message";
-    event.bot_id = "BOTHERBOT";
-    delete event.user;
-    await stream.append({
-      type: "events.iterate.com/slack/webhook-received",
-      payload,
-    });
-    await deliverNewEvents({ cursors, processor, stream });
-
-    const inputs = stream.events.filter(
-      (streamEvent) => streamEvent.type === "events.iterate.com/agents/message-received",
-    );
-    expect(inputs).toHaveLength(1);
-    expect(inputs[0]!.payload).toMatchObject({
-      llmRequestPolicy: { behaviour: "dont-trigger-request" },
-    });
-    expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
-  });
-
-  it("forwards other bot messages when Slack authorizations omit bot_id", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("forwards other bot messages when Slack authorizations omit bot_id", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     const payload = humanMessageWebhookPayload({ text: "<@UBOT> !debug" });
     delete (payload.body.authorizations[0] as Record<string, unknown>).bot_id;
@@ -1433,7 +1242,7 @@ describe("SlackAgentProcessor", () => {
         payload,
       },
     );
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     const scripts = stream.events.filter(
       (streamEvent) =>
@@ -1446,8 +1255,8 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
 
-  it("ignores our own bot messages when Slack authorizations omit bot_id", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("ignores our own bot messages when Slack authorizations omit bot_id", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     const payload = humanMessageWebhookPayload({ text: "<@UBOT> !debug" });
     delete (payload.body.authorizations[0] as Record<string, unknown>).bot_id;
@@ -1461,7 +1270,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/slack/webhook-received",
       payload,
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(
       stream.events.filter((streamEvent) => {
@@ -1476,8 +1285,8 @@ describe("SlackAgentProcessor", () => {
     expect(slackCalls).toHaveLength(0);
   });
 
-  it("ignores bot messages when Slack gives no comparable bot identity", async () => {
-    const { cursors, processor, slackCalls, stream } = setup();
+  test("ignores bot messages when Slack gives no comparable bot identity", async () => {
+    const { deliver, slackCalls, stream } = setup();
 
     const payload = humanMessageWebhookPayload({ text: "<@UBOT> !debug" });
     delete (payload.body.authorizations[0] as Record<string, unknown>).bot_id;
@@ -1491,7 +1300,7 @@ describe("SlackAgentProcessor", () => {
       type: "events.iterate.com/slack/webhook-received",
       payload,
     });
-    await deliverNewEvents({ cursors, processor, stream });
+    await deliver();
 
     expect(
       stream.events.filter((streamEvent) => {
@@ -1508,106 +1317,158 @@ describe("SlackAgentProcessor", () => {
 });
 
 describe("eyesReactionTargetFromWebhookPayload", () => {
-  it("targets human messages that @mention the bot", () => {
-    expect(eyesReactionTargetFromWebhookPayload(humanMessageWebhookPayload({}))).toEqual({
-      channel: "C123",
-      timestamp: "111.222",
-    });
-  });
-
-  it("skips ambient human messages that do not @mention the bot", () => {
-    expect(
-      eyesReactionTargetFromWebhookPayload(
-        humanMessageWebhookPayload({ mentionBot: false, text: "not for the bot" }),
-      ),
-    ).toBeNull();
-  });
-
-  it("targets app_mention deliveries", () => {
-    const payload = humanMessageWebhookPayload({ text: "status?" });
-    (payload.body.event as Record<string, unknown>).type = "app_mention";
-    expect(eyesReactionTargetFromWebhookPayload(payload)).toEqual({
-      channel: "C123",
-      timestamp: "111.222",
-    });
-  });
-
-  it("skips bot messages and reaction events", () => {
-    expect(eyesReactionTargetFromWebhookPayload(botMessageWebhookPayload())).toBeNull();
-    expect(
-      eyesReactionTargetFromWebhookPayload({
+  test.for([
+    {
+      name: "targets a human message that @mentions the bot",
+      payload: humanMessageWebhookPayload({}),
+      expected: { channel: "C123", timestamp: "111.222" },
+    },
+    {
+      name: "skips an ambient human message that does not @mention the bot",
+      payload: humanMessageWebhookPayload({ mentionBot: false, text: "not for the bot" }),
+      expected: null,
+    },
+    {
+      name: "targets an app_mention delivery",
+      payload: humanMessageWebhookPayload({ eventType: "app_mention", text: "status?" }),
+      expected: { channel: "C123", timestamp: "111.222" },
+    },
+    {
+      name: "skips bot messages",
+      payload: botMessageWebhookPayload(),
+      expected: null,
+    },
+    {
+      name: "skips reaction events",
+      payload: {
         body: {
           type: "event_callback",
           event: { type: "reaction_added", item: { channel: "C123", ts: "1.2" } },
         },
-      }),
-    ).toBeNull();
+      },
+      expected: null,
+    },
+    {
+      name: "skips messages whose only bot marker is the bot_message subtype",
+      payload: humanMessageWebhookPayload({ subtype: "bot_message" }),
+      expected: null,
+    },
+    {
+      name: "skips actions performed by the authorized bot user",
+      payload: humanMessageWebhookPayload({ user: "UBOT" }),
+      expected: null,
+    },
+    {
+      name: "skips payloads without a message timestamp",
+      payload: { body: { event: {} } },
+      expected: null,
+    },
+  ])("$name", ({ payload, expected }) => {
+    expect(eyesReactionTargetFromWebhookPayload(payload)).toEqual(expected);
   });
+});
 
-  it("skips messages whose only bot marker is the bot_message subtype", () => {
-    const payload = humanMessageWebhookPayload({});
-    (payload.body.event as Record<string, unknown>).subtype = "bot_message";
-    expect(eyesReactionTargetFromWebhookPayload(payload)).toBeNull();
-  });
-
-  it("skips actions performed by the authorized bot user", () => {
-    const payload = humanMessageWebhookPayload({});
-    (payload.body.event as Record<string, unknown>).user = "UBOT";
-    expect(eyesReactionTargetFromWebhookPayload(payload)).toBeNull();
-  });
-
-  it("skips payloads without a message timestamp", () => {
-    expect(eyesReactionTargetFromWebhookPayload({ body: { event: {} } })).toBeNull();
+describe("slackAgentSystemPrompt", () => {
+  test("stitches the connection into the prompt", () => {
+    // Structural invariant (parameter interpolation) only — the prose is
+    // deliberately unpinned: docs/testing.md names prompt-copy pinning as an
+    // antipattern.
+    expect(slackAgentSystemPrompt(CONNECTION)).toContain(`"${CONNECTION}"`);
   });
 });
 
 describe("compileBangCommand", () => {
-  it("tells Slack agents to use the Google-backed Gmail capability for inbox requests", () => {
-    const prompt = slackAgentSystemPrompt(CONNECTION);
-    expect(prompt).toContain('itx.integrations.slack.get("nustom").chat.postMessage');
-    expect(prompt).toContain("itx.integrations.list()");
-    expect(prompt).toContain("itx.integrations.gmail.get().request");
-    expect(prompt).toContain('path: "/users/me/messages"');
-    expect(prompt).toContain("Do not claim you lack inbox access");
-    expect(prompt).toContain("SILENCE IS THE DEFAULT");
-    expect(prompt).toContain("When in doubt, stay silent");
-  });
-
-  it("wraps bare expressions in an async itx arrow", () => {
-    expect(
-      compileBangCommand({
-        channel: "C1",
-        connection: "nustom",
-        message: "!whoami",
-        threadTs: "1.2",
-      })?.code,
-    ).toContain("await itx.whoami()");
-    expect(
-      compileBangCommand({
-        channel: "C1",
-        connection: "nustom",
-        message: "<@U1> !__describe",
-        threadTs: "1.2",
-      })?.code,
-    ).toContain("await itx.__describe()");
-  });
-
-  it("returns null for ordinary messages", () => {
-    expect(
-      compileBangCommand({
-        channel: "C1",
-        connection: "nustom",
-        message: "hello",
-        threadTs: "1.2",
-      }),
-    ).toBeNull();
-    expect(
-      compileBangCommand({
-        channel: "C1",
-        connection: "nustom",
-        message: undefined,
-        threadTs: "1.2",
-      }),
-    ).toBeNull();
+  test.for([
+    {
+      name: "wraps a bare expression in an async itx arrow",
+      message: "!whoami" as string | undefined,
+      expectedSnippet: "await itx.whoami()" as string | null,
+    },
+    {
+      name: "strips a leading mention before the bang",
+      message: "<@U1> !__describe",
+      expectedSnippet: "await itx.__describe()",
+    },
+    { name: "returns null for an ordinary message", message: "hello", expectedSnippet: null },
+    { name: "returns null for a missing message", message: undefined, expectedSnippet: null },
+  ])("$name", ({ message, expectedSnippet }) => {
+    const compiled = compileBangCommand({
+      channel: "C1",
+      connection: "nustom",
+      message,
+      threadTs: "1.2",
+    });
+    if (expectedSnippet === null) {
+      expect(compiled).toBeNull();
+    } else {
+      expect(compiled?.code).toContain(expectedSnippet);
+    }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function connectedEvent() {
+  return {
+    type: "events.iterate.com/slack/connected" as const,
+    payload: {
+      connection: CONNECTION,
+      externalId: TEAM_ID,
+      projectId: "prj_1",
+      teamId: TEAM_ID,
+      teamName: "acme",
+    },
+  };
+}
+
+function routerSetup(deps: { connection?: string | null; now?: () => number } = {}) {
+  const connection = deps.connection === undefined ? CONNECTION : deps.connection;
+  const acked: unknown[] = [];
+  const harness = makeProcessorHarness({
+    path: connection === null ? "/integrations/slack" : `/integrations/slack/${connection}`,
+    now: deps.now,
+    build: ({ stream }) =>
+      new SlackProcessor({
+        stream,
+        path: stream.path,
+        projectId: null,
+        connection,
+        acknowledgeRoutedWebhook: ({ payload }) => {
+          acked.push(payload);
+        },
+        ...(deps.now === undefined ? {} : { now: deps.now }),
+      }),
+  });
+  return { ...harness, acked };
+}
+
+function setup(deps?: {
+  callSlackApi?: (method: string, body: Record<string, unknown>) => Promise<void>;
+  fetchSlackChannelName?: (channel: string) => Promise<string | null>;
+  storeSlackFiles?: ConstructorParameters<typeof SlackAgentProcessor>[0]["storeSlackFiles"];
+}) {
+  const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
+  const slackCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
+  const harness = makeProcessorHarness({
+    path: "/agents/slack/nustom/c123/ts-111-222",
+    now: () => clock.now,
+    build: ({ stream }) =>
+      new SlackAgentProcessor({
+        stream,
+        path: stream.path,
+        projectId: null,
+        callSlackApi: async (method, body) => {
+          slackCalls.push({ body, method });
+          await deps?.callSlackApi?.(method, body);
+        },
+        now: () => clock.now,
+        ...(deps?.fetchSlackChannelName === undefined
+          ? {}
+          : { fetchSlackChannelName: deps.fetchSlackChannelName }),
+        ...(deps?.storeSlackFiles === undefined ? {} : { storeSlackFiles: deps.storeSlackFiles }),
+      }),
+  });
+  return { ...harness, clock, slackCalls };
+}

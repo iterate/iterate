@@ -14,6 +14,7 @@
 // vendor fake that hasn't resolved yet. Every state a test exercises is
 // therefore a reachable state, and the test doubles as the existence proof.
 
+import { expect } from "vitest";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { AnyHostedProcessor } from "./processor-host-capabilities.ts";
@@ -217,6 +218,68 @@ export async function deliverNewEvents(input: {
   if (events.length === 0) return;
   const streamMaxOffset = input.stream.events.at(-1)?.offset ?? 0;
   await input.processor.ingest({ events, streamMaxOffset });
+}
+
+/**
+ * The standard processor-suite preamble in one call: a MemoryStreamNetwork
+ * (pass `now` to pin the virtual clock), the stream at `path`, the processor
+ * built over that stream, one cursors map, and `deliver()` — cursor-based
+ * pull delivery mirroring production subscription semantics. Refold tests
+ * hand the replacement processor to `deliver(refolded)`: a fresh processor
+ * has no cursor yet, so it replays the whole journal.
+ */
+export function makeProcessorHarness<Processor extends ProcessorLike>(options: {
+  build: (ctx: { network: MemoryStreamNetwork; stream: MemoryStream }) => Processor;
+  path?: string;
+  now?: () => number;
+}) {
+  const network = new MemoryStreamNetwork(options.now);
+  const stream = network.get(options.path ?? "/agents/test");
+  const processor = options.build({ network, stream });
+  const cursors = new Map<object, number>();
+  return {
+    cursors,
+    network,
+    processor,
+    stream,
+    deliver(target: ProcessorLike = processor) {
+      return deliverNewEvents({ cursors, processor: target, stream });
+    },
+  };
+}
+
+/** The events of one type on a stream (or plain event array), in order. */
+export function eventsOfType(source: MemoryStream | StreamEvent[], type: string): StreamEvent[] {
+  const events = Array.isArray(source) ? source : source.events;
+  return events.filter((event) => event.type === type);
+}
+
+/**
+ * Assert an event of `expected.type` exists whose body CONTAINS
+ * `expected` (toMatchObject semantics — use only where containment is the
+ * intended strength) and return it, so follow-ups can assert exactly.
+ */
+export function expectEventContaining(
+  source: MemoryStream | StreamEvent[],
+  expected: { payload?: unknown; type: string },
+): StreamEvent {
+  const candidates = eventsOfType(source, expected.type);
+  const match = candidates.find((event) => {
+    try {
+      expect(event).toMatchObject(expected);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (match === undefined) {
+    // Fails with the best available diff: every same-type candidate against
+    // the expected containment. (objectContaining is stricter than
+    // toMatchObject, so reaching this line always throws here.)
+    expect(candidates).toEqual(expect.arrayContaining([expect.objectContaining(expected)]));
+    throw new Error(`no ${expected.type} event matches ${JSON.stringify(expected)}`);
+  }
+  return match;
 }
 
 /** The durable substrate an eviction does NOT destroy. */
