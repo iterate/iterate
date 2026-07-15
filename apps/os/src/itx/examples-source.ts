@@ -648,28 +648,21 @@ return await itx.projects.get(pid).__describe();
     id: "secrets-lifecycle",
     title: "Store a secret; describe() never shows the material",
     description:
-      "Secrets are path-addressed write-only capabilities: update() stores material plus the egress URLs it may be substituted into, and describe() reports metadata only (hasMaterial, egress allowlist, usage audit). Egress requests carry getSecret(path) placeholders; substitution happens server-side.",
+      "Secrets are path-addressed write-only capabilities: create() stores the initial material plus the egress URLs it may be substituted into, update() changes an existing secret, and describe() reports metadata only (hasMaterial, egress allowlist, usage audit). Egress requests carry getSecret(path) placeholders; substitution happens server-side.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { secretPath?: string; note?: string }) => {
       const secret = itx.secrets.get(vars.secretPath ?? "/secrets/example");
 
       // Store the material once, with the URLs it may be substituted into. From
       // here on, egress headers reference it as: getSecret({ path: "..." }).
-      await secret.update({
+      await secret.create({
         egress: { urls: ["https://postman-echo.com/"] },
         material: "demo-" + (vars.note ?? "material"),
       });
 
-      // The secret processor folds the update asynchronously — poll describe().
-      let described = await secret.__describe();
-      for (let attempt = 0; attempt < 50 && !described.hasMaterial; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        described = await secret.__describe();
-      }
-
       // Metadata only: hasMaterial, the egress allowlist, and the usage audit.
       // The material itself has no read API.
-      return described;
+      return await secret.__describe();
     },
   }),
   projectExample({
@@ -704,19 +697,11 @@ return await itx.projects.get(pid).__describe();
       const material = "demo-" + (vars.note ?? "postman-echo-secret");
       const secret = itx.secrets.get(secretPath);
 
-      await secret.update({
+      await secret.create({
         // Egress checks origins, so this allows any path on postman-echo.com.
         egress: { urls: ["https://postman-echo.com/"] },
         material,
       });
-
-      // update() is durable immediately, but the secret processor folds the stream
-      // asynchronously. Wait until the request path can see the new material.
-      let before = await secret.__describe();
-      for (let attempt = 0; attempt < 50 && !before.hasMaterial; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        before = await secret.__describe();
-      }
 
       const response = await itx.egress.fetch(
         new Request("https://postman-echo.com/get?source=itx-secret-example", {
@@ -792,7 +777,7 @@ return await itx.projects.get(pid).__describe();
       // ));
       //
       // If the user PASTES the key into chat instead of using the link: that is fine —
-      // store it and proceed (itx.secrets.get(secretPath).update({ material, egress: { urls: [apiOrigin] } })),
+      // create the secret and proceed (itx.secrets.get(secretPath).create({ material, egress: { urls: [apiOrigin] } })),
       // unblocking them comes first. But the pasted value sat in the transcript, so advise
       // them to roll the key with the provider and collect the replacement via
       // collectFromUser — the same call updates the existing secret in place.
@@ -1407,7 +1392,7 @@ return {
 
       // 1. The PAT lives in a Secret DO with a GitHub-only egress allowlist.
       const secret = itx.secrets.get(tokenPath);
-      await secret.update({
+      await secret.create({
         egress: { urls: ["https://api.githubcopilot.com/", "https://api.github.com/"] },
         material: vars.githubPat,
       });

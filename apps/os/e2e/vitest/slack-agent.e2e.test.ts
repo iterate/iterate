@@ -47,7 +47,7 @@ test.skipIf(signingSecret === null)(
     // connection stream (router subscription + connected fact) + global team
     // directory claim (the storage the OAuth callback writes).
     using secret = project.secrets.get(SLACK_BOT_TOKEN_SECRET_PATH);
-    await secret.update({
+    await secret.create({
       egress: { urls: ["https://slack.com"] },
       material: `xoxb-e2e-fake-${RUN_SUFFIX}`,
     });

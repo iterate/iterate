@@ -216,7 +216,7 @@ describe("connectTelegram", () => {
       projectId: "prj_other",
       path: telegramBotTokenSecretPath("their-bot"),
     });
-    await network.SECRET.getByName(oldSecretName).update({
+    await network.SECRET.getByName(oldSecretName).create({
       egress: { urls: ["https://api.telegram.org"] },
       material: BOT_TOKEN,
     });

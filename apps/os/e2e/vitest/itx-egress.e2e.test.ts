@@ -21,18 +21,18 @@ test("public secret events can change egress but copied ciphertext cannot follow
   using project = itx.projects.create({ slug: `secret-stream-forgery-${crypto.randomUUID()}` });
   const secretPath = `/secrets/stream-forgery/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
-  await secret.update({
+  await secret.create({
     egress: { urls: [original.url] },
     material: "user-submitted-material",
   });
 
   const stream = project.streams.get(secretPath);
-  const originalUpdate = (await stream.getEvents()).find(
-    (event) => event.type === "events.iterate.com/secret/updated",
+  const birthCertificate = (await stream.getEvents()).find(
+    (event) => event.type === "events.iterate.com/secret/created",
   );
-  const encryptedMaterial = (originalUpdate?.payload as Record<string, unknown> | undefined)?.[
-    "encryptedMaterial"
-  ];
+  const encryptedMaterial = (
+    birthCertificate?.payload as { config?: Record<string, unknown> } | undefined
+  )?.config?.["encryptedMaterial"];
   expect(encryptedMaterial).toBeDefined();
 
   await stream.append({
@@ -70,7 +70,7 @@ test("every egress-only update clears retained secret material", async () => {
   using project = itx.projects.create({ slug: `secret-repin-${crypto.randomUUID()}` });
   using secret = project.secrets.get(`/secrets/repin/${crypto.randomUUID()}`);
 
-  await secret.update({
+  await secret.create({
     egress: { urls: [original.url] },
     material: "user-submitted-material",
   });
@@ -145,7 +145,7 @@ test("an in-flight refresh cannot resurrect material after an egress event", asy
   using project = itx.projects.create({ slug: `secret-refresh-race-${crypto.randomUUID()}` });
   const secretPath = `/secrets/refresh-race/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
-  await secret.update({
+  await secret.create({
     egress: { urls: [provider.url] },
     material: {
       accessToken: "stale-access-token",
@@ -214,7 +214,7 @@ test("a repeated refresh event before its snapshot cannot resurrect material", a
     kind: "oauth-refresh-token",
     tokenEndpoint: `${provider.url}/oauth/token`,
   } as const;
-  await secret.update({
+  await secret.create({
     egress: { urls: [provider.url] },
     material: {
       accessToken: "stale-access-token",
@@ -268,7 +268,7 @@ test("secret egress rejects a cross-origin redirect without forwarding material"
   const secretPath = `/secrets/redirect/${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
 
-  await secret.update({
+  await secret.create({
     egress: { urls: [allowed.url] },
     material: "redirect-exfiltration-proof",
   });
@@ -300,7 +300,7 @@ test("URL-path secret material is not returned in Response metadata", async () =
   const material = `url-secret-${crypto.randomUUID()}`;
   using secret = project.secrets.get(secretPath);
 
-  await secret.update({
+  await secret.create({
     egress: { urls: [endpoint.url] },
     material,
   });
@@ -329,7 +329,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     using project = itx.projects.create({ slug: `project-egress-${crypto.randomUUID()}` });
     const secretPath = `/secrets/egress-proof/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
-    await secret.update({
+    await secret.create({
       egress: { urls: [echo.url] },
       material: "actual-secret-material",
     });
@@ -483,7 +483,7 @@ test("Project egress intercept catches explicit and worker fetches before secret
     });
     const secretPath = `/secrets/egress-intercept/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
-    await secret.update({
+    await secret.create({
       egress: { urls: [echo.url] },
       material: "intercept-secret-material",
     });

@@ -74,6 +74,9 @@ export function createFakeItxEnv(options?: {
           },
           async update(input: FakeSecretRecord) {
             await secretUpdateHooks.shift()?.();
+            if (!secrets.has(name)) {
+              throw new Error(`secret has not been created: ${name}`);
+            }
             // Merge, like the Secret DO: material/egress/refresh are separate
             // fields and an egress-only brick must not erase the material.
             secrets.set(name, { ...secrets.get(name), ...input });
