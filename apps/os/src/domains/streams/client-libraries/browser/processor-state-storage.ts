@@ -5,10 +5,8 @@
 // reset story; the cost is that projection writes and the checkpoint are not
 // in one transaction, so processors must tolerate at-least-once redelivery.
 
-import type {
-  StreamProcessorSnapshot,
-  StreamProcessorStateStorage,
-} from "../../stream-processor.ts";
+import type { ProcessorSnapshot } from "../../rpc-types.ts";
+import type { StreamProcessorStateStorage } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "./ensure-schema-once.ts";
 import type { SqlClient } from "./stream-browser-db.ts";
 
@@ -68,7 +66,7 @@ export function browserProcessorStateStorage<State>(args: {
         offset: Number(row.max_offset),
       };
     },
-    writeState: async (snapshot: StreamProcessorSnapshot<State>) => {
+    writeState: async (snapshot: ProcessorSnapshot<State>) => {
       await ensureBrowserProcessorStateSchema(args.sql);
       await args.sql.exec(
         `

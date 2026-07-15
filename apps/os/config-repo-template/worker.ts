@@ -1,6 +1,19 @@
-import { IterateDurableObject, IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import {
-  processGithubReviewEvent,
+  IterateDurableObject,
+  IterateWorkerEntrypoint,
+  createStreamProcessorHost,
+  type DynamicWorkerRef,
+  type Project,
+  type StreamEvent,
+  type StreamProcessorAlarmInfo,
+  type StreamProcessorHost,
+  type StreamSubscriberWakeRequest,
+  type StreamSubscriberWakeResponse,
+} from "iterate/sdk";
+import {
+  GithubReviewProcessor,
+  GithubReviewProcessorContract,
+  githubReviewTarget,
   type GithubReviewConfig,
   type GithubReviewRule,
 } from "./github-reviews.ts";
@@ -33,11 +46,18 @@ const GITHUB_REVIEW_RULES = [
 const GITHUB_REVIEWS = {
   forceLabel: "iterate:review",
   osBaseUrl: "https://os.iterate.com",
-  repositories: [] as string[],
+  repositories: Array<string>(),
   rules: GITHUB_REVIEW_RULES,
   skipLabel: "iterate:skip-review",
   timeoutSeconds: 30 * 60,
 } satisfies GithubReviewConfig;
+
+const GITHUB_REVIEW_COORDINATES_KEY = "github-review/stream";
+
+type GithubReviewCoordinates = {
+  path: string;
+  projectId: string;
+};
 
 // The root project worker (default export) routes HTTP and reacts to project
 // events, and the example apps are named exports — a stateless HelloApp and a
@@ -126,8 +146,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     // capability mounts, boot context. `itx.agents.defaults.forPath` returns
     // the platform's defaults as data — edit the result (or pass prompt/model
     // overrides) to change how YOUR agents behave. GitHub review automation
-    // is a separate userspace reaction to routed webhook events; see the
-    // platform's GitHub-agent guide for the small copyable pattern.
+    // is a separate userspace StreamProcessor attached below when an eligible
+    // routed webhook first reaches its canonical pull-request stream.
     if (event.path === "/" && event.type === "events.iterate.com/stream/child-stream-created") {
       const childPath = event.payload?.childPath;
       if (typeof childPath === "string" && childPath.startsWith("/agents/")) {
@@ -152,14 +172,138 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     }
 
     if (event.type === "events.iterate.com/github/webhook-received") {
+      const target = githubReviewTarget(event, GITHUB_REVIEWS);
+      if (target === null || !GITHUB_REVIEWS.repositories.includes(target.fullName)) return;
+
+      // One stateful dynamic-worker identity per canonical PR stream. The
+      // stream owns delivery; this worker only declares where its userspace
+      // processor's wake door lives. A new push interrupts the same PR agent
+      // conversation and reuses the same processor checkpoint.
+      const reviewProcessorRef = {
+        type: "stateful",
+        path: event.path,
+        className: "GithubReviewProcessorDurableObject",
+        durableWorkerKey: "github-review-processor",
+        source: {
+          files: { type: "repo", repoPath: "/repos/config" },
+          options: { entryPoint: "worker.ts" },
+        },
+      } satisfies DynamicWorkerRef;
       const itx = await this.env.ITX.get();
       try {
-        await processGithubReviewEvent({ config: GITHUB_REVIEWS, event, itx });
+        await itx.streams.get(event.path).append({
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: `github-review/subscription@${event.path}`,
+          payload: {
+            subscriptionKey: "userspace/github-review",
+            delivery: {
+              mode: "wake",
+              expression: ["workers", ["get", reviewProcessorRef], "wakeStreamSubscriber"],
+              processorSlug: GithubReviewProcessorContract.slug,
+            },
+          },
+        });
       } finally {
         try {
           itx[Symbol.dispose]?.();
         } catch {}
       }
+    }
+  }
+}
+
+/**
+ * General stream-processor hosting, entirely in project userspace. The
+ * platform's stateful dynamic-worker host supplies the Durable Object; this
+ * class supplies the ordinary processor host, processor, and wake/alarm
+ * methods expected by a wake-mode stream subscription.
+ */
+export class GithubReviewProcessorDurableObject extends IterateDurableObject {
+  #hosted: Promise<{ host: StreamProcessorHost; itx: Project }> | undefined;
+
+  async wakeStreamSubscriber(
+    request: StreamSubscriberWakeRequest,
+  ): Promise<StreamSubscriberWakeResponse> {
+    const { host } = await this.#processorHost(this.#coordinates(request));
+    return await host.wakeStreamSubscriber(request);
+  }
+
+  async alarm(alarmInfo?: StreamProcessorAlarmInfo): Promise<void> {
+    const { host } = await this.#processorHost(this.#coordinates());
+    await host.handleAlarm(alarmInfo);
+  }
+
+  #coordinates(request?: StreamSubscriberWakeRequest): GithubReviewCoordinates {
+    const stored = this.ctx.storage.kv.get<GithubReviewCoordinates>(GITHUB_REVIEW_COORDINATES_KEY);
+    if (request === undefined) {
+      if (stored === undefined) {
+        throw new Error("GitHub review processor alarm fired before its first stream wake");
+      }
+      return stored;
+    }
+    if (request.stream.projectId === null) {
+      throw new Error("GitHub review processors require a project-scoped stream");
+    }
+    const requested = {
+      path: request.stream.path,
+      projectId: request.stream.projectId,
+    };
+    if (
+      stored !== undefined &&
+      (stored.path !== requested.path || stored.projectId !== requested.projectId)
+    ) {
+      throw new Error(
+        `GitHub review processor is bound to ${stored.projectId}:${stored.path}, not ${requested.projectId}:${requested.path}`,
+      );
+    }
+    if (stored === undefined) this.ctx.storage.kv.put(GITHUB_REVIEW_COORDINATES_KEY, requested);
+    return requested;
+  }
+
+  async #processorHost(
+    coordinates: GithubReviewCoordinates,
+  ): Promise<{ host: StreamProcessorHost; itx: Project }> {
+    if (this.#hosted !== undefined) return await this.#hosted;
+    const creating = (async () => {
+      const itx = await this.env.ITX.get();
+      try {
+        const projectId = await itx.projectId;
+        if (projectId !== coordinates.projectId) {
+          throw new Error(
+            `GitHub review processor project mismatch: ${projectId} !== ${coordinates.projectId}`,
+          );
+        }
+        const host = createStreamProcessorHost(this.ctx, {
+          path: coordinates.path,
+          projectId: coordinates.projectId,
+          stream: itx.streams.get(coordinates.path),
+          version: GithubReviewProcessorContract.version,
+        });
+        host.add(
+          (deps) =>
+            new GithubReviewProcessor({
+              ...deps,
+              config: GITHUB_REVIEWS,
+              itx,
+            }),
+        );
+        // The processor performs later GitHub and scheduler calls, so this
+        // Project stub intentionally stays owned by the host for the lifetime
+        // of the Durable Object incarnation.
+        return { host, itx };
+      } catch (error) {
+        try {
+          itx[Symbol.dispose]?.();
+        } catch {}
+        throw error;
+      }
+    })();
+    this.#hosted = creating;
+    try {
+      return await creating;
+    } catch (error) {
+      if (this.#hosted === creating) this.#hosted = undefined;
+      throw error;
     }
   }
 }

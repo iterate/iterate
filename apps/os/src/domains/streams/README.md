@@ -309,7 +309,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 `add` registers the processor under its `contract.slug`, stores checkpoints in
 DO KV, and gives the processor the host's own public `Stream` capability —
 processors never hold raw DO stubs. The browser stream mirror
-(`client-libraries/browser/`) is a second host of the same engine: it runs
+(`client-libraries/browser/`) is a second host of the same processor runtime: it runs
 real `StreamProcessor` subclasses against wa-sqlite with the same
 announcements and checkpoints.
 

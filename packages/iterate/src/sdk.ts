@@ -10,8 +10,9 @@
 // platform embeds this module (compiled to plain JS) as the `iterate/sdk`
 // virtual module in every dynamic worker build — see apps/os
 // iterate-sdk-virtual-module.generated.ts. The published package is still the
-// editor/typecheck story; keep runtime code here dependency-free (only
-// `cloudflare:workers` imports) so the embed stays self-contained.
+// editor/typecheck story. The embed is bundled, so the stream-processor
+// runtime and its zod/capnweb dependencies are available in project workers
+// without a project-level npm install.
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
   DynamicWorkerRef,
@@ -24,9 +25,30 @@ import type {
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
 export type * from "./itx-api.generated";
 
+// A project-defined processor uses the same contract, runtime, and Durable
+// Object host as the platform's built-in processors. The `.js` specifiers land
+// verbatim in the published declarations and resolve to emitted files; the
+// virtual `iterate/sdk` module bundles their runtime implementations.
+export * from "./processor-contracts.js";
+export * from "./stream-processor.js";
+export * from "./stream-processor-host.js";
+export {
+  StreamEvent as StreamEventSchema,
+  StreamEventInput as StreamEventInputSchema,
+  StreamListItem as StreamListItemSchema,
+} from "./stream-events.js";
+export { z } from "zod";
+
 /** The one binding the platform supplies to every dynamic worker: `get()`
  * for capability method calls, `fetch()` for HTTP into sibling workers. */
 type IterateEnv = { ITX: ItxBinding };
+
+// Plain Node test runners expose the `cloudflare:workers` module shim without
+// its runtime base classes. Falling back to inert bases keeps contracts and
+// pure processor code importable there; a deployed worker always receives
+// the real workerd classes and therefore never takes this lane.
+const DurableObjectBase = DurableObject ?? class {};
+const WorkerEntrypointBase = WorkerEntrypoint ?? class {};
 
 /**
  * Forward a request to one of the project's dynamic workers (an "app") —
@@ -110,7 +132,7 @@ async function invokeCapability(
  */
 export class IterateWorkerEntrypoint<
   Env extends IterateEnv = IterateEnv,
-> extends WorkerEntrypoint<Env> {
+> extends WorkerEntrypointBase<Env> {
   /** See `fetchDynamicWorker` at module level: a real fetch hop into a
    * sibling dynamic worker — the only lane that can carry WebSocket upgrades
    * and streaming bodies (RPC serializes; sockets can't cross it). */
@@ -147,7 +169,9 @@ export class IterateWorkerEntrypoint<
  * capability-dispatch contracts — on a DurableObject, so state survives
  * across requests and WebSockets can be served from `fetch`.
  */
-export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends DurableObject<Env> {
+export class IterateDurableObject<
+  Env extends IterateEnv = IterateEnv,
+> extends DurableObjectBase<Env> {
   /** A real fetch hop into a sibling dynamic worker — see
    * `IterateWorkerEntrypoint.fetchDynamicWorker`. */
   protected async fetchDynamicWorker(

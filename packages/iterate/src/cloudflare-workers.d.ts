@@ -1,4 +1,13 @@
 declare module "cloudflare:workers" {
+  export const tracing: {
+    enterSpan<Result>(
+      name: string,
+      callback: (span: {
+        setAttribute(name: string, value: string | number | boolean): void;
+      }) => Result,
+    ): Result;
+  };
+
   export abstract class WorkerEntrypoint<Env = unknown, Props = Record<string, unknown>> {
     protected env: Env;
     protected ctx: {

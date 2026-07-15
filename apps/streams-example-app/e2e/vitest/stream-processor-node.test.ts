@@ -12,11 +12,8 @@ import { z } from "zod";
 import { e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
 import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import { defineProcessorContract } from "~/domains/streams/processor-contracts.ts";
-import {
-  StreamProcessor,
-  type StreamProcessorSnapshot,
-} from "~/domains/streams/stream-processor.ts";
-import type { Stream } from "~/itx-api.generated.ts";
+import { StreamProcessor } from "~/domains/streams/stream-processor.ts";
+import type { ProcessorSnapshot, Stream } from "~/itx-api.generated.ts";
 
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 
@@ -68,8 +65,8 @@ async function hostEcho(args: {
   path: string;
   subscriptionKey: string;
   storage: {
-    load: () => StreamProcessorSnapshot<EchoExampleState> | undefined;
-    save: (snapshot: StreamProcessorSnapshot<EchoExampleState>) => void;
+    load: () => ProcessorSnapshot<EchoExampleState> | undefined;
+    save: (snapshot: ProcessorSnapshot<EchoExampleState>) => void;
   };
 }) {
   const processor = new EchoExampleProcessor({
@@ -98,7 +95,7 @@ describe("node-hosted stream processor (e2e)", () => {
     });
     const stream = connection.stream as unknown as Stream;
 
-    let saved: StreamProcessorSnapshot<EchoExampleState> | undefined;
+    let saved: ProcessorSnapshot<EchoExampleState> | undefined;
     const { handle } = await hostEcho({
       stream,
       path,
@@ -131,10 +128,10 @@ describe("node-hosted stream processor (e2e)", () => {
 
   e2eIt("reconnects and resumes from its snapshot without reprocessing", async () => {
     const path = e2eStreamPathLabel("node-resume");
-    let saved: StreamProcessorSnapshot<EchoExampleState> | undefined;
+    let saved: ProcessorSnapshot<EchoExampleState> | undefined;
     const storage = {
       load: () => saved,
-      save: (snapshot: StreamProcessorSnapshot<EchoExampleState>) => void (saved = snapshot),
+      save: (snapshot: ProcessorSnapshot<EchoExampleState>) => void (saved = snapshot),
     };
 
     // Session 1: process one input, then drop the connection + processor.

@@ -4,7 +4,7 @@ import {
   recordedSpans,
   resetRecordedSpans,
 } from "../../test/cloudflare-workers-shim.ts";
-import type { StreamProcessorSnapshot } from "../streams/stream-processor.ts";
+import type { ProcessorSnapshot } from "../streams/rpc-types.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
 import {
   SchedulerProcessor,
@@ -26,7 +26,7 @@ const COMPLETED_TYPE = "events.iterate.com/scheduler/trigger-completed";
 function makeHarness(options?: {
   invokeCapability?: SchedulerProcessorDeps["dynamicWorkers"]["invokeCapability"];
   repointAlarm?: SchedulerProcessorDeps["repointAlarm"];
-  snapshotStore?: { snapshot: StreamProcessorSnapshot<SchedulerProcessorState> | undefined };
+  snapshotStore?: { snapshot: ProcessorSnapshot<SchedulerProcessorState> | undefined };
 }) {
   const clock = { now: T0 };
   // createdAt comes from the same fake clock the processor's `now` dep reads,
@@ -343,7 +343,7 @@ describe("triggering", () => {
 
   it("recovers schedule path from the defining event for legacy snapshots", async () => {
     const snapshotStore: {
-      snapshot: StreamProcessorSnapshot<SchedulerProcessorState> | undefined;
+      snapshot: ProcessorSnapshot<SchedulerProcessorState> | undefined;
     } = { snapshot: undefined };
     const harness = makeHarness({ snapshotStore });
     const { clock, deliver, invokeCapability, processor, stream } = harness;
@@ -500,7 +500,7 @@ describe("triggering", () => {
 describe("recovery and alarm derivation", () => {
   it("at-least-once: a restart mid-execution re-launches pending triggers on the next wake", async () => {
     const snapshotStore = {
-      snapshot: undefined as StreamProcessorSnapshot<SchedulerProcessorState> | undefined,
+      snapshot: undefined as ProcessorSnapshot<SchedulerProcessorState> | undefined,
     };
     // First incarnation: the execution hangs forever (simulates eviction mid-run).
     const before = makeHarness({

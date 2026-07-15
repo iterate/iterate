@@ -70,7 +70,7 @@
     "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
-    "zod": "4.1.12"
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@iterate-com/ui": "workspace:*",

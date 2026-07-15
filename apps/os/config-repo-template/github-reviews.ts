@@ -1,4 +1,11 @@
-import type { GithubConnection, Project, StreamEvent } from "iterate/sdk";
+import {
+  StreamProcessor,
+  defineProcessorContract,
+  z,
+  type GithubConnection,
+  type Project,
+  type StreamEvent,
+} from "iterate/sdk";
 
 export type GithubReviewConfig = {
   forceLabel: string;
@@ -18,37 +25,201 @@ export type GithubReviewRule = {
   invariant: string;
 };
 
+const GithubWebhookEvents = {
+  "events.iterate.com/github/webhook-received": {
+    description: "A signed GitHub webhook routed onto its canonical pull-request agent stream.",
+    // GitHub's webhook body is intentionally open-ended. The processor
+    // validates the routed authority fields and parses only the PR fields its
+    // policy needs; adding a GitHub payload field must not poison replay.
+    payloadSchema: z.looseObject({
+      appSlug: z.string(),
+      body: z.record(z.string(), z.unknown()),
+      connection: z.string(),
+      installationId: z.string(),
+    }),
+  },
+} as const;
+
+const AgentMessageEvents = {
+  "events.iterate.com/agents/message-received": {
+    description: "A trusted inbound message that asks the persistent PR agent to review a head.",
+    payloadSchema: z.object({
+      content: z.string(),
+      from: z.object({ kind: z.literal("github") }),
+      llmRequestPolicy: z.object({ behaviour: z.literal("interrupt-current-request") }),
+    }),
+  },
+} as const;
+
+const GithubReviewTarget = z.object({
+  appSlug: z.string(),
+  connection: z.string(),
+  fullName: z.string(),
+  headSha: z.string(),
+  installationId: z.string(),
+  number: z.number().int().positive(),
+  owner: z.string(),
+  previousHeadSha: z.string().optional(),
+  repo: z.string(),
+  requestKey: z.string(),
+  reviewAgentPath: z.string(),
+  trigger: z.enum(["automatic", "cancel", "explicit"]),
+});
+
+type GithubReviewTarget = z.infer<typeof GithubReviewTarget>;
+
+const GithubReviewEvents = {
+  "events.iterate.com/github-review/request-processed": {
+    description: "An at-head review obligation reached an idempotent terminal processing outcome.",
+    payloadSchema: z.object({
+      requestKey: z.string(),
+      result: z.enum(["cancelled", "ignored", "queued", "stale"]),
+      sourceOffset: z.number().int().positive(),
+    }),
+  },
+} as const;
+
+/** The ordinary processor contract for userspace pull-request reviews. */
+export const GithubReviewProcessorContract = defineProcessorContract({
+  slug: "github-review",
+  version: "0.1.0",
+  description:
+    "Folds eligible GitHub pull-request webhooks into durable obligations and reconciles them into attributed AI review tasks.",
+  stateSchema: z.object({
+    pendingRequests: z
+      .array(
+        z.object({
+          sourceOffset: z.number().int().positive(),
+          target: GithubReviewTarget,
+        }),
+      )
+      .default([]),
+  }),
+  events: GithubReviewEvents,
+  processorDeps: [GithubWebhookEvents, AgentMessageEvents],
+  consumes: [
+    "events.iterate.com/github/webhook-received",
+    "events.iterate.com/github-review/request-processed",
+  ],
+  emits: [
+    "events.iterate.com/agents/message-received",
+    "events.iterate.com/github-review/request-processed",
+  ],
+});
+
+export type GithubReviewProcessorContract = typeof GithubReviewProcessorContract;
+
+export class GithubReviewProcessor extends StreamProcessor<
+  GithubReviewProcessorContract,
+  { config: GithubReviewConfig; itx: Project }
+> {
+  readonly contract = GithubReviewProcessorContract;
+
+  protected override reduce({
+    event,
+    state,
+  }: Parameters<StreamProcessor<GithubReviewProcessorContract>["reduce"]>[0]) {
+    if (event.type === "events.iterate.com/github-review/request-processed") {
+      return {
+        pendingRequests: state.pendingRequests.filter(
+          (request) =>
+            request.sourceOffset !== event.payload.sourceOffset ||
+            request.target.requestKey !== event.payload.requestKey,
+        ),
+      };
+    }
+    const target = githubReviewTarget(event, this.deps.config);
+    if (target === null || !this.deps.config.repositories.includes(target.fullName)) return state;
+    if (state.pendingRequests.some((request) => request.sourceOffset === event.offset))
+      return state;
+    return {
+      pendingRequests: [...state.pendingRequests, { sourceOffset: event.offset, target }],
+    };
+  }
+
+  protected override async reconcile(
+    args: Parameters<StreamProcessor<GithubReviewProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    if (args.state.pendingRequests.length === 0) return;
+    args.blockProcessorWhile(async () => {
+      // GitHub can batch several PR transitions together. Preserve stream
+      // order for cancellation/check-run side effects instead of racing them.
+      for (const request of args.state.pendingRequests) {
+        const result = await processGithubReviewTarget({
+          appendAgentMessage: async (message) => {
+            await args.append(message);
+          },
+          config: this.deps.config,
+          itx: this.deps.itx,
+          sourceOffset: request.sourceOffset,
+          target: request.target,
+        });
+        await args.append({
+          type: "events.iterate.com/github-review/request-processed",
+          idempotencyKey: this.idempotencyKey(
+            `request-processed:${request.sourceOffset}:${request.target.requestKey}`,
+          ),
+          payload: {
+            requestKey: request.target.requestKey,
+            result,
+            sourceOffset: request.sourceOffset,
+          },
+        });
+      }
+    });
+  }
+}
+
 type Octokit = GithubConnection["octokit"];
 type CheckRun = Awaited<
   ReturnType<Octokit["rest"]["checks"]["listForRef"]>
 >["data"]["check_runs"][number];
-
-type GithubReviewTarget = {
-  appSlug: string;
-  connection: string;
-  fullName: string;
-  headSha: string;
-  installationId: string;
-  number: number;
-  owner: string;
-  previousHeadSha?: string;
-  repo: string;
-  requestKey: string;
-  trigger: "automatic" | "cancel" | "explicit";
-};
 
 export type GithubReviewEventResult = "cancelled" | "ignored" | "queued" | "stale";
 
 /** Complete userspace review reaction. Repository selection, controls, rules,
  * check visibility, timeout, and the agent task all remain config-repo code. */
 export async function processGithubReviewEvent(input: {
+  appendAgentMessage: (message: {
+    type: "events.iterate.com/agents/message-received";
+    idempotencyKey: string;
+    payload: {
+      content: string;
+      from: { kind: "github" };
+      llmRequestPolicy: { behaviour: "interrupt-current-request" };
+    };
+  }) => Promise<unknown>;
   config: GithubReviewConfig;
   event: StreamEvent;
   itx: Project;
 }): Promise<GithubReviewEventResult> {
   const target = githubReviewTarget(input.event, input.config);
   if (target === null || !input.config.repositories.includes(target.fullName)) return "ignored";
+  return await processGithubReviewTarget({
+    appendAgentMessage: input.appendAgentMessage,
+    config: input.config,
+    itx: input.itx,
+    sourceOffset: input.event.offset,
+    target,
+  });
+}
 
+async function processGithubReviewTarget(input: {
+  appendAgentMessage: (message: {
+    type: "events.iterate.com/agents/message-received";
+    idempotencyKey: string;
+    payload: {
+      content: string;
+      from: { kind: "github" };
+      llmRequestPolicy: { behaviour: "interrupt-current-request" };
+    };
+  }) => Promise<unknown>;
+  config: GithubReviewConfig;
+  itx: Project;
+  sourceOffset: number;
+  target: GithubReviewTarget;
+}): Promise<GithubReviewEventResult> {
+  const { target } = input;
   // A routed webhook carries the exact connection and deployment App slug
   // chosen by the signed-webhook door. Automatic work must not guess either.
   const octokit = input.itx.integrations.github.get(target.connection).octokit;
@@ -156,11 +327,10 @@ export async function processGithubReviewEvent(input: {
     owner: target.owner,
     repo: target.repo,
   });
-  const reviewAgentPath = input.event.path;
   const detailsUrl = githubReviewAgentUrl({
     osBaseUrl: input.config.osBaseUrl,
     projectSlug,
-    reviewAgentPath,
+    reviewAgentPath: target.reviewAgentPath,
   });
   if (check.status === "completed") {
     await setGithubReviewDetailsUrl({
@@ -206,7 +376,7 @@ export async function processGithubReviewEvent(input: {
       }),
     }),
   ]);
-  await input.itx.streams.get(reviewAgentPath).append({
+  await input.appendAgentMessage({
     type: "events.iterate.com/agents/message-received",
     idempotencyKey: externalId,
     payload: {
@@ -217,8 +387,8 @@ export async function processGithubReviewEvent(input: {
         externalId,
         rules: input.config.rules,
         skipLabel: input.config.skipLabel,
-        sourceOffset: input.event.offset,
-        streamPath: input.event.path,
+        sourceOffset: input.sourceOffset,
+        streamPath: target.reviewAgentPath,
         timeoutScheduleKey,
       }),
       from: { kind: "github" },
@@ -232,7 +402,7 @@ export function githubReviewTarget(
   event: StreamEvent,
   config: Pick<GithubReviewConfig, "forceLabel" | "skipLabel">,
 ): GithubReviewTarget | null {
-  const pathMatch = /^\/agents\/repos\/[^/]+\/pull-requests\/(\d+)$/.exec(event.path);
+  const pathMatch = /^\/agents\/repos\/g~[a-f0-9]{64}\/pull-requests\/([1-9]\d*)$/.exec(event.path);
   if (event.type !== "events.iterate.com/github/webhook-received" || pathMatch === null) {
     return null;
   }
@@ -315,6 +485,7 @@ export function githubReviewTarget(
       : {}),
     repo: fullName.slice(separator + 1),
     requestKey,
+    reviewAgentPath: event.path,
     trigger,
   };
 }
@@ -522,6 +693,8 @@ function githubReviewTimeoutScript(input: {
 }
 
 function record(value: unknown): Record<string, unknown> | null {
+  // TypeScript cannot infer an index signature from the runtime object/null/
+  // array checks; the cast records exactly the shape those checks establish.
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;

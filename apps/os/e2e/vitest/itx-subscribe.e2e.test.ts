@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { StreamProcessorSnapshot } from "../../src/domains/streams/stream-processor.ts";
+import type { ProcessorSnapshot } from "../../src/domains/streams/rpc-types.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   PROJECT_WORKER_FORWARDED_EVENT_TYPE,
@@ -66,7 +66,7 @@ test("Project stream subscribe can observe project worker processEventBatch forw
   });
 
   const outputStream = project.streams.get(outputPath);
-  let storedSnapshot: StreamProcessorSnapshot<ProjectWorkerForwardingProbeState> | undefined;
+  let storedSnapshot: ProcessorSnapshot<ProjectWorkerForwardingProbeState> | undefined;
   const processor = new ProjectWorkerForwardingProbeProcessor({
     readState: () => storedSnapshot,
     stream: outputStream as never,

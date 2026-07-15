@@ -13,10 +13,7 @@
 // drive all children from the SAME batch stream.
 
 import type { AnyHostedProcessor } from "../../processor-host-capabilities.ts";
-import type {
-  StreamProcessorRuntimeState,
-  StreamProcessorSnapshot,
-} from "../../stream-processor.ts";
+import type { ProcessorRuntimeState, ProcessorSnapshot } from "../../rpc-types.ts";
 
 /** A canonical mirror member: its stable slug and the hosted processor instance. */
 type CompositeChild = { slug: string; processor: AnyHostedProcessor };
@@ -96,7 +93,7 @@ export class CompositeBrowserProcessor implements AnyHostedProcessor {
     }
   }
 
-  async snapshot(): Promise<StreamProcessorSnapshot<unknown>> {
+  async snapshot(): Promise<ProcessorSnapshot<unknown>> {
     // The runtime uses this offset as the replay cursor for catch-up and the
     // live subscription. Take the MINIMUM across children so replay covers the
     // least-caught-up member; members already past it re-receive events they
@@ -112,7 +109,7 @@ export class CompositeBrowserProcessor implements AnyHostedProcessor {
     return { offset: Number.isFinite(offset) ? offset : 0, state: null };
   }
 
-  async getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>> {
+  async getRuntimeState(): Promise<ProcessorRuntimeState<unknown>> {
     return { snapshot: await this.snapshot() };
   }
 
@@ -120,7 +117,7 @@ export class CompositeBrowserProcessor implements AnyHostedProcessor {
     for (const { processor } of this.#children) processor.markLoaded();
   }
 
-  observeStateChanges(observer: (snapshot: StreamProcessorSnapshot<unknown>) => void): () => void {
+  observeStateChanges(observer: (snapshot: ProcessorSnapshot<unknown>) => void): () => void {
     const unsubscribes = this.#children.map(({ processor }) =>
       processor.observeStateChanges(observer),
     );

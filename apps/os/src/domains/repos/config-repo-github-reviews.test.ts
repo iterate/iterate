@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Project, StreamEvent } from "iterate/sdk";
+import type { Project, Stream, StreamEvent, StreamEventInput } from "iterate/sdk";
 import {
+  GithubReviewProcessor,
   githubReviewTarget,
   processGithubReviewEvent,
   type GithubReviewConfig,
 } from "../../../config-repo-template/github-reviews.ts";
+
+const REPO_ROUTE = `g~${"a".repeat(64)}`;
+const REVIEW_PATH = `/agents/repos/${REPO_ROUTE}/pull-requests/7`;
+const REVIEW_DETAILS_URL = `https://os.iterate.test/projects/widgets-project/agents/streams${REVIEW_PATH}`;
 
 const CONFIG: GithubReviewConfig = {
   forceLabel: "iterate:review",
@@ -35,7 +40,7 @@ function webhook(input?: {
   return {
     createdAt: "2026-07-14T08:00:00.000Z",
     offset: input?.offset ?? 4,
-    path: `/agents/repos/route/pull-requests/${input?.pathNumber ?? number}`,
+    path: `/agents/repos/${REPO_ROUTE}/pull-requests/${input?.pathNumber ?? number}`,
     type: "events.iterate.com/github/webhook-received",
     payload: {
       appSlug: "iterate-preview",
@@ -111,7 +116,6 @@ function harness(input?: {
   };
   const getConnection = vi.fn(() => ({ octokit }));
   const set = vi.fn().mockResolvedValue({});
-  const getStream = vi.fn(() => ({ append }));
   const itx = {
     integrations: { github: { get: getConnection } },
     // Scalar Workers RPC properties are promises at the caller even though
@@ -124,14 +128,12 @@ function harness(input?: {
       }),
     },
     scheduler: { cancel, set },
-    streams: { get: getStream },
   } as unknown as Project;
   return {
     append,
     cancel,
     create,
     getConnection,
-    getStream,
     itx,
     listForRef,
     set,
@@ -140,11 +142,148 @@ function harness(input?: {
 }
 
 describe("config-repo GitHub reviews", () => {
+  it("folds a durable obligation and stamps its reconciled task and completion", async () => {
+    const h = harness();
+    const streamAppend = vi.fn().mockResolvedValue([]);
+    const processor = new GithubReviewProcessor({
+      config: CONFIG,
+      itx: h.itx,
+      path: REVIEW_PATH,
+      projectId: "prj_test",
+      // This focused processor test exercises only its home-stream append;
+      // implementing the unrelated pager/subscription RPC surface would hide
+      // the behavior under test, so the partial fake is widened deliberately.
+      stream: { append: streamAppend } as unknown as Stream,
+    });
+
+    await processor.ingest({ events: [webhook()], streamMaxOffset: 4 });
+
+    await expect(processor.snapshot()).resolves.toEqual({
+      offset: 4,
+      state: {
+        pendingRequests: [
+          {
+            sourceOffset: 4,
+            target: {
+              appSlug: "iterate-preview",
+              connection: "install-42",
+              fullName: "acme/widgets",
+              headSha: "head-b",
+              installationId: "42",
+              number: 7,
+              owner: "acme",
+              repo: "widgets",
+              requestKey: "head:head-b",
+              reviewAgentPath: REVIEW_PATH,
+              trigger: "automatic",
+            },
+          },
+        ],
+      },
+    });
+    expect(streamAppend).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        idempotencyKey: "iterate-review:prj_test:42:7:head:head-b",
+        source: {
+          processor: {
+            slug: "github-review",
+            version: "0.1.0",
+            stream: { path: REVIEW_PATH, projectId: "prj_test" },
+          },
+        },
+        type: "events.iterate.com/agents/message-received",
+      }),
+    );
+    expect(streamAppend).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        idempotencyKey: "github-review/request-processed:4:head:head-b",
+        payload: {
+          requestKey: "head:head-b",
+          result: "queued",
+          sourceOffset: 4,
+        },
+        source: {
+          processor: {
+            slug: "github-review",
+            version: "0.1.0",
+            stream: { path: REVIEW_PATH, projectId: "prj_test" },
+          },
+        },
+        type: "events.iterate.com/github-review/request-processed",
+      }),
+    );
+  });
+
+  it("refolds a completed review journal without touching GitHub or appending events", async () => {
+    const firstHarness = harness();
+    const journal = [webhook()];
+    let nextOffset = 5;
+    const appendToJournal = vi.fn(async (...inputs: StreamEventInput[]): Promise<StreamEvent[]> => {
+      const committed = inputs.map(
+        (input): StreamEvent => ({
+          ...input,
+          createdAt: "2026-07-14T08:00:01.000Z",
+          offset: nextOffset++,
+          path: REVIEW_PATH,
+        }),
+      );
+      journal.push(...committed);
+      return committed;
+    });
+    const firstProcessor = new GithubReviewProcessor({
+      config: CONFIG,
+      itx: firstHarness.itx,
+      path: REVIEW_PATH,
+      projectId: "prj_test",
+      // This in-memory journal implements the append slice exercised by the
+      // processor; widening avoids inventing unrelated RPC methods in the test.
+      stream: { append: appendToJournal } as unknown as Stream,
+    });
+
+    await firstProcessor.ingest({ events: [journal[0]!], streamMaxOffset: 4 });
+    expect(journal.map((event) => event.type)).toEqual([
+      "events.iterate.com/github/webhook-received",
+      "events.iterate.com/agents/message-received",
+      "events.iterate.com/github-review/request-processed",
+    ]);
+    await firstProcessor.ingest({ events: journal.slice(1), streamMaxOffset: 6 });
+    await expect(firstProcessor.snapshot()).resolves.toEqual({
+      offset: 6,
+      state: { pendingRequests: [] },
+    });
+
+    const refoldHarness = harness();
+    const refoldAppend = vi.fn().mockResolvedValue([]);
+    const refoldedProcessor = new GithubReviewProcessor({
+      config: CONFIG,
+      itx: refoldHarness.itx,
+      path: REVIEW_PATH,
+      projectId: "prj_test",
+      // The fresh processor only needs append to prove replay emits nothing.
+      stream: { append: refoldAppend } as unknown as Stream,
+    });
+    await refoldedProcessor.ingest({ events: journal, streamMaxOffset: 6 });
+
+    await expect(refoldedProcessor.snapshot()).resolves.toEqual({
+      offset: 6,
+      state: { pendingRequests: [] },
+    });
+    expect(refoldHarness.getConnection).not.toHaveBeenCalled();
+    expect(refoldAppend).not.toHaveBeenCalled();
+  });
+
   it("uses routed authority, arms a terminalizer, and queues one trusted task", async () => {
     const h = harness();
 
     await expect(
-      processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx }),
+      processGithubReviewEvent({
+        appendAgentMessage: h.append,
+        config: CONFIG,
+        event: webhook(),
+        itx: h.itx,
+      }),
     ).resolves.toBe("queued");
 
     expect(h.getConnection).toHaveBeenCalledWith("install-42");
@@ -166,12 +305,10 @@ describe("config-repo GitHub reviews", () => {
       payload: { content: string; llmRequestPolicy: object };
     };
     expect(task.idempotencyKey).toBe("iterate-review:prj_test:42:7:head:head-b");
-    expect(h.getStream).toHaveBeenCalledWith("/agents/repos/route/pull-requests/7");
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({
         check_run_id: 100,
-        details_url:
-          "https://os.iterate.test/projects/widgets-project/agents/streams/agents/repos/route/pull-requests/7",
+        details_url: REVIEW_DETAILS_URL,
       }),
     );
     // The task prompt's guidance prose is deliberately unpinned
@@ -195,8 +332,18 @@ describe("config-repo GitHub reviews", () => {
       ],
     });
 
-    await processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx });
-    await processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx });
+    await processGithubReviewEvent({
+      appendAgentMessage: h.append,
+      config: CONFIG,
+      event: webhook(),
+      itx: h.itx,
+    });
+    await processGithubReviewEvent({
+      appendAgentMessage: h.append,
+      config: CONFIG,
+      event: webhook(),
+      itx: h.itx,
+    });
 
     expect(h.create).not.toHaveBeenCalled();
     expect(h.set).toHaveBeenCalledTimes(2);
@@ -224,7 +371,12 @@ describe("config-repo GitHub reviews", () => {
     });
 
     await expect(
-      processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx }),
+      processGithubReviewEvent({
+        appendAgentMessage: h.append,
+        config: CONFIG,
+        event: webhook(),
+        itx: h.itx,
+      }),
     ).resolves.toBe("ignored");
 
     expect(h.create).not.toHaveBeenCalled();
@@ -233,8 +385,7 @@ describe("config-repo GitHub reviews", () => {
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({
         check_run_id: 45,
-        details_url:
-          "https://os.iterate.test/projects/widgets-project/agents/streams/agents/repos/route/pull-requests/7",
+        details_url: REVIEW_DETAILS_URL,
       }),
     );
   });
@@ -253,7 +404,12 @@ describe("config-repo GitHub reviews", () => {
     });
 
     await expect(
-      processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx }),
+      processGithubReviewEvent({
+        appendAgentMessage: h.append,
+        config: CONFIG,
+        event: webhook(),
+        itx: h.itx,
+      }),
     ).resolves.toBe("queued");
 
     expect(h.create).toHaveBeenCalledWith(
@@ -273,7 +429,12 @@ describe("config-repo GitHub reviews", () => {
     const late = webhook({ action: "synchronize", before: "head-a", headSha: "head-b" });
 
     await expect(
-      processGithubReviewEvent({ config: CONFIG, event: late, itx: h.itx }),
+      processGithubReviewEvent({
+        appendAgentMessage: h.append,
+        config: CONFIG,
+        event: late,
+        itx: h.itx,
+      }),
     ).resolves.toBe("stale");
 
     expect(h.getConnection).toHaveBeenCalledWith("install-42");
@@ -297,8 +458,18 @@ describe("config-repo GitHub reviews", () => {
       offset: 11,
     });
 
-    await processGithubReviewEvent({ config: CONFIG, event: first, itx: h.itx });
-    await processGithubReviewEvent({ config: CONFIG, event: second, itx: h.itx });
+    await processGithubReviewEvent({
+      appendAgentMessage: h.append,
+      config: CONFIG,
+      event: first,
+      itx: h.itx,
+    });
+    await processGithubReviewEvent({
+      appendAgentMessage: h.append,
+      config: CONFIG,
+      event: second,
+      itx: h.itx,
+    });
 
     expect(h.create.mock.calls.map(([args]) => args.external_id)).toEqual([
       "iterate-review:prj_test:42:7:request:10",
@@ -336,7 +507,12 @@ describe("config-repo GitHub reviews", () => {
       labels: [CONFIG.forceLabel],
       offset: 10,
     });
-    await processGithubReviewEvent({ config: CONFIG, event, itx: h.itx });
+    await processGithubReviewEvent({
+      appendAgentMessage: h.append,
+      config: CONFIG,
+      event,
+      itx: h.itx,
+    });
 
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({ check_run_id: 8, conclusion: "cancelled" }),
@@ -344,8 +520,7 @@ describe("config-repo GitHub reviews", () => {
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({
         check_run_id: 9,
-        details_url:
-          "https://os.iterate.test/projects/widgets-project/agents/streams/agents/repos/route/pull-requests/7",
+        details_url: REVIEW_DETAILS_URL,
       }),
     );
     expect(h.cancel).toHaveBeenCalledWith("github-review-timeout:8");
@@ -377,7 +552,12 @@ describe("config-repo GitHub reviews", () => {
             ],
     });
 
-    await processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx });
+    await processGithubReviewEvent({
+      appendAgentMessage: h.append,
+      config: CONFIG,
+      event: webhook(),
+      itx: h.itx,
+    });
 
     expect(h.listForRef).toHaveBeenCalledTimes(2);
     expect(h.create).not.toHaveBeenCalled();
@@ -405,9 +585,9 @@ describe("config-repo GitHub reviews", () => {
       labels: [CONFIG.skipLabel],
     });
 
-    await expect(processGithubReviewEvent({ config: CONFIG, event, itx: h.itx })).resolves.toBe(
-      "cancelled",
-    );
+    await expect(
+      processGithubReviewEvent({ appendAgentMessage: h.append, config: CONFIG, event, itx: h.itx }),
+    ).resolves.toBe("cancelled");
 
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({ check_run_id: 88, conclusion: "cancelled" }),
@@ -431,9 +611,9 @@ describe("config-repo GitHub reviews", () => {
     });
     const event = webhook({ action: "converted_to_draft" });
 
-    await expect(processGithubReviewEvent({ config: CONFIG, event, itx: h.itx })).resolves.toBe(
-      "cancelled",
-    );
+    await expect(
+      processGithubReviewEvent({ appendAgentMessage: h.append, config: CONFIG, event, itx: h.itx }),
+    ).resolves.toBe("cancelled");
 
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({ check_run_id: 89, conclusion: "cancelled" }),
@@ -446,9 +626,9 @@ describe("config-repo GitHub reviews", () => {
     const h = harness({ liveState: "closed" });
     const event = webhook({ action: "closed", state: "closed" });
 
-    await expect(processGithubReviewEvent({ config: CONFIG, event, itx: h.itx })).resolves.toBe(
-      "cancelled",
-    );
+    await expect(
+      processGithubReviewEvent({ appendAgentMessage: h.append, config: CONFIG, event, itx: h.itx }),
+    ).resolves.toBe("cancelled");
 
     expect(h.listForRef).toHaveBeenCalled();
     expect(h.append).not.toHaveBeenCalled();
@@ -469,7 +649,12 @@ describe("config-repo GitHub reviews", () => {
     });
 
     await expect(
-      processGithubReviewEvent({ config: CONFIG, event: webhook(), itx: h.itx }),
+      processGithubReviewEvent({
+        appendAgentMessage: h.append,
+        config: CONFIG,
+        event: webhook(),
+        itx: h.itx,
+      }),
     ).resolves.toBe("cancelled");
 
     expect(h.update).toHaveBeenCalledWith(
@@ -497,9 +682,9 @@ describe("config-repo GitHub reviews", () => {
     });
     const event = webhook({ action: "synchronize", before: "head-a", headSha: "head-b" });
 
-    await expect(processGithubReviewEvent({ config: CONFIG, event, itx: h.itx })).rejects.toThrow(
-      "GitHub unavailable",
-    );
+    await expect(
+      processGithubReviewEvent({ appendAgentMessage: h.append, config: CONFIG, event, itx: h.itx }),
+    ).rejects.toThrow("GitHub unavailable");
     expect(h.create).not.toHaveBeenCalled();
     expect(h.append).not.toHaveBeenCalled();
   });
