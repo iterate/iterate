@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 
 /**
  * A wall-clock subscribed via `useSyncExternalStore`, not `useState` +
@@ -29,14 +29,10 @@ function createTickingClock(intervalMs: number) {
   return {
     subscribe(onStoreChange: () => void) {
       listeners.add(onStoreChange);
-      // Fresh snapshot so a late subscriber is not stuck on a stale `now`.
-      // Notify after subscribe returns — useSyncExternalStore re-reads
-      // getSnapshot on notification; updating `now` alone without notifying
-      // leaves the render-time snapshot in place until the next interval tick.
-      // Only fire if still registered (Strict Mode / enabled flip can
-      // unsubscribe before the microtask runs).
       now = Date.now();
       ensureTimer();
+      // Notify after subscribe returns so a remount/re-enable re-reads
+      // getSnapshot. Skip if already unsubscribed (Strict Mode remount).
       queueMicrotask(() => {
         if (listeners.has(onStoreChange)) onStoreChange();
       });
@@ -46,6 +42,14 @@ function createTickingClock(intervalMs: number) {
       };
     },
     getSnapshot() {
+      // Idle clock: refresh only when wall time has moved by a full tick so
+      // the first render after a long idle is current, but consecutive
+      // getSnapshot calls in the same tick stay Object.is-stable (avoids
+      // useSyncExternalStore infinite re-render loops).
+      if (timer == null) {
+        const wall = Date.now();
+        if (wall - now >= intervalMs) now = wall;
+      }
       return now;
     },
   };
@@ -69,6 +73,13 @@ function clockFor(intervalMs: number) {
  */
 export function useTickingNowMs(intervalMs: number, enabled = true): number {
   const clock = clockFor(intervalMs);
+  // Stable freeze while disabled so getSnapshot does not return a fresh
+  // Date.now() every call (that would infinite-loop useSyncExternalStore).
+  const frozenWhileDisabledRef = useRef(Date.now());
+  if (enabled) {
+    frozenWhileDisabledRef.current = clock.getSnapshot();
+  }
+
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       if (!enabled) return () => {};
@@ -76,5 +87,11 @@ export function useTickingNowMs(intervalMs: number, enabled = true): number {
     },
     [clock, enabled],
   );
-  return useSyncExternalStore(subscribe, clock.getSnapshot, clock.getSnapshot);
+
+  const getSnapshot = useCallback(() => {
+    if (!enabled) return frozenWhileDisabledRef.current;
+    return clock.getSnapshot();
+  }, [clock, enabled]);
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

@@ -298,6 +298,12 @@ function subscribeLiveCodeClock(onStoreChange: () => void) {
 }
 
 function getLiveCodeClockSnapshot() {
+  // Idle: refresh only when a full tick has elapsed so remounts aren't stuck
+  // on a stale freeze, but consecutive getSnapshot calls stay Object.is-stable.
+  if (liveCodeClockTimer == null) {
+    const wall = Date.now();
+    if (wall - liveCodeClockNow >= 100) liveCodeClockNow = wall;
+  }
   return liveCodeClockNow;
 }
 
