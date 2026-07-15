@@ -162,11 +162,13 @@ const SURFACE_GAPS: Record<string, string> = {
     "cannot instantiate T and reads list/get resources dynamically — its shapes are declared in " +
     "examples-source.ts",
   "ai-generate-text":
-    "ai.run() returns unknown (model-shaped output); the body reads result.response",
-  "ai-generate-image": "ai.run() returns unknown; the body reads response.image",
-  "ai-generate-audio": "ai.run() returns unknown; the body reads result.audio",
-  "ai-transcribe-audio": "ai.run() returns unknown; the body reads result.text and friends",
-  "ai-generate-video": "ai.run() returns unknown; the body reads result.video",
+    "ai.run's output is caller-typed (run<T = unknown>); this plain-JS body cannot instantiate T " +
+    "and reads result.response — the shape is declared in examples-source.ts",
+  "ai-generate-image": "same run<T> constraint as ai-generate-text; the body reads response.image",
+  "ai-generate-audio": "same run<T> constraint as ai-generate-text; the body reads result.audio",
+  "ai-transcribe-audio":
+    "same run<T> constraint as ai-generate-text; the body reads result.text and friends",
+  "ai-generate-video": "same run<T> constraint as ai-generate-text; the body reads result.video",
   "cf-browser-markdown":
     "browser.quickAction() returns the action-shaped unknown; markdown is a string per entry",
 };

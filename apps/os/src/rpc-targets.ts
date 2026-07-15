@@ -2691,13 +2691,19 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   }
 
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
-   * The optional third argument is the binding's own options object — e.g.
-   * `{ gateway: { id: "default", skipCache: true } }` — passed through to
-   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
-  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown> {
+   * Outputs are model-shaped: instantiate `run<T>` with the response shape you
+   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
+   * `unknown`. The optional third argument is the binding's own options object
+   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T> {
     const gateway = options?.gateway ?? this.props.gateway;
     const merged = gateway === undefined ? options : { ...options, gateway };
-    return env.AI.run(model, body as Record<string, unknown>, merged as AiRunOptions | undefined);
+    return env.AI.run(
+      model,
+      body as Record<string, unknown>,
+      merged as AiRunOptions | undefined,
+    ) as Promise<T>;
   }
 
   /** Calling with no arguments lists the file formats the converter accepts. */

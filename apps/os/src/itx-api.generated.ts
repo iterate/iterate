@@ -276,10 +276,12 @@ export interface Ai {
   /** List the Workers AI model catalog. */
   models(): Promise<unknown>;
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
-   * The optional third argument is the binding's own options object — e.g.
-   * `{ gateway: { id: "default", skipCache: true } }` — passed through to
-   * `env.AI.run`; its `gateway` wins over any constructor-provided one. */
-  run(model: string, body: unknown, options?: CfAiRunOptions): Promise<unknown>;
+   * Outputs are model-shaped: instantiate `run<T>` with the response shape you
+   * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
+   * `unknown`. The optional third argument is the binding's own options object
+   * — e.g. `{ gateway: { id: "default", skipCache: true } }` — passed through
+   * to `env.AI.run`; its `gateway` wins over any constructor-provided one. */
+  run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
   /** Convert one document (`{ name, blob }`) to Markdown. */

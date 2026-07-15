@@ -1525,7 +1525,12 @@ export default class ProjectWorker extends WorkerEntrypoint {
       return { supported: supported.slice(0, 10), converted };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // run's output is caller-typed (run<T = unknown>) and a plain-JS body
+    // cannot instantiate T, so each ai entry declares the shape it reads.
+    // Text-generation models answer in `response`.
+    ai: { run(model: string, body: unknown): Promise<{ response?: string }> };
+  }>({
     id: "ai-generate-text",
     e2eProven: false,
     title: "Generate or summarize text with a hosted LLM",
@@ -1547,7 +1552,11 @@ export default class ProjectWorker extends WorkerEntrypoint {
       return { summary: result.response };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // Same run<T> rationale as ai-generate-text; FLUX answers with a
+    // base64 image in `image`.
+    ai: { run(model: string, body: unknown): Promise<{ image?: string }> };
+  }>({
     id: "ai-generate-image",
     e2eProven: false,
     title: "Generate an image with a Workers AI model",
@@ -1578,7 +1587,11 @@ export default class ProjectWorker extends WorkerEntrypoint {
       };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // Same run<T> rationale as ai-generate-text; Grok TTS answers with a
+    // hosted MP3 URL in `result.audio`.
+    ai: { run(model: string, body: unknown): Promise<{ result?: { audio?: string } }> };
+  }>({
     id: "ai-generate-audio",
     e2eProven: false,
     title: "Generate speech audio with a Workers AI model",
@@ -1600,7 +1613,18 @@ export default class ProjectWorker extends WorkerEntrypoint {
       };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // Same run<T> rationale as ai-generate-text; Grok STT answers with the
+    // transcription fields under `result`.
+    ai: {
+      run(
+        model: string,
+        body: unknown,
+      ): Promise<{
+        result?: { text?: string; language?: string; duration?: number; words?: unknown[] };
+      }>;
+    };
+  }>({
     id: "ai-transcribe-audio",
     e2eProven: false,
     title: "Transcribe audio with a Workers AI model",
@@ -1624,7 +1648,11 @@ export default class ProjectWorker extends WorkerEntrypoint {
       };
     },
   }),
-  projectExample<LooseAiRun>({
+  projectExample<{
+    // Same run<T> rationale as ai-generate-text; Grok Imagine Video answers
+    // with a hosted MP4 URL in `result.video`.
+    ai: { run(model: string, body: unknown): Promise<{ result?: { video?: string } }> };
+  }>({
     id: "ai-generate-video",
     e2eProven: false,
     title: "Generate video with a Workers AI model",
@@ -1930,13 +1958,3 @@ type Live<Name extends string, Impl, Mounted = Remoted<Impl>> = Record<Name, Mou
     type: "live";
   }): Promise<CapabilityProvision>;
 };
-
-// ── PUBLISHED-TYPE GAPS — each of these is an itx-api.generated.ts weakness;
-// fix upstream, then delete the overlay. Every alias is an `Extra` widening,
-// intersected FIRST at its use site so its signatures win resolution for
-// exactly the calls the entry teaches. ──
-
-/** `itx.ai.run` returns `unknown` in the generated surface (outputs are
- * model-shaped); entries that read a specific model's response fields use
- * this per-entry overlay instead of casting inside the body. */
-type LooseAiRun = { ai: { run(model: string, body: unknown): Promise<any> } };
