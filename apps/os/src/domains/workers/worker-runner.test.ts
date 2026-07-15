@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers-shim.ts";
 import type { DynamicWorkerRef } from "./schemas.ts";
 import {
-  invalidateLoadedWorker,
   loadResolvedWorker,
+  loadResolvedWorkerAnonymous,
   resolveWorkerSource,
 } from "./worker-loader.ts";
 import { DynamicWorkerRunner, type DynamicWorkerTraceRole } from "./worker-runner.ts";
@@ -18,11 +18,11 @@ vi.mock("../projects/utils.ts", () => ({
 }));
 
 vi.mock("./worker-loader.ts", () => ({
-  invalidateLoadedWorker: vi.fn(),
   isInvalidWorkerLoaderCloneError: (error: unknown) =>
     (error as { message?: unknown } | null)?.message ===
     "Unable to deserialize cloned data due to invalid or unsupported version.",
   loadResolvedWorker: vi.fn(),
+  loadResolvedWorkerAnonymous: vi.fn(),
   resolveCachedArtifact: vi.fn(),
   resolveWorkerSource: vi.fn(async () => {
     throw new Error("stop after entering the trace span");
@@ -59,7 +59,7 @@ beforeEach(() => {
   resetRecordedSpans();
 });
 
-it("rotates a poisoned named loader isolate without retrying a generic capability call", async () => {
+it("does not retry a poisoned named loader isolate for a generic capability call", async () => {
   const cloneError = new Error(
     "Unable to deserialize cloned data due to invalid or unsupported version.",
   );
@@ -73,7 +73,7 @@ it("rotates a poisoned named loader isolate without retrying a generic capabilit
     source: inlineRef.source,
     version: "artifact-v1",
   });
-  vi.mocked(loadResolvedWorker).mockReturnValueOnce({
+  vi.mocked(loadResolvedWorker).mockResolvedValueOnce({
     getEntrypoint: () => ({
       processEventBatch: vi.fn().mockRejectedValue(cloneError),
     }),
@@ -93,17 +93,11 @@ it("rotates a poisoned named loader isolate without retrying a generic capabilit
     }),
   ).rejects.toBe(cloneError);
 
-  expect(invalidateLoadedWorker).toHaveBeenCalledOnce();
-  expect(invalidateLoadedWorker).toHaveBeenCalledWith({
-    projectId: "prj_private",
-    ref: inlineRef,
-    resolved,
-    scopePath: "/",
-  });
   expect(loadResolvedWorker).toHaveBeenCalledOnce();
+  expect(loadResolvedWorkerAnonymous).not.toHaveBeenCalled();
 });
 
-it("retries an at-least-once call once on the rotated named loader isolate", async () => {
+it("retries an at-least-once call once through an anonymous loader isolate", async () => {
   const cloneError = new Error(
     "Unable to deserialize cloned data due to invalid or unsupported version.",
   );
@@ -119,13 +113,12 @@ it("retries an at-least-once call once on the rotated named loader isolate", asy
   });
   const first = vi.fn().mockRejectedValue(cloneError);
   const recovered = vi.fn().mockResolvedValue("delivered");
-  vi.mocked(loadResolvedWorker)
-    .mockReturnValueOnce({
-      getEntrypoint: () => ({ processEventBatch: first }),
-    } as unknown as WorkerStub)
-    .mockReturnValueOnce({
-      getEntrypoint: () => ({ processEventBatch: recovered }),
-    } as unknown as WorkerStub);
+  vi.mocked(loadResolvedWorker).mockResolvedValueOnce({
+    getEntrypoint: () => ({ processEventBatch: first }),
+  } as unknown as WorkerStub);
+  vi.mocked(loadResolvedWorkerAnonymous).mockReturnValueOnce({
+    getEntrypoint: () => ({ processEventBatch: recovered }),
+  } as unknown as WorkerStub);
   const runner = new DynamicWorkerRunner({
     exports: {} as ExecutionContext["exports"],
     projectId: "prj_private",
@@ -134,18 +127,20 @@ it("retries an at-least-once call once on the rotated named loader isolate", asy
   });
 
   await expect(
-    runner.invokeCapability({
+    runner.invokeAtLeastOnceCapability({
       flattenNestedPath: true,
       path: ["processEventBatch"],
       ref: inlineRef,
-      retryInvalidLoaderClone: true,
     }),
   ).resolves.toBe("delivered");
 
   expect(first).toHaveBeenCalledOnce();
   expect(recovered).toHaveBeenCalledOnce();
-  expect(loadResolvedWorker).toHaveBeenCalledTimes(2);
-  expect(invalidateLoadedWorker).toHaveBeenCalledOnce();
+  expect(loadResolvedWorker).toHaveBeenCalledOnce();
+  expect(loadResolvedWorkerAnonymous).toHaveBeenCalledOnce();
+  expect(recordedSpans[1]?.attributes).toMatchObject({
+    "iterate.worker.loader_recovery": "anonymous",
+  });
 });
 
 it("bounds at-least-once clone recovery to one retry", async () => {
@@ -165,13 +160,12 @@ it("bounds at-least-once clone recovery to one retry", async () => {
     source: inlineRef.source,
     version: "artifact-v1",
   });
-  vi.mocked(loadResolvedWorker)
-    .mockReturnValueOnce({
-      getEntrypoint: () => ({ processEventBatch: vi.fn().mockRejectedValue(firstCloneError) }),
-    } as unknown as WorkerStub)
-    .mockReturnValueOnce({
-      getEntrypoint: () => ({ processEventBatch: vi.fn().mockRejectedValue(secondCloneError) }),
-    } as unknown as WorkerStub);
+  vi.mocked(loadResolvedWorker).mockResolvedValueOnce({
+    getEntrypoint: () => ({ processEventBatch: vi.fn().mockRejectedValue(firstCloneError) }),
+  } as unknown as WorkerStub);
+  vi.mocked(loadResolvedWorkerAnonymous).mockReturnValueOnce({
+    getEntrypoint: () => ({ processEventBatch: vi.fn().mockRejectedValue(secondCloneError) }),
+  } as unknown as WorkerStub);
   const runner = new DynamicWorkerRunner({
     exports: {} as ExecutionContext["exports"],
     projectId: "prj_private",
@@ -180,16 +174,15 @@ it("bounds at-least-once clone recovery to one retry", async () => {
   });
 
   await expect(
-    runner.invokeCapability({
+    runner.invokeAtLeastOnceCapability({
       flattenNestedPath: true,
       path: ["processEventBatch"],
       ref: inlineRef,
-      retryInvalidLoaderClone: true,
     }),
   ).rejects.toBe(secondCloneError);
 
-  expect(loadResolvedWorker).toHaveBeenCalledTimes(2);
-  expect(invalidateLoadedWorker).toHaveBeenCalledTimes(2);
+  expect(loadResolvedWorker).toHaveBeenCalledOnce();
+  expect(loadResolvedWorkerAnonymous).toHaveBeenCalledOnce();
 });
 
 describe("dynamic worker spans", () => {

@@ -14,9 +14,9 @@ import {
   withWorkerFetchDispatchHeader,
 } from "./worker-fetch-dispatch.ts";
 import {
-  invalidateLoadedWorker,
   isInvalidWorkerLoaderCloneError,
   loadResolvedWorker,
+  loadResolvedWorkerAnonymous,
   resolveCachedArtifact,
   resolveWorkerSource,
   type ResolvedWorkerSource,
@@ -25,6 +25,16 @@ import {
 } from "./worker-loader.ts";
 
 export type DynamicWorkerTraceRole = "project_config" | "run_script" | "scheduler_action";
+
+type InvokeCapabilityInput = {
+  args?: unknown[];
+  /** Give up on a cold build after this long (see resolveWorkerSource). */
+  buildBudgetMs?: number;
+  flattenNestedPath?: boolean;
+  path: string[];
+  ref: DynamicWorkerRef;
+  traceRole?: DynamicWorkerTraceRole;
+};
 
 // Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
 // of the DO's own type: the DO imports this module (cycle), and a typed
@@ -85,8 +95,9 @@ export class DynamicWorkerRunner {
   async #getStatelessEntrypoint<T = unknown>(
     ref: StatelessDynamicWorkerRef,
     buildBudgetMs?: number,
+    loader: "anonymous" | "named" = "named",
   ): Promise<T> {
-    const { worker } = await this.#load(ref, buildBudgetMs);
+    const { worker } = await this.#load(ref, buildBudgetMs, loader);
     return worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T;
   }
 
@@ -114,7 +125,7 @@ export class DynamicWorkerRunner {
   ): Promise<{ klass: T; resolved: ResolvedWorkerSource } | null> {
     const resolved = await resolveCachedArtifact(cacheKey);
     if (resolved === null) return null;
-    const worker = this.#loadResolved(ref, resolved);
+    const worker = await this.#loadResolved(ref, resolved);
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
   }
 
@@ -166,26 +177,30 @@ export class DynamicWorkerRunner {
     });
   }
 
-  async invokeCapability({
-    args = [],
-    buildBudgetMs,
-    flattenNestedPath = false,
-    path,
-    ref,
-    retryInvalidLoaderClone = false,
-    traceRole,
-  }: {
-    args?: unknown[];
-    /** Give up on a cold build after this long (see resolveWorkerSource). */
-    buildBudgetMs?: number;
-    flattenNestedPath?: boolean;
-    path: string[];
-    ref: DynamicWorkerRef;
-    /** Retry once after rotating a poisoned named Loader isolate. Only valid
-     * for callers whose operation already promises at-least-once delivery. */
-    retryInvalidLoaderClone?: boolean;
-    traceRole?: DynamicWorkerTraceRole;
-  }): Promise<unknown> {
+  async invokeCapability(input: InvokeCapabilityInput): Promise<unknown> {
+    return await this.#invokeCapability(input, false);
+  }
+
+  /**
+   * Invoke under an existing at-least-once contract. If Cloudflare rejects a
+   * retained named Loader env, retry exactly once through an anonymous isolate
+   * in this request. The caller remains responsible for idempotent effects.
+   */
+  async invokeAtLeastOnceCapability(input: InvokeCapabilityInput): Promise<unknown> {
+    return await this.#invokeCapability(input, true);
+  }
+
+  async #invokeCapability(
+    {
+      args = [],
+      buildBudgetMs,
+      flattenNestedPath = false,
+      path,
+      ref,
+      traceRole,
+    }: InvokeCapabilityInput,
+    recoverInvalidLoaderClone: boolean,
+  ): Promise<unknown> {
     // Capability dispatch is method calls; no name is protocol-special here,
     // `fetch` included (see docs/dynamic-worker-dispatch.md). A WebSocket
     // upgrade needs the REAL fetch handler on a real workerd object reached
@@ -203,8 +218,11 @@ export class DynamicWorkerRunner {
       );
     }
 
-    const invoke = () =>
-      this.#trace(ref, "call", traceRole, async () => {
+    const invoke = (loader: "anonymous" | "named") =>
+      this.#trace(ref, "call", traceRole, async (span) => {
+        if (loader === "anonymous") {
+          span.setAttribute("iterate.worker.loader_recovery", "anonymous");
+        }
         if (ref.type === "stateful") {
           // Method replay must happen inside StatefulWorkerDurableObject. Returning
           // a dynamic facet stub through one DO and then invoking it from another RPC
@@ -223,44 +241,27 @@ export class DynamicWorkerRunner {
           });
         }
 
-        const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
+        const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs, loader);
         return flattenNestedPath
           ? await invokePreferringFlattenedPath({ args, path, target })
           : await replayPath({ args, path, target });
       });
 
     try {
-      return await invoke();
+      return await invoke("named");
     } catch (error) {
-      // A named Loader isolate owns the env Frankenvalue created with it. If
-      // Cloudflare can no longer deserialize that retained value, rotate the
-      // exact identity. Generic capability calls preserve the rejection:
-      // unlike Stream delivery, they do not promise idempotent side effects.
-      const invalidated = this.#invalidateCloneFailedLoader(ref, error);
-      if (!invalidated || !retryInvalidLoaderClone) throw error;
-
-      try {
-        return await invoke();
-      } catch (retryError) {
-        // Leave a second bad identity rotated for the next durable redelivery,
-        // but never spin inside one request.
-        this.#invalidateCloneFailedLoader(ref, retryError);
-        throw retryError;
+      // Generic calls preserve the rejection because they make no idempotency
+      // promise. Stream delivery is already at-least-once, so it can recover
+      // once without adding another persistent named Loader identity.
+      if (
+        !recoverInvalidLoaderClone ||
+        ref.type !== "stateless" ||
+        !isInvalidWorkerLoaderCloneError(error)
+      ) {
+        throw error;
       }
+      return await invoke("anonymous");
     }
-  }
-
-  #invalidateCloneFailedLoader(ref: DynamicWorkerRef, error: unknown): boolean {
-    if (ref.type !== "stateless" || !isInvalidWorkerLoaderCloneError(error)) return false;
-    const resolved = this.#sourceResolution?.resolved;
-    if (resolved === undefined) return false;
-    invalidateLoadedWorker({
-      projectId: this.#projectId,
-      ref,
-      resolved,
-      scopePath: this.#scopePath,
-    });
-    return true;
   }
 
   /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */
@@ -271,6 +272,7 @@ export class DynamicWorkerRunner {
   async #load(
     ref: DynamicWorkerRef,
     buildBudgetMs?: number,
+    loader: "anonymous" | "named" = "named",
   ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
     const resolution = await resolveWorkerSource({
       buildBudgetMs,
@@ -281,18 +283,25 @@ export class DynamicWorkerRunner {
     });
     this.#sourceResolution = resolution;
     const { resolved } = resolution;
-    return { resolved, worker: this.#loadResolved(ref, resolved) };
+    return { resolved, worker: await this.#loadResolved(ref, resolved, loader) };
   }
 
-  #loadResolved(ref: DynamicWorkerRef, resolved: ResolvedWorkerSource): WorkerStub {
-    return loadResolvedWorker({
+  async #loadResolved(
+    ref: DynamicWorkerRef,
+    resolved: ResolvedWorkerSource,
+    loader: "anonymous" | "named" = "named",
+  ): Promise<WorkerStub> {
+    const input = {
       bindings: this.#bindings,
       globalOutbound: this.#globalOutbound,
       projectId: this.#projectId,
       ref,
       resolved,
       scopePath: this.#scopePath,
-    });
+    };
+    return loader === "anonymous"
+      ? loadResolvedWorkerAnonymous(input)
+      : await loadResolvedWorker(input);
   }
 
   #statefulWorker(ref: StatefulDynamicWorkerRef): StatefulWorkerRpc {

@@ -4404,7 +4404,6 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   readonly #flattenNestedPaths: boolean;
   readonly #props: { ctx: CfExecutionContext; projectId: string };
   readonly #ref: DynamicWorkerRef;
-  readonly #retryInvalidLoaderClone: boolean;
   readonly #traceRole: DynamicWorkerTraceRole | undefined;
   #lazyRunner: DynamicWorkerRunner | undefined;
 
@@ -4414,7 +4413,6 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
-    retryInvalidLoaderClone?: boolean;
     traceRole?: DynamicWorkerTraceRole;
   }) {
     super();
@@ -4422,7 +4420,6 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#props = { ctx: props.ctx, projectId: props.projectId };
     this.#ref = props.ref;
-    this.#retryInvalidLoaderClone = props.retryInvalidLoaderClone === true;
     this.#traceRole = props.traceRole;
   }
 
@@ -4506,7 +4503,6 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       flattenNestedPath,
       path,
       ref: this.#ref,
-      retryInvalidLoaderClone: this.#retryInvalidLoaderClone,
       traceRole: this.#traceRole,
     });
   }
@@ -5096,7 +5092,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
   readonly #props: ProjectRpcTargetProps;
-  #deliveryWorker: DynamicWorkerCapability<ProjectWorker> | undefined;
+  #deliveryRunner: DynamicWorkerRunner | undefined;
 
   constructor(props: ProjectRpcTargetProps) {
     super();
@@ -5461,24 +5457,28 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     this.#indexAgentStatus(batch);
     this.#indexStreamSearch(batch);
     try {
-      this.#deliveryWorker ??= new DynamicWorkerRpcTarget({
-        ctx: this.#props.ctx,
-        flattenNestedPaths: true,
+      const ref = defaultProjectWorkerRef();
+      this.#deliveryRunner ??= new DynamicWorkerRunner({
+        exports: this.#props.ctx.exports,
         projectId: this.#props.projectId,
-        ref: defaultProjectWorkerRef(),
-        // Configured Stream delivery is already at-least-once and requires
-        // idempotent subscriber effects. Recover a poisoned Loader in this
-        // same fronting Worker request before fleet-wide retries accumulate
-        // exponential backoff across activation-local Loader caches.
-        retryInvalidLoaderClone: true,
-      }) as unknown as DynamicWorkerCapability<ProjectWorker>;
-      return await this.#deliveryWorker.processEventBatch(batch);
+        scopePath: ref.path,
+        waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
+      });
+      // Configured Stream delivery is already at-least-once and requires
+      // idempotent subscriber effects. The dedicated runner operation may
+      // recover a poisoned named Loader once through an anonymous isolate.
+      await this.#deliveryRunner.invokeAtLeastOnceCapability({
+        args: [batch],
+        flattenNestedPath: true,
+        path: ["processEventBatch"],
+        ref,
+      });
     } catch (error) {
       // Bootstrap failures and a poisoned named Loader isolate are receiver
       // availability, not evidence that any event is poison. Say so in the
       // delivery contract's vocabulary so the spine backs off and redelivers
       // the whole batch instead of skip-confirming healthy events. The runner
-      // rotates a clone-failed Loader identity before this error crosses back.
+      // attempts a request-local anonymous Loader before this crosses back.
       if (
         isRepoNotSeededError(error) ||
         isWorkerBuildInProgressError(error) ||

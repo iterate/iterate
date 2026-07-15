@@ -1,4 +1,4 @@
-import { itxEnv as env } from "../../env.ts";
+import { itxEnv as env, workerVersion } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerRef, DynamicWorkerSource, WorkerBuildOptions } from "./schemas.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
@@ -66,13 +66,10 @@ export function isInvalidWorkerLoaderCloneError(error: unknown): boolean {
   return (error as { message?: unknown } | null)?.message === INVALID_LOADER_CLONE_MESSAGE;
 }
 
-// A named Loader isolate retains the env capabilities from the call that
-// created it. In production a source Durable Object restart has left that
-// retained Frankenvalue unreadable even though a fresh isolate with the same
-// artifact works. Only faulted identities get a nonce; healthy hot paths keep
-// the stable key and continue sharing their named isolate.
-const loaderRecoveryNonceByBaseKey = new Map<string, string>();
-const LOADER_RECOVERY_NONCE_LIMIT = 128;
+// Cache only plain digest strings. Concurrent misses may duplicate one digest,
+// which is cheaper and safer than sharing a WebCrypto promise across requests.
+const loaderCacheKeyMemo = new Map<string, string>();
+const LOADER_CACHE_KEY_MEMO_LIMIT = 128;
 
 export async function resolveWorkerSource({
   buildBudgetMs,
@@ -360,84 +357,104 @@ async function resolveFileSource({
   };
 }
 
-export function loadResolvedWorker({
-  bindings,
-  globalOutbound,
-  projectId,
-  ref,
-  resolved,
-  scopePath,
-}: {
+type LoadResolvedWorkerInput = {
   bindings: WorkerBindings;
   globalOutbound: Fetcher;
   projectId: string;
   ref: DynamicWorkerRef;
   resolved: ResolvedWorkerSource;
   scopePath: string;
-}): WorkerStub {
+};
+
+export async function loadResolvedWorker({
+  bindings,
+  globalOutbound,
+  projectId,
+  ref,
+  resolved,
+  scopePath,
+}: LoadResolvedWorkerInput): Promise<WorkerStub> {
   // The Worker Loader cache must separate all runtime-relevant dimensions. In
   // particular `scopePath` prevents a worker loaded for an agent path from
   // reusing a project-root `env.ITX` binding, even if the module bytes match.
-  const baseCacheKey = workerLoaderBaseCacheKey({ projectId, ref, resolved, scopePath });
-  const recoveryNonce = loaderRecoveryNonceByBaseKey.get(baseCacheKey);
-  const cacheKey =
-    recoveryNonce === undefined ? baseCacheKey : `${baseCacheKey}:recovery:${recoveryNonce}`;
-  return env.LOADER.get(cacheKey, () => ({
+  // The parent deploy version is equally important: a named isolate retains
+  // the env Frankenvalue created by that parent. Reusing it after a deploy can
+  // fail deserialization even when the dynamic worker artifact is unchanged.
+  const cacheKey = await workerLoaderCacheKey({
+    deploymentVersion: workerVersion(env),
+    projectId,
+    ref,
+    resolved,
+    scopePath,
+  });
+  return env.LOADER.get(cacheKey, () => workerLoaderCode({ bindings, globalOutbound, resolved }));
+}
+
+/**
+ * One request-local escape hatch for a poisoned named Loader isolate. Anonymous
+ * loads do not add another persistent cache identity; workerd retains the code
+ * recipe on the returned stub and can recreate the isolate after eviction.
+ */
+export function loadResolvedWorkerAnonymous({
+  bindings,
+  globalOutbound,
+  resolved,
+}: LoadResolvedWorkerInput): WorkerStub {
+  return env.LOADER.load(workerLoaderCode({ bindings, globalOutbound, resolved }));
+}
+
+function workerLoaderCode({
+  bindings,
+  globalOutbound,
+  resolved,
+}: Pick<LoadResolvedWorkerInput, "bindings" | "globalOutbound" | "resolved">) {
+  return {
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
     env: bindings,
     globalOutbound,
     mainModule: resolved.mainModule,
     modules: resolved.modules,
-  }));
+  };
 }
 
-/** Force the next load of one exact worker identity onto a fresh named isolate. */
-export function invalidateLoadedWorker(input: {
+/** Opaque, deployment-scoped identity for one exact named Loader isolate. */
+export async function workerLoaderCacheKey(input: {
+  deploymentVersion: string;
   projectId: string;
   ref: DynamicWorkerRef;
   resolved: ResolvedWorkerSource;
   scopePath: string;
-}): void {
-  const baseCacheKey = workerLoaderBaseCacheKey(input);
-  if (
-    !loaderRecoveryNonceByBaseKey.has(baseCacheKey) &&
-    loaderRecoveryNonceByBaseKey.size >= LOADER_RECOVERY_NONCE_LIMIT
-  ) {
-    const oldest = loaderRecoveryNonceByBaseKey.keys().next().value;
-    if (oldest !== undefined) loaderRecoveryNonceByBaseKey.delete(oldest);
-  }
-  loaderRecoveryNonceByBaseKey.set(baseCacheKey, crypto.randomUUID());
-}
-
-function workerLoaderBaseCacheKey({
-  projectId,
-  ref,
-  resolved,
-  scopePath,
-}: {
-  projectId: string;
-  ref: DynamicWorkerRef;
-  resolved: ResolvedWorkerSource;
-  scopePath: string;
-}): string {
-  const exportKey =
-    ref.type === "stateless"
-      ? `entrypoint:${ref.entrypoint ?? "default"}`
-      : `durable-object:${ref.className}`;
-  return [
-    "worker-loader",
+}): Promise<string> {
+  const exportIdentity =
+    input.ref.type === "stateless"
+      ? { entrypoint: input.ref.entrypoint ?? "default", type: "entrypoint" as const }
+      : { className: input.ref.className, type: "durable-object" as const };
+  const identity = {
+    deploymentVersion: input.deploymentVersion,
     // The hosting worker's own name. Loader caches are shared across parent
     // workers when they run in one workerd (vitest-pool-workers; a future
     // second LOADER holder), and a cached isolate only works for the parent
     // whose loopback stubs it was created with — a foreign hit fails as an
     // opaque "internal error" (#1614).
-    env.WORKER_SELF,
-    projectId,
-    ref.path,
-    scopePath,
-    ref.type,
-    exportKey,
-    resolved.cacheKey,
-  ].join(":");
+    hostingWorker: env.WORKER_SELF,
+    projectId: input.projectId,
+    refPath: input.ref.path,
+    resolvedCacheKey: input.resolved.cacheKey,
+    runtimeType: input.ref.type,
+    scopePath: input.scopePath,
+    exportIdentity,
+    type: "worker-loader" as const,
+  };
+  const unhashed = JSON.stringify(identity);
+  const memoized = loaderCacheKeyMemo.get(unhashed);
+  if (memoized !== undefined) return memoized;
+
+  const cacheKey = `worker-loader:${await stableSha256(identity)}`;
+  if (loaderCacheKeyMemo.size >= LOADER_CACHE_KEY_MEMO_LIMIT) {
+    const oldest = loaderCacheKeyMemo.keys().next().value;
+    if (oldest !== undefined) loaderCacheKeyMemo.delete(oldest);
+  }
+  loaderCacheKeyMemo.set(unhashed, cacheKey);
+  return cacheKey;
 }
