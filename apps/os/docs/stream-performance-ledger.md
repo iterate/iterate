@@ -4034,3 +4034,141 @@ focused tests, three prototype correctness runs, OS typecheck, and Wrangler
 dry-run pass. It was not deployed. The experiment collapses by deleting one
 branch and directory; shipping it would materially increase complexity while
 reducing throughput. Synchronous SQLite remains the accepted journal.
+
+## 2026-07-15: Replay Central Latency Cleared, P99 Risk Retained
+
+Checkpoint thirteen's 500-event replay row had only 50 observations per
+revision and reported a 33.18% candidate p95 regression. A larger isolated
+control appended 500 128-byte events, opened a replaying subscription, and
+host-timed every delivered batch until all 500 offsets were observed. Three
+fresh processes per immutable revision contributed 300 observations each.
+Exact main was `7b106d623ca1d814304443c0ad34f8e36ac0b0bb`; candidate production code was
+exact shipping revision `147758b867b454292c550038e5f9c73fd103227c`.
+
+| Replay statistic | Fresh main | Candidate | Candidate change |
+| ---------------- | ---------: | --------: | ---------------: |
+| p50              |   6.966 ms |  6.418 ms |     7.87% faster |
+| p90              |  10.077 ms |  9.118 ms |     9.52% faster |
+| p95              |  11.173 ms | 11.446 ms |     2.44% slower |
+| p99              |  16.917 ms | 43.251 ms |   155.67% slower |
+| mean             |   7.923 ms |  7.489 ms |     5.49% faster |
+| maximum          |  21.811 ms | 61.411 ms |   181.56% slower |
+
+The earlier p50/p95 warning is cleared: candidate central latency is faster
+and p95 is within the 5% gate. The candidate nevertheless produced a 43-61 ms
+pause in every process while main's maximum was 21.8 ms. That repeated p99
+shape is consistent with an allocator or garbage-collection pause, although
+the benchmark does not identify its cause. It remains a soak and heap-profile
+risk rather than being averaged away as noise.
+
+One main attempt was excluded after a long-lived local benchmark server failed
+to deliver its first event within 60 seconds; restarting the exact same main
+revision produced a valid replacement. Every included process passed exact
+revision, offset, count, and ordering assertions. Raw records are
+`/tmp/replay-tail-{main,candidate}-r{1..3}.log`. Both local servers were
+stopped; no deployment or data changed.
+
+## 2026-07-15: Hybrid Per-Event Receiver Accepted
+
+Three independent redesign agents converged on the same narrow receiver: keep
+bounded `processEventBatch` transport private, expose only
+`processEvent(event)`, return `void` for an entirely synchronous batch, and
+create one ordered continuation only after the first Promise. They rejected
+credits, timers, queues, schemas, protocol changes, and a separate append-ack
+operation. This preserves the external vocabulary of `append`, `subscribe`,
+`read`, and `waitForEvent` while retaining the existing internal batching and
+durable retry protocol.
+
+The implementation at `d2514eeb1a7b7029ca1dbf2f34bdc27a79b91e08` added
+the hybrid drain to `subscribe`, `IterateWorkerEntrypoint`, and
+`IterateDurableObject`; made the class batch receiver TypeScript-private; and
+kept `processEvent` as the only subclass callback. Fourteen focused embedded
+SDK tests cover empty and synchronous batches, ordered asynchronous suffixes,
+synchronous throws, asynchronous rejection, and both Worker and Durable
+Object base classes. The package build and declarations, broad Stream tests,
+OS typecheck, lint, full CI, and preview e2e passed.
+
+A deployed same-build failure probe then made the first event throw
+synchronously once. Preview 5 redelivered exact source offsets 4, 5, and 6 in
+order, forwarded each exactly once, and checkpointed offset 6. The observed
+failure count remained one in every output. This proves that the synchronous
+throw escapes the receiver before any acknowledgement and still drives the
+real Worker-to-Stream-Durable-Object retry path.
+
+The first deployed performance implementation used one cached receiver arrow
+for all class events. Eight fresh durable projects later contributed 240
+singleton and 200 paired 1,000 x 640-byte samples against an explicit
+always-async batch loop. Singleton p50 improved 2.54%, but PCM p50 regressed
+6.74% even though its paired median improved 0.91%. The extra class receiver
+arrow was the only per-event call absent from the baseline. Exact head
+`8e3c9e8473e43c6eb01f8647a81ecec1f8189e89` therefore specializes the Worker
+and Durable Object synchronous loops to call the subclass directly; only a
+genuinely asynchronous suffix uses the shared continuation. The resulting
+production SDK change remains 33 net lines over `147758b86`; no transport,
+storage, cursor, or schema state was added.
+
+The ephemeral contract matters here. `StreamRpcTarget.subscribe` terminates
+the callback leg with `void forward(batch)`, so the subscriber's result is
+genuinely unobserved by the Stream DO. Four balanced fresh deployed projects
+therefore made every per-event handler synchronous, moved only the benchmark's
+completion signal into `ctx.waitUntil`, and compared the hybrid helper with an
+explicit always-async batch loop on the same Stream DO and Worker:
+
+| Ephemeral statistic | Singleton change | 1,000 x 640-byte change |
+| ------------------- | ---------------: | ----------------------: |
+| p50                 |     1.41% faster |            0.45% slower |
+| p95                 |     2.63% slower |           34.83% faster |
+| p99                 |    24.74% slower |            8.55% faster |
+| mean                |     2.19% faster |            6.72% faster |
+| paired median       |     0.88% faster |            0.98% slower |
+| paired wins         |          258/480 |                 156/320 |
+
+This proves central parity even for the voice-PCM case. Per-project tail
+direction changed with platform stalls, so no tail improvement is attributed
+to the adapter. A separate ephemeral lane whose final handler returned its
+completion Promise was also central-neutral (0.15% slower singleton p50,
+0.87% slower PCM p50), but PCM p95 and mean were 17.51% and 7.12% slower. The
+relay discards either adapter's result, so async callback work is not a durable
+acknowledgement boundary; applications needing retry must use durable push.
+
+Durable project-worker push is different: `Itx.processEventBatch` awaits the
+Worker result so a rejection reaches the Stream spine's retry machinery. The
+shipping hybrid therefore propagates the first returned Promise and processes
+the remaining local suffix in order. It does not discard durable work. Exact
+head `8e3c9e8473e43c6eb01f8647a81ecec1f8189e89`, deployed as OS Worker version
+`e0802646-5798-4cc1-a324-878299c79fb0`, ran thirteen fresh projects with
+balanced installation order. Each sample host-timed append -> Stream DO ->
+project Worker -> completion Stream DO -> validated Node waiter. All 780
+paired samples (1,560 timed arms) and their event ordering/count assertions
+passed.
+
+| Durable statistic | Explicit batch singleton | Hybrid singleton | Explicit batch PCM |   Hybrid PCM |
+| ----------------- | -----------------------: | ---------------: | -----------------: | -----------: |
+| p50               |                68.715 ms |        69.313 ms |         147.150 ms |   144.607 ms |
+| p90               |               117.869 ms |       117.329 ms |         227.936 ms |   220.514 ms |
+| p95               |               134.089 ms |       130.601 ms |         330.523 ms |   299.486 ms |
+| p99               |               260.192 ms |       223.160 ms |       1,968.028 ms | 1,531.404 ms |
+| mean              |                79.794 ms |        87.566 ms |         207.846 ms |   178.449 ms |
+
+PCM improved 1.73% at p50, 3.26% at p90, 9.39% at p95, and 14.14% at mean;
+its paired median improved 0.58% and the hybrid won 206 of 390 pairs. Singleton
+p50 was 0.87% slower, p95 2.60% faster, and paired median 0.19% slower: central
+parity. Its 9.74% worse mean came entirely from one 3.115-second candidate
+outlier; candidate p99 was still 14.23% faster. Tail improvements are not
+claimed as intrinsic wins, but the enlarged distribution rejects a systematic
+latency or throughput regression.
+
+Two deliberately enlarged projects stopped at the same batch-34 boundary,
+once on each implementation, and are excluded. They identify a shared-preview
+or harness saturation ceiling rather than a receiver difference. Raw records
+are `/tmp/hybrid-deployed-sync-discard-r{1..4}.log`,
+`/tmp/hybrid-deployed-ephemeral-r{1..4}.log`,
+`/tmp/hybrid-deployed-durable-awaited-r{1..8}.log`, and
+`/tmp/hybrid-deployed-specialized-durable-r{1..13}.log`.
+
+The accepted shape is an elegant collapse rather than a second delivery
+system: one public per-event callback, one private bounded transport batch,
+one optional ordered Promise continuation, and no added durable state. The
+microbench gains under fully synchronous saturation remain upside; deployed
+tests establish that obtaining them does not tax the actual PCM path.
+Production remains untouched.
