@@ -4172,3 +4172,64 @@ one optional ordered Promise continuation, and no added durable state. The
 microbench gains under fully synchronous saturation remain upside; deployed
 tests establish that obtaining them does not tax the actual PCM path.
 Production remains untouched.
+
+## 2026-07-15: Fourteenth Cumulative Main Comparison
+
+The candidate was exact draft-PR head
+`cee0ddfc81de5e289f3ff9d5e2a786eb286544ec`; its production code differs from
+the accepted receiver revision `8e3c9e8473e43c6eb01f8647a81ecec1f8189e89`
+only by the preceding ledger entry. Freshly fetched `origin/main` remained
+`7b106d623ca1d814304443c0ad34f8e36ac0b0bb` before and immediately after the
+collection and was already an ancestor of the candidate. No merge commit was
+required.
+
+Five fresh Node/Vitest processes per revision ran each of the unmodified full
+suite, enlarged append/reactivation tails, enlarged live delivery, enlarged
+cross-post, and enlarged storage/reactivation lanes. The 50 processes ran
+between `2026-07-15T08:47:50Z` and `2026-07-15T09:00:08Z`; every process
+reported the exact expected revision, non-empty finite samples, and a passing
+semantic result. Revision lead alternated by lane. All timers remained on the
+Node host around awaited network/RPC work or host-observed delivery.
+
+| Equal-workload aggregate  | p50 improvement | p95 improvement | Mean improvement |
+| ------------------------- | --------------: | --------------: | ---------------: |
+| Unmodified full suite     |         33.332% |         24.916% |          30.247% |
+| Conservative substitution |         28.684% |         21.720% |          25.299% |
+
+The conservative row replaces the noisier full-suite append singleton,
+100-event append, concurrent-32 append, one-subscriber delivery, and
+25-subscriber delivery values with their enlarged controls. It is an
+equal-workload geometric summary, not production-traffic weighting and not a
+sum of isolated improvements.
+
+Median-of-five focused p50 results remain directionally consistent with the
+thirteenth checkpoint: acknowledgement-only 1 KiB append improved 66.59%,
+concurrent-32 append improved 38.91%, one-subscriber live delivery improved
+54.68%, 25-subscriber delivery improved 11.66%, dense reactivation read
+improved 34.39%, sparse reactivation read improved 35.87%, and inline 768 KiB
+append improved 49.69%. A 100-event tiny append in the equal-count storage lane
+regressed 23.07% p50, while 100 x 1 KiB and 1,000 tiny events improved 27.60%
+and 31.38%. The 1.1 MiB chunked append was neutral at 4.19% slower p50 and 4.38%
+faster p95.
+
+The enlarged controls retain explicit tails. Concurrent-32 append improved
+38.91% p50 and 15.72% p95. Forced-reactivation head improved 7.61% p50 but was
+33.45% slower p95, repeating its known unstable tail. One-subscriber delivery
+improved 54.68% p50 and 37.30% p95; 25-subscriber delivery improved 11.66% p50
+and was neutral at 1.26% p95. Dense enlarged cross-post was 8.58% slower p50
+but 9.82% faster p95; sparse cross-post improved 22.91% p50 and 18.63% p95.
+
+The ten-observation full-suite replay row improved 17.41% p50 but was 82.18%
+slower p95. The enlarged-cross-post processes' incidental replay row was 2.47%
+slower p50 and 27.20% slower p95. Those low-sample tails do not supersede the
+separate 300-observation replay control: central latency there passed while
+four isolated candidate samples exceeded 30 ms and none did on main. Replay
+p99 therefore remains the next attribution experiment rather than being
+hidden in the aggregate.
+
+Raw records are `/tmp/cumulative-14-{full,tail,live,crosspost,storage}-`
+`{main,candidate}-r{1..5}.log`; the aggregate output is
+`/tmp/cumulative-14-analysis.txt`. Both benchmark servers were stopped and all
+draft-PR checks passed, including preview deploy/e2e. Production remained
+untouched. If active optimization continues, the next cumulative comparison
+is due by `2026-07-15T13:00:08Z`.
