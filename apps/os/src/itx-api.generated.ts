@@ -75,9 +75,9 @@ export interface Session {
  * root "/", an agent path, ...). Built-ins (streams, repo, agents, files,
  * integrations, sandboxes, scheduler, docs, ...) are project-global and
  * identical at every scope; what differs by scope is the capability host
- * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
+ * ancestor graph (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
  * Unknown dotted members dispatch dynamically against the scope's capability
- * host, chaining up to the project root.
+ * host, then follow only explicitly declared ancestors.
  */
 export interface Project {
   /** The project this itx is scoped into. */
@@ -116,7 +116,7 @@ export interface Project {
   /**
    * Capability hosts of OTHER scopes, by path. `capabilityHosts.get("/")` is
    * the project root — providing there makes a capability visible to every
-   * scope in the project (child scopes inherit ancestors' mounts).
+   * agent scope whose explicit ancestor graph reaches root.
    */
   capabilityHosts: CapabilityHostCollection;
   /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */
@@ -465,8 +465,8 @@ export interface AgentChat {
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
  * the CapabilityHostDurableObject with that name). Mounting is always local to
- * this scope; reads chain up through enclosing scopes inside the Durable
- * Object. `itx.capabilityHost` is the current scope's host;
+ * this scope; reads follow the host's explicitly declared ancestor. Path
+ * prefixes have no inheritance meaning. `itx.capabilityHost` is the current scope's host;
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
@@ -482,8 +482,14 @@ export interface CapabilityHost {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
-  __describe(): Promise<Description & { capabilities: CapabilityDescription[]; path: string }>;
+  /** Includes the explicit `ancestorPath` and `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
+  __describe(): Promise<
+    Description & {
+      ancestorPath: string | null;
+      capabilities: CapabilityDescription[];
+      path: string;
+    }
+  >;
   /** Run an `async (itx) => { … }` script in this scope; the execution is journaled on the scope stream. */
   runScript(code: string): Promise<{
     completedEvent: StreamEvent;
@@ -627,7 +633,7 @@ export interface EmailCapability {
  * the platform's example scripts (most are proven: the test suite runs them
  * unattended against a live project on every change; the rest are marked
  * interactive), the public type surface (the Itx Type Graph), and the
- * capabilities mounted in the caller's scope chain. One door for "how do I
+ * capabilities mounted in the caller's explicit ancestor graph. One door for "how do I
  * X?": search first, fetch what the hits name, adapt working code.
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),
@@ -1958,7 +1964,7 @@ export type CapabilityDescription = {
   providedAtOffset?: number;
   /**
    * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).
-   * Set when a scope reports capabilities it inherited from an enclosing scope,
+   * Set when a scope reports capabilities inherited through an explicit ancestor,
    * so the reader can tell a local mount from an inherited one. Absent on
    * built-ins (they exist at every scope).
    */

@@ -7,14 +7,15 @@
 // against the real compiler in domains/typecheck/virtual-project.test.ts;
 // here the checker is a stub and the subject is the gate's plumbing.
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "../../itx-api.generated.ts";
+import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers-shim.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
 import {
   CapabilityHostProcessor,
-  type ParentCapabilityHost,
+  type CapabilityHostAncestor,
 } from "./capability-host-processor-implementation.ts";
 
 const T = {
@@ -27,7 +28,8 @@ const T = {
 function makeProcessor(options: {
   stream: MemoryStream;
   run?: (code: string) => Promise<unknown>;
-  parent?: ParentCapabilityHost;
+  ancestor?: CapabilityHostAncestor;
+  path?: string;
   typecheckScript?: (input: {
     capabilities: CapabilityDescription[];
     code: string;
@@ -36,9 +38,9 @@ function makeProcessor(options: {
   return new CapabilityHostProcessor({
     stream: options.stream,
     itx: {} as Project,
-    path: "/",
+    path: options.path ?? "/",
     projectId: null,
-    parent: options.parent,
+    resolveAncestor: options.ancestor === undefined ? undefined : () => options.ancestor!,
     scriptExecutionEntrypoint: {
       run:
         options.run ??
@@ -61,6 +63,8 @@ async function requestScript(stream: MemoryStream, processor: CapabilityHostProc
 function completion(stream: MemoryStream) {
   return stream.events.find((event) => event.type === T.completed);
 }
+
+beforeEach(() => resetRecordedSpans());
 
 describe("script execution typecheck gate", () => {
   it("a problems verdict settles as an error completion — never started, never run", async () => {
@@ -105,6 +109,29 @@ describe("script execution typecheck gate", () => {
     });
     expect(stream.events.some((event) => event.type === T.started)).toBe(true);
     expect(ran).toHaveLength(1);
+  });
+
+  it("traces capability discovery, compilation, the started append, and loopback separately", async () => {
+    const stream = new MemoryStream();
+    const processor = makeProcessor({
+      stream,
+      run: async () => "ok",
+      typecheckScript: async () => ({ verdict: "clean", emittedJs: "export default 1" }),
+    });
+    await requestScript(stream, processor);
+
+    await vi.waitFor(() => expect(completion(stream)).toBeDefined());
+    expect(recordedSpans.map((span) => span.name)).toEqual([
+      "capability_host.script_execution",
+      "capability_host.script_describe_capabilities",
+      "capability_host.script_typecheck",
+      "capability_host.script_started_append",
+      "capability_host.script_loopback",
+      "capability_host.script_completion_append",
+    ]);
+    expect(recordedSpans[0]?.attributes).toMatchObject({
+      "iterate.capability_host.script_outcome": "succeeded",
+    });
   });
 
   it("an unchecked verdict runs the script (permissive on unknowns)", async () => {
@@ -171,8 +198,9 @@ describe("script execution typecheck gate", () => {
     };
     const processor = makeProcessor({
       stream,
+      path: "/agents/test",
       run: async () => null,
-      parent: {
+      ancestor: {
         invokeCapability: () => Promise.reject(new Error("unused")),
         describeCapabilities: async () => [inherited],
       },
@@ -180,6 +208,10 @@ describe("script execution typecheck gate", () => {
         seen.push(capabilities);
         return { verdict: "clean" };
       },
+    });
+    await stream.append({
+      type: "events.iterate.com/capability-host/ancestor-configured",
+      payload: { ancestorPath: "/" },
     });
     await stream.append({
       type: T.provided,

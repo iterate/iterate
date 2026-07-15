@@ -1,3 +1,4 @@
+import { tracing } from "cloudflare:workers";
 import {
   StreamProcessor,
   type StreamProcessorConstructorArgs,
@@ -111,17 +112,22 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
 }
 
 /**
- * The enclosing itx scope, as seen from a child scope's processor.
+ * One explicitly declared ancestor scope, as seen from a child scope's processor.
  *
  * Only the two read operations chain upward (see the class below); mounting is
  * always local, so `provide`/`revoke` are deliberately absent here. In practice
  * this is a `DurableObjectStub<CapabilityHostDurableObject>` for the parent scope, but the
  * processor only depends on these two methods.
  */
-export type ParentCapabilityHost = {
-  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  describeCapabilities(): Promise<CapabilityDescription[]>;
+export type CapabilityHostAncestor = {
+  invokeCapability(
+    input: { args?: unknown[]; path: string[] },
+    visitedScopePaths?: string[],
+  ): Promise<unknown>;
+  describeCapabilities(visitedScopePaths?: string[]): Promise<CapabilityDescription[]>;
 };
+
+const MAX_CAPABILITY_ANCESTOR_DEPTH = 32;
 
 export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProcessorContract> {
   readonly contract = CapabilityHostProcessorContract;
@@ -130,7 +136,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   #scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
   /** Injected clock (expiry decisions); production defaults to Date.now. */
   #now: (() => number) | undefined;
-  #parent: ParentCapabilityHost | undefined;
+  #resolveAncestor: ((path: string) => CapabilityHostAncestor) | undefined;
+  /**
+   * Only for the bounded pre-0.2 migration. `undefined` means the harness has
+   * no migration policy; `null` explicitly terminates at this host.
+   */
+  #legacyAncestorPath: string | null | undefined;
+  // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: #migrateLegacyAncestor reads and assigns this via ??=.
+  #legacyAncestorMigration: Promise<void> | undefined;
   #validateCapabilityTypes: ((types: string) => Promise<string[]>) | undefined;
   #typecheckScript:
     | ((input: {
@@ -148,10 +161,13 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
       /** Injected clock (expiry decisions); production defaults to Date.now. */
       now?: () => number;
-      // The enclosing scope, or undefined at the project root ("/"). Present for
-      // every nested scope (agents, sub-agents, agent namespaces) so capability
-      // lookups that miss locally can fall through to the surrounding scope.
-      parent?: ParentCapabilityHost;
+      /** Resolves only the path recorded by ancestor-configured. */
+      resolveAncestor?: (path: string) => CapabilityHostAncestor;
+      /**
+       * One-time migration target for hosts created before explicit ancestry.
+       * Production supplies this; new hosts receive the declaration at birth.
+       */
+      legacyAncestorPath?: string | null;
       /**
        * Compiles a mount's `types` string, returning problems (empty = it
        * compiles). Wired to the typechecker sidecar in production; the node
@@ -175,7 +191,8 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     this.#path = normalizePath(args.path);
     this.#scriptExecutionEntrypoint = args.scriptExecutionEntrypoint;
     this.#now = args.now;
-    this.#parent = args.parent;
+    this.#resolveAncestor = args.resolveAncestor;
+    this.#legacyAncestorPath = args.legacyAncestorPath;
     this.#validateCapabilityTypes = args.validateCapabilityTypes;
     this.#typecheckScript = args.typecheckScript;
   }
@@ -185,6 +202,14 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     state,
   }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
+      case "events.iterate.com/capability-host/ancestor-configured": {
+        const path =
+          event.payload.ancestorPath === null ? null : normalizePath(event.payload.ancestorPath);
+        return {
+          ...state,
+          ancestor: { configuredAtOffset: event.offset, path },
+        };
+      }
       case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
           ...event.payload,
@@ -284,8 +309,9 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
         // batch as the request or it would judge the script against a stale
         // scope.
         const capabilities = args.state.capabilities;
+        const ancestor = args.state.ancestor;
         args.runInBackground(() =>
-          this.#executeScript({ capabilities, code: execution.code, executionId }),
+          this.#executeScript({ ancestor, capabilities, code: execution.code, executionId }),
         );
         continue;
       }
@@ -467,7 +493,10 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     await this.waitUntilEvent({ offset: committed.offset });
   }
 
-  async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+  async invokeCapability(
+    { args = [], path }: { args?: unknown[]; path: string[] },
+    visitedScopePaths: string[] = [],
+  ) {
     // A trailing __describe is a valid INVOCATION (answered from the mount's
     // durable metadata below) — the reserved-name rule is for MOUNT names, so
     // validate the path without it or discovery on provided capabilities dies
@@ -475,12 +504,17 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (!hit) {
-      // Not declared at THIS scope. Capability reads chain up the scope hierarchy,
-      // so ask the enclosing scope before giving up — this is how an agent sees
-      // capabilities mounted on its namespace or on the project. Resolution reads
-      // live `state.capabilities` every call, so a revoked child mount transparently
-      // re-exposes whatever the parent still has at that path.
-      if (this.#parent) return await this.#parent.invokeCapability({ args, path });
+      // Not declared at THIS scope. Ask only the ancestor named in this host's
+      // durable declaration. Path prefixes are names, not capability scopes.
+      // Resolution reads live state every call, so revoking a child mount
+      // transparently re-exposes whatever the declared ancestor still has.
+      const ancestor = await this.#ancestorFor(this.state.ancestor);
+      if (ancestor !== undefined) {
+        return await ancestor.invokeCapability(
+          { args, path },
+          this.#nextAncestorTraversal(visitedScopePaths),
+        );
+      }
       throw new Error(`no capability "${path.join(".")}"`);
     }
     // `__describe` on a mounted capability is answered HERE, from the mount's
@@ -541,16 +575,22 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     };
   }
 
-  // Reports everything reachable at this scope: this scope's own mounts plus every
-  // capability inherited from enclosing scopes, each tagged with the scope it was
-  // declared at. A nearer scope shadows a farther one at the same path (same rule
-  // as `resolveLongestPrefix` above), so the caller — usually an LLM deciding what
-  // it can invoke — sees exactly one entry per reachable path and where it lives.
-  describeCapabilities(): Promise<CapabilityDescription[]> {
-    return this.#describeCapabilitiesFrom(this.state.capabilities);
+  // Reports everything reachable at this scope: this scope's own mounts plus
+  // those reachable through its explicit ancestor, each tagged with the scope
+  // it was declared at. A nearer scope shadows a farther one at the same path.
+  describeCapabilities(visitedScopePaths: string[] = []): Promise<CapabilityDescription[]> {
+    return this.#describeCapabilitiesFrom(
+      this.state.capabilities,
+      this.state.ancestor,
+      visitedScopePaths,
+    );
   }
 
-  async #describeCapabilitiesFrom(records: CapabilityRecord[]): Promise<CapabilityDescription[]> {
+  async #describeCapabilitiesFrom(
+    records: CapabilityRecord[],
+    ancestorDeclaration: { configuredAtOffset: number; path: string | null } | undefined,
+    visitedScopePaths: string[] = [],
+  ): Promise<CapabilityDescription[]> {
     const local: CapabilityDescription[] = records.map((record) => ({
       instructions: record.instructions,
       path: record.path,
@@ -559,10 +599,79 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
       type: record.type,
       types: record.types,
     }));
-    if (!this.#parent) return local;
+    const ancestor = await this.#ancestorFor(ancestorDeclaration);
+    if (ancestor === undefined) return local;
     const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
-    const inherited = await this.#parent.describeCapabilities();
+    const inherited = await ancestor.describeCapabilities(
+      this.#nextAncestorTraversal(visitedScopePaths),
+    );
     return [...local, ...inherited.filter((c) => !shadowed.has(JSON.stringify(c.path)))];
+  }
+
+  #nextAncestorTraversal(visitedScopePaths: string[]): string[] {
+    if (visitedScopePaths.includes(this.#path)) {
+      throw new Error(
+        `capability-host ancestor cycle: ${[...visitedScopePaths, this.#path].join(" -> ")}`,
+      );
+    }
+    if (visitedScopePaths.length >= MAX_CAPABILITY_ANCESTOR_DEPTH) {
+      throw new Error(
+        `capability-host ancestor depth exceeds ${MAX_CAPABILITY_ANCESTOR_DEPTH}: ${[
+          ...visitedScopePaths,
+          this.#path,
+        ].join(" -> ")}`,
+      );
+    }
+    return [...visitedScopePaths, this.#path];
+  }
+
+  async #ancestorFor(
+    declaration: { configuredAtOffset: number; path: string | null } | undefined,
+  ): Promise<CapabilityHostAncestor | undefined> {
+    const ancestorPath = await this.#ancestorPathFor(declaration);
+    if (ancestorPath === undefined || ancestorPath === null) return undefined;
+    if (ancestorPath === this.#path) {
+      throw new Error(`capability-host "${this.#path}" cannot be its own ancestor`);
+    }
+    const resolveAncestor = this.#resolveAncestor;
+    if (resolveAncestor === undefined) {
+      throw new Error(
+        `capability-host "${this.#path}" declares ancestor "${ancestorPath}" but no resolver is configured`,
+      );
+    }
+    return resolveAncestor(ancestorPath);
+  }
+
+  async ancestorPath(): Promise<string | null | undefined> {
+    return await this.#ancestorPathFor(this.state.ancestor);
+  }
+
+  async #ancestorPathFor(
+    declaration: { configuredAtOffset: number; path: string | null } | undefined,
+  ): Promise<string | null | undefined> {
+    if (declaration !== undefined) return declaration.path;
+    if (this.#legacyAncestorPath === undefined) return undefined;
+    await this.#migrateLegacyAncestor(this.#legacyAncestorPath);
+    return this.#legacyAncestorPath;
+  }
+
+  async #migrateLegacyAncestor(ancestorPath: string | null): Promise<void> {
+    this.#legacyAncestorMigration ??= (async () => {
+      console.warn("[capability-host] migrating implicit ancestor to a durable declaration", {
+        ancestorPath,
+        scopePath: this.#path,
+      });
+      const [configured] = await this.append({
+        type: "events.iterate.com/capability-host/ancestor-configured",
+        idempotencyKey: this.idempotencyKey("legacy-ancestor-configured"),
+        payload: { ancestorPath },
+      });
+      await this.waitUntilEvent({ offset: configured.offset });
+    })().catch((error: unknown) => {
+      this.#legacyAncestorMigration = undefined;
+      throw error;
+    });
+    await this.#legacyAncestorMigration;
   }
 
   async runScript(code: string): Promise<RunScriptResult> {
@@ -606,12 +715,35 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   async #typecheckScriptForRun(
     code: string,
     records: CapabilityRecord[],
+    ancestorDeclaration: { configuredAtOffset: number; path: string | null } | undefined,
   ): Promise<{ rejection: string | null; emittedJs?: string }> {
     const typecheckScript = this.#typecheckScript;
     if (typecheckScript === undefined) return { rejection: null };
     try {
-      const capabilities = await this.#describeCapabilitiesFrom(records);
-      const checked = await typecheckScript({ capabilities, code });
+      const capabilities = await tracing.enterSpan(
+        "capability_host.script_describe_capabilities",
+        async (span) => {
+          span.setAttribute("iterate.capability_host.local_capability_count", records.length);
+          span.setAttribute(
+            "iterate.capability_host.ancestor_declared",
+            ancestorDeclaration !== undefined,
+          );
+          const described = await this.#describeCapabilitiesFrom(records, ancestorDeclaration);
+          span.setAttribute("iterate.capability_host.reachable_capability_count", described.length);
+          return described;
+        },
+      );
+      const checked = await tracing.enterSpan("capability_host.script_typecheck", async (span) => {
+        span.setAttribute("iterate.capability_host.script_chars", code.length);
+        span.setAttribute("iterate.capability_host.capability_count", capabilities.length);
+        const result = await typecheckScript({ capabilities, code });
+        span.setAttribute("iterate.capability_host.typecheck_verdict", result.verdict);
+        span.setAttribute(
+          "iterate.capability_host.has_emitted_js",
+          result.verdict === "clean" && result.emittedJs !== undefined,
+        );
+        return result;
+      });
       if (checked.verdict === "clean") {
         // Check and emit are one compile: what runs IS the compiler's
         // type-stripped output, so scripts are genuinely TypeScript.
@@ -634,45 +766,81 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async #executeScript(input: {
+    ancestor: { configuredAtOffset: number; path: string | null } | undefined;
     capabilities: CapabilityRecord[];
     code: string;
     executionId: string;
   }) {
-    try {
-      // The typecheck gate runs BEFORE the started evidence: it has no side
-      // effects, so a rejected script provably never ran (requested →
-      // completed, no started event) and the reconciler doctrine is untouched.
-      const checked = await this.#typecheckScriptForRun(input.code, input.capabilities);
-      if (checked.rejection !== null) {
-        await this.#appendCompletion({ executionId: input.executionId, error: checked.rejection });
-        return;
-      }
-      // Started-evidence lands durably BEFORE the script body runs, so the
-      // fold can always tell "provably never ran" (requested, startable late)
-      // from "may have half-run" (started, settle-only). Deliberately OUTSIDE
-      // the try below: if this append fails the script never ran, so no
-      // completion may be appended — the obligation stays `requested`, the
-      // rethrow marks the keepalive window failed, and a later reconciliation
-      // retries the whole attempt. (Same shape as the LLM providers.)
-      await this.append({
-        type: "events.iterate.com/capability-host/script-execution-started",
-        idempotencyKey: this.idempotencyKey(`script-execution-started@${input.executionId}`),
-        payload: { executionId: input.executionId },
-      });
+    await tracing.enterSpan("capability_host.script_execution", async (span) => {
+      span.setAttribute("iterate.capability_host.script_chars", input.code.length);
+      span.setAttribute("iterate.capability_host.ancestor_declared", input.ancestor !== undefined);
+      span.setAttribute(
+        "iterate.capability_host.local_capability_count",
+        input.capabilities.length,
+      );
       try {
-        const result = await this.#scriptExecutionEntrypoint.run(input.code, {
-          emittedJs: checked.emittedJs,
-        });
-        await this.#appendCompletion({ executionId: input.executionId, result });
-      } catch (error) {
-        await this.#appendCompletion({
-          executionId: input.executionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        // The typecheck gate runs BEFORE the started evidence: it has no side
+        // effects, so a rejected script provably never ran (requested →
+        // completed, no started event) and the reconciler doctrine is untouched.
+        const checked = await this.#typecheckScriptForRun(
+          input.code,
+          input.capabilities,
+          input.ancestor,
+        );
+        if (checked.rejection !== null) {
+          span.setAttribute("iterate.capability_host.script_outcome", "typecheck_rejected");
+          await tracing.enterSpan("capability_host.script_completion_append", () =>
+            this.#appendCompletion({
+              executionId: input.executionId,
+              error: checked.rejection!,
+            }),
+          );
+          return;
+        }
+        // Started-evidence lands durably BEFORE the script body runs, so the
+        // fold can always tell "provably never ran" (requested, startable late)
+        // from "may have half-run" (started, settle-only). Deliberately OUTSIDE
+        // the try below: if this append fails the script never ran, so no
+        // completion may be appended — the obligation stays `requested`, the
+        // rethrow marks the keepalive window failed, and a later reconciliation
+        // retries the whole attempt. (Same shape as the LLM providers.)
+        await tracing.enterSpan("capability_host.script_started_append", () =>
+          this.append({
+            type: "events.iterate.com/capability-host/script-execution-started",
+            idempotencyKey: this.idempotencyKey(`script-execution-started@${input.executionId}`),
+            payload: { executionId: input.executionId },
+          }),
+        );
+        try {
+          const result = await tracing.enterSpan(
+            "capability_host.script_loopback",
+            async (loopbackSpan) => {
+              loopbackSpan.setAttribute(
+                "iterate.capability_host.has_emitted_js",
+                checked.emittedJs !== undefined,
+              );
+              return await this.#scriptExecutionEntrypoint.run(input.code, {
+                emittedJs: checked.emittedJs,
+              });
+            },
+          );
+          await tracing.enterSpan("capability_host.script_completion_append", () =>
+            this.#appendCompletion({ executionId: input.executionId, result }),
+          );
+          span.setAttribute("iterate.capability_host.script_outcome", "succeeded");
+        } catch (error) {
+          span.setAttribute("iterate.capability_host.script_outcome", "failed");
+          await tracing.enterSpan("capability_host.script_completion_append", () =>
+            this.#appendCompletion({
+              executionId: input.executionId,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
+      } finally {
+        this.#liveExecutions.delete(input.executionId);
       }
-    } finally {
-      this.#liveExecutions.delete(input.executionId);
-    }
+    });
   }
 
   /** The one durable outcome of a script execution. The reconciler's settle

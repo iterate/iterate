@@ -4858,8 +4858,8 @@ type CapabilityHostRpcTargetProps = {
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
  * the CapabilityHostDurableObject with that name). Mounting is always local to
- * this scope; reads chain up through enclosing scopes inside the Durable
- * Object. `itx.capabilityHost` is the current scope's host;
+ * this scope; reads follow the host's explicitly declared ancestor. Path
+ * prefixes have no inheritance meaning. `itx.capabilityHost` is the current scope's host;
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
@@ -4925,15 +4925,22 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     return await this.#durableObject.invokeCapability({ args, path });
   }
 
-  /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
+  /** Includes the explicit `ancestorPath` and `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
   async __describe(): Promise<
-    Description & { capabilities: CapabilityDescription[]; path: string }
+    Description & {
+      ancestorPath: string | null;
+      capabilities: CapabilityDescription[];
+      path: string;
+    }
   > {
-    const capabilities = await this.#durableObject.describeCapabilities();
+    const [ancestorPath, capabilities] = await Promise.all([
+      this.#durableObject.capabilityHostAncestorPath(),
+      this.#durableObject.describeCapabilities(),
+    ]);
     // (DO method name: describeCapabilities — it returns the raw array; the
     // Description envelope is assembled here, where the scope context lives.)
     return describeNode({
-      instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; reads chain up through enclosing scopes, so \`capabilities\` includes inherited mounts tagged with their declaring scope.`,
+      instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; reads follow explicit ancestor ${ancestorPath === null ? "none" : JSON.stringify(ancestorPath)}, so \`capabilities\` includes inherited mounts tagged with their declaring scope.`,
       children: {
         invokeCapability:
           "Explicit dynamic dispatch ({ path, args }); dotted calls compile to this.",
@@ -4943,6 +4950,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         runScript: "Run an async (itx) => {...} script in this scope.",
       },
       parent: `project ${this.#props.projectId}; sibling scopes via capabilityHosts.get(path)`,
+      ancestorPath,
       capabilities,
       path: this.#props.path,
     });
@@ -5059,7 +5067,7 @@ type ProjectRpcTargetProps = {
  * Object. Its built-in members (`streams`, `agents`, `repo`, …) are resolved here
  * in the isolate; only unknown roots fall through the prototype-chain
  * fallback (the registry block at the bottom of this file) to the capability
- * host's dynamic table (which itself chains up to enclosing scopes). So the
+ * host's dynamic table (which follows its durable ancestor declaration). So the
  * common `itx.streams.get(...)` path never makes a round trip
  * just to check whether `streams` was shadowed. The deliberate cost: a dynamic
  * capability can never shadow a built-in name — the built-in always wins
@@ -5084,9 +5092,9 @@ type ProjectDurableObjectRpc = {
  * root "/", an agent path, ...). Built-ins (streams, repo, agents, files,
  * integrations, sandboxes, scheduler, docs, ...) are project-global and
  * identical at every scope; what differs by scope is the capability host
- * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
+ * ancestor graph (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
  * Unknown dotted members dispatch dynamically against the scope's capability
- * host, chaining up to the project root.
+ * host, then follow only explicitly declared ancestors.
  */
 export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
@@ -5128,7 +5136,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       instructions:
         `An itx: project "${project.name}" (${project.projectId}) at scope "${scopePath}". ` +
         "Built-ins are project-global and identical at every scope — `children` below lists them; `capabilities` lists this scope's dynamic mounts. " +
-        "Unknown dotted members dispatch dynamically against this scope's capability host, chaining up to the project root. " +
+        "Unknown dotted members dispatch dynamically against this scope's capability host, then follow only its explicit ancestors. " +
         'To find anything — e2e-tested example scripts, type declarations, mounted capabilities — use itx.docs.search({ q: "several related words" }) then itx.docs.get({ name }); __describe() works on every child.',
       // The Project declaration alone is ~1.4k tokens; 2000 fits it plus a
       // little of its closure, and the trailer names the rest.
@@ -5252,7 +5260,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /**
    * Capability hosts of OTHER scopes, by path. `capabilityHosts.get("/")` is
    * the project root — providing there makes a capability visible to every
-   * scope in the project (child scopes inherit ancestors' mounts).
+   * agent scope whose explicit ancestor graph reaches root.
    */
   get capabilityHosts(): CapabilityHostCollectionRpcTarget {
     return new CapabilityHostCollectionRpcTarget({
@@ -6146,7 +6154,7 @@ const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.contex
  * the platform's example scripts (most are proven: the test suite runs them
  * unattended against a live project on every change; the rest are marked
  * interactive), the public type surface (the Itx Type Graph), and the
- * capabilities mounted in the caller's scope chain. One door for "how do I
+ * capabilities mounted in the caller's explicit ancestor graph. One door for "how do I
  * X?": search first, fetch what the hits name, adapt working code.
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),

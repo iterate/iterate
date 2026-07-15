@@ -3,6 +3,7 @@ import { defineProcessorContract, type ProcessorState } from "../streams/process
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { StreamListItem } from "../streams/schemas.ts";
 import {
@@ -452,9 +453,11 @@ export const ProjectProcessorContract = defineProcessorContract({
     CoreProcessorContract,
     RepoProcessorContract,
     AgentProcessorContract,
+    CapabilityHostProcessorContract,
     EmailProcessorContract,
   ],
   emits: [
+    "events.iterate.com/capability-host/ancestor-configured",
     "events.iterate.com/agents/context-added",
     "events.iterate.com/agent/llm-provider-selected",
     // Seeded onto /integrations/email at project birth (the creator's email

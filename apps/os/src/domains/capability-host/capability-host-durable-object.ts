@@ -2,7 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { DurableObjectNameCodec, parentScopePath } from "../durable-object-names.ts";
+import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
+import { childAgentParentPath } from "../../lib/agent-paths.ts";
 import { createStreamProcessorHost } from "../streams/stream-processor-host.ts";
 import type {
   StreamSubscriberWakeRequest,
@@ -13,7 +14,7 @@ import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";
 import {
   CapabilityHostProcessor,
-  type ParentCapabilityHost,
+  type CapabilityHostAncestor,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
@@ -31,11 +32,32 @@ type ScriptExecutionLoopbackExports = {
   }): ScriptExecutionEntrypoint;
 };
 
+type CapabilityHostAncestorEntrypoint = {
+  invokeCapabilityFromDescendant(input: {
+    args?: unknown[];
+    path: string[];
+    visitedScopePaths: string[];
+  }): Promise<unknown>;
+  describeCapabilitiesFromDescendant(visitedScopePaths: string[]): Promise<CapabilityDescription[]>;
+};
+
+/**
+ * Pre-0.2 migration only. New capability hosts never infer relationships from
+ * names; their birth event declares one. Keeping this private prevents the old
+ * path-prefix rule from becoming platform semantics again.
+ */
+function legacyParentScopePath(path: string): string | null {
+  const normalized = normalizePath(path);
+  if (normalized === "/") return null;
+  const parent = normalized.slice(0, normalized.lastIndexOf("/"));
+  return parent === "" ? "/" : parent;
+}
+
 /**
  * One capability scope: the durable dynamic-capability table and script
  * journal at one `{projectId, path}`. `provideCapability` always mounts here;
- * `invokeCapability`/`describeCapabilities` chain up to the enclosing scope's
- * host on a local miss.
+ * `invokeCapability`/`describeCapabilities` follow the host's durable,
+ * explicit ancestor declaration on a local miss.
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -59,12 +81,13 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
           path: this.#name.path,
           projectId: this.#name.projectId,
         }),
-        // The enclosing scope, so a capability miss at this path falls through to
-        // the surrounding scope (agent → its namespace → the project). Only the
-        // immediate parent is wired; deeper ancestors are reached because that
-        // parent applies the same fallback. Undefined at the root, which ends the
-        // chain.
-        parent: this.#parentCapabilityHost(),
+        // Resolve only the durable ancestor declaration folded by the
+        // processor. Namespace path prefixes are never dialed implicitly.
+        resolveAncestor: (path) => this.#capabilityHostAncestor(path),
+        // Bounded compatibility migration for pre-0.2 hosts. Once touched,
+        // the inferred legacy relationship is journaled and all later boots
+        // use the explicit declaration. New hosts receive it at birth.
+        legacyAncestorPath: this.#legacyAncestorPath(),
         path: this.#name.path,
         scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
         validateCapabilityTypes: (types) =>
@@ -88,19 +111,49 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     });
   }
 
-  #parentCapabilityHost(): ParentCapabilityHost | undefined {
-    const parentPath = parentScopePath(this.#name.path);
-    if (parentPath === null) return undefined;
-    const parent = this.env.CAPABILITY_HOST.getByName(
-      DurableObjectNameCodec.stringify({ path: parentPath, projectId: this.#name.projectId }),
-    );
-    // Forward only the two read methods the child scope chains through. Handing the
-    // full DurableObjectStub over as a typed dependency makes TypeScript instantiate
-    // the DO's self-referential stub type (TS2589); a thin forwarder keeps it shallow.
+  #capabilityHostAncestor(ancestorPath: string): CapabilityHostAncestor {
+    const ancestor = this.env.CAPABILITY_HOST.getByName(
+      DurableObjectNameCodec.stringify({ path: ancestorPath, projectId: this.#name.projectId }),
+    ) as unknown as CapabilityHostAncestorEntrypoint;
+    // Forward only the two internal read methods. Handing the full stub over as
+    // a typed dependency makes TypeScript instantiate the DO's self-referential
+    // stub type (TS2589); this thin forwarder also keeps the traversal proof out
+    // of the public capability-host surface.
     return {
-      invokeCapability: (input) => parent.invokeCapability(input),
-      describeCapabilities: () => parent.describeCapabilities(),
+      invokeCapability: (input, visitedScopePaths = []) =>
+        ancestor.invokeCapabilityFromDescendant({ ...input, visitedScopePaths }),
+      describeCapabilities: (visitedScopePaths = []) =>
+        ancestor.describeCapabilitiesFromDescendant(visitedScopePaths),
     };
+  }
+
+  #legacyAncestorPath(): string | null {
+    if (this.#name.path.startsWith("/agents/")) {
+      // Agent relationships are semantic, not filesystem-shaped. In
+      // particular `/agents/web/<conversation>` is a routed leaf whose
+      // ancestor is root, while a deliberate child agent inherits its agent.
+      return childAgentParentPath(this.#name.path) ?? "/";
+    }
+    // Preserve legacy non-agent scopes during their one-time migration. No
+    // new host is created this way: callers must append an explicit declaration.
+    return legacyParentScopePath(this.#name.path);
+  }
+
+  invokeCapabilityFromDescendant(input: {
+    args?: unknown[];
+    path: string[];
+    visitedScopePaths: string[];
+  }): Promise<unknown> {
+    return this.#capabilityHostProcessor.invokeCapability(
+      { args: input.args, path: input.path },
+      input.visitedScopePaths,
+    );
+  }
+
+  describeCapabilitiesFromDescendant(
+    visitedScopePaths: string[],
+  ): Promise<CapabilityDescription[]> {
+    return this.#capabilityHostProcessor.describeCapabilities(visitedScopePaths);
   }
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
@@ -143,5 +196,13 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   describeCapabilities(): Promise<CapabilityDescription[]> {
     return this.#capabilityHostProcessor.describeCapabilities();
+  }
+
+  async capabilityHostAncestorPath(): Promise<string | null> {
+    const ancestorPath = await this.#capabilityHostProcessor.ancestorPath();
+    if (ancestorPath === undefined) {
+      throw new Error(`capability-host "${this.#name.path}" has no ancestor declaration`);
+    }
+    return ancestorPath;
   }
 }

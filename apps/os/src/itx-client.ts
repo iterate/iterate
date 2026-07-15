@@ -120,7 +120,7 @@ export function connectItx(
 
   // An "agent itx" reached from outside `/api` is just this agent's `Agent`
   // handle. It already carries the agent's own control surface plus the dynamic
-  // capability scope chain (agent scope → project scope), so
+  // explicit capability ancestor graph (normally agent scope → project root), so
   // `agent.someProvidedCapability()` resolves whether the capability was mounted
   // on the agent or on the project. Inside a Worker, `env.ITX.get()` returns the
   // richer full itx at the agent path; the external client keeps the narrower,

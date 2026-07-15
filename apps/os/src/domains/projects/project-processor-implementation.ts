@@ -145,6 +145,11 @@ export class ProjectProcessor extends StreamProcessor<
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
+                CapabilityHostProcessorContract.buildEvent({
+                  type: "events.iterate.com/capability-host/ancestor-configured",
+                  idempotencyKey: `capability-host/ancestor-configured:${this.deps.itx.projectId}:/`,
+                  payload: { ancestorPath: null },
+                }),
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
                     projectId: this.deps.itx.projectId,
@@ -385,6 +390,14 @@ function agentSubscriptionEvents(input: {
       processorSlug,
     });
   return [
+    // Capability inheritance is an explicit part of the birth certificate.
+    // A real child agent inherits its parent agent; routed/top-level agents
+    // inherit root directly. Namespace prefixes never become implicit hosts.
+    CapabilityHostProcessorContract.buildEvent({
+      type: "events.iterate.com/capability-host/ancestor-configured",
+      idempotencyKey: `capability-host/ancestor-configured:${durableObjectName}`,
+      payload: { ancestorPath: childAgentParentPath(input.childPath) ?? "/" },
+    }),
     // One agent processor owns history, scheduling, and the Cloudflare AI call.
     subscription(AgentProcessorContract.slug, "agent"),
     subscription(CapabilityHostProcessorContract.slug, "capability-host"),

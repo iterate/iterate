@@ -2,7 +2,7 @@
 // mechanics live here: resolving whether one agent should receive parent-agent
 // prompt guidance when addressed below another agent path.
 
-const PLATFORM_AGENT_NAMESPACES = new Set(["email", "mcp", "repos", "slack", "telegram"]);
+const PLATFORM_AGENT_NAMESPACES = new Set(["email", "mcp", "repos", "slack", "telegram", "web"]);
 
 /**
  * The parent agent path for a child agent path, or null when the path is a
@@ -48,6 +48,8 @@ function hasPlatformRouteLeafPrefix(segments: string[]): boolean {
       return segments.length >= 5 && segments[4]!.startsWith("ts-");
     case "telegram":
       return isTelegramRouteLeafPrefix(segments);
+    case "web":
+      return segments.length >= 3;
     default:
       return false;
   }
@@ -67,6 +69,8 @@ function isPlatformRouteLeaf(segments: string[]): boolean {
       return (
         isTelegramRouteLeafPrefix(segments) && telegramRouteLeafLength(segments) === segments.length
       );
+    case "web":
+      return segments.length === 3;
     default:
       return false;
   }

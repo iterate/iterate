@@ -64,9 +64,20 @@ export const DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS = 15 * 60_000;
 
 export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
-  version: "0.1.0",
+  version: "0.2.0",
   description: "A tiny dynamic capability table and script execution journal.",
   stateSchema: z.object({
+    /**
+     * The one explicitly declared scope this host inherits from. `undefined`
+     * identifies a pre-0.2 host awaiting the bounded journal migration; an
+     * explicit `path: null` terminates inheritance (normally the project root).
+     */
+    ancestor: z
+      .object({
+        configuredAtOffset: z.number().int().nonnegative(),
+        path: z.string().nullable(),
+      })
+      .optional(),
     capabilities: z.array(CapabilityRecord).default([]),
     /**
      * The host's open script OBLIGATIONS, keyed by executionId — the "what
@@ -89,6 +100,23 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
       .default({}),
   }),
   events: {
+    "events.iterate.com/capability-host/ancestor-configured": {
+      description:
+        "Declares the one capability scope this host inherits from, or null when inheritance terminates. The durable declaration replaces path-prefix inference.",
+      payloadSchema: z.strictObject({
+        ancestorPath: z.string().trim().min(1).nullable(),
+      }),
+      examples: [
+        {
+          description: "A top-level agent inherits project-scoped mounts directly from root.",
+          payload: { ancestorPath: "/" },
+        },
+        {
+          description: "The project root explicitly terminates capability inheritance.",
+          payload: { ancestorPath: null },
+        },
+      ],
+    },
     "events.iterate.com/capability-host/capability-provided": {
       description: "A capability was mounted at a path.",
       payloadSchema: CapabilityProvidedPayload,
@@ -188,6 +216,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
+    "events.iterate.com/capability-host/ancestor-configured",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
     "events.iterate.com/capability-host/script-execution-requested",
@@ -195,6 +224,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-completed",
   ],
   emits: [
+    "events.iterate.com/capability-host/ancestor-configured",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
     "events.iterate.com/capability-host/script-execution-requested",

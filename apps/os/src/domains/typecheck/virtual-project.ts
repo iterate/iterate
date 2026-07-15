@@ -132,7 +132,12 @@ if (TYPECHECKER_ITX_TYPES === itxTypesFileText) {
 }
 
 const SHARED_FILES: Record<string, string> = {
-  "itx-types.ts": TYPECHECKER_ITX_TYPES,
+  // This is generated, static declaration text. Giving it a declaration-file
+  // extension lets skipLibCheck avoid rebinding and semantically checking its
+  // ~4,000 lines on every tiny script check; extensionless imports still
+  // resolve it normally. Keep journal-provided mount declarations as `.ts`:
+  // those are untrusted inputs whose errors the checker must surface.
+  "itx-types.d.ts": TYPECHECKER_ITX_TYPES,
   "runtime.d.ts": RUNTIME_SHIMS,
   "tsconfig.json": JSON.stringify({
     compilerOptions: {

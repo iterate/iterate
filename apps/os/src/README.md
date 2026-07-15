@@ -41,8 +41,8 @@ live in domain files.
   "itx" is a NAMING CONVENTION, not a class: an itx is normally an instance of
   `ProjectRpcTarget` whose capability host sits at `"/"` — and sometimes at
   `"/agents/…"`, which is what "an agent context" means. Same type either way;
-  a nested scope sees its own mounted capabilities plus everything inherited
-  from enclosing scopes (child → parent → project).
+  a nested scope sees its own mounted capabilities plus everything reachable
+  through its explicitly declared capability-host ancestors.
 - A **capability host** is the durable dynamic-capability table (and script
   journal) at one scope path — one `CapabilityHostDurableObject` per
   `{projectId, path}`. Host operations are `provideCapability`,
@@ -142,9 +142,12 @@ The itx and agent surfaces have NO dispatch machinery of their own: the
 to the injected capability host, and the host itself carries the same fallback
 (`host.foo.bar(x)` is `host.invokeCapability({ path: ["foo","bar"], args: [x] })`).
 
-The load-bearing asymmetry: **reads chain up, writes stay local.**
-`invokeCapability`/`__describe` fall through to the enclosing scope on a miss
-(agent -> namespace -> project root), so a root mount is visible everywhere.
+The load-bearing asymmetry: **reads follow declared ancestors, writes stay local.**
+`invokeCapability`/`__describe` follow the host's explicit ancestor on a miss.
+Agent birth normally points a top-level/routed agent straight at project root,
+while a deliberate child agent points at its parent agent; namespace prefixes
+are never activated as capability hosts. A root mount is therefore visible to
+every agent whose declared ancestor graph reaches root.
 `provideCapability` always mounts on exactly the host you called it on — to
 mount elsewhere, address that scope explicitly via `capabilityHosts.get(path)`.
 
