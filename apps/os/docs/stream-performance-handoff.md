@@ -1,8 +1,8 @@
 # Stream Performance Handoff
 
 Snapshot captured on 2026-07-15 after merging `origin/main` through
-`eefc9d1e3` into draft PR [#1902](https://github.com/iterate/iterate/pull/1902).
-The merge commit is `9af5f02ce`. The last Stream runtime change is
+`591d7a4847` into draft PR [#1902](https://github.com/iterate/iterate/pull/1902).
+The latest merge commit is `1c918c190d`. The last Stream runtime change is
 `886b5ecf1`; later commits are documentation, test-harness, and main merges.
 Production has not been deployed, erased, or otherwise changed.
 

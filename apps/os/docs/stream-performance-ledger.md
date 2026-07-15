@@ -4590,6 +4590,10 @@ mock shape. The affected two files passed 64 tests. No Stream runtime changed;
 `886b5ecf1` remains the final runtime revision measured by checkpoint 15 and
 the deployed callback comparison.
 
+After this handoff was committed, `origin/main` advanced through `591d7a4847`
+and was merged cleanly as `1c918c190d`. Those four commits changed preview,
+configuration, PostHog, UI, and documentation files but no Stream runtime.
+
 Every raw path referenced by this ledger was audited before landing. There are
 1,130 surviving logs, profiles, and analyses totaling 24,280,568 bytes: 1,114
 logs, 11 DevTools CPU profiles, and five JSON/text analyses. Checkpoints 14 and
