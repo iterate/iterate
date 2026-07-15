@@ -16,7 +16,6 @@ import {
 } from "./scheduler-processor-implementation.ts";
 import {
   SchedulerProcessorContract,
-  type ScheduleSetPayload,
   type SchedulerProcessorState,
 } from "./scheduler-processor-contract.ts";
 import { SCHEDULER_HEARTBEAT_MS } from "./recurrence.ts";
@@ -29,7 +28,7 @@ const REQUESTED_TYPE = "events.iterate.com/scheduler/trigger-requested";
 const COMPLETED_TYPE = "events.iterate.com/scheduler/trigger-completed";
 
 /** In-memory two-cursor progress store (CAS-fenced like the DO adapter);
- * shared across harnesses to model a restart, seeded for checkpoint fixtures. */
+ * shared across harnesses to model a restart. */
 function makeProgressStore() {
   let record: ProcessorProgress<SchedulerProcessorState> | undefined;
   const store: ProcessorProgressStore<SchedulerProcessorState> = {
@@ -44,13 +43,7 @@ function makeProgressStore() {
       record = structuredClone(progress);
     },
   };
-  return {
-    ...store,
-    /** Plant a checkpoint verbatim (restart / legacy-shape fixtures). */
-    seed(progress: ProcessorProgress<SchedulerProcessorState>) {
-      record = structuredClone(progress);
-    },
-  };
+  return store;
 }
 
 // The processor is driven by a REAL StreamProcessorRunner — the same driver
@@ -423,45 +416,6 @@ describe("triggering", () => {
     });
     expect(completed.idempotencyKey).toBe(`scheduler/trigger-completed:${triggerArg.executionId}`);
     expect(state().pendingTriggers).toEqual({});
-  });
-
-  it("recovers schedule path from the defining event for legacy checkpoints", async () => {
-    const progressStore = makeProgressStore();
-    const harness = makeHarness({ progressStore });
-    const { clock, deliver, invokeCapability, processor, stream } = harness;
-    const [defined] = await stream.append(setEvent("report"));
-    const payload = defined!.payload as ScheduleSetPayload;
-    // A checkpoint persisted before schedule entries carried `path` (the
-    // legacy-snapshot conversion preserves such states verbatim).
-    progressStore.seed({
-      reduction: {
-        reducerVersion: SchedulerProcessorContract.version,
-        reducedThroughOffset: defined!.offset,
-        state: {
-          pendingTriggers: {},
-          schedules: {
-            report: {
-              action: payload.action,
-              definedAtOffset: defined!.offset,
-              nextTriggerAt: T0 + 60_000,
-              recurrence: payload.recurrence,
-              runCount: 0,
-              setAt: defined!.createdAt,
-            },
-          },
-        },
-      },
-      processing: { acknowledgedThroughOffset: defined!.offset, cursorRevision: 0 },
-    });
-
-    clock.now = T0 + 61_000;
-    await processor.triggerDue();
-    await deliver();
-    await waitForCompletion(harness);
-
-    const call = vi.mocked(invokeCapability).mock.calls[0]![0];
-    const [scheduleArg] = call.args as [Record<string, unknown>];
-    expect(scheduleArg).toMatchObject({ key: "report", path: stream.path });
   });
 
   it("records a throwing script as outcome=failed and keeps the recurrence alive", async () => {

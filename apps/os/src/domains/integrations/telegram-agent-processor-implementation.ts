@@ -26,6 +26,7 @@
 //   journal is exactly-once, the send is at-least-once).
 
 import { stringify as stringifyYaml } from "yaml";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
 import type { StreamEvent } from "../streams/schemas.ts";
 import {
@@ -157,6 +158,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
               payload: {
                 code: compileTelegramDebugScript(this.deps.agentPath),
                 executionId: `telegram-debug-command-${event.offset}`,
+                expiresAt: (this.deps.now ?? Date.now)() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
               },
             });
           });

@@ -367,7 +367,7 @@ describe("EmailAgentProcessor", () => {
     expect(inputs[0]!.payload).toMatchObject({ files: [resolved] });
   });
 
-  it("degrades to a plain transcription when attachment resolution fails", async () => {
+  it("a failed attachment resolution forwards the mail with an explicit loss note", async () => {
     const { driver, stream } = setup({
       resolveStoredAttachments: async () => {
         throw new Error("signing exploded");
@@ -386,7 +386,10 @@ describe("EmailAgentProcessor", () => {
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).not.toHaveProperty("files");
-    expect((inputs[0]!.payload as { content: string }).content).toContain("cat.png");
+    const content = (inputs[0]!.payload as { content: string }).content;
+    expect(content).toContain("cat.png");
+    // Never a silent drop: the loss and its cause are visible to the model.
+    expect(content).toContain("[1 attachment(s) could not be loaded: signing exploded]");
   });
 
   it("captures thread context and transcribes inbound mail into triggering agent input", async () => {

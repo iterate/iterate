@@ -40,9 +40,8 @@ export const DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS = 10 * 60_000;
  * scheduling reconciler. Normally dead code: the obligation reconciler
  * settles every open request well before this (attempts self-cap at
  * DEFAULT_AGENT_LLM_REQUEST_EXPIRY_MS, crashed attempts cancel, expired
- * intents fail). It exists for folds the normal lifecycle didn't produce —
- * hand-seeded checkpoints, raw-append journals — and as insurance against
- * reconciliation bugs. If it ever races a still-running attempt the outcomes
+ * intents fail). It exists purely as insurance against reconciliation
+ * bugs. If it ever races a still-running attempt the outcomes
  * CONVERGE rather than conflict: the backstop failure and any late completion
  * carry idempotent keys, the reducer ignores completions for a request that
  * is no longer current, and the late attempt's output is gated on request
@@ -462,9 +461,8 @@ export const AgentProcessorContract = defineProcessorContract({
            * carries. */
           llmRequestOffset: z.number().int().positive(),
           /** Epoch ms the requested event committed (its createdAt), driving
-           * the reconciler's backstop deadline. Optional: raw appends and
-           * pre-backstop checkpoints lack it, and the backstop then skips. */
-          requestedAt: z.number().int().positive().optional(),
+           * the reconciler's backstop deadline. */
+          requestedAt: z.number().int().positive(),
         }),
       ])
       .nullable()

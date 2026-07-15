@@ -33,6 +33,7 @@ import {
   mergeAgentStatusPatch,
   type AgentFileAttachment,
 } from "../agents/agent-processor-contract.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   readRecord,
   readString,
@@ -165,6 +166,9 @@ export class SlackAgentProcessor extends StreamProcessor<
         const senderUserId = slackWebhookSenderUserId(event.payload.body);
         const appendAgentMessage = async (
           input: {
+            /** Explicit trailing note (e.g. attachment loss) — data loss must
+             * be visible in the transcription, never silent. */
+            contentNote?: string;
             files?: AgentFileAttachment[];
             llmRequestPolicy?: { behaviour: "dont-trigger-request" };
           } = {},
@@ -173,7 +177,10 @@ export class SlackAgentProcessor extends StreamProcessor<
             type: "events.iterate.com/agents/message-received",
             idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
             payload: {
-              content: slackWebhookAgentInput(event.payload),
+              content:
+                input.contentNote === undefined
+                  ? slackWebhookAgentInput(event.payload)
+                  : `${slackWebhookAgentInput(event.payload)}\n\n${input.contentNote}`,
               from: { kind: "slack", ...(senderUserId == null ? {} : { userId: senderUserId }) },
               ...(input.files == null || input.files.length === 0 ? {} : { files: input.files }),
               ...(input.llmRequestPolicy == null
@@ -240,6 +247,7 @@ export class SlackAgentProcessor extends StreamProcessor<
               payload: {
                 code: bangCommand.code,
                 executionId: `slack-bang-command-${event.offset}`,
+                expiresAt: (this.deps.now ?? Date.now)() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
               },
             });
             await this.#addEyesReactionForMessageTarget(target, event);
@@ -259,13 +267,16 @@ export class SlackAgentProcessor extends StreamProcessor<
         // Same ordering requirement: the agent input append commits before the
         // eyes reaction tells the user their message was picked up. Files
         // shared on the message are materialized into project file storage
-        // first so the input event carries the attachments; a failed download
-        // degrades to the plain webhook input (the YAML already names the
-        // files) rather than wedging the processor. Eyes only on mentions —
-        // follow-ups after activation wake the agent without the 👀 noise.
+        // first so the input event carries the attachments. A failed download
+        // can be PERMANENT (Slack tombstones files, tokens get revoked), so
+        // throwing would wedge this frame forever; instead the message goes
+        // through WITH an explicit loss note — never a silent drop. Eyes only
+        // on mentions — follow-ups after activation wake the agent without
+        // the 👀 noise.
         blockProcessorWhile(async () => {
           const sharedFiles = readSlackMessageFiles(slackEvent);
           let files: AgentFileAttachment[] | undefined;
+          let attachmentFailureNote: string | undefined;
           if (sharedFiles.length > 0 && this.deps.storeSlackFiles != null) {
             try {
               files = await this.deps.storeSlackFiles({
@@ -277,9 +288,13 @@ export class SlackAgentProcessor extends StreamProcessor<
                 count: sharedFiles.length,
                 error,
               });
+              attachmentFailureNote = `[${sharedFiles.length} attachment(s) could not be loaded: ${
+                error instanceof Error ? error.message : String(error)
+              }]`;
             }
           }
           await appendAgentMessage({
+            ...(attachmentFailureNote === undefined ? {} : { contentNote: attachmentFailureNote }),
             ...(files == null ? {} : { files }),
             ...(shouldTriggerLlm
               ? {}

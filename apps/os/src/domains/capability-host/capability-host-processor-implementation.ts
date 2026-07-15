@@ -255,9 +255,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
             [event.payload.executionId]: {
               status: "requested" as const,
               code: event.payload.code,
-              expiresAt:
-                event.payload.expiresAt ??
-                Date.parse(event.createdAt) + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+              expiresAt: event.payload.expiresAt,
             },
           },
         };
@@ -623,7 +621,11 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     const completed = this.#waitForScriptCompletion(executionId);
     await this.append({
       type: "events.iterate.com/capability-host/script-execution-requested",
-      payload: { code, executionId },
+      payload: {
+        code,
+        executionId,
+        expiresAt: (this.#now ?? Date.now)() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+      },
     });
     const event = await completed;
     const payload = event.payload as CompletedPayload;

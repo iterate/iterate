@@ -358,13 +358,6 @@ export class SchedulerProcessor extends StreamProcessor<
       outcome = { outcome: "skipped" };
     } else {
       try {
-        const schedulePath =
-          entry.path ?? (await this.stream.getEvent({ offset: entry.definedAtOffset }))?.path;
-        if (schedulePath === undefined) {
-          throw new Error(
-            `cannot resolve stream path for schedule "${pending.key}" defined at offset ${entry.definedAtOffset}`,
-          );
-        }
         const result = await tracing.enterSpan("scheduler action invocation", async (span) => {
           span.setAttribute("iterate.scheduler.execution_id", executionId);
           try {
@@ -373,7 +366,7 @@ export class SchedulerProcessor extends StreamProcessor<
                 {
                   key: pending.key,
                   ...(entry.metadata === undefined ? {} : { metadata: entry.metadata }),
-                  path: schedulePath,
+                  path: entry.path,
                   recurrence: entry.recurrence,
                   setAt: entry.setAt,
                 },

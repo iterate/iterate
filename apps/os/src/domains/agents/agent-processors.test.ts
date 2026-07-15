@@ -2690,7 +2690,7 @@ describe("busy/idle status announcements", () => {
     // so surfaces switch from "making an LLM request" to "running a script".
     const [script] = await stream.append({
       type: "events.iterate.com/capability-host/script-execution-requested",
-      payload: { code: "async () => {}", executionId: "script-1" },
+      payload: { code: "async () => {}", executionId: "script-1", expiresAt: Date.now() + 60_000 },
     });
     await deliver();
     await deliver();
@@ -2785,6 +2785,7 @@ describe("busy/idle status announcements", () => {
       at(5, "events.iterate.com/capability-host/script-execution-requested", {
         code: "async () => {}",
         executionId: "script-5",
+        expiresAt: Date.now() + 60_000,
       }),
     ];
     expect(deriveAgentBusy(reduceAgentEvents(withScript))).toBe(true);

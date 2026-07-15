@@ -71,7 +71,11 @@ function makeProcessor(options: {
 async function requestScript(stream: MemoryStream, harness: Harness) {
   await stream.append({
     type: T.requested,
-    payload: { code: "async (itx) => itx.streams.gett('/')", executionId: "exec-1" },
+    payload: {
+      code: "async (itx) => itx.streams.gett('/')",
+      executionId: "exec-1",
+      expiresAt: Date.now() + 60_000,
+    },
   });
   await harness.runner.catchUp();
 }

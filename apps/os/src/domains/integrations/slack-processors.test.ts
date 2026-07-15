@@ -658,7 +658,7 @@ describe("SlackAgentProcessor", () => {
     expect(inputs[0]!.payload).toMatchObject({ files: [attachment] });
   });
 
-  it("degrades to a plain agent input when file storage fails", async () => {
+  it("a failed file download forwards the message with an explicit loss note", async () => {
     const { deliver, stream } = setup({
       storeSlackFiles: async () => {
         throw new Error("slack download exploded");
@@ -677,7 +677,10 @@ describe("SlackAgentProcessor", () => {
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).not.toHaveProperty("files");
-    expect((inputs[0]!.payload as { content: string }).content).toContain("cat.png");
+    const content = (inputs[0]!.payload as { content: string }).content;
+    expect(content).toContain("cat.png");
+    // Never a silent drop: the loss and its cause are visible to the model.
+    expect(content).toContain("[1 attachment(s) could not be loaded: slack download exploded]");
   });
 
   it("ignores our own bot's messages entirely", async () => {

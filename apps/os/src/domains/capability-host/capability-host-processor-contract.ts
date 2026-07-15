@@ -144,9 +144,8 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
       payloadSchema: z.looseObject({
         code: z.string(),
         executionId: z.string(),
-        /** Epoch ms past which the reconciler settles instead of running.
-         * Absent (raw appends), defaults to createdAt + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS. */
-        expiresAt: z.number().int().positive().optional(),
+        /** Epoch ms past which the reconciler settles instead of running. */
+        expiresAt: z.number().int().positive(),
       }),
       examples: [
         {

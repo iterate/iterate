@@ -176,7 +176,7 @@ describe("script execution reconciliation", () => {
     };
     await h.stream.append({
       type: T.requested,
-      payload: { code: "async () => 1", executionId: "exec-1" },
+      payload: { code: "async () => 1", executionId: "exec-1", expiresAt: h.clock.now + 60_000 },
     });
     await h.deliverPending();
 
@@ -192,7 +192,10 @@ describe("script execution reconciliation", () => {
     const h = makeHarness();
     // The dead incarnation's evidence, written before it was evicted.
     await h.stream.append(
-      { type: T.requested, payload: { code: "async () => 1", executionId: "exec-1" } },
+      {
+        type: T.requested,
+        payload: { code: "async () => 1", executionId: "exec-1", expiresAt: h.clock.now + 60_000 },
+      },
       { type: T.started, payload: { executionId: "exec-1" } },
     );
     await h.deliverPending(); // run.impl throws if invoked
@@ -211,7 +214,7 @@ describe("script execution reconciliation", () => {
     // The dead incarnation appended the request but never a started fact.
     await h.stream.append({
       type: T.requested,
-      payload: { code: "async () => 2", executionId: "exec-2" },
+      payload: { code: "async () => 2", executionId: "exec-2", expiresAt: h.clock.now + 60_000 },
     });
     const ran: string[] = [];
     h.run.impl = async (code) => {
@@ -237,7 +240,7 @@ describe("script execution reconciliation", () => {
     };
     await h.stream.append({
       type: T.requested,
-      payload: { code: "async () => 5", executionId: "exec-5" },
+      payload: { code: "async () => 5", executionId: "exec-5", expiresAt: h.clock.now + 60_000 },
     });
     await h.deliverPending();
     // Give the failed attempt a beat: nothing may have run or settled — the
@@ -295,7 +298,7 @@ describe("script execution reconciliation", () => {
     h.run.impl = async () => "done";
     await h.stream.append({
       type: T.requested,
-      payload: { code: "async () => 4", executionId: "exec-4" },
+      payload: { code: "async () => 4", executionId: "exec-4", expiresAt: h.clock.now + 60_000 },
     });
     await h.deliverPending();
     await vi.waitFor(() => {
@@ -323,7 +326,7 @@ describe("eviction recovery end to end", () => {
     h.run.impl = () => new Promise<never>(() => {});
     await h.stream.append({
       type: T.requested,
-      payload: { code: "async () => 1", executionId: "exec-1" },
+      payload: { code: "async () => 1", executionId: "exec-1", expiresAt: h.clock.now + 60_000 },
     });
     await h.deliverPending();
     await vi.waitFor(() => {

@@ -775,13 +775,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       // Last-resort backstop. Normally dead code: the obligation pass above
       // settles every open request (attempts self-cap at the expiry deadline,
       // crashed attempts cancel, expired intents fail), so this only fires
-      // for folds the lifecycle didn't produce — hand-seeded checkpoints,
-      // raw-append journals — or a reconciliation bug. The completion key is
-      // the SAME one every other settle lane uses, so the backstop, the
-      // obligation pass, and any late real settle collapse to one durable
-      // outcome instead of double-failing the request.
+      // on a reconciliation bug. The completion key is the SAME one every
+      // other settle lane uses, so the backstop, the obligation pass, and any
+      // late real settle collapse to one durable outcome instead of
+      // double-failing the request.
       const requestedAt = state.currentRequest.requestedAt;
-      if (requestedAt === undefined) return;
       if (this.#now() - requestedAt < AGENT_LLM_REQUEST_BACKSTOP_MS) return;
       const llmRequestOffset = state.currentRequest.llmRequestOffset;
       await args.append({
