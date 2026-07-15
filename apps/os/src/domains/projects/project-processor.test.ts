@@ -59,6 +59,8 @@ describe("ProjectProcessor bootstrap", () => {
     // stream `/` — full history, so the saga's repo/created arrives too.
     expect(configRepo[1]!.payload).toMatchObject({
       subscriptionKey: "cross-post:/",
+      description:
+        "Special project config repo: every event is cross-posted to the project root so the project processor can react when config changes.",
       delivery: { mode: "push", expression: ["streams", ["get", "/"], "acceptCrossPost"] },
       deliver: "all",
     });

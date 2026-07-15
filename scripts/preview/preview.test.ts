@@ -41,12 +41,14 @@ const {
   orderPreviewDeployBatches,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  readPreviewAppConfig,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
+  resolvePreviewTestBaseUrlEnvironment,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
@@ -54,8 +56,8 @@ const {
 } = previewInternals;
 
 describe("preview app dependency expansion", () => {
-  it("expands os to include its auth dependency", () => {
-    expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth"]);
+  it("expands os to include its auth and dummy-petshop dependencies", () => {
+    expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth", "dummy-petshop"]);
   });
 
   it("expands semaphore to include its auth dependency", () => {
@@ -67,7 +69,11 @@ describe("preview app dependency expansion", () => {
   });
 
   it("deduplicates dependencies", () => {
-    expect(expandPreviewDependencies(["os", "os", "auth"])).toEqual(["os", "auth"]);
+    expect(expandPreviewDependencies(["os", "os", "auth"])).toEqual([
+      "os",
+      "auth",
+      "dummy-petshop",
+    ]);
   });
 });
 
@@ -80,12 +86,14 @@ describe("preview deploy ordering", () => {
     ).toEqual([["semaphore"]]);
   });
 
-  it("deploys auth before OS", () => {
+  it("deploys auth and dummy-petshop before OS", () => {
     expect(
-      orderPreviewDeployBatches([cloudflarePreviewApps.os, cloudflarePreviewApps.auth]).map(
-        (batch) => batch.map((app) => app.slug),
-      ),
-    ).toEqual([["auth"], ["os"]]);
+      orderPreviewDeployBatches([
+        cloudflarePreviewApps.os,
+        cloudflarePreviewApps.auth,
+        cloudflarePreviewApps["dummy-petshop"],
+      ]).map((batch) => batch.map((app) => app.slug)),
+    ).toEqual([["auth", "dummy-petshop"], ["os"]]);
   });
 
   it("keeps auth dependents parallel after auth is ready", () => {
@@ -94,8 +102,12 @@ describe("preview deploy ordering", () => {
         cloudflarePreviewApps.os,
         cloudflarePreviewApps.semaphore,
         cloudflarePreviewApps.auth,
+        cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["auth"], ["os", "semaphore"]]);
+    ).toEqual([
+      ["auth", "dummy-petshop"],
+      ["os", "semaphore"],
+    ]);
   });
 });
 
@@ -114,6 +126,85 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("pnpm-lock.yaml");
     expect(cloudflarePreviewSharedPaths).toContain("pnpm-workspace.yaml");
     expect(cloudflarePreviewSharedPaths).toContain("patches/**");
+  });
+
+  it("runs the dummy-petshop live e2e against its deployed preview", async () => {
+    const petshop = cloudflarePreviewApps["dummy-petshop"];
+
+    expect(petshop).toMatchObject({
+      appPath: "apps/dummy-petshop",
+      paths: ["apps/dummy-petshop/**"],
+      previewReadyUrlPath: "/",
+      previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
+      previewTestCommandArgs: ["pnpm", "test:e2e"],
+    });
+    await expect(
+      readPreviewAppConfig({
+        app: petshop,
+        commandEnvironment: {},
+        dopplerConfig: "preview_3",
+        repositoryRoot: repoRoot,
+      }),
+    ).resolves.toEqual({
+      baseUrl: "https://dummy-petshop.iterate-preview-3.com",
+      projectHostnameBases: [],
+    });
+    for (const workflow of ["cloudflare-previews.yml", "cloudflare-preview-cleanup.yml"]) {
+      expect(readFileSync(resolve(repoRoot, ".depot/workflows", workflow), "utf8")).toContain(
+        "- apps/dummy-petshop/**",
+      );
+    }
+  });
+
+  it("deploys OS after Petshop and passes that exact preview URL to OS e2e", () => {
+    const headSha = "abc1234";
+    const os = cloudflarePreviewApps.os;
+
+    expect(os).toMatchObject({
+      paths: expect.arrayContaining(["apps/dummy-petshop/**"]),
+      previewDependencies: ["auth", "dummy-petshop"],
+      previewTestDependencyBaseUrlEnvVars: {
+        "dummy-petshop": "PETSHOP_BASE_URL",
+      },
+    });
+    expect(
+      resolvePreviewTestBaseUrlEnvironment({
+        app: os,
+        apps: {
+          os: {
+            headSha,
+            publicUrl: "https://os.iterate-preview-7.com",
+          },
+          "dummy-petshop": {
+            headSha,
+            publicUrl: "https://dummy-petshop.iterate-preview-7.com",
+          },
+        },
+        headSha,
+      }),
+    ).toEqual([
+      "OS_BASE_URL=https://os.iterate-preview-7.com",
+      "PETSHOP_BASE_URL=https://dummy-petshop.iterate-preview-7.com",
+    ]);
+  });
+
+  it("refuses to run OS e2e against a missing or stale Petshop deployment", () => {
+    expect(() =>
+      resolvePreviewTestBaseUrlEnvironment({
+        app: cloudflarePreviewApps.os,
+        apps: {
+          os: {
+            headSha: "current-head",
+            publicUrl: "https://os.iterate-preview-7.com",
+          },
+          "dummy-petshop": {
+            headSha: "older-head",
+            publicUrl: "https://dummy-petshop.iterate-preview-7.com",
+          },
+        },
+        headSha: "current-head",
+      }),
+    ).toThrow(/PETSHOP_BASE_URL requires dummy-petshop deployed at head current/);
   });
 
   it("rejects pre-RPC branches before the preview orchestrator can deploy Auth", () => {
@@ -388,7 +479,7 @@ describe("preview retry selection", () => {
           notice: null,
         },
       }).map((app) => app.slug),
-    ).toEqual(["os", "auth"]);
+    ).toEqual(["os", "auth", "dummy-petshop"]);
   });
 
   it("retries apps whose slot claim failed", () => {
@@ -432,7 +523,7 @@ describe("preview retry selection", () => {
           notice: null,
         },
       }).map((app) => app.slug),
-    ).toEqual(["os", "auth"]);
+    ).toEqual(["os", "auth", "dummy-petshop"]);
   });
 
   it("re-runs awaiting-tests apps whatever head deployed them — their e2e never ran", () => {
@@ -458,7 +549,7 @@ describe("preview retry selection", () => {
           notice: null,
         },
       }).map((app) => app.slug),
-    ).toEqual(["os", "auth"]);
+    ).toEqual(["os", "auth", "dummy-petshop"]);
   });
 });
 
@@ -541,7 +632,12 @@ describe("preview deploy selection", () => {
       },
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "streams-example-app"]);
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
     // Only the green claims get probed — the failed app is already selected
     // for retry — and each app is probed on its own readiness path.
     expect(probedUrls).toEqual([
@@ -573,7 +669,7 @@ describe("preview deploy selection", () => {
       probeAppServing: everythingServing,
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth"]);
+    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth", "dummy-petshop"]);
   });
 
   it("deploys the full fleet when the compare 404s because a force-push rewrote the deployed head away", async () => {
@@ -592,7 +688,13 @@ describe("preview deploy selection", () => {
       probeAppServing: everythingServing,
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth", "streams-example-app"]);
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "semaphore",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
   });
 
   it("deploys the full fleet when the deployed head is no longer an ancestor of the current head", async () => {
@@ -612,7 +714,13 @@ describe("preview deploy selection", () => {
       probeAppServing: everythingServing,
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth", "streams-example-app"]);
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "semaphore",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
   });
 
   it("propagates non-404 compare failures instead of guessing a selection", async () => {

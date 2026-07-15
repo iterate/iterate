@@ -61,6 +61,7 @@ function githubCrossPostSubscriptionEvent(input: {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: input.subscriptionKey,
+      description: `Copies GitHub webhooks for ${input.owner}/${input.repo} onto this repo's stream so the repo processor can react to them.`,
       selector: {
         eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
         condition: `payload.body.repository.full_name = ${JSON.stringify(`${input.owner}/${input.repo}`)}`,

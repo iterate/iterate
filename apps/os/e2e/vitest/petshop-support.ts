@@ -11,17 +11,27 @@ export const PETSHOP_DEFAULT_CLIENT = {
   clientSecret: "petshop-default-secret",
 } as const;
 
-/** The petshop the OS deployment can reach. Explicit `PETSHOP_BASE_URL` wins;
- * otherwise derive it from the OS base by swapping the first hostname label
- * (`os.iterate-preview-3.com` → `dummy-petshop.iterate-preview-3.com`). */
+/**
+ * Local e2e can opt out when the fixture was not started. CI may not: the
+ * preview orchestrator must pass the deployed sibling's exact URL, and a
+ * missing value is an orchestration failure rather than permission to turn
+ * these integration tests into silent skips.
+ */
+export function shouldSkipPetshopE2e(): boolean {
+  if (process.env.PETSHOP_BASE_URL?.trim()) return false;
+  if (process.env.CI === "true") {
+    throw new Error(
+      "CI must provide PETSHOP_BASE_URL for the deployed preview Petshop; refusing to skip OS Petshop e2e.",
+    );
+  }
+  return true;
+}
+
+/** The exact deployed Petshop selected by the preview orchestrator. */
 export function petshopBaseUrl(): string {
   const explicit = process.env.PETSHOP_BASE_URL?.trim();
   if (explicit) return explicit.replace(/\/$/, "");
-  const appBase = process.env.APP_CONFIG_BASE_URL?.trim();
-  if (!appBase) throw new Error("petshop e2e needs PETSHOP_BASE_URL or APP_CONFIG_BASE_URL");
-  const url = new URL(appBase);
-  url.hostname = url.hostname.replace(/^[^.]+\./, "dummy-petshop.");
-  return url.origin;
+  throw new Error("petshop e2e needs the deployed fixture's exact PETSHOP_BASE_URL");
 }
 
 function backdoorHeaders(): Record<string, string> {
