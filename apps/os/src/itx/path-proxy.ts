@@ -20,9 +20,6 @@
 // the proxy only needs to protect protocol-level names on intermediate path
 // segments.
 
-// The ONE calling convention's shapes.
-type PathCall = { path: string[]; args: unknown[] };
-
 /**
  * The optional self-description method the core probes at provide time
  * (itx.ts): a call-implementing target answering `call({ path:
@@ -78,7 +75,7 @@ const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
  */
 export async function replayPathCall(
   target: unknown,
-  call: PathCall,
+  call: { path: string[]; args: unknown[] },
   context?: { capability?: string },
 ): Promise<unknown> {
   // Filter the path here too, not just in the consumer proxy: `invoke` is a
