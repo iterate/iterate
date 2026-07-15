@@ -32,7 +32,6 @@ import {
   mergeAgentStatusPatch,
   type AgentFileAttachment,
 } from "../agents/agent-processor-contract.ts";
-import { agentBusyPhaseLabel } from "~/lib/feed-format.ts";
 import {
   readRecord,
   readString,
@@ -43,6 +42,7 @@ import {
   SlackAgentProcessorContract,
   type SlackAgentProcessorState,
 } from "./slack-agent-processor-contract.ts";
+import { agentBusyPhaseLabel } from "~/lib/feed-format.ts";
 
 /** One file shared on a Slack message, as the webhook carries it. */
 type SlackSharedFile = { mimetype?: string; name?: string; urlPrivate: string };
