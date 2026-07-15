@@ -1,12 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   BanIcon,
@@ -51,6 +43,7 @@ import {
   looksLikeCode,
 } from "~/lib/feed-format.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 // The clean agent chat rows: user and assistant messages plus archived
 // activity rows ("Ran code 2× · 3 requests · 7.4 s"), and the live in-flight
@@ -859,15 +852,11 @@ function liveStepHasVisibleContent(step: AgentUiStep) {
 /**
  * Live CLI-style elapsed counter (`0.9s`) while code is running. Ticks every
  * 100ms so the tenths place moves; idle when `startedAtMs` is null.
+ * Clock is a useSyncExternalStore subscription (react-doctor happy path),
+ * not a useState+setInterval effect loop.
  */
 function useElapsedLabel(startedAtMs: number | null): string | null {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    if (startedAtMs == null) return;
-    setNowMs(Date.now());
-    const interval = setInterval(() => setNowMs(Date.now()), 100);
-    return () => clearInterval(interval);
-  }, [startedAtMs]);
+  const nowMs = useTickingNowMs(100, startedAtMs != null);
   if (startedAtMs == null) return null;
   return formatElapsedSeconds(nowMs - startedAtMs);
 }

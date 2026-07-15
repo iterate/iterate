@@ -14,7 +14,7 @@
 import { StyledText, bg, fg } from "@opentui/core";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import type {
   AgentUiActivity,
   AgentUiItem,
@@ -267,19 +267,48 @@ function SettledActivity(props: { activity: AgentUiActivity }) {
   );
 }
 
+/** Shared 100ms clock for live "Running code 0.9s" — useSyncExternalStore,
+ * not useState+setInterval, so the snapshot is stable between ticks. */
+let liveCodeClockNow = Date.now();
+const liveCodeClockListeners = new Set<() => void>();
+let liveCodeClockTimer: ReturnType<typeof setInterval> | undefined;
+
+function subscribeLiveCodeClock(onStoreChange: () => void) {
+  liveCodeClockListeners.add(onStoreChange);
+  liveCodeClockNow = Date.now();
+  if (liveCodeClockTimer == null) {
+    liveCodeClockTimer = setInterval(() => {
+      liveCodeClockNow = Date.now();
+      for (const listener of liveCodeClockListeners) listener();
+    }, 100);
+  }
+  return () => {
+    liveCodeClockListeners.delete(onStoreChange);
+    if (liveCodeClockListeners.size === 0 && liveCodeClockTimer != null) {
+      clearInterval(liveCodeClockTimer);
+      liveCodeClockTimer = undefined;
+    }
+  };
+}
+
+function getLiveCodeClockSnapshot() {
+  return liveCodeClockNow;
+}
+
 function LiveActivity(props: { activity: AgentUiActivity }) {
   // Tick while code runs so "Running code 0.9s" counts up without waiting
   // for feed events (script execution often emits nothing mid-run).
   const codeRunning = props.activity.steps.some(
     (step) => step.kind === "code" && step.status === "running",
   );
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    if (!codeRunning) return;
-    setNowMs(Date.now());
-    const interval = setInterval(() => setNowMs(Date.now()), 100);
-    return () => clearInterval(interval);
-  }, [codeRunning]);
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (!codeRunning) return () => {};
+      return subscribeLiveCodeClock(onStoreChange);
+    },
+    [codeRunning],
+  );
+  const nowMs = useSyncExternalStore(subscribe, getLiveCodeClockSnapshot, getLiveCodeClockSnapshot);
 
   const lastStep = props.activity.steps[props.activity.steps.length - 1];
   const thinking = lastStep?.kind === "llm" ? streamingTail(lastStep.thinkingText) : "";
