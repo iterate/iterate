@@ -9,7 +9,9 @@ Production has not been deployed, erased, or otherwise changed.
 This document is the short, decision-oriented companion to the chronological
 [Stream performance ledger](./stream-performance-ledger.md). The ledger is the
 source of truth for experiment setup, immutable revisions, raw sample paths,
-and rejected hypotheses.
+and rejected hypotheses. The destructive consolidation sequence and its
+acceptance gates are in the
+[Stream refactor roadmap](./stream-refactor-roadmap.md).
 
 ## Executive Summary
 
