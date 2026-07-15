@@ -156,6 +156,182 @@ export async function indexPinnedStreamEvent(input: {
   return { key };
 }
 
+const STREAM_THROUGH_OFFSET_METADATA = "streamThroughOffset";
+const SAME_KEY_WRITE_PACE_MS = 1_100;
+const MAX_SAME_KEY_RATE_LIMIT_RETRIES = 3;
+
+export interface StreamIndexBucket {
+  head(key: string): Promise<Pick<R2Object, "customMetadata" | "etag"> | null>;
+  put(
+    key: string,
+    value: string,
+    options: R2PutOptions & { onlyIf: R2Conditional },
+  ): Promise<Pick<R2Object, "customMetadata" | "etag"> | null>;
+}
+
+export interface StreamSegmentIndexRequest {
+  loadEvents: () => Promise<StreamEvent[]>;
+  path: string;
+  projectId: string;
+  segment: number;
+  throughOffset: number;
+}
+
+interface StreamSegmentIndexEntry {
+  loadEvents: () => Promise<StreamEvent[]>;
+  promise: Promise<void>;
+  request: Omit<StreamSegmentIndexRequest, "loadEvents" | "throughOffset">;
+  requestedThroughOffset: number;
+}
+
+function persistedStreamThroughOffset(object: Pick<R2Object, "customMetadata"> | null): number {
+  const raw = object?.customMetadata?.[STREAM_THROUGH_OFFSET_METADATA];
+  if (raw === undefined) return -1;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : -1;
+}
+
+function isSameKeyRateLimit(error: unknown): boolean {
+  return (
+    (typeof error === "object" && error !== null && "code" in error && error.code === 10_058) ||
+    /concurrent request rate for the same object/i.test(String(error))
+  );
+}
+
+/**
+ * Collapses overlapping writes to one stream segment inside an isolate and
+ * uses R2 conditional puts to keep snapshots monotonic across isolates.
+ * Stream offsets are the only ordering clock; the fixed wait merely respects
+ * R2's one-write-per-second-per-key limit after contention or a trailing mark.
+ */
+export class StreamSegmentIndexCoalescer {
+  readonly #bucket: () => StreamIndexBucket;
+  readonly #entries = new Map<string, StreamSegmentIndexEntry>();
+  readonly #paceSameKeyWrite: () => Promise<void>;
+
+  constructor(input: { bucket: () => StreamIndexBucket; paceSameKeyWrite?: () => Promise<void> }) {
+    this.#bucket = input.bucket;
+    this.#paceSameKeyWrite =
+      input.paceSameKeyWrite ?? (() => scheduler.wait(SAME_KEY_WRITE_PACE_MS));
+  }
+
+  index(input: StreamSegmentIndexRequest): Promise<void> {
+    const key = streamSegmentKey({
+      projectId: input.projectId,
+      streamPath: input.path,
+      segment: input.segment,
+    });
+    let entry = this.#entries.get(key);
+    if (entry === undefined) {
+      const createdEntry: StreamSegmentIndexEntry = {
+        loadEvents: input.loadEvents,
+        promise: Promise.resolve(),
+        request: {
+          path: input.path,
+          projectId: input.projectId,
+          segment: input.segment,
+        },
+        requestedThroughOffset: input.throughOffset,
+      };
+      entry = createdEntry;
+      this.#entries.set(key, createdEntry);
+      createdEntry.promise = Promise.resolve()
+        .then(() => this.#drain(key, createdEntry))
+        .finally(() => {
+          if (this.#entries.get(key) === createdEntry) this.#entries.delete(key);
+        });
+    } else if (input.throughOffset >= entry.requestedThroughOffset) {
+      entry.requestedThroughOffset = input.throughOffset;
+      entry.loadEvents = input.loadEvents;
+    }
+    return entry.promise;
+  }
+
+  async #drain(key: string, entry: StreamSegmentIndexEntry): Promise<void> {
+    let completedThroughOffset = -1;
+    while (completedThroughOffset < entry.requestedThroughOffset) {
+      const targetThroughOffset = entry.requestedThroughOffset;
+      const loadEvents = entry.loadEvents;
+      const events = await loadEvents();
+      const observedThroughOffset = events.reduce(
+        (highest, event) => Math.max(highest, event.offset),
+        -1,
+      );
+      if (observedThroughOffset < targetThroughOffset) {
+        throw new Error(
+          `stream segment read stopped at ${observedThroughOffset}; expected ${targetThroughOffset}`,
+        );
+      }
+
+      const document = renderStreamSegmentDocument({
+        events,
+        segment: entry.request.segment,
+        streamPath: entry.request.path,
+      });
+      let wrote = false;
+      if (document !== null) {
+        wrote = await this.#putMonotonically({
+          document,
+          key,
+          request: entry.request,
+          throughOffset: observedThroughOffset,
+        });
+      }
+
+      completedThroughOffset = observedThroughOffset;
+      if (wrote && completedThroughOffset < entry.requestedThroughOffset) {
+        await this.#paceSameKeyWrite();
+      }
+    }
+  }
+
+  async #putMonotonically(input: {
+    document: string;
+    key: string;
+    request: StreamSegmentIndexEntry["request"];
+    throughOffset: number;
+  }): Promise<boolean> {
+    const bucket = this.#bucket();
+    let rateLimitRetries = 0;
+    while (true) {
+      const current = await bucket.head(input.key);
+      if (persistedStreamThroughOffset(current) >= input.throughOffset) return false;
+
+      try {
+        const result = await bucket.put(input.key, input.document, {
+          httpMetadata: { contentType: "text/markdown" },
+          customMetadata: {
+            ...searchMetadata(
+              "streams",
+              streamSegmentContext({
+                streamPath: input.request.path,
+                segment: input.request.segment,
+              }),
+              streamEventsRef({
+                path: input.request.path,
+                ...offsetRangeOf(input.request.segment),
+              }),
+            ),
+            [STREAM_THROUGH_OFFSET_METADATA]: String(input.throughOffset),
+          },
+          onlyIf: current === null ? { etagDoesNotMatch: "*" } : { etagMatches: current.etag },
+        });
+        if (result !== null) return true;
+      } catch (error) {
+        if (!isSameKeyRateLimit(error) || rateLimitRetries >= MAX_SAME_KEY_RATE_LIMIT_RETRIES) {
+          throw error;
+        }
+        rateLimitRetries += 1;
+      }
+      await this.#paceSameKeyWrite();
+    }
+  }
+}
+
+const streamSegmentIndexCoalescer = new StreamSegmentIndexCoalescer({
+  bucket: () => itxEnv.SEARCH_BUCKET,
+});
+
 /**
  * Index one delivered stream batch: rewrite every segment document the batch
  * touches. For each affected segment it re-reads the segment's FULL offset
@@ -182,46 +358,33 @@ export async function indexStreamEventBatch(input: {
   }) => Promise<StreamEvent[]>;
 }): Promise<void> {
   const { batch } = input;
-  if (batch.projectId === null) return;
+  const projectId = batch.projectId;
+  if (projectId === null) return;
   const offsets = batch.events.map((event) => event.offset);
   if (offsets.length === 0) return;
 
-  const segments = new Set(offsets.map(segmentForOffset));
-  for (const segment of segments) {
-    const { first, last } = segmentOffsetRange(segment);
-    const events = await input.readEvents({
-      afterOffset: first - 1,
-      beforeOffset: last + 1,
-      limit: SEARCH_SEGMENT_SIZE,
-    });
-    const document = renderStreamSegmentDocument({
-      events,
-      segment,
-      streamPath: batch.path,
-    });
-    const key = streamSegmentKey({
-      projectId: batch.projectId,
-      streamPath: batch.path,
-      segment,
-    });
-    if (document === null) {
-      // Nothing indexable in the segment (all housekeeping/ephemeral). Delete
-      // rather than skip so a segment that RENDERED before but no longer does
-      // (e.g. after a disallow-list change) self-heals instead of serving a
-      // stale document forever.
-      await itxEnv.SEARCH_BUCKET.delete(key);
-      continue;
-    }
-    const { first: firstOffset, last: lastOffset } = segmentOffsetRange(segment);
-    await itxEnv.SEARCH_BUCKET.put(key, document, {
-      httpMetadata: { contentType: "text/markdown" },
-      customMetadata: searchMetadata(
-        "streams",
-        streamSegmentContext({ streamPath: batch.path, segment }),
-        streamEventsRef({ path: batch.path, firstOffset, lastOffset }),
-      ),
-    });
+  const segments = new Map<number, number>();
+  for (const offset of offsets) {
+    const segment = segmentForOffset(offset);
+    segments.set(segment, Math.max(segments.get(segment) ?? -1, offset));
   }
+  await Promise.all(
+    [...segments].map(async ([segment, throughOffset]) => {
+      const { first, last } = segmentOffsetRange(segment);
+      await streamSegmentIndexCoalescer.index({
+        loadEvents: () =>
+          input.readEvents({
+            afterOffset: first - 1,
+            beforeOffset: last + 1,
+            limit: SEARCH_SEGMENT_SIZE,
+          }),
+        path: batch.path,
+        projectId,
+        segment,
+        throughOffset,
+      });
+    }),
+  );
 }
 
 /**
@@ -252,29 +415,23 @@ export async function indexEntireStream(input: {
   let segments = 0;
 
   const flush = async () => {
+    const events = buffer;
+    if (events.length === 0) return;
+    const segment = currentSegment;
     const document = renderStreamSegmentDocument({
-      events: buffer,
+      events,
       segment: currentSegment,
       streamPath: input.path,
     });
     buffer = [];
     if (document === null) return;
-    await itxEnv.SEARCH_BUCKET.put(
-      streamSegmentKey({
-        projectId: input.projectId,
-        streamPath: input.path,
-        segment: currentSegment,
-      }),
-      document,
-      {
-        httpMetadata: { contentType: "text/markdown" },
-        customMetadata: searchMetadata(
-          "streams",
-          streamSegmentContext({ streamPath: input.path, segment: currentSegment }),
-          streamEventsRef({ path: input.path, ...offsetRangeOf(currentSegment) }),
-        ),
-      },
-    );
+    await streamSegmentIndexCoalescer.index({
+      loadEvents: async () => events,
+      path: input.path,
+      projectId: input.projectId,
+      segment,
+      throughOffset: events[events.length - 1]!.offset,
+    });
     segments += 1;
   };
 
