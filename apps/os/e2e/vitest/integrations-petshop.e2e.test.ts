@@ -13,7 +13,7 @@
 //   3. describe() never leaks material; uses land on the audit trail.
 //
 // Requires a deployed OS (APP_CONFIG_BASE_URL) and a reachable dummy-petshop
-// (PETSHOP_BASE_URL, or derived). See petshop-support.ts.
+// (the exact PETSHOP_BASE_URL supplied by preview orchestration).
 
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -25,16 +25,16 @@ import {
   petshopExchangeCode,
   petshopExpireTokens,
   petshopMintClient,
+  shouldSkipPetshopE2e,
 } from "./petshop-support.ts";
 
 const RUN = crypto.randomUUID().slice(0, 8);
 const REDIRECT_URI = "https://example.com/callback";
 
-// Opt-in: this suite talks to a deployed dummy-petshop, which only exists at
-// slots where it was deployed. Point PETSHOP_BASE_URL at one to run it;
-// otherwise it skips, so the shared CI e2e lane (whose preview slot has no
-// petshop) stays green.
-test.skipIf(!process.env.PETSHOP_BASE_URL)(
+// Local runs can opt in by pointing PETSHOP_BASE_URL at a fixture. Preview CI
+// always supplies the Petshop deployment from its own leased slot and fails
+// closed rather than silently skipping this coverage.
+test.skipIf(shouldSkipPetshopE2e())(
   "two OAuth clients, two connections: connect, call, forced-expiry refresh",
   async () => {
     const petshop = petshopBaseUrl();
@@ -121,7 +121,7 @@ test.skipIf(!process.env.PETSHOP_BASE_URL)(
 // APP_CONFIG_INTEGRATIONS__PETSHOP) resolved from typed AppConfig by the
 // Secret DO's trusted code. No project app secret, no platform bytes in
 // project material. Only `clientCreds` differs from the userspace lane.
-test.skipIf(!process.env.PETSHOP_BASE_URL)(
+test.skipIf(shouldSkipPetshopE2e())(
   "first-party lane: client credential resolves from platform config, same strategy",
   async () => {
     const petshop = petshopBaseUrl();

@@ -15,7 +15,7 @@
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { startEgressEcho } from "./itx-capability-fixtures.ts";
-import { petshopBaseUrl, petshopExpireTokens } from "./petshop-support.ts";
+import { petshopBaseUrl, petshopExpireTokens, shouldSkipPetshopE2e } from "./petshop-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -233,7 +233,7 @@ test("builtin waitrose: grammar, __describe, and method-miss stay loud", async (
 // use (no initial token anywhere), re-mint on 401 — and the minted session is
 // an ordinary bearer on petshop's ONE pets API. Same opt-in gate as
 // integrations-petshop.e2e.test.ts.
-test.skipIf(!process.env.PETSHOP_BASE_URL)(
+test.skipIf(shouldSkipPetshopE2e())(
   "waitrose-session strategy: username/password secret mints on first use, re-mints on 401, session works on the API",
   async () => {
     const petshop = petshopBaseUrl();

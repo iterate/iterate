@@ -209,6 +209,8 @@ describe("linkRepoToGithub", () => {
       ?.find((event) => event.type === "events.iterate.com/stream/subscription-configured");
     expect(subscription?.payload).toEqual({
       subscriptionKey: "github-repo:/repos/project",
+      description:
+        "Copies GitHub webhooks for acme/widgets onto this repo's stream so the repo processor can react to them.",
       selector: {
         condition: 'payload.body.repository.full_name = "acme/widgets"',
         eventTypes: ["events.iterate.com/github/webhook-received"],
