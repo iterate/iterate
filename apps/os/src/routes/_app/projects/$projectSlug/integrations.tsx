@@ -41,7 +41,6 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@iterate-com/ui/components/sheet";
-import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
@@ -65,7 +64,6 @@ import { z } from "zod";
 import type { Project } from "../../../../itx-api.generated.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamPathPill } from "~/components/stream-path-pill.tsx";
 import {
   breadcrumbLoaderData,
   streamBreadcrumb,
@@ -328,167 +326,155 @@ function ProjectIntegrationsContent() {
     if (feedOpenRequestId.current !== requestId) return;
     setFeedPanel(panel);
   };
-  const openProjectFeed = () =>
-    openFeed({
-      emptyLabel: "No events on the integrations stream yet.",
-      streamPath: "/integrations",
-    });
 
-  return (
-    <main className="min-h-0 flex-1 overflow-y-auto bg-background">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-5 md:px-6">
-        <header className="flex items-center gap-2 pb-2">
-          <SidebarTrigger className="-ml-1 md:hidden" />
-          <StreamPathPill streamPath="/integrations" />
-          <Button
-            className="ml-auto shrink-0"
-            size="sm"
-            variant="outline"
-            onClick={openProjectFeed}
-          >
-            <Activity data-icon="inline-start" />
-            Show stream
-          </Button>
-        </header>
+  // Same shell as secrets/agents/repos: ProjectStreamView owns the header
+  // (path pill flush left, presence + RTT + stream state on the right) and the
+  // live /integrations feed; the domain UI is the panel beside it.
+  const panel = (
+    <>
+      {oauthErrorLabel ? (
+        <Alert variant="destructive">
+          <AlertCircle className="size-4" />
+          <AlertTitle>Integration failed</AlertTitle>
+          <AlertDescription>{oauthErrorLabel}</AlertDescription>
+        </Alert>
+      ) : null}
 
-        {oauthErrorLabel ? (
-          <Alert variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Integration failed</AlertTitle>
-            <AlertDescription>{oauthErrorLabel}</AlertDescription>
-          </Alert>
-        ) : null}
+      <section className="space-y-3">
+        <div className="space-y-1">
+          <h2 className="text-base font-medium">Connectable integrations</h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            OAuth and app-installation connections create their own stream at
+            <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              /integrations/&lt;provider&gt;/&lt;connection&gt;
+            </code>
+            for lifecycle facts, routed webhooks, and provider-specific activity.
+          </p>
+        </div>
+        <ItemGroup className="grid gap-4">
+          <ConnectableIntegrationCard
+            connectionNoun="workspace"
+            connections={slackConnections}
+            description="Receive Slack events and call Slack Web API methods with project-scoped credentials."
+            disconnecting={disconnectSlack.isPending}
+            icon={MessageSquare}
+            name="Slack"
+            onDisconnect={(connection) => disconnectSlack.mutate(connection)}
+            onOpenFeed={openFeed}
+            provider="slack"
+            connectControl={
+              <Button size="sm" disabled={startSlack.isPending} onClick={() => startSlack.mutate()}>
+                {startSlack.isPending ? <Spinner /> : <Plus className="size-4" />}
+                Connect
+              </Button>
+            }
+          />
+          <ConnectableIntegrationCard
+            connectionNoun="account"
+            connections={googleConnections}
+            description="Use Gmail API tools through a connected Google account."
+            disconnecting={disconnectGoogle.isPending}
+            icon={Mail}
+            name="Google"
+            onDisconnect={(connection) => disconnectGoogle.mutate(connection)}
+            onOpenFeed={openFeed}
+            provider="google"
+            connectControl={
+              <Button
+                size="sm"
+                disabled={startGoogle.isPending}
+                onClick={() => startGoogle.mutate()}
+              >
+                {startGoogle.isPending ? <Spinner /> : <Plus className="size-4" />}
+                Connect
+              </Button>
+            }
+          />
+          <ConnectableIntegrationCard
+            connectionNoun="installation"
+            connections={githubConnections}
+            description="Use the GitHub REST API, route repo webhooks, and enable gh/git inside sandboxes."
+            disconnecting={disconnectGithub.isPending}
+            icon={Github}
+            name="GitHub"
+            onDisconnect={(connection) => disconnectGithub.mutate(connection)}
+            onOpenFeed={openFeed}
+            provider="github"
+            connectControl={
+              <Button
+                size="sm"
+                disabled={startGithub.isPending}
+                onClick={() => startGithub.mutate()}
+              >
+                {startGithub.isPending ? <Spinner /> : <Plus className="size-4" />}
+                Connect
+              </Button>
+            }
+          />
+          <ConnectableIntegrationCard
+            connectionNoun="bot"
+            connections={telegramConnections}
+            description="Connect a Telegram bot (via @BotFather) so agents can chat in Telegram."
+            disconnecting={disconnectTelegram.isPending}
+            icon={Send}
+            name="Telegram"
+            onDisconnect={(connection) => disconnectTelegram.mutate(connection)}
+            onOpenFeed={openFeed}
+            provider="telegram"
+            connectControl={
+              <TelegramConnectSheet
+                connect={connectTelegram}
+                open={telegramSheetOpen}
+                onOpenChange={setTelegramSheetOpen}
+              />
+            }
+          />
+          <AccountConnectionsItem />
+        </ItemGroup>
+      </section>
 
+      {providedConnections.length > 0 ? (
         <section className="space-y-3">
           <div className="space-y-1">
-            <h2 className="text-base font-medium">Connectable integrations</h2>
-            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-              OAuth and app-installation connections create their own stream at
-              <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-xs">
-                /integrations/&lt;provider&gt;/&lt;connection&gt;
-              </code>
-              for lifecycle facts, routed webhooks, and provider-specific activity.
+            <h2 className="text-base font-medium">Project integrations</h2>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Mounted by this project through <code>provideCapability</code>; manage these in
+              project code.
             </p>
           </div>
-          <ItemGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <ConnectableIntegrationCard
-              connectionNoun="workspace"
-              connections={slackConnections}
-              description="Receive Slack events and call Slack Web API methods with project-scoped credentials."
-              disconnecting={disconnectSlack.isPending}
-              icon={MessageSquare}
-              name="Slack"
-              onDisconnect={(connection) => disconnectSlack.mutate(connection)}
-              onOpenFeed={openFeed}
-              provider="slack"
-              connectControl={
-                <Button
-                  size="sm"
-                  disabled={startSlack.isPending}
-                  onClick={() => startSlack.mutate()}
-                >
-                  {startSlack.isPending ? <Spinner /> : <Plus className="size-4" />}
-                  Connect
-                </Button>
-              }
-            />
-            <ConnectableIntegrationCard
-              connectionNoun="account"
-              connections={googleConnections}
-              description="Use Gmail API tools through a connected Google account."
-              disconnecting={disconnectGoogle.isPending}
-              icon={Mail}
-              name="Google"
-              onDisconnect={(connection) => disconnectGoogle.mutate(connection)}
-              onOpenFeed={openFeed}
-              provider="google"
-              connectControl={
-                <Button
-                  size="sm"
-                  disabled={startGoogle.isPending}
-                  onClick={() => startGoogle.mutate()}
-                >
-                  {startGoogle.isPending ? <Spinner /> : <Plus className="size-4" />}
-                  Connect
-                </Button>
-              }
-            />
-            <ConnectableIntegrationCard
-              connectionNoun="installation"
-              connections={githubConnections}
-              description="Use the GitHub REST API, route repo webhooks, and enable gh/git inside sandboxes."
-              disconnecting={disconnectGithub.isPending}
-              icon={Github}
-              name="GitHub"
-              onDisconnect={(connection) => disconnectGithub.mutate(connection)}
-              onOpenFeed={openFeed}
-              provider="github"
-              connectControl={
-                <Button
-                  size="sm"
-                  disabled={startGithub.isPending}
-                  onClick={() => startGithub.mutate()}
-                >
-                  {startGithub.isPending ? <Spinner /> : <Plus className="size-4" />}
-                  Connect
-                </Button>
-              }
-            />
-            <ConnectableIntegrationCard
-              connectionNoun="bot"
-              connections={telegramConnections}
-              description="Connect a Telegram bot (via @BotFather) so agents can chat in Telegram."
-              disconnecting={disconnectTelegram.isPending}
-              icon={Send}
-              name="Telegram"
-              onDisconnect={(connection) => disconnectTelegram.mutate(connection)}
-              onOpenFeed={openFeed}
-              provider="telegram"
-              connectControl={
-                <TelegramConnectSheet
-                  connect={connectTelegram}
-                  open={telegramSheetOpen}
-                  onOpenChange={setTelegramSheetOpen}
-                />
-              }
-            />
-            <AccountConnectionsItem />
-          </ItemGroup>
-        </section>
-
-        {providedConnections.length > 0 ? (
-          <section className="space-y-3">
-            <div className="space-y-1">
-              <h2 className="text-base font-medium">Project integrations</h2>
-              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-                Mounted by this project through <code>provideCapability</code>; manage these in
-                project code.
-              </p>
-            </div>
-            <ItemGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {providedConnections.map((entry) => (
-                <ProvidedIntegrationCard key={entry.path} entry={entry} onOpenFeed={openFeed} />
-              ))}
-            </ItemGroup>
-          </section>
-        ) : null}
-
-        <section className="space-y-3">
-          <div className="space-y-1">
-            <h2 className="text-base font-medium">Built-in Integrations</h2>
-            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-              Iterate-managed capabilities are available without creating a connection. Keys stay
-              server-side and usage is charged to this project.
-            </p>
-          </div>
-          <ItemGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {BUILTIN_API_INTEGRATIONS.map((integration) => (
-              <BuiltInApiIntegrationRow key={integration.name} integration={integration} />
+          <ItemGroup className="grid gap-4">
+            {providedConnections.map((entry) => (
+              <ProvidedIntegrationCard key={entry.path} entry={entry} onOpenFeed={openFeed} />
             ))}
           </ItemGroup>
         </section>
-      </div>
+      ) : null}
 
+      <section className="space-y-3">
+        <div className="space-y-1">
+          <h2 className="text-base font-medium">Built-in Integrations</h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Iterate-managed capabilities are available without creating a connection. Keys stay
+            server-side and usage is charged to this project.
+          </p>
+        </div>
+        <ItemGroup className="grid gap-4">
+          {BUILTIN_API_INTEGRATIONS.map((integration) => (
+            <BuiltInApiIntegrationRow key={integration.name} integration={integration} />
+          ))}
+        </ItemGroup>
+      </section>
+    </>
+  );
+
+  return (
+    <>
+      <ProjectStreamView
+        panel={panel}
+        projectId={project.id}
+        streamPath="/integrations"
+        emptyLabel="No events on the integrations stream yet."
+      />
       <IntegrationFeedSheet
         feedPanel={feedPanel}
         onOpenChange={(open) => {
@@ -500,7 +486,7 @@ function ProjectIntegrationsContent() {
         }}
         projectId={project.id}
       />
-    </main>
+    </>
   );
 }
 
@@ -721,9 +707,10 @@ function IntegrationFeedSheet({
           <SheetHeader className="sr-only">
             <SheetTitle>{feedPanel.streamPath} feed</SheetTitle>
           </SheetHeader>
-          <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 flex-col">
+            {/* Full stream chrome (path pill, presence, RTT, stream state) —
+                same header as every other domain page, not a header-less feed. */}
             <ProjectStreamView
-              showHeader={false}
               projectId={projectId}
               streamPath={feedPanel.streamPath}
               emptyLabel={feedPanel.emptyLabel}
