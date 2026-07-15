@@ -37,3 +37,14 @@ in [docs/testing.md](../../../docs/testing.md).
   `GITHUB_SHA` when set).
 - Stream TUI behavior specs: `tsx ./e2e/tui-test/run.ts` (see `tui-test/README.md`). The script
   creates a disposable OS project before launching Microsoft TUI Test and deletes it afterward.
+
+## Scripts in tests
+
+A script that demonstrates a user-facing pattern belongs in the examples
+catalogue (`src/itx/examples-source.ts`): the test executes the entry by id
+via `runExample()` (`test-support/run-example.ts`) and owns the assertions on
+top. A probe — protocol semantics, concurrency blasts, incident repros,
+malformed input — uses `itxScript()` (typed `execute()` by default,
+`executeSource()` when the string itself is the point) and is never a
+catalogue entry. Scripts carried by other channels (agent chat fences) are
+authored with `defineItxScript()` so they typecheck the same way.

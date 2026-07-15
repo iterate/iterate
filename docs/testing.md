@@ -114,12 +114,12 @@ two ways:
 New work of these shapes ships WITH these tests. Absence is a review
 blocker, not a style note:
 
-| You built                                           | It ships with                                                                                                                                                                             |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A stream processor, or a new side-effect arm in one | A harness suite including a **refold test** (replay the whole journal ⇒ zero side effects, zero appends); if it holds obligations, an **eviction-recovery** test (`h.crash()` mid-flight) |
-| An itx capability or API surface                    | A catalogue example proven by the examples matrix (and thereby every runtime), plus engine e2e for its failure arms                                                                       |
-| A product flow in the dashboard                     | A Playwright spec under `specs/`, readable as a product spec                                                                                                                              |
-| An incident fix with a journal-shaped cause         | A captured-journal repro named for the PR (`stream-repros/`)                                                                                                                              |
+| You built                                           | It ships with                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A stream processor, or a new side-effect arm in one | A harness suite including a **refold test** (replay the whole journal ⇒ zero side effects, zero appends); if it holds obligations, an **eviction-recovery** test (`h.crash()` mid-flight)                                                                                                 |
+| An itx capability or API surface                    | A catalogue example proven by the examples matrix (and thereby every runtime), plus engine e2e for its failure arms. A test exercising a catalogue pattern runs the entry itself by id (`runExample`, `apps/os/e2e/test-support/run-example.ts`); hand-rolled scripts are for probes only |
+| A product flow in the dashboard                     | A Playwright spec under `specs/`, readable as a product spec                                                                                                                                                                                                                              |
+| An incident fix with a journal-shaped cause         | A captured-journal repro named for the PR (`stream-repros/`)                                                                                                                                                                                                                              |
 
 What we do NOT want:
 
