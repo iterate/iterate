@@ -4305,3 +4305,89 @@ Raw allocation records are
 and their adjacent `.cpuprofile` files. The temporary inspector configuration
 was not added to the shipping branch. Both benchmark servers were stopped;
 production remained untouched.
+
+## 2026-07-15: JSON-Table Append Kernel Rejected
+
+The append-kernel redesign rechecked whether one SQLite JSON-table expansion
+could beat the current schema-v8 direct-BLOB statements for homogeneous,
+idempotency-key-free batches. The isolated prototype serialized each event,
+joined bounded JSON arrays, and expanded those arrays into the canonical rows
+with `json_each()`. It kept the existing journal representation and Durable
+Object output-gate semantics.
+
+Three same-process alternating trials against exact candidate head
+`b2e294bd23683dbdbf2c8b6d4823dbaf1db4e036` contributed 360 Node-host samples
+per 100-event arm and 90 per 1,000-event arm. Each timer enclosed the complete
+awaited Worker RPC, so the measurement does not depend on a running clock
+inside workerd.
+
+| Workload    | Direct BLOB p50 / p95 / mean | JSON table p50 / p95 / mean | JSON change p50 / p95 / mean |
+| ----------- | ---------------------------: | --------------------------: | ---------------------------: |
+| 100 tiny    |     5.207 / 7.725 / 5.433 ms |    5.156 / 8.371 / 5.523 ms |        -1.0% / +8.4% / +1.7% |
+| 100 x 1 KiB |     6.292 / 9.793 / 6.779 ms |   6.439 / 10.260 / 7.125 ms |        +2.3% / +4.8% / +5.1% |
+| 1,000 tiny  |  17.821 / 30.375 / 20.093 ms | 17.902 / 29.527 / 18.961 ms |        +0.5% / -2.8% / -5.6% |
+
+The 1,000-event mean moved only because of direct-path outliers. Per-run JSON
+throughput changed by `+3.67%`, `-4.16%`, and `-1.78%`, so there is no
+reproducible gain. More decisively, SQLite JSON1 rejects a valid payload at
+1,000 levels of nesting as malformed JSON, while direct BLOB insertion stores
+and replays it. The proposed threshold would therefore make the same valid
+event fail only when its homogeneous append reaches 100 events.
+
+The prototype adds 80 net production lines, duplicate serialized-event and
+joined-array buffers, and threshold, partition, fallback, JSON-depth, and
+transaction branches. Its 394 Stream tests, typecheck, lint, formatting, and
+forced-reactivation ordering checks passed, but neutral-to-negative speed plus
+the input-dependent correctness failure reject it. Together with the earlier
+legacy-KV and segmented-journal results, this keeps bounded direct BLOB
+bindings into synchronous SQLite as the accepted append kernel. Evidence is
+isolated in `/private/tmp/iterate-stream-storage-explorer-a`; raw paired output
+is `/tmp/stream-json-array-ab-r{1..3}.log`. Nothing was deployed or pushed.
+
+## 2026-07-15: Coherent Stream Kernel Prototype, Continue But Do Not Ship
+
+A separate from-scratch experiment tested whether the Stream can collapse to
+one journal plus one delivery machine while keeping only `append`, `subscribe`,
+`read`, and `waitForEvent` on the external capability. Consumers expose only
+`processEvent`; event batching and durable checkpointing remain private. The
+prototype uses the existing chunk-safe `StreamEventLog`, one persisted durable
+claim/checkpoint row, an 8,192-event fresh-tail bound, exact-frame retry, and
+one ordered Promise continuation only after a receiver first becomes async.
+
+Five fresh Node processes ran 31 alternating pairs per workload against exact
+candidate `b2e294bd`. The comparison deliberately favors current code: its
+baseline is only the present journal plus equivalent preparation and excludes
+the current reducer, metrics, fanout, and subscription machinery. These are
+host-side JavaScript and Node-SQLite measurements, not workerd or deployed RPC
+claims.
+
+| Workload                     | Current lower bound |     Kernel | Paired kernel change |
+| ---------------------------- | ------------------: | ---------: | -------------------: |
+| Singleton append             |            5.385 us |   5.855 us |         9.51% slower |
+| 100-event append             |          146.331 us | 144.026 us |         0.65% faster |
+| Read 500 events              |          380.555 us | 385.685 us |         1.79% slower |
+| Dispatch 1,000 events        |            4.245 us |   4.380 us |         4.26% slower |
+| Add one live consumer        |                     |            |         1.71% slower |
+| Durable 100-event checkpoint |                     | 174.459 us |     573,201 events/s |
+
+The architecture is promising because the prototype's coordination core is
+1,053 implementation lines and 26 private state members versus 5,085 lines
+and 88 private members in the comparable current coordination files, a 79.3%
+line reduction. That reduction is credible only if selectors, presence,
+cross-posts, webhooks, metrics, and other specialized policy remain narrow
+receiver adapters. Copying every current feature back into the kernel would
+largely recreate the existing complexity.
+
+The prototype passed 412 Stream-domain tests plus 20 focused kernel tests,
+typecheck, lint, and format. It covers atomic writes, exact-frame retries after
+concurrent growth, parking, eviction recovery, async ordering, and async wait
+predicates. It is not shippable: frames are event-count-bounded but not
+byte-bounded, durable targets are only strings, and poison handling, metrics,
+lifecycle cleanup, wait resubscription, local workerd proof, and deployed
+Worker-to-Stream-DO proof are absent. At-least-once receiver effects also still
+require idempotency.
+
+The experiment remains uncommitted and isolated at
+`/Users/jonastemplestein/.superset/worktrees/iterate/graceful-snowplow-stream-kernel`.
+It is architecture evidence for a gradual claim/checkpoint simplification,
+not a replacement candidate. Nothing was deployed, pushed, or merged.
