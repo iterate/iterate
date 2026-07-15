@@ -51,42 +51,42 @@ describe("normalizeGithubError", () => {
     expect(GITHUB_CALL_GRAMMAR).toContain(".octokit.graphql(query, variables)");
   });
 
-  // Both replayPathCall miss shapes must answer with the grammar: a live
-  // agent invented `.api.request(...)` (a MID-path miss — "hit undefined"),
-  // got a generic failure, and burned turns rediscovering the surface.
-  test("mid-path miss (hit undefined) gets the call grammar", () => {
-    const error = normalizeGithubError(
-      new Error("Capability path api.request hit undefined."),
-      "acme",
-    );
-    expect(error.message).toBe(GITHUB_CALL_GRAMMAR);
-  });
-
-  test("leaf miss (did not resolve to a function) gets the call grammar", () => {
-    const error = normalizeGithubError(
-      new Error("Capability path repos.list did not resolve to a function."),
-      "acme",
-    );
-    expect(error.message).toBe(GITHUB_CALL_GRAMMAR);
-  });
-
-  test("real API failures keep their status and message", () => {
-    const error = normalizeGithubError(
-      Object.assign(new Error("Not Found"), { status: 404 }),
-      "acme",
-    );
-    expect(error.message).toBe("GitHub API failed with HTTP 404: Not Found");
-  });
-
-  // Reserved-segment rejections share the "Capability path" prefix but are a
-  // protocol violation, not a wrong guess at the surface — the real reason
-  // must survive, not be rewritten to the grammar.
-  test("reserved-segment errors pass through", () => {
-    const error = normalizeGithubError(
-      new Error('Capability path segment "constructor" is reserved.'),
-      "acme",
-    );
-    expect(error.message).toContain("is reserved");
+  test.for([
+    {
+      // Both replayPathCall miss shapes must answer with the grammar: a live
+      // agent invented `.api.request(...)` (a MID-path miss — "hit
+      // undefined"), got a generic failure, and burned turns rediscovering
+      // the surface.
+      name: "mid-path miss (hit undefined) gets the call grammar",
+      error: new Error("Capability path api.request hit undefined."),
+      expectedMessage: GITHUB_CALL_GRAMMAR,
+    },
+    {
+      name: "leaf miss (did not resolve to a function) gets the call grammar",
+      error: new Error("Capability path repos.list did not resolve to a function."),
+      expectedMessage: GITHUB_CALL_GRAMMAR,
+    },
+    {
+      name: "real API failures keep their status and message",
+      error: Object.assign(new Error("Not Found"), { status: 404 }),
+      expectedMessage: "GitHub API failed with HTTP 404: Not Found",
+    },
+    {
+      // Reserved-segment rejections share the "Capability path" prefix but
+      // are a protocol violation, not a wrong guess at the surface — the real
+      // reason must survive, not be rewritten to the grammar.
+      name: "reserved-segment errors pass through",
+      error: new Error('Capability path segment "constructor" is reserved.'),
+      expectedContains: "is reserved",
+    },
+  ])("$name", ({ error, expectedContains, expectedMessage }) => {
+    const normalized = normalizeGithubError(error, "acme");
+    if (expectedMessage !== undefined) {
+      expect(normalized.message).toBe(expectedMessage);
+    }
+    if (expectedContains !== undefined) {
+      expect(normalized.message).toContain(expectedContains);
+    }
   });
 });
 

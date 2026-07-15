@@ -57,114 +57,149 @@ describe("connectionSlackClient", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  test("a WebClient call rides project egress with a placeholder auth header", async () => {
-    const slack = connectionSlackClient({ connection: "main", projectId: "prj_1" });
-    const result = await slack.chat.postMessage({ channel: "C1", text: "hi" });
+  test.for([
+    {
+      name: "a WebClient call rides project egress and succeeds first try",
+      act: () =>
+        connectionSlackClient({ connection: "main", projectId: "prj_1" }).chat.postMessage({
+          channel: "C1",
+          text: "hi",
+        }),
+      expectedEgressUrls: ["https://slack.com/api/chat.postMessage"],
+      expectedDeploymentPaths: [],
+    },
+    {
+      name: "an invalid connection token retries with the same-workspace deployment token",
+      primaryResult: { error: "invalid_auth", ok: false },
+      act: () =>
+        connectionSlackClient({ connection: "main", projectId: "prj_1" }).chat.postMessage({
+          channel: "C1",
+          text: "hi",
+        }),
+      expectedEgressUrls: ["https://slack.com/api/chat.postMessage"],
+      expectedDeploymentPaths: ["/api/auth.test", "/api/chat.postMessage"],
+    },
+    {
+      name: "does not retry with a deployment token from another workspace",
+      primaryResult: { error: "invalid_auth", ok: false },
+      fallbackTeamId: "T_OTHER",
+      act: () =>
+        connectionSlackClient({ connection: "main", projectId: "prj_1" }).chat.postMessage({
+          channel: "C1",
+          text: "hi",
+        }),
+      expectedRejection: "invalid_auth",
+      expectedEgressUrls: ["https://slack.com/api/chat.postMessage"],
+      expectedDeploymentPaths: ["/api/auth.test"],
+    },
+    {
+      name: "the hand-rolled Web API path uses the same recovery policy",
+      primaryResult: { error: "token_revoked", ok: false },
+      act: () =>
+        callProjectSlackWebApi({
+          body: { channel: "C1", name: "eyes", timestamp: "1700000000.000100" },
+          connection: "main",
+          method: "reactions.add",
+          projectId: "prj_1",
+        }),
+      expectedEgressUrls: ["https://slack.com/api/reactions.add"],
+      expectedDeploymentPaths: ["/api/auth.test", "/api/reactions.add"],
+    },
+    {
+      name: "never retries auth.revoke with the deployment credential",
+      primaryResult: { error: "invalid_auth", ok: false },
+      act: () =>
+        callProjectSlackWebApi({
+          body: {},
+          connection: "main",
+          method: "auth.revoke",
+          projectId: "prj_1",
+        }),
+      expectedRejection: "invalid_auth",
+      expectedEgressUrls: ["https://slack.com/api/auth.revoke"],
+      expectedDeploymentPaths: [],
+    },
+  ])(
+    "$name",
+    async ({
+      act,
+      expectedDeploymentPaths,
+      expectedEgressUrls,
+      expectedRejection,
+      fallbackTeamId,
+      primaryResult,
+    }) => {
+      if (primaryResult !== undefined) mocks.primaryResult = primaryResult;
+      if (fallbackTeamId !== undefined) mocks.fallbackTeamId = fallbackTeamId;
 
-    expect(result.ok).toBe(true);
-    const request = mocks.requests[0]!;
-    expect(new URL(request.url).href).toBe("https://slack.com/api/chat.postMessage");
-    expect(request.headers.get("authorization")).toBe(
-      'Bearer getSecret({ path: "/secrets/integrations/slack/main/bot-token" })',
-    );
-  });
+      if (expectedRejection === undefined) {
+        const result = await act();
+        expect(result.ok).toBe(true);
+      } else {
+        await expect(act()).rejects.toThrow(expectedRejection);
+      }
 
-  test("an invalid connection token retries with the same-workspace deployment token", async () => {
-    mocks.primaryResult = { error: "invalid_auth", ok: false };
-
-    const slack = connectionSlackClient({ connection: "main", projectId: "prj_1" });
-    const result = await slack.chat.postMessage({ channel: "C1", text: "hi" });
-
-    expect(result.ok).toBe(true);
-    expect(mocks.requests.map((request) => new URL(request.url).pathname)).toEqual([
-      "/api/chat.postMessage",
-    ]);
-    expect(mocks.deploymentRequests.map((request) => new URL(request.url).pathname)).toEqual([
-      "/api/auth.test",
-      "/api/chat.postMessage",
-    ]);
-    expect(mocks.deploymentRequests.map((request) => request.headers.get("authorization"))).toEqual(
-      ["Bearer deployment-slack-token", "Bearer deployment-slack-token"],
-    );
-  });
-
-  test("does not retry with a deployment token from another workspace", async () => {
-    mocks.primaryResult = { error: "invalid_auth", ok: false };
-    mocks.fallbackTeamId = "T_OTHER";
-
-    const slack = connectionSlackClient({ connection: "main", projectId: "prj_1" });
-
-    await expect(slack.chat.postMessage({ channel: "C1", text: "hi" })).rejects.toThrow(
-      "invalid_auth",
-    );
-    expect(mocks.requests).toHaveLength(1);
-    expect(mocks.deploymentRequests).toHaveLength(1);
-  });
-
-  test("the hand-rolled Web API path uses the same recovery policy", async () => {
-    mocks.primaryResult = { error: "token_revoked", ok: false };
-
-    const result = await callProjectSlackWebApi({
-      body: { channel: "C1", name: "eyes", timestamp: "1700000000.000100" },
-      connection: "main",
-      method: "reactions.add",
-      projectId: "prj_1",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(mocks.deploymentRequests.map((request) => new URL(request.url).pathname)).toEqual([
-      "/api/auth.test",
-      "/api/reactions.add",
-    ]);
-  });
-
-  test("never retries auth.revoke with the deployment credential", async () => {
-    mocks.primaryResult = { error: "invalid_auth", ok: false };
-
-    await expect(
-      callProjectSlackWebApi({
-        body: {},
-        connection: "main",
-        method: "auth.revoke",
-        projectId: "prj_1",
-      }),
-    ).rejects.toThrow("invalid_auth");
-    expect(mocks.deploymentRequests).toHaveLength(0);
-  });
+      expect(mocks.requests.map((request) => new URL(request.url).href)).toEqual(
+        expectedEgressUrls,
+      );
+      expect(mocks.deploymentRequests.map((request) => new URL(request.url).pathname)).toEqual(
+        expectedDeploymentPaths,
+      );
+      // Every egress request carries the placeholder (the real token never
+      // leaves the Secret DO); every deployment-lane request carries the
+      // deployment credential.
+      for (const request of mocks.requests) {
+        expect(request.headers.get("authorization")).toBe(
+          'Bearer getSecret({ path: "/secrets/integrations/slack/main/bot-token" })',
+        );
+      }
+      for (const request of mocks.deploymentRequests) {
+        expect(request.headers.get("authorization")).toBe("Bearer deployment-slack-token");
+      }
+    },
+  );
 });
 
 describe("normalizeSlackError", () => {
-  test("a secret-pipeline error names the connection and points at discovery", () => {
-    const err = normalizeSlackError({ data: { error: "secret_no_material" } }, "main");
-    expect(err.message).toContain('Slack connection "main"');
-    expect(err.message).toContain("itx.integrations.list()");
-  });
-
-  // The forgot-the-connection shape: `slack.chat.postMessage(...)` makes the
-  // replay treat `chat` as the connection and try `postMessage` on the
-  // WebClient, which misses. That miss must surface as the call grammar, not
-  // the raw path-proxy string.
-  test("a path-resolution miss becomes the call grammar", () => {
-    const err = normalizeSlackError(
-      new Error("Capability path postMessage did not resolve to a function."),
-      "chat",
-    );
-    expect(err.message).toBe(SLACK_CALL_GRAMMAR);
-    expect(err.message).toMatch(/use itx\.integrations\.list\(\) to see connections/);
-  });
-
-  // A MID-path miss (an invented namespace like `.api.postMessage`) dies on
-  // `api` being undefined, not on the leaf — same grammar answer.
-  test("a mid-path miss (hit undefined) becomes the call grammar", () => {
-    const err = normalizeSlackError(
-      new Error("Capability path api.postMessage hit undefined."),
-      "main",
-    );
-    expect(err.message).toBe(SLACK_CALL_GRAMMAR);
-  });
-
-  test("an unrecognized Slack error passes through verbatim", () => {
-    const err = normalizeSlackError({ message: "channel_not_found" }, "main");
-    expect(err.message).toBe("channel_not_found");
+  test.for([
+    {
+      name: "a secret-pipeline error names the connection and points at discovery",
+      error: { data: { error: "secret_no_material" } } as unknown,
+      connection: "main",
+      expectedContains: ['Slack connection "main"', "itx.integrations.list()"],
+    },
+    {
+      // The forgot-the-connection shape: `slack.chat.postMessage(...)` makes
+      // the replay treat `chat` as the connection and try `postMessage` on the
+      // WebClient, which misses. That miss must surface as the call grammar,
+      // not the raw path-proxy string.
+      name: "a path-resolution miss becomes the call grammar",
+      error: new Error("Capability path postMessage did not resolve to a function."),
+      connection: "chat",
+      expectedMessage: SLACK_CALL_GRAMMAR,
+      expectedContains: ["use itx.integrations.list() to see connections"],
+    },
+    {
+      // A MID-path miss (an invented namespace like `.api.postMessage`) dies
+      // on `api` being undefined, not on the leaf — same grammar answer.
+      name: "a mid-path miss (hit undefined) becomes the call grammar",
+      error: new Error("Capability path api.postMessage hit undefined."),
+      connection: "main",
+      expectedMessage: SLACK_CALL_GRAMMAR,
+    },
+    {
+      name: "an unrecognized Slack error passes through verbatim",
+      error: { message: "channel_not_found" } as unknown,
+      connection: "main",
+      expectedMessage: "channel_not_found",
+    },
+  ])("$name", ({ connection, error, expectedContains, expectedMessage }) => {
+    const err = normalizeSlackError(error, connection);
+    if (expectedMessage !== undefined) {
+      expect(err.message).toBe(expectedMessage);
+    }
+    for (const needle of expectedContains ?? []) {
+      expect(err.message).toContain(needle);
+    }
   });
 });
