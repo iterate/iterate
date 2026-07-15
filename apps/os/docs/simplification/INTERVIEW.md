@@ -95,6 +95,18 @@ do consume-and-check — "logically that's what this is, that's what we're build
 ordering point; placement is an optimisation). Taxonomy: `append`, `consume` (+ flagged:
 consume vs subscribe).
 
+### I5 — Precondition on append + terminology (consume → processEvent)
+**Asked (broad):** do `append` + `processEvent` cover queue-claim + conditional-write, or is
+there a hidden third primitive?
+**A:** **Precondition already exists.** You don't append an event — you append an **event
+input**, which can carry an **offset** = an optional precondition ("only append if the
+stream hasn't moved"). That's the compare-and-swap → exclusive claim (queue) and conditional
+write (db) from the one primitive. **Terminology fix:** we don't say "consume" — we say
+**`processEvent`** everywhere.
+**→** updated [[D16]] (append takes an event input + optional offset precondition; read
+primitive is `processEvent`, not consume); taxonomy: `append`, `event input`, `processEvent`
+(Avoid: consume); resolved the consume-vs-subscribe flag.
+
 ---
 
 ## Backlog — questions still to ask (living list, reorder freely)

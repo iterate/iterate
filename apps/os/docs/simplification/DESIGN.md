@@ -578,7 +578,7 @@ for now they're cross-referenced. **Status: skeleton — we fill objects one at 
   side-effecting. An **agent is a processor with a prompt**; a processor can be hosted
   anywhere ([[R11]]).
 - **Decisions:** [[D3]] (reconcile-is-just-wake, [[Q2]] resolved), [[R11]], [[R12]]
-  (concurrency), [[D16]] (`processEvent` = platform-hosted `consume`).
+  (concurrency), [[D16]] (`processEvent` = the read/react primitive).
 - **How it works / open:** the obligation convention (`requested → completed{outcome}`,
   [[Q3]]); the at-head/idempotency mechanics. _stub._
 
@@ -666,8 +666,8 @@ to be explicitly dropped. Roughly ordered by how load-bearing they are._
 - **Q5 — Config worker sync/async + stateless vs Durable Object. [RESOLVED → [[D16]]].**
   The substrate is two primitives, `append` + `consume`. `append` waits for durability
   (inherent); waiting for a *reaction / outcome* is just consuming until the named event
-  appears — "it just depends," nothing forces a block. `processEvent` = platform-hosted
-  consume; `waitFor` and server-side filters are optimisations. So the worker needn't be a
+  appears — "it just depends," nothing forces a block. `processEvent` is the read/react
+  primitive; `waitFor` and server-side filters are optimisations. So the worker needn't be a
   resident DO to block/coordinate — **stateless stands** ([[R13]]); the DO is only the
   **ordering point**. Placement (stateless vs DO) is an optimisation, not a fundamental.
 - **Q6 — Do "other repos" need the repo abstraction at all?** [[R3]] says work on
@@ -898,3 +898,10 @@ paraphrase. ✅ = represented in a section above · ⬜ = still to fold / sharpe
   wait for outcomes yourself.' You could use JSONata or some discrete type filter on the
   server because it'll be faster, but logically that's what this is — that's what we're
   building." → new [[D16]]; resolved [[Q5]]; taxonomy: append, consume.
+- ✅ [2026-07-15, terminology + precondition] "We do have a precondition on append. You
+  don't append an event, you append an **event input**. The event input can contain an
+  offset — that's your precondition, optional; if you put in an offset it means 'only append
+  if the stream hasn't moved.' Also, instead of 'consume' we say **`processEvent`**
+  everywhere — that's what we currently call this." → updated [[D16]] (append an event input
+  + optional offset precondition; read primitive = `processEvent`, not consume); taxonomy:
+  append, event input, processEvent (Avoid: consume).
