@@ -29,10 +29,43 @@ export type * from "./itx-api.generated";
  * for capability method calls, `fetch()` for HTTP into sibling workers. */
 type IterateEnv = { ITX: ItxBinding };
 
-type StreamSubscribeArgs = Omit<Parameters<Stream["subscribe"]>[0], "processEventBatch"> & {
+export type StreamSubscribeArgs = Omit<Parameters<Stream["subscribe"]>[0], "processEventBatch"> & {
   /** Called once per event after the internal batch reaches this isolate. */
   processEvent(event: StreamEvent): void | Promise<void>;
 };
+
+type ProcessEvent = StreamSubscribeArgs["processEvent"];
+
+/**
+ * Drain one private wire batch through the public per-event callback. The
+ * synchronous path returns void without allocating or yielding. The first
+ * asynchronous result moves only the remaining suffix into one ordered
+ * continuation.
+ */
+function processEventsInOrder(
+  events: readonly StreamEvent[],
+  processEvent: ProcessEvent,
+): void | Promise<void> {
+  for (let index = 0; index < events.length; index += 1) {
+    const result = processEvent(events[index]!);
+    if (result !== undefined) {
+      return continueProcessingEvents(events, index + 1, result, processEvent);
+    }
+  }
+}
+
+async function continueProcessingEvents(
+  events: readonly StreamEvent[],
+  nextIndex: number,
+  pending: Promise<void>,
+  processEvent: ProcessEvent,
+): Promise<void> {
+  await pending;
+  for (let index = nextIndex; index < events.length; index += 1) {
+    const result = processEvent(events[index]!);
+    if (result !== undefined) await result;
+  }
+}
 
 /**
  * Subscribe to a stream with one user-level callback per event.
@@ -56,12 +89,7 @@ export function subscribe(
   const { processEvent, ...options } = args;
   return stream.subscribe({
     ...options,
-    async processEventBatch(batch) {
-      for (const event of batch.events) {
-        const result = processEvent(event);
-        if (result !== undefined) await result;
-      }
-    },
+    processEventBatch: (batch) => processEventsInOrder(batch.events, processEvent),
   });
 }
 
@@ -128,7 +156,7 @@ async function invokeCapability(
  * the platform's itx binding, plus the platform ceremony every worker needs
  * but shouldn't have to hand-roll:
  *
- * - `processEventBatch` / `processEvent`: the platform delivers every
+ * - `processEvent`: the platform delivers every
  *   committed DURABLE event on every stream in the project as checkpointed
  *   per-stream batches — in per-stream order, at-least-once. Events appended
  *   with `ephemeral: true` (LLM streaming chunks and other transient
@@ -148,6 +176,8 @@ async function invokeCapability(
 export class IterateWorkerEntrypoint<
   Env extends IterateEnv = IterateEnv,
 > extends WorkerEntrypoint<Env> {
+  readonly #streamEventReceiver = (event: StreamEvent) => this.processEvent(event);
+
   /** See `fetchDynamicWorker` at module level: a real fetch hop into a
    * sibling dynamic worker — the only lane that can carry WebSocket upgrades
    * and streaming bodies (RPC serializes; sockets can't cross it). */
@@ -159,14 +189,9 @@ export class IterateWorkerEntrypoint<
     return await fetchDynamicWorker(this.env, req, ref, opts);
   }
 
-  /** Platform entry point for event delivery (see the class docstring for
-   * the delivery contract). Override `processEvent`, not this, unless you
-   * need whole-batch atomicity. */
-  async processEventBatch(batch: StreamEventBatch): Promise<void> {
-    for (const event of batch.events) {
-      const result = this.processEvent(event);
-      if (result !== undefined) await result;
-    }
+  /** Private transport entry point for event delivery. */
+  private processEventBatch(batch: StreamEventBatch): void | Promise<void> {
+    return processEventsInOrder(batch.events, this.#streamEventReceiver);
   }
 
   /** Called once per delivered event, in per-stream order, at-least-once.
@@ -188,6 +213,8 @@ export class IterateWorkerEntrypoint<
  * across requests and WebSockets can be served from `fetch`.
  */
 export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends DurableObject<Env> {
+  readonly #streamEventReceiver = (event: StreamEvent) => this.processEvent(event);
+
   /** A real fetch hop into a sibling dynamic worker — see
    * `IterateWorkerEntrypoint.fetchDynamicWorker`. */
   protected async fetchDynamicWorker(
@@ -198,13 +225,9 @@ export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends D
     return await fetchDynamicWorker(this.env, req, ref, opts);
   }
 
-  /** Platform entry point for event delivery — see
-   * `IterateWorkerEntrypoint.processEventBatch`. */
-  async processEventBatch(batch: StreamEventBatch): Promise<void> {
-    for (const event of batch.events) {
-      const result = this.processEvent(event);
-      if (result !== undefined) await result;
-    }
+  /** Private transport entry point for event delivery. */
+  private processEventBatch(batch: StreamEventBatch): void | Promise<void> {
+    return processEventsInOrder(batch.events, this.#streamEventReceiver);
   }
 
   /** Called once per delivered event — see

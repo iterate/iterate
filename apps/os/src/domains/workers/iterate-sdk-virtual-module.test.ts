@@ -7,7 +7,9 @@ type EmbeddedSdk = {
   IterateWorkerEntrypoint: new (...args: unknown[]) => EventBatchReceiver;
   subscribe: (
     stream: {
-      subscribe(args: { processEventBatch(batch: EventBatch): Promise<void> }): Promise<unknown>;
+      subscribe(args: {
+        processEventBatch(batch: EventBatch): void | Promise<void>;
+      }): Promise<unknown>;
     },
     args: { processEvent(event: unknown): void | Promise<void> },
   ) => Promise<unknown>;
@@ -16,7 +18,7 @@ type EmbeddedSdk = {
 type EventBatch = { events: unknown[] };
 
 type EventBatchReceiver = {
-  processEventBatch(batch: EventBatch): Promise<void>;
+  processEventBatch(batch: EventBatch): void | Promise<void>;
 };
 
 async function loadEmbeddedSdk(): Promise<EmbeddedSdk> {
@@ -90,14 +92,33 @@ test.each(["IterateWorkerEntrypoint", "IterateDurableObject"] as const)(
     const completion = receiver.processEventBatch({ events });
 
     expect(seen).toEqual(events);
-    await completion;
+    expect(completion).toBeUndefined();
+  },
+);
+
+test.each(["IterateWorkerEntrypoint", "IterateDurableObject"] as const)(
+  "%s propagates a synchronous handler failure without processing the suffix",
+  async (className) => {
+    const sdk = await loadEmbeddedSdk();
+    const seen: unknown[] = [];
+    const failure = new Error("synchronous process event failed");
+    const receiver = Object.assign(new sdk[className](), {
+      processEvent(event: unknown): void {
+        seen.push(event);
+        if (seen.length === 2) throw failure;
+      },
+    });
+    const events = [{ index: 0 }, { index: 1 }, { index: 2 }];
+
+    expect(() => receiver.processEventBatch({ events })).toThrow(failure);
+    expect(seen).toEqual(events.slice(0, 2));
   },
 );
 
 test("subscribe adapts one wire batch to synchronous per-event handlers without yielding", async () => {
   const sdk = await loadEmbeddedSdk();
   const seen: unknown[] = [];
-  let processEventBatch!: (batch: EventBatch) => Promise<void>;
+  let processEventBatch!: (batch: EventBatch) => void | Promise<void>;
   const subscribed = sdk.subscribe(
     {
       async subscribe(args) {
@@ -117,13 +138,56 @@ test("subscribe adapts one wire batch to synchronous per-event handlers without 
   const completion = processEventBatch({ events });
 
   expect(seen).toEqual(events);
-  await completion;
+  expect(completion).toBeUndefined();
+});
+
+test("subscribe returns synchronously for an empty wire batch", async () => {
+  const sdk = await loadEmbeddedSdk();
+  let processEventBatch!: (batch: EventBatch) => void | Promise<void>;
+  await sdk.subscribe(
+    {
+      async subscribe(args) {
+        processEventBatch = args.processEventBatch;
+      },
+    },
+    {
+      processEvent() {
+        throw new Error("empty batches must not invoke the consumer");
+      },
+    },
+  );
+
+  expect(processEventBatch({ events: [] })).toBeUndefined();
+});
+
+test("subscribe propagates a synchronous failure without processing the suffix", async () => {
+  const sdk = await loadEmbeddedSdk();
+  const seen: unknown[] = [];
+  const failure = new Error("synchronous process event failed");
+  let processEventBatch!: (batch: EventBatch) => void | Promise<void>;
+  await sdk.subscribe(
+    {
+      async subscribe(args) {
+        processEventBatch = args.processEventBatch;
+      },
+    },
+    {
+      processEvent(event) {
+        seen.push(event);
+        if (seen.length === 2) throw failure;
+      },
+    },
+  );
+  const events = [{ index: 0 }, { index: 1 }, { index: 2 }];
+
+  expect(() => processEventBatch({ events })).toThrow(failure);
+  expect(seen).toEqual(events.slice(0, 2));
 });
 
 test("subscribe awaits asynchronous per-event handlers in order", async () => {
   const sdk = await loadEmbeddedSdk();
   const seen: unknown[] = [];
-  let processEventBatch!: (batch: EventBatch) => Promise<void>;
+  let processEventBatch!: (batch: EventBatch) => void | Promise<void>;
   let releaseFirst!: () => void;
   const firstCompletion = new Promise<void>((resolve) => {
     releaseFirst = resolve;
@@ -155,7 +219,7 @@ test("subscribe propagates a per-event handler failure and stops the local batch
   const sdk = await loadEmbeddedSdk();
   const seen: unknown[] = [];
   const failure = new Error("ephemeral process event failed");
-  let processEventBatch!: (batch: EventBatch) => Promise<void>;
+  let processEventBatch!: (batch: EventBatch) => void | Promise<void>;
   await sdk.subscribe(
     {
       async subscribe(args) {
