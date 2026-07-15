@@ -13,14 +13,14 @@ import { EmailProcessorContract } from "./email-processor-contract.ts";
  *
  * The upstream `email` router has already routed inbound mail to this stream.
  * This processor owns the email-specific in-thread behavior: recording thread
- * context and transcribing received mail into agent input. Replies leave
+ * context and transcribing received mail into agent context. Replies leave
  * through `itx.email.reply` (rpc-targets.ts), which derives the counterpart,
  * threading headers, and the thread's Reply-To tag from this same stream — so
  * unlike the slack-agent processor there are no side-effect deps here.
  */
 export const EmailAgentProcessorContract = defineProcessorContract({
   slug: "email-agent",
-  version: "0.1.0",
+  version: "0.2.0",
   description: "Handles email-specific behavior for one routed email agent stream.",
   stateSchema: z.object({
     threadId: z.string().optional(),
@@ -35,7 +35,7 @@ export const EmailAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/email/thread-route-configured",
     "events.iterate.com/email/received",
   ],
-  emits: ["events.iterate.com/agents/message-received", "events.iterate.com/agent/status-changed"],
+  emits: ["events.iterate.com/agents/context-added", "events.iterate.com/agent/status-changed"],
 });
 
 export type EmailAgentProcessorState = z.infer<typeof EmailAgentProcessorContract.stateSchema>;

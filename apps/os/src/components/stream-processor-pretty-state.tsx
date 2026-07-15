@@ -203,22 +203,23 @@ export function AgentPrettyState({ state }: { state: unknown }) {
       : currentRequest.phase === "scheduled"
         ? "scheduled"
         : "requested";
-  const history = Array.isArray(agent.history) ? agent.history : [];
+  const context = readRuntimeRecord(agent.context);
+  const system = Array.isArray(context?.system) ? context.system : [];
+  const history = Array.isArray(context?.history) ? context.history : [];
   const lastMessage = history.length > 0 ? history[history.length - 1] : null;
   const lastPreview =
     lastMessage != null && typeof lastMessage === "object" && lastMessage !== null
       ? previewChatMessage(lastMessage as Record<string, unknown>)
       : null;
-  const scripts = Array.isArray(agent.inProgressScriptExecutions)
-    ? agent.inProgressScriptExecutions
+  const scripts = Array.isArray(agent.activeScriptExecutionIds)
+    ? agent.activeScriptExecutionIds
     : [];
-  const systemPrompt = typeof agent.systemPrompt === "string" ? agent.systemPrompt : "";
 
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <RuntimeStateStat label="phase" value={phase} />
-        <RuntimeStateStat label="provider" value={String(agent.llmProvider ?? "—")} />
+        <RuntimeStateStat label="published" value={`#${String(context?.publishedThrough ?? 0)}`} />
         <RuntimeStateStat
           label="model"
           value={String(
@@ -245,25 +246,14 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         <div>
           <SectionHeading>In-progress scripts</SectionHeading>
           <div className="flex flex-col gap-1.5">
-            {scripts.map((script, index) => {
-              const row =
-                script != null && typeof script === "object"
-                  ? (script as Record<string, unknown>)
-                  : {};
-              return (
-                <div
-                  key={String(row.executionId ?? index)}
-                  className="rounded-xl bg-muted/40 px-3 py-2"
-                >
-                  <div className="font-mono text-[10px] text-muted-foreground">
-                    {String(row.executionId ?? "script")}
-                  </div>
-                  <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-foreground/80">
-                    {String(row.code ?? "").slice(0, 400)}
-                  </pre>
-                </div>
-              );
-            })}
+            {scripts.map((executionId, index) => (
+              <div
+                key={String(executionId ?? index)}
+                className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs"
+              >
+                {String(executionId ?? "script")}
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -273,7 +263,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
             History
           </div>
-          <div className="font-mono text-xs text-muted-foreground">{history.length} messages</div>
+          <div className="font-mono text-xs text-muted-foreground">{history.length} items</div>
         </div>
         {lastPreview == null ? (
           <div className="mt-1 text-xs text-muted-foreground">No messages yet.</div>
@@ -284,17 +274,17 @@ export function AgentPrettyState({ state }: { state: unknown }) {
           </div>
         )}
         <div className="mt-1 text-[10px] text-muted-foreground/70">
-          Full history is in Raw view (and in the Pretty feed).
+          Full projected history is in Raw view (and in the Pretty feed).
         </div>
       </div>
 
-      {systemPrompt === "" ? null : (
+      {system.length === 0 ? null : (
         <details className="rounded-xl bg-muted/40 px-3 py-2">
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            System prompt
+            System context ({system.length})
           </summary>
           <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-foreground/80">
-            {systemPrompt}
+            {system.map(renderProjectedContextItem).join("\n\n")}
           </pre>
         </details>
       )}
@@ -310,11 +300,23 @@ export function AgentPrettyState({ state }: { state: unknown }) {
 function asAgentState(state: unknown): Record<string, unknown> | null {
   if (state == null || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
-  // Heuristic: agent reduced state always has history + llmProvider-ish keys.
-  if (!("history" in record) && !("currentRequest" in record) && !("systemPrompt" in record)) {
+  // Agent state is recognized by its provider-neutral context projection.
+  if (!("context" in record) || !("llmConfig" in record)) {
     return null;
   }
   return record;
+}
+
+function renderProjectedContextItem(item: unknown): string {
+  if (item == null || typeof item !== "object") return String(item);
+  const record = item as Record<string, unknown>;
+  const fields = [
+    typeof record.offset === "number" ? `@${record.offset}` : "@?",
+    typeof record.key === "string" ? `key=${JSON.stringify(record.key)}` : null,
+    typeof record.updatesOffset === "number" ? `updates=@${record.updatesOffset}` : null,
+    typeof record.role === "string" ? `role=${record.role}` : null,
+  ].filter((field): field is string => field !== null);
+  return `${fields.join(" ")}\n${String(record.content ?? "")}`;
 }
 
 function previewChatMessage(message: Record<string, unknown>): { role: string; text: string } {

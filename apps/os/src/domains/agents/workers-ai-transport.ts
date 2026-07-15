@@ -63,10 +63,26 @@ type WorkersAiCompletion = {
  * not provider input: it forces cache bypass when the text carries temporary
  * project-file capability URLs. */
 export type WorkersAiMessage = {
-  role: "system" | "user" | "assistant";
+  role: "system" | "developer" | "user" | "assistant";
   content: string;
   containsFiles?: boolean;
 };
+
+/** Keep the projection provider-neutral while adapting the wire format.
+ * Untrusted developer context has already been downgraded to user by the
+ * projection. Trusted developer messages sent through a transport without a
+ * confirmed native developer role receive the conservative system-role
+ * equivalent. Today only the direct OpenAI BYOK endpoint opts into that role;
+ * the Workers AI partner-model interface remains conservative. */
+export function adaptMessagesForModel(
+  messages: WorkersAiMessage[],
+  options: { supportsDeveloperRole: boolean },
+): Array<{ role: "system" | "developer" | "user" | "assistant"; content: string }> {
+  return messages.map(({ content, role }) => ({
+    content,
+    role: role === "developer" && !options.supportsDeveloperRole ? "system" : role,
+  }));
+}
 
 /**
  * One complete attempt: dial `ai.run`, drain the response (streaming or not),
@@ -103,7 +119,7 @@ export async function runWorkersAiAttempt(input: {
     if (transport.kind === "byok" && input.model.startsWith("openai/")) {
       return await runByokAttempt({ ...input, deadline, transport });
     }
-    const messages = input.messages.map(({ content, role }) => ({ content, role }));
+    const messages = adaptMessagesForModel(input.messages, { supportsDeveloperRole: false });
     const raw = await deadline.race(
       input.ai.run(input.model, {
         messages,
@@ -147,7 +163,7 @@ async function runByokAttempt(input: {
   const containsFiles = input.messages.some((message) => message.containsFiles === true);
   const body = {
     model: input.model.replace(/^openai\//, ""),
-    messages: input.messages.map(({ content, role }) => ({ content, role })),
+    messages: adaptMessagesForModel(input.messages, { supportsDeveloperRole: true }),
     stream: true,
     ...openAiReasoningExtras(input.model),
     ...(transport.openaiPromptCacheKey === undefined

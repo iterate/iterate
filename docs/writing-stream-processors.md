@@ -173,7 +173,7 @@ exclude them, so neither a live fold nor a refold ever contains one: you never
 need to filter them out yourself, and you cannot fold or side-effect on one.
 Corollary: anything your fold or reconciler depends on must NOT be appended
 ephemeral — the durable truth is always its own event (chunks →
-`output-added`).
+an assistant-role `agents/context-added` item).
 
 ### The refold test
 

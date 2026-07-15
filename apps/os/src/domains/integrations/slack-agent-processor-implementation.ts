@@ -6,7 +6,7 @@
 // Side-effect policy:
 // - Slack Web API calls (status updates, reactions) run inside
 //   `blockProcessorWhile` so the checkpoint only advances once they finished;
-//   sequences like "commit agent input, then add the eyes reaction" keep their
+//   sequences like "commit agent context, then add the eyes reaction" keep their
 //   legacy ordering by sharing one blocking closure.
 // - Replay runs the same idempotency-keyed side effects as live delivery. The
 //   processor checkpoint is the guardrail; failed batches replay from the last
@@ -139,8 +139,8 @@ export class SlackAgentProcessor extends StreamProcessor<
         return;
       }
       case "events.iterate.com/slack/webhook-received": {
-        // The webhook transcribes into the unified inbound message event —
-        // Slack messages are messages FROM a user, `from` carries the facts.
+        // The webhook transcribes into application-supplied developer
+        // context; actor/refs retain its untrusted external provenance.
         // The sender is extracted here, once, wherever the payload shape
         // carries it (event_callback events vs interactivity payloads), so
         // button presses and reactions keep their sender too.
@@ -152,11 +152,23 @@ export class SlackAgentProcessor extends StreamProcessor<
           } = {},
         ) => {
           await append({
-            type: "events.iterate.com/agents/message-received",
-            idempotencyKey: this.idempotencyKey("webhook-to-agent-input", event),
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: this.idempotencyKey("webhook-to-agent-context", event),
             payload: {
+              role: "developer",
               content: slackWebhookAgentInput(event.payload),
-              from: { kind: "slack", ...(senderUserId == null ? {} : { userId: senderUserId }) },
+              actor: {
+                type: "slack",
+                ...(senderUserId == null ? {} : { userId: senderUserId }),
+              },
+              refs: [
+                {
+                  type: "event",
+                  streamPath: event.path,
+                  offset: event.offset,
+                  eventType: event.type,
+                },
+              ],
               ...(input.files == null || input.files.length === 0 ? {} : { files: input.files }),
               ...(input.llmRequestPolicy == null
                 ? {}
@@ -238,7 +250,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           eventType === "app_mention" || slackTextMentionsBot(messageText, botUserId);
         const shouldTriggerLlm = mentioned || state.conversationActive;
 
-        // Same ordering requirement: the agent input append commits before the
+        // Same ordering requirement: the agent-context append commits before the
         // eyes reaction tells the user their message was picked up. Files
         // shared on the message are materialized into project file storage
         // first so the input event carries the attachments; a failed download

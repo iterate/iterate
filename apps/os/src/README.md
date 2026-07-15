@@ -319,21 +319,26 @@ Await a handle itself only when you truly need the settled stub.
 ## Agents
 
 An agent is a stream (`/agents/<name>`) plus processors. `agent.message()`
-appends `events.iterate.com/agents/message-received`; the single agent
-processor renders inputs into history, applies the input policy, debounces,
-and appends `events.iterate.com/agent/llm-request-requested` — **by
-reference**: no prompt body, the offset is the `llmRequestId`. That same
-processor rebuilds the request by reducing committed history up to that
-offset, runs it through the Cloudflare AI binding (`env.AI`), and appends
-started/chunk/output/completed events. The agent contract: respond with
-exactly one fenced TypeScript block containing a single
-`async (itx) => { … }`, which the itx processor executes; replies reach the
-user via `itx.chat.sendMessage(message)`
-(`events.iterate.com/agents/web-message-sent`). Scripts behave like tool
-calls: a returned value (or thrown error) renders back into history as the
-next input and triggers another turn, while a script that returns `undefined`
-ends the loop — the completion event then carries no `result` key.
-`agent.ask({ message })` is the send-and-wait convenience.
+appends `events.iterate.com/agents/context-added`: a user-role item for an
+external caller, or a developer-role item with an agent actor for agent-to-agent
+messages. The single agent processor folds all model-visible context into a
+provider-neutral projection with a compaction-immune system lane and a history
+lane, applies user/developer request policies, debounces, and appends
+`events.iterate.com/agent/llm-request-requested` — **by reference**: no prompt
+body, and the event offset is the `llmRequestId`. That same processor rebuilds
+the request by reducing committed events through that offset, runs it through
+the Cloudflare AI binding (`env.AI`), and journals the request lifecycle plus
+the assistant context item. See [Agent context and turns](../docs/agents.md)
+for projection, key publication, provider-role, and compaction semantics.
+
+The agent contract is to respond with exactly one fenced TypeScript block
+containing a single `async (itx) => { … }`, which the capability-host processor
+executes. Replies reach the user via `itx.chat.sendMessage(message)`
+(`events.iterate.com/agents/web-message-sent`). Scripts behave like tool calls:
+a returned value (or thrown error) becomes a developer context item and
+triggers another turn, while a script that returns `undefined` ends the loop —
+the completion event then carries no `result` key. `agent.ask({ message })` is
+the send-and-wait convenience.
 
 ## Stream processor hosting
 

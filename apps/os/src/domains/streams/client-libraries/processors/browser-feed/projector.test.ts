@@ -21,11 +21,16 @@ function event(offset: number, type: string, payload: unknown = { offset }): Str
 const CREATED = "events.iterate.com/stream/created";
 const WOKEN = "events.iterate.com/stream/woken";
 const DEBUG = "events.iterate.com/debug/random-event";
-const MESSAGE_RECEIVED = "events.iterate.com/agents/message-received";
+const CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
 function userMessage(offset: number, text: string): StreamEvent {
-  return event(offset, MESSAGE_RECEIVED, { content: text, from: { kind: "user", origin: "web" } });
+  return event(offset, CONTEXT_ADDED, {
+    role: "user",
+    actor: { type: "user", origin: "web" },
+    content: text,
+    llmRequestPolicy: { behaviour: "after-current-request" },
+  });
 }
 
 const START = initialBrowserFeedState();

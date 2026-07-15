@@ -23,7 +23,7 @@ The smoke test covers the OS-side production path after Slack ingress:
    event on the project's `/integrations/slack` stream.
 3. `SlackIntegrationDurableObject` routes that event to
    `/agents/slack/<channel>/ts-<thread>`.
-4. `SlackAgentDurableObject` transcribes the Slack event into agent input.
+4. `SlackAgentDurableObject` transcribes the Slack event into agent context.
 5. `AgentDurableObject` starts the LLM request.
 6. The itx script calls `itx.slack.chat.postMessage`.
 7. A real Slack reply appears in the original thread.
@@ -89,7 +89,7 @@ doppler run --project os --config prd -- sh -c 'echo "$APP_CONFIG_BASE_URL"'
    completed itx script execution.
 9. Inspect the routed stream for these useful timestamps:
    - `events.iterate.com/slack/webhook-received`
-   - `events.iterate.com/agent/input-added`
+   - `events.iterate.com/agents/context-added`
    - `events.iterate.com/agent/llm-request-started`
    - `events.iterate.com/itx/script-execution-completed`
 
@@ -103,4 +103,5 @@ the stream. Prefer event `createdAt` deltas when comparing code changes.
 For the ordering hotfix, the interesting check is whether the routed stream
 shows `slack-agent:` work before the slower `agent:` subscriber processes the
 raw Slack webhook. The expected effect is a faster transition from
-`slack/webhook-received` to `agent/input-added` and then to LLM request start.
+`slack/webhook-received` to the developer-role `agents/context-added` item and
+then to LLM request start.

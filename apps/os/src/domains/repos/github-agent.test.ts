@@ -21,15 +21,13 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
 
   function agentInputs(stream: MemoryStream) {
     return stream.events.filter(
-      (event) =>
-        event.type === "events.iterate.com/agent/input-added" ||
-        event.type === "events.iterate.com/agents/message-received",
+      (event) => event.type === "events.iterate.com/agents/context-added",
     );
   }
 
   function turns(stream: MemoryStream) {
-    return stream.events.filter(
-      (event) => event.type === "events.iterate.com/agents/message-received",
+    return agentInputs(stream).filter(
+      (event) => (event.payload as { role?: unknown }).role === "developer",
     );
   }
 
@@ -62,13 +60,19 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
 
     const inputs = agentInputs(stream);
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: object };
-    // Structural invariants only (route params + connection stitched into the
-    // context, and the policy) — the guidance prose is deliberately unpinned:
+    const payload = inputs[0]!.payload as {
+      content: string;
+      key?: string;
+      llmRequestPolicy?: object;
+      role?: string;
+    };
+    // Structural invariants only (route params + connection stitched into its
+    // keyed system slot) — the guidance prose is deliberately unpinned:
     // docs/testing.md names prompt-copy pinning as an antipattern.
+    expect(payload).toMatchObject({ role: "system", key: "github/route-context" });
     expect(payload.content).toContain("pull request #7 of acme/widgets");
-    expect(payload.content).toContain('itx.integrations.github.get("install-789")');
-    expect(payload.llmRequestPolicy).toEqual({ behaviour: "dont-trigger-request" });
+    expect(payload.content).toContain('itx.integrations.github.get("install-789").octokit');
+    expect(payload).not.toHaveProperty("llmRequestPolicy");
   });
 
   test("keeps ordinary webhooks silent and renders one bounded trusted mention", async () => {
@@ -100,9 +104,24 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
 
     expect(agentInputs(stream)).toHaveLength(2); // route context + mention
     const turn = turns(stream)[0]!.payload as {
+      actor?: unknown;
       content: string;
       llmRequestPolicy: { behaviour: string };
+      refs?: unknown;
+      role: string;
     };
+    expect(turn).toMatchObject({
+      role: "developer",
+      actor: { type: "github", login: "jonas", senderType: "User" },
+      refs: [
+        {
+          type: "event",
+          streamPath: AGENT_PATH,
+          offset: 4,
+          eventType: "events.iterate.com/github/webhook-received",
+        },
+      ],
+    });
     expect(turn.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
     expect(turn.content).toContain("@iterate what does this change?");
     expect(turn.content).toContain("Add widgets");

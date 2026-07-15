@@ -2,7 +2,7 @@
 // `/integrations/email` stream. Deliberately shaped after the Slack webhook
 // router (slack-processor-contract.ts): the router owns raw inbound email
 // events and a reduced thread lookup table; it does not interpret mail as
-// agent input (the `email-agent` processor on the routed stream does that).
+// agent context (the `email-agent` processor on the routed stream does that).
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";

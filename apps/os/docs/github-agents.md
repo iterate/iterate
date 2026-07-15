@@ -145,9 +145,9 @@ eligible routed webhook it:
    arms a userspace timeout before waking the model, anchored to the Check
    Run's absolute start-time deadline so webhook redelivery cannot extend it.
 6. Gets stock defaults for that exact review-agent path, then appends those
-   idempotent defaults and one request-keyed
-   `events.iterate.com/agents/message-received` review task in a single batch to
-   a dedicated review-agent stream for that Check Run.
+   idempotent defaults and one request-idempotent, payload-keyed
+   `events.iterate.com/agents/context-added` developer review task in a single
+   batch to a dedicated review-agent stream for that Check Run.
 7. Keeps automatic review isolated from the conversational PR stream, so a
    push-triggered review cannot cancel, coalesce with, or inherit the visible
    handoff obligation from a mentioned user's multi-step code-work turn.

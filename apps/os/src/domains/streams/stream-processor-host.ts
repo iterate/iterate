@@ -530,7 +530,7 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
         // One honest hole: an EPHEMERAL tail (a mid-turn chunk run) is
         // invisible to this pull too — the checkpoint parks below the raw
         // head and the deferred reconcile waits for the next durable fact.
-        // Every producer pattern ends with one (chunks → output-added;
+        // Every producer pattern ends with one (chunks → assistant context;
         // revival appends `revived`), so the deferral is bounded by design:
         // reconciliation is guaranteed relative to the DURABLE head, not the
         // allocator head. Already-at-head batches pay one snapshot read.

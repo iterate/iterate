@@ -59,7 +59,7 @@ know whether the request was satisfied yet.
 
 Every event type is a scheme-less path under `events.iterate.com`. The
 convention in code is the bare string, for example
-`"events.iterate.com/agent/input-added"`, not a full `https://` URL. The path
+`"events.iterate.com/agents/context-added"`, not a full `https://` URL. The path
 is the canonical identifier; prefixed with `https://`, it should resolve to
 documentation describing the event's purpose, schema, and example payloads.
 
