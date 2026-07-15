@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -69,6 +69,7 @@ import {
   streamBreadcrumb,
   streamPageStaticData,
 } from "~/lib/route-breadcrumbs.ts";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx, useItxQuery, useLiveState } from "~/itx/itx-react.tsx";
 
@@ -80,30 +81,12 @@ type ConnectionEntry = Awaited<ReturnType<Project["integrations"]["list"]>>[numb
   status: Connection | null;
 };
 
-type FeedPanel = {
-  emptyLabel: string;
-  streamPath: string;
-};
-
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),
   /** Deep-link target: `?connect=<slug>` auto-starts that integration's connect
    * flow on mount, then clears itself so a refresh never re-triggers. */
   connect: z.string().optional(),
 });
-
-const STREAM_VIEW_SEARCH_RESET = {
-  components: undefined,
-  event: undefined,
-  filter: undefined,
-  from: undefined,
-  mode: undefined,
-  panel: undefined,
-  processor: undefined,
-  q: undefined,
-  to: undefined,
-  types: undefined,
-} satisfies Partial<z.infer<typeof StreamViewSearch>>;
 
 const BUILTIN_API_INTEGRATIONS = [
   {
@@ -158,6 +141,7 @@ function ProjectIntegrationsPage() {
 function ProjectIntegrationsContent() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const { session } = useAuthClient();
   const userId = session?.authenticated ? session.user.id : null;
@@ -195,8 +179,6 @@ function ProjectIntegrationsContent() {
   );
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
   const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
-  const [feedPanel, setFeedPanel] = useState<FeedPanel | null>(null);
-  const feedOpenRequestId = useRef(0);
 
   const startSlack = useMutation({
     mutationFn: async () => {
@@ -312,19 +294,11 @@ function ProjectIntegrationsContent() {
     // Unknown slug: ignored.
   }, [search.connect, navigate, connectSlack, connectGoogle, connectGithub]);
 
-  const resetFeedViewSearch = () => {
-    return navigate({
-      search: (previous) => ({ ...previous, ...STREAM_VIEW_SEARCH_RESET }),
-      replace: true,
-    });
-  };
-  const openFeed = async (panel: FeedPanel) => {
-    const requestId = ++feedOpenRequestId.current;
-    if (feedPanel == null || feedPanel.streamPath !== panel.streamPath) {
-      await resetFeedViewSearch();
-    }
-    if (feedOpenRequestId.current !== requestId) return;
-    setFeedPanel(panel);
+  // Connection journals are their own streams — open the canonical stream
+  // page rather than stacking a second ProjectStreamView (which would share
+  // this route's StreamViewSearch URL params with the /integrations feed).
+  const openStream = (streamPath: string) => {
+    void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath));
   };
 
   // Same shell as secrets/agents/repos: ProjectStreamView owns the header
@@ -360,7 +334,7 @@ function ProjectIntegrationsContent() {
             icon={MessageSquare}
             name="Slack"
             onDisconnect={(connection) => disconnectSlack.mutate(connection)}
-            onOpenFeed={openFeed}
+            onOpenFeed={openStream}
             provider="slack"
             connectControl={
               <Button size="sm" disabled={startSlack.isPending} onClick={() => startSlack.mutate()}>
@@ -377,7 +351,7 @@ function ProjectIntegrationsContent() {
             icon={Mail}
             name="Google"
             onDisconnect={(connection) => disconnectGoogle.mutate(connection)}
-            onOpenFeed={openFeed}
+            onOpenFeed={openStream}
             provider="google"
             connectControl={
               <Button
@@ -398,7 +372,7 @@ function ProjectIntegrationsContent() {
             icon={Github}
             name="GitHub"
             onDisconnect={(connection) => disconnectGithub.mutate(connection)}
-            onOpenFeed={openFeed}
+            onOpenFeed={openStream}
             provider="github"
             connectControl={
               <Button
@@ -419,7 +393,7 @@ function ProjectIntegrationsContent() {
             icon={Send}
             name="Telegram"
             onDisconnect={(connection) => disconnectTelegram.mutate(connection)}
-            onOpenFeed={openFeed}
+            onOpenFeed={openStream}
             provider="telegram"
             connectControl={
               <TelegramConnectSheet
@@ -444,7 +418,7 @@ function ProjectIntegrationsContent() {
           </div>
           <ItemGroup className="grid gap-4">
             {providedConnections.map((entry) => (
-              <ProvidedIntegrationCard key={entry.path} entry={entry} onOpenFeed={openFeed} />
+              <ProvidedIntegrationCard key={entry.path} entry={entry} onOpenFeed={openStream} />
             ))}
           </ItemGroup>
         </section>
@@ -468,25 +442,12 @@ function ProjectIntegrationsContent() {
   );
 
   return (
-    <>
-      <ProjectStreamView
-        panel={panel}
-        projectId={project.id}
-        streamPath="/integrations"
-        emptyLabel="No events on the integrations stream yet."
-      />
-      <IntegrationFeedSheet
-        feedPanel={feedPanel}
-        onOpenChange={(open) => {
-          if (!open) {
-            feedOpenRequestId.current += 1;
-            void resetFeedViewSearch();
-            setFeedPanel(null);
-          }
-        }}
-        projectId={project.id}
-      />
-    </>
+    <ProjectStreamView
+      panel={panel}
+      projectId={project.id}
+      streamPath="/integrations"
+      emptyLabel="No events on the integrations stream yet."
+    />
   );
 }
 
@@ -557,7 +518,7 @@ function ConnectableIntegrationCard({
   icon: LucideIcon;
   name: string;
   onDisconnect: (connection: string) => void;
-  onOpenFeed: (panel: FeedPanel) => void;
+  onOpenFeed: (streamPath: string) => void;
   provider: "github" | "google" | "slack" | "telegram";
 }) {
   const connected = connectedCount(connections);
@@ -586,12 +547,7 @@ function ConnectableIntegrationCard({
                 disconnecting={disconnecting}
                 entry={entry}
                 onDisconnect={() => onDisconnect(entry.connection)}
-                onOpenFeed={() =>
-                  onOpenFeed({
-                    emptyLabel: `No events on ${entry.path} yet.`,
-                    streamPath: entry.path,
-                  })
-                }
+                onOpenFeed={() => onOpenFeed(entry.path)}
                 provider={provider}
               />
             ))}
@@ -607,7 +563,7 @@ function ProvidedIntegrationCard({
   onOpenFeed,
 }: {
   entry: ConnectionEntry;
-  onOpenFeed: (panel: FeedPanel) => void;
+  onOpenFeed: (streamPath: string) => void;
 }) {
   return (
     <Item variant="outline" className="min-w-0 items-start gap-4 p-4">
@@ -631,12 +587,7 @@ function ProvidedIntegrationCard({
           className="w-fit"
           size="sm"
           variant="outline"
-          onClick={() =>
-            onOpenFeed({
-              emptyLabel: `No events on ${entry.path} yet.`,
-              streamPath: entry.path,
-            })
-          }
+          onClick={() => onOpenFeed(entry.path)}
         >
           <Activity className="size-4" />
           Feed
@@ -688,37 +639,6 @@ function ConnectionRow({
         ) : null}
       </div>
     </div>
-  );
-}
-
-function IntegrationFeedSheet({
-  feedPanel,
-  onOpenChange,
-  projectId,
-}: {
-  feedPanel: FeedPanel | null;
-  onOpenChange: (open: boolean) => void;
-  projectId: string;
-}) {
-  return (
-    <Sheet open={feedPanel != null} onOpenChange={onOpenChange}>
-      {feedPanel == null ? null : (
-        <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[56vw] data-[side=right]:sm:max-w-[92vw]">
-          <SheetHeader className="sr-only">
-            <SheetTitle>{feedPanel.streamPath} feed</SheetTitle>
-          </SheetHeader>
-          <div className="flex min-h-0 flex-1 flex-col">
-            {/* Full stream chrome (path pill, presence, RTT, stream state) —
-                same header as every other domain page, not a header-less feed. */}
-            <ProjectStreamView
-              projectId={projectId}
-              streamPath={feedPanel.streamPath}
-              emptyLabel={feedPanel.emptyLabel}
-            />
-          </div>
-        </SheetContent>
-      )}
-    </Sheet>
   );
 }
 

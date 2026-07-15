@@ -658,7 +658,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       ...(args.eventTypes === undefined ? {} : { eventTypes: args.eventTypes }),
       ...(args.condition === undefined ? {} : { condition: args.condition }),
     };
-    const description = args.description?.trim();
     const [event] = await this.append({
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
@@ -667,7 +666,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
           mode: "push",
           expression: ["streams", ["get", destination], "acceptCrossPost"],
         },
-        ...(description === undefined || description === "" ? {} : { description }),
+        ...(args.description?.trim() ? { description: args.description.trim() } : {}),
         ...(Object.keys(selector).length === 0 ? {} : { selector }),
         ...(args.deliver === undefined ? {} : { deliver: args.deliver }),
         ...(args.transform === undefined ? {} : { params: { transform: args.transform } }),
