@@ -36,8 +36,10 @@ import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from
 import { envs } from "../../../envs.ts";
 import {
   ensureR2ObjectExpiryLifecycle,
+  PREVIEW_DISPOSABLE_TTL_SECONDS,
   PREVIEW_FILES_OBJECT_EXPIRY,
   PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  SANDBOX_BACKUP_EXPIRY_RULE,
   wipeD1Tables,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
@@ -204,6 +206,22 @@ export default async function eraseData(options: {
           `R2 ${bucket} lifecycle ensure failed — falling back to walking it: ${String(error).slice(0, 200)}`,
         );
       }
+    }
+    // Also self-heal the sandbox backups expiry (3h). ensure-resources sets it
+    // too, but CI never runs that, so without this preview sandbox backups keep
+    // whatever rule they had (often none → they accumulate forever). We only
+    // install the rule; the sandboxes bucket's data is never walked here (its
+    // containers own it — see the DO section).
+    try {
+      await ensureR2ObjectExpiryLifecycle(ctx, `${env.osWorkerName}-sandboxes`, {
+        ...SANDBOX_BACKUP_EXPIRY_RULE,
+        ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
+      });
+      console.log(
+        `R2 ${env.osWorkerName}-sandboxes: backups/ set to ${PREVIEW_DISPOSABLE_TTL_SECONDS}s lifecycle expiry`,
+      );
+    } catch (error) {
+      console.warn(`R2 sandboxes lifecycle ensure failed: ${String(error).slice(0, 200)}`);
     }
   }
   const bucketsToWalk = [searchIndexBucket, filesBucket].filter(
