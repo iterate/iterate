@@ -7,7 +7,6 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
 export * as dev from "./dev.ts";
 export * as itx from "./itx.ts";
-export * as recreateProduction from "./recreate-production/index.ts";
 export * as session from "./session.ts";
 
 const DEFAULT_MCP_BASE_URL = "https://mcp.iterate.com";

@@ -2,7 +2,6 @@ name: Deploy Auth + OS
 permissions:
   contents: read
   deployments: write
-  pull-requests: read
   statuses: write
 concurrency:
   # Every dispatch below targets the same production Workers, even when the
@@ -41,7 +40,6 @@ jobs:
     timeout-minutes: 45
     outputs:
       public_url: ${{ steps.metadata.outputs.public_url }}
-      should_deploy: ${{ steps.deploy_gate.outputs.should_deploy }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -50,28 +48,20 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
-      - id: deploy_gate
-        name: Check for planned manual cutover
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm tsx scripts/ci/should-deploy-os.ts
       # Auth owns the default RPC entrypoint. This is the one production rollout
       # path for both workers, so a push cannot race independent auth and OS
       # workflows at different commits.
       - name: Deploy apps/auth
-        if: steps.deploy_gate.outputs.should_deploy == 'true'
         working-directory: apps/auth
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project auth --config prd -- pnpm run-script deploy
       - name: Setup Doppler (baked CLI)
-        if: steps.deploy_gate.outputs.should_deploy == 'true'
         run: doppler setup --config prd --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - id: metadata
         name: Resolve OS deploy URL
-        if: steps.deploy_gate.outputs.should_deploy == 'true'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
@@ -81,7 +71,6 @@ jobs:
             echo "public_url=${public_url}" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy apps/os
-        if: steps.deploy_gate.outputs.should_deploy == 'true'
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -103,7 +92,7 @@ jobs:
       # was actually deployed — checkout honors inputs.ref on dispatch, so
       # the trigger's GITHUB_SHA can be a different commit.
       - name: Report worker size
-        if: steps.deploy_gate.outputs.should_deploy == 'true' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
@@ -115,7 +104,7 @@ jobs:
   notify:
     needs:
       - deploy
-    if: always() && needs.deploy.outputs.should_deploy == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
