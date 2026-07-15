@@ -1334,7 +1334,24 @@ return {
       return { copied: copied.payload, provenance: copied.source?.crossPostedFrom };
     },
   }),
-  projectExample<GmailDataGap>({
+  projectExample<{
+    // `data` is caller-typed on the surface (request<T = unknown>); a plain-JS
+    // body cannot instantiate T, so the shapes this body reads (the message
+    // list, then per-message metadata) are declared here instead.
+    integrations: {
+      gmail: {
+        get(connection?: string): {
+          request(input: { path: string; query?: Record<string, unknown> }): Promise<{
+            data: {
+              messages?: Array<{ id: string }>;
+              resultSizeEstimate?: number;
+              payload?: { headers?: Array<{ name: string; value?: string }> };
+            };
+          }>;
+        };
+      };
+    };
+  }>({
     id: "gmail-search-inbox",
     e2eProven: false,
     title: "Search the inbox through the built-in Gmail integration",
@@ -1918,24 +1935,6 @@ type Live<Name extends string, Impl, Mounted = Remoted<Impl>> = Record<Name, Mou
 // fix upstream, then delete the overlay. Every alias is an `Extra` widening,
 // intersected FIRST at its use site so its signatures win resolution for
 // exactly the calls the entry teaches. ──
-
-/** The generated GmailConnection types response `data` as unknown (it is
- * whatever the REST resource returns); the gmail entry reads it dynamically. */
-type GmailDataGap = {
-  integrations: {
-    gmail: {
-      get(connection?: string): {
-        request(input: { path: string; query?: Record<string, unknown> }): Promise<{
-          data: {
-            messages?: Array<{ id: string }>;
-            resultSizeEstimate?: number;
-            payload?: { headers?: Array<{ name: string; value?: string }> };
-          };
-        }>;
-      };
-    };
-  };
-};
 
 /** `itx.ai.run` returns `unknown` in the generated surface (outputs are
  * model-shaped); entries that read a specific model's response fields use

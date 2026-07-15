@@ -2575,10 +2575,15 @@ export type SlackConnection = Record<string, any> & {
   processor: WakeableStreamProcessorRpc;
 };
 
-/** The Gmail REST API connection exposed by a connected Google account. */
+/** The Gmail REST API connection exposed by a connected Google account.
+ * `data` is whatever the addressed REST resource returns — the caller
+ * supplies the expected shape via `request<T>` (no invented Gmail schemas
+ * here); it defaults to the honest `unknown` when uninstantiated. */
 export type GmailConnection = {
-  request(input: GmailRequestInput): Promise<{
-    data: unknown;
+  request<T = unknown>(
+    input: GmailRequestInput,
+  ): Promise<{
+    data: T;
     headers: Record<string, string>;
     status: number;
     statusText: string;

@@ -1352,7 +1352,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "GmailConnection",
     kind: "typeAlias",
     sourceText:
-      "/** The Gmail REST API connection exposed by a connected Google account. */\nexport type GmailConnection = {\n  request(input: GmailRequestInput): Promise<{\n    data: unknown;\n    headers: Record<string, string>;\n    status: number;\n    statusText: string;\n  }>;\n};",
+      "/** The Gmail REST API connection exposed by a connected Google account.\n * `data` is whatever the addressed REST resource returns — the caller\n * supplies the expected shape via `request<T>` (no invented Gmail schemas\n * here); it defaults to the honest `unknown` when uninstantiated. */\nexport type GmailConnection = {\n  request<T = unknown>(\n    input: GmailRequestInput,\n  ): Promise<{\n    data: T;\n    headers: Record<string, string>;\n    status: number;\n    statusText: string;\n  }>;\n};",
     summary: "The Gmail REST API connection exposed by a connected Google account.",
     memberSummaries: {},
     referencedTypeNames: ["GmailRequestInput"],

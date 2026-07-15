@@ -158,8 +158,9 @@ const SURFACE_GAPS: Record<string, string> = {
     "octokit package graph is too large for the in-Worker checker); readme.data is typed in " +
     "examples-source.ts against the real Octokit",
   "gmail-search-inbox":
-    "GmailConnection.request() data is unknown (resource-shaped); the body reads list/get resources " +
-    "dynamically",
+    "GmailConnection.request's data is caller-typed (request<T = unknown>); this plain-JS body " +
+    "cannot instantiate T and reads list/get resources dynamically — its shapes are declared in " +
+    "examples-source.ts",
   "ai-generate-text":
     "ai.run() returns unknown (model-shaped output); the body reads result.response",
   "ai-generate-image": "ai.run() returns unknown; the body reads response.image",
