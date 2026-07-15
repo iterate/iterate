@@ -19,7 +19,6 @@
     "typecheck": "pnpm gen:wrangler && tsc --noEmit",
     "test": "pnpm typecheck",
     "test:e2e": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
-    "test:e2e:preview": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts ./e2e/vitest/preview.e2e.test.ts",
     "test:all": "pnpm run test && pnpm run test:e2e",
     "test:quick": "pnpm test:e2e",
     "test:watch": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest --config ./e2e/vitest.config.ts",
