@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ItxExpressionStep } from "../../itx/expression.ts";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,
@@ -79,6 +80,10 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
   version: "0.1.0",
   description: "A tiny dynamic capability table and script execution journal.",
+  // Brings the core `stream/*` lifecycle events into scope so the obligation
+  // reconcile can consume `stream/woken` / `subscriber-connected` as re-check
+  // signals (see `consumes`).
+  processorDeps: [CoreProcessorContract],
   stateSchema: z.object({
     capabilities: z.array(CapabilityRecord).default([]),
     /**
@@ -225,6 +230,13 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-started",
     "events.iterate.com/capability-host/script-execution-completed",
+    // Core lifecycle RE-CHECK signals (see the agent contract for the full
+    // rationale): neither folds into state, but their at-head delivery gives
+    // the script-obligation reconcile a guaranteed consumed-at-head turn —
+    // `stream/woken` on a stream (re)start, `subscriber-connected` on a runner
+    // (re)attach.
+    "events.iterate.com/stream/woken",
+    "events.iterate.com/stream/subscriber-connected",
     // The revival fact MUST be consumed (the runner throws at construction
     // otherwise): a revival nobody consumes recovers nothing. See the
     // constant's doc for why it is absent from `emits`.

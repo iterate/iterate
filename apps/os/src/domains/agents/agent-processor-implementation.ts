@@ -180,9 +180,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         await this.#reconcileStatusAnnouncement(args);
       });
     }
-    // Event-less at-head pass (a head-reaching batch that consumed nothing):
-    // only the reconcile above runs; there is no event for the per-event switch.
-    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/agent/config-updated": {
         if (event.payload.systemPrompt === undefined) return;

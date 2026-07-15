@@ -135,9 +135,6 @@ export class TelegramAgentProcessor extends StreamProcessor<
     event,
     state,
   }: Parameters<StreamProcessor<TelegramAgentProcessorContract>["processEvent"]>[0]): undefined {
-    // The event-less at-head pass has no per-event work here (only the typing
-    // repaint in processEvent); the switch runs for real consumed events only.
-    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/telegram/webhook-received": {
         const target = telegramUpdateTarget(event.payload.body);

@@ -222,10 +222,10 @@ describe("StreamProcessor provenance stamping", () => {
   }
 
   // At-head appends are derived from the whole fold, not one event — the
-  // at-head reconcile (processEvent under `delivery.caughtUp`) runs them. On the
-  // EVENT-LESS at-head pass (a head-reaching batch that consumed nothing) the
-  // append carries no `whileProcessing` stamp — the successor of the legacy
-  // batch-level append lane.
+  // at-head reconcile (processEvent under `delivery.caughtUp`) runs them,
+  // riding the LAST CONSUMED event of a head-reaching batch. That event is the
+  // one the append is stamped with (the reconcile has no batch-level unstamped
+  // lane; obligation-stability comes from the idempotency KEY, not the stamp).
   class CaughtUpEchoProcessor extends StreamProcessor<typeof EchoContract> {
     readonly contract = EchoContract;
 
@@ -314,30 +314,23 @@ describe("StreamProcessor provenance stamping", () => {
     });
   });
 
-  it("stamps event-less at-head appends without whileProcessing", async () => {
+  it("runs the at-head reconcile on the last consumed event of a head-reaching batch, keyed by the fold not the event", async () => {
     const { appends, stream } = recordingNetwork();
     const { deliver } = drive(new CaughtUpEchoProcessor({ stream, ...HOME }), stream);
 
-    // A head-reaching batch that consumes NOTHING (this contract does not
-    // consume `unrelated`) triggers the runner's event-less at-head pass — the
-    // reconcile runs over the fold with no source event, so its append is
-    // unstamped.
-    await deliver({
-      events: [
-        {
-          type: "events.iterate.com/test/unrelated",
-          offset: 7,
-          createdAt: new Date(7).toISOString(),
-          path: HOME.path,
-          payload: {},
-        },
-      ],
-      streamMaxOffset: 7,
-    });
+    // A consumed event at head carries `caughtUp`: the reconcile runs over the
+    // whole fold. Its idempotency key is derived from the FOLD (the observed
+    // head offset), not the event — that is what keeps an obligation stable
+    // across redelivery; the `whileProcessing` stamp just records the consumed
+    // event the reconcile rode in on.
+    await deliver({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
 
     const summary = appends.find(({ event }) => event.idempotencyKey?.includes("at-head-summary"));
     expect(summary?.event.idempotencyKey).toBe("test-echo/at-head-summary:7");
-    expect(summary?.event.source?.processor).toEqual(STAMP);
+    expect(summary?.event.source?.processor).toMatchObject({
+      ...STAMP,
+      whileProcessing: { offset: 7, type: "events.iterate.com/test/triggered" },
+    });
   });
 
   it("refuses to append an event type missing from emits, on both lanes", () => {

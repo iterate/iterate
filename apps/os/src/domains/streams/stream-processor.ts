@@ -119,22 +119,12 @@ type SideEffectHelpers = {
 };
 
 /** What `processEvent` receives: one reduction result plus delivery context and helpers. */
-type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
+type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
   SideEffectHelpers & {
-    /**
-     * The consumed event being processed — or `null` for an EVENT-LESS at-head
-     * pass (`delivery.caughtUp` is then true). The runner runs that pass when a
-     * batch reached head but consumed nothing (a self-pull that folded only an
-     * unconsumed durable tail): there is no source event, so the reconcile runs
-     * over the head fold (`state`). A per-event switch MUST guard on
-     * `event !== null`; the at-head reconcile reads `state` and needs no event.
-     */
-    event: ReducedEvent<Contract>["event"] | null;
     /**
      * Append one or more events listed in `contract.emits` to this stream,
      * stamped with `source.processor` provenance pointing at THIS event as
-     * `whileProcessing` (unstamped on the event-less at-head pass). The binding
-     * is a closure, so appends made later from
+     * `whileProcessing`. The binding is a closure, so appends made later from
      * `blockProcessorWhile`/`runInBackground` work scheduled here still stamp
      * the event that was being processed.
      */

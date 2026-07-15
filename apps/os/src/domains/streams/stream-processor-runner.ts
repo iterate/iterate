@@ -802,14 +802,6 @@ export class StreamProcessorRunner<
     for (const event of pending) {
       if (consumedTypes.has(event.type)) lastConsumedOffset = event.offset;
     }
-    // A batch that reaches head but consumes NOTHING (a self-pull that folded
-    // only an unconsumed durable tail — the consumes-filtered wake lane splits
-    // the obligation-opening consumed event from its tail; codex bug #1) still
-    // has to run the at-head reconcile: there is no consumed event to carry
-    // `caughtUp`, so the runner delivers a trailing EVENT-LESS at-head pass
-    // after the loop (below), with the same unstamped / offset-free-key
-    // semantics the reconcile needs.
-    let firedCaughtUp = false;
 
     const ctx: FrameContext<ProcessorState<Contract>> = {
       revision: committed.processing.cursorRevision,
@@ -837,7 +829,6 @@ export class StreamProcessorRunner<
           // (not `offset >= head` — that never fires for a subset-consuming
           // processor whose head is a later unconsumed event).
           const caughtUp = batchReachesHead && event.offset === lastConsumedOffset;
-          if (caughtUp) firedCaughtUp = true;
           const delivery: DeliveryContext = {
             phase: event.offset >= observedHeadOffset ? "live" : "catching-up",
             observedHeadOffset,
@@ -897,45 +888,13 @@ export class StreamProcessorRunner<
           await this.#commitFrameContext(ctx);
         }
       }
-      // The at-head reconcile normally rides `processEvent` for the last
-      // consumed event of a head-reaching batch (`delivery.caughtUp`). But when
-      // the batch reached head yet consumed NOTHING — a self-pull that folded
-      // only an unconsumed durable tail (codex bug #1), or a head-reaching
-      // batch of purely foreign types — there is no consumed event to carry the
-      // signal, so the runner runs the reconcile itself: an EVENT-LESS at-head
-      // pass over the head fold. `event` is null (the processor skips its
-      // per-event switch), appends are unstamped, and the idempotency key binds
-      // no offset — the stable-obligation-key semantics the reconcile needs.
-      // Its blockers are awaited here, before the deferred frame-end commit, so
-      // a failure keeps the whole frame retryable.
-      if (batchReachesHead && !firedCaughtUp) {
-        const delivery: DeliveryContext = {
-          phase: "live",
-          observedHeadOffset,
-          eventsBehindObservedHead: 0,
-          caughtUp: true,
-          cursorRevision: ctx.revision,
-          idempotencyKey: (key) => this.#effectIdempotencyKey(key, undefined, ctx.revision),
-        };
-        const atHeadBlockers: Promise<unknown>[] = [];
-        this.driver.processEvent({
-          event: null,
-          previousState: ctx.state,
-          state: ctx.state,
-          streamMaxOffset: observedHeadOffset,
-          checkpointOffset: frameCheckpointOffset,
-          delivery,
-          blockProcessorWhile: (work) => {
-            const attempt = this.#keepAliveBackedWork(work);
-            atHeadBlockers.push(attempt);
-            startedBlockers.push(attempt);
-          },
-          runInBackground: (work) => this.#runInBackground(work),
-          append: (...input) => this.driver.append({}, input),
-          appendTo: (path, ...input) => this.driver.appendTo(path, {}, input),
-        });
-        await Promise.all(atHeadBlockers);
-      }
+      // The at-head reconcile rides `processEvent` for the LAST CONSUMED event
+      // of a head-reaching batch (`delivery.caughtUp`). A head-reaching batch
+      // that consumed NOTHING (a self-pull that folded only an unconsumed
+      // durable tail) carries no such event, so it does NOT reconcile this
+      // pass: the obligation defers to the next consumed-at-head event, or the
+      // consumed `stream/processor-revived` fact recovery appends. Reconcile
+      // never fires without a real consumed event at head.
     } catch (error) {
       // A failed frame must still settle work it already registered so
       // nothing rejects unobserved. Whatever was not yet durably committed is

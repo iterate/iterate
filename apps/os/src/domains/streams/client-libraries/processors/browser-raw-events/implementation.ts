@@ -55,8 +55,6 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEvent"]>[0],
   ): undefined {
     const event = args.event;
-    // Event-less at-head pass: this processor has no at-head reconcile, so nothing to do.
-    if (event === null) return;
     // Gaps are legal only once server-side ephemeral eviction exists; until
     // then every delivered stream is dense (the subscription lane, the pull
     // pager, and the runner's self-pulls all include ephemeral rows), so an

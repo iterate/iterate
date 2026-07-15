@@ -122,7 +122,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     // below: `blockProcessorWhile` may start its closure synchronously, so a
     // head event's own announcement must already be memoized when the
     // repaint reads it.
-    if (event !== null && event.type === "events.iterate.com/agent/status-changed") {
+    if (event.type === "events.iterate.com/agent/status-changed") {
       this.#unpaintedStatusFact = event;
     }
     // AT-HEAD repaint (was `onCaughtUp`): fires for the last consumed event of
@@ -134,9 +134,6 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (args.delivery.caughtUp) {
       blockProcessorWhile(() => this.#reconcileStatus(args));
     }
-    // Event-less at-head pass (a head-reaching batch that consumed nothing):
-    // only the repaint above runs.
-    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured": {
         // Route context (channel/thread_ts/streamPath) is captured in

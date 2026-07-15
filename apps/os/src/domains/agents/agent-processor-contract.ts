@@ -1081,6 +1081,16 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/status-changed",
     "events.iterate.com/capability-host/script-execution-requested",
     "events.iterate.com/capability-host/script-execution-completed",
+    // Core lifecycle RE-CHECK signals. Neither folds into state (reduce
+    // ignores them) — they are consumed so their at-head delivery gives the
+    // obligation reconcile (`processEvent` under `delivery.caughtUp`) a
+    // guaranteed consumed-at-head turn. `stream/woken` fires when the stream DO
+    // (re)starts — the revival/deploy case; `subscriber-connected` fires when a
+    // runner (re)attaches — closing the live race where an unconsumed presence
+    // fact would otherwise land at head just after an obligation was opened and
+    // strand it until the next domain event.
+    "events.iterate.com/stream/woken",
+    "events.iterate.com/stream/subscriber-connected",
     // The revival fact MUST be consumed (the runner throws at construction
     // otherwise): a revival nobody consumes recovers nothing. See the
     // constant's doc for why it is absent from `emits`.

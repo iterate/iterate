@@ -2478,9 +2478,14 @@ describe("busy/idle status announcements", () => {
 
       // The busy trigger lands, with a successor event so its frame is not
       // the final page; the parked pull reduces AND COMMITS it, then holds
-      // before the at-head pass.
+      // before the at-head pass. The successor is a CONSUMED lifecycle
+      // re-check (`stream/woken`): the at-head reconcile fires only on a
+      // consumed event delivered at head, and this is that event.
       const [busyMessage] = await stream.append(userMessage());
-      await stream.append({ type: "events.iterate.com/test/nudge", payload: {} });
+      await stream.append({
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnationId: "nudge" },
+      });
       let releaseTail!: () => void;
       holdTail = new Promise((resolve) => {
         releaseTail = resolve;

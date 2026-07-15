@@ -74,16 +74,13 @@ abstract class HookArgTypes extends StreamProcessor<TaskContract> {
   declare readonly processArgs: Parameters<StreamProcessor<TaskContract>["processEvent"]>[0];
 }
 type ProcessArgs = HookArgTypes["processArgs"];
-/** processEvent args narrowed to a real consumed event (`onProcess` only fires
- * for those; the at-head reconcile rides `onHead` and may have a null event). */
-type ConsumedProcessArgs = ProcessArgs & { event: NonNullable<ProcessArgs["event"]> };
 type TaskHooks = {
-  onProcess?: (args: ConsumedProcessArgs) => void;
+  onProcess?: (args: ProcessArgs) => void;
   /** The at-head reconcile (was `onCaughtUp`): `processEvent` under
-   * `delivery.caughtUp`. `args.event` is the last consumed event of a
-   * head-reaching batch, or `null` for an event-less at-head pass. `stableKey`
-   * is `this.idempotencyKey` (binds NO offset) — the way a real reconcile
-   * mints obligation keys that survive redelivery/revival unchanged. */
+   * `delivery.caughtUp` — the last consumed event of a head-reaching batch.
+   * `stableKey` is `this.idempotencyKey` (binds NO offset) — the way a real
+   * reconcile mints obligation keys that survive redelivery/revival
+   * unchanged. */
   onHead?: (args: ProcessArgs, stableKey: (key: string) => string) => void | Promise<void>;
 };
 
@@ -109,12 +106,12 @@ class TaskProcessor extends StreamProcessor<
   }
 
   protected override processEvent(args: ProcessArgs): undefined {
-    if (args.event !== null) this.deps.hooks.onProcess?.(args as ConsumedProcessArgs);
+    this.deps.hooks.onProcess?.(args);
     // The at-head reconcile: fires for the last consumed event of a
-    // head-reaching batch, or the runner's event-less at-head pass. onHead
-    // registers its blocking work synchronously (the runner awaits it before
-    // the deferred frame-end commit), so invoking it here — not awaiting — is
-    // the faithful fold-in of the old awaited `onCaughtUp`.
+    // head-reaching batch. onHead registers its blocking work synchronously
+    // (the runner awaits it before the deferred frame-end commit), so invoking
+    // it here — not awaiting — is the faithful fold-in of the old awaited
+    // `onCaughtUp`.
     if (args.delivery.caughtUp) {
       void this.deps.hooks.onHead?.(args, (key) => this.idempotencyKey(key));
     }
@@ -1090,16 +1087,18 @@ describe("StreamProcessorRunner skipThrough validation", () => {
 });
 
 // =============================================================================
-// 7. At-head reconcile (`delivery.caughtUp`) — the last consumed event of a
-//    head-reaching batch, or an EVENT-LESS pass when the batch consumed nothing
-//    (the requested-N / unconsumed-tail wedge; codex bug #1)
+// 7. At-head reconcile (`delivery.caughtUp`) — fires on the LAST CONSUMED event
+//    of a batch whose final event is the observed stream head. A head-reaching
+//    batch that consumes NOTHING does not reconcile: the obligation defers to
+//    the next consumed-at-head event (in production the `stream/processor-revived`
+//    fact or a `stream/subscriber-connected` presence event both qualify).
 // =============================================================================
 
 describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
-  it("fires at head via an event-less pass when the head-reaching batch consumed nothing", async () => {
+  it("fires on the last consumed event of a head-reaching batch; an unconsumed tail defers to the next consumed-at-head event", async () => {
     const journal = makeJournal();
-    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // N: opens the obligation
-    journal.seed({ type: NOISE, payload: {} }); // N+1: unconsumed, reaches head
+    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1: opens the obligation
+    journal.seed({ type: NOISE, payload: {} }); // 2: unconsumed, reaches head
 
     const headCalls: { open: string[]; phase: string }[] = [];
     const processPhases: string[] = [];
@@ -1126,28 +1125,35 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     const { sink } = await harness.runner.openDelivery();
     const [requestedEvent, noiseEvent] = journal.rows();
 
-    // Frame 1: the requested event, delivered mid-catch-up (head is at 2).
-    // The legacy wedge: N is "catching up" so nothing may act, and N+1 is
-    // unconsumed so no processEvent will ever fire — without a runner-level
-    // at-head pulse the obligation would hang forever.
+    // Frame 1: the requested event, delivered mid-catch-up (head is at 2). It
+    // is behind head, so NOT caughtUp — nothing may act on a partial fold.
     await sink({ events: [requestedEvent!], streamMaxOffset: 2 });
     expect(processPhases).toEqual(["1:catching-up:1"]);
     expect(headCalls).toEqual([]);
     expect(journal.rows(SIBLING)).toHaveLength(0);
 
-    // Frame 2: ONLY the unconsumed tail event. Zero processEvent calls — yet
-    // the cursor reaches the observed head and onCaughtUp drives the fold.
+    // Frame 2: ONLY the unconsumed tail event. The batch reaches head but
+    // consumes nothing — so NO consumed event carries `caughtUp`, and the
+    // reconcile deliberately does NOT fire. The obligation opened by event 1
+    // DEFERS: the runner never acts on a fold no consumed event delivered it at
+    // head. (In production the trailing self-pull still advances the cursor to
+    // head; the reconcile waits for a consumed-at-head event.)
     await sink({ events: [noiseEvent!], streamMaxOffset: 2 });
     expect(processPhases).toEqual(["1:catching-up:1"]); // still no processEvent
-    expect(headCalls).toEqual([{ open: ["a"], phase: "live" }]);
+    expect(headCalls).toEqual([]); // deferred — no consumed event at head
+    expect(journal.rows(SIBLING)).toHaveLength(0);
+
+    // A later CONSUMED event reaches head: now the last consumed event of a
+    // head-reaching batch carries `caughtUp`, and the reconcile drives every
+    // open obligation over the final fold.
+    journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 3: consumed, at head
+    await sink({ events: [journal.rows()[2]!], streamMaxOffset: 3 });
+    expect(processPhases).toEqual(["1:catching-up:1", "3:live:0"]);
+    expect(headCalls).toEqual([{ open: ["a", "b"], phase: "live" }]);
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
       { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
+      { type: DRIVEN, idempotencyKey: "test-task/drive:b", payload: { id: "b" } },
     ]);
-
-    // A redelivered (fully acknowledged) frame delivers nothing new and does
-    // not re-fire the pulse; a revival fact is what guarantees later turns.
-    await sink({ events: [noiseEvent!], streamMaxOffset: 2 });
-    expect(headCalls).toHaveLength(1);
   });
 
   it("defers the head event's commit past onCaughtUp: a failing blocker leaves it UNcommitted and retried (codex bug #2)", async () => {
@@ -1207,7 +1213,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     ]);
   });
 
-  it("closes the filtered-delivery wedge with a trailing unfiltered self-pull (codex bug #1)", async () => {
+  it("advances the cursor to head over an unconsumed tail (self-pull) but defers the reconcile until a consumed event reaches head", async () => {
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1 — consumed, opens the obligation
     journal.seed({ type: NOISE, payload: {} }); // 2 — unconsumed durable tail; the wake lane never delivers it
@@ -1230,26 +1236,36 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     const harness = makeHarness({ journal, hooks });
 
     // The production wake lane's exact shape: ONLY the consumed event 1 is
-    // delivered, stamped with the RAW head 2. The frame alone leaves the
-    // cursor at 1 < streamMaxOffset with nothing else ever pushing offset 2:
-    // without the trailing pull, onCaughtUp never fires and the obligation
-    // opened by event 1 wedges forever.
+    // delivered, stamped with the RAW head 2. The trailing type-unfiltered
+    // self-pull folds the unconsumed tail so the cursor reaches head.
     await harness.deliverConsumesFilteredPending();
-
-    // The trailing type-unfiltered self-pull (keepalive lane, not the
-    // transport's promise) folds the tail, reaches the durable head, and the
-    // at-head pulse drives the obligation.
     await vi.waitFor(() => {
       expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
-      expect(headCalls).toEqual([{ open: ["a"] }]);
     });
-    expect(comparableRows(journal.rows(SIBLING))).toEqual([
-      { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
-    ]);
+
+    // The tail was unconsumed, so NO consumed event was ever at head: the
+    // reconcile deliberately did NOT fire (it never acts on a fold a consumed
+    // event did not deliver it at head). The obligation opened by event 1
+    // DEFERS. In production the `stream/processor-revived` fact (on eviction)
+    // or a `stream/subscriber-connected` presence event (both consumed) is the
+    // guaranteed consumed-at-head turn that drives it.
+    expect(headCalls).toEqual([]);
+    expect(journal.rows(SIBLING)).toHaveLength(0);
     await expect(harness.runner.snapshot()).resolves.toEqual({
       offset: 2,
       state: { count: 1, open: ["a"] },
     });
+
+    // A consumed event reaching head drives the deferred obligation.
+    journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 3 — consumed, at head
+    await harness.deliverConsumesFilteredPending();
+    await vi.waitFor(() => {
+      expect(headCalls).toEqual([{ open: ["a", "b"] }]);
+    });
+    expect(comparableRows(journal.rows(SIBLING))).toEqual([
+      { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
+      { type: DRIVEN, idempotencyKey: "test-task/drive:b", payload: { id: "b" } },
+    ]);
   });
 });
 

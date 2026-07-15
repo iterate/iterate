@@ -179,9 +179,6 @@ export class SchedulerProcessor extends StreamProcessor<
         await this.deps.repointAlarm(nextWakeAtMs(args.state, this.deps.now()));
       });
     }
-    // Event-less at-head pass (a head-reaching batch that consumed nothing):
-    // only the alarm repoint above runs.
-    if (event === null) return;
     if (event.type !== "events.iterate.com/scheduler/trigger-requested") return;
     // No gate here — #execute does all the gating after its barrier: pending
     // recheck against committed state, plus a completion-existence read so a

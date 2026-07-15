@@ -117,8 +117,6 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
     event,
     previousState,
   }: Parameters<StreamProcessor<typeof EmailProcessorContract>["processEvent"]>[0]): undefined {
-    // Event-less at-head pass: this processor has no at-head reconcile, so nothing to do.
-    if (event === null) return;
     if (event.type !== "events.iterate.com/email/received") return;
 
     // Resolve against the state BEFORE this event — the same input reduce()

@@ -139,9 +139,6 @@ export class GithubAgentProcessor extends StreamProcessor<
     previousState,
     state,
   }: Parameters<StreamProcessor<GithubAgentProcessorContract>["processEvent"]>[0]): undefined {
-    // The event-less at-head pass has no per-event work here (only the bridge
-    // reset in processEvent); the switch runs for real consumed events only.
-    if (event === null) return;
     switch (event.type) {
       case "events.iterate.com/github-agent/route-configured": {
         if (!hasCurrentRoute(previousState) || !sameRoute(previousState, event.payload)) {

@@ -122,9 +122,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (args.delivery.caughtUp) {
       blockProcessorWhile(() => this.#reconcileObligations(args));
     }
-    // Event-less at-head pass (a head-reaching batch that consumed nothing):
-    // only the obligation reconcile above runs.
-    if (event === null) return;
     if (event.type === "events.iterate.com/repo/cloudflare-artifact-event-received") {
       const push = repoArtifactPushFromEventPayload(event.payload);
       const commitOid = push?.afterCommitOid;

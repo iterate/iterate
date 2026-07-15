@@ -62,8 +62,6 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
     runInBackground,
     state,
   }: Parameters<StreamProcessor<SlackProcessorContract>["processEvent"]>[0]): undefined {
-    // Event-less at-head pass: this processor has no at-head reconcile, so nothing to do.
-    if (event === null) return;
     if (event.type !== "events.iterate.com/slack/webhook-received") return;
 
     if (this.deps.connection === null) {

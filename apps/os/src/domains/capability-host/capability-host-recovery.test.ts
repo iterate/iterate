@@ -249,11 +249,16 @@ describe("script execution reconciliation", () => {
     expect(h.stream.events.some((event) => event.type === T.completed)).toBe(false);
     expect(h.state().scriptExecutions["exec-5"]).toMatchObject({ status: "requested" });
 
-    // The stream recovers; the next caught-up pass (any delivery — even one
-    // of events this processor does not consume) retries the whole attempt
-    // from the fold.
+    // The stream recovers; the next caught-up pass retries the whole attempt
+    // from the fold. The trigger is a CONSUMED lifecycle re-check event
+    // (`stream/woken` — a stream restart) reaching head: the reconcile only
+    // fires when a consumed event is delivered at head, never on a fold no
+    // consumed event carried it to.
     h.stream.failAppendsOfType = undefined;
-    await h.stream.append({ type: "events.iterate.com/test/nudge", payload: {} });
+    await h.stream.append({
+      type: "events.iterate.com/stream/woken",
+      payload: { incarnationId: "retry" },
+    });
     await h.deliverPending();
     await vi.waitFor(() => {
       const completed = h.stream.events.find(
