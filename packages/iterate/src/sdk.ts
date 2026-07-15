@@ -191,7 +191,12 @@ export class IterateWorkerEntrypoint<
 
   /** Private transport entry point for event delivery. */
   private processEventBatch(batch: StreamEventBatch): void | Promise<void> {
-    return processEventsInOrder(batch.events, this.#streamEventReceiver);
+    for (let index = 0; index < batch.events.length; index += 1) {
+      const result = this.processEvent(batch.events[index]!);
+      if (result !== undefined) {
+        return continueProcessingEvents(batch.events, index + 1, result, this.#streamEventReceiver);
+      }
+    }
   }
 
   /** Called once per delivered event, in per-stream order, at-least-once.
@@ -227,7 +232,12 @@ export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends D
 
   /** Private transport entry point for event delivery. */
   private processEventBatch(batch: StreamEventBatch): void | Promise<void> {
-    return processEventsInOrder(batch.events, this.#streamEventReceiver);
+    for (let index = 0; index < batch.events.length; index += 1) {
+      const result = this.processEvent(batch.events[index]!);
+      if (result !== undefined) {
+        return continueProcessingEvents(batch.events, index + 1, result, this.#streamEventReceiver);
+      }
+    }
   }
 
   /** Called once per delivered event — see

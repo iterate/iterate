@@ -65,6 +65,8 @@ const WORKER_CONSUMER_PROCESS_EVENT =
   process.env.STREAM_BENCH_WORKER_CONSUMER_PROCESS_EVENT === "1";
 const WORKER_CONSUMER_PAIRED = process.env.STREAM_BENCH_WORKER_CONSUMER_PAIRED === "1";
 const WORKER_CONSUMER_EPHEMERAL = process.env.STREAM_BENCH_WORKER_CONSUMER_EPHEMERAL === "1";
+const WORKER_CONSUMER_DISCARD_CALLBACK_RESULT =
+  process.env.STREAM_BENCH_WORKER_CONSUMER_DISCARD_CALLBACK_RESULT === "1";
 const WORKER_CONSUMER_CANDIDATE_FIRST =
   process.env.STREAM_BENCH_WORKER_CONSUMER_CANDIDATE_FIRST === "1";
 const WORKER_CONSUMER_PAYLOAD_BYTES = Number(
@@ -1852,6 +1854,11 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     }
     const paired = WORKER_CONSUMER_PAIRED || WORKER_CONSUMER_EPHEMERAL;
     const useProcessEvent = WORKER_CONSUMER_PROCESS_EVENT || paired;
+    if (WORKER_CONSUMER_DISCARD_CALLBACK_RESULT && !paired) {
+      throw new Error(
+        "STREAM_BENCH_WORKER_CONSUMER_DISCARD_CALLBACK_RESULT requires a paired lane.",
+      );
+    }
     const maxBatchSize = useProcessEvent ? 1_000 : 100;
     if (
       !Number.isInteger(WORKER_CONSUMER_BATCH_SIZE) ||
@@ -1902,19 +1909,22 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
 
         ${
           WORKER_CONSUMER_PAIRED
-            ? `async processEventBatch(batch) {
+            ? `processEventBatch(batch) {
           const mode = batch.events.find(
             (event) => event.path === SOURCE_PATH && event.type === TRIGGER_TYPE,
           )?.payload.mode;
           if (mode === "baseline") {
-            for (const event of batch.events) {
-              const result = this.processEvent(event);
-              if (result !== undefined) await result;
-            }
-            return;
+            return this.#processEventBatchBaseline(batch);
           }
           if (mode !== "candidate") throw new Error(\`Unknown processEvent mode: \${mode}.\`);
-          await super.processEventBatch(batch);
+          return super.processEventBatch(batch);
+        }
+
+        async #processEventBatchBaseline(batch) {
+          for (const event of batch.events) {
+            const result = this.processEvent(event);
+            if (result !== undefined) await result;
+          }
         }`
             : ""
         }
@@ -1938,7 +1948,12 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
           }
           this.#iteration = undefined;
           this.#receivedCount = 0;
-          return this.#complete(iteration, count, mode, event);
+          const completion = this.#complete(iteration, count, mode, event);
+          if (${JSON.stringify(WORKER_CONSUMER_DISCARD_CALLBACK_RESULT)}) {
+            this.ctx.waitUntil(completion);
+            return;
+          }
+          return completion;
         }
 
         async #complete(iteration, count, mode, event) {
@@ -2054,7 +2069,12 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
 
         #processEvent(event, mode) {
           if (this.#accept(event, mode)) {
-            return this.#complete(event, mode);
+            const completion = this.#complete(event, mode);
+            if (${JSON.stringify(WORKER_CONSUMER_DISCARD_CALLBACK_RESULT)}) {
+              this.ctx.waitUntil(completion);
+              return;
+            }
+            return completion;
           }
         }
 
@@ -2246,9 +2266,13 @@ test.skipIf(!ENABLED || !FOCUS_WORKER_CONSUMER)(
     const metrics: Record<string, Metric> = {};
     for (const mode of modes) {
       const metricPrefix = WORKER_CONSUMER_EPHEMERAL
-        ? `worker_consumer_ephemeral_process_event_shared_transport_paired_${mode}`
+        ? WORKER_CONSUMER_DISCARD_CALLBACK_RESULT
+          ? `worker_consumer_ephemeral_process_event_sync_discard_shared_transport_paired_${mode}`
+          : `worker_consumer_ephemeral_process_event_shared_transport_paired_${mode}`
         : WORKER_CONSUMER_PAIRED
-          ? `worker_consumer_process_event_paired_${mode}`
+          ? WORKER_CONSUMER_DISCARD_CALLBACK_RESULT
+            ? `worker_consumer_process_event_sync_discard_paired_${mode}`
+            : `worker_consumer_process_event_paired_${mode}`
           : WORKER_CONSUMER_PROCESS_EVENT
             ? "worker_consumer_process_event"
             : "worker_consumer_forward";
