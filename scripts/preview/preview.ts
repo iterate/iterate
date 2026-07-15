@@ -786,52 +786,70 @@ export async function assign(options: AssignOptions = {}) {
 }
 
 /**
- * Show environment config lease inventory and active leases for PR previews.
+ * Show environment config lease inventory, cross-check holders against GitHub
+ * PR state, and explain why the fleet can look full even when only a handful
+ * of PRs are open (orphaned closed-PR leases, idle holds, draft opt-ins, …).
+ *
+ *   doppler run --project _shared --config prd -- pnpm preview status
  */
-export async function status() {
+type StatusOptions = {
+  /** GitHub token. Defaults to GITHUB_TOKEN or `gh auth token`. */
+  githubToken?: string;
+  /** Hours without a deploy/test renewal before a hold counts as idle. */
+  minIdleHours?: number;
+};
+
+export async function status(options: StatusOptions = {}) {
   const runtime = createPreviewRuntime();
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
-  const now = Date.now();
-  const resources = await semaphore.list({
-    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  const { githubToken, repositoryFullName, fetchPullRequestState } = resolvePreviewGithubContext(
+    runtime,
+    options,
+  );
+  if (!fetchPullRequestState) {
+    logPreview(
+      "no GITHUB_TOKEN / gh auth — cannot check whether pr-* holders are closed or list open PRs; lease table is still live from the semaphore",
+    );
+  }
+
+  const minIdleHours = options.minIdleHours ?? defaultReclaimMinIdleHours;
+  const slots = await classifyEnvironmentConfigLeases({
+    fetchPullRequestState,
+    minIdleMs: minIdleHours * 3_600_000,
+    semaphore,
   });
-  const available = resources
-    .filter((resource) => resource.leaseState === "available")
-    .map((resource) => ({
-      data: resource.data,
-      slug: resource.slug,
-      lastReleasedAt:
-        resource.lastReleasedAt === null ? null : new Date(resource.lastReleasedAt).toISOString(),
-    }));
-  const leased = resources
-    .filter((resource) => resource.leaseState === "leased")
-    .map((resource) => ({
-      data: resource.data,
-      slug: resource.slug,
-      holder: resource.holder ?? null,
-      pullRequestUrl: holderPullRequestUrl(resource.holder),
-      leasedUntil:
-        resource.leasedUntil === null ? null : new Date(resource.leasedUntil).toISOString(),
-      expiresInMs: resource.leasedUntil === null ? null : resource.leasedUntil - now,
-      lastAcquiredAt:
-        resource.lastAcquiredAt === null ? null : new Date(resource.lastAcquiredAt).toISOString(),
-    }))
-    .sort((left, right) => {
-      if (left.leasedUntil === null) return 1;
-      if (right.leasedUntil === null) return -1;
-      return left.leasedUntil.localeCompare(right.leasedUntil);
-    });
+  const openPullRequests = githubToken
+    ? await listOpenPullRequestsForPreviewDiagnosis(githubToken, repositoryFullName)
+    : [];
+  const diagnosis = diagnosePreviewFleetCapacity({ openPullRequests, slots });
 
   return {
-    checkedAt: new Date(now).toISOString(),
+    checkedAt: new Date().toISOString(),
     semaphoreBaseUrl: defaultSemaphoreBaseUrl,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-    total: resources.length,
-    availableCount: available.length,
-    leasedCount: leased.length,
-    nextLeaseExpiryAt: leased[0]?.leasedUntil ?? null,
-    available,
-    leased,
+    total: slots.length,
+    availableCount: diagnosis.availableCount,
+    leasedCount: diagnosis.leasedCount,
+    minIdleHours,
+    nextLeaseExpiryAt: diagnosis.nextLeaseExpiryAt,
+    slots,
+    openPullRequests: openPullRequests.map((pullRequest) => ({
+      number: pullRequest.number,
+      title: pullRequest.title,
+      url: pullRequest.url,
+      isDraft: pullRequest.isDraft,
+      labels: pullRequest.labels,
+      previewEligible: pullRequestWouldClaimPreviewSlot(pullRequest),
+      holdsSlot: diagnosis.holdersWithOpenPrs.includes(pullRequest.number),
+    })),
+    diagnosis,
+    // Surface reclaim commands at the top level too, matching `reclaim`'s own
+    // output shape. Must be a fresh array: the trpc-cli renderer prints any
+    // value it has already seen elsewhere in the tree (here, the same array
+    // under `diagnosis.reclaimCommands`) as the literal string "[Circular]",
+    // even though it is only shared, not truly cyclic.
+    reclaimable: [...diagnosis.reclaimCommands],
+    note: diagnosis.summary,
   };
 }
 
@@ -987,17 +1005,10 @@ type ReclaimOptions = {
 export async function reclaim(options: ReclaimOptions = {}) {
   const runtime = createPreviewRuntime();
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
-  const githubToken =
-    options.githubToken?.trim() || runtime.commandEnvironment.GITHUB_TOKEN?.trim();
-  const fetchPullRequestState = githubToken
-    ? makePullRequestStateFetcher(
-        githubToken,
-        runtime.commandEnvironment.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName,
-      )
-    : null;
+  const { fetchPullRequestState } = resolvePreviewGithubContext(runtime, options);
   if (!fetchPullRequestState) {
     logPreview(
-      "no GITHUB_TOKEN available — cannot check whether pr-* holders are closed, so verdicts are idle-time only (orphaned PRs show as idle/active)",
+      "no GITHUB_TOKEN / gh auth — cannot check whether pr-* holders are closed, so verdicts are idle-time only (orphaned PRs show as idle/active)",
     );
   }
 
@@ -3455,6 +3466,25 @@ function makePullRequestStateFetcher(
   };
 }
 
+/**
+ * Resolve the GitHub token, repo, and PR-state fetcher shared by `status` and
+ * `reclaim`. Token precedence: explicit option → GITHUB_TOKEN → `gh auth token`.
+ * `fetchPullRequestState` is null when no token is available — callers log their
+ * own reason and fall back to idle-time-only verdicts.
+ */
+function resolvePreviewGithubContext(runtime: PreviewRuntime, options: { githubToken?: string }) {
+  const githubToken =
+    options.githubToken?.trim() ||
+    runtime.commandEnvironment.GITHUB_TOKEN?.trim() ||
+    tryReadGhAuthToken();
+  const repositoryFullName =
+    runtime.commandEnvironment.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName;
+  const fetchPullRequestState = githubToken
+    ? makePullRequestStateFetcher(githubToken, repositoryFullName)
+    : null;
+  return { githubToken, repositoryFullName, fetchPullRequestState };
+}
+
 /** Pure reporting verdict; it never authorizes an automatic lease takeover. */
 function classifyLeaseForReclaim(input: {
   holderPullRequestState: "open" | "closed" | "unknown" | null;
@@ -3482,6 +3512,175 @@ function classifyLeaseForReclaim(input: {
   }
 
   return "active";
+}
+
+type PreviewDiagnosisOpenPullRequest = {
+  number: number;
+  title: string;
+  url: string;
+  isDraft: boolean;
+  labels: string[];
+};
+
+/**
+ * Draft PRs only claim a slot when they opt in (same policy as deploy). Used
+ * by `preview status` so "9 open PRs" is not compared apples-to-oranges with
+ * the 9-slot fleet.
+ */
+function pullRequestWouldClaimPreviewSlot(pullRequest: {
+  isDraft: boolean;
+  labels: readonly string[];
+}): boolean {
+  return !pullRequest.isDraft || pullRequest.labels.includes(previewOptInLabel);
+}
+
+type PreviewDiagnosisSlot = {
+  slug: string;
+  verdict: "available" | "active" | "idle" | "orphaned";
+  holder: string | null;
+  pullRequestUrl: string | null;
+  pullRequestState: "open" | "closed" | "unknown" | null;
+  leasedUntil: string | null;
+  lastUsedAgo: string | null;
+};
+
+/**
+ * Pure capacity diagnosis: reconcile semaphore holders with open PRs so an
+ * operator can see why "only N open PRs" still means zero free slots.
+ */
+function diagnosePreviewFleetCapacity(input: {
+  openPullRequests: PreviewDiagnosisOpenPullRequest[];
+  slots: PreviewDiagnosisSlot[];
+}) {
+  const available = input.slots.filter((slot) => slot.verdict === "available");
+  const leased = input.slots.filter((slot) => slot.verdict !== "available");
+  const orphaned = leased.filter((slot) => slot.verdict === "orphaned");
+  const idle = leased.filter((slot) => slot.verdict === "idle");
+  const active = leased.filter((slot) => slot.verdict === "active");
+  const holdersWithOpenPrs = input.openPullRequests
+    .map((pullRequest) => pullRequest.number)
+    .filter((number) => leased.some((slot) => parsePullRequestHolder(slot.holder) === number));
+  const previewEligibleOpen = input.openPullRequests.filter(pullRequestWouldClaimPreviewSlot);
+  const previewEligibleWithoutSlot = previewEligibleOpen.filter(
+    (pullRequest) => !holdersWithOpenPrs.includes(pullRequest.number),
+  );
+  const openButIneligible = input.openPullRequests.filter(
+    (pullRequest) => !pullRequestWouldClaimPreviewSlot(pullRequest),
+  );
+  const closedHolders = leased.filter((slot) => slot.pullRequestState === "closed");
+  const nonPrHolders = leased.filter((slot) => parsePullRequestHolder(slot.holder) === null);
+
+  const reasons: string[] = [];
+  if (available.length === 0 && leased.length > 0) {
+    reasons.push(`All ${leased.length} preview slots are leased (0 available).`);
+  } else if (available.length > 0) {
+    reasons.push(`${available.length} of ${input.slots.length} slots are available.`);
+  }
+  if (closedHolders.length > 0) {
+    reasons.push(
+      `${closedHolders.length} leased by closed/merged PRs (cleanup failed or never ran): ${closedHolders
+        .map((slot) => `${slot.slug}←${slot.holder}`)
+        .join(", ")}.`,
+    );
+  }
+  if (idle.length > 0) {
+    reasons.push(
+      `${idle.length} idle (open holder, no deploy/test renewal recently): ${idle
+        .map(
+          (slot) =>
+            `${slot.slug}←${slot.holder}${slot.lastUsedAgo ? ` (${slot.lastUsedAgo})` : ""}`,
+        )
+        .join(", ")}.`,
+    );
+  }
+  if (nonPrHolders.length > 0) {
+    reasons.push(
+      `${nonPrHolders.length} held by non-PR holders (manual/reclaim): ${nonPrHolders
+        .map((slot) => `${slot.slug}←${slot.holder ?? "unknown"}`)
+        .join(", ")}.`,
+    );
+  }
+  if (previewEligibleWithoutSlot.length > 0) {
+    reasons.push(
+      `${previewEligibleWithoutSlot.length} open preview-eligible PR(s) have no slot: ${previewEligibleWithoutSlot
+        .map((pullRequest) => `#${pullRequest.number}`)
+        .join(", ")}.`,
+    );
+  }
+  if (openButIneligible.length > 0) {
+    reasons.push(
+      `${openButIneligible.length} open draft PR(s) without the \`${previewOptInLabel}\` label correctly claim no slot: ${openButIneligible
+        .map((pullRequest) => `#${pullRequest.number}`)
+        .join(", ")}.`,
+    );
+  }
+  if (
+    input.openPullRequests.length > 0 &&
+    closedHolders.length === 0 &&
+    available.length === 0 &&
+    previewEligibleOpen.length <= input.slots.length
+  ) {
+    reasons.push(
+      `Open-PR count alone (${input.openPullRequests.length} open, ${previewEligibleOpen.length} preview-eligible) does not explain a full fleet — check idle/manual holders above.`,
+    );
+  }
+
+  const reclaimCommands = [...orphaned, ...idle].map(
+    (slot) => `pnpm preview reclaim --slot ${slot.slug} --force`,
+  );
+
+  const summaryParts = [
+    `${available.length} available / ${leased.length} leased of ${input.slots.length}`,
+    closedHolders.length > 0 ? `${closedHolders.length} orphaned (closed PR)` : null,
+    idle.length > 0 ? `${idle.length} idle` : null,
+    active.length > 0 ? `${active.length} active` : null,
+    previewEligibleWithoutSlot.length > 0
+      ? `${previewEligibleWithoutSlot.length} open PR(s) waiting for a slot`
+      : null,
+  ].filter(Boolean);
+
+  return {
+    availableCount: available.length,
+    leasedCount: leased.length,
+    orphanedCount: orphaned.length,
+    idleCount: idle.length,
+    activeCount: active.length,
+    openPullRequestCount: input.openPullRequests.length,
+    previewEligibleOpenCount: previewEligibleOpen.length,
+    previewEligibleWithoutSlotCount: previewEligibleWithoutSlot.length,
+    holdersWithOpenPrs,
+    nextLeaseExpiryAt:
+      leased
+        .map((slot) => slot.leasedUntil)
+        .filter((value): value is string => value != null)
+        .sort()[0] ?? null,
+    reasons,
+    reclaimCommands,
+    summary: summaryParts.join(" · "),
+  };
+}
+
+async function listOpenPullRequestsForPreviewDiagnosis(
+  githubToken: string,
+  repositoryFullName: string,
+): Promise<PreviewDiagnosisOpenPullRequest[]> {
+  const octokit = new Octokit({ auth: githubToken });
+  const [owner, repo] = splitRepositoryFullName(repositoryFullName);
+  const pullRequests = await octokit.paginate(octokit.rest.pulls.list, {
+    owner,
+    repo,
+    state: "open",
+    per_page: 100,
+  });
+  return pullRequests.map((pullRequest) => ({
+    number: pullRequest.number,
+    title: pullRequest.title,
+    url: pullRequest.html_url,
+    isDraft: Boolean(pullRequest.draft),
+    labels: (pullRequest.labels ?? [])
+      .map((label) => (typeof label === "string" ? label : label.name))
+      .filter((name): name is string => typeof name === "string" && name.length > 0),
+  }));
 }
 
 async function classifyEnvironmentConfigLeases(input: {
@@ -4530,9 +4729,11 @@ export const previewInternals = {
   describeEnvironmentConfigLeases,
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
+  diagnosePreviewFleetCapacity,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
   pullRequestHolder,
+  pullRequestWouldClaimPreviewSlot,
   requireExplicitReclaimForce,
   retakeRecordedSlotIfFree,
   resolveSlotWaitTotalMs,

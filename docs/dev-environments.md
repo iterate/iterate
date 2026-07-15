@@ -356,12 +356,21 @@ invariants:
   maximizes the chance a lapsed PR retakes its own slot instead of finding
   someone else on it.
 - **Everything is attributable and visible.** `pnpm preview status` shows
-  each slot's holder, PR link, and expiry; the semaphore UI at
-  semaphore.iterate.com shows the same; every lease transition
+  each slot's holder, PR open/closed state, idle/orphaned verdict, open
+  preview-eligible PRs without a slot, and reclaim commands when the fleet
+  is full for a reason other than "nine open PRs". The semaphore UI at
+  semaphore.iterate.com shows the same live leases; every lease transition
   (acquired/renewed/evicted/expired/force-released) is logged as an event in
   the coordinator. Exceptional states — waiting for a slot, no slot
   available, slot taken over, slot moved — are additionally bannered as a
   caution alert at the top of the PR body's managed preview section.
+
+  ```bash
+  # Why are there no free slots? (uses GITHUB_TOKEN or `gh auth token`)
+  doppler run --project _shared --config prd -- pnpm preview status
+  # Free an orphaned/idle slot after checking no cleanup is mid-flight:
+  pnpm preview reclaim --slot preview-4 --force
+  ```
 
 CI and local machines run the **same preview commands against the same
 semaphore**. CI additionally checks the deployment epoch before invoking those

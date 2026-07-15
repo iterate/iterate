@@ -116,9 +116,10 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
     expect(cloudflarePreviewSharedPaths).toContain("packages/ui/**");
     expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/iterate-com/**");
-    // The preview deploy + e2e lifecycle is one Depot CI workflow (cleanup
-    // has its own, with mirrored paths); a change to it triggers a full-fleet
-    // preview and must be mirrored in that file's own paths list.
+    // The preview deploy + e2e lifecycle is one Depot CI workflow; a change to
+    // it triggers a full-fleet preview. Cleanup is a separate closed-event
+    // workflow with no paths filter (it must run for every closed PR that
+    // might hold a lease, including full reverts).
     expect(cloudflarePreviewSharedPaths).toContain(".depot/workflows/cloudflare-previews.yml");
     // Dependency manifests can change every app's build output; a diff that
     // touches only them must select the full fleet, not "no apps affected"
@@ -250,6 +251,25 @@ describe("preview workflow scope", () => {
     });
     expect(deployWorkflowText).not.toContain("cloudflare-preview-fleet-auth-rpc-cutover");
     expect(cleanupWorkflowText).not.toContain("cloudflare-preview-fleet-auth-rpc-cutover");
+  });
+
+  it("always runs cleanup on close with default-branch tooling (no paths filter)", () => {
+    const cleanupWorkflowText = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-preview-cleanup.yml"),
+      "utf8",
+    );
+    const cleanupWorkflow = parseYaml(cleanupWorkflowText) as {
+      on?: { pull_request?: { types?: string[]; paths?: string[] } };
+    };
+
+    expect(cleanupWorkflow.on?.pull_request?.types).toEqual(["closed"]);
+    // A paths filter skips cleanup when the final PR diff is empty (full
+    // revert) or no longer matches deploy paths — which leaks the lease.
+    expect(cleanupWorkflow.on?.pull_request?.paths).toBeUndefined();
+    // PR-head checkout reintroduces old bugs (e.g. bail-before-release);
+    // cleanup tooling must come from the default branch.
+    expect(cleanupWorkflowText).toContain("github.event.repository.default_branch");
+    expect(cleanupWorkflowText).not.toContain("github.event.pull_request.head.sha");
   });
 });
 
@@ -1700,6 +1720,67 @@ describe("lease reclaim verdicts", () => {
         now,
       }),
     ).toBe("active");
+  });
+});
+
+describe("preview fleet capacity diagnosis", () => {
+  const { diagnosePreviewFleetCapacity, pullRequestWouldClaimPreviewSlot } = previewInternals;
+
+  it("treats ready PRs and preview-labeled drafts as slot-eligible", () => {
+    expect(pullRequestWouldClaimPreviewSlot({ isDraft: false, labels: [] })).toBe(true);
+    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: ["preview"] })).toBe(true);
+    expect(pullRequestWouldClaimPreviewSlot({ isDraft: true, labels: [] })).toBe(false);
+  });
+
+  it("explains a full fleet held mostly by closed PRs despite few open ones", () => {
+    const diagnosis = diagnosePreviewFleetCapacity({
+      openPullRequests: [
+        {
+          number: 2008,
+          title: "ready pr without a slot",
+          url: "https://github.com/iterate/iterate/pull/2008",
+          isDraft: false,
+          labels: [],
+        },
+        {
+          number: 1983,
+          title: "draft without opt-in",
+          url: "https://github.com/iterate/iterate/pull/1983",
+          isDraft: true,
+          labels: [],
+        },
+      ],
+      slots: [
+        {
+          slug: "preview-1",
+          verdict: "orphaned",
+          holder: "pr-1990",
+          pullRequestUrl: "https://github.com/iterate/iterate/pull/1990",
+          pullRequestState: "closed",
+          leasedUntil: "2026-07-15T13:53:39.946Z",
+          lastUsedAgo: "19h ago",
+        },
+        {
+          slug: "preview-2",
+          verdict: "active",
+          holder: "pr-2006",
+          pullRequestUrl: "https://github.com/iterate/iterate/pull/2006",
+          pullRequestState: "open",
+          leasedUntil: "2026-07-16T09:20:18.639Z",
+          lastUsedAgo: "2m ago",
+        },
+      ],
+    });
+
+    expect(diagnosis.availableCount).toBe(0);
+    expect(diagnosis.leasedCount).toBe(2);
+    expect(diagnosis.orphanedCount).toBe(1);
+    expect(diagnosis.previewEligibleWithoutSlotCount).toBe(1);
+    expect(diagnosis.reclaimCommands).toEqual(["pnpm preview reclaim --slot preview-1 --force"]);
+    expect(diagnosis.reasons.some((reason) => reason.includes("closed/merged"))).toBe(true);
+    expect(diagnosis.reasons.some((reason) => reason.includes("#2008"))).toBe(true);
+    expect(diagnosis.reasons.some((reason) => reason.includes("#1983"))).toBe(true);
+    expect(diagnosis.summary).toContain("orphaned");
   });
 });
 
