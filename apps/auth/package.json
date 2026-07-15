@@ -26,7 +26,8 @@
     "ensure-resources": "tsx ./scripts/ensure-resources.ts",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "seed-oauth-clients": "tsx ./scripts/seed-oauth-clients.ts",
-    "test": "node --import tsx --test scripts/*.test.ts src/**/*.test.ts"
+    "test": "node --import tsx --test scripts/*.test.ts src/**/*.test.ts",
+    "test:e2e": "node -e \"if (!process.env.AUTH_BASE_URL) { console.error('AUTH_BASE_URL is required for auth e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts"
   },
   "dependencies": {
     "@better-auth/oauth-provider": "^1.6.9",
@@ -62,6 +63,7 @@
     "miniflare": "catalog:cloudflare",
     "trpc-cli": "0.15.1",
     "vite": "^8.0.0",
+    "vitest": "4.0.15",
     "wrangler": "catalog:cloudflare"
   }
 }
