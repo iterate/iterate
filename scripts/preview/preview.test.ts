@@ -116,6 +116,23 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("patches/**");
   });
 
+  it("runs the dummy-petshop live e2e against its deployed preview", () => {
+    const petshop = cloudflarePreviewApps["dummy-petshop"];
+
+    expect(petshop).toMatchObject({
+      appPath: "apps/dummy-petshop",
+      paths: ["apps/dummy-petshop/**"],
+      previewReadyUrlPath: "/",
+      previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
+      previewTestCommandArgs: ["pnpm", "test:e2e"],
+    });
+    for (const workflow of ["cloudflare-previews.yml", "cloudflare-preview-cleanup.yml"]) {
+      expect(readFileSync(resolve(repoRoot, ".depot/workflows", workflow), "utf8")).toContain(
+        "- apps/dummy-petshop/**",
+      );
+    }
+  });
+
   it("rejects pre-RPC branches before the preview orchestrator can deploy Auth", () => {
     const workflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
@@ -592,7 +609,13 @@ describe("preview deploy selection", () => {
       probeAppServing: everythingServing,
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth", "streams-example-app"]);
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "semaphore",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
   });
 
   it("deploys the full fleet when the deployed head is no longer an ancestor of the current head", async () => {
@@ -612,7 +635,13 @@ describe("preview deploy selection", () => {
       probeAppServing: everythingServing,
     });
 
-    expect(apps.map((app) => app.slug)).toEqual(["os", "semaphore", "auth", "streams-example-app"]);
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "semaphore",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
   });
 
   it("propagates non-404 compare failures instead of guessing a selection", async () => {

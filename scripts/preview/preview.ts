@@ -1060,7 +1060,13 @@ export async function provisionAuthPreviewConfigs(
   };
 }
 
-export const CloudflarePreviewAppSlug = z.enum(["os", "semaphore", "auth", "streams-example-app"]);
+export const CloudflarePreviewAppSlug = z.enum([
+  "os",
+  "semaphore",
+  "auth",
+  "streams-example-app",
+  "dummy-petshop",
+]);
 
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 type CloudflarePreviewAppSlugType = CloudflarePreviewAppSlug;
@@ -1455,6 +1461,20 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         "pnpm playwright --grep @preview --reporter=list",
       ].join("; "),
     ],
+  },
+  "dummy-petshop": {
+    slug: "dummy-petshop",
+    displayName: "Dummy Petshop",
+    appPath: "apps/dummy-petshop",
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    // The fixture holds only fake data, so cleanup deliberately leaves its
+    // worker and singleton Durable Object in place.
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
+    dopplerProject: "dummy-petshop",
+    paths: ["apps/dummy-petshop/**"],
+    previewReadyUrlPath: "/",
+    previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
+    previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
 };
 

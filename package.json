@@ -24,7 +24,7 @@
     "spec": "playwright test --config playwright.config.ts",
     "e2e": "pnpm --dir apps/os e2e",
     "vitest": "pnpm --dir apps/os test",
-    "test": "pnpm -r --parallel --filter '!iterate' test",
+    "test": "pnpm -r --parallel test",
     "clean": "rm -rf ./**/node_modules",
     "super-reset": "pnpm i && pnpm -r --parallel --filter '!iterate' super-reset",
     "auth:mint": "tsx scripts/auth/mint-session.ts",

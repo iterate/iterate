@@ -433,11 +433,11 @@ type SecretErrorCode =
  * a 4xx instead of leaking an exception. `detail` (message-only) names the
  * specifics — e.g. which URL part held a disallowed placeholder. */
 export class SecretSubstitutionError extends Error {
-  constructor(
-    readonly code: SecretErrorCode,
-    detail?: string,
-  ) {
+  readonly code: SecretErrorCode;
+
+  constructor(code: SecretErrorCode, detail?: string) {
     super(detail === undefined ? code : `${code}: ${detail}`);
+    this.code = code;
     this.name = "SecretSubstitutionError";
   }
 }
