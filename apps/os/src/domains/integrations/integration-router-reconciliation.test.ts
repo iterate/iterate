@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { integrationConnectionStreamPath } from "./utils.ts";
 
 const network = vi.hoisted(() => {
@@ -47,20 +46,21 @@ const network = vi.hoisted(() => {
 
 vi.mock("../../env.ts", () => ({ itxEnv: { STREAM: network.STREAM } }));
 
-const { appendConnectionDirectoryEvent, integrationStreamStub, routeIntegrationWebhook } =
-  await import("./integration-streams.ts");
+const {
+  appendConnectionDirectoryEvent,
+  buildIntegrationRouterCreatedEvent,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
+  integrationStreamStub,
+  routeIntegrationWebhook,
+} = await import("./integration-streams.ts");
 
 const PROJECT_ID = "prj_test";
 const CONNECTION = "acme";
-const SUBSCRIPTION_KEY = `${DurableObjectNameCodec.stringify({
-  projectId: PROJECT_ID,
-  path: integrationConnectionStreamPath("slack", CONNECTION),
-})}#slack`;
 
-describe("webhook router subscription reconciliation", () => {
+describe("explicit webhook router creation", () => {
   afterEach(() => network.reset());
 
-  test("a webhook replaces a stale property-walk subscription before routing, once", async () => {
+  test("ingress appends only the webhook and never creates or subscribes the router", async () => {
     await appendConnectionDirectoryEvent({
       claimed: true,
       connection: CONNECTION,
@@ -68,21 +68,17 @@ describe("webhook router subscription reconciliation", () => {
       projectId: PROJECT_ID,
       slug: "slack",
     });
-    await integrationStreamStub(
-      PROJECT_ID,
-      integrationConnectionStreamPath("slack", CONNECTION),
-    ).append({
-      idempotencyKey: `slack-router-subscription:${PROJECT_ID}:${CONNECTION}`,
-      payload: {
-        subscriptionKey: SUBSCRIPTION_KEY,
-        delivery: {
-          mode: "wake",
-          expression: ["integrations", "slack", CONNECTION, "processor", "wakeStreamSubscriber"],
-          processorSlug: "slack",
-        },
-      },
-      type: "events.iterate.com/stream/subscription-configured",
-    });
+    const path = integrationConnectionStreamPath("slack", CONNECTION);
+    await integrationStreamStub(PROJECT_ID, path).append(
+      buildIntegrationRouterCreatedEvent({ connection: CONNECTION, slug: "slack" }),
+      buildIntegrationRouterSubscriptionConfiguredEvent({
+        connection: CONNECTION,
+        processorSlug: "slack",
+        projectId: PROJECT_ID,
+        slug: "slack",
+      }),
+    );
+    network.appendBatches.length = 0;
 
     await routeIntegrationWebhook({
       event: {
@@ -91,57 +87,19 @@ describe("webhook router subscription reconciliation", () => {
         type: "events.iterate.com/slack/webhook-received",
       },
       externalId: "T1",
-      routerProcessorSlug: "slack",
-      slug: "slack",
-    });
-    await routeIntegrationWebhook({
-      event: {
-        idempotencyKey: "slack-webhook:two",
-        payload: { body: { event_id: "two" } },
-        type: "events.iterate.com/slack/webhook-received",
-      },
-      externalId: "T1",
-      routerProcessorSlug: "slack",
       slug: "slack",
     });
 
-    const streamName = DurableObjectNameCodec.stringify({
-      projectId: PROJECT_ID,
-      path: integrationConnectionStreamPath("slack", CONNECTION),
-    });
-    const events = network.streams.get(streamName)!;
-    const firstWebhookBatch = network.appendBatches.find(({ inputs }) =>
-      inputs.some((event) => event.idempotencyKey === "slack-webhook:one"),
-    );
-    expect(firstWebhookBatch?.inputs.map((event) => event.type)).toEqual([
-      "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/slack/webhook-received",
-    ]);
-    const configurations = events.filter(
-      (event) => event.type === "events.iterate.com/stream/subscription-configured",
-    );
-    expect(configurations).toHaveLength(2);
-    expect(configurations[1]).toMatchObject({
-      payload: {
-        subscriptionKey: SUBSCRIPTION_KEY,
-        delivery: {
-          mode: "wake",
-          expression: [
-            "integrations",
-            "slack",
-            ["get", CONNECTION],
-            "processor",
-            "wakeStreamSubscriber",
-          ],
-          processorSlug: "slack",
+    expect(network.appendBatches).toHaveLength(1);
+    expect(network.appendBatches[0]?.inputs).toEqual([
+      expect.objectContaining({
+        idempotencyKey: "slack-webhook:one",
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: { event_id: "one" },
+          connection: CONNECTION,
         },
-      },
-    });
-    expect(events.map((event) => event.idempotencyKey)).toEqual([
-      `slack-router-subscription:${PROJECT_ID}:${CONNECTION}`,
-      expect.stringContaining("integration-router-subscription:"),
-      "slack-webhook:one",
-      "slack-webhook:two",
+      }),
     ]);
   });
 });

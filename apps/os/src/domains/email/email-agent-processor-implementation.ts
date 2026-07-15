@@ -39,6 +39,21 @@ export class EmailAgentProcessor extends StreamProcessor<
     StreamProcessor<typeof EmailAgentProcessorContract>["reduce"]
   >[0]): EmailAgentProcessorState {
     switch (event.type) {
+      case "events.iterate.com/email-agent/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("Email agent processor received more than one email-agent/created event");
+        }
+        return {
+          ...state,
+          birthCertificate: event.payload,
+          threadId: event.payload.config.threadId,
+          ...(event.payload.config.counterpart === undefined
+            ? {}
+            : { counterpart: event.payload.config.counterpart }),
+          ...(event.payload.config.subject === undefined
+            ? {}
+            : { subject: event.payload.config.subject }),
+        };
       case "events.iterate.com/email/thread-route-configured":
         return {
           ...state,
@@ -76,6 +91,8 @@ export class EmailAgentProcessor extends StreamProcessor<
   }: Parameters<
     StreamProcessor<typeof EmailAgentProcessorContract>["processEvent"]
   >[0]): undefined {
+    if (event.type === "events.iterate.com/email-agent/created") return;
+    if (state.birthCertificate === null) return;
     if (event.type !== "events.iterate.com/email/received") return;
 
     // Never transcribe the project's own mail: a copy of our outbound looping

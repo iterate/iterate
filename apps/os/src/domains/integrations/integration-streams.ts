@@ -132,9 +132,8 @@ export async function lookupConnectionClaim(
 
 /**
  * The desired durable subscription from an integration connection journal to
- * its router processor. Both connect and ingress use this one builder: connect
- * arms a fresh stream, while every webhook idempotently reconciles connections
- * that predate the current itx expression shape.
+ * its router processor. Connection setup owns this append. Webhook ingress
+ * never creates or subscribes a processor.
  *
  * The idempotency key fingerprints the persisted capability name itself. A
  * future expression or processor-slug change therefore appends one replacement
@@ -168,6 +167,17 @@ export function buildIntegrationRouterSubscriptionConfiguredEvent(input: {
   });
 }
 
+/** Birth certificate paired with a connection router subscription. The
+ * provider owns the event type; the connection is processor config, not an
+ * identity inferred from the stream path. */
+export function buildIntegrationRouterCreatedEvent(input: { connection: string; slug: string }) {
+  return {
+    type: `events.iterate.com/${input.slug}/created`,
+    idempotencyKey: `integration-router-created:${input.slug}:${input.connection}`,
+    payload: { config: { connection: input.connection } },
+  };
+}
+
 /** The outcome of routing one inbound webhook: delivered to a connection, or
  * `ignored` because no project has claimed its external id (the caller ACKs the
  * ignored case with a 200 — see the webhook handlers' cardinal rule). */
@@ -178,42 +188,28 @@ type RouteIntegrationWebhookResult =
 /**
  * Route one validly-signed webhook to the project + connection that claimed its
  * `(slug, externalId)`, by appending a provider-shaped event to that
- * connection's stream. Providers with a connection-stream router also supply
- * its processor slug: the same append then reconciles the desired durable
- * subscription BEFORE the webhook fact, so old parked connections repair on
- * their next delivery. `ignored` (no live claim) lets the door ACK-and-drop.
- * This is the generic core of the webhook door (D4): per-provider code does
- * only the signature verify, external-id extract, and event shaping; routing is
- * one function for every integration.
+ * connection's stream. This function deliberately appends ONLY the ingress
+ * fact: connection setup owns any router birth and subscription. `ignored` (no
+ * live claim) lets the door ACK-and-drop. This is the generic core of the
+ * webhook door (D4): per-provider code does only the signature verify,
+ * external-id extract, and event shaping; routing is one function for every
+ * integration.
  */
 export async function routeIntegrationWebhook(input: {
   event: { idempotencyKey: string; payload: Record<string, unknown>; type: string };
   externalId: string;
-  routerProcessorSlug?: string;
   slug: string;
 }): Promise<RouteIntegrationWebhookResult> {
   const claim = await lookupConnectionClaim(input.slug, input.externalId);
   if (claim === null) return { ignored: "external-id-not-claimed", ok: true };
   const streamPath = integrationConnectionStreamPath(input.slug, claim.connection);
-  await integrationStreamStub(claim.projectId, streamPath).append(
-    ...(input.routerProcessorSlug === undefined
-      ? []
-      : [
-          buildIntegrationRouterSubscriptionConfiguredEvent({
-            connection: claim.connection,
-            processorSlug: input.routerProcessorSlug,
-            projectId: claim.projectId,
-            slug: input.slug,
-          }),
-        ]),
-    {
-      ...input.event,
-      // Preserve the trusted routing decision on the durable fact. Downstream
-      // userspace can select the exact account that received the webhook
-      // instead of accidentally acting through the project's first connection.
-      payload: { ...input.event.payload, connection: claim.connection },
-    },
-  );
+  await integrationStreamStub(claim.projectId, streamPath).append({
+    ...input.event,
+    // Preserve the trusted routing decision on the durable fact. Downstream
+    // userspace can select the exact account that received the webhook
+    // instead of accidentally acting through the project's first connection.
+    payload: { ...input.event.payload, connection: claim.connection },
+  });
   return { connection: claim.connection, ok: true, projectId: claim.projectId };
 }
 

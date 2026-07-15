@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createProcessorHostHarness,
   MemoryStream,
+  MemoryStreamNetwork,
   type ProcessorHostHarness,
 } from "../streams/test-helpers.ts";
 import { PROCESSOR_HOST_REVIVED_EVENT_TYPE } from "../streams/stream-processor-host.ts";
@@ -15,10 +16,13 @@ import { AgentProcessor } from "./agent-processor-implementation.ts";
 import {
   AGENT_LLM_REQUEST_BACKSTOP_MS,
   AgentProcessorContract,
+  DEFAULT_AGENT_MODEL,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
 } from "./agent-processor-contract.ts";
 
 const T = {
   context: "events.iterate.com/agents/context-added",
+  created: "events.iterate.com/agent/created",
   scheduled: "events.iterate.com/agent/llm-request-scheduled",
   requested: "events.iterate.com/agent/llm-request-requested",
   started: "events.iterate.com/agent/llm-request-started",
@@ -26,6 +30,32 @@ const T = {
   cancelled: "events.iterate.com/agent/llm-request-cancelled",
   revived: PROCESSOR_HOST_REVIVED_EVENT_TYPE,
 } as const;
+
+const birthCertificate = {
+  config: {
+    llm: { model: DEFAULT_AGENT_MODEL },
+    systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+  },
+};
+
+function seedAgentBirth(stream: MemoryStream): void {
+  stream.events.push({
+    type: T.created,
+    idempotencyKey: `agent/created:test:${stream.path}`,
+    payload: birthCertificate,
+    createdAt: new Date(stream.now()).toISOString(),
+    offset: 1,
+    path: stream.path,
+  });
+}
+
+function createdAgentStream(): MemoryStream {
+  // Agent birth cross-posts to the project catalog at `/`; a network keeps
+  // that catalog event off the agent stream, like production.
+  const stream = new MemoryStreamNetwork().get("/agents/test");
+  seedAgentBirth(stream);
+  return stream;
+}
 
 function agentHarness() {
   return createProcessorHostHarness({
@@ -64,6 +94,8 @@ describe("eviction recovery, end to end", () => {
   let h: ProcessorHostHarness<{ agent: AgentProcessor }>;
   beforeEach(async () => {
     h = agentHarness();
+    h.stream.network = new MemoryStreamNetwork(() => h.clock.now);
+    seedAgentBirth(h.stream);
     pump = setInterval(() => void h.deliverAll(), 10);
     await h.stream.append(
       {
@@ -186,7 +218,7 @@ describe("eviction recovery, end to end", () => {
 
 describe("attempt bookkeeping under stream failures", () => {
   it("a failed started-append leaves the obligation requested and releases the live-set (no leak, retried later)", async () => {
-    const stream = new MemoryStream();
+    const stream = createdAgentStream();
     let failStartedAppends = true;
     const realAppend = stream.append.bind(stream);
     stream.append = async (...inputs) => {
@@ -240,7 +272,7 @@ describe("attempt bookkeeping under stream failures", () => {
 
 describe("staleness policy (only-settle-past-expiry)", () => {
   it("settles an expired request as failure without ever dialing the AI binding", async () => {
-    const stream = new MemoryStream();
+    const stream = createdAgentStream();
     const agent = new AgentProcessor({
       stream,
       path: stream.path,
@@ -271,11 +303,13 @@ describe("staleness policy (only-settle-past-expiry)", () => {
   });
 
   it("the agent's backstop settles a request that never completed", async () => {
-    const stream = new MemoryStream();
+    const stream = createdAgentStream();
     const now = Date.now();
     // Reached-by-lifecycle state, seeded as a checkpoint: a request accepted
     // long ago whose LLM attempt never finished.
     const stuck = AgentProcessorContract.stateSchema.parse({
+      birthCertificate,
+      config: birthCertificate.config,
       currentRequest: {
         phase: "requested",
         llmRequestOffset: 2,
@@ -291,13 +325,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
     });
     // The checkpoint sits at offset 2; give the journal that history so the
     // nudge lands past it instead of being filtered as already-processed.
-    await stream.append(
-      {
-        type: T.scheduled,
-        payload: { debounceMs: 0, model: "m", requestId: "r" },
-      },
-      { type: T.requested, payload: { model: "m", requestId: "r" } },
-    );
+    await stream.append({ type: T.requested, payload: { model: "m", requestId: "r" } });
     const [nudge] = await stream.append({
       type: T.context,
       payload: {
@@ -318,7 +346,7 @@ describe("staleness policy (only-settle-past-expiry)", () => {
   });
 
   it("a request past BOTH the expiry and the backstop horizon settles exactly once", async () => {
-    const stream = new MemoryStream();
+    const stream = createdAgentStream();
     // requestedAt comes from the journaled event's wall-clock createdAt; run
     // the processor's clock far enough ahead that the expired-obligation pass
     // AND the backstop both want to settle this request in the same reconcile.

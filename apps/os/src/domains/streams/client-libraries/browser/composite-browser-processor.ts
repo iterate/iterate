@@ -116,6 +116,12 @@ export class CompositeBrowserProcessor implements AnyHostedProcessor {
     return { snapshot: await this.snapshot() };
   }
 
+  async waitUntilProcessed(
+    input: Parameters<AnyHostedProcessor["waitUntilProcessed"]>[0],
+  ): Promise<void> {
+    await Promise.all(this.#children.map(({ processor }) => processor.waitUntilProcessed(input)));
+  }
+
   markLoaded(): void {
     for (const { processor } of this.#children) processor.markLoaded();
   }

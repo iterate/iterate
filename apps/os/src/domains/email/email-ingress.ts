@@ -20,10 +20,8 @@ import { itxEnv } from "../../env.ts";
 import { parseConfig } from "../../config.ts";
 import { readProjectBySlug } from "../../project-directory.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { integrationStreamStub } from "../integrations/integration-streams.ts";
 import { putProjectFile, sanitizeFileFilename } from "../files/project-files.ts";
-import { EmailProcessorContract } from "./email-processor-contract.ts";
 import {
   EMAIL_BODY_TRUNCATE_CHARS,
   EMAIL_INTEGRATION_STREAM_PATH,
@@ -157,21 +155,10 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
     },
   };
 
-  // The subscription append is belt-and-braces for projects born before the
-  // email router existed (the project processor's create lane arms it for new
-  // projects): idempotency-keyed, so it is a no-op every time after the first.
-  await integrationStreamStub(project.id, EMAIL_INTEGRATION_STREAM_PATH).append(
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName: DurableObjectNameCodec.stringify({
-        projectId: project.id,
-        path: EMAIL_INTEGRATION_STREAM_PATH,
-      }),
-      idempotencyKey: `email-router-subscription:${project.id}`,
-      processor: ["email", "processor"],
-      processorSlug: EmailProcessorContract.slug,
-    }),
-    receivedEvent,
-  );
+  // Project creation owns the email router's birth and subscription. Ingress
+  // only records mail on that already-created stream; receiving a message is
+  // never an implicit processor-creation mechanism.
+  await integrationStreamStub(project.id, EMAIL_INTEGRATION_STREAM_PATH).append(receivedEvent);
 }
 
 /**

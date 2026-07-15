@@ -33,6 +33,14 @@ function makeHarness(options?: {
   // so reduce-time math (`Date.parse(event.createdAt)`) is exact in assertions.
   const stream = new MemoryStream("/scheduler/primary");
   stream.now = () => clock.now;
+  stream.events.push({
+    type: "events.iterate.com/scheduler/created",
+    idempotencyKey: "scheduler/created:test",
+    payload: { config: {} },
+    createdAt: new Date(clock.now).toISOString(),
+    offset: 1,
+    path: stream.path,
+  });
   const repointAlarm = vi.fn(options?.repointAlarm ?? (async () => {}));
   const invokeCapability = vi.fn(
     options?.invokeCapability ?? (async () => "ok"),
@@ -84,19 +92,29 @@ async function waitForCompletion(harness: ReturnType<typeof makeHarness>, count 
 }
 
 describe("SchedulerProcessor reduce", () => {
+  it("throws when a second scheduler birth certificate is reduced", async () => {
+    const { deliver, stream } = makeHarness();
+    await stream.append({
+      type: "events.iterate.com/scheduler/created",
+      payload: { config: {} },
+    });
+
+    await expect(deliver()).rejects.toThrow("scheduler received more than one created event");
+  });
+
   it("upserts on schedule-set: re-setting a key replaces code, provenance, and run count", async () => {
     const { deliver, processor, stream } = makeHarness();
     await stream.append(setEvent("report", "async () => 1"));
     await deliver();
     const first = processor.state.schedules["report"]!;
     expect(first.nextTriggerAt).toBe(T0 + 60_000);
-    expect(first.definedAtOffset).toBe(1);
+    expect(first.definedAtOffset).toBe(2);
 
     await stream.append(setEvent("report", "async () => 2"));
     await deliver();
     const second = processor.state.schedules["report"]!;
     expect(second.action.script).toBe("async () => 2");
-    expect(second.definedAtOffset).toBe(2);
+    expect(second.definedAtOffset).toBe(3);
     expect(second.runCount).toBe(0);
   });
 
@@ -175,7 +193,7 @@ describe("SchedulerProcessor reduce", () => {
     expect(processor.getScheduleView("missing")).toBeUndefined();
     expect(processor.getScheduleView("alpha")).toEqual({
       action: { kind: "itx-script", script: "async () => {}" },
-      definedAtOffset: 2,
+      definedAtOffset: 3,
       key: "alpha",
       metadata: { owner: "tests" },
       nextTriggerAt: new Date(T0 + 60_000).toISOString(),
@@ -236,7 +254,7 @@ describe("triggering", () => {
     const requested = stream.events.filter((e) => e.type === REQUESTED_TYPE);
     expect(requested).toHaveLength(1);
     expect(requested[0]!.idempotencyKey).toBe(
-      `scheduler/trigger-requested:report:1:${T0 + 60_000}`,
+      `scheduler/trigger-requested:report:2:${T0 + 60_000}`,
     );
     expect(requested[0]!.payload).toMatchObject({
       key: "report",
@@ -332,7 +350,7 @@ describe("triggering", () => {
 
     const completed = stream.events.find((e) => e.type === COMPLETED_TYPE)!;
     expect(completed.payload).toMatchObject({
-      definedAtOffset: 1,
+      definedAtOffset: 2,
       key: "report",
       outcome: "succeeded",
       result: { made: "cat-image" },
@@ -352,6 +370,7 @@ describe("triggering", () => {
     snapshotStore.snapshot = {
       offset: defined!.offset,
       state: {
+        birthCertificate: { config: {} },
         pendingTriggers: {},
         schedules: {
           report: {
@@ -478,6 +497,7 @@ describe("triggering", () => {
   it("manual triggers require an existing key, run immediately, and advance the recurring clock", async () => {
     const harness = makeHarness();
     const { clock, deliver, processor, stream } = harness;
+    await deliver();
     expect(() => processor.buildManualTriggerEvent("ghost")).toThrow(/no schedule/);
 
     await stream.append(setEvent("report"));
@@ -571,13 +591,13 @@ describe("recovery and alarm derivation", () => {
     const { processor, repointAlarm, stream } = harness;
     await stream.append(setEvent("report"));
     const events = stream.events.slice();
-    await expect(processor.ingest({ events, streamMaxOffset: 1 })).rejects.toThrow(
+    await expect(processor.ingest({ events, streamMaxOffset: 2 })).rejects.toThrow(
       "setAlarm outage",
     );
     expect(processor.state.schedules).toEqual({});
 
     // The checkpoint did not advance, so redelivering the same batch heals.
-    await processor.ingest({ events, streamMaxOffset: 1 });
+    await processor.ingest({ events, streamMaxOffset: 2 });
     expect(processor.state.schedules["report"]).toBeDefined();
     expect(repointAlarm).toHaveBeenLastCalledWith(T0 + 60_000);
   });
@@ -602,7 +622,8 @@ describe("recovery and alarm derivation", () => {
   });
 
   it("triggerDue on an empty scheduler deletes the alarm (the heartbeat has nothing to heal)", async () => {
-    const { processor, repointAlarm } = makeHarness();
+    const { deliver, processor, repointAlarm } = makeHarness();
+    await deliver();
     await processor.triggerDue();
     expect(repointAlarm).toHaveBeenCalledWith(null);
   });

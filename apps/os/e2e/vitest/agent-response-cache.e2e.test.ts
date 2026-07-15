@@ -30,7 +30,7 @@ type LlmCompletionEvidence = {
 
 /**
  * One onboarding birth turn, start to greeting: create a project, open the
- * onboarding agent the way the dashboard chat page does (configure({})), and
+ * onboarding agent the way the dashboard chat page does (create({})), and
  * return the LLM completion's gateway-cache evidence plus the greeting text.
  */
 async function runOnboardingBirthTurn(slug: string): Promise<LlmCompletionEvidence> {
@@ -38,7 +38,7 @@ async function runOnboardingBirthTurn(slug: string): Promise<LlmCompletionEviden
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = itx.projects.create({ slug });
   using agent = project.agents.get("/agents/onboarding");
-  await agent.configure({});
+  await agent.create({});
   const greeting = await agent.stream.waitForEvent({
     eventTypes: [WEB_MESSAGE_SENT_TYPE],
     timeoutMs: 90_000,

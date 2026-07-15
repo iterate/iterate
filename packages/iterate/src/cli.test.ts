@@ -350,7 +350,7 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_missing",
       slug: "missing",
-      waitUntilCreated: false,
+      waitUntilReady: false,
     });
     expect(waitArgs).toEqual({
       afterOffset: 0,
@@ -393,7 +393,7 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_default",
       slug: "default",
-      waitUntilCreated: false,
+      waitUntilReady: false,
     });
   });
 
@@ -429,7 +429,7 @@ describe("resolveChatProject", () => {
       organizationSlug: "acme",
       projectId: "prj_org_project",
       slug: "org-project",
-      waitUntilCreated: false,
+      waitUntilReady: false,
     });
   });
 

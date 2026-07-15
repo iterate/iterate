@@ -301,8 +301,9 @@ loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
 default repo's `worker.ts`.
 
 Note: method-returned itx surfaces pipeline on every transport, including
-script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`
-and `await itx.agents.get(path).message(...)` work as one expression (the
+script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`,
+`await itx.agents.get(path).create({})`, and (after birth)
+`await itx.agents.get(path).message(...)` work as one expression (the
 dynamic-capability fallback lives on the classes' prototype chains, so the
 returned instances are genuine RpcTargets; see
 `installPrototypeInvokeCapabilityFallback`). For several calls on one
@@ -311,6 +312,7 @@ pattern:
 
 ```ts
 using agent = itx.agents.get(path); // no await
+await agent.create({});
 const [sent, description] = await Promise.all([agent.message("hello"), agent.__describe()]);
 ```
 

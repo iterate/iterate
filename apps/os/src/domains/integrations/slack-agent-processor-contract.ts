@@ -11,7 +11,7 @@ import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { AgentProcessorContract, AgentStatusRecord } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { SlackProcessorContract } from "./slack-processor-contract.ts";
+import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-processor-contract.ts";
 
 /**
  * Processor for one Slack-backed agent stream.
@@ -35,6 +35,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   version: "0.5.0",
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
+    birthCertificate: SlackAgentBirthCertificate.nullable().default(null),
     /**
      * The agent's merged status record — what the assistant thread should
      * show. Folded from agent/status-changed patches with the contract's
@@ -59,6 +60,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   events: {},
   processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, SlackProcessorContract],
   consumes: [
+    "events.iterate.com/slack-agent/created",
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
     "events.iterate.com/agent/status-changed",

@@ -26,6 +26,32 @@ const OTHER_INSTALLATION_PR_7 = await githubAgentPath(
   { ...GITHUB_LINK, installationId: "999", repo: "gadgets", repoPath: "/repos/config" },
   7,
 );
+const REPO_ARTIFACT = {
+  artifactName: "prj_1--L3JlcG9zL2NvbmZpZw",
+  defaultBranch: "main",
+  remote: "https://example.artifacts.cloudflare.net/git/ns/prj_1--L3JlcG9zL2NvbmZpZw.git",
+};
+
+function seedReadyRepo(stream: MemoryStream): void {
+  stream.events.push(
+    {
+      type: "events.iterate.com/repo/created",
+      idempotencyKey: "repo/created:test",
+      payload: { config: {} },
+      createdAt: new Date(0).toISOString(),
+      offset: 1,
+      path: stream.path,
+    },
+    {
+      type: "events.iterate.com/repo/ready",
+      idempotencyKey: "repo/ready:test",
+      payload: { ...REPO_ARTIFACT, path: stream.path, projectId: "prj_1" },
+      createdAt: new Date(0).toISOString(),
+      offset: 2,
+      path: stream.path,
+    },
+  );
+}
 
 function newRepoProcessor(stream: MemoryStream, path = "/repos/config") {
   return new RepoProcessor({
@@ -103,7 +129,7 @@ describe("github-agent path scheme", () => {
 });
 
 describe("RepoProcessor PR webhook forward (router)", () => {
-  test("forwards PR webhooks to the per-PR agent stream, route fact first", async () => {
+  test("forwards PR webhooks to an explicitly created per-PR agent stream", async () => {
     const { network, stream, deliver } = routerSetup();
 
     await stream.append(
@@ -117,21 +143,41 @@ describe("RepoProcessor PR webhook forward (router)", () => {
 
     const routed = network.eventsAt(WIDGETS_PR_7);
     expect(routed.map((event) => event.type)).toEqual([
-      "events.iterate.com/github-agent/route-configured",
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/github-agent/created",
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/github/webhook-received",
     ]);
-    expect(routed[0]!.payload).toEqual({
-      ...GITHUB_LINK,
-      number: 7,
-      repoPath: "/repos/config",
-      streamPath: WIDGETS_PR_7,
+    expect(routed[2]!.payload).toEqual({
+      config: {
+        ...GITHUB_LINK,
+        number: 7,
+        repoPath: "/repos/config",
+      },
     });
-    expect(routed[1]!.payload).toMatchObject({
-      subscriptionKey: expect.stringMatching(/#github-agent$/),
-      delivery: { processorSlug: "github-agent" },
-    });
-    expect(routed[2]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
+    expect(routed.slice(5, 8).map((event) => event.payload)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          delivery: { processorSlug: "agent", mode: "wake", expression: expect.any(Array) },
+        }),
+        expect.objectContaining({
+          delivery: {
+            processorSlug: "capability-host",
+            mode: "wake",
+            expression: expect.any(Array),
+          },
+        }),
+        expect.objectContaining({
+          delivery: { processorSlug: "github-agent", mode: "wake", expression: expect.any(Array) },
+        }),
+      ]),
+    );
+    expect(routed[8]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
   });
 
   test("routes each PR to its own stream and dedupes the route fact per PR", async () => {
@@ -155,13 +201,25 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     await deliver();
 
     expect(network.eventsAt(WIDGETS_PR_7).map((event) => event.type)).toEqual([
-      "events.iterate.com/github-agent/route-configured",
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/github-agent/created",
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/github/webhook-received",
       "events.iterate.com/github/webhook-received",
     ]);
     expect(network.eventsAt(WIDGETS_PR_8).map((event) => event.type)).toEqual([
-      "events.iterate.com/github-agent/route-configured",
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/github-agent/created",
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/github/webhook-received",
     ]);
@@ -198,8 +256,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     const routePayload = (path: string) =>
       network
         .eventsAt(path)
-        .find((event) => event.type === "events.iterate.com/github-agent/route-configured")
-        ?.payload;
+        .find((event) => event.type === "events.iterate.com/github-agent/created")?.payload?.config;
     expect(routePayload(WIDGETS_PR_7)).toMatchObject({
       installationId: "789",
       repo: "widgets",
@@ -240,7 +297,13 @@ describe("RepoProcessor PR webhook forward (router)", () => {
           .eventsAt(await githubAgentPath({ ...GITHUB_LINK, repoPath: "/repos/config" }, number))
           .map((event) => event.type),
       ).toEqual([
-        "events.iterate.com/github-agent/route-configured",
+        "events.iterate.com/agent/created",
+        "events.iterate.com/capability-host/created",
+        "events.iterate.com/github-agent/created",
+        "events.iterate.com/capability-host/capability-provided",
+        "events.iterate.com/agents/context-added",
+        "events.iterate.com/stream/subscription-configured",
+        "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/github/webhook-received",
       ]);
@@ -263,19 +326,14 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     );
     await deliver();
 
-    expect(network.streams.size).toBe(1);
+    expect(network.eventsAt(WIDGETS_PR_7)).toEqual([]);
   });
 });
 
-describe("RepoProcessor create lane (creation as an at-head obligation)", () => {
-  const createdArtifact = {
-    artifactName: "prj_1--L3JlcG9zL2NvbmZpZw",
-    defaultBranch: "main",
-    remote: "https://example.artifacts.cloudflare.net/git/ns/prj_1--L3JlcG9zL2NvbmZpZw.git",
-  };
-  const createRequested = {
-    type: "events.iterate.com/repo/create-requested" as const,
-    payload: { projectId: "prj_1", path: "/repos/config" },
+describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)", () => {
+  const repoCreated = {
+    type: "events.iterate.com/repo/created" as const,
+    payload: { config: {} },
   };
 
   function newCreatingRepoProcessor(stream: MemoryStream, createCalls: unknown[]) {
@@ -285,7 +343,7 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
       syncFromGithubPush: async () => ({ commitOid: "github-head" }),
       createRepoArtifact: async (input) => {
         createCalls.push(input);
-        return createdArtifact;
+        return REPO_ARTIFACT;
       },
       path: "/repos/config",
       projectId: "prj_1",
@@ -300,47 +358,48 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
     });
   }
 
-  test("creates the artifact once at head and journals repo/created", async () => {
+  test("creates the artifact once at head and journals repo/ready", async () => {
     const createCalls: unknown[] = [];
     const { stream, processor, deliver } = creatingSetup(createCalls);
 
-    await stream.append(createRequested);
+    await stream.append(repoCreated);
     await deliver();
 
     expect(createCalls).toEqual([{ path: "/repos/config", projectId: "prj_1" }]);
-    const created = stream.events.filter(
-      (event) => event.type === "events.iterate.com/repo/created",
-    );
-    expect(created).toHaveLength(1);
-    expect(created[0]).toMatchObject({
-      idempotencyKey: "repo/created",
-      payload: { ...createdArtifact, path: "/repos/config", projectId: "prj_1" },
+    const ready = stream.events.filter((event) => event.type === "events.iterate.com/repo/ready");
+    expect(ready).toHaveLength(1);
+    expect(ready[0]).toMatchObject({
+      idempotencyKey: "repo/ready",
+      payload: { ...REPO_ARTIFACT, path: "/repos/config", projectId: "prj_1" },
     });
 
     await deliver();
-    expect(processor.state).toMatchObject({ createRequested: true, created: true });
+    expect(processor.state).toMatchObject({
+      birthCertificate: { config: {} },
+      ready: true,
+    });
     expect(createCalls).toHaveLength(1);
   });
 
   test("defers creation while the fold is behind the head, then creates once caught up", async () => {
     const createCalls: unknown[] = [];
     const { stream, processor } = creatingSetup(createCalls);
-    const [requested, linked] = await stream.append(createRequested, {
+    const [created, linked] = await stream.append(repoCreated, {
       type: "events.iterate.com/repo/github-link-configured",
       payload: GITHUB_LINK,
     });
 
-    await processor.ingest({ events: [requested!], streamMaxOffset: 2 });
+    await processor.ingest({ events: [created!], streamMaxOffset: 2 });
     expect(createCalls).toHaveLength(0);
     await processor.ingest({ events: [linked!], streamMaxOffset: 2 });
     expect(createCalls).toHaveLength(1);
   });
 
-  test("refold: a journal that already contains repo/created never re-creates", async () => {
+  test("refold: a journal that already contains repo/ready never re-creates", async () => {
     const createCalls: unknown[] = [];
     const { stream, processor, deliver } = creatingSetup(createCalls);
 
-    await stream.append(createRequested);
+    await stream.append(repoCreated);
     await deliver();
     await deliver();
     expect(createCalls).toHaveLength(1);
@@ -364,9 +423,11 @@ describe("RepoProcessor create lane (creation as an at-head obligation)", () => 
 });
 
 function routerSetup() {
-  return makeProcessorHarness({
+  const harness = makeProcessorHarness({
     path: "/repos/config",
     now: () => 0, // epoch-pinned stamps; see github-agent-test-helpers.ts
     build: ({ stream }) => newRepoProcessor(stream),
   });
+  seedReadyRepo(harness.stream);
+  return harness;
 }

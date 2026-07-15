@@ -16,6 +16,7 @@ import {
   type ParentCapabilityHost,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
@@ -118,7 +119,10 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#capabilityHostProcessor);
+    return new StreamProcessorRpcTarget(this.#capabilityHostProcessor, {
+      waitUntilProcessed: (input) =>
+        this.#processorHost.waitUntilProcessed(CapabilityHostProcessorContract.slug, input),
+    });
   }
 
   // Return types are pinned shallow so `DurableObjectStub<CapabilityHostDurableObject>`

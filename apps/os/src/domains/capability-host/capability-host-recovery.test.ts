@@ -10,10 +10,24 @@ import { MemoryStream } from "../streams/test-helpers.ts";
 import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";
 
 const T = {
+  created: "events.iterate.com/capability-host/created",
   requested: "events.iterate.com/capability-host/script-execution-requested",
   started: "events.iterate.com/capability-host/script-execution-started",
   completed: "events.iterate.com/capability-host/script-execution-completed",
 } as const;
+
+function capabilityHostStream(): MemoryStream {
+  const stream = new MemoryStream();
+  stream.events.push({
+    type: T.created,
+    idempotencyKey: `capability-host/created:test:${stream.path}`,
+    payload: { config: {} },
+    createdAt: new Date().toISOString(),
+    offset: 1,
+    path: stream.path,
+  });
+  return stream;
+}
 
 function makeProcessor(options: {
   stream: MemoryStream;
@@ -36,7 +50,7 @@ function makeProcessor(options: {
 
 describe("script execution reconciliation", () => {
   it("runs a fresh request: started evidence lands before the body, completion after", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const ran: string[] = [];
     const processor = makeProcessor({
       stream,
@@ -62,14 +76,17 @@ describe("script execution reconciliation", () => {
   });
 
   it("settles an orphaned execution (started, incarnation died) without re-running it", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     // The dead incarnation's evidence, written before it was evicted.
     await stream.append(
       { type: T.requested, payload: { code: "async () => 1", executionId: "exec-1" } },
       { type: T.started, payload: { executionId: "exec-1" } },
     );
     const processor = makeProcessor({ stream }); // run() throws if invoked
-    await processor.ingest({ events: stream.events, streamMaxOffset: 2 });
+    await processor.ingest({
+      events: stream.events,
+      streamMaxOffset: stream.events.at(-1)!.offset,
+    });
 
     await vi.waitFor(() => {
       const completed = stream.events.find((event) => event.type === T.completed);
@@ -81,7 +98,7 @@ describe("script execution reconciliation", () => {
   });
 
   it("recovers a request whose incarnation died BEFORE any attempt started (provably never ran → runs it)", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     await stream.append({
       type: T.requested,
       payload: { code: "async () => 2", executionId: "exec-2" },
@@ -96,7 +113,10 @@ describe("script execution reconciliation", () => {
     });
     // A later batch (e.g. the revival fact) — the requested event itself is
     // NOT in it; recovery reads the fold, not the batch.
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
+    await processor.ingest({
+      events: stream.events,
+      streamMaxOffset: stream.events.at(-1)!.offset,
+    });
     await vi.waitFor(() => {
       expect(stream.events.some((event) => event.type === T.completed)).toBe(true);
     });
@@ -104,7 +124,7 @@ describe("script execution reconciliation", () => {
   });
 
   it("a failed started-append leaves the obligation requested (no body run, no completion) and retries", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     let failStartedAppends = true;
     const realAppend = stream.append.bind(stream);
     stream.append = async (...inputs) => {
@@ -125,7 +145,10 @@ describe("script execution reconciliation", () => {
       type: T.requested,
       payload: { code: "async () => 5", executionId: "exec-5" },
     });
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
+    await processor.ingest({
+      events: stream.events,
+      streamMaxOffset: stream.events.at(-1)!.offset,
+    });
     // Give the failed attempt a beat: nothing may have run or settled — the
     // evidence rule ("no started fact ⇒ never ran") must stay true.
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -151,7 +174,7 @@ describe("script execution reconciliation", () => {
   });
 
   it("settles an expired request without running it (only-settle-past-expiry)", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     await stream.append({
       type: T.requested,
       payload: {
@@ -161,7 +184,10 @@ describe("script execution reconciliation", () => {
       },
     });
     const processor = makeProcessor({ stream }); // run() throws if invoked
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
+    await processor.ingest({
+      events: stream.events,
+      streamMaxOffset: stream.events.at(-1)!.offset,
+    });
 
     await vi.waitFor(() => {
       const completed = stream.events.find((event) => event.type === T.completed);
@@ -173,13 +199,16 @@ describe("script execution reconciliation", () => {
   });
 
   it("a completion settles the obligation for good: replayed batches change nothing", async () => {
-    const stream = new MemoryStream();
+    const stream = capabilityHostStream();
     const processor = makeProcessor({ stream, run: async () => "done" });
     await stream.append({
       type: T.requested,
       payload: { code: "async () => 4", executionId: "exec-4" },
     });
-    await processor.ingest({ events: stream.events, streamMaxOffset: 1 });
+    await processor.ingest({
+      events: stream.events,
+      streamMaxOffset: stream.events.at(-1)!.offset,
+    });
     await vi.waitFor(() => {
       expect(stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);
     });

@@ -80,6 +80,11 @@ export class SchedulerProcessor extends StreamProcessor<
     state: SchedulerProcessorState;
   }): SchedulerProcessorState {
     switch (event.type) {
+      case "events.iterate.com/scheduler/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("scheduler received more than one created event");
+        }
+        return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/scheduler/schedule-set": {
         const payload = event.payload;
         return {
@@ -149,7 +154,9 @@ export class SchedulerProcessor extends StreamProcessor<
 
   protected override processEvent({
     event,
+    state,
   }: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEvent"]>[0]): undefined {
+    if (state.birthCertificate === null) return;
     if (event.type !== "events.iterate.com/scheduler/trigger-requested") return;
     // No gate here — #execute does all the gating after its barrier: pending
     // recheck against checkpointed state, plus a completion-existence read so
@@ -163,6 +170,7 @@ export class SchedulerProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
+    if (args.state.birthCertificate === null) return;
     // Inside the serialized batch section, so the alarm always reflects the
     // state that is about to checkpoint.
     await this.deps.repointAlarm(nextWakeAtMs(args.state, this.deps.now()));
@@ -188,6 +196,7 @@ export class SchedulerProcessor extends StreamProcessor<
     // Self-load: after a restart this can run before any batch has delivered,
     // and the due/sweep decisions below must see the durable checkpoint.
     await this.snapshot();
+    this.assertCreated();
     const now = this.deps.now();
     const due = dueSchedules(this.state.schedules, now);
     if (due.length > 0) {
@@ -234,6 +243,7 @@ export class SchedulerProcessor extends StreamProcessor<
 
   /** Build a validated `schedule-set` append input (the DO appends it). */
   buildScheduleSetEvent(payload: ScheduleSetPayload) {
+    this.assertCreated();
     return this.contract.buildEvent({
       type: "events.iterate.com/scheduler/schedule-set",
       payload,
@@ -242,6 +252,7 @@ export class SchedulerProcessor extends StreamProcessor<
 
   /** Build a validated `schedule-cancelled` append input. */
   buildScheduleCancelledEvent(key: string) {
+    this.assertCreated();
     return this.contract.buildEvent({
       type: "events.iterate.com/scheduler/schedule-cancelled",
       payload: { key },
@@ -255,6 +266,7 @@ export class SchedulerProcessor extends StreamProcessor<
    * Schedule's clock and consumes a one-shot.
    */
   buildManualTriggerEvent(key: string) {
+    this.assertCreated();
     const entry = this.state.schedules[key];
     if (entry === undefined) throw new Error(`no schedule under key "${key}"`);
     const nowIso = new Date(this.deps.now()).toISOString();
@@ -270,6 +282,12 @@ export class SchedulerProcessor extends StreamProcessor<
       },
     });
     return { event, executionId };
+  }
+
+  assertCreated(): void {
+    if (this.state.birthCertificate === null) {
+      throw new Error("scheduler has not been created");
+    }
   }
 
   /** One key's Schedule as the public view shape, or undefined. */

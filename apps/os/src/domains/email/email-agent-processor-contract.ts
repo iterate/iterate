@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { EmailProcessorContract } from "./email-processor-contract.ts";
+import { EmailAgentBirthCertificate, EmailProcessorContract } from "./email-processor-contract.ts";
 
 /**
  * Processor for one email-thread agent stream.
@@ -23,6 +23,7 @@ export const EmailAgentProcessorContract = defineProcessorContract({
   version: "0.2.0",
   description: "Handles email-specific behavior for one routed email agent stream.",
   stateSchema: z.object({
+    birthCertificate: EmailAgentBirthCertificate.nullable().default(null),
     threadId: z.string().optional(),
     streamPath: z.string().optional(),
     /** Who the thread is with: the latest inbound Reply-To/From address. */
@@ -32,6 +33,7 @@ export const EmailAgentProcessorContract = defineProcessorContract({
   events: {},
   processorDeps: [AgentProcessorContract, EmailProcessorContract],
   consumes: [
+    "events.iterate.com/email-agent/created",
     "events.iterate.com/email/thread-route-configured",
     "events.iterate.com/email/received",
   ],

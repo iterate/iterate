@@ -114,6 +114,9 @@ const PendingTrigger = z.looseObject({
 });
 type PendingTrigger = z.infer<typeof PendingTrigger>;
 
+export const SchedulerBirthCertificate = z.strictObject({ config: z.strictObject({}) });
+export type SchedulerBirthCertificate = z.infer<typeof SchedulerBirthCertificate>;
+
 export const SchedulerProcessorContract = defineProcessorContract({
   slug: "scheduler",
   version: "0.1.0",
@@ -122,10 +125,15 @@ export const SchedulerProcessorContract = defineProcessorContract({
     "due Schedules are triggered by the hosting Durable Object's alarm and every Trigger's " +
     "request and outcome land back on the stream.",
   stateSchema: z.object({
+    birthCertificate: SchedulerBirthCertificate.nullable().default(null),
     pendingTriggers: z.record(z.string(), PendingTrigger).default({}),
     schedules: z.record(z.string(), ScheduleEntry).default({}),
   }),
   events: {
+    "events.iterate.com/scheduler/created": {
+      description: "Creates a scheduler processor on this stream.",
+      payloadSchema: SchedulerBirthCertificate,
+    },
     "events.iterate.com/scheduler/schedule-set": {
       description: "A Schedule was created or replaced under its key.",
       payloadSchema: ScheduleSetPayload,
@@ -144,12 +152,14 @@ export const SchedulerProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
+    "events.iterate.com/scheduler/created",
     "events.iterate.com/scheduler/schedule-set",
     "events.iterate.com/scheduler/schedule-cancelled",
     "events.iterate.com/scheduler/trigger-requested",
     "events.iterate.com/scheduler/trigger-completed",
   ],
   emits: [
+    "events.iterate.com/scheduler/created",
     "events.iterate.com/scheduler/schedule-set",
     "events.iterate.com/scheduler/schedule-cancelled",
     "events.iterate.com/scheduler/trigger-requested",

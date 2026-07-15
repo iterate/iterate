@@ -7,7 +7,10 @@ import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
+import {
+  TelegramAgentBirthCertificate,
+  TelegramProcessorContract,
+} from "./telegram-processor-contract.ts";
 
 /**
  * Processor for one Telegram-backed agent stream (one chat session).
@@ -34,6 +37,7 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
   version: "0.3.0",
   description: "Handles Telegram-specific behavior for one routed Telegram agent stream.",
   stateSchema: z.object({
+    birthCertificate: TelegramAgentBirthCertificate.nullable().default(null),
     botId: z.string().optional(),
     chatId: z.string().optional(),
     messageThreadId: z.string().optional(),
@@ -67,6 +71,7 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     TelegramProcessorContract,
   ],
   consumes: [
+    "events.iterate.com/telegram-agent/created",
     "events.iterate.com/telegram/webhook-received",
     "events.iterate.com/telegram/send-requested",
     "events.iterate.com/agent/llm-request-requested",

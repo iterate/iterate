@@ -16,7 +16,13 @@ import {
 } from "../integrations/github-app.ts";
 import { isStreamOffsetConflictError } from "../streams/rpc-types.ts";
 import type { StreamEventInput } from "../streams/schemas.ts";
-import type { SecretDescription, SecretRefresh, SecretUpdateInput } from "./types.ts";
+import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import type {
+  SecretCreateInput,
+  SecretDescription,
+  SecretRefresh,
+  SecretUpdateInput,
+} from "./types.ts";
 import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.ts";
 import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
@@ -99,6 +105,8 @@ export class SecretDurableObject extends DurableObject<Env> {
   get processor() {
     return new StreamProcessorRpcTarget(this.#secretProcessor, {
       catchUpBeforeSnapshot: () => this.#processorHost.catchUp(SecretProcessorContract.slug),
+      waitUntilProcessed: (input) =>
+        this.#processorHost.waitUntilProcessed(SecretProcessorContract.slug, input),
       // Secret material is write-only: the live state that leaves this DO is
       // the DESCRIPTION — snapshots and onStateChange pushes must never carry
       // the ciphertext, only the hasMaterial fact.
@@ -109,6 +117,88 @@ export class SecretDurableObject extends DurableObject<Env> {
   /** The secret's live state — the DESCRIPTION only, behind `itx.secrets.get(path).liveState`. */
   get liveState() {
     return new LiveStateRpcTarget<SecretDescription>(this.#processorHost);
+  }
+
+  create(input: SecretCreateInput) {
+    const result = this.#updates.then(() => this.#create(input));
+    this.#updates = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async #create(input: SecretCreateInput) {
+    const egress = normalizeEgress(input.egress);
+    const idempotencyKey = `secret/created:${this.#name.projectId}:${this.#name.path}`;
+    const stream = this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.#name.projectId,
+        path: this.#name.path,
+      }),
+    );
+    const subscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
+      durableObjectName: this.ctx.id.name!,
+      idempotencyKey: `stream/subscription-configured:${this.ctx.id.name!}#${SecretProcessorContract.slug}`,
+      processor: ["secrets", ["get", this.#name.path], "processor"],
+      processorSlug: SecretProcessorContract.slug,
+    });
+
+    const existing = await stream.getEvent({ idempotencyKey });
+    if (existing !== undefined) {
+      const [configured] = await stream.append(subscription);
+      await this.#processorHost.waitUntilProcessed(SecretProcessorContract.slug, {
+        offset: configured!.offset,
+      });
+      return existing;
+    }
+
+    for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
+      const snapshot = await this.#snapshotWithOffset();
+      if (snapshot.state.birthCertificate !== null) {
+        throw new Error(`secret already created: ${this.#name.path}`);
+      }
+      const offset = snapshot.offset + 1;
+      const encryptedMaterial =
+        input.material === undefined
+          ? undefined
+          : await encryptSecretCellMaterial(
+              JSON.stringify(input.material),
+              this.env.SECRET_ENCRYPTION_KEY,
+              {
+                egressOrigins: egressOrigins(egress),
+                offset,
+                path: this.#name.path,
+                projectId: this.#name.projectId,
+              },
+            );
+      try {
+        const [created, configured] = await stream.append(
+          {
+            idempotencyKey,
+            offset,
+            type: "events.iterate.com/secret/created",
+            payload: {
+              config: {
+                egress,
+                ...(encryptedMaterial === undefined ? {} : { encryptedMaterial }),
+                refresh: input.refresh ?? null,
+              },
+            },
+          } as StreamEventInput,
+          subscription,
+        );
+        await this.#processorHost.waitUntilProcessed(SecretProcessorContract.slug, {
+          offset: Math.max(created!.offset, configured!.offset),
+        });
+        return created!;
+      } catch (error) {
+        if (!isStreamOffsetConflictError(error) || attempt === MAX_MATERIAL_APPEND_ATTEMPTS) {
+          throw error;
+        }
+      }
+    }
+    throw new Error("unreachable secret create retry state");
   }
 
   update(input: SecretUpdateInput) {
@@ -127,6 +217,8 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (input.material !== undefined && input.egress === undefined) {
       throw new Error("secret.update requires egress with replacement material");
     }
+    const initialSnapshot = await this.#snapshotWithOffset();
+    assertSecretCreated(initialSnapshot.state, this.#name.path);
 
     const egress = input.egress === undefined ? undefined : normalizeEgress(input.egress);
 
@@ -141,6 +233,9 @@ export class SecretDurableObject extends DurableObject<Env> {
           ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
         },
       });
+      await this.#processorHost.waitUntilProcessed(SecretProcessorContract.slug, {
+        offset: event!.offset,
+      });
       return event!;
     }
 
@@ -148,13 +243,18 @@ export class SecretDurableObject extends DurableObject<Env> {
     // blob must be thrown away and recomputed for a fresh snapshot.
     for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
       const snapshot = await this.#snapshotWithOffset();
+      assertSecretCreated(snapshot.state, this.#name.path);
       try {
-        return await this.#appendMaterialUpdate({
+        const event = await this.#appendMaterialUpdate({
           egress: egress!,
           material: input.material,
           offset: snapshot.offset + 1,
           ...(input.refresh === undefined ? {} : { refresh: input.refresh }),
         });
+        await this.#processorHost.waitUntilProcessed(SecretProcessorContract.slug, {
+          offset: event.offset,
+        });
+        return event;
       } catch (error) {
         if (!isStreamOffsetConflictError(error) || attempt === MAX_MATERIAL_APPEND_ATTEMPTS) {
           throw error;
@@ -194,6 +294,7 @@ export class SecretDurableObject extends DurableObject<Env> {
 
     try {
       let state = await this.#snapshot();
+      assertSecretCreated(state, this.#name.path);
       assertOriginPinned(request.url, state);
 
       // A refresh-and-retry needs the body twice; clone while it is still
@@ -652,8 +753,15 @@ function sameRefresh(current: SecretRefresh | null, expected: SecretRefresh): bo
 function describeSecretState(state: SecretState): SecretDescription {
   return {
     audit: state.audit,
+    created: state.birthCertificate !== null,
     egress: state.egress,
     hasMaterial: state.encryptedMaterial !== null,
     refresh: state.refresh?.kind ?? null,
   };
+}
+
+function assertSecretCreated(state: SecretState, path: string): void {
+  if (state.birthCertificate === null) {
+    throw new Error(`secret has not been created: ${path}`);
+  }
 }

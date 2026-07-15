@@ -4,21 +4,21 @@ import { isOnboardingActive } from "./onboarding-agent.ts";
 
 const state = (overrides: Partial<ProjectProcessorState>): ProjectProcessorState => ({
   agents: [],
-  createRequest: null,
-  created: true,
+  birthCertificate: { config: { slug: "test" } },
   customDomains: [],
   egressRules: [],
   humanApprovalKeys: [],
   onboardingActive: false,
   onboardingCompletedAt: null,
   repos: [],
+  ready: true,
   secrets: [],
   streams: [],
   ...overrides,
 });
 
 describe("isOnboardingActive", () => {
-  test("keys off the phase marker alone — the agent births lazily and may not exist yet", () => {
+  test("keys off the phase marker alone — the agent may not have been explicitly created yet", () => {
     expect(isOnboardingActive(state({ onboardingActive: true }))).toBe(true);
     expect(isOnboardingActive(state({ onboardingActive: false }))).toBe(false);
   });

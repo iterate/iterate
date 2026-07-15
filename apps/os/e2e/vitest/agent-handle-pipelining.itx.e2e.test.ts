@@ -5,7 +5,7 @@
  * Model-authored scripts run in dynamic workers whose `itx` is a workerd RPC
  * stub (`env.ITX` loopback), and models write the natural one-liners:
  *
- *   await itx.agents.get("researcher").message(task);   // child agent, relative path
+ *   await itx.agents.get("researcher").message(task);   // already-created child agent
  *   await itx.agents.get(path).someTool(args);
  *   await itx.capabilityHosts.get(path).runScript(code);
  *
@@ -52,6 +52,11 @@ test(
     const agentPath = "/agents/pipeline-target";
     const marker = crypto.randomUUID().slice(0, 8);
 
+    // Creation is explicit. This call itself is pipelined through get(); the
+    // rest of the test proves the other methods still pipeline on the
+    // already-created handle.
+    await itx.agents.get(agentPath).create({});
+
     // A DURABLE dynamic capability on the agent's scope (an itx-expression
     // method alias: calling it appends to the proof stream). Durable rather
     // than live because the script below runs server-side, long after this
@@ -82,8 +87,8 @@ test(
         }>()
         .vars({ agentPath, marker, proofType: PROOF_TYPE })
         .execute(async (itx, vars) => {
-          // 1. THE one-liner every prompt teaches. message() on the pipelined
-          //    result of get(); the first message also births the agent.
+          // 1. message() on the pipelined result of get(). The agent was born
+          //    explicitly above; message is an ordinary post-birth command.
           const sent = await itx.agents.get(vars.agentPath).message("pipelined hello");
 
           // 2. A dynamic capability DIRECTLY on the fetched handle: proofAppend

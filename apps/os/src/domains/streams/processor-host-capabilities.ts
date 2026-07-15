@@ -23,6 +23,7 @@ export type AnyHostedProcessor = {
     streamMaxOffset: number;
   }): Promise<void>;
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
+  waitUntilProcessed(args: { offset: number; timeoutMs?: number }): Promise<void>;
   getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
   currentState: unknown;
   readonly isLoaded: boolean;

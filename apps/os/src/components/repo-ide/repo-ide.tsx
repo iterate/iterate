@@ -300,9 +300,11 @@ export function RepoIde({
       sourceStore.setStaged(task.path, undefined);
       sourceStore.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
 
-      // Messaging a fresh path births the agent. The task commit intentionally
-      // happens first so its first turn can always read the durable assignment.
-      await itx.agents.get(assignment.agentPath).message(assignment.instructions);
+      // The task commit intentionally happens before explicit birth, so the
+      // agent's first turn can always read the durable assignment.
+      const agent = itx.agents.get(assignment.agentPath);
+      await agent.create({});
+      await agent.message(assignment.instructions);
       toast.success(`Assigned ${task.title} to ${assignment.agentPath}.`);
       return assignment.agentPath;
     } catch (error) {

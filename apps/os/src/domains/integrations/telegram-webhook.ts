@@ -20,7 +20,6 @@
 import { itxEnv } from "../../env.ts";
 import { timingSafeStringEqual } from "../secrets/utils.ts";
 import { routeIntegrationWebhook } from "./integration-streams.ts";
-import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
 import {
   TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE,
   parseJsonRecord,
@@ -77,7 +76,6 @@ export function createTelegramWebhookFetch(deps: TelegramWebhookDeps) {
         type: TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE,
       },
       externalId: botId,
-      routerProcessorSlug: TelegramProcessorContract.slug,
       slug: "telegram",
     });
     if ("ignored" in result) return Response.json({ ignored: result.ignored, ok: true });

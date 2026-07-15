@@ -108,7 +108,9 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
         return { kind: "push" as const, r: await repo.pushToGithub({ force: true }) };
       }
       const agentPath = githubHistoryMergeAgentPath(repoPath);
-      await itx.agents.get(agentPath).message(
+      const agent = itx.agents.get(agentPath);
+      await agent.create({});
+      await agent.message(
         githubHistoryMergeAgentInstructions({
           owner: conflict.owner,
           repo: conflict.repo,

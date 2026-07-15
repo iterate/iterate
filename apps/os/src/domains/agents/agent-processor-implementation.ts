@@ -17,13 +17,18 @@
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor } from "../streams/stream-processor.ts";
-import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
+import {
+  cachedEventSchema,
+  getConsumedEventDefinition,
+  mergeProcessorConfig,
+} from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   AGENT_COMPACTION_TRIGGER_FRACTION,
   AGENT_LLM_REQUEST_BACKSTOP_MS,
   AGENT_LLM_RETRY_BACKOFF_BASE_MS,
   AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+  AgentConfig,
   AgentContextAddedPayload,
   AgentProcessorContract,
   DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS,
@@ -166,12 +171,24 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   protected override processEvent({
     append,
+    appendTo,
     blockProcessorWhile,
     event,
     previousState,
     runInBackground,
     state,
   }: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0]): undefined {
+    if (event.type === "events.iterate.com/agent/created") {
+      blockProcessorWhile(() =>
+        appendTo("/", {
+          type: "events.iterate.com/agent/created",
+          idempotencyKey: this.idempotencyKey("catalog-created", event),
+          payload: event.payload,
+        }),
+      );
+      return;
+    }
+    if (state.birthCertificate === null) return;
     switch (event.type) {
       case "events.iterate.com/agents/web-message-sent": {
         // Files the agent attached to its own message ride the reflection too,
@@ -513,6 +530,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   protected override async reconcile(
     args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
   ): Promise<void> {
+    if (args.state.birthCertificate === null) return;
     await this.#reconcileLlmObligations(args);
     await this.#reconcileLlmScheduling(args);
     this.#reconcileStatusAnnouncement(args);
@@ -1112,6 +1130,34 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
 function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
   const { event, state } = input;
   switch (event.type) {
+    case "events.iterate.com/agent/created":
+      if (state.birthCertificate !== null) {
+        throw new Error("agent received more than one created event");
+      }
+      return {
+        ...state,
+        birthCertificate: event.payload,
+        config: event.payload.config,
+        context: projectAgentSystemPrompt(state.context, {
+          content: event.payload.config.systemPrompt,
+          offset: event.offset,
+        }),
+        llmConfig: event.payload.config.llm,
+        llmConfigConfigured: true,
+      };
+    case "events.iterate.com/agent/configured": {
+      const config = AgentConfig.parse(mergeProcessorConfig(state.config, event.payload.config));
+      return {
+        ...state,
+        config,
+        context: projectAgentSystemPrompt(state.context, {
+          content: config.systemPrompt,
+          offset: event.offset,
+        }),
+        llmConfig: config.llm,
+        llmConfigConfigured: true,
+      };
+    }
     case "events.iterate.com/agents/context-added": {
       const triggerSource = contextTriggerSource(event.payload);
       return {
@@ -1130,6 +1176,9 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
       if (event.payload.ifUnset && state.llmConfigConfigured) return state;
       return {
         ...state,
+        ...(state.config === null
+          ? {}
+          : { config: { ...state.config, llm: { model: event.payload.model } } }),
         llmConfig: { model: event.payload.model },
         llmConfigConfigured: true,
       };
@@ -1402,6 +1451,26 @@ function projectContextAdded(
   return event.payload.role === "system"
     ? { ...context, system: projected }
     : { ...context, history: projected };
+}
+
+function projectAgentSystemPrompt(
+  context: AgentState["context"],
+  input: { content: string; offset: number },
+): AgentState["context"] {
+  const item: AgentState["context"]["system"][number] = {
+    role: "system",
+    key: AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+    content: input.content,
+    offset: input.offset,
+  };
+  return {
+    ...context,
+    system: projectContextLane({
+      item,
+      lane: context.system,
+      publishedThrough: context.publishedThrough,
+    }),
+  };
 }
 
 function retainLatestKeyedOccurrences(

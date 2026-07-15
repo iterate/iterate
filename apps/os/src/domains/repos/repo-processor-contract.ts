@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 
 /**
  * The GitHub repository one repo mirrors to: a named GitHub connection (the
@@ -26,19 +28,30 @@ const RepoCommitCompletedPayload = z.object({
   commitOid: z.string().trim().min(1),
 });
 
+export const RepoBirthCertificate = z.strictObject({ config: z.strictObject({}) });
+export type RepoBirthCertificate = z.infer<typeof RepoBirthCertificate>;
+
+export const GithubAgentBirthCertificate = z.strictObject({
+  config: z.strictObject({
+    connection: z.string(),
+    installationId: z.string(),
+    number: z.number().int().positive(),
+    owner: z.string(),
+    repo: z.string(),
+    repoPath: z.string(),
+  }),
+});
+export type GithubAgentBirthCertificate = z.infer<typeof GithubAgentBirthCertificate>;
+
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
   version: "0.1.0",
   description:
     "Projects repo lifecycle, Git activity, task changes, and GitHub routing onto an addressable repo stream.",
   stateSchema: z.object({
+    birthCertificate: RepoBirthCertificate.nullable().default(null),
     artifactName: z.string().nullable().default(null),
-    /** An open creation OBLIGATION: `create-requested` folded, `created` not
-     * yet. The end-of-batch reconciler compares this pair at head — never
-     * event-time state, which a journal refold replays with `created` still
-     * false (docs/writing-stream-processors.md, "Refold safety"). */
-    createRequested: z.boolean().default(false),
-    created: z.boolean().default(false),
+    ready: z.boolean().default(false),
     defaultBranch: z.string().nullable().default(null),
     github: GithubLinkPayload.nullable().default(null),
     /** A GitHub default-branch import obligation. The webhook is first
@@ -67,24 +80,18 @@ export const RepoProcessorContract = defineProcessorContract({
     remote: z.string().nullable().default(null),
   }),
   events: {
-    "events.iterate.com/repo/create-requested": {
-      description: "A repo creation was requested.",
-      payloadSchema: z.object({
-        projectId: z.string().nullable(),
-        path: z.string(),
-      }),
+    "events.iterate.com/repo/created": {
+      description: "Creates a repo processor on this stream.",
+      payloadSchema: RepoBirthCertificate,
       examples: [
         {
-          description: 'Project bootstrap requested the config repo at path "/repos/config".',
-          payload: {
-            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
-            path: "/repos/config",
-          },
+          description: "A repo is born; its backing artifact is established asynchronously.",
+          payload: { config: {} },
         },
       ],
     },
-    "events.iterate.com/repo/created": {
-      description: "The repo was created.",
+    "events.iterate.com/repo/ready": {
+      description: "The repo's backing artifact is ready.",
       payloadSchema: z.object({
         artifactName: z.string(),
         defaultBranch: z.string(),
@@ -435,42 +442,30 @@ export const RepoProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/github-agent/route-configured": {
-      description:
-        "Binds one PR agent stream to its pull request: the GitHub coordinates (via the repo's link), the PR number, and the repo path the webhooks route from. Appended to the agent stream by the repo processor's PR webhook forward.",
-      payloadSchema: z
-        .object({
-          connection: z.string(),
-          installationId: z.string(),
-          number: z.number(),
-          owner: z.string(),
-          repo: z.string(),
-          repoPath: z.string(),
-          streamPath: z.string(),
-        })
-        .loose(),
+    "events.iterate.com/github-agent/created": {
+      description: "Birth certificate for the GitHub facet on one pull-request agent stream.",
+      payloadSchema: GithubAgentBirthCertificate,
       examples: [
         {
-          description:
-            "The first PR webhook for acme-inc/acme-config#42 bound its agent stream to the pull request.",
+          description: "The first PR webhook for acme-inc/acme-config#42 created its GitHub facet.",
           payload: {
-            connection: "install-87654321",
-            installationId: "87654321",
-            number: 42,
-            owner: "acme-inc",
-            repo: "acme-config",
-            repoPath: "/repos/config",
-            streamPath:
-              "/agents/repos/g~0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/pull-requests/42",
+            config: {
+              connection: "install-87654321",
+              installationId: "87654321",
+              number: 42,
+              owner: "acme-inc",
+              repo: "acme-config",
+              repoPath: "/repos/config",
+            },
           },
         },
       ],
     },
   },
-  processorDeps: [CoreProcessorContract],
+  processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, CoreProcessorContract],
   consumes: [
-    "events.iterate.com/repo/create-requested",
     "events.iterate.com/repo/created",
+    "events.iterate.com/repo/ready",
     "events.iterate.com/repo/cloudflare-artifact-event-received",
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repo/github-link-configured",
@@ -487,6 +482,7 @@ export const RepoProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/repo/created",
+    "events.iterate.com/repo/ready",
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repo/task-created",
     "events.iterate.com/repo/task-updated",
@@ -496,7 +492,11 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/github-import-completed",
     "events.iterate.com/repo/github-import-failed",
     "events.iterate.com/github/webhook-received",
-    "events.iterate.com/github-agent/route-configured",
+    "events.iterate.com/agent/created",
+    "events.iterate.com/agents/context-added",
+    "events.iterate.com/capability-host/created",
+    "events.iterate.com/capability-host/capability-provided",
+    "events.iterate.com/github-agent/created",
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",
   ],

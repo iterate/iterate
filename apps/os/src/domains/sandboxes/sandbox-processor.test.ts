@@ -29,18 +29,37 @@ function sandboxProcessor() {
 }
 
 describe("SandboxProcessor", () => {
+  it("throws when a second sandbox birth certificate is reduced", async () => {
+    const processor = sandboxProcessor();
+    await processor.ingest({
+      events: [event("events.iterate.com/sandbox/created", { config: { instanceType: "basic" } })],
+      streamMaxOffset: nextOffset,
+    });
+
+    const duplicate = event("events.iterate.com/sandbox/created", {
+      config: { instanceType: "basic" },
+    });
+    await expect(
+      processor.ingest({ events: [duplicate], streamMaxOffset: nextOffset }),
+    ).rejects.toThrow("more than one sandbox/created event");
+  });
+
   it("folds a pet's whole life: created → running → stopped → running → destroyed", async () => {
     const processor = sandboxProcessor();
     await processor.ingest({
       events: [
         // create-requested lands on the /sandboxes catalogue stream, not here —
         // the pet's own stream starts with the completion.
-        event("events.iterate.com/sandbox/created", { instanceType: "basic" }),
+        event("events.iterate.com/sandbox/created", { config: { instanceType: "basic" } }),
       ],
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { status: "created", instanceType: "basic", lastBackupId: null },
+      state: {
+        birthCertificate: { config: { instanceType: "basic" } },
+        status: "created",
+        lastBackupId: null,
+      },
     });
 
     await processor.ingest({
@@ -52,7 +71,7 @@ describe("SandboxProcessor", () => {
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { status: "stopped", instanceType: "basic", lastBackupId: "bkp-1" },
+      state: { status: "stopped", lastBackupId: "bkp-1" },
     });
 
     await processor.ingest({
@@ -66,7 +85,7 @@ describe("SandboxProcessor", () => {
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { status: "destroyed", instanceType: "basic" },
+      state: { status: "destroyed" },
     });
   });
 
@@ -74,7 +93,7 @@ describe("SandboxProcessor", () => {
     const processor = sandboxProcessor();
     await processor.ingest({
       events: [
-        event("events.iterate.com/sandbox/created", { instanceType: "lite" }),
+        event("events.iterate.com/sandbox/created", { config: { instanceType: "lite" } }),
         event("events.iterate.com/sandbox/destroyed"),
         // The SDK delivers a stop that happened while the Durable Object was
         // hibernated on the NEXT wake — after the destroy already landed.
@@ -116,7 +135,7 @@ describe("SandboxProcessor", () => {
       streamMaxOffset: nextOffset,
     });
     await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: null, status: "created" },
+      state: { birthCertificate: null, lastBackupId: null, status: null },
     });
   });
 });

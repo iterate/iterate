@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
+import type { StreamEvent } from "../streams/schemas.ts";
 import { MemoryStreamNetwork } from "../streams/test-helpers.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
@@ -10,8 +10,45 @@ function event(type: string, payload: Record<string, unknown>, offset = 1): Stre
     payload,
     createdAt: new Date(offset).toISOString(),
     offset,
-    path: "/projects/test",
+    path: "/",
   };
+}
+
+function crossPostedEvent(
+  type: string,
+  payload: Record<string, unknown>,
+  sourcePath: string,
+  offset: number,
+): StreamEvent {
+  return {
+    ...event(type, payload, offset),
+    source: {
+      crossPostedFrom: [
+        {
+          subscriptionKey: "cross-post:/",
+          createdAt: new Date(offset).toISOString(),
+          offset,
+          path: sourcePath,
+          projectId: "prj_test",
+          type,
+        },
+      ],
+    },
+  };
+}
+
+function projectCreated(offset = 1): StreamEvent {
+  return event(
+    "events.iterate.com/project/created",
+    {
+      config: {
+        creatorEmail: "owner@example.com",
+        onboardingActive: true,
+        slug: "demo",
+      },
+    },
+    offset,
+  );
 }
 
 function makeHarness() {
@@ -19,11 +56,7 @@ function makeHarness() {
   const itx = {
     projectId: "prj_test",
     streams: { get: (path: string) => network.get(path) },
-    // The repo-created lane probes the default project worker before
-    // committing project/created; the fake worker is always ready.
     worker: { fetch: async () => ({}) },
-    // The create saga ensures the project's search instance at birth
-    // (best-effort); the fake resolves so the saga's Promise.all settles.
     search: { ensureIndex: async () => ({ created: true }) },
   } as unknown as ProjectRpcTarget;
   const processor = new ProjectProcessor({
@@ -36,112 +69,107 @@ function makeHarness() {
 }
 
 describe("ProjectProcessor bootstrap", () => {
-  it("arms the config repo on its own stream: processor subscription, cross-post to /, create request", async () => {
+  it("creates each required sibling processor explicitly", async () => {
     const { network, processor } = makeHarness();
 
-    await processor.ingest({
-      events: [
-        event("events.iterate.com/project/create-requested", {
-          projectId: "prj_test",
-          slug: "demo",
-        }),
-      ],
-      streamMaxOffset: 1,
-    });
+    await processor.ingest({ events: [projectCreated()], streamMaxOffset: 1 });
 
-    const configRepo = network.eventsAt("/repos/config");
-    expect(configRepo.map((streamEvent) => streamEvent.type)).toEqual([
+    expect(network.eventsAt("/").map((streamEvent) => streamEvent.type)).toEqual([
+      "events.iterate.com/capability-host/created",
       "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/repo/create-requested",
     ]);
-    // The cross-post rule copies EVERY config-repo event onto the project
-    // stream `/` — full history, so the saga's repo/created arrives too.
-    expect(configRepo[1]!.payload).toMatchObject({
-      subscriptionKey: "cross-post:/",
-      description:
-        "Special project config repo: every event is cross-posted to the project root so the project processor can react when config changes.",
-      delivery: { mode: "push", expression: ["streams", ["get", "/"], "acceptCrossPost"] },
-      deliver: "all",
+    expect(network.eventsAt("/scheduler/primary").map((streamEvent) => streamEvent.type)).toEqual([
+      "events.iterate.com/scheduler/created",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
+    expect(network.eventsAt("/repos/config").map((streamEvent) => streamEvent.type)).toEqual([
+      "events.iterate.com/repo/created",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
+    expect(network.eventsAt("/integrations/email").map((streamEvent) => streamEvent.type)).toEqual([
+      "events.iterate.com/email/created",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/email/sender-allowed",
+    ]);
+
+    await expect(processor.snapshot()).resolves.toMatchObject({
+      state: {
+        birthCertificate: {
+          config: { creatorEmail: "owner@example.com", onboardingActive: true, slug: "demo" },
+        },
+        onboardingActive: true,
+        ready: false,
+      },
     });
-    expect(configRepo[2]!.payload).toEqual({ path: "/repos/config", projectId: "prj_test" });
-    // Nothing repo-shaped lands on `/` first-hand anymore; the project stream
-    // only carries its own saga events plus cross-posted copies.
-    expect(
-      network.eventsAt("/").filter((streamEvent) => streamEvent.type.includes("/repo/")),
-    ).toEqual([]);
   });
 
-  it("completes the saga from the (cross-posted) repo/created fact for the config repo", async () => {
+  it("throws when a second project birth certificate is reduced", async () => {
+    const { processor } = makeHarness();
+    await processor.ingest({ events: [projectCreated()], streamMaxOffset: 1 });
+
+    await expect(
+      processor.ingest({ events: [projectCreated(2)], streamMaxOffset: 2 }),
+    ).rejects.toThrow("more than one project/created");
+  });
+
+  it("marks the project ready only after the config repo is ready and its worker responds", async () => {
     const { network, processor } = makeHarness();
+    await processor.ingest({ events: [projectCreated()], streamMaxOffset: 1 });
 
     await processor.ingest({
       events: [
-        event("events.iterate.com/project/create-requested", {
-          projectId: "prj_test",
-          slug: "demo",
-        }),
-      ],
-      streamMaxOffset: 1,
-    });
-    await processor.ingest({
-      events: [
-        {
-          ...event(
-            "events.iterate.com/repo/created",
-            {
-              artifactName: "prj_test--L3JlcG9zL2NvbmZpZw",
-              defaultBranch: "main",
-              path: "/repos/config",
-              projectId: "prj_test",
-              remote: "https://example.artifacts.cloudflare.net/git/ns/x.git",
-            },
-            2,
-          ),
-          // As delivered on `/`: a cross-posted copy with provenance.
-          source: {
-            crossPostedFrom: [
-              {
-                subscriptionKey: "cross-post:/",
-                createdAt: new Date(2).toISOString(),
-                offset: 4,
-                path: "/repos/config",
-                projectId: "prj_test",
-                type: "events.iterate.com/repo/created",
-              },
-            ],
+        crossPostedEvent(
+          "events.iterate.com/repo/ready",
+          {
+            artifactName: "prj_test--L3JlcG9zL2NvbmZpZw",
+            defaultBranch: "main",
+            path: "/repos/config",
+            projectId: "prj_test",
+            remote: "https://example.artifacts.cloudflare.net/git/ns/x.git",
           },
-        },
+          "/repos/config",
+          2,
+        ),
       ],
       streamMaxOffset: 2,
     });
 
-    const rootTypes = network.eventsAt("/").map((streamEvent) => streamEvent.type);
-    expect(rootTypes).toContain("events.iterate.com/project/created");
+    expect(network.eventsAt("/").map((streamEvent) => streamEvent.type)).toContain(
+      "events.iterate.com/project/ready",
+    );
   });
 });
 
-describe("ProjectProcessor agent birth", () => {
-  it("appends only processor subscriptions at birth — policy comes from the project worker", async () => {
+describe("ProjectProcessor catalogs", () => {
+  it("keeps physical paths separate from explicitly created domain objects", async () => {
     const { network, processor } = makeHarness();
+    await processor.ingest({ events: [projectCreated()], streamMaxOffset: 1 });
 
     await processor.ingest({
       events: [
-        event("events.iterate.com/stream/child-stream-created", {
-          childPath: "/agents/demo",
-        }),
+        event("events.iterate.com/stream/child-stream-created", { childPath: "/agents/slack" }, 2),
+        crossPostedEvent(
+          "events.iterate.com/agent/created",
+          {
+            config: {
+              llm: { model: "openai/gpt-5.6-sol" },
+              systemPrompt: "Handle this Slack thread.",
+            },
+          },
+          "/agents/slack/main/C123/ts-1",
+          3,
+        ),
       ],
-      streamMaxOffset: 1,
+      streamMaxOffset: 3,
     });
 
-    // Mechanics only. System prompt, model selection, capability mounts,
-    // and boot context are appended by the project worker via
-    // itx.agents.defaults (see agents/agent-defaults.test.ts).
-    const born = network.eventsAt("/agents/demo").map((streamEvent) => streamEvent.type);
-    // agent processor + capability-host — no separate LLM provider processors.
-    expect(born).toEqual([
-      "events.iterate.com/stream/subscription-configured",
-      "events.iterate.com/stream/subscription-configured",
-    ]);
+    await expect(processor.snapshot()).resolves.toMatchObject({
+      state: {
+        agents: [{ path: "/agents/slack/main/C123/ts-1" }],
+        streams: [{ path: "/agents/slack" }],
+      },
+    });
+    expect(network.eventsAt("/agents/slack")).toEqual([]);
   });
 });

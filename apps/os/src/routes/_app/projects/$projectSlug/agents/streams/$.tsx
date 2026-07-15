@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
+import { ONBOARDING_AGENT_SYSTEM_PROMPT } from "~/domains/agents/agent-defaults.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItxBrowser } from "~/itx/itx-react.tsx";
 import {
@@ -49,11 +50,8 @@ function ProjectAgentDetailContent() {
 
   // THE onboarding-agent birth: the agent is deliberately not born during
   // project bootstrap (it costs a real LLM turn), so opening its chat is what
-  // births it. configure({}) is the idempotent birth-with-defaults door — on a
-  // fresh path it establishes the full default policy (prompt, model, the
-  // "Start onboarding now" kickoff) in the SAME append that creates the
-  // stream, so there is no stock-defaults window; on an already-born agent
-  // every keyed event dedupes away. Retries cover the create-flow window where
+  // births it. The onboarding prompt and kickoff are explicit here rather
+  // than inferred from the stream path. Retries cover the create-flow window where
   // the itx session's claims may still be catching up.
   useEffect(() => {
     if (streamPath !== ONBOARDING_AGENT_PATH) return;
@@ -62,7 +60,19 @@ function ProjectAgentDetailContent() {
       for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
         try {
           const itx = await connectItxBrowser({ projectId: project.id });
-          await itx.agents.get(ONBOARDING_AGENT_PATH).configure({});
+          const agent = itx.agents.get(ONBOARDING_AGENT_PATH);
+          await agent.create({ systemPrompt: ONBOARDING_AGENT_SYSTEM_PROMPT });
+          await agent.stream.append({
+            type: "events.iterate.com/agents/context-added",
+            idempotencyKey: `project-onboarding-start:${project.id}`,
+            payload: {
+              role: "developer",
+              key: "agent/onboarding-start",
+              content:
+                "Begin onboarding. The project owner just created this project and is looking at the chat. If the user already sent a message above, answer it first, then continue the onboarding script.",
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
+          });
           return;
         } catch {
           await new Promise((resolve) => setTimeout(resolve, 2_000 * (attempt + 1)));

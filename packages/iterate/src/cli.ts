@@ -344,7 +344,7 @@ const setupMissingProjectForChat = async (session: RpcStub<Session>, project: Pr
       projectId: project.id,
       slug: project.slug,
       ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
-      waitUntilCreated: false,
+      waitUntilReady: false,
     })) as unknown as RpcStub<Project>;
     agentStream = projectItx.streams.get(DEFAULT_CHAT_AGENT_PATH) as RpcStub<Stream>;
     await agentStream.waitForEvent({

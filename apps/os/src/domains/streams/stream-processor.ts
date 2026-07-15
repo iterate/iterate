@@ -382,6 +382,16 @@ export abstract class StreamProcessor<
   }
 
   /**
+   * Wait until this processor has durably processed through `offset`.
+   *
+   * This is the public, outcome-shaped name for the offset form of
+   * `waitUntilEvent`; the predicate form remains an internal event waiter.
+   */
+  waitUntilProcessed(args: { offset: number; timeoutMs?: number }): Promise<void> {
+    return this.waitUntilEvent(args);
+  }
+
+  /**
    * One-time async setup, run before the checkpoint is first read — whether
    * that happens via `snapshot()` or the first ingested batch. Override for
    * work that can invalidate the stored checkpoint, such as schema migrations

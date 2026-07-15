@@ -125,8 +125,9 @@ describe("connectTelegram", () => {
       material: BOT_TOKEN,
     });
 
-    // Connected fact + the router's processor subscription on the connection
-    // stream; the directory claim (botId → project + connection) for routing.
+    // Explicit router birth, its processor subscription, then the connected
+    // fact on the connection stream; the directory claim (botId → project +
+    // connection) is the independent ingress-routing projection.
     const journal = network.streams.get(
       DurableObjectNameCodec.stringify({
         projectId: PROJECT_ID,
@@ -134,10 +135,11 @@ describe("connectTelegram", () => {
       }),
     );
     expect(journal?.map((event) => event.type)).toEqual([
+      "events.iterate.com/telegram/created",
       "events.iterate.com/stream/subscription-configured",
       TELEGRAM_CONNECTED_EVENT_TYPE,
     ]);
-    expect(journal?.[1]).toMatchObject({
+    expect(journal?.[2]).toMatchObject({
       payload: {
         botId: BOT_ID,
         botUsername: "MishasHelperBot",

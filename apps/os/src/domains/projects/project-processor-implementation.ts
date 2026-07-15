@@ -3,25 +3,14 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CONFIG_REPO_PATH } from "../repos/utils.ts";
 import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
-import { childAgentParentPath } from "../../lib/agent-paths.ts";
-import type { StreamListItem } from "../streams/schemas.ts";
+import type { StreamEvent, StreamListItem } from "../streams/schemas.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
-import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
-import { SlackAgentProcessorContract } from "../integrations/slack-agent-processor-contract.ts";
-import { TelegramAgentProcessorContract } from "../integrations/telegram-agent-processor-contract.ts";
-import {
-  slackConnectionFromAgentPath,
-  telegramConnectionFromAgentPath,
-} from "../integrations/utils.ts";
-import { EmailAgentProcessorContract } from "../email/email-agent-processor-contract.ts";
+import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
-import { EMAIL_INTEGRATION_STREAM_PATH, isEmailAgentPath } from "../email/utils.ts";
-import { githubAgentSubscriptionConfiguredEvent } from "../repos/github-agent-mechanics.ts";
-import { isGithubAgentPath } from "../repos/github-agent-utils.ts";
+import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-domain-processor.ts";
@@ -48,26 +37,30 @@ export class ProjectProcessor extends StreamProcessor<
     state,
   }: Parameters<StreamProcessor<ProjectProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
-      case "events.iterate.com/project/create-requested":
-        if (event.payload.projectId !== this.deps.itx.projectId) return state;
+      case "events.iterate.com/project/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("Project processor received more than one project/created event");
+        }
         return {
           ...state,
-          createRequest: {
-            projectId: event.payload.projectId,
-            slug: event.payload.slug,
-          },
-          onboardingActive: event.payload.onboardingActive === true,
+          birthCertificate: event.payload,
+          onboardingActive: event.payload.config.onboardingActive === true,
         };
-      case "events.iterate.com/project/created":
-        if (event.payload.projectId !== this.deps.itx.projectId) return state;
-        return { ...state, created: true };
+      case "events.iterate.com/project/ready":
+        return { ...state, ready: true };
       case "events.iterate.com/project/onboarding-completed":
         return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
       case "events.iterate.com/stream/created":
         if (event.payload.projectId !== this.deps.itx.projectId) return state;
-        return recordStream(state, event.payload.path, event.createdAt);
+        return recordPhysicalStream(state, event.payload.path, event.createdAt);
       case "events.iterate.com/stream/child-stream-created":
-        return recordStream(state, event.payload.childPath, event.createdAt);
+        return recordPhysicalStream(state, event.payload.childPath, event.createdAt);
+      case "events.iterate.com/agent/created":
+        return recordDomainObject(state, "agents", event);
+      case "events.iterate.com/repo/created":
+        return recordDomainObject(state, "repos", event);
+      case "events.iterate.com/secret/created":
+        return recordDomainObject(state, "secrets", event);
       case "events.iterate.com/project/egress-rules-configured":
         return { ...state, egressRules: event.payload.rules };
       case "events.iterate.com/project/human-approval-key-added":
@@ -110,26 +103,19 @@ export class ProjectProcessor extends StreamProcessor<
     // included) pumps its own events into the worker's `processEventBatch`
     // with a durable checkpoint (see streams/project-worker-delivery.ts).
 
+    if (event.type !== "events.iterate.com/project/created" && state.birthCertificate === null) {
+      return;
+    }
+
     switch (event.type) {
-      case "events.iterate.com/project/create-requested": {
-        if (event.payload.projectId !== this.deps.itx.projectId) {
-          throw new Error(
-            `create-requested for "${event.payload.projectId}" on project "${this.deps.itx.projectId}"`,
-          );
-        }
+      case "events.iterate.com/project/created": {
         blockProcessorWhile(async () => {
           const timing = { projectId: this.deps.itx.projectId };
-          // The root saga, the config repo, and the email router arm in
-          // parallel — each is one batched append, cutting the create
-          // round-trips (see tasks/os-cold-create-latency.md). The Slack
-          // webhook router is NOT armed here: connection streams
-          // (/integrations/slack/{connection}) are born at connect time by
-          // recordSlackConnection. The onboarding agent is not born during
-          // bootstrap AT ALL: it births lazily on first use — opening its
-          // chat page (or any first append to its stream) creates the stream,
-          // and birth mechanics + policy follow through the ordinary
-          // child-stream-created lanes. Projects whose onboarding chat is
-          // never opened (CLI creates, test fixtures) never pay an LLM turn.
+          const config = event.payload.config;
+          // The root capability host, primary scheduler, config repo, and
+          // email router are explicit sibling processors created by the
+          // project's birth saga. A physical child stream never implies any
+          // processor identity.
           // The project's AI Search instance is born WITH the project so
           // itx.search works from the first query instead of warming lazily
           // (Jonas, 2026-07-13). Fire-and-forget, NOT awaited in the saga:
@@ -145,6 +131,11 @@ export class ProjectProcessor extends StreamProcessor<
           await Promise.all([
             timedStep("create-timing", timing, "root-saga-append", () =>
               append(
+                {
+                  type: "events.iterate.com/capability-host/created",
+                  idempotencyKey: `capability-host/created:${this.deps.itx.projectId}:/`,
+                  payload: { config: {} },
+                },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
                     projectId: this.deps.itx.projectId,
@@ -152,6 +143,25 @@ export class ProjectProcessor extends StreamProcessor<
                   }),
                   processor: ["capabilityHosts", ["get", "/"], "processor"],
                   processorSlug: CapabilityHostProcessorContract.slug,
+                }),
+              ),
+            ),
+            timedStep("create-timing", timing, "primary-scheduler-append", () =>
+              appendTo(
+                SCHEDULER_PRIMARY_PATH,
+                {
+                  type: "events.iterate.com/scheduler/created",
+                  idempotencyKey: `scheduler-created:${this.deps.itx.projectId}:${SCHEDULER_PRIMARY_PATH}`,
+                  payload: { config: {} },
+                },
+                buildDurableObjectProcessorSubscriptionConfiguredEvent({
+                  durableObjectName: DurableObjectNameCodec.stringify({
+                    projectId: this.deps.itx.projectId,
+                    path: SCHEDULER_PRIMARY_PATH,
+                  }),
+                  idempotencyKey: `scheduler-subscription:${this.deps.itx.projectId}:${SCHEDULER_PRIMARY_PATH}`,
+                  processor: ["schedulers", ["get", SCHEDULER_PRIMARY_PATH], "processor"],
+                  processorSlug: SchedulerProcessorContract.slug,
                 }),
               ),
             ),
@@ -164,6 +174,11 @@ export class ProjectProcessor extends StreamProcessor<
             timedStep("create-timing", timing, "config-repo-append", () =>
               appendTo(
                 CONFIG_REPO_PATH,
+                {
+                  type: "events.iterate.com/repo/created",
+                  idempotencyKey: `repo-created:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
+                  payload: { config: {} },
+                },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
                     projectId: this.deps.itx.projectId,
@@ -189,26 +204,22 @@ export class ProjectProcessor extends StreamProcessor<
                     deliver: "all",
                   },
                 },
-                {
-                  type: "events.iterate.com/repo/create-requested",
-                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
-                  payload: {
-                    path: CONFIG_REPO_PATH,
-                    projectId: this.deps.itx.projectId,
-                  },
-                },
               ),
             ),
             // Arm the email thread router on `/integrations/email` from birth
             // (Slack routers are per-connection and armed by the connect
-            // flow); the email ingress door repeats the subscription append
-            // (same idempotency key) for projects born before the router
-            // existed. The creator's email seeds the project sender allowlist
-            // so the owner can email their project from day one without any
-            // config.
+            // flow). Email ingress only records received mail; it never
+            // creates or subscribes the router. The creator's email seeds the
+            // project sender allowlist so the owner can email their project
+            // from day one without any config.
             timedStep("create-timing", timing, "email-router-append", () =>
               appendTo(
                 EMAIL_INTEGRATION_STREAM_PATH,
+                {
+                  type: "events.iterate.com/email/created",
+                  idempotencyKey: `email-created:${this.deps.itx.projectId}`,
+                  payload: { config: {} },
+                },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
                     projectId: this.deps.itx.projectId,
@@ -218,14 +229,14 @@ export class ProjectProcessor extends StreamProcessor<
                   processor: ["email", "processor"],
                   processorSlug: EmailProcessorContract.slug,
                 }),
-                ...(event.payload.creatorEmail === undefined
+                ...(config.creatorEmail === undefined
                   ? []
                   : [
                       {
                         type: "events.iterate.com/email/sender-allowed" as const,
-                        idempotencyKey: `email-sender-allowed:${this.deps.itx.projectId}:${event.payload.creatorEmail.toLowerCase()}`,
+                        idempotencyKey: `email-sender-allowed:${this.deps.itx.projectId}:${config.creatorEmail.toLowerCase()}`,
                         payload: {
-                          pattern: event.payload.creatorEmail,
+                          pattern: config.creatorEmail,
                           reason: "project-owner",
                         },
                       },
@@ -236,87 +247,15 @@ export class ProjectProcessor extends StreamProcessor<
         });
         break;
       }
-      case "events.iterate.com/stream/child-stream-created": {
-        const childPath = event.payload.childPath;
-        if (
-          !childPath.startsWith("/agents/") &&
-          !childPath.startsWith("/secrets/") &&
-          !childPath.startsWith("/scheduler/")
-        ) {
-          return;
-        }
-        blockProcessorWhile(async () => {
-          const durableObjectName = DurableObjectNameCodec.stringify({
-            projectId: this.deps.itx.projectId,
-            path: childPath,
-          });
-          if (childPath.startsWith("/scheduler/")) {
-            // A scheduler stream's birth certificate is just its processor
-            // subscription: the Scheduler Durable Object reduces schedules and
-            // owns the alarm from the first delivered batch onward.
-            await appendTo(
-              childPath,
-              buildDurableObjectProcessorSubscriptionConfiguredEvent({
-                durableObjectName,
-                idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SchedulerProcessorContract.slug}`,
-                processor: ["schedulers", ["get", childPath], "processor"],
-                processorSlug: SchedulerProcessorContract.slug,
-              }),
-            );
-            return;
-          }
-          if (childPath.startsWith("/agents/")) {
-            // MECHANICS only: the processor subscriptions that make a stream
-            // an agent. POLICY — system prompt, model, capability
-            // mounts, boot context — is appended by the PROJECT WORKER, which
-            // sees this same child-stream-created event through its stream
-            // delivery and applies itx.agents.defaults (see
-            // config-repo-template/worker.ts and agents/agent-defaults.ts).
-            // Slack/Telegram-agent wiring requires the full routed-path shape
-            // — the connection segment is what replies authenticate with.
-            // Child-agent paths are checked FIRST: the routed-agent predicates
-            // are shape-loose (Slack matches any >=6-segment path under its
-            // connection, email matches by prefix), and a child under a routed
-            // agent must not inherit its transcriber.
-            const isChildAgent = childAgentParentPath(childPath) !== null;
-            const isSlack = !isChildAgent && slackConnectionFromAgentPath(childPath) !== null;
-            const isTelegram = !isChildAgent && telegramConnectionFromAgentPath(childPath) !== null;
-            await appendTo(
-              childPath,
-              // Stable idempotency keys: retried deliveries and re-created
-              // child streams collapse into one durable subscription set.
-              ...agentSubscriptionEvents({
-                childPath,
-                email: !isChildAgent && isEmailAgentPath(childPath),
-                github: !isChildAgent && isGithubAgentPath(childPath),
-                projectId: this.deps.itx.projectId,
-                slack: isSlack,
-                telegram: isTelegram,
-              }),
-            );
-            return;
-          }
-
-          await appendTo(
-            childPath,
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName,
-              processor: ["secrets", ["get", childPath], "processor"],
-              processorSlug: SecretProcessorContract.slug,
-            }),
-          );
-        });
-        return;
-      }
-      case "events.iterate.com/repo/created": {
+      case "events.iterate.com/repo/ready": {
         // Arrives as a cross-posted copy: the config repo commits its facts
         // on its own stream, and the `cross-post:/` rule armed at create
         // copies them here — this saga only ever reacts to events ON `/`.
         if (
           event.payload.projectId !== this.deps.itx.projectId ||
           event.payload.path !== CONFIG_REPO_PATH ||
-          state.created ||
-          state.createRequest === null
+          state.ready ||
+          state.birthCertificate === null
         ) {
           return;
         }
@@ -325,11 +264,11 @@ export class ProjectProcessor extends StreamProcessor<
           await timedStep("create-timing", timing, "worker-probe", () =>
             waitForDefaultProjectWorker(this.deps.itx),
           );
-          await timedStep("create-timing", timing, "project-created-append", () =>
+          await timedStep("create-timing", timing, "project-ready-append", () =>
             append({
-              type: "events.iterate.com/project/created",
-              idempotencyKey: this.idempotencyKey("created"),
-              payload: state.createRequest!,
+              type: "events.iterate.com/project/ready",
+              idempotencyKey: this.idempotencyKey("ready"),
+              payload: {},
             }),
           );
         });
@@ -355,54 +294,7 @@ export class ProjectProcessor extends StreamProcessor<
   }
 }
 
-/**
- * The MECHANICS an agent stream is born with: the processor subscriptions
- * that give it an LLM loop, a capability host, and (for Slack/Telegram/email
- * threads) its domain transcriber. Policy — prompt, model, mounts, boot context —
- * comes from the project worker via itx.agents.defaults
- * (agents/agent-defaults.ts).
- */
-function agentSubscriptionEvents(input: {
-  childPath: string;
-  email?: boolean;
-  github?: boolean;
-  projectId: string;
-  slack?: boolean;
-  telegram?: boolean;
-}) {
-  const durableObjectName = DurableObjectNameCodec.stringify({
-    projectId: input.projectId,
-    path: input.childPath,
-  });
-  const subscription = (processorSlug: string, hostKind: "agent" | "capability-host") =>
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${processorSlug}`,
-      processor:
-        hostKind === "agent"
-          ? ["agents", ["get", input.childPath], "processor"]
-          : ["capabilityHosts", ["get", input.childPath], "processor"],
-      processorSlug,
-    });
-  return [
-    // One agent processor owns history, scheduling, and the Cloudflare AI call.
-    subscription(AgentProcessorContract.slug, "agent"),
-    subscription(CapabilityHostProcessorContract.slug, "capability-host"),
-    ...(input.slack ? [subscription(SlackAgentProcessorContract.slug, "agent")] : []),
-    ...(input.telegram ? [subscription(TelegramAgentProcessorContract.slug, "agent")] : []),
-    ...(input.email ? [subscription(EmailAgentProcessorContract.slug, "agent")] : []),
-    ...(input.github
-      ? [
-          githubAgentSubscriptionConfiguredEvent({
-            agentPath: input.childPath,
-            projectId: input.projectId,
-          }),
-        ]
-      : []),
-  ];
-}
-
-function recordStream<
+function recordPhysicalStream<
   State extends {
     agents: StreamListItem[];
     repos: StreamListItem[];
@@ -413,10 +305,23 @@ function recordStream<
   const item = { path, createdAt };
   return {
     ...state,
-    agents: path.startsWith("/agents/") ? addStreamListItem(state.agents, item) : state.agents,
-    repos: path.startsWith("/repos/") ? addStreamListItem(state.repos, item) : state.repos,
-    secrets: path.startsWith("/secrets/") ? addStreamListItem(state.secrets, item) : state.secrets,
     streams: addStreamListItem(state.streams, item),
+  };
+}
+
+function recordDomainObject<
+  State extends {
+    agents: StreamListItem[];
+    repos: StreamListItem[];
+    secrets: StreamListItem[];
+  },
+  Key extends "agents" | "repos" | "secrets",
+>(state: State, key: Key, event: StreamEvent): State {
+  const path = event.source?.processor?.stream.path ?? event.source?.crossPostedFrom?.[0]?.path;
+  if (path === undefined) return state;
+  return {
+    ...state,
+    [key]: addStreamListItem(state[key], { path, createdAt: event.createdAt }),
   };
 }
 
@@ -450,7 +355,7 @@ async function waitForDefaultProjectWorker(itx: ProjectRpcTarget): Promise<void>
       await new Promise((resolve) => setTimeout(resolve, PROJECT_WORKER_READY_RETRY_MS));
     }
   }
-  throw new Error("Default project worker did not become ready before project/created.", {
+  throw new Error("Default project worker did not become ready before project/ready.", {
     cause: lastError,
   });
 }

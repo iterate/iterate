@@ -479,7 +479,7 @@ test('An agent scope provides a capability to the whole project via capabilityHo
   });
 });
 
-test("Project worker births agents: policy from itx.agents.defaults, appended by the seeded template", async () => {
+test("agents.get(path).create explicitly appends and processes the complete birth batch", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
@@ -490,52 +490,33 @@ test("Project worker births agents: policy from itx.agents.defaults, appended by
   const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
   using agentStream = project.streams.get(agentPath);
 
-  // Wait for the policy BEFORE materializing the stream, so the birth
-  // reaction (worker sees child-stream-created on "/") races nothing.
-  const systemContext = agentStream.waitForEvent({
-    eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
-    predicate: (event) =>
-      event.payload?.role === "system" && event.payload?.key === "agent/system-prompt",
-    timeoutMs: 60_000,
-  });
-  const providerSelected = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
+  const birth = agentStream.waitForEvent({
+    eventTypes: ["events.iterate.com/agent/created"],
     timeoutMs: 60_000,
   });
   const workspaceMount = agentStream.waitForEvent({
     eventTypes: ["events.iterate.com/capability-host/capability-provided"],
     timeoutMs: 60_000,
   });
-  // Policy (worker) and mechanics (project processor) are appended by two
-  // INDEPENDENT reactors to the same child-stream-created announcement —
-  // policy arriving says nothing about the mechanics batch. Await the batch
-  // itself: it is one atomic append, so its capability-host member visible
-  // means all four are.
   const mechanics = agentStream.waitForEvent({
     eventTypes: ["events.iterate.com/stream/subscription-configured"],
     predicate: (event) => event.idempotencyKey?.endsWith("#capability-host") ?? false,
     timeoutMs: 60_000,
   });
 
-  // Any append materializes the agent stream; the platform announces it on
-  // the root stream, the project worker reacts with the defaults batch.
-  await agentStream.append({
-    type: "events.iterate.test/agent-policy-probe",
-    payload: {},
-  });
+  await project.agents.get(agentPath).create({});
 
-  const systemContextEvent = await systemContext;
-  expect(systemContextEvent.payload?.content).toContain("async (itx)");
-  expect((await providerSelected).payload).toMatchObject({ ifUnset: true });
+  const birthEvent = await birth;
+  expect(
+    (birthEvent.payload as { config?: { systemPrompt?: string } } | undefined)?.config
+      ?.systemPrompt,
+  ).toContain("async (itx)");
   expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
   await mechanics;
 
   // Birth mechanics: project-worker (every project stream) + agent processor +
   // capability-host. One agent processor owns history, scheduling, and the
-  // Workers AI call — no separate LLM provider processors. The mechanics come
-  // from the project processor's serialized lane (queued behind the worker
-  // probe), so they can land AFTER the pump-delivered policy above — wait
-  // for them instead of snapshotting the instant policy arrives.
+  // Workers AI call — no separate LLM provider processors.
   const mechanicsDeadline = Date.now() + 60_000;
   let subscriptionCount = 0;
   let processorSlugs: string[] = [];

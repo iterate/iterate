@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import {
   MemoryStream,
+  MemoryStreamNetwork,
   deliverNewEvents,
   eventsOfType,
   makeProcessorHarness,
@@ -79,6 +80,28 @@ async function appendProviderOutput(stream: MemoryStream, content: string) {
   return output!;
 }
 
+function seedAgentBirth(stream: MemoryStream): void {
+  stream.events.push({
+    type: "events.iterate.com/agent/created",
+    idempotencyKey: `agent/created:test:${stream.path}`,
+    payload: {
+      config: {
+        llm: { model: DEFAULT_AGENT_MODEL },
+        systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+      },
+    },
+    createdAt: "2026-07-09T00:00:00.000Z",
+    offset: 1,
+    path: stream.path,
+  });
+}
+
+function agentStream(): MemoryStream {
+  const stream = new MemoryStreamNetwork().get("/agents/test");
+  seedAgentBirth(stream);
+  return stream;
+}
+
 function agentRequestEvents(content: string, model = DEFAULT_AGENT_MODEL): StreamEventInput[] {
   return [
     systemContext(),
@@ -112,6 +135,36 @@ function sseStream(...chunks: unknown[]): ReadableStream<Uint8Array> {
 }
 
 describe("minimal web-chat agent processors", () => {
+  test("throws when a second agent birth certificate is reduced", async () => {
+    const { deliver, stream } = setup();
+    await stream.append({
+      type: "events.iterate.com/agent/created",
+      payload: {
+        config: {
+          llm: { model: DEFAULT_AGENT_MODEL },
+          systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+        },
+      },
+    });
+
+    await expect(deliver()).rejects.toThrow("agent received more than one created event");
+  });
+
+  test("deep-merges configured patches into the birth configuration", async () => {
+    const { deliver, processor, stream } = setup();
+    await deliver();
+    await stream.append({
+      type: "events.iterate.com/agent/configured",
+      payload: { config: { llm: { model: "openai/gpt-5.6" } } },
+    });
+    await deliver();
+
+    expect(processor.state.config).toEqual({
+      llm: { model: "openai/gpt-5.6" },
+      systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+    });
+  });
+
   test("feeds a returned script result back as input and schedules another turn", async () => {
     const { stream, deliver } = setup();
 
@@ -159,7 +212,7 @@ describe("minimal web-chat agent processors", () => {
   });
 
   test("spills an oversized script result to a workspace file and references it", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const writes: { content: string; path: string }[] = [];
     const agent = new AgentProcessor({
       stream,
@@ -200,7 +253,7 @@ describe("minimal web-chat agent processors", () => {
   });
 
   test("spills a multi-megabyte result as ONE file (R2 handles the size)", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const writes: { content: string; path: string }[] = [];
     const agent = new AgentProcessor({
       stream,
@@ -249,7 +302,7 @@ describe("minimal web-chat agent processors", () => {
   });
 
   test("does not spill small script results", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const writes: { content: string; path: string }[] = [];
     const agent = new AgentProcessor({
       stream,
@@ -322,33 +375,22 @@ describe("minimal web-chat agent processors", () => {
   });
 
   test("stops the agent loop instead of scheduling past the autonomous turn limit", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     await stream.append({
       type: "events.iterate.com/stream/woken",
       payload: { incarnationId: "existing" },
     });
     const state = AgentProcessorContract.stateSchema.parse({
-      context: {
-        system: [
-          {
-            role: "system",
-            key: "agent/system-prompt",
-            content: DEFAULT_AGENT_SYSTEM_PROMPT,
-            offset: 1,
-          },
-        ],
-        history: [],
-        publishedThrough: 0,
-      },
+      ...reduceAgentEvents(stream.events),
       autonomousTurnCount: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
-      pendingTriggerOffset: 1,
+      pendingTriggerOffset: 2,
       pendingTriggerSource: "agent-loop",
     });
     const agent = new AgentProcessor({
       stream,
       path: stream.path,
       projectId: null,
-      readState: async () => ({ offset: 1, state }),
+      readState: async () => ({ offset: 2, state }),
     });
 
     await stream.append({
@@ -363,7 +405,7 @@ describe("minimal web-chat agent processors", () => {
     expect(stopped?.payload).toMatchObject({
       maxAutonomousTurns: DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS,
       reason: expect.stringContaining(`${DEFAULT_AGENT_MAX_AUTONOMOUS_TURNS}`),
-      triggerOffset: 1,
+      triggerOffset: 2,
     });
     expect(stream.events.some((event) => event.type === "events.iterate.com/stream/paused")).toBe(
       false,
@@ -376,7 +418,7 @@ describe("minimal web-chat agent processors", () => {
   });
 
   test("projects web user context, requests AI by reference, and turns output into script execution", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const aiCalls: unknown[] = [];
     const agent = new AgentProcessor({
       stream,
@@ -436,9 +478,9 @@ describe("minimal web-chat agent processors", () => {
         }),
         {
           role: "system",
-          content: `@1 key="agent/system-prompt"\n${DEFAULT_AGENT_SYSTEM_PROMPT}`,
+          content: `@2 key="agent/system-prompt"\n${DEFAULT_AGENT_SYSTEM_PROMPT}`,
         },
-        { role: "user", content: "@2 actor=user:web\nhello" },
+        { role: "user", content: "@3 actor=user:web\nhello" },
         // The trailing clock stamp (prompt-cache-safe tail position).
         expect.objectContaining({
           role: "system",
@@ -604,33 +646,29 @@ describe("minimal web-chat agent processors", () => {
     await deliver();
 
     // The user context folds straight into projected history.
-    expect(stream.events.map((event) => event.type)).toEqual([
+    const events = stream.events.filter(
+      (event) => event.type !== "events.iterate.com/agent/created",
+    );
+    expect(events.map((event) => event.type)).toEqual([
       "events.iterate.com/agents/context-added",
       "events.iterate.com/agents/context-added",
       "events.iterate.com/agent/llm-request-scheduled",
       "events.iterate.com/agent/status-changed",
     ]);
-    expect(stream.events[1]!.payload).toMatchObject({
+    expect(events[1]!.payload).toMatchObject({
       role: "user",
       content: "how many agents does this project have?",
       actor: { type: "user", origin: "mcp" },
     });
   });
 
-  test("holds an early user trigger until the final unpublished system prompt arrives", async () => {
-    const { stream, deliver } = setup();
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
+  test("holds an early user trigger until the birth certificate arrives", async () => {
+    const stream = new MemoryStreamNetwork().get("/agents/test");
+    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+    const cursors = new Map<object, number>();
+    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
     await stream.append(userContext("I raced agent setup"));
     await deliver();
-    expect(warning).toHaveBeenCalledWith(
-      "[agent] holding llm trigger until canonical system prompt arrives",
-      {
-        pendingTriggerOffset: 1,
-        requiredContextKey: "agent/system-prompt",
-      },
-    );
-    warning.mockRestore();
     expect(deriveAgentBusy(reduceAgentEvents(stream.events))).toBe(false);
     expect(
       stream.events.some(
@@ -638,10 +676,15 @@ describe("minimal web-chat agent processors", () => {
       ),
     ).toBe(false);
 
-    const [, finalSystem] = await stream.append(
-      systemContext("Default instructions."),
-      systemContext("Project-specific instructions."),
-    );
+    const [birth] = await stream.append({
+      type: "events.iterate.com/agent/created",
+      payload: {
+        config: {
+          llm: { model: DEFAULT_AGENT_MODEL },
+          systemPrompt: "Project-specific instructions.",
+        },
+      },
+    });
     await deliver();
 
     const state = reduceAgentEvents(stream.events);
@@ -650,7 +693,7 @@ describe("minimal web-chat agent processors", () => {
         role: "system",
         key: "agent/system-prompt",
         content: "Project-specific instructions.",
-        offset: finalSystem!.offset,
+        offset: birth!.offset,
       },
     ]);
     expect(state.context.history).toMatchObject([
@@ -726,7 +769,7 @@ describe("minimal web-chat agent processors", () => {
   });
 
   test("does not fire a second LLM call when a second message arrives during the first request", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const aiCalls: unknown[] = [];
     let resolveFirstCall!: () => void;
     const firstCallInFlight = new Promise<void>((resolve) => {
@@ -778,14 +821,14 @@ describe("minimal web-chat agent processors", () => {
     const firstCall = aiCalls[0] as { messages: Array<{ role: string; content: string }> };
     expect(firstCall.messages.map((m) => m.content)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/^@2 actor=user:web\nmessage one$/),
+        expect.stringMatching(/^@3 actor=user:web\nmessage one$/),
         expect.stringMatching(/^@\d+ actor=user:web\nmessage two$/),
       ]),
     );
   });
 
   test("recovers a stuck scheduled request after DO restart (lost debounce timer)", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     // Simulate events already committed before restart
     await stream.append(systemContext(), userContext("hello"), {
       type: "events.iterate.com/agent/llm-request-scheduled",
@@ -797,28 +840,7 @@ describe("minimal web-chat agent processors", () => {
     });
     // Simulate a checkpoint written after the scheduled event but before the timer fired
     const stuckState = AgentProcessorContract.stateSchema.parse({
-      context: {
-        system: [
-          {
-            role: "system",
-            key: "agent/system-prompt",
-            content: DEFAULT_AGENT_SYSTEM_PROMPT,
-            offset: 1,
-          },
-        ],
-        history: [
-          {
-            role: "user",
-            content: "hello",
-            actor: { type: "user", origin: "web" },
-            llmRequestPolicy: { behaviour: "after-current-request" },
-            offset: 2,
-          },
-        ],
-        publishedThrough: 0,
-      },
-      currentRequest: { phase: "scheduled", requestId: "llm-request:1", scheduledOffset: 3 },
-      llmConfigConfigured: true,
+      ...reduceAgentEvents(stream.events),
     });
     const agent = new AgentProcessor({
       stream,
@@ -914,7 +936,7 @@ describe("minimal web-chat agent processors", () => {
   });
 
   test("fails LLM requests politely when no AI binding is configured", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const agent = new AgentProcessor({
       stream,
       path: stream.path,
@@ -988,7 +1010,7 @@ describe("minimal web-chat agent processors", () => {
   });
 
   test("stops auto-retrying after three consecutive failures, with backoff between retries", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     let boom = 0;
     const agent = new AgentProcessor({
       stream,
@@ -1066,7 +1088,7 @@ describe("minimal web-chat agent processors", () => {
   });
 
   test("rate-limited failures keep retrying past the generic three-strike cap", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     let attempts = 0;
     const agent = new AgentProcessor({
       stream,
@@ -1248,7 +1270,7 @@ describe("minimal web-chat agent processors", () => {
     // evicted before completing it, and the agent queued every later input
     // behind the never-completing request forever. The in-flight attempt is
     // cancelled (durable-object-crashed), not failed as a completed LLM call.
-    const stream = new MemoryStream();
+    const stream = agentStream();
     // Incarnation 1: accepted the request and appended started, then died —
     // simulated by writing the events directly, never running a processor.
     const [requested] = await stream.append({
@@ -1432,7 +1454,7 @@ describe("interrupt and stray-request hygiene", () => {
   });
 
   test("settles a stray non-current requested obligation without dialing the AI binding", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     let dials = 0;
     const agent = new AgentProcessor({
       stream,
@@ -1663,7 +1685,7 @@ describe("refold safety", () => {
   test("refold: replaying the settled journal dials no AI and appends nothing new", async () => {
     // Live flow to a settled turn: user message → scheduled → requested →
     // started → output → completed, folded by a live processor as it goes.
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const live = new AgentProcessor({
       stream,
       path: stream.path,
@@ -1730,7 +1752,7 @@ describe("file attachments in the LLM request", () => {
   };
 
   test("carries user-context files through to the provider-facing history", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     await stream.append(
       systemContext(),
       {
@@ -1757,16 +1779,16 @@ describe("file attachments in the LLM request", () => {
       },
     );
 
-    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestOffset: 4 });
+    const body = buildAgentLlmRequestBody({ events: stream.events, llmRequestOffset: 5 });
     const userMessage = body.messages.find((message) => message.role === "user");
     expect(userMessage).toMatchObject({
-      content: "@2 actor=user:web\n[File attached: cat.png (image/png)]",
+      content: "@3 actor=user:web\n[File attached: cat.png (image/png)]",
       files: [attachment],
     });
   });
 
   test("reflects sent-message attachments back into model-visible history", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const processor = new AgentProcessor({ stream, path: stream.path, projectId: null });
     await stream.append({
       type: "events.iterate.com/agents/web-message-sent",
@@ -1793,7 +1815,7 @@ describe("file attachments in the LLM request", () => {
     );
     expect(reflectedMessage).toMatchObject({
       content: expect.stringMatching(
-        /^@2\nThe assistant sent this visible web-chat message: Here is your cat!$/,
+        /^@3\nThe assistant sent this visible web-chat message: Here is your cat!$/,
       ),
       files: [attachment],
     });
@@ -1971,7 +1993,7 @@ describe("token usage and history compaction", () => {
   });
 
   test("skips the report when the vendor sent no parseable usage, and on failures", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     let fail = false;
     const agent = new AgentProcessor({
       stream,
@@ -2311,7 +2333,7 @@ describe("token usage and history compaction", () => {
   });
 
   test("an over-threshold usage report triggers compaction: summary via the agent's model, history replaced", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const aiCalls: { model: string; messages: { role: string; content: string }[] }[] = [];
     const makeAgent = () =>
       new AgentProcessor({
@@ -2388,9 +2410,9 @@ describe("token usage and history compaction", () => {
       { role: "system", content: expect.stringContaining("append-only event stream") },
       {
         role: "system",
-        content: `@1 key="agent/system-prompt"\n${DEFAULT_AGENT_SYSTEM_PROMPT}`,
+        content: `@2 key="agent/system-prompt"\n${DEFAULT_AGENT_SYSTEM_PROMPT}`,
       },
-      { role: "user", content: "@2 actor=user:web\nremember: I like teal" },
+      { role: "user", content: "@3 actor=user:web\nremember: I like teal" },
       { role: "system", content: expect.stringContaining("Current date and time (UTC):") },
       { role: "system", content: expect.stringContaining("output only the summary") },
     ]);
@@ -2433,7 +2455,7 @@ describe("token usage and history compaction", () => {
   });
 
   test("coalesces catch-up reports onto the newest request and that request's model", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const calls: { model: string; messages: { role: string; content: string }[] }[] = [];
     const agent = new AgentProcessor({
       stream,
@@ -2520,7 +2542,7 @@ describe("token usage and history compaction", () => {
   });
 
   test("does not let an earlier-cutoff summary suppress compaction of a later request", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const calls: string[] = [];
     const agent = new AgentProcessor({
       stream,
@@ -2632,7 +2654,7 @@ describe("token usage and history compaction", () => {
   });
 
   test("compaction rides the BYOK transport with the conversation's prompt cache key and journals the cache split", async () => {
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const encoder = new TextEncoder();
     const sse = (frames: unknown[]) =>
       new ReadableStream<Uint8Array>({
@@ -2854,7 +2876,7 @@ describe("busy/idle status announcements", () => {
 
   test("a revived incarnation announces a past-due idle flip immediately", async () => {
     // A live run settles a turn, but dies before its idle debounce fires.
-    const stream = new MemoryStream();
+    const stream = agentStream();
     const live = new AgentProcessor({
       stream,
       path: stream.path,
@@ -2912,7 +2934,7 @@ describe("busy/idle status announcements", () => {
     // NEITHER busy nor idle: no surface ever painted anything, so there is
     // nothing to clear — and an idle append here would fire once per
     // historical agent journal on the first refold after a deploy.
-    const stream = new MemoryStream();
+    const stream = agentStream();
     await stream.append(
       userMessage(),
       {
@@ -2923,12 +2945,12 @@ describe("busy/idle status announcements", () => {
         type: "events.iterate.com/agent/llm-request-requested",
         // The key the replayed scheduled event's re-armed debounce timer will
         // re-derive, so its append dedupes into this seeded event.
-        idempotencyKey: "agent/llm-request-requested@2",
+        idempotencyKey: "agent/llm-request-requested@3",
         payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 10, llmRequestOffset: 3, result: { status: "success" } },
+        payload: { durationMs: 10, llmRequestOffset: 4, result: { status: "success" } },
       },
     );
     const agent = new AgentProcessor({
@@ -2949,7 +2971,7 @@ describe("busy/idle status announcements", () => {
     // Same replay shape as above, but the journal carries an authored status
     // patch — announcedStatus EXISTS without busy ever journaled. Idle is due
     // only when a busy announcement stands, so this still announces nothing.
-    const stream = new MemoryStream();
+    const stream = agentStream();
     await stream.append(
       {
         type: "events.iterate.com/agent/status-changed",
@@ -2962,12 +2984,12 @@ describe("busy/idle status announcements", () => {
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
-        idempotencyKey: "agent/llm-request-requested@3",
+        idempotencyKey: "agent/llm-request-requested@4",
         payload: { model: "gpt-test", requestId: "llm-request:gen-0" },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
-        payload: { durationMs: 10, llmRequestOffset: 4, result: { status: "success" } },
+        payload: { durationMs: 10, llmRequestOffset: 5, result: { status: "success" } },
       },
     );
     const agent = new AgentProcessor({
@@ -3158,5 +3180,6 @@ function setup(
     build: ({ stream }) =>
       new AgentProcessor({ stream, path: stream.path, projectId: null, ...deps }),
   });
+  seedAgentBirth(harness.stream);
   return { ...harness, agent: harness.processor };
 }

@@ -93,7 +93,7 @@ export interface Project {
   debug(): Promise<string>;
   /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** The project stream processor (snapshot/state; `state.created` flips when bootstrap lands). */
+  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<ProjectLiveState>;
@@ -192,7 +192,7 @@ export interface StreamCollection {
 /** Repo catalog for either a project or the deployment-wide global scope. */
 export interface RepoCollection {
   __describe(): Promise<Description>;
-  /** Create the repo at a path; resolves once `repo/created` lands. */
+  /** Create the repo at a path; resolves once its backing artifact is `repo/ready`. */
   create(input: { path: string }): Promise<Repo>;
   /** The repo at a path. */
   get(path: string): Repo;
@@ -210,12 +210,13 @@ export interface ProjectCollection {
   get(projectId: string): Promise<Project>;
   /**
    * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/created` — convenient for scripts
+   * bootstrap saga has committed `project/ready` — convenient for scripts
    * and tests that use the project immediately. Pass
-   * `waitUntilCreated: false` to resolve as soon as the project EXISTS
+   * `waitUntilReady: false` to resolve once the `project/created` birth
+   * certificate has been processed
    * (identity registered, directory primed, bootstrap events appended): the
    * saga then runs behind the returned handle, and its progress is ordinary
-   * live state (`itx.liveState` — `state.reduced.created` flips when bootstrap
+   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap
    * lands). The dashboard uses the fast path to redirect into the project
    * instantly and play creation progress from pushes.
    */
@@ -223,12 +224,12 @@ export interface ProjectCollection {
     organizationSlug?: string;
     projectId?: string;
     slug: string;
-    waitUntilCreated?: boolean;
+    waitUntilReady?: boolean;
   }): Promise<Project>;
   /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
-   * engine probe (`state.created` on each project's processor snapshot). A
+   * engine probe (`state.ready` on each project's processor snapshot). A
    * probe failure degrades THAT entry to "unknown" — the list always renders.
    * Scope is explicit: "mine" (default for user principals) is the caller's
    * own claims even when admin credentials ride the same socket;
@@ -339,14 +340,20 @@ export interface Agent {
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
   /**
+   * Create the agent on this stream. The birth certificate contains only the
+   * processor-owned config; this method also creates the universally paired
+   * capability host, installs both subscriptions, and returns only after both
+   * processors have durably processed the complete batch.
+   */
+  create(input: AgentDefaultsOverrides): Promise<void>;
+  /**
    * Send a message to this agent — THE inbound door for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
    * (itx scoped to an agent path), the message is stamped
    * `{ type: "agent", path }` and does NOT refill the receiver's autonomous
    * turn budget, so agent↔agent reply loops stay bounded; from anywhere else
-   * (web UI, CLI, MCP session) it is a user message. Messaging a path that
-   * never existed births the agent: the first append creates the stream and
-   * the platform applies birth mechanics + default policy. Optional files
+   * (web UI, CLI, MCP session) it is a user message. The agent must already
+   * have been created explicitly. Optional files
    * are stored in project file storage and ride the message as attachments
    * (images stay visible to vision-capable models).
    */
@@ -358,18 +365,6 @@ export interface Agent {
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
         },
   ): Promise<StreamEvent>;
-  /**
-   * Set THIS agent's policy: system prompt and/or model. Works on an agent
-   * that already ran (a plain last-write-wins update) AND on a path that has
-   * never existed — the append births the agent with the full default policy
-   * plus these overrides, and the batch claims the same idempotency keys the
-   * project worker's defaults lane uses, so whichever lane runs second
-   * dedupes instead of clobbering. A custom systemPrompt REPLACES the path's
-   * platform prompt wholesale — including the codemode contract that tells
-   * the agent how to act. For delegation, prefer putting instructions in the
-   * message itself and leaving the prompt alone.
-   */
-  configure(input: AgentDefaultsOverrides): Promise<void>;
   /**
    * Update this agent's status record — the title, note, and shortStatus that
    * project surfaces (the agents list, the Slack thread status) show for it.
@@ -476,6 +471,8 @@ export interface CapabilityHost {
   /** This scope's capability-host stream processor (snapshot/state). A real
    * member, so it also claims the name: mounts cannot shadow `processor`. */
   processor: WakeableStreamProcessorRpc;
+  /** Create this capability host and return only after it has processed its birth batch. */
+  create(): Promise<void>;
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Remove the current mount at a path, or one exact mount by its offset. */
@@ -549,8 +546,6 @@ export interface AgentCollection {
   get(path: string): Agent;
   /** Known agents, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
-  /** The platform's default agent policy, as data. */
-  defaults: AgentDefaults;
 }
 
 /**
@@ -1065,6 +1060,8 @@ export interface Scheduler {
   __describe(): Promise<Description>;
   /** The scheduler stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;
+  /** Create this Scheduler and return only after it has processed the complete birth batch. */
+  create(): Promise<void>;
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
@@ -1109,7 +1106,7 @@ export interface SecretCollection {
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
 export interface Repo {
   __describe(): Promise<Description>;
-  /** Create the repo if it does not exist yet; resolves once `repo/created` lands. */
+  /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */
   create(): Promise<Repo>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
@@ -1428,32 +1425,13 @@ export interface StreamRecovery {
 /**
  * The read-side RPC surface every stream processor node exposes: inspect
  * runtime state (snapshot plus a processor-specific runtime bag), take an
- * offset-pinned `snapshot()` of the folded state, and `waitUntilEvent` to
- * block until the processor has folded a given offset.
+ * offset-pinned `snapshot()` of the folded state, and `waitUntilProcessed` to
+ * block until the processor has durably folded through a given offset.
  */
 export interface StreamProcessorRpc<State = unknown> {
   getRuntimeState(): Promise<ProcessorRuntimeState<State>>;
   snapshot(): Promise<ProcessorSnapshot<State>>;
-  waitUntilEvent(input: { offset: number; timeoutMs?: number }): Promise<void>;
-}
-
-/**
- * The `itx.agents.defaults` built-in: default agent POLICY as data. The
- * project worker owns applying it — the seeded template reacts to
- * `stream/child-stream-created` for `/agents/**` by appending
- * `forPath(path).events` to the new agent stream (and edits the result to
- * customize agents). The platform appends only mechanics (processor
- * subscriptions); an agent nobody configures runs on stock defaults.
- */
-export interface AgentDefaults {
-  __describe(): Promise<Description>;
-  /**
-   * The default policy for one agent path: the named pieces plus the exact
-   * event batch that applies them. Events are idempotency-keyed on
-   * (projectId, path), so appending them twice — or racing a redelivery — is
-   * a no-op.
-   */
-  forPath(path: string, overrides?: AgentDefaultsOverrides): Promise<AgentDefaultPolicy>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
 }
 
 /** Disposable handle for one live project egress interception. */
@@ -1517,6 +1495,8 @@ export interface Secret {
   fetch(request: Request): Promise<Response>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
+  /** Create this secret and wait until its processor has folded the birth certificate. */
+  create(input: SecretCreateInput): Promise<StreamEvent>;
   /** Set secret material, its egress allowlist, and/or refresh strategy.
    * Replacement material requires its complete egress policy in the same
    * update. Every update without replacement material clears stored material. */
@@ -1764,13 +1744,19 @@ export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<Sta
 
 /**
  * The project processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape. `created` flips when the
+ * `stateSchema` — the one definition of the shape. `ready` flips when the
  * bootstrap saga lands; the list fields are what the collection `list()`
  * methods read.
  */
 export type ProjectProcessorState = {
-  createRequest: { projectId: string; slug: string } | null;
-  created: boolean;
+  birthCertificate: {
+    config: {
+      slug: string;
+      onboardingActive?: boolean | undefined;
+      creatorEmail?: string | undefined;
+    };
+  } | null;
+  ready: boolean;
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
   agents: { createdAt: string; path: string }[];
@@ -2123,6 +2109,8 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
  * `stateSchema`.
  */
 export type AgentProcessorState = {
+  birthCertificate: { config: { systemPrompt: string; llm: { model: string } } } | null;
+  config: { systemPrompt: string; llm: { model: string } } | null;
   context: {
     system: (
       | {
@@ -2416,6 +2404,14 @@ export type AgentProcessorState = {
   };
 };
 
+/** Caller-supplied policy overrides, baked into the returned events. A
+ * systemPrompt override REPLACES the generic platform prompt wholesale — the
+ * caller owns the whole contract, including how the agent acts (codemode). */
+export type AgentDefaultsOverrides = {
+  systemPrompt?: string;
+  model?: string;
+};
+
 /**
  * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
  * base64 (optionally a full `data:` URL) — that is what Workers AI image
@@ -2459,14 +2455,6 @@ export type StreamEvent = {
   offset: number;
   createdAt: string;
   path: string;
-};
-
-/** Caller-supplied policy overrides, baked into the returned events. A
- * systemPrompt override REPLACES the path's platform prompt wholesale — the
- * caller owns the whole contract, including how the agent acts (codemode). */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
 };
 
 /** A file attached to an agent context item: content type, filename, project
@@ -2809,6 +2797,7 @@ export type SearchAnswerResult = SearchQueryResult & {
 
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
 export type SchedulerProcessorState = {
+  birthCertificate: { config: Record<string, never> } | null;
   pendingTriggers: Record<
     string,
     {
@@ -2985,9 +2974,9 @@ export type GithubResetResult = {
  * `stateSchema` — the one definition of the shape.
  */
 export type RepoProcessorState = {
+  birthCertificate: { config: Record<string, never> } | null;
   artifactName: string | null;
-  createRequested: boolean;
-  created: boolean;
+  ready: boolean;
   defaultBranch: string | null;
   github: { connection: string; installationId: string; owner: string; repo: string } | null;
   githubImport: {
@@ -3305,7 +3294,7 @@ export type StreamRecoveryRestoreInput = {
 /**
  * Whether a project the directory knows about actually exists in THIS
  * deployment's engine:
- * - `ready` — the project stream's bootstrap saga ran (`state.created`).
+ * - `ready` — the project stream's bootstrap saga ran (`state.ready`).
  * - `missing` — the engine has no state for it (e.g. the deployment was reset
  *   while the auth worker kept its rows); it can be set up again.
  * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
@@ -3380,14 +3369,6 @@ export type FlattenedCapabilityInvocation = {
 
 /** One step of an {@link ItxExpression}: a property read, or a `[method, ...args]` call. */
 export type ItxExpressionStep = string | [method: string, ...args: unknown[]];
-
-/** The default policy for one agent path: the named pieces plus the exact
- * event batch that applies them (idempotency-keyed, safe to re-append). */
-export type AgentDefaultPolicy = {
-  systemPrompt: string;
-  model: string;
-  events: AgentPolicyEventInput[];
-};
 
 /** A stored project file: what it looks like from the outside — its itx path plus wire facts. */
 export type ProjectFileMetadata = {
@@ -3487,6 +3468,8 @@ export type SecretDescription = {
     usedCount: number;
   };
   egress: { urls: string[] };
+  /** Whether the secret processor has folded its birth certificate. */
+  created: boolean;
   hasMaterial: boolean;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
@@ -3499,6 +3482,16 @@ export type SecretDescription = {
  * processor facade projects it away (write-only material) before anything
  * crosses the RPC boundary.
  */
+export type SecretCreateInput = {
+  /** Complete egress policy established by the birth certificate. */
+  egress: { urls: string[] };
+  /** Optional initial write-only material. */
+  material?: unknown;
+  /** Optional initial refresh strategy; omitted means no refresh. */
+  refresh?: SecretRefresh | null;
+};
+
+/** Input for replacing secret material or changing its egress and refresh policy. */
 export type SecretUpdateInput =
   | {
       /** Replacement material must name its complete egress policy in the same
@@ -3732,15 +3725,6 @@ export type StreamPingInput = { t0: number };
  * ping failures drop the sample and never affect delivery or liveness.
  */
 export type StreamPingReply = { t0: number; t1: number; t2: number };
-
-/** The policy events an agent is born with, as append inputs. Typed
- * structurally (not against the full event catalog) so the SDK projection
- * stays self-contained. */
-export type AgentPolicyEventInput = {
-  type: string;
-  idempotencyKey: string;
-  payload: Record<string, unknown>;
-};
 
 /** Input to the Images capability's `transform`: the source image stream,
  * ordered transform steps, optional overlay draws (watermarks — each with its

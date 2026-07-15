@@ -146,6 +146,11 @@ export type StreamProcessorHost<Live extends object = Record<string, unknown>> =
    * successfully ingested state, exactly as it would have without the pull.
    */
   catchUp(name: string): Promise<void>;
+  /** Pull through and wait until one named processor durably includes `offset`. */
+  waitUntilProcessed(
+    name: string,
+    input: { offset: number; timeoutMs?: number },
+  ): Promise<StreamProcessorSnapshot<unknown>>;
   /**
    * Wire this to the host DO's `alarm()` handler — REQUIRED on every hosting
    * class. The keepalive self-gates on whether the fire was its own, so a DO
@@ -457,6 +462,13 @@ export function createStreamProcessorHost<Live extends object = Record<string, u
     },
 
     catchUp: (name) => catchUpInternal(name, { rethrow: false }),
+
+    async waitUntilProcessed(name, input) {
+      const entry = requireEntry(name);
+      await catchUpInternal(name, { rethrow: true });
+      await entry.processor.waitUntilProcessed(input);
+      return await entry.processor.snapshot();
+    },
 
     handleAlarm(alarmInfo) {
       return tracing.enterSpan("alarm processor keepalive", async (span) => {

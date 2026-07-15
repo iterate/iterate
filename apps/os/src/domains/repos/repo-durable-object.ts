@@ -58,6 +58,7 @@ import {
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
+import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth } from "./github-sync-utils.ts";
@@ -129,7 +130,10 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   get processor() {
-    return new StreamProcessorRpcTarget(this.#repoProcessor);
+    return new StreamProcessorRpcTarget(this.#repoProcessor, {
+      waitUntilProcessed: (input) =>
+        this.#host.waitUntilProcessed(RepoProcessorContract.slug, input),
+    });
   }
 
   /** The repo's live state — the get/set/assign/subscribe surface behind `itx.repos.get(path).liveState`. */

@@ -43,6 +43,11 @@ function repoHarness(
 
 const REPO_CREATED = {
   type: "events.iterate.com/repo/created" as const,
+  payload: { config: {} },
+};
+
+const REPO_READY = {
+  type: "events.iterate.com/repo/ready" as const,
   payload: {
     artifactName: "artifact",
     defaultBranch: "main",
@@ -73,6 +78,13 @@ function artifactPush(branch: string) {
 }
 
 describe("RepoProcessor task change events", () => {
+  test("throws when a second repo birth certificate is reduced", async () => {
+    const { deliver, stream } = repoHarness(async () => []);
+    await stream.append(REPO_CREATED, REPO_CREATED);
+
+    await expect(deliver()).rejects.toThrow("repo received more than one created event");
+  });
+
   test("imports connected GitHub main pushes and waits for the Artifacts queue to emit facts", async () => {
     const syncFromGithubPush = vi.fn(async () => ({ commitOid: "github-head" }));
     const taskChangesForArtifactPush = vi.fn(async () => []);
@@ -81,7 +93,7 @@ describe("RepoProcessor task change events", () => {
       syncFromGithubPush,
     );
 
-    await stream.append(REPO_CREATED, GITHUB_LINK_CONFIGURED, {
+    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, {
       type: "events.iterate.com/github/webhook-received",
       payload: webhookPayload(
         { ref: "refs/heads/main", before: "before123", after: "after456" },
@@ -134,7 +146,7 @@ describe("RepoProcessor task change events", () => {
       syncFromGithubPush,
     );
 
-    await stream.append(REPO_CREATED, GITHUB_LINK_CONFIGURED, {
+    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, {
       type: "events.iterate.com/github/webhook-received",
       payload: webhookPayload(
         { ref: "refs/heads/main", before: "before123", after: "after456" },
@@ -169,6 +181,7 @@ describe("RepoProcessor task change events", () => {
 
     await stream.append(
       REPO_CREATED,
+      REPO_READY,
       GITHUB_LINK_CONFIGURED,
       {
         type: "events.iterate.com/repo/github-import-requested",
@@ -205,7 +218,7 @@ describe("RepoProcessor task change events", () => {
     ]);
     const { deliver, stream } = repoHarness(taskChangesForArtifactPush);
 
-    await stream.append(REPO_CREATED, artifactPush("main"));
+    await stream.append(REPO_CREATED, REPO_READY, artifactPush("main"));
     await deliver();
     await deliver();
 
@@ -247,7 +260,7 @@ describe("RepoProcessor task change events", () => {
     const taskChangesForArtifactPush = vi.fn(async () => []);
     const { deliver, stream } = repoHarness(taskChangesForArtifactPush);
 
-    await stream.append(REPO_CREATED, artifactPush("feature"));
+    await stream.append(REPO_CREATED, REPO_READY, artifactPush("feature"));
     await deliver();
 
     expect(taskChangesForArtifactPush).not.toHaveBeenCalled();
@@ -260,7 +273,7 @@ describe("RepoProcessor task change events", () => {
     ];
     const { deliver, stream } = repoHarness(taskChangesForArtifactPush);
 
-    await stream.append(REPO_CREATED, artifactPush("main"));
+    await stream.append(REPO_CREATED, REPO_READY, artifactPush("main"));
     await deliver();
     await deliver();
     const journalLength = stream.events.length;

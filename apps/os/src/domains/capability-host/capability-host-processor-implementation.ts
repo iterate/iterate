@@ -185,6 +185,11 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     state,
   }: Parameters<StreamProcessor<CapabilityHostProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
+      case "events.iterate.com/capability-host/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("capability host received more than one created event");
+        }
+        return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
           ...event.payload,
@@ -270,6 +275,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     args: Parameters<StreamProcessor<CapabilityHostProcessorContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await super.processEventBatch(args);
+    if (args.state.birthCertificate === null) return;
     // At-head gate — see OpenAiWsProcessor.processEventBatch.
     if (args.checkpointOffset < args.streamMaxOffset) return;
     const now = (this.#now ?? Date.now)();
@@ -310,6 +316,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async provideCapability(input: ProvideCapabilityInput) {
+    this.#assertCreated();
     const { path } = input;
     assertCapabilityPath(path);
     const key = liveKey(path);
@@ -448,6 +455,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
+    this.#assertCreated();
     assertCapabilityPath(path);
     const current = this.state.capabilities.find((record) => samePath(record.path, path));
     if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
@@ -468,6 +476,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
+    this.#assertCreated();
     // A trailing __describe is a valid INVOCATION (answered from the mount's
     // durable metadata below) — the reserved-name rule is for MOUNT names, so
     // validate the path without it or discovery on provided capabilities dies
@@ -566,6 +575,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async runScript(code: string): Promise<RunScriptResult> {
+    this.#assertCreated();
     const executionId = crypto.randomUUID();
     const completed = this.#waitForScriptCompletion(executionId);
     await this.append({
@@ -576,6 +586,12 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     const payload = event.payload as CompletedPayload;
     if (payload.error !== undefined) throw new Error(String(payload.error));
     return { completedEvent: event, executionId, result: payload.result ?? null };
+  }
+
+  #assertCreated(): void {
+    if (this.state.birthCertificate === null) {
+      throw new Error(`capability host at ${this.#path} has not been created`);
+    }
   }
 
   async #waitForScriptCompletion(executionId: string) {

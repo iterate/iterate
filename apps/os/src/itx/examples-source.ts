@@ -827,17 +827,16 @@ return await itx.projects.get(pid).__describe();
   }),
   projectExample({
     id: "agent-send-message",
-    title: "Send a message to an agent (also how you create one)",
+    title: "Create an agent, then send it a message",
     description:
-      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). message() appends an agents/context-added item to the agent's stream and returns it — the sender and user/developer role are derived from your scope; the agent's processors take it from there (use agent.ask({ message }) to wait for the reply when the agent has a model configured). This is ALSO how you create, spawn, or birth a new child agent / subagent to delegate work to: messaging a fresh /agents/** path births that agent with default policy — put everything the child needs in the message.",
+      "Agents live at /agents/<name> and are addressed through itx.agents.get(path). create() explicitly appends the agent and capability-host birth certificates, setup, and subscriptions, then waits for both processors. message() requires that birth and appends an agents/context-added item — the sender and user/developer role are derived from your scope. Put everything a delegated child needs in its first message.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { agentPath?: string; message?: string }) => {
-      // One expression: get() pipelines, so no intermediate await is needed. The
-      // returned value is the committed stream event — the durable record the
-      // agent loop reduces into its history.
-      const sent = await itx.agents
-        .get(vars.agentPath ?? "/agents/repl-demo")
-        .message(vars.message ?? "Hello from the examples catalogue");
+      const agent = itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
+      await agent.create({});
+      // The returned value is the committed stream event — the durable record
+      // the agent loop reduces into its context projection.
+      const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
       return { offset: sent.offset, payload: sent.payload, type: sent.type };
     },
   }),
@@ -1773,7 +1772,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     id: "scheduler-agent-checkin",
     title: "Give an agent a recurring task",
     description:
-      "The scheduler + agents flywheel: schedule a script that sends an agent a message, and the agent wakes on cadence, does the work, and reports in its own chat. Sending to a fresh /agents/** path births that agent on first use — so a schedule targeting a date-stamped path creates a NEW agent per occurrence.",
+      "The scheduler + agents flywheel: schedule a script that explicitly creates an agent, sends it a message, and the agent wakes on cadence, does the work, and reports in its own chat. create() is idempotent for a fixed path; a date-stamped path creates a new agent per occurrence.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { schedulerKey?: string }) => {
       const key = vars.schedulerKey ?? "examples/agent-checkin";
@@ -1784,7 +1783,9 @@ export default class ProjectWorker extends WorkerEntrypoint {
     // A fixed path = one long-lived agent accumulating context. For a fresh
     // agent per occurrence use a derived path instead, e.g.
     // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
-    await itx.agents.get("/agents/checkin").message(
+    const agent = itx.agents.get("/agents/checkin");
+    await agent.create({});
+    await agent.message(
       "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
     );
   }`,

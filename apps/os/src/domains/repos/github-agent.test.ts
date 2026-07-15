@@ -14,9 +14,11 @@ import { githubAgentPath } from "./github-agent-utils.ts";
 const AGENT_PATH = await githubAgentPath({ ...GITHUB_LINK, repoPath: "/repos/config" }, 7);
 
 describe("GithubAgentProcessor (projection and conversation policy)", () => {
-  const ROUTE_EVENT = {
-    type: "events.iterate.com/github-agent/route-configured" as const,
-    payload: { ...GITHUB_LINK, number: 7, repoPath: "/repos/config", streamPath: AGENT_PATH },
+  const BIRTH_EVENT = {
+    type: "events.iterate.com/github-agent/created" as const,
+    payload: {
+      config: { ...GITHUB_LINK, number: 7, repoPath: "/repos/config" },
+    },
   };
 
   function agentInputs(stream: MemoryStream) {
@@ -55,7 +57,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
   test("turns the route fact into silent context naming the full Octokit reply door", async () => {
     const { stream, deliver } = agentSetup();
 
-    await stream.append(ROUTE_EVENT);
+    await stream.append(BIRTH_EVENT);
     await deliver();
 
     const inputs = agentInputs(stream);
@@ -80,7 +82,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     const omittedTail = "not-in-the-bounded-rendering";
 
     await stream.append(
-      ROUTE_EVENT,
+      BIRTH_EVENT,
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload(pullRequestBody({ title: "Add widgets" })),
@@ -143,7 +145,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
       },
     }));
 
-    await stream.append(ROUTE_EVENT, {
+    await stream.append(BIRTH_EVENT, {
       type: "events.iterate.com/github/webhook-received",
       payload: webhookPayload(
         pullRequestBody({ comment: { body: "@iterate can you see this?", id: 4_962_404_485 } }),
@@ -172,7 +174,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
       },
     }));
 
-    await stream.append(ROUTE_EVENT, {
+    await stream.append(BIRTH_EVENT, {
       type: "events.iterate.com/github/webhook-received",
       payload: webhookPayload(
         pullRequestBody({
@@ -205,7 +207,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     const pullRequest = opened.pull_request as Record<string, unknown>;
 
     await stream.append(
-      ROUTE_EVENT,
+      BIRTH_EVENT,
       { type: "events.iterate.com/github/webhook-received", payload: webhookPayload(opened) },
       {
         type: "events.iterate.com/github/webhook-received",
@@ -246,7 +248,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     });
 
     await stream.append(
-      ROUTE_EVENT,
+      BIRTH_EVENT,
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload(
@@ -295,7 +297,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     }));
     const body = pullRequestBody({ action: "submitted", headSha: "review-head" });
 
-    await stream.append(ROUTE_EVENT, {
+    await stream.append(BIRTH_EVENT, {
       type: "events.iterate.com/github/webhook-received",
       payload: webhookPayload(
         {
@@ -332,7 +334,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     const { stream, deliver } = agentSetup();
 
     await stream.append(
-      ROUTE_EVENT,
+      BIRTH_EVENT,
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload(
@@ -389,7 +391,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
       },
     }));
 
-    await stream.append(ROUTE_EVENT, {
+    await stream.append(BIRTH_EVENT, {
       type: "events.iterate.com/github/webhook-received",
       payload: webhookPayload(
         pullRequestBody({
@@ -430,7 +432,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     }));
 
     await stream.append(
-      ROUTE_EVENT,
+      BIRTH_EVENT,
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload(
@@ -468,10 +470,10 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     });
   });
 
-  test("clears projected conversation state when a stale stream is relinked", async () => {
+  test("throws when a second birth certificate is appended", async () => {
     const { stream, processor, deliver } = agentSetup();
 
-    await stream.append(ROUTE_EVENT, {
+    await stream.append(BIRTH_EVENT, {
       type: "events.iterate.com/github/webhook-received",
       payload: webhookPayload(
         pullRequestBody({ body: "@iterate inspect the old repository", headSha: "old-head" }),
@@ -481,24 +483,20 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     expect(processor.state.conversationActive).toBe(true);
 
     await stream.append({
-      ...ROUTE_EVENT,
-      payload: { ...ROUTE_EVENT.payload, repo: "gadgets" },
+      ...BIRTH_EVENT,
+      payload: {
+        config: { ...BIRTH_EVENT.payload.config, repo: "gadgets" },
+      },
     });
-    await deliver();
-
-    expect(processor.state).toMatchObject({
-      conversationActive: false,
-      pullRequest: null,
-      recentActivity: [],
-      repo: "gadgets",
-    });
+    await expect(deliver()).rejects.toThrow(/more than one github-agent\/created/);
+    expect(processor.state.birthCertificate).toEqual(BIRTH_EVENT.payload);
   });
 
   test("leaves pushes silent so project userspace alone decides whether to review", async () => {
     const { stream, processor, deliver } = agentSetup();
 
     await stream.append(
-      ROUTE_EVENT,
+      BIRTH_EVENT,
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload(pullRequestBody({ action: "opened", headSha: "head-one" })),
@@ -518,7 +516,7 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     const { stream, deliver } = agentSetup();
 
     await stream.append(
-      ROUTE_EVENT,
+      BIRTH_EVENT,
       {
         type: "events.iterate.com/github/webhook-received",
         payload: webhookPayload(pullRequestBody({ action: "opened", headSha: "ci-head" })),

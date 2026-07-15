@@ -33,7 +33,6 @@ import { SlackProcessor } from "../integrations/slack-processor-implementation.t
 import { eyesReactionTargetFromWebhookPayload } from "../integrations/slack-agent-processor-implementation.ts";
 import { callProjectSlackWebApi } from "../integrations/slack-api.ts";
 import { TelegramProcessor } from "../integrations/telegram-processor-implementation.ts";
-import { connectionFromIntegrationStreamPath } from "../integrations/utils.ts";
 import { EmailProcessor } from "../email/email-processor-implementation.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
@@ -126,17 +125,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // Registration is the point: the host wakes the router by slug; nothing
   // dials the facet handle directly anymore (status is a journal fold).
   protected readonly slackRouterRegistration = this.#processorHost.add((deps) => {
-    // This DO instance hosts one connection's router stream
-    // (/integrations/slack/{connection}): the name IS the connection, for both
-    // routing and the bot-token secret path. Null (a non-connection path) is
-    // passed through — the processor errors loudly if a mis-armed subscription
-    // ever wakes it there.
-    const connection = connectionFromIntegrationStreamPath(this.#name.path);
     return new SlackProcessor({
       ...deps,
-      connection,
-      acknowledgeRoutedWebhook: async ({ payload }) => {
-        if (connection === null) return;
+      acknowledgeRoutedWebhook: async ({ connection, payload }) => {
         const ack = eyesReactionTargetFromWebhookPayload(payload);
         if (ack == null) return;
         try {
@@ -166,16 +157,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // Telegram has no reaction primitive; the telegram-agent processor's
   // "typing…" chat action covers acknowledgement.
   protected readonly telegramRouterRegistration = this.#processorHost.add((deps) => {
-    return new TelegramProcessor({
-      ...deps,
-      connection: connectionFromIntegrationStreamPath(this.#name.path),
-    });
+    return new TelegramProcessor(deps);
   });
 
   // The email thread router — same hosting shape as the Slack router: it only
   // ever WAKES on the Durable Object instance addressed at
-  // `/integrations/email`, where project bootstrap (or the email ingress
-  // door's belt-and-braces append) configured its subscription.
+  // `/integrations/email`, where project bootstrap explicitly created it and
+  // configured its subscription. Email ingress only appends received mail.
   readonly #emailProcessor = this.#processorHost.add((deps) => new EmailProcessor(deps));
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
@@ -193,6 +181,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
       // must reflect a policy event appended moments ago (e.g. the birth
       // seed) even when push delivery is lagging or a wake was dropped.
       catchUpBeforeSnapshot: () => this.#processorHost.catchUp(EmailProcessorContract.slug),
+      waitUntilProcessed: (input) =>
+        this.#processorHost.waitUntilProcessed(EmailProcessorContract.slug, input),
     });
   }
 
@@ -214,6 +204,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
       // a child stream created moments ago even when the root stream's push
       // delivery is lagging or a wake was dropped.
       catchUpBeforeSnapshot: () => this.#processorHost.catchUp(ProjectProcessorContract.slug),
+      waitUntilProcessed: (input) =>
+        this.#processorHost.waitUntilProcessed(ProjectProcessorContract.slug, input),
     });
   }
 

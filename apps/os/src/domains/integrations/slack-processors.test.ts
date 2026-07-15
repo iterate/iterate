@@ -22,6 +22,16 @@ import {
 const CONNECTION = "nustom";
 
 describe("SlackProcessor (webhook router)", () => {
+  test("throws when a second Slack-router birth certificate is reduced", async () => {
+    const { deliver, stream } = routerSetup();
+    await stream.append({
+      type: "events.iterate.com/slack/created",
+      payload: { config: { connection: CONNECTION } },
+    });
+
+    await expect(deliver()).rejects.toThrow("more than one slack/created event");
+  });
+
   test("creates a route and forwards the webhook to the routed agent stream", async () => {
     const { network, stream, acked, deliver } = routerSetup();
 
@@ -42,22 +52,29 @@ describe("SlackProcessor (webhook router)", () => {
       threadTs: "111.222",
     });
 
-    // …and the routed stream receives [route, webhook] verbatim.
+    // …and the routed stream is explicitly born before [route, webhook].
     const routed = network.eventsAt("/agents/slack/nustom/c123/ts-111-222");
-    expect(routed.map((event) => event.type)).toEqual([
+    expect(routed.slice(0, 3).map((event) => event.type)).toEqual([
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/slack-agent/created",
+    ]);
+    expect(eventsOfType(routed, "events.iterate.com/stream/subscription-configured")).toHaveLength(
+      3,
+    );
+    expect(routed.slice(-2).map((event) => event.type)).toEqual([
       "events.iterate.com/slack/thread-route-configured",
       "events.iterate.com/slack/webhook-received",
     ]);
-    expect(routed[1]!.payload).toEqual(humanMessageWebhookPayload({}));
+    expect(routed.at(-1)!.payload).toEqual(humanMessageWebhookPayload({}));
 
     // The fast-ack hook fired once for the forwarded webhook.
     expect(acked).toHaveLength(1);
   });
 
-  test("routes webhooks that arrive before the connected fact folds", async () => {
-    // The connection is a projection of the host DO's name, not folded state,
-    // so routing is total from the very first webhook — event ordering cannot
-    // produce a window where a message is dropped.
+  test("routes after birth even when no connected lifecycle fact exists", async () => {
+    // The explicit birth certificate, not a connected fact or path parsing,
+    // owns the connection used for routing.
     const { network, stream, deliver } = routerSetup();
 
     await stream.append({
@@ -67,7 +84,12 @@ describe("SlackProcessor (webhook router)", () => {
     await deliver();
 
     const routed = network.eventsAt("/agents/slack/nustom/c123/ts-111-222");
-    expect(routed.map((event) => event.type)).toEqual([
+    expect(routed.slice(0, 3).map((event) => event.type)).toEqual([
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/slack-agent/created",
+    ]);
+    expect(routed.slice(-2).map((event) => event.type)).toEqual([
       "events.iterate.com/slack/thread-route-configured",
       "events.iterate.com/slack/webhook-received",
     ]);
@@ -140,21 +162,22 @@ describe("SlackProcessor (webhook router)", () => {
     // The router's whole state is its routing table; connection status is read
     // straight off the journal by getConnectionStatus, so lifecycle facts
     // reduce to nothing here.
-    expect(processor.state).toEqual({ routes: {} });
+    expect(processor.state).toEqual({
+      birthCertificate: { config: { connection: CONNECTION } },
+      routes: {},
+    });
   });
 
-  test("errors loudly instead of routing when the host stream carries no connection", async () => {
-    // A mis-armed subscription: slack router woken on a non-connection path.
+  test("does nothing before its explicit birth certificate", async () => {
     const { network, stream, deliver } = routerSetup({ connection: null });
 
     await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
-    // Throwing (not dropping) holds the checkpoint so the webhook stays
-    // replayable — a silent drop here is the 2026-06-15 outage shape.
-    await expect(deliver()).rejects.toThrow(/no connection/);
+    await deliver();
     expect(network.streams.size).toBe(1);
+    expect(stream.events).toHaveLength(1);
   });
 
   test("acknowledges webhooks forwarded through existing routes", async () => {
@@ -191,15 +214,15 @@ describe("SlackProcessor (webhook router)", () => {
     await deliver();
     expect(acked).toHaveLength(1);
     const routedPath = "/agents/slack/nustom/c123/ts-111-222";
-    expect(network.eventsAt(routedPath)).toHaveLength(2);
+    const routedCount = network.eventsAt(routedPath).length;
+    expect(routedCount).toBeGreaterThan(2);
 
     clock.now += 60 * 60_000;
     const refoldAcked: unknown[] = [];
     const refolded = new SlackProcessor({
       stream,
       path: stream.path,
-      projectId: null,
-      connection: CONNECTION,
+      projectId: "prj_1",
       acknowledgeRoutedWebhook: ({ payload }) => {
         refoldAcked.push(payload);
       },
@@ -210,7 +233,7 @@ describe("SlackProcessor (webhook router)", () => {
     // The stale ack is skipped; the durable forwards replay and dedupe at the
     // append layer (idempotency keys), leaving the routed stream unchanged.
     expect(refoldAcked).toEqual([]);
-    expect(network.eventsAt(routedPath)).toHaveLength(2);
+    expect(network.eventsAt(routedPath)).toHaveLength(routedCount);
     expect(
       stream.events.filter(
         (event) => event.type === "events.iterate.com/slack/thread-route-configured",
@@ -254,10 +277,12 @@ describe("SlackProcessor (webhook router)", () => {
       }
       return originalRoutedAppend(...inputs);
     };
-    // The connected fact folds first (the connection names new thread paths).
+    const birth = stream.events[0]!;
+    await processor.ingest({ events: [birth], streamMaxOffset: birth.offset });
+    // Connected is only an ordinary lifecycle fact; birth owns the connection.
     const [connected] = await stream.append(connectedEvent());
-    await processor.ingest({ events: [connected!], streamMaxOffset: 1 });
-    expect(processor.checkpointOffset).toBe(1);
+    await processor.ingest({ events: [connected!], streamMaxOffset: connected!.offset });
+    expect(processor.checkpointOffset).toBe(connected!.offset);
     const [webhook] = await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
@@ -265,17 +290,22 @@ describe("SlackProcessor (webhook router)", () => {
 
     // First delivery: the forward throws. ingest MUST reject and the
     // checkpoint MUST hold — otherwise the webhook is gone for good.
-    await expect(processor.ingest({ events: [webhook!], streamMaxOffset: 2 })).rejects.toThrow(
-      /StreamsCapability/,
-    );
-    expect(processor.checkpointOffset).toBe(1);
+    await expect(
+      processor.ingest({ events: [webhook!], streamMaxOffset: webhook!.offset }),
+    ).rejects.toThrow(/StreamsCapability/);
+    expect(processor.checkpointOffset).toBe(connected!.offset);
     expect(routed.events).toHaveLength(0);
 
     // The host replays the same webhook from the un-advanced checkpoint; the
     // forward now succeeds and the checkpoint advances.
-    await processor.ingest({ events: [webhook!], streamMaxOffset: 2 });
-    expect(processor.checkpointOffset).toBe(2);
-    expect(routed.events.map((event) => event.type)).toEqual([
+    await processor.ingest({ events: [webhook!], streamMaxOffset: webhook!.offset });
+    expect(processor.checkpointOffset).toBe(webhook!.offset);
+    expect(routed.events.slice(0, 3).map((event) => event.type)).toEqual([
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/slack-agent/created",
+    ]);
+    expect(routed.events.slice(-2).map((event) => event.type)).toEqual([
       "events.iterate.com/slack/thread-route-configured",
       "events.iterate.com/slack/webhook-received",
     ]);
@@ -290,6 +320,18 @@ describe("SlackProcessor (webhook router)", () => {
 });
 
 describe("SlackAgentProcessor", () => {
+  test("throws when a second Slack-agent birth certificate is reduced", async () => {
+    const { deliver, stream } = setup();
+    await stream.append({
+      type: "events.iterate.com/slack-agent/created",
+      payload: {
+        config: { channel: "C123", connection: CONNECTION, threadTs: "111.222" },
+      },
+    });
+
+    await expect(deliver()).rejects.toThrow("more than one slack-agent/created event");
+  });
+
   test("turns a routed @mention into triggering agent context and adds the eyes reaction", async () => {
     const { deliver, processor, slackCalls, stream } = setup();
 
@@ -325,7 +367,7 @@ describe("SlackAgentProcessor", () => {
         {
           type: "event",
           streamPath: "/agents/slack/nustom/c123/ts-111-222",
-          offset: 2,
+          offset: 3,
           eventType: "events.iterate.com/slack/webhook-received",
         },
       ],
@@ -719,7 +761,7 @@ describe("SlackAgentProcessor", () => {
   test("retries a failed title paint on batch redelivery", async () => {
     let failNext = true;
     const { deliver, processor, slackCalls, stream } = setup({
-      callSlackApi: async (method) => {
+      callSlackApi: async ({ method }) => {
         if (method !== "assistant.threads.setTitle" || !failNext) return;
         failNext = false;
         throw new Error("slack blew up");
@@ -1011,7 +1053,7 @@ describe("SlackAgentProcessor", () => {
       stream,
       path: stream.path,
       projectId: null,
-      callSlackApi: async (method, body) => {
+      callSlackApi: async ({ body, method }) => {
         refoldCalls.push({ body, method });
       },
       now: () => clock.now,
@@ -1087,8 +1129,8 @@ describe("SlackAgentProcessor", () => {
     );
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).toMatchObject({
-      idempotencyKey: "slack-agent/bang-command@/agents/slack/nustom/c123/ts-111-222:2",
-      payload: { executionId: "slack-bang-command-2" },
+      idempotencyKey: "slack-agent/bang-command@/agents/slack/nustom/c123/ts-111-222:3",
+      payload: { executionId: "slack-bang-command-3" },
     });
     const code = (scripts[0]!.payload as { code: string }).code;
     expect(code).toContain("const debug = await itx.debug();");
@@ -1109,6 +1151,12 @@ describe("SlackAgentProcessor", () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/agents/slack/nustom/c123/ts-111-222");
     await stream.append({
+      type: "events.iterate.com/slack-agent/created",
+      payload: {
+        config: { channel: "C123", connection: CONNECTION, threadTs: "111.222" },
+      },
+    });
+    await stream.append({
       type: "events.iterate.com/slack/webhook-received",
       payload: humanMessageWebhookPayload({}),
     });
@@ -1126,7 +1174,7 @@ describe("SlackAgentProcessor", () => {
       stream,
       path: stream.path,
       projectId: null,
-      callSlackApi: async (method) => {
+      callSlackApi: async ({ method }) => {
         calls.push(`slack:${method}`);
       },
     });
@@ -1163,7 +1211,7 @@ describe("SlackAgentProcessor", () => {
     );
     expect(inputs).toHaveLength(1);
     expect(inputs[0]).toMatchObject({
-      idempotencyKey: "slack-agent/webhook-to-agent-context@/agents/slack/nustom/c123/ts-111-222:1",
+      idempotencyKey: "slack-agent/webhook-to-agent-context@/agents/slack/nustom/c123/ts-111-222:2",
     });
     const payload = inputs[0]!.payload as {
       actor?: unknown;
@@ -1180,7 +1228,7 @@ describe("SlackAgentProcessor", () => {
         {
           type: "event",
           streamPath: "/agents/slack/nustom/c123/ts-111-222",
-          offset: 1,
+          offset: 2,
           eventType: "events.iterate.com/slack/webhook-received",
         },
       ],
@@ -1468,20 +1516,32 @@ function routerSetup(deps: { connection?: string | null; now?: () => number } = 
       new SlackProcessor({
         stream,
         path: stream.path,
-        projectId: null,
-        connection,
+        projectId: "prj_1",
         acknowledgeRoutedWebhook: ({ payload }) => {
           acked.push(payload);
         },
         ...(deps.now === undefined ? {} : { now: deps.now }),
       }),
   });
+  if (connection !== null) {
+    void harness.stream.append({
+      type: "events.iterate.com/slack/created",
+      payload: { config: { connection } },
+    });
+  }
   return { ...harness, acked };
 }
 
 function setup(deps?: {
-  callSlackApi?: (method: string, body: Record<string, unknown>) => Promise<void>;
-  fetchSlackChannelName?: (channel: string) => Promise<string | null>;
+  callSlackApi?: (input: {
+    body: Record<string, unknown>;
+    connection: string;
+    method: string;
+  }) => Promise<void>;
+  fetchSlackChannelName?: (input: {
+    channel: string;
+    connection: string;
+  }) => Promise<string | null>;
   storeSlackFiles?: ConstructorParameters<typeof SlackAgentProcessor>[0]["storeSlackFiles"];
 }) {
   const clock = { now: Date.parse("2026-07-09T12:00:00Z") };
@@ -1494,9 +1554,10 @@ function setup(deps?: {
         stream,
         path: stream.path,
         projectId: null,
-        callSlackApi: async (method, body) => {
+        callSlackApi: async (input) => {
+          const { body, method } = input;
           slackCalls.push({ body, method });
-          await deps?.callSlackApi?.(method, body);
+          await deps?.callSlackApi?.(input);
         },
         now: () => clock.now,
         ...(deps?.fetchSlackChannelName === undefined
@@ -1504,6 +1565,12 @@ function setup(deps?: {
           : { fetchSlackChannelName: deps.fetchSlackChannelName }),
         ...(deps?.storeSlackFiles === undefined ? {} : { storeSlackFiles: deps.storeSlackFiles }),
       }),
+  });
+  void harness.stream.append({
+    type: "events.iterate.com/slack-agent/created",
+    payload: {
+      config: { channel: "C123", connection: CONNECTION, threadTs: "111.222" },
+    },
   });
   return { ...harness, clock, slackCalls };
 }

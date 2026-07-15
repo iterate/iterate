@@ -13,6 +13,19 @@ import { CapabilityHostProcessor } from "./capability-host-processor-implementat
 
 const PROVIDED = "events.iterate.com/capability-host/capability-provided";
 
+function capabilityHostStream(): MemoryStream {
+  const stream = new MemoryStream();
+  stream.events.push({
+    type: "events.iterate.com/capability-host/created",
+    idempotencyKey: `capability-host/created:test:${stream.path}`,
+    payload: { config: {} },
+    createdAt: new Date().toISOString(),
+    offset: 1,
+    path: stream.path,
+  });
+  return stream;
+}
+
 /**
  * `provideCapability` awaits read-your-writes delivery of its own append;
  * MemoryStream has no delivery loop, so pump appended events back through
@@ -34,12 +47,12 @@ async function provideDelivered(
   return await pending;
 }
 
-function makeProcessor(options: {
+async function makeProcessor(options: {
   stream: MemoryStream;
   itx?: unknown;
   validateCapabilityTypes?: (types: string) => Promise<string[]>;
 }) {
-  return new CapabilityHostProcessor({
+  const processor = new CapabilityHostProcessor({
     stream: options.stream,
     itx: (options.itx ?? {}) as Project,
     path: "/",
@@ -51,12 +64,33 @@ function makeProcessor(options: {
     },
     validateCapabilityTypes: options.validateCapabilityTypes,
   });
+  await processor.ingest({
+    events: options.stream.events,
+    streamMaxOffset: options.stream.events.at(-1)!.offset,
+  });
+  return processor;
 }
+
+describe("CapabilityHostProcessor birth", () => {
+  it("throws when a second capability-host birth certificate is reduced", async () => {
+    const stream = capabilityHostStream();
+    const processor = await makeProcessor({ stream });
+    await stream.append({
+      type: "events.iterate.com/capability-host/created",
+      payload: { config: {} },
+    });
+    const duplicate = stream.events.at(-1)!;
+
+    await expect(
+      processor.ingest({ events: [duplicate], streamMaxOffset: duplicate.offset }),
+    ).rejects.toThrow("capability host received more than one created event");
+  });
+});
 
 describe("provide-time types validation", () => {
   it("rejects authored types that do not compile, appending nothing", async () => {
-    const stream = new MemoryStream();
-    const processor = makeProcessor({
+    const stream = capabilityHostStream();
+    const processor = await makeProcessor({
       stream,
       validateCapabilityTypes: async () => ["types:1 — Cannot find name 'Streem'. (TS2304)"],
     });
@@ -72,8 +106,8 @@ describe("provide-time types validation", () => {
   });
 
   it("journals authored types that compile", async () => {
-    const stream = new MemoryStream();
-    const processor = makeProcessor({ stream, validateCapabilityTypes: async () => [] });
+    const stream = capabilityHostStream();
+    const processor = await makeProcessor({ stream, validateCapabilityTypes: async () => [] });
     await provideDelivered(processor, stream, {
       expression: ["streams"],
       path: ["root"],
@@ -85,8 +119,8 @@ describe("provide-time types validation", () => {
   });
 
   it("skips validation when no validator is wired (node harness)", async () => {
-    const stream = new MemoryStream();
-    const processor = makeProcessor({ stream });
+    const stream = capabilityHostStream();
+    const processor = await makeProcessor({ stream });
     await provideDelivered(processor, stream, {
       expression: ["streams"],
       path: ["unchecked"],
@@ -101,8 +135,8 @@ describe("connect-time auto-typing", () => {
   const SELF_DESCRIBED = "export type Capability = { forecast(): Promise<string> };";
 
   it("stamps an expression mount's types from the capability's own __describe", async () => {
-    const stream = new MemoryStream();
-    const processor = makeProcessor({
+    const stream = capabilityHostStream();
+    const processor = await makeProcessor({
       stream,
       itx: { weather: { __describe: async () => ({ types: SELF_DESCRIBED }) } },
       validateCapabilityTypes: async () => [],
@@ -117,8 +151,8 @@ describe("connect-time auto-typing", () => {
   });
 
   it("leaves the mount untyped when self-reported types fail to compile", async () => {
-    const stream = new MemoryStream();
-    const processor = makeProcessor({
+    const stream = capabilityHostStream();
+    const processor = await makeProcessor({
       stream,
       itx: { weather: { __describe: async () => ({ types: "broken (" }) } },
       validateCapabilityTypes: async () => ["types:1 — expected declaration (TS1128)"],
@@ -133,8 +167,8 @@ describe("connect-time auto-typing", () => {
   });
 
   it("leaves the mount untyped when describing throws, without blocking the provide", async () => {
-    const stream = new MemoryStream();
-    const processor = makeProcessor({
+    const stream = capabilityHostStream();
+    const processor = await makeProcessor({
       stream,
       itx: {
         weather: {
