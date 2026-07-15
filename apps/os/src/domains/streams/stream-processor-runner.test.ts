@@ -1407,6 +1407,46 @@ describe("StreamProcessorRunner parse-failure lane", () => {
       consoleError.mockRestore();
     }
   });
+
+  it("a malformed consumed event at head does NOT steal caughtUp from the last good event", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const journal = makeJournal();
+      journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1 — good, opens obligation
+      journal.seed({ type: REQUESTED, payload: { id: 42 } }); // 2 — malformed, at raw head
+
+      const headCalls: string[][] = [];
+      const hooks: TaskHooks = {
+        onHead: (args, stableKey) => {
+          headCalls.push([...args.state.open]);
+          for (const id of args.state.open) {
+            args.blockProcessorWhile(() =>
+              args.appendTo(SIBLING, {
+                type: DRIVEN,
+                idempotencyKey: stableKey(`drive:${id}`),
+                payload: { id },
+              }),
+            );
+          }
+        },
+      };
+      const harness = makeHarness({ journal, hooks });
+      // Head is offset 2 (the malformed event). The last DELIVERED event is
+      // offset 1 (the good one) — it must carry caughtUp so the obligation
+      // drives, rather than being stranded because offset 2 stole the flag.
+      await harness.deliverFrames([journal.rows().slice()]);
+      await tick();
+
+      expect(headCalls).toEqual([["a"]]);
+      expect(comparableRows(journal.rows(SIBLING))).toEqual([
+        { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
+      ]);
+      // Both offsets committed (the malformed one skipped-not-wedged).
+      expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(2);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });
 
 // =============================================================================

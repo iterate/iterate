@@ -797,15 +797,15 @@ export class StreamProcessorRunner<
     // processor at head). `caughtUp` is the at-head reconcile signal — see
     // DeliveryContext.
     const batchReachesHead = pending.at(-1)!.offset >= observedHeadOffset;
-    // A `"*"` contract consumes EVERY type (matching `getConsumedEventDefinition`),
-    // so every event counts toward the last-consumed offset; otherwise only
-    // exact type matches do. Without the wildcard arm a `"*"` processor
-    // (project, browser feed/raw-events) would never see `caughtUp`.
-    const consumesAllTypes = this.driver.contract.consumes.includes("*");
-    const consumedTypes = new Set(this.driver.contract.consumes);
-    let lastConsumedOffset: number | null = null;
+    // The offset of the LAST event this batch will actually deliver to
+    // `processEvent` — a consumed type that PARSES. `isDeliverable` folds in
+    // the wildcard (`"*"` consumes every type) AND excludes malformed consumed
+    // events: without the parse check a malformed event at head would be
+    // selected as "last consumed", steal the `caughtUp` flag from the real
+    // last-good event (which never gets it), and strand its obligation.
+    let lastDeliveredOffset: number | null = null;
     for (const event of pending) {
-      if (consumesAllTypes || consumedTypes.has(event.type)) lastConsumedOffset = event.offset;
+      if (this.driver.isDeliverable(event)) lastDeliveredOffset = event.offset;
     }
 
     const ctx: FrameContext<ProcessorState<Contract>> = {
@@ -830,10 +830,10 @@ export class StreamProcessorRunner<
           // wedge on it), and record it AFTER its commit lands (below).
           ctx.uncommittedParseFailures.push({ event, error: reduction.parseError });
         } else if (reduction !== undefined) {
-          // `caughtUp` on the LAST consumed event of a batch that reached head
+          // `caughtUp` on the LAST delivered event of a batch that reached head
           // (not `offset >= head` — that never fires for a subset-consuming
           // processor whose head is a later unconsumed event).
-          const caughtUp = batchReachesHead && event.offset === lastConsumedOffset;
+          const caughtUp = batchReachesHead && event.offset === lastDeliveredOffset;
           const delivery: DeliveryContext = {
             phase: event.offset >= observedHeadOffset ? "live" : "catching-up",
             observedHeadOffset,

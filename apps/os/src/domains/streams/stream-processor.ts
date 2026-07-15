@@ -206,6 +206,11 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
     event: StreamEvent;
     state: ProcessorState<Contract>;
   }): ReducedEvent<Contract> | ConsumedEventParseFailure | undefined;
+  /** Whether this event will reach `processEvent` — a consumed type whose
+   * payload parses. Stateless (no fold), so the runner can find the last
+   * DELIVERED offset of a batch (for `caughtUp`) without pre-folding, and
+   * without letting a malformed consumed event at head steal the flag. */
+  isDeliverable(event: StreamEvent): boolean;
   /** The synchronous per-event side-effect hook (virtual — subclass overrides
    * dispatch). The at-head reconcile rides it under `delivery.caughtUp`. */
   processEvent(args: ProcessEventArgs<Contract>): undefined;
@@ -322,6 +327,7 @@ export abstract class StreamProcessor<
           : { success: false, error: parsed.error };
       },
       reduceRawEvent: (args) => processor.#reduceRawEvent(args),
+      isDeliverable: (event) => processor.#isDeliverable(event),
       processEvent: (args) => processor.processEvent(args),
       noteBatchIngested: (args) => processor.subscriberMetrics.noteBatchIngested(args),
       idempotencyKey: (key, whileProcessing) => processor.idempotencyKey(key, whileProcessing),
@@ -416,25 +422,41 @@ export abstract class StreamProcessor<
    * appends by design, so a malformed event is a fact of the log, not an
    * exception: throwing here would wedge the cursor on it forever.
    */
-  #reduceRawEvent(args: {
-    event: StreamEvent;
-    state: ProcessorState<Contract>;
-  }): ReducedEvent<Contract> | ConsumedEventParseFailure | undefined {
+  /** Parse a raw event against the contract: `undefined` (type not consumed),
+   * a Zod error (consumed type, bad shape), or the typed consumed event.
+   * Stateless — shared by {@link #reduceRawEvent} and {@link #isDeliverable}. */
+  #parseConsumedEvent(
+    event: StreamEvent,
+  ): { ok: true; event: ConsumedEvent<Contract> } | { ok: false; error?: z.ZodError } {
     const eventDefinition = getConsumedEventDefinition({
       contract: this.contract,
-      eventType: args.event.type,
+      eventType: event.type,
     });
-    if (eventDefinition === undefined) return undefined;
-
+    if (eventDefinition === undefined) return { ok: false };
     // Rebuilding the parser from the catalog key and payload schema keeps replay
     // and live delivery on the same validation path. Cached: constructing the
     // zod wrapper per event cost ~20µs on the hot reduce path.
     const parsed = cachedEventSchema({
-      type: args.event.type,
+      type: event.type,
       payloadSchema: eventDefinition.payloadSchema,
-    }).safeParse(args.event);
-    if (!parsed.success) return { parseError: parsed.error };
-    const event = parsed.data as ConsumedEvent<Contract>;
+    }).safeParse(event);
+    if (!parsed.success) return { ok: false, error: parsed.error };
+    return { ok: true, event: parsed.data as ConsumedEvent<Contract> };
+  }
+
+  /** True when this event will reach `processEvent`: a consumed type that
+   * parses. A malformed consumed event is deliberately NOT deliverable. */
+  #isDeliverable(event: StreamEvent): boolean {
+    return this.#parseConsumedEvent(event).ok;
+  }
+
+  #reduceRawEvent(args: {
+    event: StreamEvent;
+    state: ProcessorState<Contract>;
+  }): ReducedEvent<Contract> | ConsumedEventParseFailure | undefined {
+    const parsed = this.#parseConsumedEvent(args.event);
+    if (!parsed.ok) return parsed.error === undefined ? undefined : { parseError: parsed.error };
+    const event = parsed.event;
 
     const state = this.reduce({ event, state: args.state }) ?? args.state;
     assertObjectProcessorState({ processorSlug: this.contract.slug, value: state });
