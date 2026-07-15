@@ -133,16 +133,15 @@ export class StreamEventLog {
    * This is the recovery primitive, not a normal write path: callers validate
    * the birth certificate and stream coordinate before reaching storage.
    */
-  replaceAll(events: readonly StreamEvent[], highestAssignedOffset: number): number[] {
+  replaceAll(events: readonly StreamEvent[], highestAssignedOffset: number): void {
     this.sql.exec("delete from event_chunks");
     this.sql.exec("delete from events");
     this.sql.exec("delete from sqlite_sequence where name = 'events'");
-    const byteLengths = this.insert(events);
+    this.insert(events);
     this.sql.exec(
       "update sqlite_sequence set seq = ? where name = 'events'",
       highestAssignedOffset,
     );
-    return byteLengths;
   }
 
   getByOffset(offset: number): StreamEvent | undefined {
