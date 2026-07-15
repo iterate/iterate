@@ -35,8 +35,7 @@ export class ItxScriptBuilder<Ctx, Vars extends Record<string, unknown>> {
   /** Type-only: extend (or replace) the script-side `itx` surface — e.g. a
    * dynamic capability the test mounted, or an agent scope's members. */
   context<NewCtx, Mode extends "extend" | "replace" = "extend">() {
-    type ReplacementCtx = Mode extends "extend" ? Ctx & NewCtx : NewCtx;
-    return this as unknown as ItxScriptBuilder<ReplacementCtx, Vars>;
+    return this as unknown as ItxScriptBuilder<Mode extends "extend" ? Ctx & NewCtx : NewCtx, Vars>;
   }
 
   /** Serialize values into the script source; they arrive as the function's

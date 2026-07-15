@@ -7,8 +7,8 @@
 
 export const SLACK_TEAM_ID = "T0TEAM";
 /** The authorized (our) bot, as Slack reports it in `authorizations`. */
-export const SLACK_BOT_USER_ID = "UBOT";
-export const SLACK_BOT_ID = "BBOT";
+const SLACK_BOT_USER_ID = "UBOT";
+const SLACK_BOT_ID = "BBOT";
 
 export function slackHumanMessageWebhookPayload(input: {
   channel?: string;
