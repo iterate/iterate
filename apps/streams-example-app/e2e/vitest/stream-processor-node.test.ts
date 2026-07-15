@@ -1,6 +1,8 @@
 // Node runtime over a REAL WebSocket subscription: hosts a class-based stream
-// processor in-process against a running worker. Gated like the other e2e —
-// set STREAM_STAGING_E2E=true with `pnpm dev` running. Typecheck-verified always.
+// processor in-process against a running worker — the playground named by
+// WORKER_URL (deployed, as in the preview CI lane) or the local `pnpm dev`
+// server when WORKER_URL is unset. Runs unconditionally; an unreachable
+// target fails loudly via ../vitest-global-setup.ts instead of skipping.
 //
 // The pre-itx-v4 streams implementation shipped an echo example processor; itx does
 // not, so this suite defines an equivalent inline with the itx
@@ -18,8 +20,6 @@ import {
   type ProcessorProgress,
 } from "~/domains/streams/stream-processor-runner.ts";
 import type { Stream } from "~/itx-api.generated.ts";
-
-const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 
 const EchoExampleContract = defineProcessorContract({
   slug: "echo-example",
@@ -101,7 +101,7 @@ async function hostEcho(args: {
 }
 
 describe("node-hosted stream processor (e2e)", () => {
-  e2eIt("hosts echo in-process over a plain subscription", async () => {
+  it("hosts echo in-process over a plain subscription", async () => {
     const path = e2eStreamPathLabel("node-echo");
     using connection = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl({ path }),
@@ -139,7 +139,7 @@ describe("node-hosted stream processor (e2e)", () => {
     }
   });
 
-  e2eIt("reconnects and resumes from its snapshot without reprocessing", async () => {
+  it("reconnects and resumes from its snapshot without reprocessing", async () => {
     const path = e2eStreamPathLabel("node-resume");
     let saved: ProcessorProgress<EchoExampleState> | undefined;
     const storage = {

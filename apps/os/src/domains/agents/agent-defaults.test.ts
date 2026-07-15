@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import { ONBOARDING_AGENT_PATH } from "../../lib/onboarding-agent.ts";
 import { EMAIL_AGENT_SYSTEM_PROMPT, agentDefaultsForPath } from "./agent-defaults.ts";
 
@@ -17,7 +17,7 @@ function defaultsFor(
 }
 
 describe("agentDefaultsForPath", () => {
-  it("boot context names the project when directory facts are supplied — id-only without", () => {
+  test("boot context names the project when directory facts are supplied — id-only without", () => {
     const bootContent = (project?: { name: string; slug: string; workerUrl?: string }) => {
       const events = agentDefaultsForPath({
         agentPath: "/agents/demo",
@@ -45,7 +45,7 @@ describe("agentDefaultsForPath", () => {
     expect(bootContent()).toContain(`- Project id: ${PROJECT_ID}`);
   });
 
-  it("mounts only the workspace — sandboxes are created explicitly, never granted", () => {
+  test("mounts only the workspace — sandboxes are created explicitly, never granted", () => {
     const mounts = defaultsFor("/agents/demo")
       .events.filter(
         (event) => event.type === "events.iterate.com/capability-host/capability-provided",
@@ -54,7 +54,7 @@ describe("agentDefaultsForPath", () => {
     expect(mounts).toEqual([["workspace"]]);
   });
 
-  it("selects the prompt by path and reports it alongside the events", () => {
+  test("selects the prompt by path and reports it alongside the events", () => {
     const emailDefaults = defaultsFor("/agents/email/t42");
     expect(emailDefaults.systemPrompt).toBe(EMAIL_AGENT_SYSTEM_PROMPT);
     const config = emailDefaults.events.find(
@@ -63,24 +63,19 @@ describe("agentDefaultsForPath", () => {
     expect(config?.payload.systemPrompt).toBe(EMAIL_AGENT_SYSTEM_PROMPT);
   });
 
-  it("gives pull-request agents the GitHub prompt without platform review policy", () => {
+  test("gives pull-request agents the GitHub prompt without platform review policy", () => {
     const defaults = defaultsFor(GITHUB_AGENT_PATH);
-    const prompt = defaults.systemPrompt;
-    expect(prompt).toContain("attached to one GitHub pull request");
-    expect(prompt).toContain(".octokit.rest.issues.createComment");
-    expect(prompt).toContain("all-in-one Octokit");
-    expect(prompt).toContain(".graphql(query, variables)");
-    expect(prompt).toContain("repo.data.permissions");
-    expect(prompt).toContain("Use Promise.all");
-    expect(prompt).toContain("successful GitHub write response");
-    expect(prompt).toContain("octokit.rest.git.getRef");
-    expect(prompt).toContain("VISIBLE HANDOFF INVARIANT");
+    // Prompt SELECTION is the invariant (one identifying anchor + not the
+    // generic default); the guidance prose is deliberately unpinned —
+    // docs/testing.md names prompt-copy pinning as an antipattern.
+    expect(defaults.systemPrompt).toContain("attached to one GitHub pull request");
+    expect(defaults.systemPrompt).not.toBe(defaultsFor("/agents/demo").systemPrompt);
     expect(
       defaults.events.some((event) => event.type === "events.iterate.com/github-agent/configure"),
     ).toBe(false);
   });
 
-  it("only the onboarding agent gets the kickoff input", () => {
+  test("only the onboarding agent gets the kickoff input", () => {
     const kickoffTypes = (path: string) =>
       defaultsFor(path).events.filter(
         (event) => event.idempotencyKey === `project-onboarding-start:${PROJECT_ID}`,
@@ -89,7 +84,7 @@ describe("agentDefaultsForPath", () => {
     expect(kickoffTypes("/agents/demo")).toBe(0);
   });
 
-  it("bakes overrides into the returned events — a systemPrompt override replaces wholesale", () => {
+  test("bakes overrides into the returned events — a systemPrompt override replaces wholesale", () => {
     const custom = defaultsFor("/agents/demo", {
       systemPrompt: "Answer in one short sentence.",
       model: "openai/gpt-5.5",
@@ -105,7 +100,7 @@ describe("agentDefaultsForPath", () => {
     expect(provider?.payload).toMatchObject({ model: "openai/gpt-5.5" });
   });
 
-  it("uses GPT-5.6 Sol by default", () => {
+  test("uses GPT-5.6 Sol by default", () => {
     const defaults = defaultsFor("/agents/demo");
     expect(defaults.model).toBe("openai/gpt-5.6-sol");
     const provider = defaults.events.find(
@@ -114,13 +109,13 @@ describe("agentDefaultsForPath", () => {
     expect(provider?.payload).toMatchObject({ ifUnset: true, model: "openai/gpt-5.6-sol" });
   });
 
-  it("keys every event on (projectId, agentPath) so re-appends dedupe", () => {
+  test("keys every event on (projectId, agentPath) so re-appends dedupe", () => {
     for (const event of defaultsFor("/agents/demo").events) {
       expect(event.idempotencyKey).toContain(PROJECT_ID);
     }
   });
 
-  it("child agents get the plain default prompt — never a thread transcriber prompt, no child suffix", () => {
+  test("child agents get the plain default prompt — never a thread transcriber prompt, no child suffix", () => {
     // Child-agent-ness rides on the parent's message (the fold labels
     // agent-sourced messages with the sender's path and reply door), not on
     // a birth-time prompt.

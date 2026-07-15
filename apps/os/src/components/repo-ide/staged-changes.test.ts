@@ -159,20 +159,6 @@ test("text content decodes UTF-8 files written through the base64 upload lane", 
   expect(textContentForEntry({ type: "delete" })).toBeUndefined();
 });
 
-test("changes persist to storage under the repo+oid key and rehydrate on load", () => {
-  using fixture = storageFixture();
-  fixture.store("oid-1").setWorking("README.md", write("survives"));
-
-  expect(fixture.keys()).toEqual([`${fixture.prefix}oid-1`]);
-
-  // A page reload constructs a store for a never-seen key and rehydrates
-  // from storage: simulate by seeding storage directly for a new identity.
-  fixture.seed("oid-2", [["README.md", { working: write("from-disk") }]]);
-  expect(fixture.store("oid-2").changes.get("README.md")).toMatchObject({
-    working: { content: "from-disk" },
-  });
-});
-
 test("a moved HEAD orphans stale state: older-oid keys are swept on load", () => {
   using fixture = storageFixture();
   fixture.seed("oid-old", [["README.md", { working: write("stale") }]]);

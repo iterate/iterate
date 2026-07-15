@@ -327,9 +327,14 @@ a **holder** (`pr-1234` for the PR flow, `manual-<user>` for humans). The
 invariants:
 
 - **A PR keeps its slot from first deploy until the PR closes.** Every
-  `preview deploy` / `preview test` run renews the lease for 24h; closing the
-  PR tears the apps down and releases it. Lease expiry is only the safety
-  valve for abandoned PRs (no pushes for >24h).
+  `preview deploy` / `preview test` run renews the lease for 3h; closing the
+  PR tears the apps down and releases it. Lease expiry is the safety valve for
+  abandoned PRs (no pushes for >3h) — kept short because a leased slot costs us
+  for its Cloudflare resources, and a deploy/e2e cycle is only minutes so an
+  active PR never lapses mid-run. A lapsed lease is reclaimed by the scheduled
+  GC sweep — see **[Preview resource GC](preview-resource-gc.md)** for how
+  teardown is decoupled from releasing the slot (and how disposable data
+  expires 3h after last use).
 - **Draft PRs don't claim a slot unless they ask.** Drafts are the default
   for agent-opened PRs, and nine slots don't survive a busy night of them. A
   draft asks by wearing the `preview` label (durable — previews then behave
@@ -356,12 +361,24 @@ invariants:
   maximizes the chance a lapsed PR retakes its own slot instead of finding
   someone else on it.
 - **Everything is attributable and visible.** `pnpm preview status` shows
-  each slot's holder, PR link, and expiry; the semaphore UI at
-  semaphore.iterate.com shows the same; every lease transition
+  each slot's holder, PR open/closed state, idle/orphaned verdict, open
+  preview-eligible PRs without a slot, and reclaim commands when the fleet
+  is full for a reason other than "nine open PRs". The semaphore UI at
+  semaphore.iterate.com shows the same live leases; every lease transition
   (acquired/renewed/evicted/expired/force-released) is logged as an event in
   the coordinator. Exceptional states — waiting for a slot, no slot
   available, slot taken over, slot moved — are additionally bannered as a
   caution alert at the top of the PR body's managed preview section.
+
+  ```bash
+  # Why are there no free slots? (uses GITHUB_TOKEN or `gh auth token`)
+  doppler run --project _shared --config prd -- pnpm preview status
+  # Free an orphaned/idle slot after checking no cleanup is mid-flight:
+  pnpm preview reclaim --slot preview-4 --force
+  # Reclaim every slot whose lease has expired (what the hourly GC cron runs;
+  # --dry-run to preview). Never touches a live lease.
+  doppler run --project _shared --config prd -- pnpm preview gc --dry-run
+  ```
 
 CI and local machines run the **same preview commands against the same
 semaphore**. CI additionally checks the deployment epoch before invoking those

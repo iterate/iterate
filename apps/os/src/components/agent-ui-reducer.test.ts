@@ -3,13 +3,18 @@
 // code execution, completion, assistant reply — must reduce into the chat
 // items and live active-work tail the agent feed renders.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { Event } from "@iterate-com/ui/components/events/types";
 import {
   initialAgentUiState,
   reduceAgentUi,
   type AgentUiItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import {
+  slackBotMessageWebhookPayload,
+  slackHumanMessageWebhookPayload,
+  telegramMessageWebhookPayload,
+} from "../domains/integrations/webhook-fixtures.ts";
 
 function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unknown }>) {
   let offset = 0;
@@ -37,7 +42,7 @@ function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unkn
 }
 
 describe("agent-ui reducer", () => {
-  it("streams thinking and response deltas into the live llm step", () => {
+  test("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agents/message-received",
@@ -87,7 +92,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("settles the activity into items when all work completes", () => {
+  test("settles the activity into items when all work completes", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agents/message-received",
@@ -144,7 +149,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("keeps running script source and start time in the live activity", () => {
+  test("keeps running script source and start time in the live activity", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/capability-host/script-execution-requested",
@@ -163,7 +168,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("keeps the live indicator while a running script emits chat messages", () => {
+  test("keeps the live indicator while a running script emits chat messages", () => {
     const countdownEvents: Array<Partial<Event> & { type: string; payload?: unknown }> = [
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -223,7 +228,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("streams legacy openai-ws llm-response-chunk frames into the live llm step", () => {
+  test("streams legacy openai-ws llm-response-chunk frames into the live llm step", () => {
     // itx journals every raw Responses-WS frame as llm-response-chunk
     // ({llmRequestId, sequence, chunk}). Regression guard: the feed once
     // showed only a bare spinner because the reducer ignored these frames.
@@ -271,7 +276,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("accumulates agent llm-response-chunk deltas", () => {
+  test("accumulates agent llm-response-chunk deltas", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -303,7 +308,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("tracks subscriber presence including processor announcements", () => {
+  test("tracks subscriber presence including processor announcements", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/stream/subscriber-connected",
@@ -344,7 +349,7 @@ describe("agent-ui reducer", () => {
     expect(state.presence[1]).toMatchObject({ subscriptionKey: "browser:tab-1", connected: false });
   });
 
-  it("does not show the bootstrap stream wake in the agent feed", () => {
+  test("does not show the bootstrap stream wake in the agent feed", () => {
     const state = reduceAll([
       { type: "events.iterate.com/stream/created" },
       { type: "events.iterate.com/stream/woken" },
@@ -353,7 +358,7 @@ describe("agent-ui reducer", () => {
     expect(state.items).toEqual([]);
   });
 
-  it("shows later stream wakes in the agent feed and clears presence", () => {
+  test("shows later stream wakes in the agent feed and clears presence", () => {
     const state = reduceAll([
       { type: "events.iterate.com/stream/created" },
       { type: "events.iterate.com/stream/woken" },
@@ -375,7 +380,7 @@ describe("agent-ui reducer", () => {
     expect(state.presence).toMatchObject([{ subscriptionKey: "agent:agent", connected: false }]);
   });
 
-  it("shows child stream creation events in the agent feed", () => {
+  test("shows child stream creation events in the agent feed", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/stream/child-stream-created",
@@ -393,7 +398,7 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  it("shows stream pause and resume events in the agent feed", () => {
+  test("shows stream pause and resume events in the agent feed", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/stream/paused",
@@ -423,7 +428,7 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  it("settles a completed LLM request even without an assistant message", () => {
+  test("settles a completed LLM request even without an assistant message", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -449,7 +454,7 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  it("does not clear running work from idle status alone", () => {
+  test("does not clear running work from idle status alone", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -467,7 +472,7 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
   });
 
-  it("queues a user message that arrives mid-turn", () => {
+  test("queues a user message that arrives mid-turn", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -491,7 +496,7 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
   });
 
-  it("settles queued user messages before the next LLM request starts", () => {
+  test("settles queued user messages before the next LLM request starts", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -527,7 +532,7 @@ describe("agent-ui reducer", () => {
     expect(state.live?.steps[0]).toMatchObject({ kind: "llm", llmRequestOffset: 12 });
   });
 
-  it("does not append late chunks from an interrupted request into the next turn", () => {
+  test("does not append late chunks from an interrupted request into the next turn", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -592,207 +597,177 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("renders a slack user message webhook as a user bubble", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/slack/webhook-received",
-        payload: {
-          body: {
-            type: "event_callback",
-            event: {
-              type: "message",
-              channel: "C08R1SMTZGD",
-              user: "U0123ABC",
-              ts: "1783437255.864399",
-              text: "hey <@U9BOT> can you check <https://example.com/status|the status page>? a &amp; b",
+  test.for([
+    {
+      name: "renders a slack user message webhook as a user bubble",
+      events: [
+        {
+          type: "events.iterate.com/slack/webhook-received",
+          payload: slackHumanMessageWebhookPayload({
+            channel: "C08R1SMTZGD",
+            text: "hey <@U9BOT> can you check <https://example.com/status|the status page>? a &amp; b",
+            ts: "1783437255.864399",
+            user: "U0123ABC",
+          }),
+        },
+      ],
+      expectedItems: [
+        {
+          kind: "user",
+          text: "hey @U9BOT can you check [the status page](https://example.com/status)? a & b",
+          via: { service: "slack", sender: "U0123ABC" },
+        },
+      ],
+    },
+    {
+      name: "renders the bot's slack echo webhook as an assistant bubble",
+      events: [
+        {
+          type: "events.iterate.com/slack/webhook-received",
+          payload: slackBotMessageWebhookPayload({
+            botProfile: { name: "iterate" },
+            subtype: "bot_message",
+            text: "All 3 checks passed.",
+            ts: "1783437299.000100",
+          }),
+        },
+      ],
+      expectedItems: [
+        {
+          kind: "assistant",
+          text: "All 3 checks passed.",
+          via: { service: "slack", sender: "iterate" },
+        },
+      ],
+    },
+    {
+      name: "renders a third-party bot's slack message as a user bubble, not the assistant",
+      events: [
+        {
+          type: "events.iterate.com/slack/webhook-received",
+          payload: slackBotMessageWebhookPayload({
+            botId: "B0OTHER",
+            botProfile: { name: "github", user_id: "UGITHUB" },
+            subtype: "bot_message",
+            text: "Deploy finished.",
+            ts: "1783437300.000100",
+          }),
+        },
+      ],
+      expectedItems: [
+        {
+          kind: "user",
+          text: "Deploy finished.",
+          via: { service: "slack", sender: "github" },
+        },
+      ],
+    },
+    {
+      name: "ignores non-message and edit slack webhooks",
+      events: [
+        {
+          type: "events.iterate.com/slack/webhook-received",
+          payload: {
+            body: {
+              type: "event_callback",
+              event: { type: "reaction_added", user: "U0123ABC", reaction: "eyes" },
             },
           },
         },
-      },
-    ]);
-
-    expect(state.items).toMatchObject([
-      {
-        kind: "user",
-        text: "hey @U9BOT can you check [the status page](https://example.com/status)? a & b",
-        via: { service: "slack", sender: "U0123ABC" },
-      },
-    ]);
-  });
-
-  it("renders the bot's slack echo webhook as an assistant bubble", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/slack/webhook-received",
-        payload: {
-          body: {
-            type: "event_callback",
-            authorizations: [{ is_bot: true, bot_id: "B0BOT", user_id: "U9BOT" }],
-            event: {
-              type: "message",
-              subtype: "bot_message",
-              channel: "C08R1SMTZGD",
-              bot_id: "B0BOT",
-              bot_profile: { name: "iterate" },
-              ts: "1783437299.000100",
-              text: "All 3 checks passed.",
+        {
+          type: "events.iterate.com/slack/webhook-received",
+          payload: {
+            body: {
+              type: "event_callback",
+              event: {
+                type: "message",
+                subtype: "message_changed",
+                channel: "C08R1SMTZGD",
+                message: { text: "edited text", user: "U0123ABC" },
+              },
             },
           },
         },
-      },
-    ]);
-
-    expect(state.items).toMatchObject([
-      {
-        kind: "assistant",
-        text: "All 3 checks passed.",
-        via: { service: "slack", sender: "iterate" },
-      },
-    ]);
-  });
-
-  it("renders a third-party bot's slack message as a user bubble, not the assistant", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/slack/webhook-received",
-        payload: {
-          body: {
-            type: "event_callback",
-            authorizations: [{ is_bot: true, bot_id: "B0BOT", user_id: "U9BOT" }],
-            event: {
-              type: "message",
-              subtype: "bot_message",
-              channel: "C08R1SMTZGD",
-              bot_id: "B0OTHER",
-              bot_profile: { name: "github", user_id: "UGITHUB" },
-              ts: "1783437300.000100",
-              text: "Deploy finished.",
+        {
+          type: "events.iterate.com/slack/webhook-received",
+          payload: { body: { type: "url_verification", challenge: "x" } },
+        },
+      ],
+      expectedItems: [],
+    },
+    {
+      name: "renders a telegram message webhook as a user bubble (text, sender, media placeholders)",
+      events: [
+        {
+          type: "events.iterate.com/telegram/webhook-received",
+          payload: telegramMessageWebhookPayload({
+            chatId: 42,
+            date: 1_783_437_255,
+            text: "what's the plan for today?",
+          }),
+        },
+        // No username on the sender (falls back to first_name) and no text —
+        // media renders as bracketed placeholders after the caption.
+        {
+          type: "events.iterate.com/telegram/webhook-received",
+          payload: {
+            botId: "7000001",
+            body: {
+              update_id: 100002,
+              message: {
+                message_id: 2,
+                from: { id: 555, is_bot: false, first_name: "Misha" },
+                chat: { id: 42, type: "private" },
+                date: 1_783_437_299,
+                caption: "look at this",
+                photo: [{ file_id: "photo-1" }],
+              },
             },
           },
         },
-      },
-    ]);
-
-    expect(state.items).toMatchObject([
-      {
-        kind: "user",
-        text: "Deploy finished.",
-        via: { service: "slack", sender: "github" },
-      },
-    ]);
-  });
-
-  it("ignores non-message and edit slack webhooks", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/slack/webhook-received",
-        payload: {
-          body: {
-            type: "event_callback",
-            event: { type: "reaction_added", user: "U0123ABC", reaction: "eyes" },
+      ],
+      expectedItems: [
+        {
+          kind: "user",
+          text: "what's the plan for today?",
+          via: { service: "telegram", sender: "misha" },
+        },
+        {
+          kind: "user",
+          text: "look at this [photo]",
+          via: { service: "telegram", sender: "Misha" },
+        },
+      ],
+    },
+    {
+      name: "renders a telegram send request as the assistant bubble and ignores non-message updates",
+      events: [
+        {
+          type: "events.iterate.com/telegram/send-requested",
+          payload: { text: "Started a fresh thread." },
+        },
+        // Membership updates, markers, and bot-authored echoes are not bubbles.
+        {
+          type: "events.iterate.com/telegram/webhook-received",
+          payload: {
+            botId: "7000001",
+            body: { update_id: 3, my_chat_member: { chat: { id: 42 }, from: { id: 555 } } },
           },
         },
-      },
-      {
-        type: "events.iterate.com/slack/webhook-received",
-        payload: {
-          body: {
-            type: "event_callback",
-            event: {
-              type: "message",
-              subtype: "message_changed",
-              channel: "C08R1SMTZGD",
-              message: { text: "edited text", user: "U0123ABC" },
-            },
-          },
+        {
+          type: "events.iterate.com/telegram/message-sent",
+          payload: { messageId: 9001, requestOffset: 1 },
         },
-      },
-      {
-        type: "events.iterate.com/slack/webhook-received",
-        payload: { body: { type: "url_verification", challenge: "x" } },
-      },
-    ]);
-
-    expect(state.items).toEqual([]);
+      ],
+      expectedItems: [
+        { kind: "assistant", text: "Started a fresh thread.", via: { service: "telegram" } },
+      ],
+    },
+  ])("$name", ({ events, expectedItems }) => {
+    expect(reduceAll(events).items).toMatchObject(expectedItems);
   });
 
-  it("renders a telegram message webhook as a user bubble (text, sender, media placeholders)", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/telegram/webhook-received",
-        payload: {
-          botId: "7000001",
-          body: {
-            update_id: 100001,
-            message: {
-              message_id: 1,
-              from: { id: 555, is_bot: false, first_name: "Misha", username: "misha" },
-              chat: { id: 42, type: "private" },
-              date: 1_783_437_255,
-              text: "what's the plan for today?",
-            },
-          },
-        },
-      },
-      {
-        type: "events.iterate.com/telegram/webhook-received",
-        payload: {
-          botId: "7000001",
-          body: {
-            update_id: 100002,
-            message: {
-              message_id: 2,
-              from: { id: 555, is_bot: false, first_name: "Misha" },
-              chat: { id: 42, type: "private" },
-              date: 1_783_437_299,
-              caption: "look at this",
-              photo: [{ file_id: "photo-1" }],
-            },
-          },
-        },
-      },
-    ]);
-
-    expect(state.items).toMatchObject([
-      {
-        kind: "user",
-        text: "what's the plan for today?",
-        via: { service: "telegram", sender: "misha" },
-      },
-      {
-        kind: "user",
-        text: "look at this [photo]",
-        via: { service: "telegram", sender: "Misha" },
-      },
-    ]);
-  });
-
-  it("renders a telegram send request as the assistant bubble and ignores non-message updates", () => {
-    const state = reduceAll([
-      {
-        type: "events.iterate.com/telegram/send-requested",
-        payload: { text: "Started a fresh thread." },
-      },
-      // Membership updates, markers, and bot-authored echoes are not bubbles.
-      {
-        type: "events.iterate.com/telegram/webhook-received",
-        payload: {
-          botId: "7000001",
-          body: { update_id: 3, my_chat_member: { chat: { id: 42 }, from: { id: 555 } } },
-        },
-      },
-      {
-        type: "events.iterate.com/telegram/message-sent",
-        payload: { messageId: 9001, requestOffset: 1 },
-      },
-    ]);
-
-    expect(state.items).toMatchObject([
-      { kind: "assistant", text: "Started a fresh thread.", via: { service: "telegram" } },
-    ]);
-  });
-
-  it("queues a slack user message that arrives mid-turn", () => {
+  test("queues a slack user message that arrives mid-turn", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -801,12 +776,12 @@ describe("agent-ui reducer", () => {
       },
       {
         type: "events.iterate.com/slack/webhook-received",
-        payload: {
-          body: {
-            type: "event_callback",
-            event: { type: "message", channel: "C1", user: "U1", ts: "1.2", text: "one more" },
-          },
-        },
+        payload: slackHumanMessageWebhookPayload({
+          channel: "C1",
+          text: "one more",
+          ts: "1.2",
+          user: "U1",
+        }),
       },
     ]);
 
@@ -814,7 +789,7 @@ describe("agent-ui reducer", () => {
     expect(state.queuedUserMessages).toMatchObject([{ kind: "user", text: "one more" }]);
   });
 
-  it("shows only the attachments from the slack-agent's transcribed message", () => {
+  test("shows only the attachments from the slack-agent's transcribed message", () => {
     // The slack message itself already rendered from the webhook event; the
     // slack-agent processor's message-received yaml transcription exists for
     // the model, not the user — but its stored file attachments are the only
@@ -843,7 +818,7 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  it("keeps email/github transcription text visible — they have no raw-event bubble", () => {
+  test("keeps email/github transcription text visible — they have no raw-event bubble", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agents/message-received",
@@ -864,7 +839,7 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  it("still blanks pre-unification slack yaml inputs from old journals", () => {
+  test("still blanks pre-unification slack yaml inputs from old journals", () => {
     const file = {
       contentType: "image/png",
       filename: "screenshot.png",
@@ -885,7 +860,7 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  it("renders inter-agent mail as a labeled user bubble", () => {
+  test("renders inter-agent mail as a labeled user bubble", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agents/message-received",
@@ -905,7 +880,7 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  it("marks an LLM request cancelled when interrupted", () => {
+  test("marks an LLM request cancelled when interrupted", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -933,7 +908,7 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  it("tallies token-usage reports and tracks the latest as context fullness", () => {
+  test("tallies token-usage reports and tracks the latest as context fullness", () => {
     // Payload shapes mirror the contract's payloads exactly — the reducer
     // reads by key, so made-up fields would pass silently and never catch
     // drift.
@@ -979,7 +954,7 @@ describe("agent-ui reducer", () => {
     expect(state.items).toHaveLength(0);
   });
 
-  it("a history-reset clears the context-fullness reading but keeps lifetime totals", () => {
+  test("a history-reset clears the context-fullness reading but keeps lifetime totals", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/token-usage-reported",

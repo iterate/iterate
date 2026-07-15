@@ -128,6 +128,22 @@ export class StreamEventLog {
     return byteLengths;
   }
 
+  /**
+   * Replace the complete committed log while preserving the supplied offsets.
+   * This is the recovery primitive, not a normal write path: callers validate
+   * the birth certificate and stream coordinate before reaching storage.
+   */
+  replaceAll(events: readonly StreamEvent[], highestAssignedOffset: number): void {
+    this.sql.exec("delete from event_chunks");
+    this.sql.exec("delete from events");
+    this.sql.exec("delete from sqlite_sequence where name = 'events'");
+    this.insert(events);
+    this.sql.exec(
+      "update sqlite_sequence set seq = ? where name = 'events'",
+      highestAssignedOffset,
+    );
+  }
+
   getByOffset(offset: number): StreamEvent | undefined {
     const row = this.sql
       .exec<{ offset: number }>("select offset from events where offset = ? limit 1", offset)
@@ -154,6 +170,50 @@ export class StreamEventLog {
     includeEphemeral?: boolean;
   }): StreamEvent[] {
     return this.getRangeSized(args).map((sized) => sized.event);
+  }
+
+  /**
+   * Read only offsets and serialized sizes for a replay window. Recovery uses
+   * this to choose a byte-bounded page before hydrating any event JSON, so a
+   * large candidate window never becomes one large Durable Object allocation.
+   */
+  getRangeSizes(args: {
+    afterOffset: number;
+    beforeOffset: number;
+    eventTypes?: readonly string[];
+    limit: number;
+    includeEphemeral?: boolean;
+  }): { offset: number; byteLength: number }[] {
+    if (args.eventTypes?.length === 0) return [];
+    const eventTypes =
+      args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
+    const eventTypeClause =
+      eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
+    const ephemeralClause = args.includeEphemeral === true ? "" : "and ephemeral = 0";
+    return this.sql
+      .exec<{ offset: number; byteLength: number }>(
+        `
+          select selected.offset as offset, sum(length(event_chunks.chunk_bytes)) as byteLength
+          from (
+            select offset
+            from events
+            where offset > ?
+              and offset < ?
+              ${ephemeralClause}
+              ${eventTypeClause}
+            order by offset asc
+            limit ?
+          ) selected
+          join event_chunks on event_chunks.offset = selected.offset
+          group by selected.offset
+          order by selected.offset asc
+        `,
+        args.afterOffset,
+        args.beforeOffset,
+        ...(eventTypes ?? []),
+        args.limit,
+      )
+      .toArray();
   }
 
   /**

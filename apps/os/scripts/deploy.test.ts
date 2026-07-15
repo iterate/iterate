@@ -9,9 +9,26 @@ import {
   assertDopplerSecretAbsent,
   assertWorkerSecretAbsent,
 } from "../../../scripts/lib/deploy-helpers.ts";
-import { isExactOsProjectMiss } from "./deploy.ts";
+import { assertPreviewPetshopIntegrationConfigured, isExactOsProjectMiss } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+
+describe("preview Petshop deployment invariant", () => {
+  it("requires first-party Petshop credentials in every preview OS config", () => {
+    expect(() => assertPreviewPetshopIntegrationConfigured("preview_4", {})).toThrow(
+      /preview_4 requires APP_CONFIG_INTEGRATIONS__PETSHOP/,
+    );
+    expect(() =>
+      assertPreviewPetshopIntegrationConfigured("preview_4", {
+        APP_CONFIG_INTEGRATIONS__PETSHOP: '{"oauthClientId":"petshop-default"}',
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not require the test fixture in production", () => {
+    expect(() => assertPreviewPetshopIntegrationConfigured("prd", {})).not.toThrow();
+  });
+});
 
 describe("forbidden auth service-token invariants (secret-leak protection)", () => {
   it("refuses when the resolved Doppler config carries the retired secret", () => {

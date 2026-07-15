@@ -6,8 +6,8 @@
  */
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { listenOnFetchSafePort } from "./test/fetch-safe-port.ts";
 import { seedPets } from "./pets.ts";
 import { pkceS256, randomSealKey } from "./seal.ts";
 import {
@@ -241,46 +241,66 @@ describe("token exchange", () => {
     expect(wrong.status).toBe(401);
   });
 
-  test("a code minted for one client cannot be exchanged by another", async () => {
-    const shop = makeShop();
-    const other = await (await shop("/__backdoor/clients", postJson({}))).json<MintedClient>();
-    const location = await approve(shop, {
-      client_id: DEFAULT_CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
-    });
-    const response = await exchange(shop, {
-      clientId: other.clientId,
-      clientSecret: other.clientSecret,
-      body: {
+  // The rejection grammar: every row approves a fresh code, then exchanges
+  // with one thing wrong. `expectedStatus` is asserted only where the
+  // original test pinned it.
+  test.for([
+    {
+      name: "a code minted for one client cannot be exchanged by another",
+      useMintedClient: true,
+      body: (code: string) => ({
         grant_type: "authorization_code",
-        code: location.searchParams.get("code") ?? "",
+        code,
         redirect_uri: REDIRECT_URI,
-      },
-    });
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: "invalid_grant" });
-  });
-
-  test("re-checks redirect_uri at exchange time", async () => {
+      }),
+      expectedStatus: 400,
+      expectedError: "invalid_grant",
+    },
+    {
+      name: "re-checks redirect_uri at exchange time",
+      body: (code: string) => ({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: "https://attacker.example/callback",
+      }),
+      expectedStatus: 400,
+      expectedError: "invalid_grant",
+    },
+    {
+      name: "rejects garbage codes",
+      body: () => ({
+        grant_type: "authorization_code",
+        code: "garbage",
+        redirect_uri: REDIRECT_URI,
+      }),
+      expectedError: "invalid_grant",
+    },
+    {
+      name: "rejects unknown grant types",
+      body: () => ({ grant_type: "password" }),
+      expectedError: "unsupported_grant_type",
+    },
+  ])("$name", async ({ body, expectedError, expectedStatus, useMintedClient }) => {
     const shop = makeShop();
     const location = await approve(shop, {
       client_id: DEFAULT_CLIENT_ID,
       redirect_uri: REDIRECT_URI,
     });
+    const client = useMintedClient
+      ? await (await shop("/__backdoor/clients", postJson({}))).json<MintedClient>()
+      : { clientId: DEFAULT_CLIENT_ID, clientSecret: DEFAULT_CLIENT_SECRET };
     const response = await exchange(shop, {
-      clientId: DEFAULT_CLIENT_ID,
-      clientSecret: DEFAULT_CLIENT_SECRET,
-      body: {
-        grant_type: "authorization_code",
-        code: location.searchParams.get("code") ?? "",
-        redirect_uri: "https://attacker.example/callback",
-      },
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      body: body(location.searchParams.get("code") ?? ""),
     });
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: "invalid_grant" });
+    if (expectedStatus !== undefined) {
+      expect(response.status).toBe(expectedStatus);
+    }
+    expect(await response.json()).toMatchObject({ error: expectedError });
   });
 
-  test("rejects expired codes, garbage codes, and unknown grant types", async () => {
+  test("rejects expired codes", async () => {
     const shop = makeShop();
     const location = await approve(shop, {
       client_id: DEFAULT_CLIENT_ID,
@@ -298,21 +318,6 @@ describe("token exchange", () => {
       },
     });
     expect(await expired.json()).toMatchObject({ error: "invalid_grant" });
-    vi.useRealTimers();
-
-    const garbage = await exchange(shop, {
-      clientId: DEFAULT_CLIENT_ID,
-      clientSecret: DEFAULT_CLIENT_SECRET,
-      body: { grant_type: "authorization_code", code: "garbage", redirect_uri: REDIRECT_URI },
-    });
-    expect(await garbage.json()).toMatchObject({ error: "invalid_grant" });
-
-    const unknown = await exchange(shop, {
-      clientId: DEFAULT_CLIENT_ID,
-      clientSecret: DEFAULT_CLIENT_SECRET,
-      body: { grant_type: "password" },
-    });
-    expect(await unknown.json()).toMatchObject({ error: "unsupported_grant_type" });
   });
 
   test("backdoor-minted clients control their own access-token TTL", async () => {
@@ -468,8 +473,7 @@ describe("webhooks", () => {
         response.writeHead(200).end("ok");
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const { port } = server.address() as AddressInfo;
+    const port = await listenOnFetchSafePort(server);
     return {
       url: `http://127.0.0.1:${port}/hook`,
       received,

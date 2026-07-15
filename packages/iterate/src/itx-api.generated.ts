@@ -64,6 +64,8 @@ export interface Session {
   streams: StreamCollection;
   /** Deployment-wide repos (admin only; projectId: null). */
   repos: RepoCollection;
+  /** Admin-only exact-offset Stream Durable Object recovery. */
+  streamRecovery: StreamRecoveryCollection;
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
   projects: ProjectCollection;
 }
@@ -194,6 +196,11 @@ export interface RepoCollection {
   create(input: { path: string }): Promise<Repo>;
   /** The repo at a path. */
   get(path: string): Repo;
+}
+
+/** Admin-only catalog for exact-offset Stream Durable Object recovery. */
+export interface StreamRecoveryCollection {
+  get(input: { projectId: string | null; path: string }): StreamRecovery;
 }
 
 /** Catalog of projects reachable from a {@link Session}. */
@@ -367,7 +374,7 @@ export interface Agent {
    * Update this agent's status record — the title, note, and shortStatus that
    * project surfaces (the agents list, the Slack thread status) show for it.
    * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag (and what you are doing — LLM request vs running script)
+   * busy/idle flag (and what you are doing — waiting for a response vs running code)
    * into the same record on its own. `shortStatus` completes the sentence
    * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
    * while the agent works — update it as your work moves through phases.
@@ -1379,6 +1386,11 @@ export interface Stream {
     path: string;
     /** Subscription identity; defaults to `cross-post:<destination path>`. */
     key?: string;
+    /**
+     * Human-readable note for operators and the stream state panel (why this
+     * cross-post exists). Optional on the API; platform call sites always set it.
+     */
+    description?: string;
     eventTypes?: string[];
     /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */
     condition?: string;
@@ -1389,6 +1401,28 @@ export interface Stream {
   }): Promise<StreamEvent>;
   /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */
   removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;
+}
+
+/** Admin-only exact-offset export and replacement of one Stream Durable Object. */
+export interface StreamRecovery {
+  exportForRecovery(args?: {
+    afterOffset?: number;
+    limit?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportPage>;
+  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
+  exportToRecovery(args: {
+    sink: StreamRecoveryExportSink;
+    afterOffset?: number;
+    limit?: number;
+    maxPages?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportSummary>;
+  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
+    restoredEventCount: number;
+    lastImportedOffset: number;
+    currentMaxOffset: number;
+  }>;
 }
 
 /**
@@ -2923,6 +2957,104 @@ export type StreamSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
   unsubscribe(): void;
+};
+
+/** One bounded page of a stream's storage-level recovery export. */
+export type StreamRecoveryExportPage = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  events: {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          crossPostedFrom?:
+            | {
+                subscriptionKey: string;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  }[];
+  throughOffset: number;
+  complete: boolean;
+};
+
+/** Acknowledged page sink used by one long-running recovery export RPC. */
+export type StreamRecoveryExportSink = {
+  write(page: StreamRecoveryExportPage): Promise<void>;
+};
+
+/** Small result returned after every exported page has been acknowledged. */
+export type StreamRecoveryExportSummary = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  throughOffset: number;
+  exportedEventCount: number;
+  pageCount: number;
+  lastExportedOffset: number;
+  complete: boolean;
+};
+
+/** A complete normalized stream log accepted by storage-level recovery restore. */
+export type StreamRecoveryRestoreInput = {
+  format: "iterate-stream-recovery";
+  version: 1;
+  stream: { projectId: string | null; path: string };
+  events: {
+    type: string;
+    payload?: Record<string, unknown> | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    source?:
+      | {
+          processor?:
+            | {
+                slug: string;
+                version: string;
+                stream: { path: string; projectId: string | null };
+                whileProcessing?: { offset: number; type: string } | undefined;
+              }
+            | undefined;
+          crossPostedFrom?:
+            | {
+                subscriptionKey: string;
+                createdAt: string;
+                offset: number;
+                path: string;
+                projectId: string | null;
+                type: string;
+              }[]
+            | undefined;
+        }
+      | undefined;
+    idempotencyKey?: string | undefined;
+    ephemeral?: true | undefined;
+    offset: number;
+    createdAt: string;
+    path: string;
+  }[];
+  highestAssignedOffset: number;
 };
 
 /**

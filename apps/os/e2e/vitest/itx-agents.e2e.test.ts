@@ -1,4 +1,6 @@
 import { expect, test } from "vitest";
+import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
+import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   AGENT_OUTPUT_ADDED_TYPE,
@@ -30,15 +32,15 @@ test("Agent scripts update their own status record via itx.agent.setStatus", asy
   await agent.stream.append({
     type: AGENT_OUTPUT_ADDED_TYPE,
     payload: {
-      content: fencedAgentScript(`
-        async (itx) => {
+      content: fencedAgentScript(
+        defineItxScript<{ agent: Agent }>(async (itx) => {
           await itx.agent.setStatus({
             title: "Lisbon trip",
             note: "Planning a 3-day Lisbon trip.",
             shortStatus: "comparing flights",
           });
-        }
-      `),
+        }).code,
+      ),
     },
   });
 
@@ -99,16 +101,19 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
   await agent.stream.append({
     type: AGENT_OUTPUT_ADDED_TYPE,
     payload: {
-      content: fencedAgentScript(`
-          async (itx) => {
-            const message = await itx.projectTool.format({ text: "project-capability" });
-            await itx.chat.sendMessage(message);
-            // The way to attach files: the options second argument.
-            await itx.chat.sendMessage("string form with files", {
-              files: [{ filename: "note.txt", contentType: "text/plain", data: "aGVsbG8=" }],
-            });
-          }
-        `),
+      content: fencedAgentScript(
+        defineItxScript<{
+          projectTool: { format(input: { text: string }): Promise<string> };
+          chat: AgentChat;
+        }>(async (itx) => {
+          const message = await itx.projectTool.format({ text: "project-capability" });
+          await itx.chat.sendMessage(message);
+          // The way to attach files: the options second argument.
+          await itx.chat.sendMessage("string form with files", {
+            files: [{ filename: "note.txt", contentType: "text/plain", data: "aGVsbG8=" }],
+          });
+        }).code,
+      ),
     },
   });
 
@@ -148,11 +153,14 @@ test("New agent streams install processors and replay existing child events", as
   const agentPath = `/agents/auto-bootstrap-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
 
-  const content = fencedAgentScript(`
-      async (itx) => {
-        await itx.chat.sendMessage(${JSON.stringify(marker)});
-      }
-    `);
+  const content = fencedAgentScript(
+    defineItxScript<{ chat: AgentChat }, { marker: string }>(
+      async (itx, vars) => {
+        await itx.chat.sendMessage(vars.marker);
+      },
+      { marker },
+    ).code,
+  );
   const [historicalOutput] = await agent.stream.append({
     type: AGENT_OUTPUT_ADDED_TYPE,
     payload: { content },
@@ -293,8 +301,21 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
   await agent.stream.append({
     type: AGENT_OUTPUT_ADDED_TYPE,
     payload: {
-      content: fencedAgentScript(`
-          async (itx) => {
+      content: fencedAgentScript(
+        defineItxScript<
+          {
+            agentProbe: {
+              inspect(input: string): Promise<{ input: string; projectId: string; whoami: string }>;
+            };
+            agent: Agent & {
+              agentCounter: { increment(): Promise<number> };
+              capabilityHost: CapabilityHost & { agentCounter: { current(): Promise<number> } };
+            };
+            chat: AgentChat;
+          },
+          { durableWorkerKey: string }
+        >(
+          async (itx, vars) => {
             // Agent-scope capabilities: itx.<cap> is the canonical spelling in
             // your own scope; itx.agent.capabilityHost.<cap> is the explicit
             // handle door; itx.agent.<cap> also works via the handle's
@@ -303,14 +324,18 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
             const probe = await itx.agentProbe.inspect("agent-only");
             const first = await itx.agent.agentCounter.increment();
             const current = await itx.agent.capabilityHost.agentCounter.current();
-            await itx.chat.sendMessage(JSON.stringify({
-              durableWorkerKey: ${JSON.stringify(durableWorkerKey)},
-              current,
-              first,
-              probe,
-            }));
-          }
-        `),
+            await itx.chat.sendMessage(
+              JSON.stringify({
+                durableWorkerKey: vars.durableWorkerKey,
+                current,
+                first,
+                probe,
+              }),
+            );
+          },
+          { durableWorkerKey },
+        ).code,
+      ),
     },
   });
 
@@ -406,7 +431,9 @@ test('An agent scope provides a capability to the whole project via capabilityHo
   // The provide runs INSIDE the agent scope: the script's `itx` fronts the
   // agent's own capability host and mounts on the project root by addressing
   // it through `capabilityHosts.get("/")`.
-  const execution = await agent.capabilityHost.runScript(`async (itx) => {
+  const executed = await itxScript(agent.capabilityHost)
+    .context<{ crossScopeProbe: { ping(): Promise<string> } }>()
+    .execute(async (itx) => {
       // capabilityHosts.get() pipelines; a handle is kept here only because
       // the script calls the root host twice (provide + invoke below).
       const host = await itx.capabilityHosts.get("/");
@@ -427,10 +454,9 @@ test('An agent scope provides a capability to the whole project via capabilityHo
         .map((capability) => capability.scope);
       await provision.revoke();
       return { viaRoot, viaChain, describedScopes };
-    }`);
+    });
 
-  // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: the script returns exactly these keys; toMatchObject would subset-match and hide extras
-  expect(execution.result).toEqual({
+  expect(executed.success()).toEqual({
     viaRoot: "pong-from-agent-mount",
     viaChain: "pong-from-agent-mount",
     describedScopes: ["/"],
