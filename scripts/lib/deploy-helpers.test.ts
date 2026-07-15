@@ -6,6 +6,7 @@ import {
   PREVIEW_DISPOSABLE_TTL_SECONDS,
   PREVIEW_FILES_OBJECT_EXPIRY,
   PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  SANDBOX_BACKUP_EXPIRY_RULE,
   SANDBOX_BACKUP_TTL_SECONDS_PRD,
   smokeResponse,
 } from "./deploy-helpers.ts";
@@ -99,11 +100,16 @@ describe("R2 object-expiry lifecycle", () => {
     ]);
   });
 
-  it("scopes to a prefix when given one (e.g. the sandbox backups/ rule)", () => {
-    const rules = buildR2ObjectExpiryLifecycleRules({
+  it("scopes the shared sandbox rule to backups/ (prd 90d ttl here)", () => {
+    // Same rule id + prefix as ensure-resources and erase-data both install
+    // (they differ only in ttl: 3h preview, 90d prd).
+    expect(SANDBOX_BACKUP_EXPIRY_RULE).toEqual({
       ruleId: "expire-sandbox-workspace-backups",
-      ttlSeconds: SANDBOX_BACKUP_TTL_SECONDS_PRD,
       prefix: "backups/",
+    });
+    const rules = buildR2ObjectExpiryLifecycleRules({
+      ...SANDBOX_BACKUP_EXPIRY_RULE,
+      ttlSeconds: SANDBOX_BACKUP_TTL_SECONDS_PRD,
     });
 
     expect(rules[0]?.conditions).toEqual({ prefix: "backups/" });

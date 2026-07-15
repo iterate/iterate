@@ -5,6 +5,7 @@ import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import type { StreamEvent } from "../../../../domains/streams/schemas.ts";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 import {
   useItx,
   useItxSubscription,
@@ -18,8 +19,9 @@ import {
 // the request isolate with no DO), and the SEPARATE raw event-log lane.
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/reactivity")({
+  staticData: breadcrumbStaticData("Reactivity"),
   ssr: false,
-  loader: ({ context }) => ({ breadcrumb: "Reactivity", project: context.project }),
+  loader: ({ context }) => ({ project: context.project }),
   component: ProjectReactivityPage,
 });
 

@@ -24,6 +24,7 @@ import {
   PREVIEW_DISPOSABLE_TTL_SECONDS,
   PREVIEW_FILES_OBJECT_EXPIRY,
   PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  SANDBOX_BACKUP_EXPIRY_RULE,
   SANDBOX_BACKUP_TTL_SECONDS_PRD,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
@@ -153,9 +154,8 @@ export default async function ensureResources(
   // restoring a reaped backup degrades to an empty workspace, so the sandbox
   // simply comes back fresh after ~3h of no use.
   await ensureR2ObjectExpiryLifecycle(ctx, sandboxesBucket, {
-    ruleId: "expire-sandbox-workspace-backups",
+    ...SANDBOX_BACKUP_EXPIRY_RULE,
     ttlSeconds: isPreview ? PREVIEW_DISPOSABLE_TTL_SECONDS : SANDBOX_BACKUP_TTL_SECONDS_PRD,
-    prefix: "backups/",
   });
   if (isPreview) {
     await ensureR2ObjectExpiryLifecycle(

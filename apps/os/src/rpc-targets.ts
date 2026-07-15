@@ -58,6 +58,12 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
+import type {
+  StreamRecoveryExportPage,
+  StreamRecoveryExportSink,
+  StreamRecoveryExportSummary,
+  StreamRecoveryRestoreInput,
+} from "./domains/streams/recovery.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import {
@@ -711,6 +717,61 @@ class StreamCollectionRpcTarget<
       projectId: this.props.projectId,
       path,
     });
+  }
+}
+
+/** Admin-only catalog for exact-offset Stream Durable Object recovery. */
+class StreamRecoveryCollectionRpcTarget extends IterateRpcTarget<"StreamRecoveryCollection"> {
+  constructor(readonly props: { auth: ItxAuth }) {
+    super();
+    if (!props.auth.isAdmin()) throw new Error("stream recovery requires an admin principal");
+  }
+
+  get(input: { projectId: string | null; path: string }): StreamRecoveryRpcTarget {
+    return new StreamRecoveryRpcTarget({
+      projectId: input.projectId,
+      path: normalizePath(input.path),
+    });
+  }
+}
+
+/** Admin-only exact-offset export and replacement of one Stream Durable Object. */
+class StreamRecoveryRpcTarget extends IterateRpcTarget<"StreamRecovery"> {
+  constructor(readonly props: { projectId: string | null; path: string }) {
+    super();
+  }
+
+  get #stream() {
+    return env.STREAM.getByName(
+      DurableObjectNameCodec.stringify(this.props, { allowNullProjectId: true }),
+    );
+  }
+
+  exportForRecovery(args?: {
+    afterOffset?: number;
+    limit?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportPage> {
+    return this.#stream.exportForRecovery(args);
+  }
+
+  /** Stream part of a fixed export window to an acknowledged sink in bounded pages. */
+  exportToRecovery(args: {
+    sink: StreamRecoveryExportSink;
+    afterOffset?: number;
+    limit?: number;
+    maxPages?: number;
+    throughOffset?: number;
+  }): Promise<StreamRecoveryExportSummary> {
+    return this.#stream.exportToRecovery(args);
+  }
+
+  restoreFromRecovery(input: StreamRecoveryRestoreInput): Promise<{
+    restoredEventCount: number;
+    lastImportedOffset: number;
+    currentMaxOffset: number;
+  }> {
+    return this.#stream.restoreFromRecovery(input);
   }
 }
 
@@ -5626,6 +5687,7 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       children: {
         projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
         repos: "Deployment-wide repos (admin only; projectId: null).",
+        streamRecovery: "Admin-only exact-offset Stream Durable Object recovery.",
         streams: "Deployment-wide streams (admin only; projectId: null).",
       },
       parent: "the /api unauthenticated entrypoint, via authenticate(credentials)",
@@ -5647,6 +5709,11 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       auth: this.props.auth,
       projectId: null,
     });
+  }
+
+  /** Admin-only exact-offset Stream Durable Object recovery. */
+  get streamRecovery(): StreamRecoveryCollectionRpcTarget {
+    return new StreamRecoveryCollectionRpcTarget({ auth: this.props.auth });
   }
 
   /** Project catalog: list(), get(projectId), create({ slug }) — each vends an itx. */
