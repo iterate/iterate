@@ -22,8 +22,7 @@ if (
 
 const recovery = itx.streamRecovery.get(input.stream);
 try {
-  const result = await recovery.restoreFromRecovery(input);
-  return { inputFile, stream: input.stream, ...result };
+  return { inputFile, stream: input.stream, ...(await recovery.restoreFromRecovery(input)) };
 } finally {
   recovery[Symbol.dispose]?.();
 }
