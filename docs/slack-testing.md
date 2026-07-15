@@ -3,8 +3,20 @@
 Use this when testing real Slack flows against OS local dev, preview, or
 production environments.
 
+**Agents: start here if you need to post a Slack message that wakes `iterate`
+(or a preview bot).** The short path is:
+
+1. Trigger actor token: Doppler **`SLACK_CI_BOT_TOKEN`** (not the product bot).
+2. Product bot **must be in the channel** (join via project `itx.integrations.slack`).
+3. Post into **`#slack-agent-e2e-test`** (`C096Q1M4Y86`) with ambient vs `@mention`.
+
+Details below under [Trigger actor for smoke tests](#trigger-actor-for-smoke-tests)
+and [Production mention-gate smoke](#production-mention-gate-smoke).
+
 ## Start here
 
+- **Scripted production / preview smokes (this page):** CI actor token, channel
+  membership, ambient vs mention checks
 - Preview Slack app creation and manifest:
   [apps/os/docs/slack-preview-app-manifest.md](../apps/os/docs/slack-preview-app-manifest.md)
 - Bulk-create remaining preview Slack OAuth clients:
@@ -13,8 +25,10 @@ production environments.
   [slack-bot-token-migration.md](slack-bot-token-migration.md)
 - Public local URLs for Slack callbacks:
   [dev-environments.md#tunnels-and-webhooks](dev-environments.md#tunnels-and-webhooks)
-- Older manual production smoke notes:
+- Older manual production smoke notes (pre-itx-v4; historical only):
   [slack-smoke-testing.md](slack-smoke-testing.md)
+- Code that loads the CI actor token:
+  [`scripts/ci/slack.ts`](../scripts/ci/slack.ts) (`getSlackBotToken()`)
 
 ## Environment model
 
@@ -62,45 +76,65 @@ processor.
 Doppler has a second bot used only as a **message sender** for automated
 smokes (CI notifications and agent smoke posts). It is **not** the product bot:
 
-|          | Product bot under test                                                                                                                           | Trigger actor                                                    |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| Identity | production `iterate`, or `iterate-preview-N`                                                                                                     | `Niterate` / `iterate_ci_preview_bo`                             |
-| Doppler  | project secret `/secrets/integrations/slack/<connection>/bot-token` (Connect Slack); optional recovery `APP_CONFIG_INTEGRATIONS__SLACK.botToken` | **`SLACK_CI_BOT_TOKEN`** on `os/*` configs **and** `_shared/prd` |
-| Used for | receiving events, 👀, replies                                                                                                                    | `chat.postMessage` only                                          |
+|          | Product bot under test                                                                                                                           | Trigger actor                                                        |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| Identity | production `iterate`, or `iterate-preview-N`                                                                                                     | `Niterate` / `iterate_ci_preview_bo`                                 |
+| Doppler  | project secret `/secrets/integrations/slack/<connection>/bot-token` (Connect Slack); optional recovery `APP_CONFIG_INTEGRATIONS__SLACK.botToken` | **`SLACK_CI_BOT_TOKEN`** on `os/*` configs **and** `_shared/prd`     |
+| Used for | receiving events, 👀, replies                                                                                                                    | `chat.postMessage` only                                              |
+| Code     | outbound Web API via OS / `itx.integrations.slack`                                                                                               | [`scripts/ci/slack.ts`](../scripts/ci/slack.ts) `getSlackBotToken()` |
 
 ```bash
 # Resolve the CI actor token (never print it)
 doppler secrets get SLACK_CI_BOT_TOKEN --project os --config prd --plain >/dev/null
 
-# Or from monorepo scripts — scripts/ci/slack.ts getSlackBotToken():
-#   process.env.SLACK_CI_BOT_TOKEN
-#   or: doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN
+# Same secret is mirrored on _shared/prd (what scripts/ci/slack.ts falls back to):
+#   doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN
 ```
 
+### Channel membership (common failure mode)
+
 **The product bot must be a member of the channel** or Slack will not deliver
-`message.channels` events to it. A bare @mention does nothing if the app is not
-in the channel. Prefer a dedicated public channel:
+`message.channels` events to it. A bare @mention does nothing useful if the app
+is not in the channel — you will see silence and wrongly conclude the agent is
+broken.
 
 | Channel                 | ID            | Purpose                      |
 | ----------------------- | ------------- | ---------------------------- |
 | `#slack-agent-e2e-test` | `C096Q1M4Y86` | Production / agent e2e smoke |
 
-If `@iterate` is missing from that channel, join with the **project's Slack
-connection** (not the CI actor — it usually lacks invite/`channels:manage`):
+If `@iterate` is missing, **do not** expect the CI actor to invite it
+(`conversations.invite` usually fails with `missing_scope`). Join with the
+**project's Slack connection** after **Connect Slack**:
 
 ```bash
-# from apps/os — joins as the connected iterate install (production "iterate" project)
+# from apps/os
+# 1) resolve the production "iterate" project id (do not hard-code)
+doppler run --config prd -- pnpm cli itx run -e '
+  const rows = await itx.projects.list();
+  return rows.filter((p) => p.slug === "iterate").map((p) => ({ id: p.id, slug: p.slug }));
+'
+
+# 2) join the e2e channel as that install
 doppler run --config prd -- pnpm cli itx run \
-  --context prj_d08f4599397a4e37b6467ce1e2b07bae \
+  --context <projectId-from-above> \
   -e 'return await itx.integrations.slack.get().conversations.join({ channel: "C096Q1M4Y86" })'
 ```
 
-`APP_CONFIG_INTEGRATIONS__SLACK.botToken` is only a recovery credential and may
-be `invalid_auth`; do not rely on it for join/invite. Prefer
-`itx.integrations.slack.get()` against a project that has completed **Connect
-Slack**.
+`APP_CONFIG_INTEGRATIONS__SLACK.botToken` is only a **recovery** credential for
+the deployment's Slack app and may be `invalid_auth`. Prefer the project secret
+behind `itx.integrations.slack.get()` for join / real outbound API calls.
 
-Then post as the CI actor (ambient vs mention smoke):
+### Production mention-gate smoke
+
+After membership is fixed, post as the CI actor. Expected behaviour of the
+current **slack-agent** mention gate:
+
+| Message                                              | Expected                                        |
+| ---------------------------------------------------- | ----------------------------------------------- |
+| Ambient channel text (no `@bot`)                     | No LLM wake; no product-bot reply               |
+| `<@iterateUserId> …` or Slack `app_mention`          | Product bot wakes and can reply (👀 may appear) |
+| Follow-up in a thread already activated by a mention | Still wakes (no re-mention required)            |
+| `!debug` / bang-commands                             | Still run without a mention                     |
 
 ```bash
 doppler run --project os --config prd -- python3 - <<'PY'
@@ -118,8 +152,19 @@ def post(text):
     return json.loads(urllib.request.urlopen(req).read())
 
 print(post("ambient smoke — should not wake"))
-print(post(f"<@{iterate_uid}> mention smoke — should 👀 and reply"))
+print(post(f"<@{iterate_uid}> mention smoke — should reply"))
 PY
+```
+
+Archive links look like
+`https://iterate-com.slack.com/archives/C096Q1M4Y86/p<ts-without-dot>`.
+
+To confirm membership / reactions from the CI actor:
+
+```bash
+# auth.test who the CI token is
+# conversations.members?channel=C096Q1M4Y86  → product bot user id must be listed
+# reactions.get / conversations.replies on the message ts
 ```
 
 ## Manual preview smoke test
