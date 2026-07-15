@@ -12,13 +12,16 @@ import { SlackAgentProcessor } from "../integrations/slack-agent-processor-imple
 import { SLACK_AGENT_REVIVED_EVENT_TYPE } from "../integrations/slack-agent-processor-contract.ts";
 import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations/slack-api.ts";
 import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
+import { TELEGRAM_AGENT_REVIVED_EVENT_TYPE } from "../integrations/telegram-agent-processor-contract.ts";
 import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
 import {
   slackConnectionFromAgentPath,
   telegramConnectionFromAgentPath,
 } from "../integrations/utils.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
+import { EMAIL_AGENT_REVIVED_EVENT_TYPE } from "../email/email-agent-processor-contract.ts";
 import { GithubAgentProcessor } from "../repos/github-agent-processor-implementation.ts";
+import { GITHUB_AGENT_REVIVED_EVENT_TYPE } from "../repos/github-agent-processor-contract.ts";
 import { connectionOctokit } from "../integrations/github-api.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -166,11 +169,14 @@ export class AgentDurableObject extends DurableObject<Env> {
   // subscription. Two Telegram lanes with opposite failure policies: the
   // typing chat action is best effort (a failure must never wedge the
   // processor checkpoint), while the journaled send THROWS on failure so the
-  // send obligation holds the checkpoint and retries. NO recovery on purpose:
-  // its consequential work (the journaled send) runs under
-  // `blockProcessorWhile`, which holds the cursor — a death mid-send leaves
-  // the frame unacknowledged and the subscription spine redelivers; the
-  // typing repaint is cosmetic, telemetry-grade loss.
+  // send obligation holds the checkpoint and retries. Registered WITH
+  // recovery (codex review P1): the journaled send is consequential blocking
+  // work, and the held cursor alone only helps while something still dials —
+  // a SIMULTANEOUS Agent+Stream DO death mid-send (a deploy evicts both)
+  // leaves nothing armed to redeliver, and the legacy host's shared keepalive
+  // covered exactly that. The alarm's `telegram-agent/revived` append
+  // cold-boots the stream; the unacknowledged frame redelivers and the send
+  // re-runs (at-least-once at the Bot API, as under the legacy host).
   readonly telegramAgentProcessor = this.#registry.register(
     new TelegramAgentProcessor({
       stream: this.#stream,
@@ -226,15 +232,21 @@ export class AgentDurableObject extends DurableObject<Env> {
         return { messageId };
       },
     }),
+    { recovery: { revivedEventType: TELEGRAM_AGENT_REVIVED_EVENT_TYPE } },
   );
 
   // Registered on every agent host; it wakes on routed email agent streams
   // (`/agents/email/**`) and on any agent stream an agent-scoped email.send
   // bound. Replies leave through itx.email.reply, called by the agent itself;
   // the one dep turns door-stored inbound attachments into signed
-  // AgentFileAttachments so images are visible to the model. NO recovery:
-  // per-event `blockProcessorWhile` transcription only — a death mid-append
-  // leaves the frame unacknowledged and the subscription spine redelivers.
+  // AgentFileAttachments so images are visible to the model. Registered WITH
+  // recovery (codex review P1): the blocking transcription is an inbound
+  // message's ONLY path to the LLM, and the held cursor alone only helps
+  // while something still dials — a SIMULTANEOUS Agent+Stream DO death while
+  // resolving attachments or before `agents/message-received` commits leaves
+  // nothing armed to redeliver on a quiet inbox. The alarm's
+  // `email-agent/revived` append cold-boots the stream; the unacknowledged
+  // frame redelivers and the transcription re-runs.
   readonly emailAgentProcessor = this.#registry.register(
     new EmailAgentProcessor({
       stream: this.#stream,
@@ -260,6 +272,7 @@ export class AgentDurableObject extends DurableObject<Env> {
         );
       },
     }),
+    { recovery: { revivedEventType: EMAIL_AGENT_REVIVED_EVENT_TYPE } },
   );
 
   // Registered on every agent host; it wakes on routed PR agent streams
@@ -267,10 +280,14 @@ export class AgentDurableObject extends DurableObject<Env> {
   // linked connection's itx.integrations.github Octokit, called by the agent
   // itself. The platform supplies one best-effort immediate UI affordance:
   // a 👀 acknowledgement on a fresh trusted mention. Review automation and
-  // its Check Run lifecycle belong to the project config worker. NO recovery:
-  // its consequential work (collaborator verification + the message append)
-  // runs under `blockProcessorWhile`, which holds the cursor for the spine's
-  // redelivery; the eyes reaction is cosmetic.
+  // its Check Run lifecycle belong to the project config worker. Registered
+  // WITH recovery (codex review P1): the collaborator verification + message
+  // append are consequential blocking work, and the held cursor alone only
+  // helps while something still dials — a SIMULTANEOUS Agent+Stream DO death
+  // mid-verification at raw head leaves nothing armed to redeliver, and the
+  // mention strands. The alarm's `github-agent/revived` append cold-boots the
+  // stream; the unacknowledged frame redelivers and the verification + turn
+  // append re-run. The eyes reaction stays cosmetic.
   readonly githubAgentProcessor = this.#registry.register(
     new GithubAgentProcessor({
       stream: this.#stream,
@@ -339,6 +356,7 @@ export class AgentDurableObject extends DurableObject<Env> {
         }
       },
     }),
+    { recovery: { revivedEventType: GITHUB_AGENT_REVIVED_EVENT_TYPE } },
   );
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {

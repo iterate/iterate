@@ -10,6 +10,23 @@ import { CapabilityHostProcessorContract } from "../capability-host/capability-h
 import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
 
 /**
+ * The processor-scoped revival fact `durableObjectRecovery` appends when an
+ * incarnation died owing work (stream-processor-runner.ts's
+ * `ProcessorRecovery`) — here, the journaled send running under
+ * `blockProcessorWhile`. The held cursor alone is not enough: a SIMULTANEOUS
+ * Agent+Stream DO death (a deploy evicts both) leaves nothing armed to dial
+ * either side again, so the unmet send obligation strands on a quiet thread.
+ * The keepalive alarm survives that death; its revival appends this fact,
+ * which cold-boots the Stream DO (the append's `woken` fan-out restores the
+ * spine), and the ordinary redelivery of the UNACKNOWLEDGED frame re-runs the
+ * blocking send. The contract CONSUMES it — the runner's construction check
+ * requires that — but never emits it: the recovery adapter appends it raw, as
+ * the runtime speaking. The fact itself is only a wake trigger; no per-event
+ * handling is needed (reduce ignores it).
+ */
+export const TELEGRAM_AGENT_REVIVED_EVENT_TYPE = "events.iterate.com/telegram-agent/revived";
+
+/**
  * Processor for one Telegram-backed agent stream (one chat session).
  *
  * The upstream `telegram` router has already forwarded this session's raw
@@ -60,6 +77,25 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
         },
       ],
     },
+    [TELEGRAM_AGENT_REVIVED_EVENT_TYPE]: {
+      description:
+        "The telegram-agent processor was revived after its incarnation died owing work (a journaled send in flight when an eviction took both the agent and stream DOs). Appended by the platform's recovery alarm, not by the processor; the append cold-boots the stream so the unacknowledged frame redelivers and the blocking send re-runs. At-least-once at the Telegram boundary is the accepted caveat: a send that reached the Bot API before the cursor committed is re-sent (sendMessage has no idempotency key — the journal is exactly-once, the send is not).",
+      // Loose ON PURPOSE: the payload is authored by the shared recovery
+      // adapter (durableObjectRecovery.appendRevived), and future fields it
+      // grows must not turn historical revivals into parse failures.
+      payloadSchema: z.looseObject({
+        processorSlug: z.string(),
+        revivals: z.number(),
+        version: z.string(),
+      }),
+      examples: [
+        {
+          description:
+            "The keepalive alarm revived this session's telegram-agent after an eviction took its in-flight send.",
+          payload: { processorSlug: "telegram-agent", revivals: 1, version: "2026-07-15.1" },
+        },
+      ],
+    },
   },
   processorDeps: [
     AgentProcessorContract,
@@ -71,6 +107,10 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/telegram/send-requested",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/capability-host/script-execution-requested",
+    // The revival fact MUST be consumed (the runner throws at construction
+    // otherwise): a revival nobody consumes recovers nothing. See the
+    // constant's doc for why it is absent from `emits`.
+    TELEGRAM_AGENT_REVIVED_EVENT_TYPE,
   ],
   emits: [
     "events.iterate.com/agents/message-received",

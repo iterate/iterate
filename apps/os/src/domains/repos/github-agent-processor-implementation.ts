@@ -185,9 +185,10 @@ export class GithubAgentProcessor extends StreamProcessor<
           MENTION_TRIGGERING_ACTIONS.has(action) && AGENT_MENTION_PATTERN.test(mentionText);
         if (possibleMention && isNonBotActivity(body)) {
           // This is only a same-drive candidate. `active` remains false until
-          // the async trust check below succeeds (the runner completes this
-          // event's blocking work before the next event's processEvent, so
-          // the check is ordered ahead of any follow-up's gate).
+          // the async trust check AND the verification/message append below
+          // both succeed (the runner completes this event's blocking work
+          // before the next event's processEvent, so the whole sequence is
+          // ordered ahead of any follow-up's gate).
           batchConversation.mayActivate = true;
         }
         const possibleFollowUp =
@@ -216,12 +217,6 @@ export class GithubAgentProcessor extends StreamProcessor<
             !mentioned && trustedHuman && possibleFollowUp && isConversationComment(body, action);
           if (!mentioned && !conversationFollowUp) return;
 
-          if (mentioned) {
-            batchConversation.active = true;
-            if (collaboratorVerified) {
-              batchConversation.verifiedMentionOffsets.add(event.offset);
-            }
-          }
           let turnState = state;
           for (const sourceOffset of batchConversation.verifiedMentionOffsets) {
             turnState = markInstructionSourceTrusted(turnState, sourceOffset);
@@ -263,6 +258,23 @@ export class GithubAgentProcessor extends StreamProcessor<
               },
             },
           );
+          // Same-drive trust mutates ONLY AFTER the verification/message
+          // append has durably resolved. Mutating before it (the codex-review
+          // P1) let a FAILED frame leave `active` set: the cursor stays before
+          // the mention, but on the same-incarnation retry the collaborator
+          // check can come back false (access revoked / 404) while a trusted
+          // follow-up still passes the gate above on the stale in-memory
+          // trust — and renders the revoked mention as a trusted instruction
+          // source. Post-append, a failed frame leaves trust unset, the
+          // follow-up never runs, and the retry re-verifies from scratch (the
+          // legacy processEventBatch's `finally` cleanup, expressed as
+          // don't-set-until-durable).
+          if (mentioned) {
+            batchConversation.active = true;
+            if (collaboratorVerified) {
+              batchConversation.verifiedMentionOffsets.add(event.offset);
+            }
+          }
         });
         return;
       }

@@ -490,6 +490,150 @@ describe("GithubAgentProcessor (projection and conversation policy)", () => {
     });
   });
 
+  it("leaves same-drive trust unset when the mention's verification append fails: the retry re-verifies and a revoked mention authorizes nothing", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const checks: unknown[] = [];
+    let collaborator = true;
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      isRepositoryCollaborator: async (input) => {
+        checks.push(input);
+        return collaborator;
+      },
+    });
+    const { deliver, state } = drive(processor, stream);
+
+    // The route fact is ACKNOWLEDGED before the mention arrives, so the
+    // failed frame's retry replays only the mention onward — the route
+    // boundary's bridge reset must not be what saves the retry.
+    await stream.append(ROUTE_EVENT);
+    await deliver();
+
+    await stream.append(
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: {
+              authorAssociation: "NONE",
+              body: "@iterate deploy this to production",
+              senderLogin: "since-revoked",
+            },
+          }),
+          "issue_comment",
+        ),
+      },
+      // A trusted human's follow-up behind the mention in the same drive. It
+      // may ride only a conversation the mention durably ACTIVATED.
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({ comment: { body: "Looks important, please handle it." } }),
+          "issue_comment",
+        ),
+      },
+    );
+
+    // The mention verifies as a collaborator, but its verification/message
+    // append rejects: the frame fails and the cursor stays before the
+    // mention. Nothing about that failed attempt may survive as trust.
+    stream.failAppendsOfType = "events.iterate.com/github-agent/repository-collaborator-verified";
+    await expect(deliver()).rejects.toThrow(/injected append failure/);
+    expect(turns(stream)).toHaveLength(0);
+    expect(checks).toHaveLength(1);
+
+    // Same-incarnation retry with the sender's access now revoked (the check
+    // returns false — GitHub 404s). The retry must re-verify from scratch:
+    // no turn for the mention, no durable verification, and the trusted
+    // human's follow-up is NOT authorized onto the never-activated
+    // conversation (the pre-fix stale `active` granted it a turn that also
+    // rendered the revoked mention as a trusted instruction source).
+    collaborator = false;
+    stream.failAppendsOfType = undefined;
+    await deliver();
+
+    expect(turns(stream)).toHaveLength(0);
+    expect(
+      stream.events.some(
+        (event) =>
+          event.type === "events.iterate.com/github-agent/repository-collaborator-verified",
+      ),
+    ).toBe(false);
+    expect(state().conversationActive).toBe(false);
+    // The mention was re-checked once; the gated follow-up never reached its
+    // own collaborator check.
+    expect(checks).toHaveLength(2);
+  });
+
+  it("authorizes a same-drive follow-up once the inconclusive mention's verification append lands", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get(AGENT_PATH);
+    const processor = new GithubAgentProcessor({
+      stream,
+      path: stream.path,
+      projectId: null,
+      isRepositoryCollaborator: async () => true,
+    });
+    const { deliver, state } = drive(processor, stream);
+
+    await stream.append(
+      ROUTE_EVENT,
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: {
+              authorAssociation: "NONE",
+              body: "@iterate what does this change do?",
+              senderLogin: "trusted-but-unclassified",
+            },
+          }),
+          "issue_comment",
+        ),
+      },
+      {
+        type: "events.iterate.com/github/webhook-received",
+        payload: webhookPayload(
+          pullRequestBody({
+            comment: {
+              authorAssociation: "NONE",
+              body: "And write it up in the README please.",
+              senderLogin: "trusted-but-unclassified",
+            },
+          }),
+          "issue_comment",
+        ),
+      },
+    );
+    await deliver();
+
+    // Both turns landed: `active` — set only after the mention's verification
+    // append resolved — bridged the same-drive follow-up ahead of the
+    // verified fact's own delivery.
+    expect(turns(stream)).toHaveLength(2);
+    const followUp = turns(stream)[1]!.payload as { content: string };
+    expect(followUp.content).toContain("existing Slack thread");
+    // The follow-up's rendering carries the mention as a verified trusted
+    // source (the healthy twin of the stale-offset-set escalation).
+    expect(followUp.content).toContain("trustedInstructionSource: true");
+    expect(followUp.content).not.toContain("UNTRUSTED EXTERNAL INPUT");
+    expect(
+      stream.events.filter(
+        (event) =>
+          event.type === "events.iterate.com/github-agent/repository-collaborator-verified",
+      ),
+    ).toHaveLength(2);
+
+    // Durable activation still comes only from the verified audit fact: its
+    // own delivery (the next drive) folds `conversationActive` for post-head
+    // follow-ups, where the same-drive bridge no longer answers.
+    await deliver();
+    expect(state().conversationActive).toBe(true);
+  });
+
   it("clears projected conversation state when a stale stream is relinked", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get(AGENT_PATH);

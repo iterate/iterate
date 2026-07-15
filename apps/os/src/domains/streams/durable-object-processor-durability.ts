@@ -46,6 +46,14 @@ export const legacyProcessorSnapshotKey = (slug: string) => `stream-processor:${
  * processors; per-runner identity gets its own key. */
 export const processorKeepaliveKey = (slug: string) => `stream-processor:${slug}:keepalive`;
 
+/** The LEGACY host's ONE shared keepalive record ({@link KeepaliveRecord} —
+ * stream-processor-host.ts). Read + deleted by the registry's one-deploy
+ * adoption (stream-processor-registry.ts `handleAlarm`), never written: a
+ * revival ARMED by the pre-cutover incarnation fires its durable alarm into
+ * the new code, where every per-slug keepalive sees no record of its own —
+ * without adoption the fire is consumed and the debt silently dropped. */
+export const LEGACY_HOST_KEEPALIVE_KEY = "stream-processor-host:keepalive";
+
 /**
  * The runner's durable progress store over DO KV (`storage.kv` — synchronous,
  * matching the host's facade usage).

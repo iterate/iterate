@@ -5,11 +5,15 @@
 // cutover), the project DO (multi-processor), the scheduler DO (domain alarm
 // slice), the capability-host DO (the recovery template), the repo DO
 // (reconcile + processEventBatch merged into onCaughtUp), and the agent DO
-// (agent-durable-object.ts — multi-processor with per-processor recovery:
-// agent + slack-agent recover, the telegram/email/github bridges ride the
-// spine's redelivery). EVERY processor-hosting DO now runs the registry; the
-// legacy host survives only for its own tests until a deletion slice retires
-// it.
+// (agent-durable-object.ts — multi-processor with per-processor recovery on
+// all five: agent, slack-agent, telegram-agent, email-agent, github-agent;
+// the spine's redelivery alone cannot cover a SIMULTANEOUS Agent+Stream DO
+// death mid-blocker — codex review P1). EVERY processor-hosting DO now runs
+// the registry; the legacy host survives only for its own tests until a
+// deletion slice retires it. Its ONE cross-deploy remnant — the shared
+// `stream-processor-host:keepalive` record a pre-cutover incarnation may
+// have armed — is adopted exactly once by `handleAlarm` (see
+// adoptLegacyHostKeepalive).
 //
 // THE CUTOVER RECIPE (established by the secret DO; repeat per DO):
 //   1. `createStreamProcessorRegistry(this.ctx, { stream, path, projectId,
@@ -77,10 +81,12 @@ import { LiveState } from "../../lib/live-state/engine.ts";
 import type { StreamEvent } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
 import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
-import { StreamProcessorRunner } from "./stream-processor-runner.ts";
+import { StreamProcessorRunner, type ProcessorRecovery } from "./stream-processor-runner.ts";
+import type { KeepaliveRecord } from "./stream-processor-keepalive.ts";
 import {
   durableObjectProgressStore,
   durableObjectRecovery,
+  LEGACY_HOST_KEEPALIVE_KEY,
 } from "./durable-object-processor-durability.ts";
 import {
   announceContract,
@@ -137,6 +143,10 @@ export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitU
 type RegistryEntry = {
   processor: RegisterableProcessor;
   runner: StreamProcessorRunner<any>;
+  /** The runner's recovery adapter when the DO opted in — kept on the entry
+   * so the legacy-keepalive adoption (see `handleAlarm`) can force a revival
+   * without a new shared-core hook. */
+  recovery?: ProcessorRecovery;
 };
 
 export type StreamProcessorRegistry<Live extends object = Record<string, unknown>> = {
@@ -355,6 +365,40 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     }
   }
 
+  /**
+   * One-deploy adoption of the LEGACY host's shared keepalive debt (codex
+   * review finding 1). The legacy host tracked EVERY processor's whole ingest
+   * attempt on ONE `stream-processor-host:keepalive` record; a revival it
+   * armed fires its durable alarm into THIS code after the cutover deploy,
+   * where every per-slug keepalive sees no record of its own and no-ops — the
+   * platform alarm is consumed, and a scheduled/started obligation strands
+   * with nothing left to dial it (the exact wedge recovery exists to close).
+   *
+   * So the alarm entry point checks for the legacy record: ARMED
+   * (`armedAtMs !== null` — the legacy invariant "died owing work" IS "died
+   * with the alarm armed") means debt whose owning processor the shared
+   * record cannot name, so EVERY recovery-enabled runner appends its revived
+   * fact (idempotent over-recovery is the accepted cost — each fact's
+   * delivery only re-runs an at-head reconciliation that settles nothing when
+   * nothing is owed). A disarmed record is legacy bookkeeping with no debt
+   * (`#disarmAndReset` wrote it back rather than deleting). Either way the
+   * record is DELETED — after the appends succeed — so adoption happens
+   * exactly once; a failed append rethrows out of `handleAlarm` with the
+   * record intact, the platform retries the fire, and the appends' keepalive-
+   * derived idempotency keys collapse the duplicates.
+   */
+  async function adoptLegacyHostKeepalive(): Promise<void> {
+    const legacy = ctx.storage.kv.get<KeepaliveRecord>(LEGACY_HOST_KEEPALIVE_KEY);
+    if (legacy === undefined) return;
+    if (legacy.armedAtMs !== null) {
+      for (const entry of entries.values()) {
+        if (entry.recovery === undefined) continue;
+        await entry.recovery.appendRevived();
+      }
+    }
+    ctx.storage.kv.delete(LEGACY_HOST_KEEPALIVE_KEY);
+  }
+
   // The node's live-state engine (transplanted from the host, :377-415).
   // Seeded empty; assembled from runner state on the first `loadAndRefreshLive`
   // and kept fresh by each runner's committed-state observer. The empty seed
@@ -445,7 +489,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         keepAlive: (work) => ctx.waitUntil(work()),
         now,
       });
-      entries.set(slug, { processor, runner });
+      entries.set(slug, { processor, runner, ...(recovery === undefined ? {} : { recovery }) });
       // Any runner's committed-state change reassembles the node's live state.
       runner.observeStateChanges(() => assembleLive());
       return processor;
@@ -509,6 +553,12 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
           span.setAttribute("iterate.alarm.retry_count", alarmInfo.retryCount);
         }
         try {
+          // A legacy-armed alarm (pre-cutover incarnation) fires into this
+          // handler with no per-slug keepalive record to claim it — adopt the
+          // shared debt FIRST, before the per-runner fires (which self-gate
+          // to no-ops in that state). A failed adoption append rethrows so
+          // the platform retries with the legacy record intact.
+          await adoptLegacyHostKeepalive();
           // EVERY runner gets the fire — each keepalive self-gates on its own
           // persisted armed time, so a foreign fire is a no-op. Failures are
           // collected (never short-circuit: the runners behind a throwing one
