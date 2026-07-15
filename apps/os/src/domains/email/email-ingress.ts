@@ -22,6 +22,7 @@ import { readProjectBySlug } from "../../project-directory.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { integrationStreamStub } from "../integrations/integration-streams.ts";
 import { putProjectFile, sanitizeFileFilename } from "../files/project-files.ts";
+import { EmailProcessorContract } from "./email-processor-contract.ts";
 import {
   EMAIL_BODY_TRUNCATE_CHARS,
   EMAIL_INTEGRATION_STREAM_PATH,
@@ -55,6 +56,10 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
     message.setReject("No such address.");
     return;
   }
+  // Project creation owns this birth. If the directory became visible before
+  // its email-router append finished, throw so SMTP retries instead of folding
+  // a message before the processor can act on it and losing that delivery.
+  const projectPatterns = await readCreatedProjectAllowedSenders(project.id);
 
   const rejectMail = async (reason: string, rejectMessage: string) => {
     // Deterministic key from pre-parse headers, same rationale as the
@@ -97,7 +102,6 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
   // unless the deployment explicitly opts out (local dev, tests). The
   // allowlist is the deployment-wide config plus the project's own patterns
   // (seeded with the creator's email at project birth).
-  const projectPatterns = await readProjectAllowedSenders(project.id);
   const patterns = [...config.email.allowedSenders, ...projectPatterns];
   if (!senderMatchesAllowlist({ address: fromAddress, patterns })) {
     await rejectMail("sender-not-allowed", "Sender not authorized for this address.");
@@ -162,24 +166,27 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
 }
 
 /**
- * The project's own sender allowlist: the email router's reduced
- * `allowedSenders` (seeded with the creator's email at project birth, grown
- * by `email/sender-allowed` events). Read failures degrade to [] — the
- * deployment-wide config allowlist still applies and closed-by-default holds.
+ * The project's own sender allowlist, read from a router whose birth is
+ * durably visible. Snapshot catch-up provides read-your-writes when push is
+ * lagging. A missing birth or read failure throws so SMTP retries: appending
+ * any inbound fact before birth would fold it without performing its action.
  */
-async function readProjectAllowedSenders(projectId: string): Promise<string[]> {
+async function readCreatedProjectAllowedSenders(projectId: string): Promise<string[]> {
   try {
     const project = itxEnv.PROJECT.getByName(
       DurableObjectNameCodec.stringify({ projectId, path: EMAIL_INTEGRATION_STREAM_PATH }),
     );
-    const { state } = await (await project.emailProcessor).snapshot();
-    const allowedSenders = (state as { allowedSenders?: unknown }).allowedSenders;
-    return Array.isArray(allowedSenders)
-      ? allowedSenders.filter((pattern): pattern is string => typeof pattern === "string")
-      : [];
+    const snapshot = await (await project.emailProcessor).snapshot();
+    const state = EmailProcessorContract.stateSchema.parse(snapshot.state);
+    if (state.birthCertificate === null) {
+      throw new Error(`Email router for project ${projectId} has not been created`);
+    }
+    return state.allowedSenders;
   } catch (error) {
-    console.error("[email] failed to read project sender allowlist", { error, projectId });
-    return [];
+    console.error("[email] project email router is not ready", { error, projectId });
+    throw new Error(`Email router for project ${projectId} is not ready; retry delivery.`, {
+      cause: error,
+    });
   }
 }
 
