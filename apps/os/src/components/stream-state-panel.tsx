@@ -91,6 +91,12 @@ type ConfiguredSubscriberDetails = {
    * (`…acceptCrossPost` push expression).
    */
   crossPostDestination?: string;
+  /**
+   * Optional operator-facing note from the subscription-configured payload
+   * (why this subscription exists). Distinct from the delivery label used as
+   * the row title.
+   */
+  note?: string;
   /** Selector event types; absent means every type. */
   eventTypes?: string[];
   /** Optional JSONata filter over the whole event. */
@@ -1027,12 +1033,17 @@ function readConfiguredSubscriberDetails(entry: unknown): ConfiguredSubscriberDe
   const onPoison =
     payload?.onPoison === "park" || payload?.onPoison === "skip" ? payload.onPoison : undefined;
   const webhookUrl = typeof delivery?.url === "string" ? delivery.url : undefined;
+  const note =
+    typeof payload?.description === "string" && payload.description.trim() !== ""
+      ? payload.description.trim()
+      : undefined;
 
   return {
     deliveryMode: mode,
     ...(configuredAtOffset === undefined ? {} : { configuredAtOffset }),
     ...(deliveryLabel === undefined ? {} : { deliveryLabel }),
     ...(crossPostDestination === undefined ? {} : { crossPostDestination }),
+    ...(note === undefined ? {} : { note }),
     ...(eventTypes === undefined ? {} : { eventTypes }),
     ...(condition === undefined ? {} : { condition }),
     ...(transform === undefined ? {} : { transform }),
@@ -1115,6 +1126,7 @@ function ConfiguredFilterSummary({ config }: { config: ConfiguredSubscriberDetai
   const hasEventFilter =
     config.eventTypes != null && config.eventTypes.length > 0 && !config.eventTypes.includes("*");
   const hasExtra =
+    config.note !== undefined ||
     config.crossPostDestination !== undefined ||
     hasEventFilter ||
     config.condition !== undefined ||
@@ -1125,12 +1137,16 @@ function ConfiguredFilterSummary({ config }: { config: ConfiguredSubscriberDetai
     ? config.eventTypes!
     : config.crossPostDestination !== undefined ||
         config.condition !== undefined ||
-        config.transform !== undefined
+        config.transform !== undefined ||
+        config.note !== undefined
       ? null // "all event types" shown as text, not chips
       : undefined;
 
   return (
     <span className="mt-1.5 flex flex-col gap-1 text-[11px] leading-snug text-muted-foreground">
+      {config.note == null ? null : (
+        <span className="text-[11px] leading-snug text-foreground/75">{config.note}</span>
+      )}
       {config.crossPostDestination == null ? null : (
         <ConfiguredFilterLine label="to">
           <span className="break-all font-mono text-foreground/80">
@@ -1412,6 +1428,7 @@ function shouldShowConfiguredDetail(
   if (config == null) return false;
   if (config.deliveryMode === "push" || config.deliveryMode === "webhook") return true;
   return (
+    config.note !== undefined ||
     config.crossPostDestination !== undefined ||
     (config.eventTypes != null && config.eventTypes.length > 0) ||
     config.condition !== undefined ||
@@ -1445,20 +1462,22 @@ function ConfiguredSubscriberDetail({ config }: { config: ConfiguredSubscriberDe
         : config.deliver === "new"
           ? "new (from configure time)"
           : `after offset #${config.deliver.afterOffset}`;
+  const genericBlurb = isCrossPost
+    ? "When matching events land on this stream, copies are pushed onto the destination with provenance (`source.crossPostedFrom`)."
+    : config.deliveryMode === "webhook"
+      ? "Each matching event is POSTed as JSON to the configured URL."
+      : config.deliveryMode === "push"
+        ? "Matching events are dialed into the configured itx expression as push batches."
+        : "The subscriber owns its checkpoint; the stream pokes it when the watermark lags.";
 
   return (
     <div className="flex flex-col gap-3">
       <div>
         <SectionHeading>{heading}</SectionHeading>
-        <p className="text-sm leading-relaxed text-foreground/70">
-          {isCrossPost
-            ? "When matching events land on this stream, copies are pushed onto the destination with provenance (`source.crossPostedFrom`)."
-            : config.deliveryMode === "webhook"
-              ? "Each matching event is POSTed as JSON to the configured URL."
-              : config.deliveryMode === "push"
-                ? "Matching events are dialed into the configured itx expression as push batches."
-                : "The subscriber owns its checkpoint; the stream pokes it when the watermark lags."}
-        </p>
+        <p className="text-sm leading-relaxed text-foreground/70">{config.note ?? genericBlurb}</p>
+        {config.note == null ? null : (
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{genericBlurb}</p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

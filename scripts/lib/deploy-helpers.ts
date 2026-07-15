@@ -253,6 +253,93 @@ export async function ensureD1(
 }
 
 /**
+ * One TTL to rule the preview fleet: a preview slot's disposable data (search
+ * corpus, project files, sandbox backups) is expired 3 hours after it was last
+ * written. Short because previews are synthetic and churn constantly, and the
+ * whole point is cost — abandoned data should not linger. Prd keeps its own,
+ * much longer retention (see `SANDBOX_BACKUP_TTL_SECONDS_PRD`); this constant
+ * is never applied there. See docs/preview-resource-gc.md.
+ */
+export const PREVIEW_DISPOSABLE_TTL_SECONDS = 3 * 60 * 60;
+
+/** Prd sandbox workspace backups: 90 days, matching the DO's SANDBOX_BACKUP_TTL_SECONDS. */
+export const SANDBOX_BACKUP_TTL_SECONDS_PRD = 90 * 24 * 60 * 60;
+
+/**
+ * The sandbox workspace backup expiry rule — shared id + `backups/` prefix so
+ * ensure-resources and erase-data install the SAME rule (the ttl differs: 3h on
+ * preview, 90 days on prd). Sandboxes snapshot `/workspace` under `backups/`
+ * and the DO only checks the ttl at restore time, so this rule is what actually
+ * reaps them.
+ */
+export const SANDBOX_BACKUP_EXPIRY_RULE = {
+  ruleId: "expire-sandbox-workspace-backups",
+  prefix: "backups/",
+} as const;
+
+/**
+ * The disposable per-slot R2 corpus (the itx.search `-search-index` bucket):
+ * pure derived state the worker re-mirrors, which on a churned preview slot
+ * grows to thousands of objects. Erasing it object-by-object is the single
+ * biggest source of the cleanup 429 storm that used to leak preview leases
+ * (2026-07-15: 1521 objects, rate-limited mid-delete). Preview slots let R2
+ * lifecycle expire it server-side — zero control-plane calls — and skip the
+ * object walk in erase-data. NOT applied to prd, whose corpus must persist.
+ */
+export const PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY = {
+  ruleId: "expire-preview-search-index",
+  ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
+} as const;
+
+/** Preview project-file storage (itx.files): same disposable 3h expiry as the corpus. */
+export const PREVIEW_FILES_OBJECT_EXPIRY = {
+  ruleId: "expire-preview-files",
+  ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
+} as const;
+
+/**
+ * Pure builder for a "delete every matching object `ttlSeconds` after it was
+ * written" R2 lifecycle policy. `prefix` scopes the rule; an empty prefix (the
+ * default) covers all objects/uploads, per the R2 lifecycle API. The Age
+ * transition takes seconds.
+ */
+export function buildR2ObjectExpiryLifecycleRules(input: {
+  ruleId: string;
+  ttlSeconds: number;
+  prefix?: string;
+}) {
+  return [
+    {
+      id: input.ruleId,
+      enabled: true,
+      conditions: { prefix: input.prefix ?? "" },
+      deleteObjectsTransition: { condition: { type: "Age", maxAge: input.ttlSeconds } },
+    },
+  ];
+}
+
+/**
+ * Put a single "expire matching objects after `ttlSeconds`" lifecycle rule on
+ * an R2 bucket, so Cloudflare garbage-collects the objects server-side instead
+ * of erase-data walking the bucket with one rate-limited DELETE per object. PUT
+ * replaces the bucket's lifecycle config wholesale — fine while this is the
+ * only rule the target buckets carry.
+ */
+export async function ensureR2ObjectExpiryLifecycle(
+  ctx: CfContext,
+  bucketName: string,
+  input: { ruleId: string; ttlSeconds: number; prefix?: string },
+): Promise<void> {
+  await ctx.cf(`/r2/buckets/${bucketName}/lifecycle`, {
+    method: "PUT",
+    body: JSON.stringify({ rules: buildR2ObjectExpiryLifecycleRules(input) }),
+  });
+  console.log(
+    `R2 bucket ${bucketName} lifecycle: objects under "${input.prefix ?? ""}" expire ${input.ttlSeconds}s after write (${input.ruleId})`,
+  );
+}
+
+/**
  * Create-only DNS ensure for a Worker-routed hostname: worker zone routes
  * only fire when a proxied DNS record answers the hostname, so create a
  * proxied originless AAAA (100::) when nothing exists. Any existing record

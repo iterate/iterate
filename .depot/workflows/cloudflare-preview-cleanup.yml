@@ -18,8 +18,12 @@
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN,
 # ITERATE_BOT_GITHUB_TOKEN.
 #
-# Keep the `paths` list below identical to cloudflare-previews.yml's, so a
-# close runs cleanup for exactly the PRs that could have deployed a preview.
+# Deliberately NO `paths` filter: a closed PR that once held a slot must always
+# attempt cleanup, even when the final PR diff is empty (full revert) or no
+# longer matches deploy paths. Cleanup is a no-op when the semaphore leases
+# nothing to the PR, so the extra runs are cheap; skipping them leaks a slot
+# for up to 24h (observed 2026-07-15: pr-2005 closed after a full revert and
+# never released preview-1).
 
 name: Cloudflare Preview Cleanup (Depot CI)
 
@@ -27,24 +31,6 @@ on:
   pull_request:
     types:
       - closed
-    paths:
-      - .depot/workflows/cloudflare-previews.yml
-      - packages/shared/**
-      - packages/ui/**
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - patches/**
-      - scripts/preview/**
-      - envs.ts
-      - scripts/lib/**
-      - apps/iterate-com/**
-      - apps/auth-example/**
-      - apps/os/**
-      - apps/auth/**
-      - apps/auth-contract/**
-      - apps/os/src/domains/streams/**
-      - apps/semaphore/**
-      - apps/streams-example-app/**
 
 concurrency:
   group: cloudflare-previews-${{ github.event.pull_request.number || inputs.pull-request-number }}
@@ -61,7 +47,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Always run cleanup tooling from the default branch. The closed PR's
+          # head may predate critical fixes (e.g. release-despite-teardown
+          # failure in #1989). On 2026-07-14, cleanups for merged pr-1986/1987/1994
+          # checked out the PR head, hit Cloudflare 429s mid-erase, bailed before
+          # releasing, and renewed the lease for another 24h — starving the fleet.
+          ref: ${{ github.event.repository.default_branch }}
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node

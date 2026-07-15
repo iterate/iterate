@@ -168,6 +168,11 @@ const SubscriptionConfiguredPayload = z
   .object({
     subscriptionKey: z.string().trim().min(1),
     delivery: SubscriptionDelivery,
+    /**
+     * Optional human-readable note for operators and the stream state panel
+     * (e.g. why a cross-post exists). Not interpreted by the delivery spine.
+     */
+    description: z.string().trim().min(1).optional(),
     /** Which events this subscription receives. Absent = everything. */
     selector: EventSelector.optional(),
     /** Initial cursor for push/webhook (see {@link DeliverPolicy}). Ignored for wake mode. */
@@ -458,6 +463,8 @@ export const CoreProcessorContract = defineProcessorContract({
             "Push delivery: cross-posts one repository's GitHub webhooks from a connection stream onto the repo's own stream, live-tailing from now.",
           payload: {
             subscriptionKey: "github-repo:/repos/root",
+            description:
+              "Copies GitHub webhooks for acme/widgets onto this repo's stream so the repo processor can react to them.",
             selector: {
               eventTypes: ["events.iterate.com/github/webhook-received"],
               condition: 'payload.body.repository.full_name = "acme/widgets"',

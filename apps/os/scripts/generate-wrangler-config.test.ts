@@ -6,10 +6,17 @@ import {
   config,
   localAuthServiceBinding,
   OPTIONAL_SECRETS,
+  REQUIRED_SECRETS,
 } from "./generate-wrangler-config.ts";
 
-it("does not ship the retired APP_CONFIG_LOGS secret", () => {
-  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_LOGS");
+it.each([
+  "APP_CONFIG_LOGS",
+  "APP_CONFIG_GEMINI_API_KEY",
+  "APP_CONFIG_SLACK_BOT_TOKEN",
+  "APP_CONFIG_X_AI_API_KEY",
+])("does not ship the retired %s override", (name) => {
+  expect(OPTIONAL_SECRETS).not.toContain(name);
+  expect(REQUIRED_SECRETS).not.toContain(name);
 });
 
 // Wrangler tags every `--env` deploy with `cf:service=<top-level name>` and

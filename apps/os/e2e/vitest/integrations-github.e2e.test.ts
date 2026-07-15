@@ -21,18 +21,24 @@
 // instead — so proving one proves both.
 //
 // Requires a deployed OS (APP_CONFIG_BASE_URL) and a reachable dummy-petshop
-// (PETSHOP_BASE_URL, or derived). See petshop-support.ts.
+// (the exact PETSHOP_BASE_URL supplied by preview orchestration).
 
 import { generateKeyPairSync } from "node:crypto";
 import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
-import { petshopBaseUrl, petshopExpireTokens, petshopRegisterApp } from "./petshop-support.ts";
+import {
+  petshopBaseUrl,
+  petshopExpireTokens,
+  petshopRegisterApp,
+  shouldSkipPetshopE2e,
+} from "./petshop-support.ts";
 
 const RUN = crypto.randomUUID().slice(0, 8);
 
-// Opt-in: talks to a deployed dummy-petshop (see integrations-petshop.e2e.test).
-test.skipIf(!process.env.PETSHOP_BASE_URL)(
+// Local runs opt in explicitly; preview CI supplies its leased Petshop URL
+// and fails closed if orchestration ever drops it.
+test.skipIf(shouldSkipPetshopE2e())(
   "bring-your-own App: mint installation token in the Secret DO, act as the installation, re-mint on expiry",
   async () => {
     const petshop = petshopBaseUrl();

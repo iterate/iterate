@@ -120,6 +120,12 @@ export function CorePrettyState({
                       {lag == null ? "" : ` · lag ${lag}`}
                     </div>
                   </div>
+                  {typeof payload?.description !== "string" ||
+                  payload.description.trim() === "" ? null : (
+                    <div className="mt-1 text-[11px] leading-snug text-foreground/80">
+                      {payload.description.trim()}
+                    </div>
+                  )}
                   {deliveryHint == null ? null : (
                     <div className="mt-1 break-all font-mono text-[11px] text-foreground/70">
                       {deliveryHint}

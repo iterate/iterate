@@ -1254,7 +1254,7 @@ return { link, github: state.state.github, lastGithubPush: state.state.lastGithu
     id: "stream-cross-post",
     title: "Cross-post matching events between streams",
     description:
-      "stream.crossPostTo({ path, eventTypes, condition? }) copies every later matching event onto the target stream — sugar over a durable push subscription targeting the destination's acceptCrossPost sink, so copies are at-least-once. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true. Copies carry source.crossPostedFrom (the full hop chain), cross-posts never copy into a stream already on the chain (cycles are safe), and removeCrossPost({ path }) removes one.",
+      "stream.crossPostTo({ path, eventTypes, condition?, description? }) copies every later matching event onto the target stream — sugar over a durable push subscription targeting the destination's acceptCrossPost sink, so copies are at-least-once. The optional condition is a JSONata expression over the whole event that must evaluate to exactly true; description is an optional human note shown in the stream state panel. Copies carry source.crossPostedFrom (the full hop chain), cross-posts never copy into a stream already on the chain (cycles are safe), and removeCrossPost({ path }) removes one.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -1263,6 +1263,7 @@ const target = itx.streams.get(vars.target ?? "/examples/cross-post/target");
 
 await source.crossPostTo({
   path: vars.target ?? "/examples/cross-post/target",
+  description: "Demo: high-importance notes land on the target stream.",
   eventTypes: ["events.iterate.example/note"],
   condition: 'payload.importance = "high"', // JSONata over the event; optional
 });

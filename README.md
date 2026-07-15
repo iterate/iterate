@@ -2,6 +2,32 @@
 
 Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main app — the product dashboard at `os.iterate.com`.
 
+## Irrevocable engineering principle: no deviant system behaviour
+
+We do not accept unexplained, unbounded, or silently tolerated system
+behaviour. An error is either an explicitly modelled and correctly classified
+expected outcome, or it is a product defect. The same rule applies to retry
+storms, stuck work, silent data loss, unexplained latency, state drift, and
+resource leaks.
+
+- Never normalize an error counter merely because it is noisy or longstanding.
+  Classify every contributing outcome, remove expected outcomes from error
+  telemetry, and fix the rest.
+- Never swallow, endlessly retry, or hide failures behind fallbacks or
+  compatibility shims. Recovery must be bounded, observable, and preserve a
+  durable explanation of what happened.
+- A healthy request is not enough if it leaves corrupt, stalled, or divergent
+  state behind. Verify the resulting state and the relevant production-shaped
+  telemetry.
+- Green tests are necessary but not sufficient. For operational changes, the
+  acceptance proof includes a preview deployment and evidence that its traces,
+  logs, metrics, and state transitions are coherent, correctly classified, and
+  free of new unexplained errors.
+
+Treat any unexplained error volume as a release blocker until evidence proves
+that each outcome is expected and correctly represented outside the error
+signal. "Unavoidable error spam" is not a category.
+
 ## Environments
 
 - The root `envs.ts` is the typed map of every deployed environment
@@ -75,7 +101,10 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
 How to open a PR (branch hygiene, body shape, **screenshots that actually
-render**, drafts/previews): **[Pull requests](docs/pull-requests.md)**.
+render**, drafts/previews) — and **after open**: wait for Iterate Review /
+review bots, address **every** CI/review comment (fix or reply + resolve),
+**never leave threads standing**, **never merge on red CI** unless the human
+explicitly said so: **[Pull requests](docs/pull-requests.md)**.
 
 **Browser testing:** use an isolated, headed `agent-browser` Chrome for Testing
 session by default so the developer can watch it. Give every concurrent agent
@@ -130,7 +159,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 
 ### Development
 
-- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, drafts/previews, body hygiene
+- [Pull requests](docs/pull-requests.md) — opening PRs, absolute screenshot URLs, drafts/previews, body hygiene; after open: wait for Iterate Review, address every thread, no merge on red CI
 - [Browser testing](docs/browser-testing.md) — isolated agent-browser sessions, visible watch mode, and reusable test logins
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities, opening project-scoped or platform-wide operator sessions, browsers for agents, preview-from-local
 - [Tunnels](docs/tunnels.md) — public HTTPS URLs for local dev, webhooks, OAuth callbacks, and CI/e2e fixtures

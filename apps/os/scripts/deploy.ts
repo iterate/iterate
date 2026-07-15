@@ -55,6 +55,21 @@ import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
 
 const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
+
+/** Preview OS always runs its first-party integration proof against the
+ * sibling dummy Petshop. Keep the formerly optional deployment setting from
+ * drifting out of a slot and turning that proof into a runtime 401. */
+export function assertPreviewPetshopIntegrationConfigured(
+  envName: string,
+  secrets: Record<string, string | undefined>,
+) {
+  if (envName.startsWith("preview_") && !secrets[PREVIEW_PETSHOP_CONFIG]?.trim()) {
+    throw new Error(
+      `${envName} requires ${PREVIEW_PETSHOP_CONFIG} so OS preview e2e can exercise the deployed dummy Petshop.`,
+    );
+  }
+}
 
 function osSmokes(env: DeployedEnv) {
   return [
@@ -152,6 +167,8 @@ export default async function deploy(
       if (previewHeadSha) {
         secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC = `https://pkg.pr.new/iterate/iterate/iterate@${previewHeadSha}`;
       }
+
+      assertPreviewPetshopIntegrationConfigured(ctx.name, secretValues);
 
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.

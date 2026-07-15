@@ -64,6 +64,19 @@ away from.
 | TUI              | `pnpm exec tsx e2e/tui-test/run.ts`   | `apps/os/e2e/tui-test/`                 | The `iterate chat` TUI through a real PTY (Microsoft TUI Test) against a disposable project.                                                                                                                                                                                                                                                                                                                       |
 | Playwright specs | `pnpm spec` (repo root)               | `specs/` (`playwright.config.ts`)       | Browser-level product flows: signup, project create, dashboard, REPL, agent chat, reactivity.                                                                                                                                                                                                                                                                                                                      |
 
+The normal Depot **Test** workflow runs `pnpm test` from the repo root. That
+recursively runs every workspace's `test` script, including the `iterate` CLI
+and dummy-petshop's unit suite. Live tests with separate `test:e2e` scripts
+belong to preview CI instead: dummy-petshop is deployed and runs its complete
+live e2e whenever that app is selected. Selecting OS also selects and deploys
+dummy-petshop first, then passes that same leased preview's recorded
+`PETSHOP_BASE_URL` into the OS e2e lane. The OS Petshop integration specs fail
+CI if that URL is absent; they cannot silently skip back out of preview CI.
+
+Two narrower lanes are deliberate. The TUI lane above is manual-only. The
+streams example app runs its `@preview`-tagged Vitest and Playwright coverage
+in preview CI; its full `pnpm test:e2e` suite remains a local/manual lane.
+
 Smoke-testing a deployment (what the deploy pipeline probes automatically,
 plus manual/agent recipes for production): [Smoke testing](smoke-testing.md).
 

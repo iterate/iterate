@@ -36,7 +36,14 @@
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs } from "../../../envs.ts";
-import { wipeD1Tables } from "../../../scripts/lib/deploy-helpers.ts";
+import {
+  ensureR2ObjectExpiryLifecycle,
+  PREVIEW_DISPOSABLE_TTL_SECONDS,
+  PREVIEW_FILES_OBJECT_EXPIRY,
+  PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  SANDBOX_BACKUP_EXPIRY_RULE,
+  wipeD1Tables,
+} from "../../../scripts/lib/deploy-helpers.ts";
 import { resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { COMPATIBILITY_DATE } from "./generate-wrangler-config.ts";
@@ -179,7 +186,56 @@ export default async function eraseData(options: {
   // user data under this script's contract. (The sandboxes bucket is left
   // alone deliberately — container teardown is broken upstream, see the DO
   // section, and its backups expire on a lifecycle rule.)
-  for (const bucket of [`${env.osWorkerName}-search-index`, `${env.osWorkerName}-files`]) {
+  //
+  // Preview slots take BOTH disposable buckets off this hot path. The
+  // search-index especially is pure derived state that churns to thousands of
+  // objects, and walking it with one DELETE per object is the biggest source
+  // of the cleanup 429 storm that leaked leases (2026-07-15: 1521 objects).
+  // Instead we guarantee each bucket's 3h server-side expiry rule and let
+  // Cloudflare GC the objects — releasing the slot immediately. AI Search above
+  // has no equivalent (namespace-delete needs an empty namespace), so its
+  // per-instance sweep stays — but with R2 off the path it no longer competes
+  // for the ~1200 req/5min budget. Any bucket whose rule can't be ensured falls
+  // back to being walked as before. Prd always walks (its data has no expiry).
+  const searchIndexBucket = `${env.osWorkerName}-search-index`;
+  const filesBucket = `${env.osWorkerName}-files`;
+  const reapedByLifecycle = new Set<string>();
+  if (ctx.name.startsWith("preview")) {
+    for (const [bucket, expiry] of [
+      [searchIndexBucket, PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY],
+      [filesBucket, PREVIEW_FILES_OBJECT_EXPIRY],
+    ] as const) {
+      try {
+        await ensureR2ObjectExpiryLifecycle(ctx, bucket, expiry);
+        reapedByLifecycle.add(bucket);
+        console.log(`R2 ${bucket}: left to ${expiry.ttlSeconds}s lifecycle expiry, not walked`);
+      } catch (error) {
+        console.warn(
+          `R2 ${bucket} lifecycle ensure failed — falling back to walking it: ${String(error).slice(0, 200)}`,
+        );
+      }
+    }
+    // Also self-heal the sandbox backups expiry (3h). ensure-resources sets it
+    // too, but CI never runs that, so without this preview sandbox backups keep
+    // whatever rule they had (often none → they accumulate forever). We only
+    // install the rule; the sandboxes bucket's data is never walked here (its
+    // containers own it — see the DO section).
+    try {
+      await ensureR2ObjectExpiryLifecycle(ctx, `${env.osWorkerName}-sandboxes`, {
+        ...SANDBOX_BACKUP_EXPIRY_RULE,
+        ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
+      });
+      console.log(
+        `R2 ${env.osWorkerName}-sandboxes: backups/ set to ${PREVIEW_DISPOSABLE_TTL_SECONDS}s lifecycle expiry`,
+      );
+    } catch (error) {
+      console.warn(`R2 sandboxes lifecycle ensure failed: ${String(error).slice(0, 200)}`);
+    }
+  }
+  const bucketsToWalk = [searchIndexBucket, filesBucket].filter(
+    (bucket) => !reapedByLifecycle.has(bucket),
+  );
+  for (const bucket of bucketsToWalk) {
     // Per-bucket budget: a churn-refilled search-index must not starve the
     // files pass (Bugbot). 90s each + 90s instances stays well inside the
     // cleanup job's 10-minute ceiling alongside the DO/D1/KV work.

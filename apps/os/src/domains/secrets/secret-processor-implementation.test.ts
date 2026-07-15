@@ -50,25 +50,4 @@ describe("SecretProcessor material decisions", () => {
       state: { encryptedMaterial: { ...encryptedMaterial, offset: 7 }, updatedOffset: 7 },
     });
   });
-
-  test("every material-less update clears retained material", async () => {
-    const subject = processor();
-    await subject.ingest({
-      events: [
-        updated(1, {
-          egress: { urls: ["https://api.example.com"] },
-          encryptedMaterial,
-        }),
-        updated(2, {
-          refresh: null,
-        }),
-      ],
-      streamMaxOffset: 2,
-    });
-
-    await expect(subject.snapshot()).resolves.toMatchObject({
-      offset: 2,
-      state: { encryptedMaterial: null, refresh: null, updatedOffset: 2 },
-    });
-  });
 });

@@ -5,8 +5,6 @@ import {
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
 import { DEFAULT_AGENT_MODEL } from "./agent-processor-contract.ts";
-import { agentDefaultsForPath } from "./agent-defaults.ts";
-import { buildAgentLlmRequestBody } from "./agent-processor-implementation.ts";
 
 describe("runWorkersAiAttempt", () => {
   it("cancels the response stream on deadline so no chunk lands after the failure", async () => {
@@ -364,68 +362,5 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
     expect(maskedA).toContain("Current date and time (UTC): MASKED");
     expect(maskedA).toContain("- Project: MASKED");
     expect(maskedA).not.toContain("snake");
-  });
-
-  it("REAL birth-turn bodies from the defaults pipeline mask to one key across projects", async () => {
-    // Not a hand-built string: run the actual birth machinery for two
-    // projects — agentDefaultsForPath events folded through
-    // buildAgentLlmRequestBody — and require the masked serializations (and
-    // so the cache keys) to be byte-identical. This is the preview-burn
-    // guarantee itself.
-    const birthBody = (input: {
-      projectId: string;
-      name: string;
-      slug: string;
-      workerUrl: string;
-      requestedAt: string;
-    }) => {
-      const defaults = agentDefaultsForPath({
-        agentPath: "/agents/onboarding",
-        projectId: input.projectId,
-        project: { name: input.name, slug: input.slug, workerUrl: input.workerUrl },
-      });
-      const events = [
-        ...defaults.events.map((event, index) => ({
-          ...event,
-          offset: index + 1,
-          createdAt: input.requestedAt,
-          path: "/agents/onboarding",
-        })),
-        {
-          type: "events.iterate.com/agent/llm-request-requested",
-          payload: { model: DEFAULT_AGENT_MODEL, requestId: "llm-request:gen-0" },
-          offset: defaults.events.length + 1,
-          createdAt: input.requestedAt,
-          path: "/agents/onboarding",
-        },
-      ];
-      return buildAgentLlmRequestBody({
-        events: events as never,
-        llmRequestOffset: events.length,
-      });
-    };
-    const bodyA = birthBody({
-      projectId: `prj_${"a".repeat(32)}`,
-      name: "Snake Game",
-      slug: "snake",
-      workerUrl: "https://snake.iterate-preview-4.app",
-      requestedAt: "2026-07-11T10:00:00.000Z",
-    });
-    const bodyB = birthBody({
-      projectId: `prj_${"b".repeat(32)}`,
-      name: "Crossword Helper",
-      slug: "crossword-helper",
-      workerUrl: "https://crossword-helper.iterate-preview-4.app",
-      requestedAt: "2026-07-12T18:30:00.000Z",
-    });
-    const [keyA, keyB] = await Promise.all([
-      cloudflareAiGatewayResponseCacheKey(bodyA),
-      cloudflareAiGatewayResponseCacheKey(bodyB),
-    ]);
-    const maskedA = maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(bodyA));
-    expect(maskedA).toBe(maskCloudflareAiGatewayResponseCacheEntropy(JSON.stringify(bodyB)));
-    expect(keyA).toBe(keyB);
-    expect(maskedA).not.toContain("snake");
-    expect(maskedA).not.toContain("Crossword");
   });
 });

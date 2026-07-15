@@ -1,7 +1,5 @@
 import type { Stream } from "../../itx-api.generated.ts";
 
-export const ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS = 90_000;
-
 export async function ensureMcpSessionAgentReady(input: {
   agentPath: string;
   projectItx: {
@@ -19,6 +17,6 @@ export async function ensureMcpSessionAgentReady(input: {
   await stream.waitForEvent({
     afterOffset: 0,
     eventTypes: ["events.iterate.com/agent/system-prompt-updated"],
-    timeoutMs: ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS,
+    timeoutMs: 90_000,
   });
 }

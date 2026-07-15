@@ -16,64 +16,9 @@ import {
 } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
-const network = vi.hoisted(() => {
-  const streams = new Map<string, Array<{ payload: unknown; type: string }>>();
-  const secrets = new Map<
-    string,
-    { egress: { urls: string[] }; material: unknown; refresh?: unknown }
-  >();
-  const secretUpdateHooks: Array<() => Promise<void>> = [];
-  return {
-    SECRET: {
-      getByName(name: string) {
-        return {
-          async update(input: {
-            egress: { urls: string[] };
-            material: unknown;
-            refresh?: unknown;
-          }) {
-            await secretUpdateHooks.shift()?.();
-            secrets.set(name, input);
-          },
-        };
-      },
-    },
-    STREAM: {
-      getByName(name: string) {
-        let events = streams.get(name);
-        if (!events) {
-          events = [];
-          streams.set(name, events);
-        }
-        const stored = events;
-        return {
-          async append(...inputs: Array<{ payload: unknown; type: string }>) {
-            stored.push(...inputs);
-            return inputs.map((input, index) => ({ ...input, offset: stored.length + index }));
-          },
-          async getEvents(input: { afterOffset?: number; limit?: number }) {
-            const afterOffset = input.afterOffset ?? 0;
-            const limit = input.limit ?? 100;
-            return stored
-              .map((event, index) => ({ ...event, offset: index + 1 }))
-              .filter((event) => event.offset > afterOffset)
-              .slice(0, limit);
-          },
-          async runtimeState() {
-            return { coreProcessorState: { maxOffset: stored.length } };
-          },
-        };
-      },
-    },
-    reset() {
-      streams.clear();
-      secrets.clear();
-      secretUpdateHooks.length = 0;
-    },
-    secretUpdateHooks,
-    secrets,
-    streams,
-  };
+const network = await vi.hoisted(async () => {
+  const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
+  return createFakeItxEnv();
 });
 
 const SECRET_ENCRYPTION_KEY = "test-secret-encryption-key";
@@ -158,7 +103,7 @@ describe("completeConnect (github App installation)", () => {
     });
     const stored = network.secrets.get(secretName);
     expect(stored?.material).toEqual({});
-    expect(stored?.egress.urls).toContain("https://api.github.com");
+    expect(stored?.egress?.urls).toContain("https://api.github.com");
     expect(stored?.refresh).toEqual({
       kind: "github-app-installation",
       apiBase: "https://api.github.com",
@@ -361,7 +306,7 @@ describe("completeConnect (github App installation)", () => {
       projectId: PROJECT_ID,
       path: githubConnectionSecretPath("install-789"),
     });
-    expect(network.secrets.get(secretName)?.egress.urls).toEqual([]);
+    expect(network.secrets.get(secretName)?.egress?.urls).toEqual([]);
     const journalName = DurableObjectNameCodec.stringify({
       projectId: PROJECT_ID,
       path: "/integrations/github/install-789",

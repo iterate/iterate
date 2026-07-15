@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
-import { MemoryStream, deliverNewEvents, type ProcessorLike } from "../streams/test-helpers.ts";
+import {
+  MemoryStream,
+  deliverNewEvents,
+  eventsOfType,
+  makeProcessorHarness,
+} from "../streams/test-helpers.ts";
 import {
   AgentProcessor,
   buildAgentCompactionRequestBody,
@@ -54,11 +59,8 @@ function sseStream(...chunks: unknown[]): ReadableStream<Uint8Array> {
 }
 
 describe("minimal web-chat agent processors", () => {
-  it("feeds a returned script result back as input and schedules another turn", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
+  test("feeds a returned script result back as input and schedules another turn", async () => {
+    const { stream, deliver } = setup();
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
@@ -79,15 +81,14 @@ describe("minimal web-chat agent processors", () => {
     ).toBe(true);
   });
 
-  it("renders string results raw — no JSON escaping, no json fence label", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+  test("renders string results raw — no JSON escaping, no json fence label", async () => {
+    const { stream, deliver } = setup();
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", result: 'line one\nline "two"' },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await deliver();
 
     const content = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
@@ -98,7 +99,7 @@ describe("minimal web-chat agent processors", () => {
     expect(content).not.toContain("```json");
   });
 
-  it("spills an oversized script result to a workspace file and references it", async () => {
+  test("spills an oversized script result to a workspace file and references it", async () => {
     const stream = new MemoryStream();
     const writes: { content: string; path: string }[] = [];
     const agent = new AgentProcessor({
@@ -137,7 +138,7 @@ describe("minimal web-chat agent processors", () => {
     expect(content.length).toBeLessThan(32_000);
   });
 
-  it("spills a multi-megabyte result as ONE file (R2 handles the size)", async () => {
+  test("spills a multi-megabyte result as ONE file (R2 handles the size)", async () => {
     const stream = new MemoryStream();
     const writes: { content: string; path: string }[] = [];
     const agent = new AgentProcessor({
@@ -164,12 +165,8 @@ describe("minimal web-chat agent processors", () => {
     expect(files[0]!.content).toBe(result);
   });
 
-  it("falls back to inline truncation when the workspace spill fails", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("falls back to inline truncation when the workspace spill fails", async () => {
+    const { stream, deliver } = setup({
       writeWorkspaceFile: async () => {
         throw new Error("workspace unavailable");
       },
@@ -179,7 +176,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", result: { items: "x".repeat(50_000) } },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await deliver();
 
     const content = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
@@ -188,7 +185,7 @@ describe("minimal web-chat agent processors", () => {
     expect(content).not.toContain("saved in your workspace");
   });
 
-  it("does not spill small script results", async () => {
+  test("does not spill small script results", async () => {
     const stream = new MemoryStream();
     const writes: { content: string; path: string }[] = [];
     const agent = new AgentProcessor({
@@ -212,16 +209,14 @@ describe("minimal web-chat agent processors", () => {
     ).toBe(true);
   });
 
-  it("feeds a thrown script error back as input", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+  test("feeds a thrown script error back as input", async () => {
+    const { stream, deliver } = setup();
 
     await stream.append({
       type: "events.iterate.com/capability-host/script-execution-completed",
       payload: { executionId: "agent-output:7", error: "gmail exploded" },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
 
     const input = stream.events.find(
       (event) => event.type === "events.iterate.com/agent/input-added",
@@ -230,10 +225,8 @@ describe("minimal web-chat agent processors", () => {
     expect(input?.payload?.content).toContain("gmail exploded");
   });
 
-  it("ends the loop when a script returns nothing, and ignores foreign executions", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+  test("ends the loop when a script returns nothing, and ignores foreign executions", async () => {
+    const { stream, deliver } = setup();
 
     await stream.append(
       // The agent's own script returned undefined — the completion event
@@ -248,14 +241,14 @@ describe("minimal web-chat agent processors", () => {
         payload: { executionId: "slack-bang-command-9", result: { noisy: true } },
       },
     );
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
 
     expect(
       stream.events.filter((event) => event.type === "events.iterate.com/agent/input-added"),
     ).toEqual([]);
   });
 
-  it("stops the agent loop instead of scheduling past the autonomous turn limit", async () => {
+  test("stops the agent loop instead of scheduling past the autonomous turn limit", async () => {
     const stream = new MemoryStream();
     await stream.append({
       type: "events.iterate.com/stream/woken",
@@ -297,7 +290,7 @@ describe("minimal web-chat agent processors", () => {
     ).toBe(false);
   });
 
-  it("normalizes web input, requests AI by reference, and turns output into script execution", async () => {
+  test("normalizes web input, requests AI by reference, and turns output into script execution", async () => {
     const stream = new MemoryStream();
     const aiCalls: unknown[] = [];
     const agent = new AgentProcessor({
@@ -366,96 +359,61 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
-  it("extracts the whole script when a string literal embeds a markdown fence", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+  // Mirrors a prd incident (agents/web/2026-07-10t05-13-04-967z): the model
+  // planned a whole workflow as four sequential scripts in one response. Only
+  // the first used to run — silently; the model believed all four did.
+  test.for([
+    {
+      name: "rejects a multi-block response instead of executing the first block",
+      content: [
+        fencedTsBlock("return 1;"),
+        fencedTsBlock("return 2;"),
+        fencedTsBlock("return 3;"),
+      ].join("\n\n"),
+      correctiveMarker: "3 fenced code blocks",
+      mentions: ["```ts block"],
+      notMentioned: ["```js block"],
+    },
+    {
+      name: "rejects mixed-language multi-block responses without executing the TypeScript block",
+      content: [fencedTsBlock("return 1;"), "```python\nprint('planned next step')\n```"].join(
+        "\n\n",
+      ),
+      correctiveMarker: "2 fenced code blocks",
+      mentions: [],
+      notMentioned: [],
+    },
+  ])("$name", async ({ content, correctiveMarker, mentions, notMentioned }) => {
+    const { stream, deliver } = setup();
 
-    // Mirrors a prd incident (agents/web/2026-07-09t14-21-45-359z): a chat
-    // message formatted as markdown puts ``` inside the script's string
-    // literal; extraction must not cut the script at that inner fence.
-    const script = [
-      "async (itx) => {",
-      '  await itx.chat.sendMessage("Tail:\\n```text\\n" + "0123456789".slice(-4) + "\\n```");',
-      "}",
-    ].join("\n");
     await stream.append({
       type: "events.iterate.com/agent/output-added",
-      payload: { content: `Reading the saved output now.\n\n\`\`\`ts\n${script}\n\`\`\`` },
+      payload: { content },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await deliver();
 
-    const requested = stream.events.find(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
-    );
-    expect(requested?.payload?.code).toBe(script);
-  });
-
-  it("rejects a multi-block response with corrective feedback instead of executing the first block", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-
-    // Mirrors a prd incident (agents/web/2026-07-10t05-13-04-967z): the model
-    // planned a whole workflow as four sequential scripts in one response.
-    // Only the first used to run — silently; the model believed all four did.
-    const block = (body: string) => `\`\`\`ts\nasync (itx) => {\n  ${body}\n}\n\`\`\``;
-    await stream.append({
-      type: "events.iterate.com/agent/output-added",
-      payload: {
-        content: `${block("return 1;")}\n\n${block("return 2;")}\n\n${block("return 3;")}`,
-      },
-    });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
-
-    const requested = stream.events.filter(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
-    );
-    expect(requested).toHaveLength(0);
+    expect(
+      eventsOfType(stream, "events.iterate.com/capability-host/script-execution-requested"),
+    ).toHaveLength(0);
     const corrective = stream.events.find(
       (event) =>
         event.type === "events.iterate.com/agent/input-added" &&
         typeof event.payload?.content === "string" &&
-        event.payload.content.includes("3 fenced code blocks"),
+        event.payload.content.includes(correctiveMarker),
     );
     expect(corrective?.payload).toMatchObject({
-      content: expect.stringContaining("```ts block"),
       llmRequestPolicy: { behaviour: "after-current-request" },
     });
-    expect(corrective?.payload?.content).not.toContain("```js block");
+    for (const snippet of mentions) {
+      expect(corrective?.payload?.content).toContain(snippet);
+    }
+    for (const snippet of notMentioned) {
+      expect(corrective?.payload?.content).not.toContain(snippet);
+    }
   });
 
-  it("rejects mixed-language multi-block responses without executing the TypeScript block", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-
-    await stream.append({
-      type: "events.iterate.com/agent/output-added",
-      payload: {
-        content: [
-          "```ts\nasync (itx) => {\n  return 1;\n}\n```",
-          "```python\nprint('planned next step')\n```",
-        ].join("\n\n"),
-      },
-    });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
-
-    expect(
-      stream.events.filter(
-        (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
-      ),
-    ).toHaveLength(0);
-    expect(
-      stream.events.find(
-        (event) =>
-          event.type === "events.iterate.com/agent/input-added" &&
-          typeof event.payload?.content === "string" &&
-          event.payload.content.includes("2 fenced code blocks"),
-      )?.payload,
-    ).toMatchObject({ llmRequestPolicy: { behaviour: "after-current-request" } });
-  });
-
-  it("rejects a fenced block that does not start with async, with corrective feedback", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+  test("rejects a fenced block that does not start with async, with corrective feedback", async () => {
+    const { stream, deliver } = setup();
 
     // Models habitually open code with a comment line; the block used to die
     // in total silence (kind "none"), which reads as the platform hanging.
@@ -465,7 +423,7 @@ describe("minimal web-chat agent processors", () => {
         content: "```ts\n// Plan: greet the user first\nasync (itx) => {\n  return 1;\n}\n```",
       },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await deliver();
 
     const requested = stream.events.filter(
       (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
@@ -488,7 +446,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/agent/output-added",
       payload: { content: "```python\nprint('hello')\n```" },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await deliver();
     expect(
       stream.events.filter(
         (event) =>
@@ -503,7 +461,7 @@ describe("minimal web-chat agent processors", () => {
       type: "events.iterate.com/agent/output-added",
       payload: { content: "Just thinking out loud, nothing to run." },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map() });
+    await deliver();
     const feedbackEvents = stream.events.filter(
       (event) =>
         event.type === "events.iterate.com/agent/input-added" &&
@@ -513,11 +471,8 @@ describe("minimal web-chat agent processors", () => {
     expect(feedbackEvents).toHaveLength(2);
   });
 
-  it("treats MCP-origin messages like any other inbound user message", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
-    const deliver = (processor: ProcessorLike) => deliverNewEvents({ processor, stream, cursors });
+  test("treats MCP-origin messages like any other inbound user message", async () => {
+    const { stream, deliver } = setup();
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -526,8 +481,8 @@ describe("minimal web-chat agent processors", () => {
         from: { kind: "user", origin: "mcp" },
       },
     });
-    await deliver(agent);
-    await deliver(agent);
+    await deliver();
+    await deliver();
 
     // The message folds straight into history (no input-added reflection).
     expect(stream.events.map((event) => event.type)).toEqual([
@@ -540,9 +495,8 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
-  it("coalesces multiple triggering inputs delivered in one batch into one LLM request", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+  test("coalesces multiple triggering inputs delivered in one batch into one LLM request", async () => {
+    const { stream, deliver } = setup();
 
     await stream.append(
       {
@@ -560,7 +514,7 @@ describe("minimal web-chat agent processors", () => {
         },
       },
     );
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await deliver();
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -569,9 +523,8 @@ describe("minimal web-chat agent processors", () => {
     expect(scheduled[0]!.payload).toMatchObject({ requestId: "llm-request:gen-0" });
   });
 
-  it("coalesces triggering inputs even when delivery chunks them across batches", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+  test("coalesces triggering inputs even when delivery chunks them across batches", async () => {
+    const { agent, stream } = setup();
 
     await stream.append(
       {
@@ -605,10 +558,8 @@ describe("minimal web-chat agent processors", () => {
     expect(scheduled[0]!.payload).toMatchObject({ requestId: "llm-request:gen-0" });
   });
 
-  it("coalesces multiple MCP-origin user messages replayed through the cold session backlog", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+  test("coalesces multiple MCP-origin user messages replayed through the cold session backlog", async () => {
+    const { stream, deliver } = setup();
 
     await stream.append(
       {
@@ -623,8 +574,8 @@ describe("minimal web-chat agent processors", () => {
 
     // Both messages fold straight into history in one batch; the settle pass
     // derives exactly one scheduled request for the pair.
-    await deliverNewEvents({ processor: agent, stream, cursors });
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
+    await deliver();
 
     const scheduled = stream.events.filter(
       (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
@@ -633,7 +584,7 @@ describe("minimal web-chat agent processors", () => {
     expect(scheduled[0]!.payload).toMatchObject({ requestId: "llm-request:gen-0" });
   });
 
-  it("does not fire a second LLM call when a second message arrives during the first request", async () => {
+  test("does not fire a second LLM call when a second message arrives during the first request", async () => {
     const stream = new MemoryStream();
     const aiCalls: unknown[] = [];
     let resolveFirstCall!: () => void;
@@ -695,7 +646,7 @@ describe("minimal web-chat agent processors", () => {
     );
   });
 
-  it("recovers a stuck scheduled request after DO restart (lost debounce timer)", async () => {
+  test("recovers a stuck scheduled request after DO restart (lost debounce timer)", async () => {
     const stream = new MemoryStream();
     // Simulate events already committed before restart
     await stream.append(
@@ -737,12 +688,8 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
-  it("treats Workers AI terminal stream chunks without choices as successful completion", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("treats Workers AI terminal stream chunks without choices as successful completion", async () => {
+    const { agent, stream } = setup({
       ai: {
         async run() {
           return sseStream(
@@ -813,7 +760,7 @@ describe("minimal web-chat agent processors", () => {
     });
   });
 
-  it("fails LLM requests politely when no AI binding is configured", async () => {
+  test("fails LLM requests politely when no AI binding is configured", async () => {
     const stream = new MemoryStream();
     const agent = new AgentProcessor({
       stream,
@@ -839,20 +786,14 @@ describe("minimal web-chat agent processors", () => {
     );
   });
 
-  it("turns a failed LLM request into an error input and schedules a retry", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("turns a failed LLM request into an error input and schedules a retry", async () => {
+    const { stream, deliver } = setup({
       ai: {
         async run() {
           throw new Error("provider exploded");
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     await stream.append({
       type: "events.iterate.com/agent/input-added",
@@ -894,7 +835,7 @@ describe("minimal web-chat agent processors", () => {
     expect(reduceAgentEvents(stream.events)).toMatchObject({ autonomousTurnCount: 1 });
   });
 
-  it("stops auto-retrying after three consecutive failures, with backoff between retries", async () => {
+  test("stops auto-retrying after three consecutive failures, with backoff between retries", async () => {
     const stream = new MemoryStream();
     let boom = 0;
     const agent = new AgentProcessor({
@@ -977,7 +918,7 @@ describe("minimal web-chat agent processors", () => {
     expect(scheduled.map((event) => event.payload?.debounceMs)).toEqual([250, 258, 266]);
   });
 
-  it("rate-limited failures keep retrying past the generic three-strike cap", async () => {
+  test("rate-limited failures keep retrying past the generic three-strike cap", async () => {
     const stream = new MemoryStream();
     let attempts = 0;
     const agent = new AgentProcessor({
@@ -1043,16 +984,12 @@ describe("minimal web-chat agent processors", () => {
     expect(attempts).toBe(7);
   });
 
-  it("repeated rate-limited failures jump the retry backoff to the ladder cap", async () => {
+  test("repeated rate-limited failures jump the retry backoff to the ladder cap", async () => {
     // The quota refills on a time window: the first retry stays cheap (the
     // failure may have been the tail of a hot minute), but once it confirms
     // the window is still hot, the next retry waits the full cap (base × 6)
     // instead of burning the last attempt inside the same minute.
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+    const { stream, deliver } = setup({
       ai: {
         async run() {
           throw new Error("3021: rate limiting: inference request per min rate reached");
@@ -1060,7 +997,6 @@ describe("minimal web-chat agent processors", () => {
       },
       llmRetryBackoffBaseMs: 8,
     });
-    const cursors = new Map<object, number>();
 
     await stream.append({
       type: "events.iterate.com/agent/input-added",
@@ -1072,7 +1008,7 @@ describe("minimal web-chat agent processors", () => {
 
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
-      await deliverNewEvents({ processor: agent, stream, cursors });
+      await deliver();
       const stopped = stream.events.some(
         (event) =>
           event.type === "events.iterate.com/agent/input-added" &&
@@ -1095,7 +1031,7 @@ describe("minimal web-chat agent processors", () => {
     ]);
   });
 
-  it("resets the consecutive failure counter after a successful request", async () => {
+  test("resets the consecutive failure counter after a successful request", async () => {
     const failureTurn = (base: number, result: unknown): StreamEventInput[] => [
       {
         type: "events.iterate.com/agent/llm-request-scheduled",
@@ -1125,7 +1061,7 @@ describe("minimal web-chat agent processors", () => {
     expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 0 });
   });
 
-  it("resets the consecutive failure counter on a fresh user message, not on loop inputs", async () => {
+  test("resets the consecutive failure counter on a fresh user message, not on loop inputs", async () => {
     // Regression for the 2026-07-09 prd Telegram outage tail: a provider blip
     // burned the retry budget, and the user's NEXT message ("hi?") inherited
     // the stale counter — one attempt, then "retries stopped". A user trigger
@@ -1171,7 +1107,7 @@ describe("minimal web-chat agent processors", () => {
     expect(reduceAgentEvents(stream.events)).toMatchObject({ consecutiveLlmFailures: 0 });
   });
 
-  it("cancels in-flight requests a dead incarnation left behind (recovery sweep)", async () => {
+  test("cancels in-flight requests a dead incarnation left behind (recovery sweep)", async () => {
     // Regression for the 2026-07-07 prd email-thread wedge: an incarnation
     // accepted a request (runInBackground advanced the checkpoint), got
     // evicted before completing it, and the agent queued every later input
@@ -1246,20 +1182,14 @@ describe("minimal web-chat agent processors", () => {
 });
 
 describe("interrupt and stray-request hygiene", () => {
-  it("an interrupt during the debounce window disarms the timer; the cancelled request never fires", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("an interrupt during the debounce window disarms the timer; the cancelled request never fires", async () => {
+    const { stream, deliver } = setup({
       ai: {
         async run() {
           return { response: "answered the second message" };
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     await stream.append({
       type: "events.iterate.com/agent/input-added",
@@ -1305,7 +1235,7 @@ describe("interrupt and stray-request hygiene", () => {
     });
   });
 
-  it("an interrupt mid-stream feeds the response so far back as model-visible input", async () => {
+  test("an interrupt mid-stream feeds the response so far back as model-visible input", async () => {
     const encoder = new TextEncoder();
     let sse!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({
@@ -1313,19 +1243,13 @@ describe("interrupt and stray-request hygiene", () => {
         sse = controller;
       },
     });
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+    const { stream, deliver } = setup({
       ai: {
         async run() {
           return body;
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     await stream.append(...agentRequestEvents("tell me a long story"));
     await deliver(); // reconcile drives the requested obligation; the attempt starts draining
@@ -1383,7 +1307,7 @@ describe("interrupt and stray-request hygiene", () => {
     ).toBe(false);
   });
 
-  it("settles a stray non-current requested obligation without dialing the AI binding", async () => {
+  test("settles a stray non-current requested obligation without dialing the AI binding", async () => {
     const stream = new MemoryStream();
     let dials = 0;
     const agent = new AgentProcessor({
@@ -1445,7 +1369,7 @@ describe("refold safety", () => {
   // processor whose process* hooks touch a vendor must prove that replaying a
   // SETTLED journal into a fresh instance re-executes nothing. This is what
   // catches consumed-idempotency-key and staleness-guard regressions.
-  it("refold: replaying the settled journal dials no AI and appends nothing new", async () => {
+  test("refold: replaying the settled journal dials no AI and appends nothing new", async () => {
     // Live flow to a settled turn: user message → scheduled → requested →
     // started → output → completed, folded by a live processor as it goes.
     const stream = new MemoryStream();
@@ -1517,7 +1441,7 @@ describe("file attachments in the LLM request", () => {
     url: "https://iterate-files--demo.iterate.app/agents/web/demo/abc-cat.png?exp=1&sig=x",
   };
 
-  it("carries input-added files through to the provider-facing history", async () => {
+  test("carries input-added files through to the provider-facing history", async () => {
     const stream = new MemoryStream();
     await stream.append(
       {
@@ -1550,7 +1474,7 @@ describe("file attachments in the LLM request", () => {
     });
   });
 
-  it("reflects sent-message attachments back into model-visible history", async () => {
+  test("reflects sent-message attachments back into model-visible history", async () => {
     const stream = new MemoryStream();
     const processor = new AgentProcessor({ stream, path: stream.path, projectId: null });
     await stream.append({
@@ -1574,7 +1498,7 @@ describe("file attachments in the LLM request", () => {
     expect(userMessage?.files).toEqual([attachment]);
   });
 
-  it("flattens attachments to actionable hint lines for text-only models", () => {
+  test("flattens attachments to actionable hint lines for text-only models", () => {
     const flattened = flattenMessageToText({
       role: "user",
       content: "look at this",
@@ -1586,7 +1510,7 @@ describe("file attachments in the LLM request", () => {
     expect(flattenMessageToText({ role: "user", content: "no files" })).toBe("no files");
   });
 
-  it("remints attachment URLs immediately before a provider request", async () => {
+  test("remints attachment URLs immediately before a provider request", async () => {
     const freshUrl =
       "https://iterate-files--demo.iterate.app/agents/web/demo/abc-cat.png?exp=900&ver=v2&sig=fresh";
     const resolveModelFileUrl = vi.fn(async () => freshUrl);
@@ -1612,7 +1536,7 @@ describe("inter-agent mail", () => {
     path: "/agents/main/researcher",
   });
 
-  it("folds agent mail into history with the sender named and the reply door spelled out, as an autonomous trigger", () => {
+  test("folds agent mail into history with the sender named and the reply door spelled out, as an autonomous trigger", () => {
     const state = reduceAgentEvents([
       mail({ content: "status?", from: { kind: "agent", path: "/agents/main" } }, 1),
     ]);
@@ -1630,7 +1554,7 @@ describe("inter-agent mail", () => {
     expect(state.pendingTriggerOffset).toBe(1);
   });
 
-  it("human messages refill the autonomous budget", () => {
+  test("human messages refill the autonomous budget", () => {
     const state = reduceAgentEvents([
       mail({ content: "hi", from: { kind: "user", origin: "web" } }, 1),
     ]);
@@ -1639,7 +1563,7 @@ describe("inter-agent mail", () => {
     expect(state.autonomousTurnCount).toBe(0);
   });
 
-  it("dont-trigger-request records the message without waking the loop", () => {
+  test("dont-trigger-request records the message without waking the loop", () => {
     const state = reduceAgentEvents([
       mail(
         {
@@ -1656,12 +1580,8 @@ describe("inter-agent mail", () => {
 });
 
 describe("token usage and history reset", () => {
-  it("reports normalized usage alongside a successful completion, and the fold tallies it", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("reports normalized usage alongside a successful completion, and the fold tallies it", async () => {
+    const { stream, deliver } = setup({
       ai: {
         async run() {
           return {
@@ -1677,8 +1597,6 @@ describe("token usage and history reset", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -1723,7 +1641,7 @@ describe("token usage and history reset", () => {
     });
   });
 
-  it("skips the report when the vendor sent no parseable usage, and on failures", async () => {
+  test("skips the report when the vendor sent no parseable usage, and on failures", async () => {
     const stream = new MemoryStream();
     let fail = false;
     const agent = new AgentProcessor({
@@ -1776,7 +1694,7 @@ describe("token usage and history reset", () => {
     ).toBe(false);
   });
 
-  it("normalizes both vendor usage dialects and rejects shapes without totals", () => {
+  test("normalizes both vendor usage dialects and rejects shapes without totals", () => {
     // OpenAI Responses dialect.
     expect(
       normalizeLlmUsage({
@@ -1800,7 +1718,7 @@ describe("token usage and history reset", () => {
     expect(normalizeLlmUsage({ total_tokens: 5000 })).toBeUndefined();
   });
 
-  it("longest-prefix matches context windows, with a conservative default", () => {
+  test("longest-prefix matches context windows, with a conservative default", () => {
     expect(contextWindowTokens("openai/gpt-5.6-sol")).toBe(272_000);
     expect(contextWindowTokens("openai/gpt-5.6-sol-2026-07-13")).toBe(272_000);
     expect(contextWindowTokens("openai/gpt-5.5")).toBe(272_000);
@@ -1808,7 +1726,7 @@ describe("token usage and history reset", () => {
     expect(contextWindowTokens("@cf/qwen/qwen3-coder-plus")).toBe(128_000);
   });
 
-  it("history-reset replaces history and system prompt wholesale; the next request body shrinks", () => {
+  test("history-reset replaces history and system prompt wholesale; the next request body shrinks", () => {
     const event = (input: { type: string; payload: Record<string, unknown> }, offset: number) => ({
       createdAt: "2026-07-09T00:00:00.000Z",
       path: "/agents/main",
@@ -1875,12 +1793,8 @@ describe("token usage and history reset", () => {
     ]);
   });
 
-  it("a context-length vendor error turns into a completed failure the reset can then clear", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("a context-length vendor error turns into a completed failure the reset can then clear", async () => {
+    const { stream, deliver } = setup({
       llmRetryBackoffBaseMs: 1,
       ai: {
         async run(_model, body) {
@@ -1892,8 +1806,6 @@ describe("token usage and history reset", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
-    const deliver = () => deliverNewEvents({ processor: agent, stream, cursors });
 
     await stream.append({
       type: "events.iterate.com/agents/message-received",
@@ -1957,7 +1869,7 @@ describe("token usage and history reset", () => {
     ).toHaveLength(1);
   });
 
-  it("an over-threshold usage report triggers compaction: summary via the agent's model, history replaced", async () => {
+  test("an over-threshold usage report triggers compaction: summary via the agent's model, history replaced", async () => {
     const stream = new MemoryStream();
     const aiCalls: { model: string; messages: { role: string; content: string }[] }[] = [];
     const makeAgent = () =>
@@ -2063,7 +1975,7 @@ describe("token usage and history reset", () => {
     ).toHaveLength(1);
   });
 
-  it("buildAgentCompactionRequestBody extends the conversation verbatim with the instruction last", () => {
+  test("buildAgentCompactionRequestBody extends the conversation verbatim with the instruction last", () => {
     const state = {
       systemPrompt: "You are terse.",
       history: [
@@ -2084,7 +1996,7 @@ describe("token usage and history reset", () => {
     });
   });
 
-  it("compaction rides the BYOK transport with the conversation's prompt cache key and journals the cache split", async () => {
+  test("compaction rides the BYOK transport with the conversation's prompt cache key and journals the cache split", async () => {
     const stream = new MemoryStream();
     const encoder = new TextEncoder();
     const sse = (frames: unknown[]) =>
@@ -2184,12 +2096,8 @@ describe("token usage and history reset", () => {
     );
   });
 
-  it("an under-threshold usage report does not compact", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("an under-threshold usage report does not compact", async () => {
+    const { stream, deliver } = setup({
       ai: {
         async run() {
           throw new Error("no AI call expected");
@@ -2206,7 +2114,7 @@ describe("token usage and history reset", () => {
         outputTokens: 200,
       },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await deliver();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(
       stream.events.some((event) => event.type === "events.iterate.com/agent/history-reset"),
@@ -2224,23 +2132,18 @@ describe("busy/idle status announcements", () => {
       .filter((event) => event.type === "events.iterate.com/agent/status-changed")
       .map((event) => event.payload);
 
-  it("announces busy immediately when a trigger queues a turn", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
+  test("announces busy immediately when a trigger queues a turn", async () => {
+    const { stream, deliver } = setup();
     const [received] = await stream.append(userMessage());
-    await deliverNewEvents({ processor: agent, stream, cursors: new Map<object, number>() });
+    await deliver();
 
     expect(announcements(stream)).toEqual([
       { busy: true, phase: "llm", sinceOffset: received!.offset },
     ]);
   });
 
-  it("announces a debounced idle once the turn settles, then goes quiet", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("announces a debounced idle once the turn settles, then goes quiet", async () => {
+    const { stream, deliver } = setup({
       statusIdleDebounceMs: 0,
       ai: {
         async run() {
@@ -2248,11 +2151,10 @@ describe("busy/idle status announcements", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
     await stream.append(userMessage());
     await vi.waitFor(
       async () => {
-        await deliverNewEvents({ processor: agent, stream, cursors });
+        await deliver();
         expect(announcements(stream)).toEqual([
           { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
           { busy: false, sinceOffset: expect.any(Number) },
@@ -2263,18 +2165,14 @@ describe("busy/idle status announcements", () => {
 
     // The announcement loop terminates: absorbing the idle announcement into
     // the fold announces nothing further.
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     const journalLength = stream.events.length;
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     expect(stream.events.length).toBe(journalLength);
   });
 
-  it("new work inside the idle debounce window leaves the blip out of the journal", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("new work inside the idle debounce window leaves the blip out of the journal", async () => {
+    const { stream, deliver } = setup({
       statusIdleDebounceMs: 60_000,
       ai: {
         async run() {
@@ -2282,11 +2180,10 @@ describe("busy/idle status announcements", () => {
         },
       },
     });
-    const cursors = new Map<object, number>();
     await stream.append(userMessage());
     await vi.waitFor(
       async () => {
-        await deliverNewEvents({ processor: agent, stream, cursors });
+        await deliver();
         expect(
           stream.events.some(
             (event) => event.type === "events.iterate.com/agent/llm-request-completed",
@@ -2296,7 +2193,7 @@ describe("busy/idle status announcements", () => {
       { timeout: 5_000 },
     );
     // Absorb the completion: the idle flip is folded and its debounce armed.
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     expect(announcements(stream)).toEqual([
       { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
     ]);
@@ -2307,7 +2204,7 @@ describe("busy/idle status announcements", () => {
     // from the superseded timer (had it raced out) would be rejected by
     // every consuming fold's sinceOffset guard.
     await stream.append(userMessage());
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     const busyAnnouncements = announcements(stream) as { busy: boolean; sinceOffset: number }[];
     expect(busyAnnouncements).toEqual([
       { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
@@ -2316,7 +2213,7 @@ describe("busy/idle status announcements", () => {
     expect(busyAnnouncements[1]!.sinceOffset).toBeGreaterThan(busyAnnouncements[0]!.sinceOffset);
   });
 
-  it("a revived incarnation announces a past-due idle flip immediately", async () => {
+  test("a revived incarnation announces a past-due idle flip immediately", async () => {
     // A live run settles a turn, but dies before its idle debounce fires.
     const stream = new MemoryStream();
     const live = new AgentProcessor({
@@ -2369,7 +2266,7 @@ describe("busy/idle status announcements", () => {
     expect(announcements(stream).at(-1)).toEqual({ busy: false, sinceOffset: expect.any(Number) });
   });
 
-  it("a replayed settled turn with no prior announcements stays silent", async () => {
+  test("a replayed settled turn with no prior announcements stays silent", async () => {
     // A journal that folds trigger-through-completion to idle in ONE at-head
     // page with nothing announced yet (a pre-announcement journal refolded
     // after a contract deploy, or a synthetically seeded lifecycle) announces
@@ -2409,7 +2306,7 @@ describe("busy/idle status announcements", () => {
     expect(deriveAgentBusy(agent.state)).toBe(false);
   });
 
-  it("a replayed settled turn with only authored patches journaled stays silent too", async () => {
+  test("a replayed settled turn with only authored patches journaled stays silent too", async () => {
     // Same replay shape as above, but the journal carries an authored status
     // patch — announcedStatus EXISTS without busy ever journaled. Idle is due
     // only when a busy announcement stands, so this still announces nothing.
@@ -2447,15 +2344,13 @@ describe("busy/idle status announcements", () => {
     expect(agent.state.announcedStatus).toEqual({ title: "Lisbon trip" });
   });
 
-  it("folds agent-authored patches into the status record without announcing anything", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+  test("folds agent-authored patches into the status record without announcing anything", async () => {
+    const { agent, stream, deliver } = setup();
     await stream.append({
       type: "events.iterate.com/agent/status-changed",
       payload: { title: "Lisbon trip", note: "Planning a trip", shortStatus: "comparing flights" },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     expect(agent.state.announcedStatus).toEqual({
       title: "Lisbon trip",
       note: "Planning a trip",
@@ -2463,56 +2358,49 @@ describe("busy/idle status announcements", () => {
     });
     // Authored fields alone announce nothing and trigger no turn.
     const journalLength = stream.events.length;
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     expect(stream.events.length).toBe(journalLength);
 
     // The platform's busy announcement then merges INTO the same record.
     await stream.append(userMessage());
-    await deliverNewEvents({ processor: agent, stream, cursors });
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
+    await deliver();
     expect(agent.state.announcedStatus).toMatchObject({ busy: true, title: "Lisbon trip" });
   });
 
-  it("announces the phase hand-off when a turn starts a script", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({
-      stream,
-      path: stream.path,
-      projectId: null,
+  test("announces the phase hand-off when a turn starts a script", async () => {
+    const { stream, deliver } = setup({
       statusIdleDebounceMs: 60_000,
     });
-    const cursors = new Map<object, number>();
     await stream.append(userMessage());
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     // The turn hands off to a script: busy stays true but the phase flips,
     // so surfaces switch from "making an LLM request" to "running a script".
     const [script] = await stream.append({
       type: "events.iterate.com/capability-host/script-execution-requested",
       payload: { code: "async () => {}", executionId: "script-1" },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors });
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
+    await deliver();
     expect(announcements(stream)).toEqual([
       { busy: true, phase: "llm", sinceOffset: expect.any(Number) },
       { busy: true, phase: "script", sinceOffset: script!.offset },
     ]);
   });
 
-  it("clears an authored blocked flag with the next busy announcement", async () => {
-    const stream = new MemoryStream();
-    const agent = new AgentProcessor({ stream, path: stream.path, projectId: null });
-    const cursors = new Map<object, number>();
+  test("clears an authored blocked flag with the next busy announcement", async () => {
+    const { agent, stream, deliver } = setup();
     // The agent ended a previous turn blocked on the human.
     await stream.append({
       type: "events.iterate.com/agent/status-changed",
       payload: { blocked: true, shortStatus: "waiting for the Acme API key" },
     });
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     expect(agent.state.announcedStatus).toMatchObject({ blocked: true });
 
     // The human replies: the busy announcement carries the unblock.
     await stream.append(userMessage());
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     const announced = announcements(stream) as { blocked?: boolean }[];
     expect(announced.at(-1)).toEqual({
       busy: true,
@@ -2520,11 +2408,11 @@ describe("busy/idle status announcements", () => {
       sinceOffset: expect.any(Number),
       blocked: false,
     });
-    await deliverNewEvents({ processor: agent, stream, cursors });
+    await deliver();
     expect(agent.state.announcedStatus).toMatchObject({ blocked: false, busy: true });
   });
 
-  it("the fold ignores a stale idle announcement that lost its race", () => {
+  test("the fold ignores a stale idle announcement that lost its race", () => {
     const statusEvent = (payload: Record<string, unknown>, offset: number) => ({
       type: "events.iterate.com/agent/status-changed",
       payload,
@@ -2541,7 +2429,7 @@ describe("busy/idle status announcements", () => {
     expect(state.announcedStatus).toEqual({ busy: true, sinceOffset: 4 });
   });
 
-  it("derives script-turn hand-offs as busy, with only one-append idle gaps", () => {
+  test("derives script-turn hand-offs as busy, with only one-append idle gaps", () => {
     const at = (offset: number, type: string, payload: Record<string, unknown>) => ({
       type,
       payload,
@@ -2604,3 +2492,24 @@ describe("busy/idle status announcements", () => {
     expect(reduceAgentEvents(nextTurn).status).toMatchObject({ busy: true, sinceOffset: 7 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function fencedTsBlock(body: string) {
+  return `\`\`\`ts\nasync (itx) => {\n  ${body}\n}\n\`\`\``;
+}
+
+/** The standard agent preamble over the shared harness; `deps` merge into the
+ * AgentProcessor constructor. Tests whose deps must capture the stream keep
+ * explicit construction. */
+function setup(
+  deps?: Partial<Omit<ConstructorParameters<typeof AgentProcessor>[0], "path" | "projectId">>,
+) {
+  const harness = makeProcessorHarness({
+    build: ({ stream }) =>
+      new AgentProcessor({ stream, path: stream.path, projectId: null, ...deps }),
+  });
+  return { ...harness, agent: harness.processor };
+}
