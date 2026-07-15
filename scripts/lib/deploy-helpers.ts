@@ -253,6 +253,58 @@ export async function ensureD1(
 }
 
 /**
+ * The disposable per-slot R2 corpus (the itx.search `-search-index` bucket):
+ * pure derived state the worker re-mirrors, which on a churned preview slot
+ * grows to thousands of objects. Erasing it object-by-object is the single
+ * biggest source of the cleanup 429 storm that used to leak preview leases
+ * (2026-07-15: 1521 objects, rate-limited mid-delete). Preview slots let R2
+ * lifecycle expire it server-side — zero control-plane calls — and skip the
+ * object walk in erase-data. NOT applied to prd, whose corpus must persist.
+ */
+export const PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY = {
+  ruleId: "expire-preview-search-index",
+  ttlSeconds: 24 * 60 * 60,
+} as const;
+
+/**
+ * Pure builder for a "delete every object `ttlSeconds` after it was written"
+ * R2 lifecycle policy. An empty prefix scopes the rule to all objects/uploads
+ * (per the R2 lifecycle API), and the Age transition takes seconds — matching
+ * the sandbox-backups rule ensure-resources already puts on its own bucket.
+ */
+export function buildR2ObjectExpiryLifecycleRules(input: { ruleId: string; ttlSeconds: number }) {
+  return [
+    {
+      id: input.ruleId,
+      enabled: true,
+      conditions: { prefix: "" },
+      deleteObjectsTransition: { condition: { type: "Age", maxAge: input.ttlSeconds } },
+    },
+  ];
+}
+
+/**
+ * Put a single "expire every object after `ttlSeconds`" lifecycle rule on an
+ * R2 bucket, so Cloudflare garbage-collects the objects server-side instead of
+ * erase-data walking the bucket with one rate-limited DELETE per object. PUT
+ * replaces the bucket's lifecycle config wholesale — fine while this is the
+ * only rule the target buckets carry.
+ */
+export async function ensureR2ObjectExpiryLifecycle(
+  ctx: CfContext,
+  bucketName: string,
+  input: { ruleId: string; ttlSeconds: number },
+): Promise<void> {
+  await ctx.cf(`/r2/buckets/${bucketName}/lifecycle`, {
+    method: "PUT",
+    body: JSON.stringify({ rules: buildR2ObjectExpiryLifecycleRules(input) }),
+  });
+  console.log(
+    `R2 bucket ${bucketName} lifecycle: all objects expire ${input.ttlSeconds}s after write (${input.ruleId})`,
+  );
+}
+
+/**
  * Create-only DNS ensure for a Worker-routed hostname: worker zone routes
  * only fire when a proxied DNS record answers the hostname, so create a
  * proxied originless AAAA (100::) when nothing exists. Any existing record

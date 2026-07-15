@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertWorkerSecretAbsent, smokeResponse } from "./deploy-helpers.ts";
+import {
+  assertWorkerSecretAbsent,
+  buildR2ObjectExpiryLifecycleRules,
+  ensureR2ObjectExpiryLifecycle,
+  PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  smokeResponse,
+} from "./deploy-helpers.ts";
 import { CloudflareApiError } from "./env-context.ts";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -72,5 +78,46 @@ describe("smokeResponse", () => {
     ).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("R2 object-expiry lifecycle", () => {
+  it("builds one Age rule scoped to every object in the bucket", () => {
+    const rules = buildR2ObjectExpiryLifecycleRules({ ruleId: "r", ttlSeconds: 3600 });
+
+    expect(rules).toEqual([
+      {
+        id: "r",
+        enabled: true,
+        // Empty prefix = all objects; deleting after an Age in seconds.
+        conditions: { prefix: "" },
+        deleteObjectsTransition: { condition: { type: "Age", maxAge: 3600 } },
+      },
+    ]);
+  });
+
+  it("keeps the preview search-index expiry a stable, short (1 day) TTL", () => {
+    // Guards against an accidental bump: erase-data relies on this expiring
+    // the corpus promptly so it can skip the per-object delete on previews.
+    expect(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ttlSeconds).toBe(24 * 60 * 60);
+    expect(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ruleId).toBe("expire-preview-search-index");
+  });
+
+  it("PUTs the rule to the bucket's lifecycle endpoint", async () => {
+    const cf = vi.fn(async () => ({}));
+
+    await ensureR2ObjectExpiryLifecycle(
+      { cf, cfV4: vi.fn() } as never,
+      "os-preview-7-search-index",
+      PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+    );
+
+    expect(cf).toHaveBeenCalledOnce();
+    const [path, init] = cf.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe("/r2/buckets/os-preview-7-search-index/lifecycle");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({
+      rules: buildR2ObjectExpiryLifecycleRules(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY),
+    });
   });
 });

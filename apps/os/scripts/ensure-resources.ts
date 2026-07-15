@@ -17,7 +17,12 @@
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs } from "../../../envs.ts";
-import { ensureD1, ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
+import {
+  ensureD1,
+  ensureProxiedDnsRecord,
+  ensureR2ObjectExpiryLifecycle,
+  PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+} from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 import { emailDomainForDeployment } from "../src/domains/email/utils.ts";
@@ -156,6 +161,17 @@ export default async function ensureResources(
   // namespace, each indexing only that project's `{projectId}/**` slice.
   await ensureR2Bucket(cf, `${env.osWorkerName}-search-index`);
   await ensureAiSearchNamespace(cf, { namespaceName: env.osWorkerName });
+  // Preview slots: the search-index corpus is disposable and churns to
+  // thousands of objects per lease. Expire it server-side so erase-data can
+  // skip the per-object DELETE storm (see erase-data.ts). Prd keeps its corpus
+  // — no expiry rule there.
+  if (ctx.name.startsWith("preview")) {
+    await ensureR2ObjectExpiryLifecycle(
+      ctx,
+      `${env.osWorkerName}-search-index`,
+      PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+    );
+  }
 
   // ---- Queues: deployment event queue + Cloudflare Artifacts subscriptions -
   // One general-purpose queue per OS worker. Artifacts event subscriptions are

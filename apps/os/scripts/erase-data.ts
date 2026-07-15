@@ -34,7 +34,11 @@
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { envs } from "../../../envs.ts";
-import { wipeD1Tables } from "../../../scripts/lib/deploy-helpers.ts";
+import {
+  ensureR2ObjectExpiryLifecycle,
+  PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+  wipeD1Tables,
+} from "../../../scripts/lib/deploy-helpers.ts";
 import { resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { COMPATIBILITY_DATE } from "./generate-wrangler-config.ts";
@@ -171,7 +175,40 @@ export default async function eraseData(options: {
   // user data under this script's contract. (The sandboxes bucket is left
   // alone deliberately — container teardown is broken upstream, see the DO
   // section, and its backups expire on a lifecycle rule.)
-  for (const bucket of [`${env.osWorkerName}-search-index`, `${env.osWorkerName}-files`]) {
+  //
+  // Preview slots take the search-index bucket off this hot path: it's pure
+  // derived state that churns to thousands of objects, and walking it with one
+  // DELETE per object is the biggest source of the cleanup 429 storm that
+  // leaked leases (2026-07-15: 1521 objects). Instead we guarantee its
+  // server-side expiry rule and let Cloudflare GC the objects — releasing the
+  // slot immediately. AI Search above has no equivalent (namespace-delete
+  // needs an empty namespace), so its per-instance sweep stays — but with R2
+  // off the path it no longer competes for the ~1200 req/5min budget. If the
+  // rule can't be ensured we fall back to walking the bucket as before.
+  const searchIndexBucket = `${env.osWorkerName}-search-index`;
+  const filesBucket = `${env.osWorkerName}-files`;
+  let searchIndexHandledByLifecycle = false;
+  if (ctx.name.startsWith("preview")) {
+    try {
+      await ensureR2ObjectExpiryLifecycle(
+        ctx,
+        searchIndexBucket,
+        PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+      );
+      searchIndexHandledByLifecycle = true;
+      console.log(
+        `R2 ${searchIndexBucket}: left to ${PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ttlSeconds}s lifecycle expiry, not walked`,
+      );
+    } catch (error) {
+      console.warn(
+        `R2 ${searchIndexBucket} lifecycle ensure failed — falling back to walking it: ${String(error).slice(0, 200)}`,
+      );
+    }
+  }
+  const bucketsToWalk = searchIndexHandledByLifecycle
+    ? [filesBucket]
+    : [searchIndexBucket, filesBucket];
+  for (const bucket of bucketsToWalk) {
     // Per-bucket budget: a churn-refilled search-index must not starve the
     // files pass (Bugbot). 90s each + 90s instances stays well inside the
     // cleanup job's 10-minute ceiling alongside the DO/D1/KV work.
