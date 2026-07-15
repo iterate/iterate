@@ -25,7 +25,6 @@ export function AppProviders<TConfig>(props: {
   const proxyUrl = props.posthog?.proxyUrl ?? "/posthog-proxy";
   const uiHost = props.posthog?.uiHost;
   const appStage = props.posthog?.appStage;
-  const bootstrapFromUrl = props.posthog?.bootstrapFromUrl ?? true;
   const sessionRecording = props.posthog?.sessionRecording;
   const posthogEnabled = props.posthog?.enabled ?? shouldEnablePosthog(posthogApiKey);
 
@@ -35,7 +34,6 @@ export function AppProviders<TConfig>(props: {
       proxyUrl,
       uiHost,
       appStage,
-      bootstrapFromUrl,
       sessionRecording,
     });
   }
