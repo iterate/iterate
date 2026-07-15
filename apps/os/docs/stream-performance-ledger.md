@@ -3833,3 +3833,80 @@ complexity for an unproven cross-object durable protocol. The current
 recommendation is to ship the callback simplification and accepted local
 optimizations, preserve pull cursors as the next architectural prototype, and
 keep synchronous SQLite.
+
+## 2026-07-15: In-Flight Follower Append Coalescing Rejected
+
+The actor-resident append queue above paid its singleton tax by delaying every
+leader. A narrower experiment moved the queue to the fronting Worker. It sent
+the first acknowledgement-only append to the Stream Durable Object
+immediately, observed that RPC, and flattened only ordinary followers arriving
+while it remained in flight. Result-bearing appends, stream control events,
+optimistic-offset appends, reads, subscriptions, runtime inspection,
+cross-post receipt, and kill all sealed the current append generation and ran
+as ordered barriers. No timer formed the batch: the real Worker-to-Durable
+Object network/RPC promise was the window, so frozen isolate clocks could not
+strand or shorten it.
+
+The prototype is preserved outside the shipping branch on
+`experiment/stream-follower-batch` at commit `70dee5eb3`. It adds 207
+production lines (and removes 17), plus 325 test/benchmark lines. Seven focused
+generation/order/failure tests and the OS typecheck pass. The first append
+returns the exact transport promise; followers are bounded to 128 calls or
+1,024 events, and a leader rejection still drains later work.
+
+Exact current head `e3d13a562414190316bd9337becc3cb3ef7960bf` and the
+candidate ran in separate local workerd servers. Five fresh Node processes per
+revision used host `performance.now()` around awaited Cap'n Web -> OS Worker ->
+Stream Durable Object calls. Process order alternated by pair. Each process
+measured 600 serial singleton appends, 100 variadic 100-event appends, 300
+concurrent-32 waves, 100 concurrent-128 waves, and 300 append-to-live-arrival
+samples. Every append result, final offset bound, and live marker assertion
+passed.
+
+Geometric paired changes were:
+
+| Workload                           |      p50 latency |   p95 latency |    Mean latency | p50 throughput |
+| ---------------------------------- | ---------------: | ------------: | --------------: | -------------: |
+| Serial singleton append            | **11.60% worse** |   1.03% worse | **7.02% worse** |              - |
+| Existing variadic 100-event append |    12.31% faster | 15.02% faster |   13.10% faster |  14.04% higher |
+| 32 concurrent singleton calls      |    23.15% faster | 23.82% faster |   21.46% faster |  30.13% higher |
+| 128 concurrent singleton calls     |    39.76% faster | 39.47% faster |   40.47% faster |  65.99% higher |
+| Serial append to live arrival      |     8.44% faster | 47.95% faster |   24.95% faster |              - |
+
+The unchanged variadic and live paths also looked materially faster on the
+candidate server, exposing a local process-placement advantage. That makes the
+concurrency result conservative only in a broad sense, not a clean attribution
+for every row. The singleton result nevertheless failed the predeclared 5%
+non-regression gate: all five paired p50 ratios were slower (1.076, 1.114,
+1.035, 1.353, and 1.031; median 1.076). Observing the leader promise is work
+the existing straight-through promise relay does not perform, so the design
+cannot claim a free singleton path merely because it dispatches immediately.
+
+More importantly, flattening separate public appends is not
+contract-preserving. One variadic Stream DO append is one atomic validation,
+reduction, timestamp, storage, and fan-out boundary. A state-invalid follower
+therefore rejects otherwise independent neighbors; successful calls acquire a
+shared timestamp and delivered batch boundary; a circuit-breaker transition
+can admit events that separate calls would reject. Pre-parsing structural
+inputs in the Worker does not repair state-dependent failure isolation.
+
+A correct automatic coalescer would require substantially more machinery:
+
+- one isolate-wide ordered lane keyed by canonical project/stream identity,
+  rather than one `StreamRpcTarget`, so repeated `streams.get()` capabilities
+  in the same isolate share order;
+- a private grouped DO operation that retains each public variadic call as a
+  separate transaction and returns a per-group success/error outcome;
+- byte, event, request, and caller bounds; exact error-name transport; idle
+  lane cleanup; capability-safe subscription barriers; and no retry after an
+  ambiguous transport failure.
+
+That design still cannot coalesce writers in other isolates, sessions, or
+regions, and still must observe the leader RPC that produced the singleton
+regression. The complexity is not an elegant collapse: it duplicates ordering
+and error-demultiplexing policy outside the Stream DO for an overload-only win
+callers can already obtain with explicit variadic `append(...events)`.
+
+The candidate is rejected and was not deployed. Raw records are
+`/tmp/follower-batch-{baseline,candidate}-r{1..5}.log`. The exact-head preview
+and production were untouched; no data was erased.
