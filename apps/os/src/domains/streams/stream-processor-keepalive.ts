@@ -5,7 +5,7 @@
 // cursor rows + the stream DO's alarm retry/park machinery,
 // stream-subscribers.ts). What nothing covered is the ZERO-LAG wedge: a
 // processor journals an obligation (`llm-request-requested`,
-// `script-execution-requested`), its checkpoint advances, and the in-flight
+// `script-run-requested`), its checkpoint advances, and the in-flight
 // attempt dies with the incarnation — a deploy evicts every DO. The stream
 // sees no lag, arms no retry, and nothing ever dials anything again. The
 // agent sits at `phase: "requested"` forever (the 2026-06-10 and 2026-07-07

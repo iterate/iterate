@@ -11,19 +11,19 @@ test("a full round reduces to user → activity → assistant", () => {
       role: "user",
     }),
     event(2, "events.iterate.com/agent/llm-request-requested", { model: "gpt-x" }),
-    event(3, "events.iterate.com/capability-host/script-execution-requested", {
+    event(3, "events.iterate.com/capability-host/script-run-requested", {
       executionId: "e1",
       code: "async (itx) => { return 1 }",
+      expiresAt: Date.UTC(2026, 0, 1, 0, 1),
     }),
-    event(4, "events.iterate.com/capability-host/script-execution-completed", {
+    event(4, "events.iterate.com/capability-host/script-run-settled", {
       executionId: "e1",
-      result: 1,
-      durationMs: 1200,
+      settlement: { status: "succeeded", result: 1 },
     }),
     // Activities settle only once every step is done — the completed event is
     // what closes the roll-up, not the assistant message.
     event(5, "events.iterate.com/agent/llm-request-completed", {
-      llmRequestId: 2,
+      llmRequestOffset: 2,
       result: { status: "success" },
     }),
     event(6, "events.iterate.com/agents/web-message-sent", { message: "Done." }),
@@ -41,13 +41,13 @@ test("streaming response text lands on the live activity while working", () => {
   const feed = reduceFeed(PATH, [
     event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
     event(2, "events.iterate.com/agent/llm-request-requested", {}),
-    event(3, "events.iterate.com/openai-ws/llm-response-chunk", {
-      llmRequestId: 2,
-      chunk: { type: "response.output_text.delta", delta: "const x" },
+    event(3, "events.iterate.com/agent/llm-response-chunk", {
+      llmRequestOffset: 2,
+      chunk: { choices: [{ delta: { content: "const x" } }] },
     }),
-    event(4, "events.iterate.com/openai-ws/llm-response-chunk", {
-      llmRequestId: 2,
-      chunk: { type: "response.output_text.delta", delta: " = 1" },
+    event(4, "events.iterate.com/agent/llm-response-chunk", {
+      llmRequestOffset: 2,
+      chunk: { choices: [{ delta: { content: " = 1" } }] },
     }),
   ]);
   expect(feed).toMatchObject({
@@ -61,15 +61,17 @@ test("streaming response text lands on the live activity while working", () => {
 test("summarizes a settled activity", () => {
   const feed = reduceFeed(PATH, [
     event(1, "events.iterate.com/agent/llm-request-requested", {}),
-    event(2, "events.iterate.com/capability-host/script-execution-requested", {
+    event(2, "events.iterate.com/capability-host/script-run-requested", {
       executionId: "e1",
       code: "1",
+      expiresAt: Date.UTC(2026, 0, 1, 0, 1),
     }),
-    event(3, "events.iterate.com/capability-host/script-execution-completed", {
+    event(3, "events.iterate.com/capability-host/script-run-settled", {
       executionId: "e1",
+      settlement: { status: "succeeded" },
     }),
     event(4, "events.iterate.com/agent/llm-request-completed", {
-      llmRequestId: 1,
+      llmRequestOffset: 1,
       result: { status: "success" },
     }),
     event(5, "events.iterate.com/agents/web-message-sent", { message: "ok" }),

@@ -82,7 +82,7 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/telegram/webhook-received",
     "events.iterate.com/telegram/send-requested",
     "events.iterate.com/agent/llm-request-requested",
-    "events.iterate.com/capability-host/script-execution-requested",
+    "events.iterate.com/capability-host/script-run-requested",
     // The platform revival fact (core-owned, ONE type for every recovery-wired
     // processor; the payload's processorSlug names which). MUST be consumed
     // (the runner throws at construction otherwise): appended when an
@@ -99,7 +99,7 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agents/context-added",
     "events.iterate.com/telegram/send-requested",
     "events.iterate.com/telegram/message-sent",
-    "events.iterate.com/capability-host/script-execution-requested",
+    "events.iterate.com/capability-host/script-run-requested",
   ],
 });
 

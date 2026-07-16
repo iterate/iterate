@@ -22,7 +22,7 @@ export function formatSeconds(durationMs: number): string {
 }
 
 /**
- * CLI-style elapsed clock for the live "Running code" indicator: always one
+ * CLI-style elapsed clock for the live current-phase indicator: always one
  * decimal place, no space (`0.0s`, `0.9s`, `12.3s`). Counts up from 0.
  */
 export function formatElapsedSeconds(durationMs: number): string {
@@ -33,7 +33,7 @@ export function formatElapsedSeconds(durationMs: number): string {
  * What the live activity spinner says right now. One in-flight LLM at a time:
  * reasoning tokens → "Thinking"; otherwise (waiting for first token or
  * streaming the response) → "Waiting for a response". Code/ITX → "Running code"
- * (the caller appends the live elapsed counter).
+ * The caller appends the current phase's live elapsed counter.
  */
 export function liveActivityLabel(runningSteps: readonly AgentUiStep[]): string {
   const runningCode = runningSteps.some((step) => step.kind === "code");

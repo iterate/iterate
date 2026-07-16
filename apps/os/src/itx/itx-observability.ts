@@ -1,5 +1,6 @@
 import { tracing } from "cloudflare:workers";
 import type { RpcSessionOptions } from "capnweb";
+import { ItxAuthenticationError } from "../auth.ts";
 import { runWideLog, wideLogger } from "../observability/wide-log.ts";
 
 type RpcCallInfo = {
@@ -7,6 +8,7 @@ type RpcCallInfo = {
   target: unknown;
 };
 
+const itxOutcome = Symbol("itxOutcome");
 const spanNamePart = /^[a-zA-Z0-9_$:-]+$/;
 
 function safeNamePart(value: unknown, fallback: string) {
@@ -49,14 +51,36 @@ function methodName(target: unknown, path: RpcCallInfo["path"]): string {
   return "call";
 }
 
-function correlatedItxError(error: unknown, callId: string): Error {
+function correlatedItxError(
+  error: unknown,
+  callId: string,
+  outcome: "client_error" | "error",
+): Error {
   let message = "ITX target threw a non-Error value";
   try {
     if (error instanceof Error && typeof error.message === "string") message = error.message;
   } catch {
     // A hostile proxy must not prevent correlation at the RPC boundary.
   }
-  return Object.assign(new Error(message), { itxCallId: callId });
+  const correlated = Object.assign(new Error(message), { itxCallId: callId });
+  Object.defineProperty(correlated, itxOutcome, { value: outcome });
+  return correlated;
+}
+
+function itxErrorOutcome(error: unknown): "client_error" | "error" {
+  try {
+    if (error instanceof ItxAuthenticationError) return "client_error";
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      Reflect.get(error, itxOutcome) === "client_error"
+    ) {
+      return "client_error";
+    }
+  } catch {
+    // Hostile thrown values are server errors, but must not break normalization.
+  }
+  return "error";
 }
 
 export function itxRpcMethod(info: Pick<RpcCallInfo, "path" | "target">): string {
@@ -83,6 +107,7 @@ export function createItxRpcSessionOptions(options: {
           {
             kind: "itx_rpc",
             parentId: options.parentLogId,
+            classifyError: (error) => itxErrorOutcome(error),
           },
           async () => {
             const callId = wideLogger.id();
@@ -106,14 +131,15 @@ export function createItxRpcSessionOptions(options: {
               span.setAttribute("itx.outcome", "ok");
               return result;
             } catch (error) {
-              span.setAttribute("itx.outcome", "error");
+              const outcome = itxErrorOutcome(error);
+              span.setAttribute("itx.outcome", outcome);
               // Cap'n Web v0.8.0 copies enumerable Error properties across
               // the wire: https://github.com/cloudflare/capnweb/blob/v0.8.0/src/serialize.ts
               // A fresh error makes the opaque ID authoritative even when a
               // target throws a frozen, pre-tagged, hostile, or non-Error
               // value. Only a safely read message survives; no arguments,
               // results, causes, arbitrary properties, or server stack do.
-              throw correlatedItxError(error, callId);
+              throw correlatedItxError(error, callId, outcome);
             }
           },
         ),

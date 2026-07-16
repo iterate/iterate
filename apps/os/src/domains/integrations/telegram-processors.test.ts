@@ -957,7 +957,7 @@ describe("TelegramAgentProcessor", () => {
     await deliver();
 
     const scripts = stream.events.filter(
-      (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
+      (event) => event.type === "events.iterate.com/capability-host/script-run-requested",
     );
     expect(scripts).toHaveLength(1);
     expect(scripts[0]).toMatchObject({

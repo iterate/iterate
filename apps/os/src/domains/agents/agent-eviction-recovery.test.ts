@@ -211,6 +211,8 @@ function makeHarness() {
           projectId: null,
           path: stream.path,
           events,
+          scannedAfterOffset: woken.checkpointOffset,
+          scannedThroughOffset: head(),
           streamMaxOffset: head(),
           state: null,
         });

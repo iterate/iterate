@@ -16,6 +16,7 @@
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",
     "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
     "./request-logging": "./src/request-logging.ts",
+    "./script-execution": "./src/script-execution.ts",
     "./slugify": "./src/slugify.ts",
     "./posthog": {
       "types": "./src/posthog/posthog.ts",

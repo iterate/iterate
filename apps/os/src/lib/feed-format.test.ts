@@ -20,6 +20,7 @@ const code = (overrides: Partial<Extract<AgentUiStep, { kind: "code" }>> = {}): 
   status: "running",
   code: "return 1",
   startedAtMs: 0,
+  expiresAtMs: 60_000,
   ...overrides,
 });
 

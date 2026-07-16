@@ -47,8 +47,10 @@ export type ProcessorSnapshot<State> = {
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
  * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug` — the inspection half of
- * this node reads the host's main processor.
+ * processor wakes from the request's `processorSlug`. Each public domain
+ * surface selects that same named processor for inspection, so
+ * `agent.processor`, `agent.slack.processor`, and other siblings expose their
+ * own snapshots and checkpoints.
  */
 export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;
@@ -104,6 +106,10 @@ export type StreamEventBatch = {
   projectId: string | null;
   path: string;
   events: StreamEvent[];
+  /** Exclusive raw-log cursor from which this delivery scan began. */
+  scannedAfterOffset: number;
+  /** Inclusive raw-log cursor through which this delivery scan completed. */
+  scannedThroughOffset: number;
   streamMaxOffset: number;
   state: unknown;
 };
@@ -317,7 +323,7 @@ export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<Pro
 export type StreamSubscriptionHandle = Disposable & {
   /** Stable identity of this subscription connection. */
   subscriptionKey: SubscriptionKey;
-  /** The stream's max offset at subscribe time (replay starts behind it). */
+  /** The stream's max offset at subscribe time (durable replay starts behind it). */
   streamMaxOffset: number;
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */

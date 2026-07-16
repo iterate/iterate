@@ -7,6 +7,7 @@ import {
   localAuthServiceBinding,
   OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
+  envShapedVars,
 } from "./generate-wrangler-config.ts";
 
 it.each([
@@ -119,6 +120,19 @@ it("selects the matching remote auth worker for local dev and the local worker f
 it("never ships the old shared auth service token to OS", () => {
   expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
   expect(config.secrets.required).not.toContain("APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN");
+});
+
+it("emits the AI response-cache key for every deployment while keeping production disabled", () => {
+  expect(envShapedVars(envs.prd)).toMatchObject({
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: "",
+  });
+  expect(envShapedVars(envs.preview_6)).toMatchObject({
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
+  });
+});
+
+it("does not retain a reconciled Durable Object tombstone", () => {
+  expect(config.exports).not.toHaveProperty("CloudflareSandboxDurableObject");
 });
 
 it("routes public event docs hosts to the os worker", () => {

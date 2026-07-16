@@ -14,6 +14,19 @@ const baseConfig = {
 };
 
 describe("AppConfig", () => {
+  it("treats an empty response-cache TTL binding as explicitly disabled", () => {
+    const parsed = parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env: {
+        APP_CONFIG: JSON.stringify(baseConfig),
+        APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: "",
+      },
+    });
+
+    expect(parsed.cloudflareAiGateway.responseCacheTtlSeconds).toBeUndefined();
+  });
+
   it("keeps TypeID prefix visible because it is not a secret", () => {
     const parsed = parseAppConfigFromEnv({
       configSchema: AppConfig,

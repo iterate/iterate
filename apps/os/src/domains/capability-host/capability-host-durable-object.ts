@@ -17,11 +17,17 @@ import {
   type ParentCapabilityHost,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
-import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
+import {
+  CapabilityHostProcessorContract,
+  type ScriptExecutionSettlement,
+} from "./capability-host-processor-contract.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
-  run(code: string, options?: { emittedJs?: string }): Promise<unknown>;
+  run(
+    code: string,
+    options: { emittedJs?: string; expiresAt: number },
+  ): Promise<ScriptExecutionSettlement>;
 };
 
 type ScriptExecutionLoopbackExports = {
