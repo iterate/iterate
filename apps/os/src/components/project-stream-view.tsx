@@ -451,6 +451,17 @@ function StreamInspectorSheet({
     panels.inspectedScriptExecutionId,
   ]);
   const [retainedInspector, setRetainedInspector] = useState(activeInspector);
+  const activeInspectorKey =
+    activeInspector?.kind === "script"
+      ? `script:${activeInspector.executionId}`
+      : activeInspector == null
+        ? null
+        : `${activeInspector.kind}:${activeInspector.offset}`;
+  // Base UI reports dismissal before TanStack Router commits the URL search
+  // update. Suppress that exact inspector immediately so retained exit content
+  // cannot navigate and write its deep link back during the closing frame.
+  const [dismissedInspectorKey, setDismissedInspectorKey] = useState<string | null>(null);
+  const inspectorOpen = activeInspectorKey != null && activeInspectorKey !== dismissedInspectorKey;
 
   // Base UI keeps the popup mounted for its exit transition. Retain the last
   // target while the URL-driven open state closes so that transition never
@@ -468,7 +479,7 @@ function StreamInspectorSheet({
     content = (
       <RawEventInspectorContent
         database={database}
-        navigationEnabled={activeInspector?.kind === "event"}
+        navigationEnabled={inspectorOpen && activeInspector?.kind === "event"}
         offset={inspector.offset}
         onNavigate={panels.inspectEvent}
       />
@@ -497,19 +508,25 @@ function StreamInspectorSheet({
 
   return (
     <Sheet
-      open={activeInspector != null}
+      open={inspectorOpen}
       onOpenChange={(open) => {
-        if (!open) panels.closeInspector();
+        if (!open) {
+          setDismissedInspectorKey(activeInspectorKey);
+          panels.closeInspector();
+        }
       }}
       onOpenChangeComplete={(open) => {
-        if (!open && activeInspector == null) setRetainedInspector(null);
+        if (!open) {
+          setRetainedInspector(null);
+          setDismissedInspectorKey(null);
+        }
       }}
     >
       <SheetContent
         side="right"
         className="w-full gap-0 p-0 data-[side=right]:sm:w-[min(92vw,72rem)] data-[side=right]:sm:max-w-[92vw]"
         data-testid={testId}
-        inert={activeInspector == null}
+        inert={!inspectorOpen}
       >
         {content}
       </SheetContent>
