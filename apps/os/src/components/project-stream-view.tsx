@@ -450,7 +450,18 @@ function StreamInspectorSheet({
     panels.inspectedOffset,
     panels.inspectedScriptExecutionId,
   ]);
-  const [retainedInspector, setRetainedInspector] = useState(activeInspector);
+  const activeInspectorContext = useMemo(
+    () =>
+      activeInspector == null
+        ? null
+        : {
+            inspector: activeInspector,
+            database,
+            agentUiState,
+          },
+    [activeInspector, agentUiState, database],
+  );
+  const [retainedInspectorContext, setRetainedInspectorContext] = useState(activeInspectorContext);
   // Base UI reports dismissal before TanStack Router commits the URL search
   // update. Suppress that exact inspector immediately so retained exit content
   // cannot navigate and write its deep link back during the closing frame. The
@@ -461,46 +472,53 @@ function StreamInspectorSheet({
   const inspectorOpen = activeInspector != null && activeInspector !== dismissedInspector;
 
   // Base UI keeps the popup mounted for its exit transition. Retain the last
-  // target while the URL-driven open state closes so that transition never
-  // flashes an empty sheet.
+  // target and the stream data it belongs to while URL-driven navigation
+  // closes the sheet, so a stream switch cannot briefly query the new stream
+  // with the previous stream's inspector identifier.
   useEffect(() => {
-    if (activeInspector != null) setRetainedInspector(activeInspector);
-  }, [activeInspector]);
+    if (activeInspectorContext != null) setRetainedInspectorContext(activeInspectorContext);
+  }, [activeInspectorContext]);
 
-  const inspector = activeInspector ?? retainedInspector;
+  const inspectorContext = activeInspectorContext ?? retainedInspectorContext;
   let content: ReactNode = null;
   let testId: string | undefined;
 
-  if (inspector?.kind === "event") {
-    testId = "raw-event-inspector";
-    content = (
-      <RawEventInspectorContent
-        database={database}
-        navigationEnabled={inspectorOpen && activeInspector?.kind === "event"}
-        offset={inspector.offset}
-        onNavigate={panels.inspectEvent}
-      />
-    );
-  } else if (inspector?.kind === "llm") {
-    const liveStep = agentUiState?.live?.steps.find(
-      (step): step is AgentUiLlmStep =>
-        step.kind === "llm" &&
-        step.llmRequestOffset === inspector.offset &&
-        step.status === "running",
-    );
-    testId = "llm-request-inspector";
-    content = (
-      <LlmRequestInspectorContent
-        database={database}
-        {...(liveStep == null ? {} : { liveStep })}
-        llmRequestOffset={inspector.offset}
-      />
-    );
-  } else if (inspector?.kind === "script") {
-    testId = "script-execution-inspector";
-    content = (
-      <ScriptExecutionInspectorContent database={database} executionId={inspector.executionId} />
-    );
+  if (inspectorContext != null) {
+    const { inspector } = inspectorContext;
+    if (inspector.kind === "event") {
+      testId = "raw-event-inspector";
+      content = (
+        <RawEventInspectorContent
+          database={inspectorContext.database}
+          navigationEnabled={inspectorOpen && activeInspector?.kind === "event"}
+          offset={inspector.offset}
+          onNavigate={panels.inspectEvent}
+        />
+      );
+    } else if (inspector.kind === "llm") {
+      const liveStep = inspectorContext.agentUiState?.live?.steps.find(
+        (step): step is AgentUiLlmStep =>
+          step.kind === "llm" &&
+          step.llmRequestOffset === inspector.offset &&
+          step.status === "running",
+      );
+      testId = "llm-request-inspector";
+      content = (
+        <LlmRequestInspectorContent
+          database={inspectorContext.database}
+          {...(liveStep == null ? {} : { liveStep })}
+          llmRequestOffset={inspector.offset}
+        />
+      );
+    } else {
+      testId = "script-execution-inspector";
+      content = (
+        <ScriptExecutionInspectorContent
+          database={inspectorContext.database}
+          executionId={inspector.executionId}
+        />
+      );
+    }
   }
 
   return (
@@ -514,7 +532,7 @@ function StreamInspectorSheet({
       }}
       onOpenChangeComplete={(open) => {
         if (!open) {
-          setRetainedInspector(null);
+          setRetainedInspectorContext(null);
           setDismissedInspector(null);
         }
       }}
