@@ -150,6 +150,7 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
       random: () => 0.5,
       armAlarm: () => undefined,
       keepAlive: (promise) => void kept.push(promise),
+      abortIncarnation: () => undefined,
     },
   });
 

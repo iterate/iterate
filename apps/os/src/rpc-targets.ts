@@ -150,7 +150,10 @@ import type {
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
-import { rethrowStreamUnavailable } from "./domains/streams/stream-unavailable.ts";
+import {
+  retryStreamUnavailable,
+  rethrowStreamUnavailable,
+} from "./domains/streams/stream-unavailable.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -4735,15 +4738,33 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // Whether to wait for the seeded project worker's bootstrap readiness is
     // the caller's choice.
     if (args.waitUntilReady !== false) {
+      const readyDeadline = Date.now() + 60_000;
       await timedStep("create-timing", timing, "wait-project-ready", () =>
-        stream.waitForEvent({
-          afterOffset: created.offset,
-          eventTypes: ["events.iterate.com/project/ready"],
-          // Tight on purpose: the saga should complete in seconds (see
-          // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-          // be fixed, not waited out). Preview CI warms slots before the suites.
-          timeoutMs: 60_000,
-        }),
+        retryStreamUnavailable(
+          () =>
+            stream.waitForEvent({
+              afterOffset: created.offset,
+              eventTypes: ["events.iterate.com/project/ready"],
+              // Keep the 60-second budget across incarnation retries. The
+              // ready fact is durable, so reopening from `created.offset`
+              // either replays a result committed before the reset or waits
+              // on the fresh incarnation for the still-pending result.
+              timeoutMs: Math.max(1, readyDeadline - Date.now()),
+            }),
+          {
+            onRetry: ({ failedAttempt, error }) => {
+              console.warn(
+                "project readiness wait interrupted by stream lifecycle; reopening from durable cursor",
+                {
+                  projectId: registered.projectId,
+                  afterOffset: created.offset,
+                  failedAttempt,
+                  error,
+                },
+              );
+            },
+          },
+        ),
       );
     }
 

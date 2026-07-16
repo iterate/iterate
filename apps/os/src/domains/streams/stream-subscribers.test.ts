@@ -153,6 +153,7 @@ function makeHarness() {
   const store = new FakeCursorStore();
   const facts: StreamEventInput[] = [];
   const armedAlarms: number[] = [];
+  const abortedIncarnations: string[] = [];
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
@@ -235,6 +236,9 @@ function makeHarness() {
       random: () => 0.5,
       armAlarm: (atMs) => armedAlarms.push(atMs),
       keepAlive: (promise) => kept.push(promise),
+      abortIncarnation: (reason) => {
+        abortedIncarnations.push(reason);
+      },
     },
   });
 
@@ -253,6 +257,7 @@ function makeHarness() {
     store,
     facts,
     armedAlarms,
+    abortedIncarnations,
     egress,
     pokes,
     pushes,
@@ -390,6 +395,73 @@ describe("StreamSubscribers", () => {
     expect(h.pushes[1].events.map((event) => event.offset)).toEqual([4, 5]);
     expect(h.pushes[1].deliveryId).toBe("k:4-5");
     expect(h.row("k")?.ackedOffset).toBe(5);
+  });
+
+  it("a2. a lifecycle reset during the cursor ack aborts the stale incarnation", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const ack = h.store.ack.bind(h.store);
+    let resetPending = true;
+    h.store.ack = (...args) => {
+      if (resetPending) {
+        resetPending = false;
+        throw new Error("cursor ack failed", {
+          cause: Object.assign(new Error("Durable Object reset because its code was updated"), {
+            durableObjectReset: true,
+            retryable: true,
+          }),
+        });
+      }
+      ack(...args);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(0);
+    expect(h.abortedIncarnations).toEqual([
+      "stream push drain interrupted by Durable Object lifecycle",
+    ]);
+
+    // The next incarnation replays the unacked batch and advances normally.
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pushes).toHaveLength(2);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+  });
+
+  it("a3. an internal drain failure enters bounded backoff instead of stranding the cursor", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    const ack = h.store.ack.bind(h.store);
+    let failurePending = true;
+    h.store.ack = (...args) => {
+      if (failurePending) {
+        failurePending = false;
+        throw new Error("sqlite write failed");
+      }
+      ack(...args);
+    };
+
+    h.subscribers.wake();
+    await h.settle();
+
+    const failed = h.row("k");
+    expect(failed).toMatchObject({ ackedOffset: 0, attempt: 1, lastError: "sqlite write failed" });
+    expect(failed?.nextAttemptAt).not.toBeNull();
+    expect(h.armedAlarms).toContain(failed!.nextAttemptAt!);
+    expect(h.abortedIncarnations).toHaveLength(0);
+
+    h.advanceTo(failed!.nextAttemptAt! + 1);
+    h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.pushes).toHaveLength(2);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 1, attempt: 0, nextAttemptAt: null });
   });
 
   it("b. selector skip-not-defer: non-matching events advance the cursor without a dial call", async () => {

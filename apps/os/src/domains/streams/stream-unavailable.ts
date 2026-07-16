@@ -32,13 +32,31 @@ export const STREAM_UNAVAILABLE_MESSAGE_PREFIX = "stream-unavailable: ";
  * and overload/network families carry `overloaded`/`retryable`.
  */
 export function isDurableObjectLifecycleError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const flags = error as {
-    durableObjectReset?: unknown;
-    retryable?: unknown;
-    overloaded?: unknown;
-  };
-  return flags.durableObjectReset === true || flags.retryable === true || flags.overloaded === true;
+  const seen = new Set<object>();
+  let current = error;
+  // Storage/RPC clients preserve the workerd rejection as `cause` while
+  // wrapping it with their own query context. Walk that standard error chain
+  // so the lifecycle contract survives useful infrastructure wrappers. The
+  // depth cap and identity set make hostile/cyclic cause graphs harmless.
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== "object" || current === null || seen.has(current)) return false;
+    seen.add(current);
+    const flags = current as {
+      cause?: unknown;
+      durableObjectReset?: unknown;
+      retryable?: unknown;
+      overloaded?: unknown;
+    };
+    if (
+      flags.durableObjectReset === true ||
+      flags.retryable === true ||
+      flags.overloaded === true
+    ) {
+      return true;
+    }
+    current = flags.cause;
+  }
+  return false;
 }
 
 /**
@@ -62,6 +80,34 @@ export function rethrowStreamUnavailable(error: unknown): never {
  * the contract: for idempotent calls this means "retry; the stream reboots on
  * the next call".
  */
-export function isStreamUnavailableError(error: unknown): boolean {
+export function isStreamUnavailableError(error: unknown): error is Error {
   return error instanceof Error && error.message.includes(STREAM_UNAVAILABLE_MESSAGE_PREFIX);
+}
+
+/**
+ * Retry one operation whose durable coordinate is stable across Stream DO
+ * incarnations. The caller supplies a fresh stub call each attempt. Only our
+ * explicit lifecycle tag is retryable; application errors escape unchanged,
+ * and the four-attempt ceiling prevents a reset storm from becoming an
+ * unbounded request.
+ */
+export async function retryStreamUnavailable<T>(
+  operation: (attempt: number) => Promise<T>,
+  options: {
+    maxAttempts?: number;
+    onRetry?: (args: { failedAttempt: number; error: Error }) => void;
+  } = {},
+): Promise<T> {
+  const maxAttempts = options.maxAttempts ?? 4;
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error("maxAttempts must be a positive safe integer");
+  }
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await operation(attempt);
+    } catch (error) {
+      if (!isStreamUnavailableError(error) || attempt >= maxAttempts) throw error;
+      options.onRetry?.({ failedAttempt: attempt, error });
+    }
+  }
 }

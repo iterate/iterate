@@ -170,6 +170,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       random: () => Math.random(),
       armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
+      abortIncarnation: (reason) => this.ctx.abort(reason),
     },
   });
   #coreProcessorState: CoreProcessorState;

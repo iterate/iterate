@@ -254,6 +254,8 @@ type StreamSubscribersHooks = {
   armAlarm(atMs: number): void;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
+  /** Tear down a stale Durable Object incarnation after a lifecycle reset. */
+  abortIncarnation(reason: string): void;
 };
 
 export class StreamSubscribers {
@@ -732,7 +734,45 @@ export class StreamSubscribers {
     })();
     this.#hooks.keepAlive(
       work.catch((error: unknown) => {
-        console.error("stream push drain failed", { subscriptionKey, error });
+        if (recoveryGeneration !== this.#recoveryGeneration) return;
+        if (isDurableObjectLifecycleError(error)) {
+          // A deploy/reset can let an already-awaited receiver resolve and
+          // then reject the local cursor ack: Cloudflare permits the stale
+          // invocation to keep running until that storage access. Merely
+          // logging here strands every waiter and leaves a quiet stream with
+          // no future wake source. Abort the stale incarnation so in-flight
+          // callers fail promptly and their retry boots a fresh constructor;
+          // its durable `woken` append replays the still-unacked batch.
+          console.warn("stream push drain interrupted by lifecycle; restarting incarnation", {
+            subscriptionKey,
+            error,
+          });
+          this.#hooks.abortIncarnation("stream push drain interrupted by Durable Object lifecycle");
+          return;
+        }
+
+        // An unexpected machinery failure is not a receiver poison verdict,
+        // but it still owns the same durable bounded-retry obligation. Nack
+        // the cursor, arm the alarm, and eventually park loudly rather than
+        // clearing the in-memory drain flag and waiting forever for a new
+        // append that may never come.
+        console.error("stream push drain failed; backing off before retry", {
+          subscriptionKey,
+          error,
+        });
+        try {
+          this.#onDeliveryFailure(subscriptionKey, error);
+        } catch (recoveryError) {
+          // If the recovery write itself cannot reach storage, this
+          // incarnation cannot make a durable promise about a later retry.
+          // Terminate it instead of pretending the error was handled.
+          console.error("stream push drain recovery failed; restarting incarnation", {
+            subscriptionKey,
+            error: recoveryError,
+            drainError: error,
+          });
+          this.#hooks.abortIncarnation("stream push drain recovery failed");
+        }
       }),
     );
   }

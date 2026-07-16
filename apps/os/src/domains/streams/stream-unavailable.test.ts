@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isDurableObjectLifecycleError,
   isStreamUnavailableError,
+  retryStreamUnavailable,
   rethrowStreamUnavailable,
   STREAM_UNAVAILABLE_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
@@ -17,6 +18,11 @@ describe("isDurableObjectLifecycleError", () => {
     ["durableObjectReset flag", withFlag("durableObjectReset"), true],
     ["retryable flag", withFlag("retryable"), true],
     ["overloaded flag", withFlag("overloaded"), true],
+    [
+      "lifecycle flag wrapped by a storage client",
+      new Error("cursor ack failed", { cause: withFlag("durableObjectReset") }),
+      true,
+    ],
     ["flag present but not literally true", withFlag("retryable", "yes"), false],
     ["plain Error (app-level throw from the DO)", new Error("kill requested"), false],
     ["string rejection", "kill requested", false],
@@ -68,5 +74,42 @@ describe("isStreamUnavailableError", () => {
     ["unrelated app error", new Error('no capability "itx.streams.get"'), false],
   ])("%s → %s", (_name, error, expected) => {
     expect(isStreamUnavailableError(error)).toBe(expected);
+  });
+});
+
+describe("retryStreamUnavailable", () => {
+  it("reopens a bounded operation after tagged lifecycle interruptions", async () => {
+    let calls = 0;
+    const result = await retryStreamUnavailable(async () => {
+      calls += 1;
+      if (calls < 3) throw new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}deployment reset`);
+      return "ready";
+    });
+
+    expect(result).toBe("ready");
+    expect(calls).toBe(3);
+  });
+
+  it("does not retry an application error", async () => {
+    let calls = 0;
+    const error = new Error("bad predicate");
+    await expect(
+      retryStreamUnavailable(async () => {
+        calls += 1;
+        throw error;
+      }),
+    ).rejects.toBe(error);
+    expect(calls).toBe(1);
+  });
+
+  it("stops after the bounded lifecycle attempt budget", async () => {
+    let calls = 0;
+    await expect(
+      retryStreamUnavailable(async () => {
+        calls += 1;
+        throw new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}still restarting`);
+      }),
+    ).rejects.toThrow("still restarting");
+    expect(calls).toBe(4);
   });
 });
