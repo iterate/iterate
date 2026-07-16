@@ -19,9 +19,11 @@ dist
 # generated from the root envs.ts by each app's scripts/generate-wrangler-config.ts
 apps/os/wrangler.jsonc
 apps/os/wrangler.builder.jsonc
+apps/os/wrangler.typechecker.jsonc
 apps/auth/wrangler.jsonc
 apps/semaphore/wrangler.jsonc
 apps/streams-example-app/wrangler.jsonc
+apps/dummy-petshop/wrangler.jsonc
 
 !.dev.vars.example
 .env*

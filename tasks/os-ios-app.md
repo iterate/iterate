@@ -5,7 +5,7 @@ size: large
 
 # os-ios-app
 
-**Status summary (for skimmers):** implemented and verified up to the machine's limits. Done: `apps/mobile` Expo app (sign-in → projects → chat list → live thread), all plumbing ported/adapted, unit tests, `expo export`/`prebuild` clean, and a LIVE e2e that passed against a real local dev server (bearer auth over the app's own dial → new `/agents/mobile/<ts>` chat → real agent reply → live subscription). Also fixed a pre-existing platform gap: local dev servers now trust forge-minted tokens (`apps/os/scripts/dev.ts`). Missing: the one manual on-device pass (Expo Go on Misha's phone — see "Handoff" below) and the captun live-check.
+**Status summary (for skimmers):** implemented and verified up to the machine's limits. Done: `apps/mobile` Expo app (sign-in → projects → chat list → live thread), all plumbing ported/adapted, unit tests, `expo export`/`prebuild` clean, and a LIVE e2e that passed against a real local dev server (bearer auth over the app's own dial → new `/agents/mobile/<ts>` chat → real agent reply → live subscription). A pre-existing platform gap this branch first hit (local dev servers rejecting forge-minted tokens) is now fixed on main independently (PR #1706) — see "Found along the way" below. Missing: the one manual on-device pass (Expo Go on Misha's phone — see "Handoff" below) and the captun live-check.
 
 An iOS app equivalent of apps/os. v1 goal: beat "open Safari → os.iterate.com → log in → new chat" — cold app open to typing a new message in a couple of taps, against any deployment (prd, preview*N, local dev via captun). Foundations over screen count: this is \_the* iterate mobile app; native features (voice, push, widgets) graft on later.
 
@@ -33,9 +33,9 @@ An iOS app equivalent of apps/os. v1 goal: beat "open Safari → os.iterate.com 
 - [x] Handoff notes for the manual on-device pass — _see "Handoff" below_
 - [x] ~~Register redirect URIs on the auth worker for the mobile client~~ — _not needed: registration is dynamic (RFC 7591, open by design); the app registers whatever redirect URI its runtime resolves (exp:// in Expo Go, iterate:// standalone)_
 
-## Found along the way (fixed here)
+## Found along the way
 
-Local dev servers rejected forge-minted bearer tokens with "missing or invalid auth" — the deploy path bakes the forge public key into the JWKS but `pnpm dev` had no equivalent, which is exactly `tasks/os-dev-server-auth-minting-without-auth-worker.md` (pre-existing, high-priority, small). Fixed in `apps/os/scripts/dev.ts`: at startup, when the Doppler config carries `AUTH_FORGE_PRIVATE_JWK` but no pinned `APP_CONFIG_ITERATE_AUTH__JWKS`, it fetches the issuer's JWKS, merges the forge public key, and injects the result into the vite child env (best-effort, warns and continues on failure — never blocks dev boot). Verified live: both admin-secret and forged-bearer lanes authenticate against a fresh dev server.
+Local dev servers used to reject forge-minted bearer tokens with "missing or invalid auth" — the deploy path bakes the forge public key into the JWKS but `pnpm dev` had no equivalent, tracked in `tasks/os-dev-server-auth-minting-without-auth-worker.md` (pre-existing, high-priority, small). This branch first fixed it locally in `apps/os/scripts/dev.ts` (fetch-and-merge into the spawned vite child's env), but main independently landed a more complete fix in the same window (PR #1706, `generate-wrangler-config.ts` deriving a forge-only JWKS at config-gen time, with tests and docs) — so on merging main, this branch's `dev.ts` version was dropped as redundant/superseded rather than carried forward. The live e2e still exercises the forged-bearer lane; it now depends on main's fix instead of this branch's.
 
 ## Handoff — the one manual pass (needs Misha's phone)
 

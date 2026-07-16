@@ -1,16 +1,24 @@
 {
   "mcpServers": {
-    "cloudflare-api": {
-      "type": "url",
+    "cloudflare": {
+      "type": "http",
       "url": "https://mcp.cloudflare.com/mcp"
     },
     "exa": {
-      "type": "url",
+      "type": "http",
       "url": "https://mcp.exa.ai/mcp"
     },
     "context7": {
-      "type": "url",
+      "type": "http",
       "url": "https://mcp.context7.com/mcp"
+    },
+    "iterate": {
+      "type": "http",
+      "url": "https://mcp.iterate.com"
+    },
+    "posthog": {
+      "type": "http",
+      "url": "https://mcp-eu.posthog.com/mcp"
     }
   }
 }

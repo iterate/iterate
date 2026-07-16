@@ -674,6 +674,24 @@ test("typed-no-floating-promises reports only unhandled promise-like expression 
   assert.doesNotMatch(output, /6:1/);
 });
 
+test("contract-package-imports permits Cloudflare only in the worker-only contract module", () => {
+  using fixture = createOxlintFixture({
+    rules: {
+      "iterate/contract-package-imports": "error",
+      "iterate/mechanical-class-impl": "off",
+      "iterate/typed-no-floating-promises": "off",
+    },
+  });
+
+  const source = 'import { WorkerEntrypoint } from "cloudflare:workers";\n';
+  fixture.write("src/worker.ts", source);
+  fixture.write("src/index.ts", source);
+
+  fixture.runOxlint(["src/worker.ts"]);
+  const result = fixture.runOxlint(["src/index.ts"], { expectFailure: true });
+  assert.match(result.stdout + result.stderr, /Forbidden runtime import "cloudflare:workers"/);
+});
+
 function getCallablePropertyNames(
   service: TypeAwareLintService,
   fileName: string,

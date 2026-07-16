@@ -4,54 +4,168 @@ import { z } from "zod";
 
 /**
  * URL-backed view state for ProjectStreamView. Every route that mounts a
- * stream view (every domain page plus the stream/agent detail
- * routes) registers this schema in its `validateSearch` — directly or via
- * `.extend()` — so the component reads/writes its tab, filter, and
- * processor-sidebar state through the URL and every view is shareable.
+ * stream view registers this schema in its `validateSearch` — directly or via
+ * `.extend()` — so the component reads/writes mode, filter, and processor-
+ * sidebar state through the URL and every view is shareable.
  *
- * Every field is optional and omitted from the URL at its default: the active
- * tab falls back to a per-stream default in the component, an absent `panel`
- * means the processors sidebar is closed, and so on. `.catch(undefined)` keeps
- * a hand-edited or stale param from bailing the whole route to its error
- * boundary — a bad value just reverts to the default.
+ * Modes (Pretty / Pretty+raw / Raw) are React view modes. Agent streams offer
+ * all three; other domains default to raw. Pretty+raw = pretty agent feed +
+ * raw feed_items (with the event inspector). Filters encode both feed-item
+ * *components* and contained raw *event types* (see stream-feed-filters.ts).
  */
+const StreamViewModeRaw = z.enum(["pretty", "pretty-raw", "raw"]);
+export type StreamViewMode = "pretty" | "pretty-raw" | "raw";
+
 export const StreamViewSearch = z.object({
-  /** Active tab; omitted on the default (Feed). */
-  tab: z.enum(["feed", "state"]).optional().catch(undefined),
-  /** Feed preset id; omitted on the stream's default preset. */
-  preset: z.string().optional().catch(undefined),
-  /** Feed text search query. */
+  /**
+   * Active view mode; omitted on the stream's default (pretty for agents, raw
+   * otherwise).
+   */
+  mode: StreamViewModeRaw.optional().catch(undefined),
+  /** Text query (agent feed and/or feed_items, depending on mode). */
   q: z.string().optional().catch(undefined),
-  /** Exact event-type filters (any-of) for the feed-items presets. */
+  /**
+   * Event-type filter (any-of) for feed_items rows — matches the primary event
+   * type of a group or singleton (see FEED_TYPE_EXPRESSION).
+   */
   types: z.array(z.string()).optional().catch(undefined),
-  /** Inclusive lower offset bound for the feed-items presets. */
+  /**
+   * Raw feed-item *kind* filter (any-of) — `feed_items.kind` values such as
+   * `raw.group`, `raw.stream.woken`, `raw.stream.child-stream-created`.
+   */
+  components: z.array(z.string()).optional().catch(undefined),
+  /** Inclusive lower offset bound for feed_items. */
   from: z.number().optional().catch(undefined),
-  /** Inclusive upper offset bound for the feed-items presets. */
+  /** Inclusive upper offset bound for feed_items. */
   to: z.number().optional().catch(undefined),
   /** Offset of the raw event open in the inspector side panel. */
   event: z.number().optional().catch(undefined),
-  /** Whether the search/filter row is open. */
+  /** llm-request-requested offset open in the LLM request inspector panel. */
+  llmRequest: z.number().optional().catch(undefined),
+  /** Whether the mode's search/filter row is open. */
   filter: z.boolean().optional().catch(undefined),
-  /** Whether the processors sidebar is open. */
+  /** Whether the processors sheet is open (overview when processor is absent). */
   panel: z.boolean().optional().catch(undefined),
-  /** Subscription key of the processor focused in the sidebar. */
+  /** Whether the events sheet is open (full-panel layouts only). */
+  events: z.boolean().optional().catch(undefined),
+  /** Subscription key of the processor focused in the sheet. */
   processor: z.string().optional().catch(undefined),
 });
 
 export type StreamViewSearch = z.infer<typeof StreamViewSearch>;
 
-/** The stream view's two tabs; Feed is the URL-omitted default. */
-export type StreamViewTab = NonNullable<StreamViewSearch["tab"]>;
+/** What filter / body surfaces a mode exposes. Modes encode this as the preset. */
+type StreamModeCapabilities = {
+  /** Agent chat rows (feed_items kind `agent.*`). */
+  agentFeed: boolean;
+  /** Include agent debug kinds (wakes, etc.) in the agent rows. */
+  agentShowDebug: boolean;
+  /** Raw rows (feed_items kind `raw.*`). */
+  rawFeed: boolean;
+  /** Raw event inspector (`?event=`) is meaningful. */
+  eventInspector: boolean;
+  /** Shell filter icon. */
+  filters: boolean;
+  /** Search box in the filter row. */
+  search: boolean;
+  /** Event-type multi-select (types inside feed items). */
+  rawEventTypes: boolean;
+  /** Raw kind multi-select (feed_items.kind, raw.* family). */
+  rawComponents: boolean;
+  /** Offset from/to bounds. */
+  rawOffsets: boolean;
+};
 
-export function streamViewTab(search: StreamViewSearch): StreamViewTab {
-  return search.tab ?? "feed";
+const PRETTY_CAPS: StreamModeCapabilities = {
+  agentFeed: true,
+  agentShowDebug: false,
+  rawFeed: false,
+  eventInspector: false,
+  filters: true,
+  search: true,
+  rawEventTypes: false,
+  rawComponents: false,
+  rawOffsets: false,
+};
+
+const PRETTY_RAW_CAPS: StreamModeCapabilities = {
+  agentFeed: true,
+  agentShowDebug: true,
+  rawFeed: true,
+  eventInspector: true,
+  filters: true,
+  search: true,
+  rawEventTypes: true,
+  rawComponents: true,
+  rawOffsets: false,
+};
+
+const RAW_CAPS: StreamModeCapabilities = {
+  agentFeed: false,
+  agentShowDebug: false,
+  rawFeed: true,
+  eventInspector: true,
+  filters: true,
+  search: true,
+  rawEventTypes: true,
+  rawComponents: true,
+  rawOffsets: true,
+};
+
+/** One header mode tab offered by a stream path. */
+type StreamModeDefinition = {
+  id: StreamViewMode;
+  label: string;
+  capabilities: StreamModeCapabilities;
+};
+
+/**
+ * Modes available on a stream. Agents get Pretty / Pretty+raw / Raw; every
+ * other domain is a single implicit Raw feed (no mode tabs).
+ */
+export function modesForStream(streamPath: string): StreamModeDefinition[] {
+  if (streamPath.startsWith("/agents/")) {
+    return [
+      { id: "pretty", label: "Pretty", capabilities: PRETTY_CAPS },
+      { id: "pretty-raw", label: "Pretty + raw", capabilities: PRETTY_RAW_CAPS },
+      { id: "raw", label: "Raw", capabilities: RAW_CAPS },
+    ];
+  }
+  return [];
+}
+
+export function defaultModeForStream(streamPath: string): StreamViewMode {
+  return streamPath.startsWith("/agents/") ? "pretty" : "raw";
 }
 
 /**
- * Read and patch the stream-view search params. The component is only rendered
- * under routes that validate against {@link StreamViewSearch}, so reading
- * loosely (`strict: false`) and casting is safe. Patches merge into the current
- * params and `replace` history so tab/filter clicks don't pile up back-button
+ * Resolve the active mode for a stream. Unknown or unsupported modes
+ * (e.g. `pretty` on a secrets stream) fall back to the stream default so
+ * filter/body surfaces stay consistent with the header.
+ */
+export function streamViewMode(search: StreamViewSearch, streamPath: string): StreamViewMode {
+  const requested = search.mode;
+  if (requested == null) return defaultModeForStream(streamPath);
+  const offered = modesForStream(streamPath);
+  // Non-agent streams have no mode tabs — only `raw` is valid (implicit).
+  if (offered.length === 0) return "raw";
+  return offered.some((entry) => entry.id === requested)
+    ? requested
+    : defaultModeForStream(streamPath);
+}
+
+export function modeCapabilities(
+  search: StreamViewSearch,
+  streamPath: string,
+): StreamModeCapabilities {
+  const mode = streamViewMode(search, streamPath);
+  const base = mode === "pretty" ? PRETTY_CAPS : mode === "pretty-raw" ? PRETTY_RAW_CAPS : RAW_CAPS;
+  return base;
+}
+
+/**
+ * Read and patch the stream-view search params. Patches merge into the current
+ * params and `replace` history so mode/filter clicks don't pile up back-button
  * entries; setting a key to `undefined` drops it from the URL.
  */
 export function useStreamViewSearch(): {
@@ -63,11 +177,6 @@ export function useStreamViewSearch(): {
   const setSearch = useCallback(
     (patch: Partial<StreamViewSearch>) => {
       void navigate({
-        // `useNavigate()` isn't scoped to one route (this hook serves every
-        // stream-view route), so
-        // without a `to`/`from` the search reducer's inferred type collapses to
-        // `never`. The reducer below is written type-safely against our schema;
-        // we only erase its type at this un-narrowable assignment boundary.
         search: ((previous: StreamViewSearch) => ({ ...previous, ...patch })) as unknown as never,
         replace: true,
       });
@@ -78,59 +187,110 @@ export function useStreamViewSearch(): {
 }
 
 /**
+ * Every key that claims the stream view's right screen edge. Openers spread
+ * this before setting their own key, so mutual exclusion is structural — a
+ * new edge surface joins by adding its key here rather than patching every
+ * other opener. (`events` is deliberately absent: the inspectors render
+ * INSIDE the Events sheet's feed, so they compose with it rather than
+ * compete; the processor sheet openers clear it themselves.)
+ */
+const RELEASE_PANEL_EDGE = {
+  event: undefined,
+  llmRequest: undefined,
+  panel: undefined,
+  processor: undefined,
+} satisfies Partial<StreamViewSearch>;
+
+/**
  * URL state for the stream view's right-edge overlays — the raw-event
- * inspector and the processors sidebar. They share the same screen edge, so
+ * inspector, the LLM request inspector, the processors sheet, and (on
+ * full-panel layouts) the Events sheet. They share the same screen edge, so
  * every setter keeps them mutually exclusive; if a hand-edited URL asks for
- * both, the inspector wins. Callable from any component under a stream-view
- * route (header, feed rows, the view itself) — the URL is the single owner,
- * so there is nothing to prop-drill.
+ * more than one, either inspector beats the processors sheet, which beats
+ * the Events sheet (between the two inspectors, StreamInspectorOverlay picks
+ * whichever the active mode can render, raw-event inspector first).
  */
 export function useStreamViewPanels(): {
-  /** Offset open in the raw-event inspector; null = closed. */
   inspectedOffset: number | null;
-  /** Subscription key of the processor focused in the sidebar; null = overview. */
+  inspectedLlmRequestOffset: number | null;
   focusedProcessorKey: string | null;
   processorsPanelOpen: boolean;
+  eventsSheetOpen: boolean;
   inspectEvent: (offset: number) => void;
   closeInspector: () => void;
-  /** Focusing a processor implies the sidebar is open. */
+  inspectLlmRequest: (llmRequestOffset: number) => void;
+  closeLlmRequestInspector: () => void;
   focusProcessor: (subscriptionKey: string) => void;
   openProcessorsOverview: () => void;
   closeProcessorsPanel: () => void;
+  openEventsSheet: () => void;
+  closeEventsSheet: () => void;
 } {
   const { search, setSearch } = useStreamViewSearch();
   const inspectedOffset = search.event ?? null;
+  // Both inspector offsets are surfaced as-is. Openers keep them mutually
+  // exclusive, so both set = a stale or hand-edited URL; precedence between
+  // them is the RENDERER's call (StreamInspectorOverlay): only it knows
+  // whether the mode can actually show the raw inspector, and suppressing
+  // the LLM offset here would leave the edge empty in modes that can't.
+  const inspectedLlmRequestOffset = search.llmRequest ?? null;
   const focusedProcessorKey = search.processor ?? null;
   const processorsPanelOpen =
-    inspectedOffset == null && (search.panel === true || focusedProcessorKey != null);
-  // Stable identities: these feed effect deps downstream (e.g. the inspector's
-  // arrow-key listener re-subscribes when its navigate callback changes).
+    inspectedOffset == null &&
+    inspectedLlmRequestOffset == null &&
+    (search.panel === true || focusedProcessorKey != null);
+  const eventsSheetOpen = search.events === true && !processorsPanelOpen;
   const inspectEvent = useCallback(
-    (offset: number) => setSearch({ event: offset, panel: undefined, processor: undefined }),
+    (offset: number) => setSearch({ ...RELEASE_PANEL_EDGE, event: offset }),
     [setSearch],
   );
   const closeInspector = useCallback(() => setSearch({ event: undefined }), [setSearch]);
+  const inspectLlmRequest = useCallback(
+    (llmRequestOffset: number) =>
+      setSearch({ ...RELEASE_PANEL_EDGE, llmRequest: llmRequestOffset }),
+    [setSearch],
+  );
+  const closeLlmRequestInspector = useCallback(
+    () => setSearch({ llmRequest: undefined }),
+    [setSearch],
+  );
   const focusProcessor = useCallback(
     (subscriptionKey: string) =>
-      setSearch({ panel: true, processor: subscriptionKey, event: undefined }),
+      setSearch({
+        ...RELEASE_PANEL_EDGE,
+        events: undefined,
+        panel: true,
+        processor: subscriptionKey,
+      }),
     [setSearch],
   );
   const openProcessorsOverview = useCallback(
-    () => setSearch({ panel: true, processor: undefined, event: undefined }),
+    () => setSearch({ ...RELEASE_PANEL_EDGE, events: undefined, panel: true }),
     [setSearch],
   );
   const closeProcessorsPanel = useCallback(
     () => setSearch({ panel: undefined, processor: undefined }),
     [setSearch],
   );
+  const openEventsSheet = useCallback(
+    () => setSearch({ events: true, panel: undefined, processor: undefined }),
+    [setSearch],
+  );
+  const closeEventsSheet = useCallback(() => setSearch({ events: undefined }), [setSearch]);
   return {
     inspectedOffset,
+    inspectedLlmRequestOffset,
     focusedProcessorKey,
     processorsPanelOpen,
+    eventsSheetOpen,
     inspectEvent,
     closeInspector,
+    inspectLlmRequest,
+    closeLlmRequestInspector,
     focusProcessor,
     openProcessorsOverview,
     closeProcessorsPanel,
+    openEventsSheet,
+    closeEventsSheet,
   };
 }

@@ -18,10 +18,11 @@ import {
   ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
 } from "@iterate-com/shared/auth-claims";
-import { betterAuth } from "better-auth";
+import { APIError, betterAuth } from "better-auth";
 import {
   getSessionActiveOrganizationIdById,
   listOrganizationsForUser,
+  updateInviteStatusById,
 } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
 import {
@@ -41,7 +42,9 @@ import { isPlatformAdminUser } from "./platform-admin.ts";
 import {
   type CloudflareEmailBinding,
   TEST_OTP_CODE,
+  getOrganizationInvitationEmailConfigError,
   sendEmailOtp,
+  sendOrganizationInvitationEmail,
   shouldUseTestOtp,
 } from "./email.ts";
 
@@ -74,11 +77,25 @@ function userIdOf(user: Record<string, unknown> | null | undefined): string | nu
   return typeof user?.id === "string" ? user.id : null;
 }
 
+const iterateOrganizationRoles = new Set(["member", "admin", "owner"]);
+
+function normalizeSingleOrganizationRole(role: string) {
+  const normalized = role.trim();
+  if (!iterateOrganizationRoles.has(normalized)) {
+    throw new APIError("BAD_REQUEST", {
+      message: "Organization role must be one of member, admin, or owner",
+    });
+  }
+  return normalized;
+}
+
 /** Only the config the plugin list actually needs. Kept plain (not the whole
  * `AppConfig`) so the sqlfu schema-generation entry (auth.schema-only.ts) can
  * build the same plugin set without real secrets. */
 export type AuthPluginOptions = {
+  authAppOrigin: string;
   emailOtpEnabled: boolean;
+  fixedTestOtpEnabled: boolean;
   emailBinding: CloudflareEmailBinding | undefined;
   emailSenderDomain: string;
 };
@@ -96,7 +113,68 @@ export function getAuthPlugins(options: AuthPluginOptions) {
     jwt(),
     bearer(),
     admin(),
-    organization(),
+    organization({
+      // Better Auth's `sendInvitationEmail` callback is routed through
+      // runInBackgroundOrAwait, which logs delivery failures instead of failing
+      // inviteMember. Hooks keep delivery on the endpoint path while still
+      // using the native organization invitation lifecycle.
+      organizationHooks: {
+        beforeAddMember: async (data) => ({
+          data: {
+            ...data.member,
+            role: normalizeSingleOrganizationRole(data.member.role),
+          },
+        }),
+        beforeCreateInvitation: async (data) => {
+          const configError = getOrganizationInvitationEmailConfigError({
+            senderDomain: options.emailSenderDomain,
+            emailBinding: options.emailBinding,
+          });
+          if (configError) {
+            throw new APIError("INTERNAL_SERVER_ERROR", { message: configError });
+          }
+
+          return {
+            data: {
+              ...data.invitation,
+              role: normalizeSingleOrganizationRole(data.invitation.role),
+            },
+          };
+        },
+        beforeAcceptInvitation: async (data) => {
+          normalizeSingleOrganizationRole(data.invitation.role);
+        },
+        beforeUpdateMemberRole: async (data) => {
+          return {
+            data: {
+              role: normalizeSingleOrganizationRole(data.newRole),
+            },
+          };
+        },
+        afterCreateInvitation: async (data) => {
+          const invitationUrl = new URL(
+            `/invitations/${data.invitation.id}`,
+            options.authAppOrigin,
+          );
+
+          try {
+            await sendOrganizationInvitationEmail({
+              email: data.invitation.email,
+              role: data.invitation.role,
+              organizationName: data.organization.name,
+              inviterName: data.inviter.name,
+              inviterEmail: data.inviter.email,
+              invitationUrl: invitationUrl.toString(),
+              senderDomain: options.emailSenderDomain,
+              emailBinding: options.emailBinding,
+            });
+          } catch (error) {
+            await updateInviteStatusById(db, { status: "canceled" }, { id: data.invitation.id });
+            throw error;
+          }
+        },
+      },
+    }),
     multiSession({ maximumSessions: 10 }),
     deviceAuthorization({
       verificationUri: "/device",
@@ -117,13 +195,13 @@ export function getAuthPlugins(options: AuthPluginOptions) {
             otpLength: 6,
             expiresIn: 300,
             generateOTP: ({ email }) => {
-              if (shouldUseTestOtp(email)) {
+              if (shouldUseTestOtp({ email, fixedTestOtpEnabled: options.fixedTestOtpEnabled })) {
                 return TEST_OTP_CODE;
               }
               return undefined;
             },
             sendVerificationOTP: async ({ email, otp }) => {
-              if (shouldUseTestOtp(email)) {
+              if (shouldUseTestOtp({ email, fixedTestOtpEnabled: options.fixedTestOtpEnabled })) {
                 return;
               }
 
@@ -166,7 +244,10 @@ export function getAuthPlugins(options: AuthPluginOptions) {
           return scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
         },
         consentReferenceId: async ({ session }) => {
-          const selection = await resolveStoredProjectSelection({ sessionId: session?.id });
+          const selection = await resolveStoredProjectSelection({
+            sessionId: session?.id,
+            client: db,
+          });
           if (!selection || !session?.userId) {
             return undefined;
           }
@@ -187,11 +268,14 @@ export function getAuthPlugins(options: AuthPluginOptions) {
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
       customAccessTokenClaims: async ({ user, referenceId, scopes }) => {
-        const grants = await buildAccessTokenGrantClaims({
-          userId: userIdOf(user),
-          requestedScopes: scopes,
-          selection: parseOAuthProjectSelectionReferenceId(referenceId),
-        });
+        const grants = await buildAccessTokenGrantClaims(
+          {
+            userId: userIdOf(user),
+            requestedScopes: scopes,
+            selection: parseOAuthProjectSelectionReferenceId(referenceId),
+          },
+          db,
+        );
 
         return {
           ...buildIterateTokenClaims(user),
@@ -203,7 +287,7 @@ export function getAuthPlugins(options: AuthPluginOptions) {
       customIdTokenClaims: ({ user }) => buildIterateTokenClaims(user),
       customUserInfoClaims: async ({ user, jwt }) => {
         const [organizationClaims, activeOrganizationId] = await Promise.all([
-          listOrganizationClaimsForUser(userIdOf(user)),
+          listOrganizationClaimsForUser(userIdOf(user), db),
           getSessionActiveOrganizationId(jwt as Record<string, unknown> | null | undefined),
         ]);
         return {

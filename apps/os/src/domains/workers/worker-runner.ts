@@ -1,13 +1,18 @@
+import { tracing } from "cloudflare:workers";
 import { itxEnv as env } from "../../env.ts";
 import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import type {
   StatefulDynamicWorkerRef,
   StatelessDynamicWorkerRef,
   DynamicWorkerRef,
-} from "../../types.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
+} from "./schemas.ts";
+import {
+  isWebSocketUpgradeRequest,
+  withWorkerFetchDispatchHeader,
+} from "./worker-fetch-dispatch.ts";
 import {
   loadResolvedWorker,
   resolveCachedArtifact,
@@ -15,6 +20,8 @@ import {
   type ResolvedWorkerSource,
   type WorkerBindings,
 } from "./worker-loader.ts";
+
+export type DynamicWorkerTraceRole = "project_config" | "run_script" | "scheduler_action";
 
 // Structural shadow of StatefulWorkerDurableObject.invokeCapability instead
 // of the DO's own type: the DO imports this module (cycle), and a typed
@@ -28,11 +35,12 @@ type StatefulWorkerRpc = {
     path: string[];
     ref: StatefulDynamicWorkerRef;
   }): Promise<unknown>;
+  kill(): Promise<void>;
 };
 
 /**
  * Small internal executor for DynamicWorkerRefs — the authority boundary
- * where a dynamic isolate gets its env: a scoped ITX loopback binding
+ * where a dynamic isolate gets its env: a scoped itx loopback binding
  * (capability-tree access as the hosting scope) and the project egress
  * fetcher as globalOutbound (all network the isolate does flows through it —
  * secret substitution, egress control). This is intentionally not an
@@ -117,12 +125,50 @@ export class DynamicWorkerRunner {
     return klass as T;
   }
 
+  /**
+   * Fetch-native dispatch into a dynamic worker.
+   *
+   * WebSocket upgrades cannot ride method replay: a 101 response carrying
+   * `webSocket` fails to serialize across RPC method-call boundaries
+   * (workerd DataCloneError). This lane keeps every hop a real `fetch()` —
+   * stateless refs hit the loaded entrypoint's fetch handler directly, and
+   * stateful refs ride the Durable Object stub's fetch into
+   * StatefulWorkerDurableObject, which forwards to the facet's fetch. Both
+   * channels tunnel upgrades natively.
+   */
+  async fetch({
+    buildBudgetMs,
+    ref,
+    request,
+    traceRole,
+  }: {
+    /** Give up on a cold build after this long (see resolveWorkerSource). */
+    buildBudgetMs?: number;
+    ref: DynamicWorkerRef;
+    request: Request;
+    traceRole?: DynamicWorkerTraceRole;
+  }): Promise<Response> {
+    return this.#trace(ref, "fetch", traceRole, async (span) => {
+      const response =
+        ref.type === "stateful"
+          ? await (
+              env.WORKER.getByName(
+                statefulWorkerDurableObjectName(this.#projectId, ref),
+              ) as unknown as Fetcher
+            ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }))
+          : await (await this.#getStatelessEntrypoint<Fetcher>(ref, buildBudgetMs)).fetch(request);
+      span.setAttribute("http.response.status_code", response.status);
+      return response;
+    });
+  }
+
   async invokeCapability({
     args = [],
     buildBudgetMs,
     flattenNestedPath = false,
     path,
     ref,
+    traceRole,
   }: {
     args?: unknown[];
     /** Give up on a cold build after this long (see resolveWorkerSource). */
@@ -130,29 +176,54 @@ export class DynamicWorkerRunner {
     flattenNestedPath?: boolean;
     path: string[];
     ref: DynamicWorkerRef;
+    traceRole?: DynamicWorkerTraceRole;
   }): Promise<unknown> {
-    if (ref.type === "stateful") {
-      // Method replay must happen inside StatefulWorkerDurableObject. Returning
-      // a dynamic facet stub through one DO and then invoking it from another RPC
-      // target has produced opaque internal RPC failures; keeping the replay at
-      // the owning DO boundary also keeps storage affinity explicit. Stateful
-      // refs are also deliberately lazy: mounting a worker capability only
-      // commits the recipe to the stream, while this first real invocation is the
-      // point where source loading, version-marker writes, and facet restarts are
-      // allowed to mutate durable runtime state.
-      return await this.#statefulWorker(ref).invokeCapability({
-        args,
-        buildBudgetMs,
-        flattenNestedPath,
-        path,
-        ref,
-      });
+    // Capability dispatch is method calls; no name is protocol-special here,
+    // `fetch` included (see docs/dynamic-worker-dispatch.md). A WebSocket
+    // upgrade needs the REAL fetch handler on a real workerd object reached
+    // over fetch hops — its 101 response cannot serialize across the RPC hops
+    // replay uses, and silently rerouting on the name `fetch` would make it
+    // magic in the capability tree when the model is precisely that it is
+    // not. Refuse loudly, with directions.
+    const [firstArg] = args;
+    if (firstArg instanceof Request && isWebSocketUpgradeRequest(firstArg)) {
+      throw new Error(
+        "WebSocket upgrades cannot ride capability dispatch: a 101 response's socket does not " +
+          "serialize across RPC method calls. Use the fetch lane instead — project ingress " +
+          "dispatches app hosts over it automatically, and worker code calls env.ITX.fetch " +
+          "with the target ref in the x-iterate-worker-dispatch header.",
+      );
     }
 
-    const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
-    return flattenNestedPath
-      ? await invokePreferringFlattenedPath({ args, path, target })
-      : await replayPath({ args, path, target });
+    return this.#trace(ref, "call", traceRole, async () => {
+      if (ref.type === "stateful") {
+        // Method replay must happen inside StatefulWorkerDurableObject. Returning
+        // a dynamic facet stub through one DO and then invoking it from another RPC
+        // target has produced opaque internal RPC failures; keeping the replay at
+        // the owning DO boundary also keeps storage affinity explicit. Stateful
+        // refs are also deliberately lazy: mounting a worker capability only
+        // commits the recipe to the stream, while this first real invocation is the
+        // point where source loading, version-marker writes, and facet restarts are
+        // allowed to mutate durable runtime state.
+        return await this.#statefulWorker(ref).invokeCapability({
+          args,
+          buildBudgetMs,
+          flattenNestedPath,
+          path,
+          ref,
+        });
+      }
+
+      const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
+      return flattenNestedPath
+        ? await invokePreferringFlattenedPath({ args, path, target })
+        : await replayPath({ args, path, target });
+    });
+  }
+
+  /** Abort a stateful dynamic worker's outer Durable Object and hosted facet. */
+  async kill(ref: StatefulDynamicWorkerRef): Promise<void> {
+    await this.#statefulWorker(ref).kill();
   }
 
   async #load(
@@ -184,12 +255,30 @@ export class DynamicWorkerRunner {
       statefulWorkerDurableObjectName(this.#projectId, ref),
     ) as unknown as StatefulWorkerRpc;
   }
+
+  #trace<T>(
+    ref: DynamicWorkerRef,
+    operation: "call" | "fetch",
+    traceRole: DynamicWorkerTraceRole | undefined,
+    callback: (span: {
+      setAttribute(name: string, value: boolean | number | string): void;
+    }) => Promise<T>,
+  ): Promise<T> {
+    const kind = traceRole ?? (ref.type === "stateful" ? "stateful" : ref.source.files.type);
+    return tracing.enterSpan(`dynamic_worker.${kind}.${operation}`, async (span) => {
+      span.setAttribute("iterate.worker.kind", kind);
+      span.setAttribute("iterate.worker.operation", operation);
+      span.setAttribute("iterate.worker.source", ref.source.files.type);
+      span.setAttribute("iterate.worker.type", ref.type);
+      return await callback(span);
+    });
+  }
 }
 
 /**
  * Durable identity for a stateful worker.
  *
- * The path is the event stream / ITX scope path. The worker-specific durable key
+ * The path is the event stream / itx scope path. The worker-specific durable key
  * is a query prop so a DO name remains fetchable at the stream path in the
  * future while still allowing multiple durable workers under that path.
  */

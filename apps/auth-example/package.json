@@ -14,16 +14,16 @@
   "dependencies": {
     "@iterate-com/auth": "workspace:*",
     "hono": "^4.12.8",
-    "react": "^19",
-    "react-dom": "^19",
-    "tailwindcss": "^4.2.1"
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.2"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
-    "@tailwindcss/vite": "^4.2.1",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "vite": "^8.0.0",
     "wrangler": "catalog:cloudflare"

@@ -14,14 +14,22 @@ import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
+import { connectItx } from "../../../apps/os/src/itx-client.ts";
 import type {
   ItxAuthCredentials,
+  Project,
   ProjectListEntry,
-  ProjectRpcTarget,
   Session,
   Stream,
-} from "../../../apps/os/src/types.ts";
-import { connectItx } from "../../../apps/os/src/itx-client.ts";
+} from "./itx-api.generated.ts";
+import {
+  emitComputerNeedsLogin,
+  runUseMyComputerJson,
+  shareMyComputer,
+} from "./use-my-computer.ts";
+import { runApprovalCli } from "./approve.ts";
+import { emitNeedsLogin, runApprovalJson } from "./approve-json.ts";
+import { launchMenubarApp } from "./menubar-app.ts";
 import {
   CONFIG_PATH,
   Config,
@@ -329,7 +337,7 @@ export const verifyOsSession = async (input: {
 };
 
 const setupMissingProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
-  let projectItx: RpcStub<ProjectRpcTarget> | undefined;
+  let projectItx: RpcStub<Project> | undefined;
   let agentStream: RpcStub<Stream> | undefined;
   try {
     projectItx = (await session.projects.create({
@@ -337,7 +345,7 @@ const setupMissingProjectForChat = async (session: RpcStub<Session>, project: Pr
       slug: project.slug,
       ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
       waitUntilCreated: false,
-    })) as unknown as RpcStub<ProjectRpcTarget>;
+    })) as unknown as RpcStub<Project>;
     agentStream = projectItx.streams.get(DEFAULT_CHAT_AGENT_PATH) as RpcStub<Stream>;
     await agentStream.waitForEvent({
       afterOffset: 0,
@@ -1032,6 +1040,252 @@ const launcherProcedures = {
         env.ITERATE_BEARER_TOKEN = token;
       }
       await runInheritedProcess({ ...command, env });
+    }),
+
+  useMyComputer: os
+    .input(
+      z.object({
+        project: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe(
+            "OS project id (prj_…) or slug. Defaults to the active config's defaultProject.",
+          ),
+        name: z
+          .string()
+          .trim()
+          .regex(
+            /^[a-zA-Z][a-zA-Z0-9]*$/,
+            "Use a camelCase name: letters and digits, starting with a letter.",
+          )
+          .optional()
+          .describe(
+            "Name agents use to reach this computer (camelCase; the itx.<name> path). Prompted if omitted.",
+          ),
+        json: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Machine mode for the menu-bar app: NDJSON activity on stdout. Never opens a browser — emits a needs-login line instead.",
+          ),
+      }),
+    )
+    .meta({
+      description:
+        "Share THIS computer with a project's agents as itx.myComputer (native dialogs, notifications, Swift). Runs until Ctrl-C.",
+    })
+    .handler(async ({ input }) => {
+      const resolved = resolveConfig(process.cwd(), { throw: true });
+
+      // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
+      // the stored `iterate login` session. In JSON mode we never open a
+      // browser — a missing session is reported so the app can drive login.
+      const envAuth = osAuthFromEnvironment();
+      let authHeaders: OsAuthHeaders | undefined;
+      if (!envAuth) {
+        try {
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        } catch (error) {
+          if (!shouldAutoLoginForChat(error)) throw error;
+          if (input.json) {
+            emitComputerNeedsLogin();
+            return;
+          }
+          console.error(
+            `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
+          );
+          await loginToResolvedConfig(resolved);
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        }
+      }
+      const auth = envAuth ?? osAuthFromHeaders(authHeaders!);
+
+      const projectId = await resolveChatProject({
+        auth,
+        baseUrl: resolved.config.osBaseUrl,
+        configName: resolved.name,
+        configPath: CONFIG_PATH,
+        configuredDefaultProject: resolved.config.defaultProject,
+        explicitProject: input.project,
+      });
+
+      // The share loop re-resolves credentials before every (re)connect so it
+      // survives the short access-token TTL over extended sharing: env secrets
+      // win (doppler/e2e, never expire), else re-read the stored session — which
+      // refreshes the OAuth token when it's near expiry.
+      const reauth = async () => {
+        const env = osAuthFromEnvironment();
+        if (env) return { auth: env.credentials, headers: headersRecord(env.requestHeaders) };
+        // Re-read the EXACT launch-time config by name (picks up a token the
+        // previous refresh persisted) — never re-resolve from cwd, which could
+        // select a different config and send its credential to this server.
+        const config = readConfig(resolved.name);
+        if (config instanceof Error) throw config;
+        const refreshed = osAuthFromHeaders(await getOsAuthHeaders(config, resolved.name));
+        return { auth: refreshed.credentials, headers: headersRecord(refreshed.requestHeaders) };
+      };
+      const shared = {
+        baseUrl: resolved.config.osBaseUrl,
+        projectId,
+        name: input.name,
+        reauth,
+      };
+      // JSON mode announces activity for the menu-bar app; the terminal form
+      // prompts for a name and prints a paste-for-your-agent hint. Both block.
+      if (input.json) {
+        await runUseMyComputerJson(shared);
+        return;
+      }
+      await shareMyComputer(shared);
+    }),
+
+  approve: os
+    .input(
+      z.object({
+        project: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe(
+            "OS project id (prj_…) or slug. Defaults to the active config's defaultProject.",
+          ),
+        enroll: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Generate this machine's approval key (Secure Enclave when available) and enroll it before listening.",
+          ),
+        softwareKey: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("With --enroll: force a software P-256 key instead of the Secure Enclave."),
+        native: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "macOS: approve via native dialogs — the Approve button leads straight into Touch ID. Needs an enrolled Secure Enclave key.",
+          ),
+        keys: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("List the project's enrolled approval keys and exit."),
+        revoke: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Revoke this machine's approval key (append key-revoked, destroy local material) and exit.",
+          ),
+        json: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Machine mode for the menu-bar app: NDJSON events on stdout, {offset,decision} on stdin. Never opens a browser — emits a needs-login line instead.",
+          ),
+        menubar: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "macOS: build (on first use, from the shipped Swift source) and launch the menu-bar approver app for this project, then exit.",
+          ),
+      }),
+    )
+    .meta({
+      description:
+        "Be the human in the loop for a project's egress: watch held outbound requests and approve or reject each one (Touch-ID-signed when an enclave key is enrolled). Runs until Ctrl-C.",
+    })
+    .handler(async ({ input }) => {
+      const resolved = resolveConfig(process.cwd(), { throw: true });
+
+      // --menubar just builds + launches the GUI app; it needs no auth here (the
+      // app signs in itself). Handle it first, and standalone.
+      if (input.menubar) {
+        if (input.json || input.enroll || input.keys || input.revoke || input.native) {
+          throw new Error("--menubar is standalone; run it without the other flags.");
+        }
+        const project = input.project ?? resolved.config.defaultProject;
+        if (!project) {
+          throw new Error("--menubar needs --project or a configured defaultProject.");
+        }
+        await launchMenubarApp({
+          configName: resolved.name,
+          project,
+          log: (message) => console.error(message),
+        });
+        return;
+      }
+
+      // --json is listen-and-decide only; the setup flags are for the terminal
+      // form. Reject the combination loudly rather than silently ignoring it.
+      if (input.json && (input.enroll || input.keys || input.revoke || input.native)) {
+        throw new Error(
+          "--json cannot be combined with --enroll/--keys/--revoke/--native; run those separately.",
+        );
+      }
+
+      // Auth, exactly like `chat`: env secrets win (doppler/e2e), otherwise use
+      // the stored `iterate login` session. In JSON mode we never open a
+      // browser — a missing session is reported so the app can drive login.
+      const envAuth = osAuthFromEnvironment();
+      let authHeaders: OsAuthHeaders | undefined;
+      if (!envAuth) {
+        try {
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        } catch (error) {
+          if (!shouldAutoLoginForChat(error)) throw error;
+          if (input.json) {
+            emitNeedsLogin();
+            return;
+          }
+          console.error(
+            `No active session for ${resolved.config.osBaseUrl}. Starting browser login...`,
+          );
+          await loginToResolvedConfig(resolved);
+          authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+        }
+      }
+      const auth = envAuth ?? osAuthFromHeaders(authHeaders!);
+
+      const projectId = await resolveChatProject({
+        auth,
+        baseUrl: resolved.config.osBaseUrl,
+        configName: resolved.name,
+        configPath: CONFIG_PATH,
+        configuredDefaultProject: resolved.config.defaultProject,
+        explicitProject: input.project,
+      });
+
+      if (input.json) {
+        await runApprovalJson({
+          auth: auth.credentials,
+          baseUrl: resolved.config.osBaseUrl,
+          projectId,
+          headers: headersRecord(auth.requestHeaders),
+        });
+        return;
+      }
+
+      await runApprovalCli({
+        auth: auth.credentials,
+        baseUrl: resolved.config.osBaseUrl,
+        projectId,
+        headers: headersRecord(auth.requestHeaders),
+        enroll: input.enroll,
+        softwareKey: input.softwareKey,
+        native: input.native,
+        keys: input.keys,
+        revoke: input.revoke,
+      });
     }),
 
   orgs: {

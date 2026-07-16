@@ -5,8 +5,46 @@ import {
   type FetchLike,
   type RequestOptions,
   type StreamableHTTPClientTransportOptions,
+  type Tool,
 } from "@modelcontextprotocol/client";
-import type { McpClientConnectInput } from "../../types.ts";
+
+/** Input to `itx.mcp.connect`: the MCP server's streamable-HTTP URL, optional
+ * request headers (auth), and an optional per-tool-call timeout in
+ * milliseconds. */
+export type McpClientConnectInput = {
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  url: string;
+};
+
+/**
+ * A connected MCP client. Its tools are dotted method calls
+ * (`itx.mcp.<server>.<tool>({...})`) resolved through the dynamic path-call
+ * fallback, so this contract deliberately does not re-declare a fixed surface.
+ */
+export type McpClientRpc = object;
+
+/** Input to `itx.mcp.beginOAuth`: the OAuth-protected MCP server to connect to,
+ * the secret path to store the resulting token at, and an optional OAuth scope. */
+export type McpBeginOAuthInput = {
+  /** The MCP server's URL (the same URL you would pass to `connect`). */
+  url: string;
+  /** Where the resulting token is stored write-only, e.g. `/secrets/mcp/cloudflare`. */
+  path: string;
+  /** OAuth scope to request; the server's default is used when omitted. */
+  scope?: string;
+};
+
+/** Result of `itx.mcp.beginOAuth`: a link to send the user through, and the
+ * secret path the token lands at once they finish. */
+export type McpBeginOAuthResult = {
+  /** Send this to the user. Signing in there stores the token and (for an agent)
+   * messages you back so you can continue. */
+  authorizationUrl: string;
+  /** The `/secrets/…` path the token is stored at. Connect afterwards with
+   * `headers: { authorization: 'Bearer getSecret({ path: "<path>", field: "accessToken" })' }`. */
+  path: string;
+};
 
 const CLIENT_INFO = {
   name: "itx-mcp-client",
@@ -28,6 +66,15 @@ export async function callMcpToolPath(
   const session = await ItxMcpClientSession.connect(input);
   try {
     return await session.callTool(toolCall);
+  } finally {
+    await session.close();
+  }
+}
+
+export async function listMcpTools(input: McpClientSessionInput): Promise<Tool[]> {
+  const session = await ItxMcpClientSession.connect(input);
+  try {
+    return (await session.listTools()).tools;
   } finally {
     await session.close();
   }
@@ -68,6 +115,10 @@ class ItxMcpClientSession {
         this.requestOptions,
       ),
     );
+  }
+
+  async listTools() {
+    return await this.client.listTools(undefined, this.requestOptions);
   }
 
   async close() {

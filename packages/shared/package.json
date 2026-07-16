@@ -14,6 +14,7 @@
     "./apps/internal-router-contract": "./src/apps/internal-router-contract.ts",
     "./test-support/vitest-e2e": "./src/test-support/vitest-e2e/index.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/index.ts",
+    "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
     "./request-logging": "./src/request-logging.ts",
     "./slugify": "./src/slugify.ts",
     "./posthog": {
@@ -40,14 +41,14 @@
     "@orpc/shared": "1.13.14",
     "evlog": "^1.8.0",
     "minimatch": "^10.1.1",
-    "react": "^19.2.4",
+    "react": "^19.2.7",
     "type-fest": "^5.5.0",
     "vite": "7.3.1",
     "zod": "^4.1.11"
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
-    "@types/react": "^19.2.14",
+    "@types/react": "^19.2.17",
     "typescript": "^5.9.3",
     "vitest": "^4.1.5",
     "wrangler": "catalog:cloudflare"

@@ -20,13 +20,14 @@ export const Route = createFileRoute("/admin/streams/$projectId/$")({
 
 function AdminStreamDetailPage() {
   const { projectId, _splat: streamPath } = Route.useParams();
-  const { source, streamProjectId } = useAdminStreamSource(projectId);
+  const { source, streamProjectId, resetTransport } = useAdminStreamSource(projectId);
 
   return (
     <ProjectStreamView
       emptyLabel="No events in this stream yet."
       projectId={streamProjectId}
       streamSource={source}
+      resetStreamSourceTransport={resetTransport}
       streamPath={streamPath}
     />
   );

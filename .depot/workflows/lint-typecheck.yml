@@ -5,11 +5,17 @@ on:
       - main
   pull_request: {}
   workflow_dispatch: {}
+# Cancel a branch's in-flight run when a newer commit supersedes it. PRs use
+# head_ref; main and manual runs use ref_name.
+concurrency:
+  group: lint-typecheck-${{ github.head_ref || github.ref_name || github.run_id }}
+  cancel-in-progress: true
 jobs:
   lint-typecheck:
     runs-on:
       size: 8x32
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

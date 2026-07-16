@@ -28,3 +28,5 @@ setup:
     path: apps/auth-example/
   - project: tunnels
     path: apps/tunnels/
+  - project: dummy-petshop
+    path: apps/dummy-petshop/

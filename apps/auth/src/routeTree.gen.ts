@@ -18,6 +18,7 @@ import { Route as AuthConsentRouteImport } from "./routes/_auth/consent.tsx";
 import { Route as AuthAdminRouteImport } from "./routes/_auth/admin.tsx";
 import { Route as AuthAdminIndexRouteImport } from "./routes/_auth/admin/index.tsx";
 import { Route as AuthProjectsChar123OrganizationSlugChar125RouteImport } from "./routes/_auth/projects.{-$organizationSlug}.tsx";
+import { Route as AuthInvitationsInvitationIdRouteImport } from "./routes/_auth/invitations.$invitationId.tsx";
 import { Route as AuthAdminClientsRouteImport } from "./routes/_auth/admin/clients.tsx";
 
 const LoginRoute = LoginRouteImport.update({
@@ -65,6 +66,12 @@ const AuthProjectsChar123OrganizationSlugChar125Route =
     path: "/projects/{-$organizationSlug}",
     getParentRoute: () => AuthRoute,
   } as any);
+const AuthInvitationsInvitationIdRoute =
+  AuthInvitationsInvitationIdRouteImport.update({
+    id: "/invitations/$invitationId",
+    path: "/invitations/$invitationId",
+    getParentRoute: () => AuthRoute,
+  } as any);
 const AuthAdminClientsRoute = AuthAdminClientsRouteImport.update({
   id: "/clients",
   path: "/clients",
@@ -79,6 +86,7 @@ export interface FileRoutesByFullPath {
   "/consent": typeof AuthConsentRoute;
   "/project-access": typeof AuthProjectAccessRoute;
   "/admin/clients": typeof AuthAdminClientsRoute;
+  "/invitations/$invitationId": typeof AuthInvitationsInvitationIdRoute;
   "/projects/{-$organizationSlug}": typeof AuthProjectsChar123OrganizationSlugChar125Route;
   "/admin/": typeof AuthAdminIndexRoute;
 }
@@ -89,6 +97,7 @@ export interface FileRoutesByTo {
   "/project-access": typeof AuthProjectAccessRoute;
   "/": typeof AuthIndexRoute;
   "/admin/clients": typeof AuthAdminClientsRoute;
+  "/invitations/$invitationId": typeof AuthInvitationsInvitationIdRoute;
   "/projects/{-$organizationSlug}": typeof AuthProjectsChar123OrganizationSlugChar125Route;
   "/admin": typeof AuthAdminIndexRoute;
 }
@@ -102,6 +111,7 @@ export interface FileRoutesById {
   "/_auth/project-access": typeof AuthProjectAccessRoute;
   "/_auth/": typeof AuthIndexRoute;
   "/_auth/admin/clients": typeof AuthAdminClientsRoute;
+  "/_auth/invitations/$invitationId": typeof AuthInvitationsInvitationIdRoute;
   "/_auth/projects/{-$organizationSlug}": typeof AuthProjectsChar123OrganizationSlugChar125Route;
   "/_auth/admin/": typeof AuthAdminIndexRoute;
 }
@@ -115,6 +125,7 @@ export interface FileRouteTypes {
     | "/consent"
     | "/project-access"
     | "/admin/clients"
+    | "/invitations/$invitationId"
     | "/projects/{-$organizationSlug}"
     | "/admin/";
   fileRoutesByTo: FileRoutesByTo;
@@ -125,6 +136,7 @@ export interface FileRouteTypes {
     | "/project-access"
     | "/"
     | "/admin/clients"
+    | "/invitations/$invitationId"
     | "/projects/{-$organizationSlug}"
     | "/admin";
   id:
@@ -137,6 +149,7 @@ export interface FileRouteTypes {
     | "/_auth/project-access"
     | "/_auth/"
     | "/_auth/admin/clients"
+    | "/_auth/invitations/$invitationId"
     | "/_auth/projects/{-$organizationSlug}"
     | "/_auth/admin/";
   fileRoutesById: FileRoutesById;
@@ -212,6 +225,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthProjectsChar123OrganizationSlugChar125RouteImport;
       parentRoute: typeof AuthRoute;
     };
+    "/_auth/invitations/$invitationId": {
+      id: "/_auth/invitations/$invitationId";
+      path: "/invitations/$invitationId";
+      fullPath: "/invitations/$invitationId";
+      preLoaderRoute: typeof AuthInvitationsInvitationIdRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
     "/_auth/admin/clients": {
       id: "/_auth/admin/clients";
       path: "/clients";
@@ -241,6 +261,7 @@ interface AuthRouteChildren {
   AuthConsentRoute: typeof AuthConsentRoute;
   AuthProjectAccessRoute: typeof AuthProjectAccessRoute;
   AuthIndexRoute: typeof AuthIndexRoute;
+  AuthInvitationsInvitationIdRoute: typeof AuthInvitationsInvitationIdRoute;
   AuthProjectsChar123OrganizationSlugChar125Route: typeof AuthProjectsChar123OrganizationSlugChar125Route;
 }
 
@@ -249,6 +270,7 @@ const AuthRouteChildren: AuthRouteChildren = {
   AuthConsentRoute: AuthConsentRoute,
   AuthProjectAccessRoute: AuthProjectAccessRoute,
   AuthIndexRoute: AuthIndexRoute,
+  AuthInvitationsInvitationIdRoute: AuthInvitationsInvitationIdRoute,
   AuthProjectsChar123OrganizationSlugChar125Route:
     AuthProjectsChar123OrganizationSlugChar125Route,
 };

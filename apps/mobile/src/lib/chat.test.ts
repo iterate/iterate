@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../../os/src/types.ts";
+import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
 import {
   ASSISTANT_MESSAGE_TYPE,
   mergeEventsByOffset,
@@ -63,9 +63,10 @@ test("mobile agent paths follow the web slug convention under the mobile channel
 function userMessage(offset: number, content: string): StreamEvent {
   return {
     type: USER_MESSAGE_TYPE,
-    payload: { content, origin: "web" },
+    payload: { content, role: "user" },
     offset,
     createdAt: new Date(2026, 0, 1, 0, 0, offset).toISOString(),
+    path: "/agents/mobile/test",
   };
 }
 
@@ -75,9 +76,16 @@ function assistantMessage(offset: number, message: string): StreamEvent {
     payload: { message },
     offset,
     createdAt: new Date(2026, 0, 1, 0, 0, offset).toISOString(),
+    path: "/agents/mobile/test",
   };
 }
 
 function activity(offset: number, type: string): StreamEvent {
-  return { type, payload: {}, offset, createdAt: new Date(2026, 0, 1, 0, 0, offset).toISOString() };
+  return {
+    type,
+    payload: {},
+    offset,
+    createdAt: new Date(2026, 0, 1, 0, 0, offset).toISOString(),
+    path: "/agents/mobile/test",
+  };
 }

@@ -7,12 +7,12 @@
 
 import {
   initialAgentUiState,
-  planAgentUiOps,
+  reduceAgentUi,
   type AgentUiActivity,
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { StreamEvent } from "../../../os/src/types.ts";
+import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
 
 export type {
   AgentUiActivity,
@@ -35,25 +35,25 @@ export type AgentFeed = {
   state: AgentUiState;
 };
 
+// packages/ui doesn't export its local `Event` type (StreamEvent + streamPath)
+// from the package boundary, so we borrow it the same way the browser-feed
+// projector does — the parameter type of the exported reducer function.
+type AgentUiEvent = Parameters<typeof reduceAgentUi>[1];
+
 export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed {
-  const { endState, ops } = planAgentUiOps(
-    initialAgentUiState(),
-    events.map((event) => ({ ...event, streamPath: agentPath })),
-  );
-  // Ops are upserts at dense positions (same application as the TUI's
-  // agent-feed-model and the browser's SQLite processor).
+  let state = initialAgentUiState();
   const settled: AgentUiItem[] = [];
-  for (const op of ops) settled[op.localIndex] = op.item;
-  const items = [
-    ...settled,
-    ...endState.queuedUserMessages,
-    ...(endState.live ? [endState.live] : []),
-  ];
+  for (const event of events) {
+    const folded = reduceAgentUi(state, { ...event, streamPath: agentPath } as AgentUiEvent);
+    state = folded.endState;
+    settled.push(...folded.items);
+  }
+  const items = [...settled, ...state.queuedUserMessages, ...(state.live ? [state.live] : [])];
   return {
     items,
-    live: endState.live,
-    working: endState.live != null && endState.live.status === "running",
-    state: endState,
+    live: state.live,
+    working: state.live != null && state.live.status === "running",
+    state,
   };
 }
 

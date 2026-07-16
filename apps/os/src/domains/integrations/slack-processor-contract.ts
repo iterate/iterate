@@ -1,26 +1,21 @@
-// Contract for the "slack" webhook-router processor mounted on the per-project
-// `/integrations/slack` stream. Rewritten new-style for itx from
-// the pre-migration slack domain (git history).
+// Contract for the "slack" webhook-router processor mounted on each
+// per-project `/integrations/slack/{connection}` stream. Rewritten new-style
+// for itx from the pre-migration slack domain (git history).
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
 
-const NullableOptionalString = z.preprocess(
-  (value) => (value === null ? undefined : value),
-  z.string().optional(),
-);
-
 /**
- * Processor mounted on `/integrations/slack`.
+ * Processor mounted on `/integrations/slack/{connection}`.
  *
  * This processor is only a Slack webhook router. It owns the raw Slack webhook
  * event and a reduced `channel:thread_ts -> streamPath` lookup table. It does
- * not interpret webhooks as agent input.
+ * not interpret webhooks as agent context.
  *
  * The intended flow is:
  *
  * 1. The webhook route appends the raw Slack Events API body to
- *    `/integrations/slack` as `events.iterate.com/slack/webhook-received`.
+ *    `/integrations/slack/{connection}` as `events.iterate.com/slack/webhook-received`.
  * 2. If the webhook is about a Slack thread and that thread has no route yet,
  *    this processor emits `events.iterate.com/slack/thread-route-configured`.
  * 3. This processor forwards the original webhook body verbatim to the routed
@@ -30,17 +25,9 @@ const NullableOptionalString = z.preprocess(
  */
 export const SlackProcessorContract = defineProcessorContract({
   slug: "slack",
-  version: "0.2.0",
+  version: "0.3.0",
   description: "Routes raw Slack webhooks into Slack-backed agent streams.",
   stateSchema: z.object({
-    connection: z
-      .object({
-        status: z.enum(["connected", "disconnected"]).default("disconnected"),
-        externalId: z.string().optional(),
-        teamId: z.string().optional(),
-        teamName: z.string().optional(),
-      })
-      .default({ status: "disconnected" }),
     /**
      * Durable Slack-thread-to-stream routing table.
      *
@@ -50,34 +37,34 @@ export const SlackProcessorContract = defineProcessorContract({
     routes: z.record(z.string(), z.string()).default({}),
   }),
   events: {
-    "events.iterate.com/slack/connected": {
-      description: "Slack OAuth connection was established for this project.",
-      payloadSchema: z
-        .object({
-          externalId: z.string(),
-          projectId: z.string(),
-          scopes: z.array(z.string()).optional(),
-          teamDomain: NullableOptionalString,
-          teamId: NullableOptionalString,
-          teamName: NullableOptionalString,
-        })
-        .loose(),
-    },
-    "events.iterate.com/slack/disconnected": {
-      description: "Slack OAuth connection was removed for this project.",
-      payloadSchema: z
-        .object({
-          externalId: z.string().optional(),
-          projectId: z.string(),
-          teamId: NullableOptionalString,
-          teamName: NullableOptionalString,
-        })
-        .loose(),
-    },
     "events.iterate.com/slack/webhook-received": {
       description:
-        "Raw Slack Events API callback body, appended by the webhook route to `/integrations/slack` and forwarded unchanged to routed thread streams.",
+        "Raw Slack Events API callback body, appended by the webhook route to `/integrations/slack/{connection}` and forwarded unchanged to routed thread streams.",
       payloadSchema: z.object({ body: z.record(z.string(), z.unknown()) }).loose(),
+      examples: [
+        {
+          description:
+            "A threaded Slack message, as Slack's Events API delivers it (trimmed to the typical fields).",
+          payload: {
+            body: {
+              type: "event_callback",
+              team_id: "T0XYZ1234",
+              api_app_id: "A0AB12CD3",
+              event: {
+                type: "message",
+                channel: "C0AB12CD3",
+                user: "U0DE45FG6",
+                text: "Hey @iterate, can you take a look at this?",
+                ts: "1751980451.204569",
+                thread_ts: "1751980423.123456",
+                channel_type: "channel",
+              },
+              event_id: "Ev0HI78JK9",
+              event_time: 1751980451,
+            },
+          },
+        },
+      ],
     },
     "events.iterate.com/slack/thread-route-configured": {
       description:
@@ -87,11 +74,20 @@ export const SlackProcessorContract = defineProcessorContract({
         threadTs: z.string(),
         streamPath: z.string(),
       }),
+      examples: [
+        {
+          description:
+            "A fresh Slack thread gets its own routed agent stream (`/agents/slack/{connection}/{channel}/ts-{threadTs}`, channel and ts sanitized to lowercase kebab).",
+          payload: {
+            channel: "C0AB12CD3",
+            threadTs: "1751980423.123456",
+            streamPath: "/agents/slack/acme/c0ab12cd3/ts-1751980423-123456",
+          },
+        },
+      ],
     },
   },
   consumes: [
-    "events.iterate.com/slack/connected",
-    "events.iterate.com/slack/disconnected",
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
   ],
@@ -100,5 +96,12 @@ export const SlackProcessorContract = defineProcessorContract({
     "events.iterate.com/slack/webhook-received",
   ],
 });
+
+/**
+ * The contract's type under the same identifier, so type-level helpers read
+ * without `typeof`: `ProcessorState<SlackProcessorContract>`,
+ * `ConsumedEvent<SlackProcessorContract>`, `ProcessorEvent<SlackProcessorContract, T>`.
+ */
+export type SlackProcessorContract = typeof SlackProcessorContract;
 
 export type SlackProcessorState = z.infer<typeof SlackProcessorContract.stateSchema>;

@@ -101,8 +101,8 @@ export function GlobalCommandPalette() {
 
   const streamNavigator = useMemo<StreamNavigator | null>(() => {
     if (adminStream != null) {
-      // Admin addresses arbitrary projects through the global (admin-cookie)
-      // session and stays within the admin explorer routes.
+      // Admin addresses arbitrary projects through platform-wide operator
+      // authority and stays within the admin explorer routes.
       return {
         source: (path) => ({
           async subscribe(args) {
@@ -168,6 +168,11 @@ export function GlobalCommandPalette() {
       currentPath={activeStream.streamPath}
       navigator={streamNavigator}
       scope={activeStream.projectId}
+      // The admin lane browses through platform-wide operator authority, and its
+      // `__null__` deployment namespace has no project DO to index — dialing
+      // `projects.get("__null__")` would just retry forever. Admin gets the
+      // tree; the live index is the app lane's.
+      liveIndex={adminStream == null}
     />
   );
 }
@@ -229,7 +234,7 @@ function ProjectPickerDialog({
  * The admin stream explorer's ⌘K context: which project (or the `__null__`
  * deployment namespace) it is browsing and where it stands. Detected from the
  * /admin/streams/$projectId route params — admin navigates within its own
- * explorer routes and dials through the global admin session.
+ * explorer routes and dials through platform-wide operator authority.
  */
 function getAdminStreamContext(matches: ReturnType<typeof useMatches>) {
   const adminMatch = matches.find((match) => match.routeId.startsWith("/admin/streams/$projectId"));

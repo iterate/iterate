@@ -8,7 +8,7 @@
 // global WebSocket satisfies capnweb; so does Node's.
 
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { Session, UnauthenticatedOs } from "../../../os/src/types.ts";
+import type { Session, UnauthenticatedOs } from "../../../os/src/itx-api.generated.ts";
 
 // What `authenticate()` actually resolves to on a capnweb stub (property
 // chains stay stubs rather than promises) — `RpcStub<Session>` directly would

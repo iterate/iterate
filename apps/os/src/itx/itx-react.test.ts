@@ -71,6 +71,28 @@ describe("itx socket map", () => {
     expect(FakeWebSocket.instances[1]!.url).toContain("/api");
   });
 
+  test("an isolated connection lane cannot evict ordinary reads in the same project", async () => {
+    const { connectItxBrowser, evictItxSocketIfCurrent } = await import("./itx-react.tsx");
+    const projectAddress = { projectId: "acme" };
+    const mirrorAddress = { projectId: "acme", connectionKey: "stream-mirror:/repos/iterate" };
+
+    const project = connectItxBrowser(projectAddress);
+    const mirror = connectItxBrowser(mirrorAddress);
+    expect(connectItxBrowser(mirrorAddress)).toBe(mirror);
+    expect(mirror).not.toBe(project);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    FakeWebSocket.instances[0]!.fire("open");
+    FakeWebSocket.instances[1]!.fire("open");
+    await expect(project).resolves.toMatchObject({ url: expect.stringContaining("/api/acme") });
+    await expect(mirror).resolves.toMatchObject({ url: expect.stringContaining("/api/acme") });
+
+    evictItxSocketIfCurrent(mirrorAddress, mirror);
+    expect(connectItxBrowser(projectAddress)).toBe(project);
+    expect(connectItxBrowser(mirrorAddress)).not.toBe(mirror);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+  });
+
   test("a closed socket is dropped; the next connectItxBrowser dials a fresh one", async () => {
     const { connectItxBrowser } = await import("./itx-react.tsx");
     const first = connectItxBrowser({ projectId: "acme" });
@@ -106,6 +128,51 @@ describe("itx socket map", () => {
     FakeWebSocket.instances[0]!.fire("close"); // stale repeat — must NOT drop the second
     expect(connectItxBrowser({ projectId: "acme" })).toBe(second);
     expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  test("repeated closed-before-open dials get backoff from the SECOND consecutive failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const { connectItxBrowser } = await import("./itx-react.tsx");
+      connectItxBrowser({ projectId: "acme" });
+      FakeWebSocket.instances[0]!.fire("close"); // failure 1
+      connectItxBrowser({ projectId: "acme" }); // first retry is immediate
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      FakeWebSocket.instances[1]!.fire("close"); // failure 2
+      connectItxBrowser({ projectId: "acme" }); // now paced: no socket yet
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(FakeWebSocket.instances).toHaveLength(3);
+      // A successful open resets the pacing.
+      FakeWebSocket.instances[2]!.fire("open");
+      FakeWebSocket.instances[2]!.fire("close"); // post-open death, not a dial failure
+      connectItxBrowser({ projectId: "acme" });
+      expect(FakeWebSocket.instances).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("evictItxSocketIfCurrent only evicts the exact suspect, never a successor", async () => {
+    const { connectItxBrowser, reconnectItx, evictItxSocketIfCurrent } =
+      await import("./itx-react.tsx");
+    const first = connectItxBrowser({ projectId: "acme" });
+    onlySocket().fire("open");
+    await first;
+
+    reconnectItx({ projectId: "acme" }); // replaced by a successor
+    const second = connectItxBrowser({ projectId: "acme" });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    // A LATE verdict against the replaced first socket must not touch the
+    // successor — regardless of the successor's age (no age heuristic here).
+    evictItxSocketIfCurrent({ projectId: "acme" }, first);
+    expect(connectItxBrowser({ projectId: "acme" })).toBe(second);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    // A verdict against the CURRENT socket evicts it, young or not.
+    evictItxSocketIfCurrent({ projectId: "acme" }, second);
+    expect(connectItxBrowser({ projectId: "acme" })).not.toBe(second);
   });
 
   test("reconnectItx disposes the live socket and forces a fresh dial", async () => {
@@ -246,7 +313,13 @@ describe("useItxSubscription liveness", () => {
     const socketsBefore = FakeWebSocket.instances.length;
     const globalSocket = connectItxBrowser();
 
+    // TWO ping timeouts: the watchdog holds the same two-strike standard as
+    // the stream runtimes' probes (one slow answer is a busy DO, not a dead
+    // socket — and this lane's recovery drops EVERY socket in the tab). After
+    // the FIRST timeout nothing may drop — a one-strike reversion fails HERE.
     await harness.advance(INTERVAL + PING_TIMEOUT);
+    expect(connectItxBrowser()).toBe(globalSocket);
+    await harness.advance(PING_TIMEOUT);
     // reconnectAllItx ran: the cached socket promise was dropped, the hook
     // re-suspended, and a FRESH dial started.
     expect(connectItxBrowser()).not.toBe(globalSocket);

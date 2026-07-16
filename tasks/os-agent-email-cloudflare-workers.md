@@ -12,9 +12,23 @@ tags: [os, agents, email, cloudflare, integrations]
 (rpc-targets.ts `EmailRpcTarget`, `domains/email/utils.ts`, `EMAIL`
 send_email binding on all itx workers, `email/sent` audit events, the
 `email-send` catalogue example). Sends from `<slug>@<first project hostname
-base>`, enforced in OS. Remaining: everything inbound below, plus onboarding
-`iterate.app` for Email Sending in the prd Cloudflare account and miniflare
-send_email simulation for local dev (the binding is deploy-only for now).
+base>`, enforced in OS.
+
+The inbound + threading slice is in review (branch dour-clavicle): the
+worker `email()` handler (`domains/email/email-ingress.ts`), the `email`
+thread-router processor on `/integrations/email`, per-thread agents at
+`/agents/email/t<threadId>`, the `email-agent` processor, `itx.email.reply`
+with derived threading headers + `Reply-To: <slug>+t<id>@<base>`, outbound
+attachments from itx.files, a deployment-wide DMARC-gated sender allowlist
+(`APP_CONFIG_EMAIL__ALLOWED_SENDERS`), and Email Routing enable + catch-all
+in ensure-resources.ts. NOTE: it uses an offset-keyed thread id + Reply-To
+token + Message-ID directory instead of the `p_<base32(agentPath)>` codec
+proposed below — real agent paths overflow the 64-char local-part limit and
+the router needs the Message-ID index anyway. Remaining: Email Sending
+onboarding in the Cloudflare dashboard per env, per-project sender policy in
+router state (deployment-wide config today), inbound attachment storage into
+itx.files (metadata-only today), miniflare send_email simulation for local
+dev.
 
 ## Goal
 
@@ -143,8 +157,9 @@ Suggested streams/processors:
 - An email router processor tracks email thread state using `Message-ID`,
   `In-Reply-To`, and `References`, so future replies can route even when the
   recipient is a project-level address.
-- An email agent processor converts routed mail into
-  `events.iterate.com/agent/input-added`.
+- An email agent processor converts routed mail into an
+  `events.iterate.com/agents/context-added` developer item with an email actor,
+  an event ref back to the routed mail, and an explicit LLM request policy.
 
 In v1, attachments can be represented as metadata plus a stored blob reference or
 explicitly rejected with a clear event. Do not silently drop attachments.
@@ -236,7 +251,7 @@ Do not block the `@iterate.app` v1 on full custom-domain email.
 - [ ] Inbound mail to `<slug>@iterate.app` appends one deterministic project email
       event.
 - [ ] Inbound mail to `<slug>+p_<encodedPath>@iterate.app` wakes/routes to the
-      decoded agent path and creates an agent input event.
+      decoded agent path and creates an agent context event.
 - [ ] OS can send mail through Cloudflare from authorized project and agent
       addresses.
 - [ ] OS rejects attempts to send from another project slug or an unsupported

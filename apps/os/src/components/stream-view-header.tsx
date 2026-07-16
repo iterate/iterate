@@ -1,68 +1,125 @@
-import { ChevronDownIcon, FilterIcon } from "lucide-react";
+import {
+  CircleStopIcon,
+  FilterIcon,
+  HistoryIcon,
+  MoreHorizontalIcon,
+  PauseIcon,
+  PlayIcon,
+  RadioIcon,
+  UsersIcon,
+} from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@iterate-com/ui/components/dropdown-menu";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { useIsMobile } from "@iterate-com/ui/hooks/use-mobile";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
-import { PresenceAvatar } from "~/components/stream-processors-panel.tsx";
+import { StreamPathPill } from "~/components/stream-path-pill.tsx";
+import { PresenceAvatar } from "~/components/stream-state-panel.tsx";
 import { feedFiltersActive } from "~/lib/stream-feed-filters.ts";
-import { presenceLabel, sparklinePoints, type RttMetrics } from "~/lib/stream-presence.ts";
 import {
-  streamViewTab,
+  presenceLabel,
+  sparklinePoints,
+  type BrowserStreamMetricsView,
+} from "~/lib/stream-presence.ts";
+import {
+  defaultModeForStream,
+  modeCapabilities,
+  modesForStream,
+  streamViewMode,
   useStreamViewPanels,
   useStreamViewSearch,
-  type StreamViewTab,
+  type StreamViewMode,
 } from "~/lib/stream-view-search.ts";
 
 const MAX_PRESENCE_AVATARS = 4;
 
 /**
  * THE page header — the app renders no other. Pill path breadcrumb (⌘K
- * trigger) top-left; presence, metrics, Feed/State tabs, and the filter
- * toggle on the right. Tab/filter/panel state is read and written straight
- * from the URL (stream-view-search.ts), so this component needs no callbacks
- * from the view it heads.
+ * trigger) top-left; presence, metrics, mode tabs (when the stream offers
+ * more than one), and the filter toggle (when the active mode opts in) on
+ * the right. Tab/filter/panel state is URL-backed (stream-view-search.ts).
+ *
+ * Mobile: presence avatars and the RTT sparkline leave the chrome row (they
+ * force sideways scroll) and live under the ⋮ menu instead. The row itself is
+ * a single non-wrapping flex line with overflow clipped.
  */
 export function StreamViewHeader({
   agentBusy,
+  agentPause,
+  eventsToggle,
   metrics,
   presence,
+  streamKill,
   streamPath,
 }: {
   agentBusy: boolean;
-  metrics: RttMetrics;
+  agentPause?: {
+    paused: boolean;
+    pending: boolean;
+    reason: string | null;
+    setPaused: (paused: boolean) => Promise<void>;
+  };
+  streamKill: {
+    kill: () => Promise<void>;
+    pending: boolean;
+  };
+  /**
+   * Full-panel layouts relegate the feed to a sheet; this renders the header
+   * button that opens it (replacing mode tabs and filter, which live inside
+   * the sheet instead).
+   */
+  eventsToggle?: { eventCount: number };
+  /** This browser's REAL measured metrics (see useBrowserStreamMetrics) — "—" until samples exist. */
+  metrics: BrowserStreamMetricsView;
   presence: readonly AgentUiPresenceEntry[];
   streamPath: string;
 }) {
+  const isMobile = useIsMobile();
   const { search, setSearch } = useStreamViewSearch();
-  const { focusedProcessorKey, focusProcessor, openProcessorsOverview } = useStreamViewPanels();
+  const {
+    focusedProcessorKey,
+    focusProcessor,
+    openProcessorsOverview,
+    eventsSheetOpen,
+    openEventsSheet,
+    closeEventsSheet,
+  } = useStreamViewPanels();
+  const caps = modeCapabilities(search, streamPath);
+  // Presence = who is here NOW. The reduced roster keeps disconnected
+  // entries (the panel needs them for asleep/parked rows), but avatars and
+  // the +N overflow must not count corpses — a listing stream accumulates
+  // every browser tab that ever visited.
+  const connectedPresence = presence.filter((entry) => entry.connected);
   const toolsOpen = search.filter === true;
-  // Signal active filters on the toggle even while the row is closed — a
-  // filtered feed with no visible cue reads as missing events.
+  const showFilterToggle = eventsToggle == null && caps.filters;
   const filtersActive = feedFiltersActive(search, streamPath);
+  const showOverflowMenu = agentPause != null || isMobile;
+  const latencyLabel = metrics.transportRttMs === null ? "—" : `${metrics.transportRttMs.last}ms`;
 
   return (
-    <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
-      <SidebarTrigger className="-ml-1 md:hidden" />
-      <button
-        type="button"
-        aria-haspopup="dialog"
+    <header className="flex min-w-0 shrink-0 items-center gap-2 overflow-x-hidden px-3 pb-1 pt-2.5 sm:gap-3 sm:px-4">
+      <SidebarTrigger className="-ml-1 shrink-0 md:hidden" />
+      <StreamPathPill
+        streamPath={streamPath}
         title={`${streamPath} — click or ⌘K to switch streams`}
-        onClick={() => openGlobalCommandPalette()}
-        className="flex h-9 min-w-0 cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 hover:bg-muted/70"
-      >
-        <span className="truncate font-mono text-sm">{streamPath}</span>
-        <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
-        <kbd className="hidden shrink-0 rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
-          ⌘K
-        </kbd>
-      </button>
+        className="min-w-0 flex-1 basis-0 sm:flex-initial sm:basis-auto sm:max-w-md"
+      />
 
-      <div className="ml-auto flex items-center gap-3">
-        {presence.length === 0 ? null : (
+      <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-3">
+        {isMobile || connectedPresence.length === 0 ? null : (
           <div className="flex items-center pl-1.5">
-            {presence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => {
+            {connectedPresence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => {
               const selected = entry.subscriptionKey === focusedProcessorKey;
               return (
                 <button
@@ -70,84 +127,284 @@ export function StreamViewHeader({
                   type="button"
                   title={`${presenceLabel(entry)} — open processor`}
                   onClick={() => focusProcessor(entry.subscriptionKey)}
-                  // The selected ring renders outside the avatar; lift it above
-                  // the overlapping siblings so it isn't clipped.
                   className={cn("-ml-1.5 rounded-full", selected && "relative z-10")}
                 >
                   <PresenceAvatar
                     entry={entry}
                     busy={agentBusy}
-                    // The avatar already reserves a 2px border to separate
-                    // overlapping siblings; recolor that same border for the
-                    // selected one instead of stacking a ring outside it.
                     className={cn("border-2", selected ? "border-foreground" : "border-background")}
                   />
                 </button>
               );
             })}
-            {presence.length > MAX_PRESENCE_AVATARS ? (
+            {connectedPresence.length > MAX_PRESENCE_AVATARS ? (
               <button
                 type="button"
-                title="All processors"
+                title="Stream state"
                 onClick={openProcessorsOverview}
                 className="-ml-1.5 grid size-6 place-items-center rounded-full border-2 border-background bg-muted font-mono text-[9px] font-bold text-muted-foreground"
               >
-                +{presence.length - MAX_PRESENCE_AVATARS}
+                +{connectedPresence.length - MAX_PRESENCE_AVATARS}
               </button>
             ) : null}
           </div>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          title="Stream health & metrics"
-          onClick={openProcessorsOverview}
-          className="font-mono text-xs font-normal text-muted-foreground"
-        >
-          <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
-            <polyline
-              points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
-              fill="none"
-              className="stroke-emerald-600"
-              strokeWidth="1.4"
-              strokeLinejoin="round"
-            />
-          </svg>
-          {metrics.rttNow}ms
-        </Button>
-        <Tabs
-          value={streamViewTab(search)}
-          onValueChange={(value) => {
-            const tab = value as StreamViewTab;
-            setSearch({ tab: tab === "feed" ? undefined : tab });
-          }}
-        >
-          <TabsList className="h-8">
-            <TabsTrigger value="feed" className="px-3 text-xs">
-              Feed
-            </TabsTrigger>
-            <TabsTrigger value="state" className="px-3 text-xs">
-              State
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <Button
-          variant="ghost"
-          size="icon"
-          title="Search & filter"
-          aria-expanded={toolsOpen}
-          onClick={() => setSearch({ filter: toolsOpen ? undefined : true })}
-          className="relative rounded-full text-muted-foreground"
-        >
-          <FilterIcon className="size-3.5" />
-          {filtersActive ? (
-            <span
-              aria-hidden="true"
-              className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
-            />
-          ) : null}
-        </Button>
+        {isMobile ? null : (
+          <Button
+            variant="ghost"
+            size="sm"
+            title="Stream state"
+            onClick={openProcessorsOverview}
+            className="font-mono text-xs font-normal text-muted-foreground"
+          >
+            {metrics.spark.length === 0 ? null : (
+              <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
+                <polyline
+                  points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
+                  fill="none"
+                  className="stroke-emerald-600"
+                  strokeWidth="1.4"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+            {latencyLabel}
+          </Button>
+        )}
+        {eventsToggle != null ? (
+          <Button
+            variant="outline"
+            size="sm"
+            title="Stream events"
+            aria-expanded={eventsSheetOpen}
+            onClick={() => (eventsSheetOpen ? closeEventsSheet() : openEventsSheet())}
+            className="text-xs font-normal"
+          >
+            <HistoryIcon className="size-3.5" />
+            <span className="hidden sm:inline">Events</span>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {eventsToggle.eventCount.toLocaleString()}
+            </span>
+          </Button>
+        ) : (
+          <>
+            <StreamModeTabs streamPath={streamPath} compact={isMobile} />
+            {showFilterToggle ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Search & filter"
+                aria-expanded={toolsOpen}
+                onClick={() => setSearch({ filter: toolsOpen ? undefined : true })}
+                className="relative rounded-full text-muted-foreground"
+              >
+                <FilterIcon className="size-3.5" />
+                {filtersActive ? (
+                  <span
+                    aria-hidden="true"
+                    className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
+                  />
+                ) : null}
+              </Button>
+            ) : null}
+          </>
+        )}
+        {showOverflowMenu ? (
+          <StreamOverflowMenu
+            agentBusy={agentBusy}
+            connectedPresence={connectedPresence}
+            focusedProcessorKey={focusedProcessorKey}
+            isMobile={isMobile}
+            kill={streamKill}
+            latencyLabel={latencyLabel}
+            metrics={metrics}
+            onFocusPresence={focusProcessor}
+            onOpenStreamState={openProcessorsOverview}
+            pause={agentPause}
+          />
+        ) : null}
       </div>
     </header>
+  );
+}
+
+/**
+ * The Pretty / Pretty+raw / Raw mode switch — URL-backed, hidden on streams
+ * that offer only the implicit raw feed. Shared by the page header and the
+ * full-panel Events sheet. Switching modes clears feed-items-only filters so
+ * they don't stick invisibly under Pretty; `q` is kept for search continuity.
+ */
+export function StreamModeTabs({
+  streamPath,
+  compact = false,
+}: {
+  streamPath: string;
+  /** Tighter triggers so the header stays on one line on phones. */
+  compact?: boolean;
+}) {
+  const { search, setSearch } = useStreamViewSearch();
+  const modes = modesForStream(streamPath);
+  const activeMode = streamViewMode(search, streamPath);
+  if (modes.length === 0) return null;
+  return (
+    <Tabs
+      value={activeMode}
+      onValueChange={(value) => {
+        const mode = value as StreamViewMode;
+        const defaultMode = defaultModeForStream(streamPath);
+        setSearch({
+          mode: mode === defaultMode ? undefined : mode,
+          types: undefined,
+          components: undefined,
+          from: undefined,
+          to: undefined,
+        });
+      }}
+    >
+      <TabsList className={cn("h-8", compact && "h-7 gap-0")}>
+        {modes.map((mode) => (
+          <TabsTrigger
+            key={mode.id}
+            value={mode.id}
+            className={cn("px-2.5 text-xs", compact && "px-1.5 text-[11px]")}
+          >
+            {compact ? compactModeLabel(mode.label) : mode.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
+  );
+}
+
+function compactModeLabel(label: string) {
+  if (label === "Pretty + raw" || label === "Pretty+raw") return "P+R";
+  if (label === "Pretty") return "P";
+  if (label === "Raw") return "R";
+  return label;
+}
+
+function StreamOverflowMenu({
+  agentBusy,
+  connectedPresence,
+  focusedProcessorKey,
+  isMobile,
+  kill,
+  latencyLabel,
+  metrics,
+  onFocusPresence,
+  onOpenStreamState,
+  pause,
+}: {
+  agentBusy: boolean;
+  connectedPresence: readonly AgentUiPresenceEntry[];
+  focusedProcessorKey: string | null;
+  isMobile: boolean;
+  kill: {
+    kill: () => Promise<void>;
+    pending: boolean;
+  };
+  latencyLabel: string;
+  metrics: BrowserStreamMetricsView;
+  onFocusPresence: (subscriptionKey: string) => void;
+  onOpenStreamState: () => void;
+  pause?: {
+    paused: boolean;
+    pending: boolean;
+    setPaused: (paused: boolean) => Promise<void>;
+  };
+}) {
+  const PauseActionIcon = pause?.paused ? PlayIcon : PauseIcon;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            title="More"
+            className="rounded-full text-muted-foreground"
+          />
+        }
+      >
+        <MoreHorizontalIcon className="size-3.5" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        {isMobile ? (
+          <>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Stream</DropdownMenuLabel>
+              <DropdownMenuItem closeOnClick onClick={onOpenStreamState}>
+                <RadioIcon />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span>Stream state</span>
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    {metrics.spark.length === 0 ? "latency " : ""}
+                    {latencyLabel}
+                  </span>
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            {connectedPresence.length === 0 ? null : (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>
+                    Presence · {connectedPresence.length} connected
+                  </DropdownMenuLabel>
+                  {connectedPresence.slice(0, 8).map((entry) => (
+                    <DropdownMenuItem
+                      key={entry.subscriptionKey}
+                      closeOnClick
+                      onClick={() => onFocusPresence(entry.subscriptionKey)}
+                    >
+                      <PresenceAvatar
+                        entry={entry}
+                        busy={agentBusy}
+                        className="size-5 text-[8px]"
+                      />
+                      <span className="min-w-0 truncate">{presenceLabel(entry)}</span>
+                      {entry.subscriptionKey === focusedProcessorKey ? (
+                        <span className="ml-auto text-[10px] text-muted-foreground">open</span>
+                      ) : null}
+                    </DropdownMenuItem>
+                  ))}
+                  {connectedPresence.length > 8 ? (
+                    <DropdownMenuItem closeOnClick onClick={onOpenStreamState}>
+                      <UsersIcon />+{connectedPresence.length - 8} more in stream state
+                    </DropdownMenuItem>
+                  ) : null}
+                </DropdownMenuGroup>
+              </>
+            )}
+          </>
+        ) : null}
+        {pause == null ? null : (
+          <>
+            {isMobile ? <DropdownMenuSeparator /> : null}
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Agent actions</DropdownMenuLabel>
+              <DropdownMenuItem
+                closeOnClick
+                disabled={pause.pending}
+                onClick={() => void pause.setPaused(!pause.paused)}
+              >
+                {pause.pending ? <Spinner /> : <PauseActionIcon />}
+                {pause.paused ? "Resume agent" : "Pause agent"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                closeOnClick
+                disabled={kill.pending}
+                variant="destructive"
+                onClick={() => void kill.kill()}
+              >
+                {kill.pending ? <Spinner /> : <CircleStopIcon />}
+                Kill stream
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

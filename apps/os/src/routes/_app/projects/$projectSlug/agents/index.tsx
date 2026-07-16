@@ -1,10 +1,15 @@
 import { useMemo } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { buttonVariants } from "@iterate-com/ui/components/button";
+import { AgentRosterList } from "~/components/agent-roster.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTree } from "~/components/stream-tree.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useItx } from "~/itx/itx-react.tsx";
@@ -12,6 +17,7 @@ import { useItx } from "~/itx/itx-react.tsx";
 const AGENTS_ROOT = "/agents";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
+  staticData: streamPageStaticData(),
   // Agents ARE streams: this page is the /agents catalogue stream's view, with
   // the live agent tree in the side panel. useItx never SSRs (it throws on the
   // server), and the tree paints from its own live subscriptions once the
@@ -51,6 +57,9 @@ function ProjectAgentsIndexContent() {
       >
         New agent
       </Link>
+      {/* Every agent's live status record (busy dot, title, what it's doing),
+          newest activity first — fed by the project's agents roster slice. */}
+      <AgentRosterList projectId={project.id} projectSlug={params.projectSlug} />
       {/* Anything under /agents is an agent and opens the chat view —
           linkOptionsForStreamPath encodes that. */}
       <StreamTree

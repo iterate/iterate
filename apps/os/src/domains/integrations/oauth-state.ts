@@ -21,13 +21,17 @@ const OAuthStateData = z.object({
   callbackUrl: z.string().optional(),
   codeVerifier: z.string().optional(),
   expiresAt: z.number(),
+  /** Tentative setup-URL input carried into GitHub's user OAuth callback.
+   * It is not authority until the resulting user token proves access. */
+  githubInstallationId: z.string().optional(),
   nonce: z.string(),
   projectId: z.string(),
-  provider: z.enum(["google", "slack"]),
+  provider: z.enum(["github", "google", "slack"]),
   userId: z.string(),
 });
 
-type OAuthStateData = z.infer<typeof OAuthStateData>;
+/** The verified contents of one signed OAuth state token. */
+export type OAuthStateData = z.infer<typeof OAuthStateData>;
 
 export async function createOAuthState(
   input: Omit<OAuthStateData, "expiresAt" | "nonce">,
@@ -45,7 +49,7 @@ export async function createOAuthState(
 
 /** Signature + expiry + provider validation. Returns null on any mismatch. */
 export async function verifyOAuthState(
-  input: { provider: "google" | "slack"; state: string },
+  input: { provider: "github" | "google" | "slack"; state: string },
   keyMaterial: string,
 ): Promise<OAuthStateData | null> {
   const [version, payload, signature] = input.state.split(".");

@@ -1,11 +1,12 @@
 import { describe, expect, test } from "vitest";
-import type { StreamEvent } from "../../../../apps/os/src/types.ts";
+import type { StreamEvent } from "../../../../apps/os/src/itx-api.generated.ts";
 import { createAgentFeedModel } from "./agent-feed-model.ts";
 
 let nextOffset = 1;
 const event = (type: string, payload: Record<string, unknown>): StreamEvent => ({
   type,
   payload,
+  path: "/agents/test",
   offset: nextOffset++,
   createdAt: new Date(1700000000000 + nextOffset * 1000).toISOString(),
 });
@@ -15,9 +16,11 @@ describe("createAgentFeedModel", () => {
     const model = createAgentFeedModel();
 
     const changed = model.applyEvents([
-      event("events.iterate.com/agents/user-message-received", {
+      event("events.iterate.com/agents/context-added", {
+        role: "user",
         content: "hello agent",
-        origin: "web",
+        actor: { type: "user", origin: "web" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
       }),
       event("events.iterate.com/agent/llm-request-requested", { model: "gpt-test" }),
     ]);
@@ -33,10 +36,15 @@ describe("createAgentFeedModel", () => {
     });
 
     model.applyEvents([
+      event("events.iterate.com/agent/llm-request-completed", {
+        llmRequestOffset: 2,
+        durationMs: 10,
+        result: { status: "success" },
+      }),
       event("events.iterate.com/agents/web-message-sent", { message: "hi human" }),
     ]);
 
-    // The assistant reply settles the live activity, then itself.
+    // LLM completion settles the live activity; the assistant reply follows.
     snapshot = model.snapshot();
     expect(snapshot.live).toBeNull();
     expect(snapshot.items.map((item) => item.kind)).toEqual(["user", "activity", "assistant"]);
@@ -46,16 +54,16 @@ describe("createAgentFeedModel", () => {
   test("accumulates streamed response deltas on the live step", () => {
     const model = createAgentFeedModel();
     const requested = event("events.iterate.com/agent/llm-request-requested", {});
-    const llmRequestId = requested.offset;
+    const llmRequestOffset = requested.offset;
     model.applyEvents([
       requested,
-      event("events.iterate.com/openai-ws/llm-response-chunk", {
-        llmRequestId,
-        chunk: { type: "response.output_text.delta", delta: "par" },
+      event("events.iterate.com/agent/llm-response-chunk", {
+        llmRequestOffset,
+        chunk: { response: "par" },
       }),
-      event("events.iterate.com/openai-ws/llm-response-chunk", {
-        llmRequestId,
-        chunk: { type: "response.output_text.delta", delta: "tial" },
+      event("events.iterate.com/agent/llm-response-chunk", {
+        llmRequestOffset,
+        chunk: { response: "tial" },
       }),
     ]);
 
@@ -65,7 +73,12 @@ describe("createAgentFeedModel", () => {
 
   test("ignores replayed events at or below the folded offset", () => {
     const model = createAgentFeedModel();
-    const first = event("events.iterate.com/agents/user-message-received", { content: "one" });
+    const first = event("events.iterate.com/agents/context-added", {
+      role: "user",
+      content: "one",
+      actor: { type: "user", origin: "web" },
+      llmRequestPolicy: { behaviour: "after-current-request" },
+    });
     model.applyEvents([first]);
     expect(model.snapshot().lastOffset).toBe(first.offset);
 

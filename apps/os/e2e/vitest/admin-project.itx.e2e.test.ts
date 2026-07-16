@@ -6,7 +6,8 @@
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
-import type { StreamEvent } from "~/types.ts";
+import { waitForCondition } from "../test-support/wait-for-condition.ts";
+import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
 
 test("creates a disposable project and uses project streams through itx", async ({ expect }) => {
   await using handle = await createTestProject({ slugPrefix: "admin-fixture" });
@@ -41,17 +42,23 @@ test("creates a disposable project and uses project streams through itx", async 
   expect(events.map((event) => event.type)).toContain(eventType);
   expect(events.find((event) => event.type === eventType)?.payload).toMatchObject({ marker });
 
-  await expect
-    .poll(() => seen.some((event) => event.type === eventType && event.payload?.marker === marker))
-    .toBe(true);
+  // waitForCondition, not expect.poll: expect.poll loses the test context on
+  // vitest retry in the CI-parallel lane and turns any first-attempt flake
+  // into a hard "expect.poll() must be called inside a test" failure. The
+  // timeouts keep expect.poll's 1s default deadline.
+  await waitForCondition(
+    () => seen.some((event) => event.type === eventType && event.payload?.marker === marker),
+    { description: "the subscription to deliver the appended event", timeoutMs: 1_000 },
+  );
 
   subscription.unsubscribe();
 
   // The project processor folds the new stream into its reduced state.
-  await expect
-    .poll(async () => {
+  await waitForCondition(
+    async () => {
       const snapshot = await itx.processor.snapshot();
       return snapshot.state.streams.some((item) => item.path === streamPath);
-    })
-    .toBe(true);
+    },
+    { description: "the project processor to fold the new stream into state", timeoutMs: 1_000 },
+  );
 });

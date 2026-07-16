@@ -1,0 +1,381 @@
+import { expect, test } from "vitest";
+import {
+  createRepoTask,
+  isRepoTaskPath,
+  parseRepoTask,
+  prepareRepoTaskAssignment,
+  repoTaskAssignmentFileChanges,
+  repoTaskAssignmentHeadPaths,
+  queryRepoTaskBoard,
+  repoTaskAgentPath,
+  repoTaskHeadingSelection,
+  repoTaskHeadingTitle,
+  repoTaskPathForTitle,
+  repoTaskPathInDirectory,
+  repoTaskWithPath,
+  repoTaskCreationPaths,
+  taskColumnState,
+  taskDirectoryForFolder,
+  taskDirectoryForPath,
+  taskStateColumns,
+  updateRepoTaskLabels,
+  updateRepoTaskAgent,
+  updateRepoTaskState,
+} from "./repo-tasks.ts";
+
+test.for([
+  { name: "a Markdown file in a root tasks directory", path: "tasks/ship-it.md", expected: true },
+  {
+    name: "a .markdown file in a nested tasks directory",
+    path: "apps/os/tasks/ship-it.markdown",
+    expected: true,
+  },
+  {
+    name: "a Markdown file below a tasks directory",
+    path: "apps/os/tasks/notes/ship-it.md",
+    expected: true,
+  },
+  { name: "a near-miss directory name", path: "apps/os/task/ship-it.md", expected: false },
+  {
+    name: "a non-Markdown file in a tasks directory",
+    path: "apps/os/tasks/ship-it.txt",
+    expected: false,
+  },
+])("isRepoTaskPath recognizes $name", ({ path, expected }) => {
+  expect(isRepoTaskPath(path)).toBe(expected);
+});
+
+test("taskDirectoryForPath finds the owning tasks directory", () => {
+  expect(taskDirectoryForPath("apps/os/tasks/notes/ship-it.md")).toBe("apps/os/tasks");
+});
+
+// Each row pins the COMPLETE projection: the shared body adds only the
+// identity fields (path, content) the parser echoes back from its input.
+test.for([
+  {
+    name: "projects a bare Markdown file into a task",
+    path: "apps/os/tasks/speed-up.md",
+    content: "# Make OS faster\n\nMeasure first.\n",
+    expected: {
+      taskDirectoryPath: "apps/os/tasks",
+      folderPath: "/apps/os",
+      title: "Make OS faster",
+      description: "Measure first.",
+      state: "todo",
+      labels: [],
+      comments: [],
+    },
+  },
+  {
+    name: "falls back to the filename and infers the root folder",
+    path: "tasks/fix-auth.md",
+    content: "There is no heading yet.",
+    expected: {
+      taskDirectoryPath: "tasks",
+      folderPath: "/",
+      title: "fix-auth",
+      description: "There is no heading yet.",
+      state: "todo",
+      labels: [],
+      comments: [],
+    },
+  },
+  {
+    name: "reads canonical frontmatter fields literally",
+    path: "packages/ui/tasks/card.md",
+    content: "---\nstate: in-progress\nlabels: [ui, polish]\n---\n# Card\n",
+    expected: {
+      taskDirectoryPath: "packages/ui/tasks",
+      folderPath: "/packages/ui",
+      title: "Card",
+      description: "",
+      state: "in-progress",
+      labels: ["ui", "polish"],
+      comments: [],
+    },
+  },
+  {
+    name: "treats non-canonical frontmatter keys as ordinary metadata",
+    path: "tasks/unrelated.md",
+    content: "---\nstatus: in-review\ntags: backend\n---\nOther keys are ordinary metadata\n",
+    expected: {
+      taskDirectoryPath: "tasks",
+      folderPath: "/",
+      title: "unrelated",
+      description: "Other keys are ordinary metadata",
+      state: "todo",
+      labels: [],
+      comments: [],
+    },
+  },
+  {
+    name: "keeps the legacy backlog state literal",
+    path: "tasks/backlog.md",
+    content: "---\nstate: backlog\n---\n# Backlog\n",
+    expected: {
+      taskDirectoryPath: "tasks",
+      folderPath: "/",
+      title: "Backlog",
+      description: "",
+      state: "backlog",
+      labels: [],
+      comments: [],
+    },
+  },
+  {
+    name: "uses an explicit title before the first heading",
+    path: "tasks/rename-me.md",
+    content: "---\ntitle: Frontmatter title\n---\n# Heading title\n\nDescription.\n",
+    expected: {
+      taskDirectoryPath: "tasks",
+      folderPath: "/",
+      title: "Frontmatter title",
+      description: "Description.",
+      state: "todo",
+      labels: [],
+      comments: [],
+    },
+  },
+  {
+    name: "reads an assigned agent and a permissive final comments log",
+    path: "tasks/assigned.md",
+    content:
+      "---\nagent: /agents/repos/config/tasks/assigned\n---\n# Assigned\n\nDo it.\n\n## Comments\n\nA loose note.\n\n### 2026-07-13T12:00:00Z — agent\n\nStarted.\n\n### malformed but fine\nDone.\n",
+    expected: {
+      taskDirectoryPath: "tasks",
+      folderPath: "/",
+      title: "Assigned",
+      description: "Do it.",
+      state: "todo",
+      labels: [],
+      agent: "/agents/repos/config/tasks/assigned",
+      comments: [
+        { heading: undefined, body: "A loose note." },
+        { heading: "2026-07-13T12:00:00Z — agent", body: "Started." },
+        { heading: "malformed but fine", body: "Done." },
+      ],
+    },
+  },
+  {
+    name: "treats an unstructured comments section as one lightweight comment",
+    path: "tasks/log.md",
+    content: "# Log\n\nBody.\n\n## Comments\nnot structured",
+    expected: {
+      taskDirectoryPath: "tasks",
+      folderPath: "/",
+      title: "Log",
+      description: "Body.",
+      state: "todo",
+      labels: [],
+      comments: [{ heading: undefined, body: "not structured" }],
+    },
+  },
+])("parseRepoTask $name", ({ content, expected, path }) => {
+  expect(parseRepoTask(path, content)).toEqual({ ...expected, content, path });
+});
+
+test.for([
+  {
+    name: "updates state while preserving unrelated YAML, comments, and Markdown",
+    act: () =>
+      updateRepoTaskState(
+        "---\n# keep this\nstate: todo\nsize: small\n---\n\n# Ship it\n\nBody.\n",
+        "in-progress",
+      ),
+    expected: "---\n# keep this\nstate: in-progress\nsize: small\n---\n\n# Ship it\n\nBody.\n",
+  },
+  {
+    name: "adds canonical state frontmatter",
+    act: () => updateRepoTaskState("# New task\n", "done"),
+    expected: "---\nstate: done\n---\n\n# New task\n",
+  },
+  {
+    name: "stores deduped labels in frontmatter",
+    act: () => updateRepoTaskLabels("# Labels\n", ["frontend", "frontend", "v1"]),
+    expected: "---\nlabels:\n  - frontend\n  - v1\n---\n\n# Labels\n",
+  },
+  {
+    name: "drops the frontmatter block when the last labels are removed",
+    act: () => updateRepoTaskLabels("---\nlabels:\n  - frontend\n  - v1\n---\n\n# Labels\n", []),
+    expected: "\n# Labels\n",
+  },
+  {
+    name: "records an assigned agent in frontmatter",
+    act: () => updateRepoTaskAgent("# Assign me\n", "/agents/repos/config/tasks/assign-me"),
+    expected: "---\nagent: /agents/repos/config/tasks/assign-me\n---\n\n# Assign me\n",
+  },
+  {
+    name: "clears an assigned agent",
+    act: () =>
+      updateRepoTaskAgent(
+        "---\nagent: /agents/repos/config/tasks/assign-me\n---\n\n# Assign me\n",
+        undefined,
+      ),
+    expected: "\n# Assign me\n",
+  },
+])("$name", ({ act, expected }) => {
+  expect(act()).toBe(expected);
+});
+
+test("creates a bare task with a stable collision-free path", () => {
+  const paths = new Set(["tasks/ship-the-board.md", "tasks/ship-the-board-2.md"]);
+  expect(createRepoTask("  Ship the board!  ", paths)).toEqual({
+    path: "tasks/ship-the-board-3.md",
+    content: "# Ship the board!\n",
+  });
+  expect(createRepoTask("   ", paths)).toBeNull();
+});
+
+test("derives bounded collision-safe filenames from the first heading", () => {
+  expect(repoTaskHeadingTitle("---\nstate: todo\n---\n# A Better Name\n\nBody")).toBe(
+    "A Better Name",
+  );
+  const content = "---\nstate: todo\n---\n# New task\n\nBody";
+  const selection = repoTaskHeadingSelection(content);
+  expect(selection).toBeDefined();
+  expect(content.slice(selection?.start, selection?.end)).toBe("New task");
+  expect(
+    repoTaskPathForTitle(
+      "apps/os/tasks/new-task.md",
+      "A Better Name",
+      new Set(["apps/os/tasks/a-better-name.md"]),
+    ),
+  ).toBe("apps/os/tasks/a-better-name-2.md");
+  const longPath = repoTaskPathForTitle(
+    "tasks/new-task.md",
+    "A title that is intentionally much much much much much much much much much much longer than a filename should be",
+    new Set(),
+  );
+  expect(longPath).toMatch(/^tasks\/[a-z0-9-]{1,64}\.md$/);
+});
+
+test("prepares a deterministic durable agent assignment", () => {
+  const task = parseRepoTask("apps/os/tasks/Ship This.md", "# Ship this\n\nPlease finish it.\n")!;
+  const assignment = prepareRepoTaskAssignment(task, "/repos/config");
+
+  expect(repoTaskAgentPath("/repos/config", task.path)).toBe(
+    "/agents/repos/config/tasks/apps-os-tasks-ship-this",
+  );
+  expect(assignment.agentPath).toBe("/agents/repos/config/tasks/apps-os-tasks-ship-this");
+  expect(parseRepoTask(task.path, assignment.content)).toMatchObject({
+    state: "in-progress",
+    agent: assignment.agentPath,
+  });
+  expect(assignment.instructions).toContain(task.path);
+  expect(assignment.instructions).toContain("First, verify");
+  expect(assignment.instructions).toContain("## Comments");
+  expect(assignment.instructions).toContain("in-review");
+  expect(
+    repoTaskAssignmentFileChanges(task, assignment.content, "apps/os/tasks/old-name.md"),
+  ).toEqual([
+    { path: "apps/os/tasks/old-name.md", delete: true },
+    { path: task.path, content: assignment.content },
+  ]);
+  expect(repoTaskAssignmentFileChanges(task, assignment.content)).toEqual([
+    { path: task.path, content: assignment.content },
+  ]);
+  expect(
+    repoTaskAssignmentHeadPaths(
+      ["README.md", "apps/os/tasks/old-name.md"],
+      task,
+      "apps/os/tasks/old-name.md",
+    ),
+  ).toEqual(["README.md", task.path]);
+});
+
+test("creates tasks in a folder's conventional task directory", () => {
+  expect(taskDirectoryForFolder("/apps/os")).toBe("apps/os/tasks");
+  expect(taskDirectoryForFolder("/")).toBe("tasks");
+  expect(createRepoTask("Ship it", new Set(), taskDirectoryForFolder("/apps/os"))?.path).toBe(
+    "apps/os/tasks/ship-it.md",
+  );
+});
+
+test("picks a collision-free path when moving a task between folders", () => {
+  const paths = new Set(["tasks/plan.md", "apps/os/tasks/plan.md", "apps/os/tasks/plan-2.md"]);
+  expect(repoTaskPathInDirectory("tasks/plan.md", "apps/os/tasks", paths)).toBe(
+    "apps/os/tasks/plan-3.md",
+  );
+  expect(repoTaskPathInDirectory("tasks/plan.md", "tasks", paths)).toBe("tasks/plan.md");
+});
+
+// The edited-path validator, over a task at tasks/old.md with tasks/taken.md
+// reserved.
+test.for([
+  { name: "accepts a slash-prefixed new path", target: "/tasks/new.md", expected: "tasks/new.md" },
+  { name: "keeps the task's own path", target: "tasks/old.md", expected: "tasks/old.md" },
+  { name: "rejects a reserved path", target: "tasks/taken.md", expected: null },
+  { name: "rejects traversal outside the repo", target: "tasks/../outside.md", expected: null },
+  { name: "rejects non-task paths", target: "not-a-task.md", expected: null },
+])("repoTaskWithPath $name", ({ expected, target }) => {
+  const task = parseRepoTask("tasks/old.md", "# Old\n")!;
+  const reserved = new Set([task.path, "tasks/taken.md"]);
+
+  const result = repoTaskWithPath(task, target, reserved);
+  if (expected === null) {
+    expect(result).toBeNull();
+  } else {
+    expect(result?.path).toBe(expected);
+  }
+});
+
+test("reserves a task path that exists at HEAD while its deletion is pending", () => {
+  const paths = repoTaskCreationPaths(["tasks/reuse-me.md"], [["tasks/reuse-me.md", "delete"]]);
+
+  expect(createRepoTask("Reuse me", paths)?.path).toBe("tasks/reuse-me-2.md");
+});
+
+test("keeps the core columns and appends states found in the repo", () => {
+  const task = parseRepoTask("tasks/review.md", "---\nstate: in-review\n---\n# Review\n")!;
+  const legacyBacklog = parseRepoTask("tasks/backlog.md", "---\nstate: backlog\n---\n# Backlog\n")!;
+  expect(legacyBacklog.state).toBe("backlog");
+  expect(taskColumnState(legacyBacklog)).toBe("todo");
+  expect(taskStateColumns([task, legacyBacklog])).toEqual([
+    "todo",
+    "in-progress",
+    "in-review",
+    "done",
+  ]);
+  const board = queryRepoTaskBoard([legacyBacklog], {
+    filter: "",
+    columns: "state",
+    rows: null,
+  });
+  expect(board.rows[0]?.cells.find((cell) => cell.state === "todo")?.tasks).toEqual([
+    legacyBacklog,
+  ]);
+});
+
+test("queries a status board with folders as an independent row dimension", () => {
+  const tasks = [
+    parseRepoTask("tasks/root.md", "# Root\n")!,
+    parseRepoTask("apps/os/tasks/ship.md", "---\nstate: in-progress\n---\n# Ship OS\n")!,
+    parseRepoTask("apps/os/tasks/test.md", "---\nlabels: [quality]\n---\n# Test OS\n")!,
+  ];
+  const board = queryRepoTaskBoard(tasks, { filter: "", columns: "state", rows: "folder" });
+
+  expect(board.states).toEqual(["todo", "in-progress", "in-review", "done"]);
+  expect(board.visibleProperties).toEqual({ folder: false, state: false, labels: true });
+  expect(board.rows.map((row) => row.label)).toEqual(["/", "/apps/os"]);
+  expect(board.rows[1]?.cells.find((cell) => cell.state === "todo")?.tasks[0]?.title).toBe(
+    "Test OS",
+  );
+  expect(board.rows[1]?.cells.find((cell) => cell.state === "in-progress")?.tasks[0]?.title).toBe(
+    "Ship OS",
+  );
+});
+
+test("filters the board projection and can group multi-label tasks", () => {
+  const task = parseRepoTask(
+    "tasks/card.md",
+    "---\nlabels: [frontend, polish]\n---\n# Polish card\n",
+  )!;
+  const byLabel = queryRepoTaskBoard([task], { filter: "card", columns: "state", rows: "label" });
+
+  expect(byLabel.taskCount).toBe(1);
+  expect(byLabel.visibleProperties).toEqual({ folder: true, state: false, labels: false });
+  expect(byLabel.rows.map((row) => row.label)).toEqual(["frontend", "polish"]);
+  expect(
+    queryRepoTaskBoard([task], { filter: "missing", columns: "state", rows: null }).taskCount,
+  ).toBe(0);
+});

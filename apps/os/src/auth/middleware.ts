@@ -10,6 +10,10 @@ import type { SignInAuthError } from "~/auth/errors.ts";
 import { createOsIterateAuth } from "~/auth/iterate-auth-client.ts";
 import type { OsIterateAuth } from "~/auth/iterate-auth-client.ts";
 import {
+  authenticateOperatorSession,
+  type AuthenticatedOperatorSession,
+} from "~/auth/operator-session.ts";
+import {
   principalFromAccessToken,
   principalFromSession,
   type Principal,
@@ -30,11 +34,32 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
       return new Response("Iterate auth is not configured.", { status: 503 });
     }
 
+    // Fingerprinted client-build files are public, yet requests for them can
+    // reach this worker (sourcemaps are not uploaded to the static assets
+    // manifest, so devtools .js.map fetches fall through). They must never run
+    // session auth: the refresh token rotates on every use and the anti-theft
+    // response to presenting a rotated token is revoking the user's whole
+    // session family, so a burst of parallel subresource refreshes racing a
+    // navigation's refresh (single-flight only holds within one isolate) signs
+    // the user out with "session_verification_failed".
+    if (isPublicAssetRequest(request)) {
+      return next({
+        context: {
+          principal: null,
+          operatorSession: null,
+          iterateAuthSession: null,
+          iterateAuthError: undefined,
+          rawRequest: request,
+        },
+      });
+    }
+
     const resolvedAuth = await resolveRequestAuth({ auth, context, request });
 
     const result = await next({
       context: {
         principal: resolvedAuth.principal,
+        operatorSession: resolvedAuth.operatorSession,
         iterateAuthSession: resolvedAuth.session,
         iterateAuthError: resolvedAuth.error,
         rawRequest: request,
@@ -50,6 +75,12 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
   },
 );
 
+/** GET/HEAD requests under the client build's asset prefix (including sourcemaps). */
+export function isPublicAssetRequest(request: Request): boolean {
+  if (request.method !== "GET" && request.method !== "HEAD") return false;
+  return new URL(request.url).pathname.startsWith("/assets/");
+}
+
 async function resolveRequestAuth(input: {
   auth: OsIterateAuth | null;
   context: Pick<RequestContext, "config" | "log">;
@@ -58,6 +89,7 @@ async function resolveRequestAuth(input: {
   principal: Principal | null;
   session: AuthenticatedSession | null;
   error?: SignInAuthError;
+  operatorSession: AuthenticatedOperatorSession | null;
   responseHeaders: Headers;
 }> {
   const adminApiPrincipal = authenticateAdminApiSecret(input.context, input.request);
@@ -66,6 +98,21 @@ async function resolveRequestAuth(input: {
       principal: adminApiPrincipal,
       session: null,
       error: undefined,
+      operatorSession: null,
+      responseHeaders: new Headers(),
+    };
+  }
+
+  const operatorSession = await authenticateOperatorSession({
+    config: input.context.config,
+    request: input.request,
+  });
+  if (operatorSession) {
+    return {
+      principal: operatorSession.principal,
+      session: null,
+      error: undefined,
+      operatorSession,
       responseHeaders: new Headers(),
     };
   }
@@ -77,7 +124,7 @@ async function resolveRequestAuth(input: {
     request: input.request,
   });
   if (sessionAuth.principal) {
-    return sessionAuth;
+    return { ...sessionAuth, operatorSession: null };
   }
 
   const bearerPrincipal = await authenticateBearerPrincipal({
@@ -88,6 +135,7 @@ async function resolveRequestAuth(input: {
     principal: bearerPrincipal,
     session: sessionAuth.session,
     error: sessionAuth.error,
+    operatorSession: null,
     responseHeaders: sessionAuth.responseHeaders,
   };
 }
@@ -127,7 +175,6 @@ async function authenticateSession(input: {
     logAuthSessionVerificationFailure({
       context: input.context,
       error: authError,
-      request: input.request,
     });
   }
 
@@ -152,74 +199,26 @@ async function authenticateBearerPrincipal(input: {
 function logAuthSessionVerificationFailure(input: {
   context: Pick<RequestContext, "config" | "log">;
   error: AuthenticateErrorEvent;
-  request: Request;
 }) {
-  const url = new URL(input.request.url);
   const details = {
-    reason: input.error.reason,
-    error: toLogError(input.error.error),
-    issuer: input.context.config.iterateAuth?.issuer,
-    clientId: input.context.config.iterateAuth?.clientId,
+    reason: diagnosticIdentifier(input.error.reason) ?? "unknown",
+    errorType: input.error.error instanceof Error ? "Error" : "NonErrorThrowable",
+    issuerHost: input.context.config.iterateAuth?.issuer
+      ? new URL(input.context.config.iterateAuth.issuer).host
+      : undefined,
+    clientId: diagnosticIdentifier(input.context.config.iterateAuth?.clientId),
     jwksKeyIds: input.context.config.iterateAuth?.jwks?.keys
-      ?.map((key) => (typeof key.kid === "string" ? key.kid : null))
-      .filter((kid) => kid !== null),
-    sessionCookie: summarizeSessionCookie(input.request.headers),
-    path: `${url.pathname}${url.search}`,
+      ?.map((key) => diagnosticIdentifier(key.kid))
+      .filter((kid) => kid !== undefined)
+      .slice(0, 20),
   };
 
-  input.context.log.warn("os.auth.session_verification_failed");
-  input.context.log.set({ auth: { sessionVerificationFailure: details } });
+  input.context.log.warn("os.auth.session_verification_failed", {
+    auth: { sessionVerificationFailure: details },
+  });
 }
 
-function toLogError(error: unknown) {
-  if (error instanceof Error) {
-    return { name: error.name, message: error.message };
-  }
-  return { message: String(error) };
-}
-
-function summarizeSessionCookie(headers: Headers) {
-  const cookieValue = extractCookie(headers.get("cookie") ?? "", "iterate_session");
-  if (!cookieValue) return { present: false };
-
-  try {
-    const tokenSet = JSON.parse(decodeURIComponent(cookieValue)) as {
-      accessToken?: unknown;
-      idToken?: unknown;
-    };
-    return {
-      present: true,
-      parseable: true,
-      accessTokenKid: jwtHeaderKid(tokenSet.accessToken),
-      idTokenKid: jwtHeaderKid(tokenSet.idToken),
-    };
-  } catch {
-    return { present: true, parseable: false };
-  }
-}
-
-function extractCookie(cookieHeader: string, name: string) {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const match = new RegExp(`(?:^|;\\s*)${escapedName}=([^;]*)`, "u").exec(cookieHeader);
-  return match?.[1] ?? null;
-}
-
-function jwtHeaderKid(token: unknown) {
-  if (typeof token !== "string") return null;
-  const encodedHeader = token.split(".", 1)[0];
-  if (!encodedHeader) return null;
-
-  try {
-    const header = JSON.parse(base64UrlDecode(encodedHeader)) as { kid?: unknown };
-    return typeof header.kid === "string" ? header.kid : null;
-  } catch {
-    return null;
-  }
-}
-
-function base64UrlDecode(value: string) {
-  const padded = `${value.replace(/-/gu, "+").replace(/_/gu, "/")}${"=".repeat(
-    (4 - (value.length % 4)) % 4,
-  )}`;
-  return atob(padded);
+function diagnosticIdentifier(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/u.test(value) ? value : undefined;
 }

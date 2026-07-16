@@ -1,9 +1,6 @@
 {
   "mcpServers": {
-    "iterate": {
-      "url": "https://mcp__iterate.iterate.app/"
-    },
-    "cloudflare-api": {
+    "cloudflare": {
       "url": "https://mcp.cloudflare.com/mcp"
     },
     "exa": {
@@ -11,6 +8,12 @@
     },
     "context7": {
       "url": "https://mcp.context7.com/mcp"
+    },
+    "iterate": {
+      "url": "https://mcp.iterate.com"
+    },
+    "posthog": {
+      "url": "https://mcp-eu.posthog.com/mcp"
     }
   }
 }

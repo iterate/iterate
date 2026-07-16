@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import type {
   SchedulerAction as SchedulerActionType,
   SchedulerRecurrence as SchedulerRecurrenceType,
-} from "../../types.ts";
+} from "./types.ts";
 
 // =============================================================================
 // Scheduler contract: durable time as stream events.
@@ -88,6 +88,8 @@ const ScheduleEntry = z.looseObject({
   /** Offset of the `schedule-set` event that last defined this key (audit provenance). */
   definedAtOffset: z.number().int().nonnegative(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  /** Stream path of the defining `schedule-set` event. */
+  path: z.string().trim().min(1),
   /**
    * Epoch ms of the next due occurrence. Null once a one-shot has been
    * requested, or when a cron expression yields no future occurrence (including
@@ -155,5 +157,8 @@ export const SchedulerProcessorContract = defineProcessorContract({
   ],
 });
 
+/** The contract's type under the same identifier — helpers read without `typeof`. */
+export type SchedulerProcessorContract = typeof SchedulerProcessorContract;
+
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
-export type SchedulerProcessorState = z.infer<typeof SchedulerProcessorContract.stateSchema>;
+export type SchedulerProcessorState = ProcessorState<SchedulerProcessorContract>;

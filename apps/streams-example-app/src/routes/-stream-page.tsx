@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -12,10 +13,7 @@ import { ClientOnly, useNavigate } from "@tanstack/react-router";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
 import { createCapnwebStreamClient } from "../lib/capnweb-stream-browser-client.ts";
-import {
-  shouldSuppressUnreadBadgeDuringInitialTail,
-  useInitialTailScroll,
-} from "../lib/use-initial-tail-scroll.ts";
+import { useStickToBottom } from "../lib/use-stick-to-bottom.ts";
 import { DEFAULT_STREAM_PROJECT_ID } from "../lib/stream-rpc.ts";
 import { runStreamControl } from "../lib/stream-control.ts";
 import { EventFeedView } from "./-event-feed-view.tsx";
@@ -23,7 +21,6 @@ import { StreamStateView } from "./-stream-state-view.tsx";
 import { ViewSwitcher } from "./-view-switcher.tsx";
 import {
   acquireStreamRuntime,
-  type BrowserProcessorConfig,
   type StreamBrowserSnapshot,
   type StreamBrowserStore,
   type StreamRuntimeState,
@@ -32,13 +29,7 @@ import {
   type StreamBrowserDatabase,
   type StreamEventRow,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
-import {
-  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  BrowserRawEventsContract,
-  BrowserRawEventsProcessor,
-  type BrowserRawEventsState,
-} from "~/domains/streams/client-libraries/processors/browser-raw-events/implementation.ts";
+import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 export function StreamPage({ streamView }: { streamView: StreamViewSearch }) {
@@ -58,7 +49,7 @@ function HydratedStreamPage({ streamView }: { streamView: StreamViewSearch }) {
 
   return (
     <StreamViewShell sidebarRuntime={sidebarRuntime} streamView={streamView}>
-      {streamView.view === "browser-event-feed" ? (
+      {streamView.view === "browser-feed" ? (
         <EventFeedView streamView={streamView} />
       ) : streamView.view === "browser-state" ? (
         <StreamStateView streamView={streamView} />
@@ -174,25 +165,23 @@ function HydratedStreamCompactView({ streamPath }: { streamPath: string }) {
   );
 }
 
-// The browser's thin layer over a processor: acquire the shared (path, processor) runtime
-// — which, once it wins leadership, runs the processor over a subscription exactly like the
-// StreamProcessorRunner DO — and subscribe to its snapshot for React. Nothing view-specific.
-function useStreamProcessor(
-  args: { streamPath: string; streamProjectId?: string } & BrowserProcessorConfig,
-) {
-  const { streamPath, streamProjectId, slug, schemaVersion, tables, createProcessor } = args;
+// The browser's thin layer over the stream mirror: acquire the shared
+// (projectId, path) runtime — which, once it wins leadership, downloads the
+// stream once and fans it out to the canonical processors exactly like the
+// StreamProcessorRunner DO — and subscribe to its snapshot for React. Every
+// view of a stream joins this one runtime, so the raw and feed views here share
+// a single download.
+function useStreamProcessor(args: { streamPath: string; streamProjectId?: string }) {
+  const { streamPath, streamProjectId } = args;
   const store = useMemo(
     () =>
       acquireStreamRuntime({
         streamPath,
         ...(streamProjectId === undefined ? {} : { projectId: streamProjectId }),
         createStreamClient: createCapnwebStreamClient,
-        slug,
-        schemaVersion,
-        tables,
-        createProcessor,
+        processors: CANONICAL_MIRROR_PROCESSORS,
       }),
-    [streamPath, streamProjectId, slug, schemaVersion, tables, createProcessor],
+    [streamPath, streamProjectId],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -201,26 +190,6 @@ function useStreamProcessor(
   );
   return { store, snapshot, db: store.streamDatabase };
 }
-
-// Stable raw-events config (a constant so useStreamProcessor's useMemo identity is stable).
-const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
-  slug: BrowserRawEventsContract.slug,
-  schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  tables: ["events"],
-  createProcessor({ stream, sql, subscriptionKey }) {
-    const storage = browserProcessorStateStorage<BrowserRawEventsState>({
-      sql,
-      processorSlug: BrowserRawEventsContract.slug,
-      subscriptionKey,
-    });
-    return new BrowserRawEventsProcessor({
-      stream,
-      sql,
-      readState: storage.readState,
-      writeState: storage.writeState,
-    });
-  },
-};
 
 // The raw-events view's data: the thin runtime + this view's own reactive SQL queries.
 function useRawEventsView(args: {
@@ -231,19 +200,25 @@ function useRawEventsView(args: {
   const { store, snapshot, db } = useStreamProcessor({
     streamPath: args.streamPath,
     streamProjectId: args.streamProjectId,
-    ...RAW_EVENTS_RUNTIME,
   });
-  const totalCountResult = useStreamQuery(db, `SELECT COUNT(*) AS count FROM events`);
+  // Counts come from the trigger-maintained event_type_counts table, not
+  // COUNT(*) over the mirror: these queries re-run reactively after every
+  // delivered batch, and a full-scan count on a deep mirror starves the shared
+  // OPFS connection that ingest writes ride on (see the processor's schema).
+  const totalCountResult = useStreamQuery(
+    db,
+    `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
+  );
   const countResult = useStreamQuery(
     db,
     args.eventTypeFilter === ""
-      ? `SELECT COUNT(*) AS count FROM events`
-      : `SELECT COUNT(*) AS count FROM events WHERE type = ?`,
+      ? `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`
+      : `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts WHERE type = ?`,
     args.eventTypeFilter === "" ? [] : [args.eventTypeFilter],
   );
   const eventTypesResult = useStreamQuery(
     db,
-    `SELECT type, COUNT(*) AS count FROM events GROUP BY type ORDER BY type ASC`,
+    `SELECT type, n AS count FROM event_type_counts ORDER BY type ASC`,
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const totalEventCount = Number(totalCountResult.data[0]?.count ?? 0);
@@ -673,12 +648,15 @@ function EventRows({
     // If this grows older-history prepends later, switch this to a persisted row id.
     getItemKey: (index) => index,
     anchorTo: "end",
-    followOnAppend: true,
+    // OFF — the stick owns tail-following in DOM truth (useStickToBottom, see
+    // -event-feed-view.tsx for the sticky-composer rationale). anchorTo stays
+    // for mid-history measurement compensation.
+    followOnAppend: false,
     // TanStack's chat docs recommend `initialOffset` for restored screens.
     // `EventRows` mounts after the SQLite count query is ready, so a reload of
     // an already-populated local mirror is a restored screen: start near the
-    // estimated end. For fresh/tiny streams omit the option entirely so live
-    // append behavior stays on TanStack's normal `followOnAppend` path.
+    // estimated end so the first paint lands near the tail before the stick's
+    // first ResizeObserver write converges it exactly.
     ...(initialScrollOffset.current === 0 ? {} : { initialOffset: initialScrollOffset.current }),
     paddingStart: topScrollAffordanceHeight,
     scrollEndThreshold: 80,
@@ -701,16 +679,31 @@ function EventRows({
     },
   });
   const virtualItems = virtualizer.getVirtualItems();
-  const initialTailScroll = useInitialTailScroll({
-    count: eventCount,
+  // The stick observes the virtualizer's sizer AND the sticky composer
+  // chrome (see -event-feed-view.tsx for the full rationale — the composer
+  // lives inside the scroller, so its growth changes content height with no
+  // scroll event, and input inside it is not leaving-the-tail intent).
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const composerChromeRef = useRef<HTMLDivElement | null>(null);
+  const setVirtualContainer = useCallback(
+    (node: HTMLDivElement | null) => {
+      virtualizer.containerRef(node);
+      contentRef.current = node;
+    },
+    [virtualizer],
+  );
+  const { stuckRef, release } = useStickToBottom({
     scrollElementRef: parentRef,
-    virtualizer,
+    contentElementRefs: [contentRef, composerChromeRef],
+    releaseExemptElementRef: composerChromeRef,
   });
 
   useLayoutEffect(() => {
     const appendedCount = eventCount - previousEventCount.current;
     previousEventCount.current = eventCount;
-    if (shouldSuppressUnreadBadgeDuringInitialTail(initialTailScroll)) {
+    // While stuck the reader is AT the newest event by definition — nothing
+    // is unread. This also covers initial replay (see -event-feed-view.tsx).
+    if (stuckRef.current) {
       setNewEventCount(0);
       return;
     }
@@ -721,7 +714,7 @@ function EventRows({
     if (!scrollPosition.isAtEnd) {
       setNewEventCount((current) => current + appendedCount);
     }
-  }, [eventCount, initialTailScroll, scrollPosition.isAtEnd]);
+  }, [eventCount, stuckRef, scrollPosition.isAtEnd]);
 
   useLayoutEffect(() => {
     if (scrollPosition.isAtEnd) setNewEventCount(0);
@@ -744,7 +737,7 @@ function EventRows({
               className="pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
               type="button"
               onClick={() => {
-                initialTailScroll.markUserLeftTail("scroll-to-top-button");
+                release("scroll-to-top-button");
                 virtualizer.scrollToOffset(0);
               }}
             >
@@ -787,10 +780,16 @@ function EventRows({
           </div>
         ) : (
           <>
-            <div
-              className="relative w-full flex-1"
-              style={{ minHeight: virtualizer.getTotalSize() }}
-            >
+            {/* directDomUpdates contract: the virtualizer owns this container's
+                height (containerRef) and each row's translate — JSX must not
+                write either. grow/shrink-0 with basis auto: the box honors the
+                virtualizer's height when content is tall (flex-1's 0% basis
+                would OVERRIDE the height style, leaving a short box whose
+                absolute rows overflow invisibly — the stick's ResizeObserver
+                watches this box, so it must be real) and still grows to fill
+                the viewport when content is short, keeping the sticky
+                composer pinned to the viewport bottom. */}
+            <div ref={setVirtualContainer} className="relative w-full grow shrink-0">
               <EventRowWindow
                 eventCount={eventCount}
                 eventTypeFilter={eventTypeFilter}
@@ -813,7 +812,11 @@ function EventRows({
             </div>
           </>
         )}
-        <div className="sticky bottom-0 z-[2] bg-white" data-testid="stream-composer-chrome">
+        <div
+          ref={composerChromeRef}
+          className="sticky bottom-0 z-[2] bg-white"
+          data-testid="stream-composer-chrome"
+        >
           {showScrollToBottom ? (
             <div
               className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-[72px] -translate-y-full items-end justify-center pb-2.5"
@@ -840,7 +843,10 @@ function EventRows({
                   type="button"
                   onClick={() => {
                     setNewEventCount(0);
-                    virtualizer.scrollToEnd();
+                    // Direct DOM write: lands at the exact bottom, and the
+                    // scroll event it fires re-engages the stick (≤2px).
+                    const scroller = parentRef.current;
+                    if (scroller != null) scroller.scrollTop = scroller.scrollHeight;
                   }}
                 >
                   <span className="text-base leading-none">↓</span>
@@ -1039,8 +1045,9 @@ function EventRowWindow({
         data-index={virtualItem.index}
         data-testid="virtual-row"
         key={virtualItem.key}
-        ref={event === undefined ? undefined : measureElement}
-        style={{ transform: `translateY(${virtualItem.start}px)` }}
+        // Unconditional: directDomUpdates positions rows through the
+        // measurement cache, so unmeasured pending rows would never be placed.
+        ref={measureElement}
       >
         {event === undefined ? (
           <article

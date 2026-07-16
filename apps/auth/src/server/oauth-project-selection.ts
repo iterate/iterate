@@ -10,7 +10,7 @@ import {
   listOrganizationsForUser,
   listProjectsForUser,
 } from "./db/queries/.generated/index.ts";
-import { db } from "./db/index.ts";
+import type { DB } from "./db/index.ts";
 
 // Project-scoped tokens: when a client requests the `project` scope, the user
 // picks which projects the token may reach on the /project-access page, and
@@ -53,12 +53,13 @@ export const OAUTH_PROJECT_SELECTION_MAX_AGE_MS = 10 * 60 * 1000;
 
 export async function resolveStoredProjectSelection(params: {
   sessionId: string | null | undefined;
+  client: DB;
 }) {
   if (!params.sessionId) {
     return null;
   }
 
-  const selection = await getFreshOAuthProjectSelectionBySessionId(db, {
+  const selection = await getFreshOAuthProjectSelectionBySessionId(params.client, {
     sessionId: params.sessionId,
     minUpdatedAt: Date.now() - OAUTH_PROJECT_SELECTION_MAX_AGE_MS,
   });
@@ -128,10 +129,11 @@ export function buildAugmentedScopeClaims(params: {
 
 export async function listOrganizationClaimsForUser(
   userId: string | null,
+  client: DB,
 ): Promise<IterateAuthOrganizationClaim[]> {
   if (!userId) return [];
 
-  const organizations = await listOrganizationsForUser(db, { userId });
+  const organizations = await listOrganizationsForUser(client, { userId });
   return organizations.map((organization) => ({
     id: organization.id,
     name: organization.name,
@@ -143,14 +145,17 @@ export async function listOrganizationClaimsForUser(
 
 // The single source of truth for what an access token grants. Two surfaces
 // consume it and MUST stay identical: JWT minting (customAccessTokenClaims in
-// auth-plugins.ts) and opaque-token introspection (the internal oRPC router).
+// auth-plugins.ts) and opaque-token introspection (the private RPC entrypoint).
 // If these ever diverged, a client would get different project access
 // depending on whether it happened to receive a JWT or an opaque token.
-export async function buildAccessTokenGrantClaims(params: {
-  userId: string | null;
-  requestedScopes: string[];
-  selection: { userId: string; projectIds: string[] } | null;
-}): Promise<{
+export async function buildAccessTokenGrantClaims(
+  params: {
+    userId: string | null;
+    requestedScopes: string[];
+    selection: { userId: string; projectIds: string[] } | null;
+  },
+  client: DB,
+): Promise<{
   organizations: IterateAuthOrganizationClaim[];
   projects: IterateAuthProjectClaim[];
   scopes: string[];
@@ -166,8 +171,8 @@ export async function buildAccessTokenGrantClaims(params: {
 
   const [organizations, allProjects] = params.userId
     ? await Promise.all([
-        listOrganizationClaimsForUser(params.userId),
-        listProjectsForUser(db, { userId: params.userId }),
+        listOrganizationClaimsForUser(params.userId, client),
+        listProjectsForUser(client, { userId: params.userId }),
       ])
     : [[], []];
 

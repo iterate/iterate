@@ -476,6 +476,31 @@ const sidebarMenuButtonVariants = cva(
   },
 );
 
+/**
+ * Stock shadcn leaves the mobile Sheet open after in-sheet navigation
+ * (https://github.com/shadcn-ui/ui/issues/5561). When a menu control is a
+ * same-tab link, dismiss the sheet so the destination is visible immediately.
+ * Real `<button>` triggers (collapse, dropdown openers) are left alone.
+ * Modifier / middle-click navigation opens another tab and must not dismiss.
+ */
+function dismissMobileSidebarOnLinkClick(
+  event: React.MouseEvent<HTMLElement>,
+  isMobile: boolean,
+  setOpenMobile: (open: boolean) => void,
+) {
+  if (!isMobile) return;
+  const el = event.currentTarget;
+  if (!(el instanceof HTMLAnchorElement)) return;
+  if (el.hasAttribute("download")) return;
+  const target = el.getAttribute("target");
+  if (target && target !== "_self") return;
+  // Keep the sheet open when the browser will not navigate this tab.
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+    return;
+  }
+  setOpenMobile(false);
+}
+
 function SidebarMenuButton({
   render,
   isActive = false,
@@ -489,12 +514,15 @@ function SidebarMenuButton({
     isActive?: boolean;
     tooltip?: string | React.ComponentProps<typeof TooltipContent>;
   } & VariantProps<typeof sidebarMenuButtonVariants>) {
-  const { isMobile, state } = useSidebar();
+  const { isMobile, state, setOpenMobile } = useSidebar();
   const comp = useRender({
     defaultTagName: "button",
     props: mergeProps<"button">(
       {
         className: cn(sidebarMenuButtonVariants({ variant, size }), className),
+        onClick(event) {
+          dismissMobileSidebarOnLinkClick(event, isMobile, setOpenMobile);
+        },
       },
       props,
     ),
@@ -643,6 +671,7 @@ function SidebarMenuSubButton({
     size?: "sm" | "md";
     isActive?: boolean;
   }) {
+  const { isMobile, setOpenMobile } = useSidebar();
   return useRender({
     defaultTagName: "a",
     props: mergeProps<"a">(
@@ -651,6 +680,9 @@ function SidebarMenuSubButton({
           "flex h-7 min-w-0 -translate-x-px items-center gap-2 overflow-hidden rounded-md px-2 text-sidebar-foreground ring-sidebar-ring outline-hidden group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[size=md]:text-sm data-[size=sm]:text-xs data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-sidebar-accent-foreground",
           className,
         ),
+        onClick(event) {
+          dismissMobileSidebarOnLinkClick(event, isMobile, setOpenMobile);
+        },
       },
       props,
     ),

@@ -35,7 +35,20 @@ export function getEventName() {
 /** The subset of GitHub webhook event payload fields our CI scripts read. */
 export type GithubEventPayload = {
   action?: string;
-  pull_request?: { number: number; body?: string | null; merged?: boolean };
+  pull_request?: {
+    number: number;
+    title?: string;
+    html_url?: string;
+    body?: string | null;
+    draft?: boolean;
+    merged?: boolean;
+    merged_by?: { login?: string | null } | null;
+    merge_commit_sha?: string | null;
+    user?: { login?: string | null } | null;
+    base?: { ref: string; sha: string };
+    head?: { ref?: string; sha: string };
+  };
+  sender?: { login?: string | null };
 };
 
 export function readEventPayload() {

@@ -1,19 +1,15 @@
-import {
-  memo,
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { memo, useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   BanIcon,
   ChevronRightIcon,
   CircleQuestionMarkIcon,
   CodeIcon,
+  GitBranchIcon,
   PaperclipIcon,
+  PauseIcon,
+  PlayIcon,
+  ScrollTextIcon,
 } from "lucide-react";
 import type {
   AgentUiActivity,
@@ -22,7 +18,7 @@ import type {
   AgentUiItem,
   AgentUiLlmStep,
   AgentUiMessageItem,
-  AgentUiState,
+  AgentUiMessageVia,
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
@@ -31,241 +27,76 @@ import {
   MessageResponse,
 } from "@iterate-com/ui/components/ai-elements/message";
 import { Button } from "@iterate-com/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { AGENT_UI_FEED_TABLE } from "~/domains/streams/client-libraries/processors/agent-ui-processor.ts";
-import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
-import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-/** How many rows past the virtualizer's window the tail query prefetches. */
-const TAIL_PREFETCH_ROWS = 32;
+import {
+  formatClockTime,
+  formatDateTime,
+  formatDateTimeAttribute,
+  formatElapsedSeconds,
+  formatFileSize,
+  formatSeconds,
+  formatTokens,
+  liveActivityLabel,
+  looksLikeCode,
+} from "~/lib/feed-format.ts";
+import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
-/**
- * The clean agent chat feed: user and assistant messages plus archived
- * activity rows ("Ran code 2× · 3 requests · 7.4 s").
- *
- * Settled items are `agent_feed_items` rows written by the agent-ui
- * processor; the TanStack virtual list windows over them with reactive
- * SQLite queries. Active LLM/script work is the list's trailing virtual item,
- * rendered straight from the processor's reduced state, so the virtualizer's
- * end anchoring tracks its growth natively.
- *
- * Callers must remount this component when pointing it at a different
- * database (key it by the database identity): the virtualizer's measurement
- * and scroll state are only valid for one stream's history.
- */
-export function AgentFeedView({
-  database,
-  liveState,
-  search = "",
-  emptyLabel = "No messages yet.",
-  isPending = false,
-  isInterruptingQueuedMessages = false,
-  onInterruptQueuedMessages,
-}: {
-  database: StreamBrowserDatabase;
-  liveState: AgentUiState | null;
-  search?: string;
-  emptyLabel?: string;
-  isPending?: boolean;
-  isInterruptingQueuedMessages?: boolean;
-  onInterruptQueuedMessages?: () => Promise<void> | void;
-}) {
-  const query = search.trim().toLowerCase();
-  const countResult = useStreamQuery(
-    database,
-    query === ""
-      ? `SELECT COUNT(*) AS count FROM ${AGENT_UI_FEED_TABLE}`
-      : `SELECT COUNT(*) AS count FROM ${AGENT_UI_FEED_TABLE} WHERE json(data) LIKE ?`,
-    query === "" ? [] : [`%${query}%`],
-  );
-  const itemCount = Number(countResult.data[0]?.count ?? 0);
-  const live = liveState?.live ?? null;
-  const queuedUserMessages = liveState?.queuedUserMessages ?? [];
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set());
-
-  // The live in-flight activity and the queued-messages panel are the list's
-  // trailing items, so TanStack Virtual owns ALL tail behavior natively:
-  // `followOnAppend` chases appends while the reader is pinned to the end, and
-  // end-anchored resize adjustments keep the pin as the live item grows with
-  // every streamed chunk. Rendering them outside the list would hide their
-  // height from the virtualizer and require hand-rolled scroll chasing.
-  const liveCount = live == null ? 0 : 1;
-  const queuedCount = queuedUserMessages.length === 0 ? 0 : 1;
-  const totalCount = itemCount + liveCount + queuedCount;
-
-  const virtualizer = useVirtualizer({
-    count: totalCount,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 56,
-    // Agent feed rows are append-only and addressed by dense local_index, so
-    // the virtual index is a stable item key for TanStack's end anchoring.
-    getItemKey: (index) => index,
-    anchorTo: "end",
-    followOnAppend: true,
-    scrollEndThreshold: 80,
-    overscan: 16,
-    directDomUpdates: true,
-  });
-
-  // Open at the newest content. anchorTo/followOnAppend only act on option
-  // UPDATES — when the deduped query registry already knows the count on the
-  // first render (e.g. re-keyed remount for a previously-opened stream), there
-  // is no 0→N transition for followOnAppend to chase, so set the initial
-  // position explicitly. scrollToEnd's reconcile loop absorbs estimated→
-  // measured size drift.
-  useLayoutEffect(() => {
-    virtualizer.scrollToEnd();
-    // useVirtualizer returns one stable instance for the component's lifetime,
-    // so this runs once on mount; later appends are followOnAppend's job.
-  }, [virtualizer]);
-
-  const virtualItems = virtualizer.getVirtualItems();
-  const first = virtualItems[0]?.index ?? 0;
-  const last = virtualItems.at(-1)?.index ?? -1;
-  // The window extends TAIL_PREFETCH_ROWS past the virtualizer's range so rows
-  // appended while pinned to the tail are already in this snapshot when the
-  // count query grows: the live→settled handoff commits in one frame instead
-  // of flashing a skeleton where the new message lands.
-  const rowsResult = useStreamQuery(
-    database,
-    query === ""
-      ? `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
-         WHERE local_index >= ? AND local_index < ?
-         ORDER BY local_index ASC`
-      : `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
-         WHERE json(data) LIKE ?
-         ORDER BY local_index ASC
-         LIMIT ? OFFSET ?`,
-    query === ""
-      ? [first, last + 1 + TAIL_PREFETCH_ROWS]
-      : [`%${query}%`, Math.max(0, last + 1 + TAIL_PREFETCH_ROWS - first), first],
-  );
-  // Retain the last committed rows across range re-queries so already-visible
-  // rows don't flash to skeletons while the shifted window's SQL runs. The
-  // retained rows are only valid for the search they were fetched under —
-  // reusing them across a filter change would briefly show unfiltered rows.
-  const lastRowsRef = useRef<{ query: string; rows: Map<number, AgentUiItem> } | null>(null);
-  const itemsByIndex = useMemo(() => {
-    if (rowsResult.status !== "ok") {
-      const retained = lastRowsRef.current;
-      return retained?.query === query ? retained.rows : new Map<number, AgentUiItem>();
-    }
-    const rows = new Map<number, AgentUiItem>();
-    rowsResult.data.forEach((row, position) => {
-      const index = query === "" ? Number(row.local_index) : first + position;
-      try {
-        rows.set(index, JSON.parse(String(row.data)) as AgentUiItem);
-      } catch {
-        // Skip unparseable rows; the row stays a skeleton.
-      }
-    });
-    lastRowsRef.current = { query, rows };
-    return rows;
-  }, [rowsResult.data, rowsResult.status, query, first]);
-
-  // Stable identity so the memoized settled rows skip the per-chunk re-renders
-  // driven by the live streaming state.
-  const toggleExpanded = useCallback((id: string) => {
-    setExpandedIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
-  return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
-        {totalCount === 0 ? (
-          <Empty className="min-h-48">
-            <EmptyHeader>
-              {isPending ? <Spinner className="size-4" /> : null}
-              <EmptyTitle>{isPending ? "Connecting to the stream" : "Nothing here yet"}</EmptyTitle>
-              {isPending ? null : <EmptyDescription>{emptyLabel}</EmptyDescription>}
-            </EmptyHeader>
-          </Empty>
-        ) : null}
-        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-          {virtualItems.map((virtualItem) => {
-            const index = virtualItem.index;
-            const isLiveItem = live != null && index === itemCount;
-            const isQueuedItem = index === itemCount + liveCount && queuedCount > 0;
-            const item = index < itemCount ? itemsByIndex.get(index) : undefined;
-            return (
-              <div
-                key={virtualItem.key}
-                data-index={index}
-                ref={virtualizer.measureElement}
-                className="absolute left-0 top-0 w-full"
-                style={{ transform: `translateY(${virtualItem.start}px)` }}
-              >
-                {isLiveItem ? (
-                  <AgentLiveActivity
-                    live={live}
-                    expandedIds={expandedIds}
-                    onToggle={toggleExpanded}
-                  />
-                ) : isQueuedItem ? (
-                  <QueuedMessagesPanel
-                    messages={queuedUserMessages}
-                    isInterrupting={isInterruptingQueuedMessages}
-                    onInterrupt={onInterruptQueuedMessages}
-                  />
-                ) : item == null ? (
-                  <div className="my-2 h-10 rounded-xl bg-muted/40" />
-                ) : (
-                  <AgentFeedItemRow
-                    item={item}
-                    expandedIds={expandedIds}
-                    onToggle={toggleExpanded}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
+// The clean agent chat rows: user and assistant messages plus archived
+// activity rows ("Ran code 2× · 3 requests · 7.4 s"), and the live in-flight
+// activity tail. The rows are `agent.*` feed_items written by the browser-feed
+// projector; the virtualized list that windows over them lives in
+// stream-feed-view.tsx — this file owns only how each item renders.
 
 // Memoized: the feed re-renders on every 16ms live-streaming tick, and settled
 // rows (markdown, highlighted code) must not re-render along with it. Item
 // objects keep their identity between ticks — the row map is only rebuilt when
 // the underlying SQLite snapshot actually changes.
-const AgentFeedItemRow = memo(function AgentFeedItemRow({
+export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   item,
-  expandedIds,
+  toggledIds,
   onToggle,
+  onInspectLlmRequest,
+  projectSlug,
 }: {
   item: AgentUiItem;
-  expandedIds: ReadonlySet<string>;
+  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
+  /** Opens the LLM request inspector at this llmRequestOffset (llm steps only). */
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
+  projectSlug?: string;
 }) {
   if (item.kind === "stream-woken") {
     return <StreamWakeRow item={item} />;
   }
 
-  if (item.kind !== "activity") {
-    if (item.kind === "user") {
-      return (
-        <Message
-          from="user"
-          className="pb-2 pt-3.5"
-          data-testid="agent-feed-message"
-          data-kind="user"
-        >
-          <MessageContent className="group-[.is-user]:rounded-2xl">
-            <UserMessageBody item={item} />
-          </MessageContent>
-        </Message>
-      );
-    }
+  if (item.kind === "child-stream-created") {
+    return <ChildStreamCreatedRow item={item} projectSlug={projectSlug} />;
+  }
+
+  if (item.kind === "stream-paused" || item.kind === "stream-resumed") {
+    return <StreamPauseRow item={item} />;
+  }
+
+  if (item.kind === "user") {
+    return (
+      <Message
+        from="user"
+        className="pb-2 pt-3.5"
+        data-testid="agent-feed-message"
+        data-kind="user"
+      >
+        <MessageContent className="group-[.is-user]:rounded-2xl">
+          <UserMessageBody item={item} />
+        </MessageContent>
+      </Message>
+    );
+  }
+
+  if (item.kind === "assistant") {
     return (
       <Message
         from="assistant"
@@ -274,7 +105,22 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
         data-kind="assistant"
       >
         <MessageContent>
-          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
+          {item.via == null ? null : (
+            <MessageViaLabel via={item.via} className="text-muted-foreground" />
+          )}
+          {/* Settled messages never stream, so skip streamdown's unpaired-
+              marker balancing — it appends a phantom `*` to text like "17 * 23".
+              mode="static" is load-bearing for the virtualized feed: streaming
+              mode paints EMPTY on mount and fills the markdown in a deferred
+              transition, so every row mounting in the virtual window measures
+              ~16px before snapping to its real height — a measurement storm
+              that breaks the virtualizer's end anchor. Static mode renders
+              synchronously; the first measurement is the real one. */}
+          <MessageResponse
+            className="min-w-0 max-w-full overflow-hidden"
+            mode="static"
+            parseIncompleteMarkdown={false}
+          >
             {item.text}
           </MessageResponse>
           <MessageAttachments files={item.files} hasText={item.text !== ""} />
@@ -283,15 +129,59 @@ const AgentFeedItemRow = memo(function AgentFeedItemRow({
     );
   }
 
-  return (
-    <AgentActivityRow
-      activity={item}
-      expanded={expandedIds.has(item.id)}
-      expandedIds={expandedIds}
-      onToggle={onToggle}
-    />
-  );
+  if (item.kind === "activity") {
+    return (
+      <AgentActivityRow
+        activity={item}
+        expanded={toggledIds.has(item.id)}
+        toggledIds={toggledIds}
+        onToggle={onToggle}
+        onInspectLlmRequest={onInspectLlmRequest}
+      />
+    );
+  }
+
+  return null;
 });
+
+function ChildStreamCreatedRow({
+  item,
+  projectSlug,
+}: {
+  item: Extract<AgentUiItem, { kind: "child-stream-created" }>;
+  projectSlug?: string;
+}) {
+  const dateTime = formatDateTimeAttribute(item.timestampMs);
+  const streamLabel = compactStreamPath(item.childPath);
+  const linkOptions =
+    projectSlug == null ? null : linkOptionsForStreamPath(projectSlug, item.childPath);
+
+  return (
+    <div
+      className="flex items-center gap-2 py-2 text-xs text-muted-foreground"
+      data-testid="agent-feed-child-stream-created"
+      data-kind="child-stream-created"
+    >
+      <div className="h-px min-w-8 flex-1 bg-border/70" />
+      <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+      <span className="shrink-0">Created child stream</span>
+      {linkOptions == null ? (
+        <span className="min-w-0 truncate font-mono text-foreground/70">{streamLabel}</span>
+      ) : (
+        <Link
+          {...linkOptions}
+          className="min-w-0 truncate font-mono text-foreground/80 underline-offset-4 hover:text-foreground hover:underline"
+        >
+          {streamLabel}
+        </Link>
+      )}
+      <time className="sr-only" dateTime={dateTime}>
+        {formatDateTime(item.timestampMs)}
+      </time>
+      <div className="h-px min-w-8 flex-1 bg-border/70" />
+    </div>
+  );
+}
 
 function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-woken" }> }) {
   const dateTime = formatDateTimeAttribute(item.timestampMs);
@@ -337,6 +227,37 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
   );
 }
 
+function StreamPauseRow({
+  item,
+}: {
+  item: Extract<AgentUiItem, { kind: "stream-paused" | "stream-resumed" }>;
+}) {
+  const dateTime = formatDateTimeAttribute(item.timestampMs);
+  const paused = item.kind === "stream-paused";
+  const Icon = paused ? PauseIcon : PlayIcon;
+
+  return (
+    <div
+      className="flex items-center gap-3 py-3"
+      data-testid="agent-feed-stream-pause-state"
+      data-kind={item.kind}
+    >
+      <div className="h-px flex-1 bg-border" />
+      <div className="flex min-w-0 shrink items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-muted-foreground">
+        <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+        <time
+          className="truncate text-xs font-medium"
+          dateTime={dateTime}
+          title={formatDateTime(item.timestampMs)}
+        >
+          {item.reason == null ? item.text : `${item.text}: ${item.reason}`}
+        </time>
+      </div>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Settled activity: the quiet "Ran code 2× · 3 requests · 7.4 s" row
 // ---------------------------------------------------------------------------
@@ -344,13 +265,15 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
 function AgentActivityRow({
   activity,
   expanded,
-  expandedIds,
+  toggledIds,
   onToggle,
+  onInspectLlmRequest,
 }: {
   activity: AgentUiActivity;
   expanded: boolean;
-  expandedIds: ReadonlySet<string>;
+  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
 }) {
   const interrupted = activityWasInterrupted(activity);
 
@@ -379,21 +302,48 @@ function AgentActivityRow({
       </Button>
       {expanded ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
-          {activity.steps.map((step) => (
-            <AgentActivityStep
-              key={step.id}
-              step={step}
-              expanded={expandedIds.has(step.id)}
-              onToggle={onToggle}
-            />
-          ))}
+          {activity.steps.map((step) => {
+            // Expanding the activity shows what happened directly — code and
+            // results are the point of expanding, not a second disclosure.
+            // The activity header already says "Ran code 1×", so a lone code
+            // step renders its detail bare instead of repeating a "Ran code"
+            // header row underneath (multiple code steps keep their headers:
+            // the start times tell the runs apart). Steps whose detail would
+            // show nothing stay collapsed behind their slim header row.
+            if (step.kind === "code" && codeStepCount(activity) === 1) {
+              return (
+                <div key={step.id} className="flex flex-col gap-2 pb-1 pt-0.5">
+                  <CodeStepDetail step={step} />
+                </div>
+              );
+            }
+            const defaultExpanded = stepDetailHasContent(step);
+            return (
+              <AgentActivityStep
+                key={step.id}
+                step={step}
+                expanded={toggledIds.has(step.id) !== defaultExpanded}
+                onToggle={onToggle}
+                onInspectLlmRequest={onInspectLlmRequest}
+              />
+            );
+          })}
         </div>
       ) : null}
     </div>
   );
 }
 
-function QueuedMessagesPanel({
+/**
+ * Messages queued for after the running turn, rendered as PART OF THE
+ * COMPOSER: the queue is input that hasn't reached the agent yet, so it
+ * belongs with the input surface, not in the feed's history. The stack is a
+ * rounded card tucked behind the composer pill (the pill overlaps its bottom
+ * edge). On phones it collapses to the newest message — each new queued
+ * message pushes the previous one out of view — with a "+N more" toggle;
+ * wider viewports show the whole (scroll-capped) stack.
+ */
+export function QueuedMessagesPanel({
   messages,
   isInterrupting,
   onInterrupt,
@@ -402,38 +352,59 @@ function QueuedMessagesPanel({
   isInterrupting: boolean;
   onInterrupt?: () => Promise<void> | void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  if (messages.length === 0) return null;
+  const hiddenCount = messages.length - 1;
   return (
-    <div className="flex flex-col gap-2 py-3">
-      <div className="flex items-center gap-3">
-        <div className="h-px flex-1 bg-border" />
-        <span className="font-mono text-xs text-muted-foreground">
-          Queued messages for after the next agent turn
+    <div
+      className="-mb-4 rounded-t-3xl border border-b-0 bg-muted/40 px-3 pb-6 pt-1.5"
+      data-testid="queued-messages-panel"
+    >
+      <div className="flex items-center gap-2 px-1.5 py-1">
+        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+          Queued for the next agent turn
         </span>
-        <div className="h-px flex-1 bg-border" />
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="shrink-0 font-mono text-[11px] text-muted-foreground underline-offset-2 hover:underline sm:hidden"
+          >
+            {expanded ? "collapse" : `+${hiddenCount} more`}
+          </button>
+        ) : null}
+        {onInterrupt == null ? null : (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void onInterrupt()}
+            disabled={isInterrupting}
+            className="ml-auto h-6 shrink-0 gap-1 px-2 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800 dark:text-red-300 dark:hover:bg-red-950/30"
+          >
+            {isInterrupting ? (
+              <Spinner className="size-3" />
+            ) : (
+              <BanIcon className="size-3 text-current" />
+            )}
+            Interrupt & send now
+          </Button>
+        )}
       </div>
-      {messages.map((message) => (
-        <Message key={message.id} from="user" className="py-1">
-          <MessageContent className="group-[.is-user]:rounded-2xl">
+      <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+        {messages.map((message, index) => (
+          <div
+            key={message.id}
+            className={cn(
+              "rounded-xl border bg-background/80 px-3 py-1.5 text-sm",
+              // The mobile push-out: only the newest message stays pinned to
+              // the composer while collapsed.
+              !expanded && index < messages.length - 1 && "hidden sm:block",
+            )}
+          >
             <UserMessageBody item={message} />
-          </MessageContent>
-        </Message>
-      ))}
-      {onInterrupt == null ? null : (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void onInterrupt()}
-          disabled={isInterrupting}
-          className="self-end border-red-200 bg-red-50 text-red-700 shadow-sm hover:border-red-300 hover:bg-red-100 hover:text-red-800 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
-        >
-          {isInterrupting ? (
-            <Spinner className="size-3" />
-          ) : (
-            <BanIcon className="size-3 text-current" />
-          )}
-          Interrupt agent and send now
-        </Button>
-      )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -441,9 +412,36 @@ function QueuedMessagesPanel({
 function UserMessageBody({ item }: { item: AgentUiMessageItem }) {
   return (
     <>
-      {item.text === "" ? null : <div className="whitespace-pre-wrap leading-6">{item.text}</div>}
+      {item.via == null ? null : <MessageViaLabel via={item.via} className="opacity-70" />}
+      {item.text === "" ? null : item.via == null ? (
+        <div className="whitespace-pre-wrap leading-6">{item.text}</div>
+      ) : (
+        // Slack text is converted to markdown-ish (mentions, [label](url)
+        // links) by the reducer — render it through the markdown path so
+        // links come out clickable instead of as raw syntax. Settled text
+        // never streams, so skip the unpaired-marker balancing; mode="static"
+        // renders synchronously (see the assistant bubble for why that keeps
+        // the virtualizer's measurements sane).
+        <MessageResponse
+          className="min-w-0 max-w-full overflow-hidden"
+          mode="static"
+          parseIncompleteMarkdown={false}
+        >
+          {item.text}
+        </MessageResponse>
+      )}
       <MessageAttachments files={item.files} hasText={item.text !== ""} />
     </>
+  );
+}
+
+/** Small "slack · U0123ABC" marker on messages from external chat integrations. */
+function MessageViaLabel({ via, className }: { via: AgentUiMessageVia; className?: string }) {
+  return (
+    <div className={cn("font-mono text-[11px] leading-none", className)}>
+      {via.service}
+      {via.sender == null ? "" : ` · ${via.sender}`}
+    </div>
   );
 }
 
@@ -491,8 +489,12 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
   );
 }
 
+function codeStepCount(activity: AgentUiActivity): number {
+  return activity.steps.filter((step) => step.kind === "code").length;
+}
+
 function activitySummary(activity: AgentUiActivity): string {
-  const codeCount = activity.steps.filter((step) => step.kind === "code").length;
+  const codeCount = codeStepCount(activity);
   const requestCount = activity.steps.filter((step) => step.kind === "llm").length;
   const interrupted = activity.steps.some(
     (step) => step.kind === "llm" && step.outcome === "cancelled",
@@ -527,34 +529,44 @@ function AgentActivityStep({
   step,
   expanded,
   onToggle,
+  onInspectLlmRequest,
 }: {
   step: AgentUiStep;
   expanded: boolean;
   onToggle: (id: string) => void;
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
 }) {
   return (
     <div className="flex flex-col">
-      <Button
-        variant="ghost"
-        size="xs"
-        aria-expanded={expanded}
-        onClick={() => onToggle(step.id)}
-        className="-ml-2 self-start font-normal"
-      >
-        {step.kind === "llm" ? (
-          <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
-        ) : (
-          <CodeIcon className="size-3 text-muted-foreground" />
-        )}
-        <span className="font-mono text-xs text-foreground/70">{stepLabel(step)}</span>
-        <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
-        <ChevronRightIcon
-          className={cn(
-            "size-2 text-muted-foreground/50 transition-transform",
-            expanded && "rotate-90",
+      <div className="-ml-2 flex items-center gap-0.5 self-start">
+        <Button
+          variant="ghost"
+          size="xs"
+          aria-expanded={expanded}
+          onClick={() => onToggle(step.id)}
+          className="font-normal"
+        >
+          {step.kind === "llm" ? (
+            <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
+          ) : (
+            <CodeIcon className="size-3 text-muted-foreground" />
           )}
-        />
-      </Button>
+          <span className="font-mono text-xs text-foreground/70">{stepLabel(step)}</span>
+          <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
+          <ChevronRightIcon
+            className={cn(
+              "size-2 text-muted-foreground/50 transition-transform",
+              expanded && "rotate-90",
+            )}
+          />
+        </Button>
+        {step.kind === "llm" && onInspectLlmRequest != null ? (
+          <InspectLlmRequestButton
+            llmRequestOffset={step.llmRequestOffset}
+            onInspectLlmRequest={onInspectLlmRequest}
+          />
+        ) : null}
+      </div>
       {expanded ? (
         <div className="flex flex-col gap-2 pb-2.5 pl-5 pt-0.5">
           {step.kind === "llm" ? <LlmStepDetail step={step} /> : <CodeStepDetail step={step} />}
@@ -564,9 +576,56 @@ function AgentActivityStep({
   );
 }
 
+/** Opens the LLM trace panel: the exact context this request sent to the
+ * model and the response it made, replayed from the local event mirror
+ * (llm-request-inspector-panel). */
+function InspectLlmRequestButton({
+  llmRequestOffset,
+  onInspectLlmRequest,
+}: {
+  llmRequestOffset: number;
+  onInspectLlmRequest: (llmRequestOffset: number) => void;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      title="Show the exact request sent to the model and its response"
+      data-testid="agent-feed-inspect-llm-request"
+      onClick={() => onInspectLlmRequest(llmRequestOffset)}
+      className="font-normal text-muted-foreground/70 hover:text-foreground"
+    >
+      <ScrollTextIcon className="size-3" />
+      <span className="font-mono text-xs">View trace</span>
+    </Button>
+  );
+}
+
+/**
+ * Whether an expanded step detail would actually show something. Steps with
+ * empty details default to collapsed so an expanded activity reads as code →
+ * results without blank sections (their headers still carry timing/tokens).
+ */
+function stepDetailHasContent(step: AgentUiStep): boolean {
+  if (step.kind === "code") return true;
+  return step.thinkingText !== "" || step.errorMessage != null || llmResponseVisible(step);
+}
+
+// In code-mode the LLM's response *is* the script that a code step executes
+// and renders with its results — showing the fenced-code variant here too
+// just duplicates it (the raw event view has it for anyone who wants it).
+// It only appears when the request was cancelled or failed, i.e. the code
+// likely never ran and this partial response is the only copy (the activity
+// summary promises "click to see partial response"). Prose always renders.
+function llmResponseVisible(step: AgentUiLlmStep): boolean {
+  if (step.responseText === "") return false;
+  if (!looksLikeCode(step.responseText)) return true;
+  return step.outcome === "cancelled" || step.outcome === "failed";
+}
+
 function stepLabel(step: AgentUiStep): string {
   if (step.kind === "code") return step.status === "running" ? "Running code" : "Ran code";
-  return step.model ?? step.provider ?? "LLM request";
+  return step.model ?? "LLM request";
 }
 
 function stepMeta(step: AgentUiStep): string {
@@ -585,10 +644,12 @@ function stepMeta(step: AgentUiStep): string {
 }
 
 function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
+  const showResponse = llmResponseVisible(step);
+  const hasContent = step.thinkingText !== "" || showResponse || step.errorMessage != null;
   return (
     <>
       {step.thinkingText === "" ? null : <ThinkingBlock>{step.thinkingText}</ThinkingBlock>}
-      {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
+      {!showResponse ? null : looksLikeCode(step.responseText) ? (
         <SourceCodeBlock
           code={step.responseText}
           language="typescript"
@@ -602,9 +663,18 @@ function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
           {step.responseText}
         </div>
       )}
-      <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground">
-        {JSON.stringify(llmStepRawSummary(step), null, 2)}
-      </pre>
+      {step.errorMessage == null ? null : (
+        <pre className="overflow-x-auto rounded-xl bg-destructive/5 px-4 py-2.5 font-mono text-xs leading-relaxed text-destructive">
+          {step.errorMessage}
+        </pre>
+      )}
+      {/* Token/timing metadata lives in the step's header row; the raw
+          summary only fills in when the step has nothing else to show. */}
+      {hasContent ? null : (
+        <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground">
+          {JSON.stringify(llmStepRawSummary(step), null, 2)}
+        </pre>
+      )}
     </>
   );
 }
@@ -612,26 +682,18 @@ function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
 function llmStepRawSummary(step: AgentUiLlmStep) {
   return {
     ...(step.model == null ? {} : { model: step.model }),
-    ...(step.provider == null ? {} : { provider: step.provider }),
     usage: { input_tokens: step.inputTokens ?? null, output_tokens: step.outputTokens ?? null },
     ...(step.durationMs == null ? {} : { duration_ms: step.durationMs }),
     status: step.outcome ?? step.status,
     ...(step.errorMessage == null ? {} : { error: step.errorMessage }),
-    ...(step.providerResponseId == null ? {} : { provider_response_id: step.providerResponseId }),
   };
 }
 
 function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
-  const startedAtDateTime = formatDateTimeAttribute(step.startedAtMs);
-
+  // No timestamp heading here: the step's header row already says when it
+  // started — the detail is the code and what it returned.
   return (
     <>
-      <time
-        className="block px-1.5 font-mono text-xs text-muted-foreground"
-        dateTime={startedAtDateTime}
-      >
-        Started {formatDateTime(step.startedAtMs)}
-      </time>
       {step.code === "" ? null : (
         <SourceCodeBlock
           code={step.code}
@@ -678,34 +740,51 @@ function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
 // ---------------------------------------------------------------------------
 
 /**
- * Rendered below the virtual list whenever work is in flight. Receives the
+ * The virtual list's trailing item whenever work is in flight. Receives the
  * live reduced state on every chunk: finished steps collapse upward into quiet
  * rows while current requests or scripts keep the busy indicator visible.
  */
-function AgentLiveActivity({
+export function AgentLiveActivity({
   live,
-  expandedIds,
+  toggledIds,
   onToggle,
+  onInspectLlmRequest,
 }: {
   live: AgentUiActivity;
-  expandedIds: ReadonlySet<string>;
+  toggledIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
+  onInspectLlmRequest?: (llmRequestOffset: number) => void;
 }) {
   const runningSteps = live.steps.filter((step) => step.status === "running");
   const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
   const working = runningSteps.length > 0;
+  const toggleLive = useCallback((id: string) => onToggle(`live:${id}`), [onToggle]);
   const showStepRail =
     doneSteps.length > 0 ||
     runningSteps.some((step) => step.kind === "code" || liveStepHasVisibleContent(step));
+
+  // The in-flight request's context is already committed history (the fold
+  // reads offsets ≤ llmRequestOffset), so "what is it chewing on right now"
+  // is inspectable mid-turn from the live label row.
+  const runningLlmStep = runningSteps
+    .filter((step): step is AgentUiLlmStep => step.kind === "llm")
+    .at(-1);
+  const runningCodeStartedAtMs =
+    runningSteps.find((step) => step.kind === "code")?.startedAtMs ?? null;
+  const codeElapsed = useElapsedLabel(runningCodeStartedAtMs);
+  const statusWithElapsed = `${liveActivityLabel(runningSteps)}${
+    codeElapsed == null ? "" : ` ${codeElapsed}`
+  }`;
 
   if (!working && activityWasInterrupted(live)) {
     return (
       <AgentActivityRow
         activity={live}
-        expanded={expandedIds.has(live.id)}
-        expandedIds={expandedIds}
+        expanded={toggledIds.has(live.id)}
+        toggledIds={toggledIds}
         onToggle={onToggle}
+        onInspectLlmRequest={onInspectLlmRequest}
       />
     );
   }
@@ -715,19 +794,32 @@ function AgentLiveActivity({
       {working ? (
         <div className="flex h-7 items-center gap-2 self-start px-0.5">
           <Spinner className="size-3 shrink-0 text-amber-600" />
-          <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
-            {liveActivityLabel(runningSteps)}
+          <span className="text-sm font-medium tabular-nums text-amber-700 dark:text-amber-500">
+            {statusWithElapsed}
           </span>
+          {runningLlmStep != null && onInspectLlmRequest != null ? (
+            <InspectLlmRequestButton
+              llmRequestOffset={runningLlmStep.llmRequestOffset}
+              onInspectLlmRequest={onInspectLlmRequest}
+            />
+          ) : null}
         </div>
       ) : null}
       {showStepRail ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
+          {/* Steps in the live rail default to collapsed quiet rows — the
+              streaming tail below is the focus while work is in flight. Toggle
+              keys are namespaced with "live:" so they don't leak into the
+              settled activity, where membership means the opposite (collapse
+              a default-expanded step); a step expanded while streaming stays
+              expanded after settling via the settled default. */}
           {doneSteps.map((step) => (
             <AgentActivityStep
               key={step.id}
               step={step}
-              expanded={expandedIds.has(step.id)}
-              onToggle={onToggle}
+              expanded={toggledIds.has(`live:${step.id}`)}
+              onToggle={toggleLive}
+              onInspectLlmRequest={onInspectLlmRequest}
             />
           ))}
           {runningSteps.map((step) =>
@@ -735,8 +827,8 @@ function AgentLiveActivity({
               <AgentActivityStep
                 key={step.id}
                 step={step}
-                expanded={expandedIds.has(step.id)}
-                onToggle={onToggle}
+                expanded={toggledIds.has(`live:${step.id}`)}
+                onToggle={toggleLive}
               />
             ) : step === liveStep && liveStepHasVisibleContent(step) ? (
               <LiveStepStream key={step.id} step={step} />
@@ -757,23 +849,16 @@ function liveStepHasVisibleContent(step: AgentUiStep) {
   return step.thinkingText !== "" || step.responseText !== "";
 }
 
-function liveActivityLabel(runningSteps: AgentUiStep[]): string {
-  const scriptCount = runningSteps.filter((step) => step.kind === "code").length;
-  const llmCount = runningSteps.length - scriptCount;
-  const parts: string[] = [];
-  if (scriptCount > 0) {
-    parts.push(`Running ${scriptCount} script${scriptCount === 1 ? "" : "s"}`);
-  }
-  if (llmCount > 0) {
-    parts.push(`Making ${llmCount} LLM request${llmCount === 1 ? "" : "s"}`);
-  }
-  return parts.join(" · ") || "Working…";
-}
-
-/** Code-mode agents stream itx code as their response; chat agents stream prose. */
-const CODE_START_PATTERN = /^\s*(async|await|function|const|let|import)\b/;
-function looksLikeCode(text: string): boolean {
-  return text.includes("```") || CODE_START_PATTERN.test(text);
+/**
+ * Live CLI-style elapsed counter (`0.9s`) while code is running. Ticks every
+ * 100ms so the tenths place moves; idle when `startedAtMs` is null.
+ * Clock is a useSyncExternalStore subscription (react-doctor happy path),
+ * not a useState+setInterval effect loop.
+ */
+function useElapsedLabel(startedAtMs: number | null): string | null {
+  const nowMs = useTickingNowMs(100, startedAtMs != null);
+  if (startedAtMs == null) return null;
+  return formatElapsedSeconds(nowMs - startedAtMs);
 }
 
 function LiveStepStream({ step }: { step: AgentUiStep }) {
@@ -805,10 +890,27 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
   );
 }
 
-/** Amber-tinted block the response/code streams into, character by character. */
+/** Amber-tinted block the response/code streams into, character by character.
+ * Clamped to the same height as settled code and tail-pinned so the newest
+ * tokens stay visible: a long codemode turn (minutes, thousands of chunks)
+ * otherwise grows to fill the viewport and reads as one never-ending code
+ * block. Scrolling up unpins; returning to the bottom re-pins. */
 function StreamingCodeBlock({ code }: { code: string }) {
+  const preRef = useRef<HTMLPreElement>(null);
+  const pinnedRef = useRef(true);
+  useLayoutEffect(() => {
+    const el = preRef.current;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+  }, [code]);
   return (
-    <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20">
+    <pre
+      ref={preRef}
+      onScroll={(event) => {
+        const el = event.currentTarget;
+        pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }}
+      className="max-h-80 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20"
+    >
       {code}
       <StreamingCursor className="bg-amber-600" />
     </pre>
@@ -839,50 +941,8 @@ function ThinkingBlock({ children }: { children: ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Formatting
+// Formatting (number/time formatters live in ~/lib/feed-format.ts)
 // ---------------------------------------------------------------------------
-
-function formatTokens(count: number | undefined): string {
-  if (count == null) return "?";
-  if (count < 1000) return String(count);
-  return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-}
-
-function formatSeconds(durationMs: number): string {
-  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
-  const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${Math.round(seconds % 60)}s`;
-}
-
-function formatFileSize(size: number): string {
-  if (size < 1024) return `${size} B`;
-  const kilobytes = size / 1024;
-  if (kilobytes < 1024) return `${kilobytes.toFixed(1).replace(/\.0$/, "")} KB`;
-  return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
-}
-
-function formatClockTime(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function formatDateTime(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleString([], {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  });
-}
-
-function formatDateTimeAttribute(timestampMs: number): string | undefined {
-  const date = new Date(timestampMs);
-  if (Number.isNaN(date.getTime())) return undefined;
-  return date.toISOString();
-}
 
 function stringifyResult(result: unknown): string {
   if (typeof result === "string") return result;
@@ -891,4 +951,11 @@ function stringifyResult(result: unknown): string {
   } catch {
     return String(result);
   }
+}
+
+function compactStreamPath(path: string): string {
+  if (path.length <= 64) return path;
+  const segments = path.split("/").filter(Boolean);
+  if (segments.length <= 3) return path;
+  return `.../${segments.slice(-3).join("/")}`;
 }

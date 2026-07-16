@@ -10,13 +10,14 @@
  */
 import { test } from "vitest";
 import { createTestProject } from "../test-support/create-test-project.ts";
+import { itxScript } from "../test-support/itx-script-builder.ts";
 
 const SCRIPT_COUNT = 20;
 const SCRIPT_HOLD_MS = 30_000;
 const MAX_CONCURRENT_COMPLETION_MS = 50_000;
 
 test(
-  "concurrent long-running ITX scripts all complete",
+  "concurrent long-running itx scripts all complete",
   { timeout: 90_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "script-concurrency" });
@@ -26,12 +27,12 @@ test(
     const startedAt = Date.now();
     const executions = await Promise.allSettled(
       Array.from({ length: SCRIPT_COUNT }, (_, index) =>
-        itx.capabilityHost.runScript(`async () => {
-          const marker = ${JSON.stringify(marker)};
-          const index = ${index};
-          await new Promise((resolve) => setTimeout(resolve, ${SCRIPT_HOLD_MS}));
-          return { index, marker };
-        }`),
+        itxScript(itx.capabilityHost)
+          .vars({ holdMs: SCRIPT_HOLD_MS, index, marker })
+          .execute(async (_itx, vars) => {
+            await new Promise((resolve) => setTimeout(resolve, vars.holdMs));
+            return { index: vars.index, marker: vars.marker };
+          }),
       ),
     );
     const elapsedMs = Date.now() - startedAt;
@@ -47,14 +48,16 @@ test(
   },
 );
 
-function formatSettledExecutions(executions: PromiseSettledResult<{ result: unknown }>[]): {
+function formatSettledExecutions(
+  executions: PromiseSettledResult<{ success(): { index: number; marker: string } }>[],
+): {
   fulfilled: unknown[];
   rejected: string[];
 } {
   return {
     fulfilled: executions
       .filter((execution) => execution.status === "fulfilled")
-      .map((execution) => execution.value.result),
+      .map((execution) => execution.value.success()),
     rejected: executions
       .filter((execution) => execution.status === "rejected")
       .map((execution) =>

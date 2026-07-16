@@ -1,12 +1,15 @@
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../../os/src/types.ts";
+import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
 import { reduceFeed, summarizeActivity, type AgentUiActivity } from "./feed.ts";
 
 const PATH = "/agents/mobile/test";
 
 test("a full round reduces to user → activity → assistant", () => {
   const feed = reduceFeed(PATH, [
-    event(1, "events.iterate.com/agents/user-message-received", { content: "add a healthcheck" }),
+    event(1, "events.iterate.com/agents/context-added", {
+      content: "add a healthcheck",
+      role: "user",
+    }),
     event(2, "events.iterate.com/agent/llm-request-requested", { model: "gpt-x" }),
     event(3, "events.iterate.com/capability-host/script-execution-requested", {
       executionId: "e1",
@@ -36,7 +39,7 @@ test("a full round reduces to user → activity → assistant", () => {
 
 test("streaming response text lands on the live activity while working", () => {
   const feed = reduceFeed(PATH, [
-    event(1, "events.iterate.com/agents/user-message-received", { content: "go" }),
+    event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
     event(2, "events.iterate.com/agent/llm-request-requested", {}),
     event(3, "events.iterate.com/openai-ws/llm-response-chunk", {
       llmRequestId: 2,
@@ -81,5 +84,6 @@ function event(offset: number, type: string, payload: Record<string, unknown>): 
     payload,
     offset,
     createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, offset)).toISOString(),
+    path: PATH,
   };
 }

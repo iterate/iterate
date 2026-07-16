@@ -10,11 +10,14 @@
 // authenticated RPC target carries, and nowhere else.
 //
 // Credential lanes (see resolveItxAuth):
-//   from-server-cookie — the browser lane: the `iterate-admin-auth` admin
+//   from-server-cookie — the browser lane: a short-lived, signed operator
 //     cookie, else the `iterate_session` cookie verified against the auth
-//     worker's JWKS. Project scopes come from the session's project claims.
+//     worker's JWKS. Ambient cookies require an exact same-origin request.
 //   bearer            — an auth-worker access token presented as RPC data.
 //   admin-secret      — APP_CONFIG_ADMIN_API_SECRET; the CLI/e2e/tooling lane.
+//   operator-session  — a short-lived deployment- and origin-bound operator
+//     grant. Project grants reconstruct a synthetic principal with exactly one
+//     project; they never impersonate a customer or widen from the directory.
 //   impersonate       — admin-secret-gated fake principal (tests): lets suites
 //     exercise user-vs-user confinement against any deployment without minting
 //     real users.
@@ -24,10 +27,14 @@
 // auth worker's directory as the source of truth — one cached membership
 // lookup widens the live context instead of forcing a token refresh.
 
-import { authenticateCapnwebAdmin } from "./auth/admin-auth-cookie.ts";
 import { authenticateAdminBearer } from "./auth/admin.ts";
-import { createAuthWorkerServiceClient } from "./auth/auth-worker-service.ts";
+import {
+  authenticateOperatorSession,
+  authenticateOperatorToken,
+  isSameOriginBrowserRequest,
+} from "./auth/operator-session.ts";
 import { createOsIterateAuth } from "./auth/iterate-auth-client.ts";
+import { itxEnv } from "./env.ts";
 import {
   principalFromAccessToken,
   principalFromSession,
@@ -36,7 +43,47 @@ import {
   type UserPrincipal,
 } from "./auth/principal.ts";
 import type { AppConfig } from "./config.ts";
-import type { ItxAuth, ItxAuthCredentials, ItxAuthToken } from "./types.ts";
+
+/**
+ * Credentials accepted by `UnauthenticatedOs.authenticate`.
+ *
+ * - `from-server-cookie` — the browser lane: an operator/session cookie on an
+ *   exact same-origin HTTP request or WebSocket handshake.
+ * - `bearer` — an auth access token presented as RPC data.
+ * - `admin-secret` — the deployment admin API secret (CLI / tooling / e2e).
+ * - `operator-session` — a short-lived grant minted with the admin secret.
+ *   Project grants create a synthetic operator principal authorized for one
+ *   resolved project only; they do not impersonate a customer. Platform-wide
+ *   grants are a separate, explicit kind.
+ * - `impersonate` — admin-secret-gated fake principal, for test suites that
+ *   exercise per-project confinement without minting real users.
+ */
+export type ItxAuthCredentials =
+  | { type: "from-server-cookie" }
+  | { type: "bearer"; token: string }
+  | { type: "admin-secret"; secret: string }
+  | { type: "operator-session"; token: string }
+  | { type: "impersonate"; secret: string; token: ItxAuthToken };
+
+/** Principal shape for `impersonate` credentials. */
+export type ItxAuthToken =
+  | { type: "admin"; principal?: string }
+  | { type: "user"; principal: string; projectScopes: string[] };
+
+/** Authority object carried by server-side RPC target instances. */
+export interface ItxAuth {
+  readonly principal: string;
+  isAdmin(): boolean;
+  canAccessProject(projectId: string): boolean;
+  assertCanAccessProject(projectId: string | null): void;
+  listAccessibleProjects(): string[];
+  /**
+   * Async access check that may consult the project directory (source of
+   * truth) when synchronous claims miss — see the auth adapter. Optional so
+   * in-process trusted contexts stay trivially constructible.
+   */
+  ensureCanAccessProject?(projectId: string): Promise<void>;
+}
 
 type ProjectDirectory = {
   userHasProject(userPrincipal: UserPrincipal, projectId: string): Promise<boolean>;
@@ -171,6 +218,16 @@ export async function resolveItxAuth(input: {
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }
 
+  if (credentials.type === "operator-session") {
+    const session = await authenticateOperatorToken({
+      config,
+      requestUrl: input.requestUrl,
+      token: credentials.token,
+    });
+    if (!session) throw new Error("missing or invalid auth");
+    return itxAuthFromPrincipal(session.principal, { allowDirectoryFallback: false });
+  }
+
   if (credentials.type === "impersonate") {
     assertAdminSecret(config, credentials.secret);
     return contextFromImpersonatedToken(credentials.token);
@@ -183,22 +240,32 @@ export async function resolveItxAuth(input: {
       headers: new Headers({ authorization: `Bearer ${credentials.token}` }),
     });
     if (!accessToken) throw new Error("missing or invalid auth");
-    return contextFromPrincipal(config, principalFromAccessToken(accessToken));
+    return itxAuthFromPrincipal(principalFromAccessToken(accessToken));
   }
 
-  // from-server-cookie: the admin cookie wins (browser REPL admin + Playwright
-  // bridge), else the iterate_session cookie.
-  const adminPrincipal = authenticateCapnwebAdmin({
+  // Ambient cookies are never authority on a cross-origin browser socket.
+  // Browsers always send Origin on WebSocket handshakes; non-browser clients
+  // normally omit it and authenticate explicitly.
+  const cookieRequest = new Request(input.requestUrl, { headers: input.headers });
+  if (!isSameOriginBrowserRequest(cookieRequest)) throw new Error("missing or invalid auth");
+
+  // A short-lived operator session wins over the ordinary Iterate session so
+  // an operator can open a narrowly-scoped browser without signing out first.
+  const operatorSession = await authenticateOperatorSession({
     config,
-    request: new Request(input.requestUrl, { headers: input.headers }),
+    request: cookieRequest,
   });
-  if (adminPrincipal) return new ItxAuthContext({ isAdmin: true, principal: "admin" });
+  if (operatorSession) {
+    return itxAuthFromPrincipal(operatorSession.principal, {
+      allowDirectoryFallback: false,
+    });
+  }
 
   const auth = createOsIterateAuth(config, input.requestUrl);
   if (!auth) throw new Error("iterate auth is not configured");
   const result = await auth.authenticate({ headers: input.headers, includeUserInfo: false });
   if (!result.session) throw new Error("missing or invalid auth");
-  return contextFromPrincipal(config, principalFromSession(result.session));
+  return itxAuthFromPrincipal(principalFromSession(result.session));
 }
 
 function assertAdminSecret(config: AppConfig, secret: string): void {
@@ -209,12 +276,23 @@ function assertAdminSecret(config: AppConfig, secret: string): void {
   if (!admin) throw new Error("missing or invalid auth");
 }
 
-function contextFromPrincipal(config: AppConfig, principal: Principal): ItxAuthContext {
+/**
+ * The itx auth context for an already-authenticated principal — the in-process
+ * lane. Server-side code that already holds the request middleware's principal
+ * (server functions, server routes) builds its session objects through this
+ * instead of re-presenting credentials to the `/api` door. Ordinary sessions
+ * may refresh stale membership through the directory; scoped operator grants
+ * explicitly disable that widening path.
+ */
+export function itxAuthFromPrincipal(
+  principal: Principal,
+  options: { allowDirectoryFallback?: boolean } = {},
+): ItxAuthContext {
   if (principal.type === "admin") {
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
   }
   return new ItxAuthContext({
-    directory: authWorkerProjectDirectory(config),
+    directory: options.allowDirectoryFallback === false ? undefined : authWorkerProjectDirectory(),
     isAdmin: principalIsAdmin(principal),
     principal: principal.userId,
     projectIds: principal.projects.map((project) => project.id),
@@ -239,37 +317,18 @@ function contextFromImpersonatedToken(token: ItxAuthToken): ItxAuthContext {
 const DIRECTORY_CACHE_TTL_MS = 30_000;
 const directoryCache = new Map<string, { expiresAt: number; hasProject: boolean }>();
 
-function authWorkerProjectDirectory(config: AppConfig): ProjectDirectory | undefined {
-  if (!config.iterateAuth?.serviceToken) return undefined;
+function authWorkerProjectDirectory(): ProjectDirectory {
   return {
     async userHasProject(userPrincipal, projectId) {
       const cacheKey = `${userPrincipal.userId}:${projectId}`;
       const cached = directoryCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) return cached.hasProject;
 
-      let hasProject = false;
-      let lookupFailed = false;
-      for (const organization of userPrincipal.organizations) {
-        const client = createAuthWorkerServiceClient(
-          { config },
-          { asUserId: userPrincipal.userId },
-        );
-        let projects;
-        try {
-          projects = await client.project.list({ organizationSlug: organization.slug });
-        } catch {
-          // Auth worker unreachable is NOT "no membership": deny THIS check
-          // without caching the denial, so the next request retries instead
-          // of locking the user out for the cache window.
-          lookupFailed = true;
-          continue;
-        }
-        if (projects.some((project) => project.id === projectId)) {
-          hasProject = true;
-          break;
-        }
-      }
-      if (!hasProject && lookupFailed) return false;
+      // An RPC failure is a dependency outage, not a negative authorization
+      // decision. Let it propagate so callers can retry and no denial is
+      // cached under a false identity claim.
+      const projects = await itxEnv.AUTH.listProjectsForUser({ userId: userPrincipal.userId });
+      const hasProject = projects.some((project) => project.id === projectId);
       directoryCache.set(cacheKey, {
         expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
         hasProject,

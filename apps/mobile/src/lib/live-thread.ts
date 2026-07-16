@@ -9,7 +9,7 @@
 // failure the subscription and itx session are dropped so the next watchdog
 // tick or screen focus re-dials and replays from the last seen offset.
 
-import type { StreamEvent, StreamEventBatch } from "../../../os/src/types.ts";
+import type { StreamEvent, StreamEventBatch } from "../../../os/src/itx-api.generated.ts";
 import { mergeEventsByOffset } from "./chat.ts";
 import { getItxSession, resetItxSession } from "./itx.ts";
 import { queryClient } from "./query.ts";

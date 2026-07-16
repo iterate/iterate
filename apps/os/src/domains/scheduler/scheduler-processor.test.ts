@@ -1,136 +1,139 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Stream, StreamEvent, StreamEventInput } from "../../types.ts";
-import type { StreamProcessorSnapshot } from "../streams/stream-processor.ts";
+import {
+  activeSpans,
+  recordedSpans,
+  resetRecordedSpans,
+} from "../../test/cloudflare-workers-shim.ts";
+import {
+  StreamProcessorRunner,
+  type ProcessorProgress,
+  type ProcessorProgressStore,
+} from "../streams/stream-processor-runner.ts";
+import { MemoryStream } from "../streams/test-helpers.ts";
 import {
   SchedulerProcessor,
   type SchedulerProcessorDeps,
 } from "./scheduler-processor-implementation.ts";
-import type { SchedulerProcessorState } from "./scheduler-processor-contract.ts";
+import {
+  SchedulerProcessorContract,
+  type SchedulerProcessorState,
+} from "./scheduler-processor-contract.ts";
 import { SCHEDULER_HEARTBEAT_MS } from "./recurrence.ts";
 
 const T0 = Date.parse("2026-01-15T12:00:00Z");
-
-/**
- * In-memory Stream with a controllable clock: `createdAt` comes from the same
- * fake clock the processor's `now` dep reads, so reduce-time math
- * (`Date.parse(event.createdAt)`) is exact in assertions. `failAppendsOfType`
- * simulates a transient Stream DO outage for specific event types.
- */
-class MemoryStream implements Stream {
-  events: StreamEvent[] = [];
-  failAppendsOfType: string | undefined;
-
-  constructor(readonly clock: { now: number }) {}
-
-  async __describe() {
-    return { instructions: "in-memory test stream", types: "", children: {} };
-  }
-
-  async append(...inputs: StreamEventInput[]): Promise<StreamEvent[]> {
-    return inputs.map((input) => {
-      if (input.type === this.failAppendsOfType) {
-        throw new Error(`injected append failure for ${input.type}`);
-      }
-      const existing =
-        input.idempotencyKey === undefined
-          ? undefined
-          : this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
-      if (existing !== undefined) return existing;
-      const event: StreamEvent = {
-        ...input,
-        createdAt: new Date(this.clock.now).toISOString(),
-        offset: this.events.length + 1,
-      };
-      this.events.push(event);
-      return event;
-    });
-  }
-
-  at(): Stream {
-    return this;
-  }
-
-  async getEvent(
-    input: { offset: number } | { idempotencyKey: string },
-  ): Promise<StreamEvent | undefined> {
-    if ("offset" in input) return this.events.find((event) => event.offset === input.offset);
-    return this.events.find((event) => event.idempotencyKey === input.idempotencyKey);
-  }
-
-  async getEvents(input: Parameters<Stream["getEvents"]>[0] = {}): Promise<StreamEvent[]> {
-    const { afterOffset = 0, limit = 500 } = input;
-    return this.events.filter((event) => event.offset > afterOffset).slice(0, limit);
-  }
-
-  readEvents(input: Parameters<Stream["readEvents"]>[0] = {}) {
-    let afterOffset = input.afterOffset ?? 0;
-    return {
-      next: async () => {
-        const page = await this.getEvents({ ...input, afterOffset });
-        afterOffset = page.at(-1)?.offset ?? afterOffset;
-        return page;
-      },
-      [Symbol.dispose]() {},
-    };
-  }
-
-  async waitForEvent(): Promise<StreamEvent> {
-    throw new Error("not used");
-  }
-
-  async getProcessorRuntimeState(): Promise<null> {
-    return null;
-  }
-
-  async runtimeState() {
-    return { coreProcessorState: null, runtime: { connections: {} } };
-  }
-
-  async subscribe(): Promise<never> {
-    throw new Error("MemoryStream does not implement subscribe().");
-  }
-}
 
 const SET_TYPE = "events.iterate.com/scheduler/schedule-set";
 const CANCELLED_TYPE = "events.iterate.com/scheduler/schedule-cancelled";
 const REQUESTED_TYPE = "events.iterate.com/scheduler/trigger-requested";
 const COMPLETED_TYPE = "events.iterate.com/scheduler/trigger-completed";
 
+/** In-memory two-cursor progress store (CAS-fenced like the DO adapter);
+ * shared across harnesses to model a restart. */
+function makeProgressStore() {
+  let record: ProcessorProgress<SchedulerProcessorState> | undefined;
+  const store: ProcessorProgressStore<SchedulerProcessorState> = {
+    read: () => (record === undefined ? undefined : structuredClone(record)),
+    commit: (progress, opts) => {
+      const persisted = record?.processing.cursorRevision ?? 0;
+      if (opts.expectedCursorRevision !== persisted) {
+        throw new Error(
+          `progress commit fenced: expected cursorRevision ${opts.expectedCursorRevision}, persisted ${persisted}`,
+        );
+      }
+      record = structuredClone(progress);
+    },
+  };
+  return store;
+}
+
+// The processor is driven by a REAL StreamProcessorRunner — the same driver
+// the SchedulerDurableObject's registry runs in production — so the at-head
+// alarm derivation (processEvent under `delivery.caughtUp`) and the
+// runner-backed fold reads (deps.reads) are exercised exactly as deployed.
+// `state()` reads the runner's committed fold; the processor instance's own
+// checkpoint never advances under runner drive.
 function makeHarness(options?: {
   invokeCapability?: SchedulerProcessorDeps["dynamicWorkers"]["invokeCapability"];
   repointAlarm?: SchedulerProcessorDeps["repointAlarm"];
-  snapshotStore?: { snapshot: StreamProcessorSnapshot<SchedulerProcessorState> | undefined };
+  progressStore?: ReturnType<typeof makeProgressStore>;
+  /** Park the runner's keepAlive-backed lanes so a test can hold delivery
+   * exactly at a frame boundary: parked work is DEFERRED, and `deliver()`
+   * unparks + flushes before driving. Deferral (not dropping) matters — the
+   * at-head alarm repoint (processEvent under `delivery.caughtUp`) rides the
+   * same keepAlive lane as a frame-blocking closure, so a dropped blocker
+   * would wedge its frame's commit (and the runner chain behind it) forever. */
+  parkRunnerBackground?: boolean;
 }) {
   const clock = { now: T0 };
-  const stream = new MemoryStream(clock);
+  let runnerBackgroundParked = options?.parkRunnerBackground === true;
+  const parkedRunnerWork: Array<() => Promise<unknown>> = [];
+  // Failures already reach the real waiter through the runner's keepalive
+  // bridge (reject-then-rethrow); swallow the duplicate rethrow here.
+  const runRunnerWork = (work: () => Promise<unknown>) => void work().catch(() => {});
+  // createdAt comes from the same fake clock the processor's `now` dep reads,
+  // so reduce-time math (`Date.parse(event.createdAt)`) is exact in assertions.
+  const stream = new MemoryStream("/scheduler/primary");
+  stream.now = () => clock.now;
   const repointAlarm = vi.fn(options?.repointAlarm ?? (async () => {}));
   const invokeCapability = vi.fn(
     options?.invokeCapability ?? (async () => "ok"),
   ) as SchedulerProcessorDeps["dynamicWorkers"]["invokeCapability"];
-  const snapshotStore = options?.snapshotStore ?? { snapshot: undefined };
+  const progressStore = options?.progressStore ?? makeProgressStore();
+  let runner!: StreamProcessorRunner<typeof SchedulerProcessorContract, SchedulerProcessorDeps>;
   const processor = new SchedulerProcessor({
     stream,
+    path: stream.path,
+    projectId: null,
     dynamicWorkers: { invokeCapability },
     now: () => clock.now,
     readAlarm: async () => null,
     repointAlarm,
-    streamPath: "/scheduler/primary",
-    readState: () => snapshotStore.snapshot,
-    writeState: (snapshot) => {
-      snapshotStore.snapshot = snapshot;
+    // Runner-backed reads, exactly as the hosting DO wires registry.reads(...)
+    // (lazy closures: the runner is constructed after the processor).
+    reads: {
+      snapshot: () => runner.snapshot(),
+      waitUntilEvent: (input) => runner.waitUntilEvent(input),
     },
   });
-  let cursor = 0;
+  runner = new StreamProcessorRunner({
+    processor,
+    stream,
+    durability: { progress: progressStore },
+    now: () => clock.now,
+    ...(options?.parkRunnerBackground === true
+      ? {
+          keepAlive: (work: () => Promise<unknown>) => {
+            if (runnerBackgroundParked) parkedRunnerWork.push(work);
+            else runRunnerWork(work);
+          },
+        }
+      : {}),
+  });
   const deliver = async () => {
-    // Deliver until quiet: executions append events that need delivering too.
+    if (runnerBackgroundParked) {
+      runnerBackgroundParked = false;
+      for (const work of parkedRunnerWork.splice(0)) runRunnerWork(work);
+    }
+    // Drive until quiet: executions append events that need delivering too.
     for (;;) {
-      const events = stream.events.slice(cursor);
-      if (events.length === 0) return;
-      cursor = stream.events.length;
-      await processor.ingest({ events, streamMaxOffset: stream.events.length });
+      const head = stream.events.at(-1)?.offset ?? 0;
+      const { offset } = await runner.snapshot();
+      if (offset >= head) return;
+      await runner.catchUp();
     }
   };
-  return { clock, deliver, invokeCapability, processor, repointAlarm, snapshotStore, stream };
+  return {
+    clock,
+    deliver,
+    invokeCapability,
+    processor,
+    progressStore,
+    repointAlarm,
+    runner,
+    /** The runner's committed fold — the read the DO's registry serves. */
+    state: () => runner.currentState,
+    stream,
+  };
 }
 
 function setEvent(key: string, script = "async () => {}", extra?: Record<string, unknown>) {
@@ -154,36 +157,36 @@ async function waitForCompletion(harness: ReturnType<typeof makeHarness>, count 
 
 describe("SchedulerProcessor reduce", () => {
   it("upserts on schedule-set: re-setting a key replaces code, provenance, and run count", async () => {
-    const { deliver, processor, stream } = makeHarness();
+    const { deliver, state, stream } = makeHarness();
     await stream.append(setEvent("report", "async () => 1"));
     await deliver();
-    const first = processor.state.schedules["report"]!;
+    const first = state().schedules["report"]!;
     expect(first.nextTriggerAt).toBe(T0 + 60_000);
     expect(first.definedAtOffset).toBe(1);
 
     await stream.append(setEvent("report", "async () => 2"));
     await deliver();
-    const second = processor.state.schedules["report"]!;
+    const second = state().schedules["report"]!;
     expect(second.action.script).toBe("async () => 2");
     expect(second.definedAtOffset).toBe(2);
     expect(second.runCount).toBe(0);
   });
 
   it("cancel removes the key and is a no-op for unknown keys", async () => {
-    const { deliver, processor, stream } = makeHarness();
+    const { deliver, state, stream } = makeHarness();
     await stream.append(setEvent("report"));
     await deliver();
-    expect(processor.state.schedules["report"]).toBeDefined();
+    expect(state().schedules["report"]).toBeDefined();
 
     await stream.append({ type: CANCELLED_TYPE, payload: { key: "report" } });
     await stream.append({ type: CANCELLED_TYPE, payload: { key: "never-existed" } });
     await deliver();
-    expect(processor.state.schedules).toEqual({});
+    expect(state().schedules).toEqual({});
   });
 
   it("tolerates raw-append trigger events for ghosts: unknown key completes as skipped, unknown executionId is a no-op", async () => {
     const harness = makeHarness();
-    const { deliver, invokeCapability, processor, stream } = harness;
+    const { deliver, invokeCapability, state, stream } = harness;
     await stream.append({
       type: COMPLETED_TYPE,
       payload: { executionId: "never-requested", key: "ghost", outcome: "succeeded" },
@@ -208,13 +211,13 @@ describe("SchedulerProcessor reduce", () => {
       key: "ghost",
       outcome: "skipped",
     });
-    expect(processor.state.pendingTriggers).toEqual({});
-    expect(processor.state.schedules).toEqual({});
+    expect(state().pendingTriggers).toEqual({});
+    expect(state().schedules).toEqual({});
   });
 
   it("parks a raw-appended cron with no future occurrence instead of poisoning the fold, and it survives completion", async () => {
     const harness = makeHarness();
-    const { deliver, processor, stream } = harness;
+    const { deliver, processor, state, stream } = harness;
     // Feb 30 never occurs; assertValidRecurrence would reject this at set()
     // time, but raw appends bypass the command surface.
     await stream.append(
@@ -223,16 +226,18 @@ describe("SchedulerProcessor reduce", () => {
       }),
     );
     await deliver();
-    expect(processor.state.schedules["impossible"]!.nextTriggerAt).toBeNull();
-    expect(processor.getScheduleView("impossible")).toMatchObject({ nextTriggerAt: null });
+    expect(state().schedules["impossible"]!.nextTriggerAt).toBeNull();
+    await expect(processor.getScheduleView("impossible")).resolves.toMatchObject({
+      nextTriggerAt: null,
+    });
 
     // Manually triggering a parked (non-one-shot) schedule runs it and keeps it.
-    const { event } = processor.buildManualTriggerEvent("impossible");
+    const { event } = await processor.buildManualTriggerEvent("impossible");
     await stream.append(event);
     await deliver();
     await waitForCompletion(harness);
-    expect(processor.state.schedules["impossible"]).toBeDefined();
-    expect(processor.state.schedules["impossible"]!.nextTriggerAt).toBeNull();
+    expect(state().schedules["impossible"]).toBeDefined();
+    expect(state().schedules["impossible"]!.nextTriggerAt).toBeNull();
   });
 
   it("exposes the public view shape: metadata round-trip, ISO conversion, key-sorted list", async () => {
@@ -241,8 +246,8 @@ describe("SchedulerProcessor reduce", () => {
     await stream.append(setEvent("alpha", "async () => {}", { metadata: { owner: "tests" } }));
     await deliver();
 
-    expect(processor.getScheduleView("missing")).toBeUndefined();
-    expect(processor.getScheduleView("alpha")).toEqual({
+    await expect(processor.getScheduleView("missing")).resolves.toBeUndefined();
+    await expect(processor.getScheduleView("alpha")).resolves.toEqual({
       action: { kind: "itx-script", script: "async () => {}" },
       definedAtOffset: 2,
       key: "alpha",
@@ -252,14 +257,54 @@ describe("SchedulerProcessor reduce", () => {
       runCount: 0,
       setAt: new Date(T0).toISOString(),
     });
-    expect(processor.listScheduleViews().map((view) => view.key)).toEqual(["alpha", "zulu"]);
+    expect((await processor.listScheduleViews()).map((view) => view.key)).toEqual([
+      "alpha",
+      "zulu",
+    ]);
   });
 });
 
 describe("triggering", () => {
+  it("traces the action invocation without blocking delivery", async () => {
+    resetRecordedSpans();
+    let finishAction!: () => void;
+    const actionFinished = new Promise<void>((resolve) => {
+      finishAction = resolve;
+    });
+    const harness = makeHarness({
+      invokeCapability: async () => {
+        expect([...activeSpans].map((span) => span.name)).toContain("scheduler action invocation");
+        await actionFinished;
+      },
+    });
+    const { clock, deliver, processor, stream } = harness;
+    await stream.append(setEvent("report"));
+    await deliver();
+
+    clock.now = T0 + 61_000;
+    await processor.triggerDue();
+    await deliver();
+
+    const invocation = recordedSpans.find((span) => span.name === "scheduler action invocation");
+    expect(invocation).toMatchObject({
+      attributes: { "iterate.scheduler.execution_id": expect.any(String) },
+    });
+    expect(activeSpans.has(invocation!)).toBe(true);
+    await expect(processor.getRuntimeState()).resolves.toMatchObject({
+      runtime: { inflightExecutions: [expect.any(String)] },
+    });
+
+    finishAction();
+    await waitForCompletion(harness);
+    expect(activeSpans.has(invocation!)).toBe(false);
+    expect(invocation).toMatchObject({
+      attributes: { "iterate.scheduler.action_outcome": "succeeded" },
+    });
+  });
+
   it("requests due schedules with incarnation-scoped idempotency keys and advances the clock", async () => {
     const harness = makeHarness();
-    const { clock, deliver, processor, stream } = harness;
+    const { clock, deliver, processor, state, stream } = harness;
     await stream.append(setEvent("report"));
     await deliver();
 
@@ -284,8 +329,8 @@ describe("triggering", () => {
 
     await deliver();
     // The interval re-anchors on the request time.
-    expect(processor.state.schedules["report"]!.nextTriggerAt).toBe(clock.now + 60_000);
-    expect(processor.state.schedules["report"]!.runCount).toBe(1);
+    expect(state().schedules["report"]!.nextTriggerAt).toBe(clock.now + 60_000);
+    expect(state().schedules["report"]!.runCount).toBe(1);
 
     // And once state advanced, the occurrence is spent for good.
     await processor.triggerDue();
@@ -295,7 +340,7 @@ describe("triggering", () => {
 
   it("a re-set one-shot with the same instant triggers again (incarnation in the idempotency key)", async () => {
     const harness = makeHarness();
-    const { clock, deliver, processor, stream } = harness;
+    const { clock, deliver, processor, state, stream } = harness;
     const at = new Date(T0 - 60_000).toISOString(); // already due at set time
     const oneShot = () =>
       stream.append({
@@ -312,7 +357,7 @@ describe("triggering", () => {
     await processor.triggerDue();
     await deliver();
     await waitForCompletion(harness, 1);
-    expect(processor.state.schedules).toEqual({});
+    expect(state().schedules).toEqual({});
 
     // Re-applying the identical schedule (declarative clients do this) must
     // trigger again, not dedupe against the spent incarnation's request.
@@ -327,19 +372,20 @@ describe("triggering", () => {
 
   it("executes the script with (schedule, trigger) args and records success + provenance", async () => {
     const harness = makeHarness({ invokeCapability: async () => ({ made: "cat-image" }) });
-    const { clock, deliver, invokeCapability, processor, stream } = harness;
+    const { clock, deliver, invokeCapability, state, stream } = harness;
     await stream.append(
       setEvent("report", "async (itx, schedule, trigger) => 42", { metadata: { owner: "test" } }),
     );
     await deliver();
     clock.now = T0 + 61_000;
-    await processor.triggerDue();
+    await harness.processor.triggerDue();
     await deliver();
     await waitForCompletion(harness);
 
     expect(invokeCapability).toHaveBeenCalledTimes(1);
     const call = vi.mocked(invokeCapability).mock.calls[0]![0];
     expect(call.path).toEqual(["run"]);
+    expect(call.traceRole).toBe("scheduler_action");
     expect(
       (call.ref as { source: { files: { files: Record<string, string> } } }).source.files.files[
         "main.js"
@@ -369,16 +415,17 @@ describe("triggering", () => {
       result: { made: "cat-image" },
     });
     expect(completed.idempotencyKey).toBe(`scheduler/trigger-completed:${triggerArg.executionId}`);
-    expect(processor.state.pendingTriggers).toEqual({});
+    expect(state().pendingTriggers).toEqual({});
   });
 
   it("records a throwing script as outcome=failed and keeps the recurrence alive", async () => {
+    resetRecordedSpans();
     const harness = makeHarness({
       invokeCapability: async () => {
         throw new Error("script exploded");
       },
     });
-    const { clock, deliver, processor, stream } = harness;
+    const { clock, deliver, processor, state, stream } = harness;
     await stream.append(setEvent("report"));
     await deliver();
     clock.now = T0 + 61_000;
@@ -390,13 +437,16 @@ describe("triggering", () => {
       error: "script exploded",
       outcome: "failed",
     });
+    expect(recordedSpans.find((span) => span.name === "scheduler action invocation")).toMatchObject(
+      { attributes: { "iterate.scheduler.action_outcome": "failed" } },
+    );
     // Failure does not retry and does not kill the schedule: next occurrence stands.
-    expect(processor.state.schedules["report"]!.nextTriggerAt).toBe(clock.now + 60_000);
+    expect(state().schedules["report"]!.nextTriggerAt).toBe(clock.now + 60_000);
   });
 
   it("a failed completion append is a transport error, not a script outcome: the sweep retries", async () => {
     const harness = makeHarness();
-    const { clock, deliver, invokeCapability, processor, stream } = harness;
+    const { clock, deliver, invokeCapability, processor, state, stream } = harness;
     await stream.append(setEvent("report"));
     await deliver();
     clock.now = T0 + 61_000;
@@ -408,7 +458,12 @@ describe("triggering", () => {
     // recorded a bogus outcome=failed for a script that succeeded.
     await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledTimes(1));
     expect(stream.events.filter((e) => e.type === COMPLETED_TYPE)).toHaveLength(0);
-    await vi.waitFor(() => expect(Object.keys(processor.state.pendingTriggers)).toHaveLength(1));
+    await vi.waitFor(() => expect(Object.keys(state().pendingTriggers)).toHaveLength(1));
+    await vi.waitFor(async () => {
+      await expect(processor.getRuntimeState()).resolves.toMatchObject({
+        runtime: { inflightExecutions: [] },
+      });
+    });
 
     // Next wake: the sweep re-launches (at-least-once) and the append heals.
     stream.failAppendsOfType = undefined;
@@ -422,13 +477,13 @@ describe("triggering", () => {
 
   it("completes as skipped when the schedule was cancelled between request and execution", async () => {
     const harness = makeHarness();
-    const { clock, deliver, invokeCapability, processor, stream } = harness;
+    const { clock, deliver, invokeCapability, processor, state, stream } = harness;
     await stream.append(setEvent("report"));
     await deliver();
     clock.now = T0 + 61_000;
     await processor.triggerDue(); // appends trigger-requested (not yet delivered)
     await stream.append({ type: CANCELLED_TYPE, payload: { key: "report" } });
-    await deliver(); // one batch: requested + cancelled reduce before the execution runs
+    await deliver(); // one frame: requested + cancelled commit before the execution's barrier lifts
     await waitForCompletion(harness);
 
     expect(invokeCapability).not.toHaveBeenCalled();
@@ -436,7 +491,7 @@ describe("triggering", () => {
       key: "report",
       outcome: "skipped",
     });
-    expect(processor.state.pendingTriggers).toEqual({});
+    expect(state().pendingTriggers).toEqual({});
   });
 
   it("latest-code-wins: a re-set between request and execution runs the new code", async () => {
@@ -464,7 +519,7 @@ describe("triggering", () => {
 
   it("one-shots leave state once their trigger settles", async () => {
     const harness = makeHarness();
-    const { clock, deliver, processor, stream } = harness;
+    const { clock, deliver, processor, state, stream } = harness;
     await stream.append({
       type: SET_TYPE,
       payload: {
@@ -478,18 +533,18 @@ describe("triggering", () => {
     await processor.triggerDue();
     await deliver();
     await waitForCompletion(harness);
-    expect(processor.state.schedules).toEqual({});
+    expect(state().schedules).toEqual({});
   });
 
   it("manual triggers require an existing key, run immediately, and advance the recurring clock", async () => {
     const harness = makeHarness();
-    const { clock, deliver, processor, stream } = harness;
-    expect(() => processor.buildManualTriggerEvent("ghost")).toThrow(/no schedule/);
+    const { clock, deliver, processor, state, stream } = harness;
+    await expect(processor.buildManualTriggerEvent("ghost")).rejects.toThrow(/no schedule/);
 
     await stream.append(setEvent("report"));
     await deliver();
     clock.now = T0 + 10_000; // before the 60s occurrence — manual runs anyway
-    const { event, executionId } = processor.buildManualTriggerEvent("report");
+    const { event, executionId } = await processor.buildManualTriggerEvent("report");
     await stream.append(event);
     await deliver();
     await waitForCompletion(harness);
@@ -498,32 +553,30 @@ describe("triggering", () => {
       outcome: "succeeded",
     });
     // The documented side effect: a manual trigger re-anchors the interval.
-    expect(processor.state.schedules["report"]!.nextTriggerAt).toBe(clock.now + 60_000);
-    expect(processor.state.schedules["report"]!.runCount).toBe(1);
+    expect(state().schedules["report"]!.nextTriggerAt).toBe(clock.now + 60_000);
+    expect(state().schedules["report"]!.runCount).toBe(1);
   });
 });
 
 describe("recovery and alarm derivation", () => {
   it("at-least-once: a restart mid-execution re-launches pending triggers on the next wake", async () => {
-    const snapshotStore = {
-      snapshot: undefined as StreamProcessorSnapshot<SchedulerProcessorState> | undefined,
-    };
+    const progressStore = makeProgressStore();
     // First incarnation: the execution hangs forever (simulates eviction mid-run).
     const before = makeHarness({
       invokeCapability: () => new Promise(() => {}),
-      snapshotStore,
+      progressStore,
     });
     await before.stream.append(setEvent("report"));
     await before.deliver();
     before.clock.now = T0 + 61_000;
     await before.processor.triggerDue();
     await before.deliver();
-    expect(Object.keys(before.processor.state.pendingTriggers)).toHaveLength(1);
+    expect(Object.keys(before.state().pendingTriggers)).toHaveLength(1);
     expect(before.stream.events.filter((e) => e.type === COMPLETED_TYPE)).toHaveLength(0);
 
-    // Second incarnation: same durable checkpoint and stream, fresh in-memory
+    // Second incarnation: same durable progress and stream, fresh in-memory
     // in-flight set. The wake's sweep re-launches the orphaned execution.
-    const after = makeHarness({ snapshotStore });
+    const after = makeHarness({ progressStore });
     after.stream.events = [...before.stream.events];
     after.clock.now = T0 + 62_000;
     await after.processor.triggerDue();
@@ -547,15 +600,18 @@ describe("recovery and alarm derivation", () => {
     await waitForCompletion(before);
     expect(vi.mocked(before.invokeCapability)).toHaveBeenCalledTimes(1);
 
-    // …then replay it from offset 0 on a fresh checkpoint, PAGED so the
-    // completion sits in a later batch than its request (the catch-up shape).
-    const replay = makeHarness();
+    // …then replay it from offset 0 on a fresh progress store, FRAMED so the
+    // completion sits behind the frame's observed head (the catch-up shape).
+    // The runner's background lanes are parked so delivery deterministically
+    // holds at the frame boundary while the launched execution runs its gate.
+    const replay = makeHarness({ parkRunnerBackground: true });
     replay.stream.events = [...before.stream.events];
     const completedOffset = replay.stream.events.find((e) => e.type === COMPLETED_TYPE)!.offset;
     const firstPage = replay.stream.events.filter((e) => e.offset < completedOffset);
-    await replay.processor.ingest({
+    const opened = await replay.runner.openDelivery();
+    await opened.sink({
       events: firstPage,
-      streamMaxOffset: replay.stream.events.length,
+      streamMaxOffset: replay.stream.events.at(-1)!.offset,
     });
     // Give any wrongly-launched execution time to run.
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -564,7 +620,7 @@ describe("recovery and alarm derivation", () => {
     expect(replay.stream.events.filter((e) => e.type === COMPLETED_TYPE)).toHaveLength(1);
   });
 
-  it("a rejecting repointAlarm fails the batch and the redelivery re-arms (the await is load-bearing)", async () => {
+  it("a rejecting repointAlarm fails the frame and the redelivery re-arms (the await is load-bearing)", async () => {
     let rejectOnce = true;
     const harness = makeHarness({
       repointAlarm: async () => {
@@ -574,21 +630,18 @@ describe("recovery and alarm derivation", () => {
         }
       },
     });
-    const { processor, repointAlarm, stream } = harness;
+    const { deliver, repointAlarm, state, stream } = harness;
     await stream.append(setEvent("report"));
-    const events = stream.events.slice();
-    await expect(processor.ingest({ events, streamMaxOffset: 1 })).rejects.toThrow(
-      "setAlarm outage",
-    );
-    expect(processor.state.schedules).toEqual({});
+    await expect(deliver()).rejects.toThrow("setAlarm outage");
+    expect(state().schedules).toEqual({});
 
-    // The checkpoint did not advance, so redelivering the same batch heals.
-    await processor.ingest({ events, streamMaxOffset: 1 });
-    expect(processor.state.schedules["report"]).toBeDefined();
+    // The cursor did not advance, so redelivering the same events heals.
+    await deliver();
+    expect(state().schedules["report"]).toBeDefined();
     expect(repointAlarm).toHaveBeenLastCalledWith(T0 + 60_000);
   });
 
-  it("repoints after every batch: earliest trigger wins, heartbeat while any state remains, deleted when empty", async () => {
+  it("repoints at the head of every delivery: earliest trigger wins, heartbeat while any state remains, deleted when empty", async () => {
     const { deliver, repointAlarm, stream } = makeHarness();
     await stream.append(setEvent("report")); // every 60s → due at T0+60s
     await deliver();
@@ -614,6 +667,7 @@ describe("recovery and alarm derivation", () => {
   });
 
   it("an in-flight execution is never double-launched by concurrent sweeps or redelivery", async () => {
+    resetRecordedSpans();
     let invocations = 0;
     const harness = makeHarness({
       invokeCapability: () => {
@@ -635,6 +689,11 @@ describe("recovery and alarm derivation", () => {
     await processor.triggerDue();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(invocations).toBe(1);
+    const invocationSpans = recordedSpans.filter(
+      (span) => span.name === "scheduler action invocation",
+    );
+    expect(invocationSpans).toHaveLength(1);
+    expect(activeSpans.has(invocationSpans[0]!)).toBe(true);
   });
 
   it("barren wakes back off exponentially instead of hot-looping at the minimum delay", async () => {

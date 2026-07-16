@@ -29,6 +29,60 @@ launched with `depot ci run --workflow .depot/workflows/preview-e2e-marathon.yml
 Local runs are for fast iteration while fixing a flake; the 50-consecutive-green
 bar is measured on Depot.
 
+## Round 4 (2026-07-13/14, PR #1938)
+
+Goal: 25 consecutive green runs on Depot, re-validating the lane after a week
+of heavy merging (subagents/unified messaging, itx.search, stream metrics,
+MCP OAuth, sandbox AI-gateway egress, …). Method unchanged: Depot marathon
+(`preview-e2e-marathon.yml`) against this PR's leased slot, fail fast, root
+cause + fix every failure, merge main into this branch between marathons so
+the lane is always tested at (or ahead of) main's head.
+
+Result: **96 consecutive green runs in one night, zero test failures, zero
+flakes found** — the goal met on the first marathon and re-proven three more
+times across six merged main heads. Detailed per-run log in the PR comments.
+
+- **marathon r4-1** `r59ccf138r` (head = main 0d53cbc7e): **25/25 green**,
+  21:51–22:53 UTC, ~2.2–2.9 min/run.
+- **marathon r4-2** `dgnsqq9jng` (merged main 9b9f3404d): **21 clean**, then
+  run 22 stopped in 4s — not a flake: the slot's semaphore lease had been
+  claimed by `main-auth-rpc-security-cutover` (the #1940 validation), whose
+  deploy replaced the PR's apps on preview-3. The ownership guard in
+  `preview test` fired exactly as designed. The marathon claimed a fresh slot
+  (preview-1) and moved on.
+- **marathon r4-3** `4xg33k0bf5` (merged main ce18a7d79): **25/25 green**,
+  01:09–02:17 UTC. Runs 24–25 slowed to ~6 min (os lane 372s/355s) with
+  recovered onboarding-stream `liveness probe` WebSocket reconnects — the
+  flake-23 pool-saturation tail signature (the pool rides at the per-type
+  `SANDBOX_MAX_INSTANCES` preview cap; #1747 replaced the flat cap-150 with
+  that table), fully absorbed by the
+  reconnect/retry machinery. The next marathon's preflight redeploy flushed
+  the pool and restored ~2.2 min/run pace from run 1, confirming the
+  mechanism (a rollout resets assigned instances).
+- **marathon r4-4** `6q6j7wlz3z` (merged main d36c2f38d): **25/25 green**,
+  02:24–03:24 UTC, no tail slowdown.
+
+Cost (measured; full breakdown in the PR): ~$54 for 101 lane executions ≈
+$0.53/run — 92% LLM tokens (gpt-5.6-sol BYOK, $49.36 uncached), with the
+AIG response cache absorbing 46.4% of requests (~$42 saved); AI Search
+fixture indexing $0.31; Depot 8-core compute ~275 min ≈ $4.40.
+
+Round-4 lessons (no test-failure fixes needed; the PR carries only the
+slot re-claim above plus a dead-code/doc-drift sweep from the round's
+follow-up reviews):
+
+- The round-1..3 fixes have held through a week of heavy platform churn; the
+  lane's stability is structural, not a lucky streak.
+- A marathon can lose its slot mid-flight to a legitimate external claim;
+  the guard converts that into a clean fast stop. The loop now re-claims a
+  slot (full-fleet redeploy) and re-runs the interrupted run number uncounted,
+  capped at `MAX_SLOT_RECLAIMS` (2) per marathon — no tests ran under the
+  refusal, so this is environment re-establishment, not a retry layer.
+- Sandbox-pool tail pressure at the per-type preview caps is visible (slower
+  runs, recovered liveness reconnects) after ~25 runs on one deploy but
+  self-heals on redeploy and never failed a run; watch it if marathons grow
+  past ~30 runs per deploy.
+
 ## Run log
 
 Depot marathons (the counted lane), 2026-07-05:
@@ -52,7 +106,8 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
 - **marathon5** `wdq4c1mv2q`: **32 clean** (new record), run 33 wedged at the
   600s watchdog — sandbox starts degraded as the instance pool saturated at
   `assigned == 100` even with destroy-on-idle (see the marathon5 addendum
-  under flake 23). Preview cap raised 100 → 500.
+  under flake 23). Preview cap raised 100 → 500 for the marathon, then reset
+  to 150 after Cloudflare rejected 500 against the preview account memory quota.
 - **marathon6** `gb1g4sg7rs`: 25 clean at a steady ~60-90s/run — cap 500
   eliminated the saturation slowdown entirely (pool rode at `assigned: 491`
   with NO latency growth, where cap-100 marathons were at 3-5min/run by run
@@ -61,6 +116,13 @@ to be reset; reference = v6frpcasd5hp70rrhv37kmr4`) during an active
   remote timeout crashed the bare tsx process. Fix: the smoke now makes 3
   attempts, each with a fresh session + project, matching the vitest lane's
   `retry: 2` policy; a broken slot still fails all three inside ~5min.
+- **2026-07-07 quota correction**: the preview cap was reduced 500 → 150.
+  Cap 500 helped a single marathon slot, but multiple preview slots at
+  `standard-1` exceeded the dev/preview account memory quota and blocked new
+  deploys. Cap 200 fits a partially populated preview fleet, but not all nine
+  preview slots once each carries the OS sandbox app. Cap 100 previously
+  wedged at `assigned == max_instances`; 150 is the fleet-wide compromise
+  until Cloudflare changes assigned-slot accounting.
 - **marathon7** `pvtfkq146g`: 21 clean, run 22 failed in
   `streams-example-app`'s vitest lane: `Network connection lost.` on a
   392ms-old fresh WebSocket (edge blip) — and that suite had NO retry config
@@ -266,8 +328,10 @@ with three apps deploy-failed on the slot. Two fixes:
 - `envs.ts` + `scripts/lib/**` joined the preview shared paths (and the Depot
   workflow's `paths`): every app's wrangler config derives from envs.ts.
 - Failed states (`deploy-failed`, `claim-failed`, `tests-failed`) now retry
-  regardless of which head recorded them; only `awaiting-tests` keeps the
-  same-head guard.
+  regardless of which head recorded them. (`awaiting-tests` initially kept a
+  same-head guard; it too retries at any head since the `preview run`
+  one-step refactor — an awaiting-tests entry at any head is a deploy whose
+  e2e never ran.)
 
 ### 13. Fresh-worker bring-up: module-scope config parse + orphaned container app
 
@@ -576,11 +640,18 @@ sandbox-exec went ~20-40s (runs 1-10) → 2.1-2.8min (runs 30-32, shaving the
 happened at exactly `assigned == max_instances` (20, then 100). Response:
 preview cap raised 100 → **500** (`generate-wrangler-config.ts`) so a whole
 50-run marathon's cumulative creations (~3-8 sandboxes/run) never saturate
-the pool; lite instances bill on usage, so the headroom is free. Destroy
+the pool. On 2026-07-07 this was reduced to **150** because several preview
+slots at 500 `standard-1` instances exceeded the dev/preview account memory
+quota and blocked deploys; 200 fit the currently populated fleet but did not
+leave room for all nine preview slots to carry OS sandbox apps. Destroy
 remains correct — it is what lets an idle fleet drain back to zero instead of
-holding slots forever. If sustained-churn claim latency reproduces at 500,
-this becomes a Cloudflare Containers escalation (pool-manager degradation
-under DO-binding churn), not an app-side fix.
+holding slots forever. If sustained-churn claim latency reproduces at the
+cap, this becomes a Cloudflare Containers escalation (pool-manager
+degradation under DO-binding churn), not an app-side fix. (Update 2026-07-08:
+#1747 replaced the flat cap with per-instance-type caps —
+`SANDBOX_MAX_INSTANCES` in `apps/os/scripts/generate-wrangler-config.ts` is
+now the source of truth; the saturation mechanics above are unchanged, per DO
+class.)
 
 ### 21. Blank route-pending panel fast-fails the first wait after `goto`
 

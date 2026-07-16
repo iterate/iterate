@@ -1,3 +1,7 @@
+# Product specs
+
+These live at the repo root — not under `apps/os` — because product specs span workers: signup drives the real auth app's UI, not just os. The sibling `apps/os/e2e` lane proves the os engine surface through the itx API; this lane proves what a user actually gets in a browser.
+
 ## Writing playwright tests
 
 Think of these as _specs_ as well as tests. The idea is that a human or agent can read a test and go "I see how this aspect of the product is supposed to work now".
@@ -13,6 +17,8 @@ Avoid doing `await myButton.waitFor()` and then `await runButton.click()`. It's 
 ## Timeouts
 
 The default `actionTimeout` in your playwright config should be _very aggressive_ and short. The `spinner-waiter` plugin allows this. If and when test fail because of this, there are two recommended courses of action, neither of which involves just bumping an assertion timeout. The first is of course to just figure out why the UI is sometimes slow and fix it. But if that's not possible, or beyond the scope of the work you're doing, the second recommended fix is to add a loading spinner to the product UI - we've identified a slow part of your app, so real users should also see a loading spinner, or some text like "Loading..."/"Pending..."/"Creating foobar..." etc.
+
+If you've really come up against a case where you truly think it's better to add `{ timeout: 10_000 }` or some such, you MUST leave a // comment explaining why so we can more easily fix the underlying issue later.
 
 ## Error UI
 

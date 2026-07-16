@@ -3,9 +3,12 @@
 // visible-message event types plus a derived "working…" flag, not the web's
 // full activity feed (packages/ui/src/components/events/agent-ui-reducer.ts).
 
-import type { StreamEvent } from "../../../os/src/types.ts";
+import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
 
-export const USER_MESSAGE_TYPE = "events.iterate.com/agents/user-message-received";
+// User messages travel as a context-added event with role "user" (the single
+// inbound door every caller — web, Slack, mobile — now shares); there is no
+// dedicated "user message" event type anymore.
+export const USER_MESSAGE_TYPE = "events.iterate.com/agents/context-added";
 export const ASSISTANT_MESSAGE_TYPE = "events.iterate.com/agents/web-message-sent";
 
 export type ChatMessage = {
@@ -34,7 +37,7 @@ export function reduceChatEvents(events: StreamEvent[]): ChatThread {
   let maxOffset = 0;
   for (const event of events) {
     maxOffset = Math.max(maxOffset, event.offset);
-    if (event.type === USER_MESSAGE_TYPE) {
+    if (event.type === USER_MESSAGE_TYPE && event.payload?.role === "user") {
       lastUserOffset = event.offset;
       messages.push({
         role: "user",

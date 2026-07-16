@@ -27,8 +27,12 @@ export interface SmokeProbe {
  *
  *   resolve --env → assert resources provisioned → collect secrets →
  *   app-specific prepare (migrations, seeds, config preflight) →
- *   adopt DO migration tag → build → deploy code+secrets in one version →
- *   smoke-probe → ✅
+ *   build → deploy code+secrets in one version → smoke-probe → ✅
+ *
+ * Durable Object classes are declared in each app's wrangler config
+ * `exports` map and reconciled by the server on every deploy — no migration
+ * tags, no bootstrap ordering. A worker fresh, parked by erase-data, or left
+ * in any state by another branch deploys the same way.
  *
  * This is a parameterized imperative function, not a framework: every input
  * is a plain value or a hook called exactly once at a fixed point you can
@@ -58,12 +62,6 @@ export async function deployApp<E extends DeployableEnv>(input: {
   /** Secret names the deploy fails without / ships when present. */
   requiredSecrets?: readonly string[];
   optionalSecrets?: readonly string[];
-  /**
-   * Whether the worker hosts Durable Object classes — drives the classless
-   * bootstrap deploy for a brand-new env's first upload (see deploy-helpers.ts).
-   * Default true; auth is the current false.
-   */
-  hasDurableObjects?: boolean;
   /**
    * "vite": rm dist + `vite build` with CLOUDFLARE_ENV (the plugin snapshots
    * an env-flattened wrangler.json into dist). "checked-in-config": no build;
@@ -107,8 +105,6 @@ export async function deployApp<E extends DeployableEnv>(input: {
 
   await input.prepare?.(ctx, secretValues, credentials);
 
-  const hasDurableObjects = input.hasDurableObjects ?? true;
-
   let builtConfig: string;
   let extraDeployArgs: string[] | undefined;
   if (input.build === "checked-in-config") {
@@ -129,13 +125,12 @@ export async function deployApp<E extends DeployableEnv>(input: {
     secretValues,
     credentials,
     extraDeployArgs,
-    ...(hasDurableObjects ? { ensureClassesFor: { ctx, workerName } } : {}),
   });
 
   for (const probe of input.smokes(ctx.env)) {
     await smoke(probe.url, probe.ok, probe.label);
   }
-  console.log(`✅ ${ctx.name} deployed and serving at ${input.servingUrl(ctx.env)}`);
-
   await input.afterDeploy?.(ctx, secretValues);
+
+  console.log(`✅ ${ctx.name} deployed and serving at ${input.servingUrl(ctx.env)}`);
 }

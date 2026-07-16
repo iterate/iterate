@@ -1,9 +1,9 @@
 /**
  * In-memory agent conversation feed for the chat TUI.
  *
- * This is the node-side sibling of the browser mirror's agent-ui processor
- * (apps/os/src/domains/streams/client-libraries/processors/agent-ui-processor.ts):
- * both fold the SAME shared reducer (`planAgentUiOps` from @iterate-com/ui)
+ * This is the node-side sibling of the browser mirror's feed projector
+ * (apps/os/src/domains/streams/client-libraries/processors/browser-feed):
+ * both fold the SAME shared reducer (`reduceAgentUi` from @iterate-com/ui)
  * over agent stream events. The browser persists settled items into SQLite for
  * a virtual list; a terminal session is ephemeral and small, so this model
  * keeps the settled items in a plain array and the streaming live activity in
@@ -11,11 +11,11 @@
  */
 import {
   initialAgentUiState,
-  planAgentUiOps,
+  reduceAgentUi,
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { StreamEvent } from "../../../../apps/os/src/types.ts";
+import type { StreamEvent } from "../../../../apps/os/src/itx-api.generated.ts";
 
 export type AgentFeedSnapshot = {
   /** Settled conversation items in list order (user, assistant, activity). */
@@ -37,8 +37,6 @@ type AgentFeedModel = {
   applyEvents(events: readonly StreamEvent[]): boolean;
 };
 
-type ReducerEvents = Parameters<typeof planAgentUiOps>[1];
-
 export function createAgentFeedModel(): AgentFeedModel {
   let state = initialAgentUiState();
   let items: AgentUiItem[] = [];
@@ -52,12 +50,13 @@ export function createAgentFeedModel(): AgentFeedModel {
       if (fresh.length === 0) return false;
 
       lastOffset = fresh[fresh.length - 1]!.offset;
-      const { endState, ops } = planAgentUiOps(state, fresh as unknown as ReducerEvents);
-      if (ops.length > 0) {
-        items = [...items];
-        for (const op of ops) items[op.localIndex] = op.item;
+      let settledItems: AgentUiItem[] | null = null;
+      for (const event of fresh) {
+        const step = reduceAgentUi(state, event as unknown as Parameters<typeof reduceAgentUi>[1]);
+        state = step.endState;
+        if (step.items.length > 0) settledItems = [...(settledItems ?? []), ...step.items];
       }
-      state = endState;
+      if (settledItems != null) items = [...items, ...settledItems];
       snapshot = { items, live: state.live, eventCount: state.eventCount, lastOffset };
       return true;
     },

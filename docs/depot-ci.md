@@ -68,7 +68,7 @@ Fetch logs and diagnostics:
 ```bash
 depot ci logs <attempt-id> --org 0p91s0lz49
 depot ci logs <job-id> --org 0p91s0lz49 --follow
-depot ci metrics <run-id> --org 0p91s0lz49
+depot ci metrics --run <run-id> --org 0p91s0lz49
 depot ci diagnose <run-id> --org 0p91s0lz49
 depot ci summary <attempt-id> --org 0p91s0lz49
 ```
@@ -121,6 +121,50 @@ For scriptable polling, ask Depot for JSON:
 depot ci run list --org 0p91s0lz49 --repo iterate/iterate --pr <pr-number> --output json
 depot ci status <run-id> --org 0p91s0lz49 --output json
 ```
+
+### Agent wait loops: gate on the head commit's check-runs
+
+Hand-rolled "wait for green" loops (agents babysitting a PR) keep failing the
+same three ways. The rules that survive contact:
+
+1. **Poll the head commit's check-runs, never `gh pr checks` text.** Right
+   after a push there is a window where the previous head's checks are gone
+   and the new head's are not registered yet — a `grep -c pending` gate reads
+   that empty moment as "all done" and exits before CI even starts. Ask for
+   the checks OF THE COMMIT and require the ones you care about to exist and
+   be `completed`:
+
+   ```bash
+   HEAD=$(git rev-parse HEAD)
+   gh api "repos/iterate/iterate/commits/$HEAD/check-runs?per_page=100" \
+     -q '[.check_runs[] | {name, status, conclusion}]'
+   ```
+
+2. **Never wait for "Cursor Bugbot posted a review for `<sha>`".** Bugbot
+   SKIPS pushes it deems trivial (merge commits especially) — the check ends
+   in `skipped` and no review naming that sha ever appears, so a review-body
+   gate spins until its iteration cap and then reports hour-stale state.
+   Gate on the Bugbot check-run reaching a terminal `status: completed`
+   (conclusion `success`/`skipped`/`neutral` all mean "bugbot is done"), and
+   read FINDINGS from unresolved review threads, which is also what blocks
+   merges:
+
+   ```bash
+   gh api graphql -f query='{ repository(owner: "iterate", name: "iterate") {
+     pullRequest(number: <pr>) { reviewThreads(first: 60) { nodes { isResolved } } } } }' \
+     -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length'
+   ```
+
+3. **A push obsoletes every running monitor.** A loop started before a push
+   waits on answers about a head that no longer exists. Kill it and start a
+   fresh one pinned to `git rev-parse HEAD`; print that sha as the loop's
+   first line so a stale monitor is recognizable at a glance.
+
+Also know what actually blocks the merge: `gh pr view --json mergeStateStatus`
+answers `BLOCKED` (required things missing — including unresolved review
+threads), `UNSTABLE` (something failing that is NOT required — preview e2e is
+in this category), or `CLEAN`. A wait-for-green loop that treats `UNSTABLE`
+as fatal waits forever on a red non-required check.
 
 ## Run A Workflow From Your Checkout
 
@@ -184,17 +228,55 @@ Use Depot-specific features where they make the workflow clearer:
 - independent checks can use Depot `parallel:` blocks with `fail-fast: false`;
 - workflow runtime logic belongs in `scripts/ci`, not in long YAML strings.
 
+### Reliability defaults
+
+Mainline workflows deliberately separate deployment safety from validation
+freshness:
+
+- A credentialed deploy uses one fixed concurrency group named for its actual
+  destination, such as `deploy-auth-os-production`. It always sets
+  `cancel-in-progress: false`. The checked-out branch is not the destination,
+  so it must not appear in that group name. An active rollout finishes; if
+  several newer commits queue behind it, Depot keeps the newest pending run.
+- Tests, lint/typecheck, and autofix use the source branch (falling back to
+  `ref_name`) and `cancel-in-progress: true`. A newer commit makes an older
+  validation result obsolete, including on `main`.
+- Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
+  jobs fail at the outer edge and an operator decides whether a rerun is safe.
+  Auth + OS gets 45 minutes because its bounded worst case includes both
+  deployments, JWKS propagation, and four sequential smoke probes.
+- Runner size follows observed peak CPU and memory, with headroom. Lint stays
+  on `8x32` (parallel oxlint/typecheck/knip). Unit tests use `4x16` — measured
+  peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to
+  lint is the common trigger for no-log `Sandbox terminated before worker
+reported completion` on main. Auth + OS deploy uses `4x16`; short deploy,
+  notification, and autofix jobs use `2x8`. Re-check with
+  `depot ci metrics --run <run-id>` before increasing a size.
+
+These defaults keep a normal all-app main push to 28 requested vCPUs before
+notification jobs, down from 72, without reducing the parallel lint lane that
+uses the larger machine. Path filters avoid deploying iterate.com for unrelated
+monorepo changes.
+
+If an attempt receives a sandbox but produces no logs or metrics before
+failing, inspect `depot ci status`, `logs`, `metrics`, and `diagnose`. When the
+same commit and image pass on rerun, treat that as runner provisioning evidence,
+not an application failure. Do not add automatic workflow retries: deployment
+reruns can repeat external side effects and need an operator decision.
+
 ## Custom Image
 
 The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 `scripts/depot-ci/bake-preview-ci-image.sh`.
 
 It contains Node, pnpm, workspace dependencies, Doppler CLI, and the preview
-browser. Jobs that consume it must keep:
+browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`, or
+`8x32` from measured workload demand. Jobs that consume it must keep the image
+and checkout behavior:
 
 ```yaml
 runs-on:
-  size: 8x32
+  size: 2x8 # workload-specific
   image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
 steps:
   - uses: actions/checkout@v4

@@ -18,11 +18,16 @@
  * exactly those keys from process.env under `doppler run -- vite dev`.
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
+import { authEnvs, envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
+import {
+  SANDBOX_INSTANCE_TYPE_BINDINGS,
+  SANDBOX_INSTANCE_TYPES,
+  type SandboxInstanceType,
+} from "../src/domains/sandboxes/instance-types.ts";
 import { workerEventsQueueName } from "../src/queue-names.ts";
 
 /**
@@ -48,21 +53,21 @@ export const REQUIRED_SECRETS = [
  */
 export const OPTIONAL_SECRETS = [
   "APP_CONFIG_CLOUDFLARE__API_TOKEN",
-  "APP_CONFIG_GEMINI_API_KEY",
+  // Iterate-owned Exa/Parallel API keys (platform-secrets.ts registry
+  // entries) — collectSecrets ships only names listed here, so a key absent
+  // from this list never reaches a deployed worker even when Doppler has it.
+  "APP_CONFIG_INTEGRATIONS__EXA",
   "APP_CONFIG_INTEGRATIONS__GITHUB",
   "APP_CONFIG_INTEGRATIONS__GOOGLE",
+  "APP_CONFIG_INTEGRATIONS__PARALLEL",
+  // The first-party dummy-petshop client credentials (integration proofs);
+  // backs /secrets/platform/integrations/petshop. Optional — only preview/dev
+  // envs running the petshop e2e carry it.
+  "APP_CONFIG_INTEGRATIONS__PETSHOP",
   "APP_CONFIG_INTEGRATIONS__SLACK",
   "APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED",
-  // Local dev must load the baked auth JWKS too; otherwise forge-minted
-  // browser sessions from `pnpm auth:mint --browser-url` fail with
-  // JWKSNoMatchingKey even when Doppler/process.env contains the key set.
-  "APP_CONFIG_ITERATE_AUTH__JWKS",
   "APP_CONFIG_ITERATE_AUTH__RESOURCE",
-  "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN",
-  "APP_CONFIG_LOGS",
   "APP_CONFIG_POSTHOG",
-  "APP_CONFIG_SLACK_BOT_TOKEN",
-  "APP_CONFIG_X_AI_API_KEY",
   // R2 S3-API credentials the Sandbox SDK uses to presign workspace-backup
   // transfers (exact names the SDK reads). Optional: without them the
   // sandbox DO falls back to streaming archives through the BACKUP_BUCKET
@@ -85,6 +90,14 @@ export function envShapedVars(env: DeployedEnv) {
     APP_CONFIG_MCP__BASE_URL: env.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
+    APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: env.cloudflareAiGatewayTransport,
+    ...(env.cloudflareAiGatewayResponseCacheTtlSeconds === undefined
+      ? {}
+      : {
+          APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(
+            env.cloudflareAiGatewayResponseCacheTtlSeconds,
+          ),
+        }),
   };
 }
 
@@ -101,7 +114,7 @@ const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 // so we always run current compat behavior and never accumulate opt-in flags
 // for things that became default. Only genuinely non-default flags go in
 // compatibility_flags below.
-const COMPATIBILITY_DATE = "2026-07-01";
+export const COMPATIBILITY_DATE = "2026-07-01";
 
 // The os worker (reader) and the builder (writer) must name the same
 // miniflare namespace in local dev or cache reads never see builds.
@@ -110,6 +123,11 @@ const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
 /** The builder sidecar's worker name, derived — never spelled out in envs.ts. */
 function builderWorkerName(osWorkerName: string) {
   return `${osWorkerName}-builder`;
+}
+
+/** The typechecker sidecar's worker name, derived the same way. */
+function typecheckerWorkerName(osWorkerName: string) {
+  return `${osWorkerName}-typechecker`;
 }
 
 /**
@@ -143,58 +161,81 @@ const DO_CLASSES = {
   CAPABILITY_HOST: "CapabilityHostDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
-  SANDBOX: "CloudflareSandboxDurableObject",
   SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
+  WORKSPACE: "WorkspaceDurableObject",
+  // One sandbox container class PER INSTANCE TYPE (Cloudflare fixes instance_type per
+  // class) — bindings and class names come from the canonical table in
+  // src/domains/sandboxes/instance-types.ts.
+  ...Object.fromEntries(
+    SANDBOX_INSTANCE_TYPES.map((instanceType) => [
+      SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].binding,
+      SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+    ]),
+  ),
 } as const;
 
-// Durable Object migration history. Deployed workers only apply tags NEWER
-// than the one they already passed, so a new class must arrive in a NEW tag —
-// adding it to an existing tag is silently ignored on every existing
-// deployment and the deploy fails at bind time with API error 10061. Fresh
-// workers (local dev, new envs) replay all tags in order.
-const DO_MIGRATIONS = [
-  {
-    tag: "v1",
-    new_sqlite_classes: [
-      "AgentDurableObject",
-      "CapabilityHostDurableObject",
-      "ProjectDurableObject",
-      "RepoDurableObject",
-      "CloudflareSandboxDurableObject",
-      "SecretDurableObject",
-      "StreamDurableObject",
-      "StatefulWorkerDurableObject",
-    ],
-  },
-  { tag: "v2", new_sqlite_classes: ["SchedulerDurableObject"] },
-];
+// Durable Object lifecycle, DECLARATIVE (wrangler's `exports` field, GA in
+// wrangler 4.107): every class the worker hosts gets a live entry, and the
+// server reconciles the declared set against the live namespaces ON EVERY
+// DEPLOY. There is no migration tag and no linear history — which is what
+// lets a preview slot deploy cleanly from any branch, regardless of what the
+// previous branch left on the worker (the old tag-diff model wedged slots
+// with API 10074/10061 whenever branch histories diverged).
+//
+// Deleting a class = replace its live entry with a hand-written
+// `state: "deleted"` tombstone. That destroys the class's Durable Objects,
+// their storage and alarms on the next deploy of each env. Tombstones are
+// idempotent (a stale one is an info, not an error) and can be removed once
+// every deployed env reports "Safe to remove from `exports`". Forgetting one
+// fails the deploy with the exact tombstone line to add.
+const DO_EXPORTS = {
+  // Live entries derive from DO_CLASSES: bound ⇔ hosted, one source of truth.
+  ...Object.fromEntries(
+    Object.values(DO_CLASSES).map((className) => [
+      className,
+      { type: "durable-object", storage: "sqlite" },
+    ]),
+  ),
+  // Sandboxes became pets with one container class per instance type (#1747);
+  // the old implicit-size class is retired (old sandboxes were ephemeral by
+  // design and their R2 snapshots age out).
+  CloudflareSandboxDurableObject: { type: "durable-object", state: "deleted" },
+};
 
-// Every bound class needs a migration entry (and nothing else does).
-{
-  const migrated = new Set(DO_MIGRATIONS.flatMap((migration) => migration.new_sqlite_classes));
-  const bound = Object.values(DO_CLASSES);
-  const missing = bound.filter((className) => !migrated.has(className));
-  const stale = [...migrated].filter((className) => !(bound as string[]).includes(className));
-  if (missing.length > 0 || stale.length > 0) {
-    throw new Error(
-      `DO_MIGRATIONS out of sync with DO_CLASSES (missing: ${missing.join(", ") || "none"}; stale: ${stale.join(", ") || "none"})`,
-    );
-  }
-}
+/**
+ * Per-size concurrent-instance caps. Cloudflare validates
+ * `max_instances × instance memory` against the account's concurrent-memory
+ * quota AT DEPLOY TIME, summed across every container app — and the preview
+ * account is shared by every preview slot — so preview caps are deliberately
+ * small (a slot's sandbox fleet reserves ~75 GiB vs production's ~260 GiB).
+ * Billing is while-running only (idle sandboxes are torn down and snapshotted),
+ * so production headroom is cheap; raise a cap here if a real workload hits it
+ * (exceeding one surfaces as HTTP 503 on sandbox start).
+ */
+const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; production: number }> =
+  {
+    lite: { preview: 20, production: 50 },
+    basic: { preview: 10, production: 30 },
+    "standard-1": { preview: 5, production: 20 },
+    "standard-2": { preview: 2, production: 10 },
+    "standard-3": { preview: 2, production: 5 },
+    "standard-4": { preview: 1, production: 3 },
+  };
 
 /** Binding config identical across local dev and every deployed env, apart from names/ids. */
 function workerBindings(input: {
   workerName: string;
   accountId: string;
+  authWorkerName: string;
+  authRemote?: boolean;
   kvId?: string;
   workerBuildCacheKvId?: string;
-  /** Sandbox container instance cap. Preview slots get extra headroom: e2e
-   * churn spins sandboxes faster than they idle out, and a saturated cap
-   * 503s every sandbox exec (observed live at 10/10 on preview-3). */
-  maxContainerInstances?: number;
+  /** Which SANDBOX_MAX_INSTANCES column to apply — deploy-time memory quota
+   * is validated per account, and previews share one account. */
+  sandboxCaps?: "preview" | "production";
 }) {
   return {
     vars: {
@@ -214,15 +255,15 @@ function workerBindings(input: {
       // See docs/cloudflare-sandboxes.md.
       SANDBOX_TRANSPORT: "rpc",
       // Container startup budget must cover the IMAGE PULL on a host that
-      // hasn't cached it: the baked-monorepo image is ~3 GB and a cold-host
-      // pull measured 1.5-3.2 min. The SDK defaults (instance-get 30s, i.e.
-      // schedule+start INCLUDING the pull; port-ready 90s) both sat inside a
-      // pull, so fresh sandboxes on cold hosts died with
-      // OPERATION_INTERRUPTED / transport_disposed on utils.createSession —
-      // the dominant e2e flake after the image grew (fast ~30-60s failures =
-      // the instance-get cap; ~150s ones = the dial budget). 300s each (the
-      // SDK's validation max for instance-get) clears the worst observed
-      // pull; anything slower is a genuinely stuck container and should fail.
+      // hasn't cached it. The SDK defaults (instance-get 30s — schedule+start
+      // INCLUDING the pull; port-ready 90s) both sat inside a cold pull back
+      // when the image baked the monorepo (~3 GB), killing the control-plane
+      // dial mid-startup (OPERATION_INTERRUPTED / transport_disposed on
+      // utils.createSession — the dominant e2e flake of that era). The image
+      // is the stock Cloudflare one now, but a generous ceiling costs nothing
+      // when startup is fast and only extends patience when a host is cold —
+      // 300s is the SDK's validation max; anything slower is a genuinely
+      // stuck container and should fail.
       SANDBOX_INSTANCE_TIMEOUT_MS: "300000",
       SANDBOX_PORT_TIMEOUT_MS: "300000",
     },
@@ -241,16 +282,40 @@ function workerBindings(input: {
       },
     ],
     services: [
+      // OS's privileged auth directory and token-introspection surface. This
+      // binding is the credential: Cloudflare resolves it directly to the
+      // selected auth Worker, so no bearer secret enters the OS process.
+      // Local dev uses `remote` unless dev-all has selected its local auth
+      // Worker through a loopback issuer.
+      {
+        binding: "AUTH",
+        service: input.authWorkerName,
+        ...(input.authRemote ? { remote: true } : {}),
+      },
       // The builder sidecar (src/builder.ts, wrangler.builder.jsonc): the one
       // script carrying the dynamic-worker bundler toolchain (esbuild-wasm,
       // ~14MB) so the product script stays small. Bound by name — deploy.ts
       // deploys the builder first.
       { binding: "BUILDER", service: builderWorkerName(input.workerName) },
+      // The typechecker sidecar (src/typechecker.ts,
+      // wrangler.typechecker.jsonc): the one script carrying the TypeScript
+      // compiler (tswasm, ~30MB wasm). Same deploy-first rule as the builder.
+      { binding: "TYPECHECKER", service: typecheckerWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
+    // The itx.search per-project instance namespace (env.SEARCH_INSTANCES,
+    // domains/search/search-index.ts). Namespace name = the worker name;
+    // ensure-resources creates it. Instances are created at runtime, one per
+    // project, over the SEARCH_BUCKET below.
+    ai_search_namespaces: [{ binding: "SEARCH_INSTANCES", namespace: input.workerName }],
     browser: { binding: "BROWSER" },
     images: { binding: "IMAGES" },
     media: { binding: "MEDIA" },
+    // Deploy identity for the stream processor hosts' crash-loop breaker: a
+    // revival that sees a NEW version id starts from a fresh backoff budget
+    // (the antidote deploy). Absent in local dev (miniflare fakes it or omits
+    // it); workerVersion(env) tolerates undefined.
+    version_metadata: { binding: "CF_VERSION_METADATA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
     queues: {
@@ -274,6 +339,9 @@ function workerBindings(input: {
     r2_buckets: [
       { binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` },
       { binding: "FILES_BUCKET", bucket_name: `${input.workerName}-files` },
+      // SEARCH_BUCKET: the itx.search corpus (domains/search/search-index.ts) —
+      // derived data an AI Search instance indexes. Same create-if-missing story.
+      { binding: "SEARCH_BUCKET", bucket_name: `${input.workerName}-search-index` },
     ],
     // Email Service send binding for itx.email. Sender authorization is
     // enforced in OS (a project only sends as <slug>@<hostname base>, see
@@ -281,41 +349,24 @@ function workerBindings(input: {
     // dynamic per-project set. Local dev gets the same binding; miniflare
     // simulates sends instead of delivering real mail.
     send_email: [{ name: "EMAIL" }],
-    containers: [
-      {
-        class_name: DO_CLASSES.SANDBOX,
-        image: "./sandbox/Dockerfile",
-        // The sandbox image bakes this repo into /opt/iterate/iterate, so the
-        // Docker build context must be the monorepo root, not apps/os/sandbox.
-        image_build_context: "../..",
-        // standard-1 (1/2 vCPU, 4 GiB, 8 GB disk), NOT lite: the baked-monorepo
-        // image unpacks to ~3 GB, over lite's 2 GB disk — instances then fail
-        // with ImagePullRequestedDiskSizeToSmall, the rollout wedges the app
-        // "degraded", and every sandbox op storms transport_disposed (observed
-        // live on preview-1, 2026-07-06). The push itself SUCCEEDS — the limit
-        // bites at instance provisioning, so a too-big image degrades envs
-        // instead of failing the deploy. 8 GB fits the image + /workspace +
-        // the backup staging in /var/backups; if the image grows, move up a
-        // tier. Custom types can't help (platform: ≥1 vCPU, disk ≤ 2× memory,
-        // enterprise-only). Billing is while-running only, so the
-        // idle-destroyed fleet stays cheap.
-        instance_type: "standard-1",
-        // Sized for e2e churn: the preview lanes provision a fresh project
-        // (and sandbox container) per test, and idle containers hold an
-        // instance slot until sleepAfter (3m, see
-        // CloudflareSandboxDurableObject). 10 wedged the sandbox-exec specs
-        // after ~5 back-to-back runs; lite instances bill on usage, not
-        // reservation, so headroom is free.
-        max_instances: input.maxContainerInstances ?? 40,
-        // Interactive shell into any running sandbox via `wrangler containers
-        // ssh <instance-id>` (find ids with `wrangler containers instances`).
-        // Account-authenticated + gated on the keys below; opens no public
-        // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
-        // the wrangler schema, so it is set explicitly.
-        ssh: { enabled: true },
-        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
-      },
-    ],
+    // One container app per sandbox size, all running the STOCK Cloudflare
+    // sandbox image (sandbox/Dockerfile is a one-line FROM — no bake, so
+    // builds and deploys are fast and every size shares one cached image).
+    // `instance_type` is the size verbatim: our size names ARE Cloudflare's
+    // instance-type names (instance-types.ts).
+    containers: SANDBOX_INSTANCE_TYPES.map((instanceType) => ({
+      class_name: SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+      image: "./sandbox/Dockerfile",
+      instance_type: instanceType,
+      max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
+      // Interactive shell into any running sandbox via `wrangler containers
+      // ssh <instance-id>` (find ids with `wrangler containers instances`).
+      // Account-authenticated + gated on the keys below; opens no public
+      // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
+      // the wrangler schema, so it is set explicitly.
+      ssh: { enabled: true },
+      authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
+    })),
     secrets: { required: REQUIRED_SECRETS },
     observability: OBSERVABILITY,
   };
@@ -323,53 +374,49 @@ function workerBindings(input: {
 
 /**
  * Every hostname routed to the os worker: the app base URL, public event docs,
- * the MCP host, and the project-host patterns. The zone is the hostname minus
- * its first label for app/MCP/event-docs hosts; project bases are themselves zones.
+ * the MCP host, project-host patterns, and any SaaS-enabled provider-zone
+ * catch-all routes. The zone is the hostname minus its first label for
+ * app/MCP/event-docs hosts; project bases are themselves zones.
  *
- * Project bases get three patterns: `base/*`, `*.base/*`, and `*base/*`.
- * The catch-all `*base/*` should subsume the others, but the live preview
- * zone only reliably invoked the worker for project hosts once all three
- * existed (observed 2026-06) — kept verbatim; collapse only with an edge
- * experiment proving it.
+ * Project bases get three built-in project-host patterns: `base/*`,
+ * `*.base/*`, and `*base/*`.
+ * The `*base/*` pattern should subsume the first two, but the live preview zone
+ * only reliably invoked the worker for project hosts once all three existed
+ * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
+ * proving it.
  */
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
   const mcpHost = new URL(env.mcpBaseUrl).hostname;
   const eventDocsHost = new URL(env.eventDocsBaseUrl).hostname;
   const zoneOf = (host: string) => host.split(".").slice(1).join(".");
+  const cloudflareForSaasBases = new Set(env.cloudflareForSaasProjectHostnameBases);
   return [
     { pattern: `${appHost}/*`, zone_name: zoneOf(appHost) },
     { pattern: `${eventDocsHost}/*`, zone_name: zoneOf(eventDocsHost) },
     { pattern: `${mcpHost}/*`, zone_name: zoneOf(mcpHost) },
-    ...env.projectHostnameBases.flatMap((base) => [
-      { pattern: `${base}/*`, zone_name: base },
-      { pattern: `*.${base}/*`, zone_name: base },
-      { pattern: `*${base}/*`, zone_name: base },
-    ]),
+    ...env.projectHostnameBases.flatMap((base) => {
+      const projectRoutes = [
+        { pattern: `${base}/*`, zone_name: base },
+        { pattern: `*.${base}/*`, zone_name: base },
+        { pattern: `*${base}/*`, zone_name: base },
+      ];
+      return cloudflareForSaasBases.has(base)
+        ? [{ pattern: "*/*", zone_name: base }, ...projectRoutes]
+        : projectRoutes;
+    }),
   ];
 }
 
 function envBlock(env: DeployedEnv) {
+  const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
+    authWorkerName: env.authWorkerName,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
-    // Sandbox containers are `lite` and bill on usage, not reservation, so a
-    // high cap is free headroom. Idle containers are destroyed (not just
-    // stopped) by CloudflareSandboxDurableObject.onActivityExpired after 3m,
-    // which releases their instance slot — but under sustained churn the
-    // platform backfills released slots into an "assigned" warm pool that
-    // rides at max_instances, and sandbox start latency grows as the pool
-    // saturates: e2e marathons wedged at EXACTLY assigned == cap on every
-    // attempt (20, then 100 — sandbox-exec went 20s → 2.8min → stuck as
-    // `wrangler containers info` reached the cap;
-    // docs/preview-e2e-flake-hunt.md flakes 19/23). The cap must therefore
-    // comfortably exceed a whole marathon's cumulative sandbox creations
-    // (~3-8 per preview e2e run × 50+ runs), not just the concurrent count.
-    // prd churns far less (real agent sandboxes, no fixture storms) and
-    // destroy-on-idle bounds its growth.
-    maxContainerInstances: env.osWorkerName === "os-prd" ? 50 : 500,
+    sandboxCaps: isProduction ? "production" : "preview",
   });
   return {
     name: env.osWorkerName,
@@ -388,18 +435,87 @@ function envBlock(env: DeployedEnv) {
  * Deploy-time generation runs without PORT, so deployed envs are unaffected
  * (they get baseUrl from envShapedVars).
  */
+export function localAuthServiceBinding(input: {
+  issuer: string | undefined;
+  allowProductionRemote: boolean;
+}) {
+  const trimmedIssuer = input.issuer?.trim();
+  if (!trimmedIssuer) {
+    return { authWorkerName: authEnvs.dev_global.authWorkerName, authRemote: true };
+  }
+
+  let issuerUrl: URL;
+  try {
+    issuerUrl = new URL(trimmedIssuer);
+  } catch {
+    throw new Error("APP_CONFIG_ITERATE_AUTH__ISSUER must be an absolute URL");
+  }
+
+  if (["localhost", "127.0.0.1", "[::1]"].includes(issuerUrl.hostname)) {
+    return { authWorkerName: "auth", authRemote: false };
+  }
+
+  const authEnv = Object.values(authEnvs).find(
+    (candidate) => new URL(candidate.authBaseUrl).origin === issuerUrl.origin,
+  );
+  if (!authEnv) {
+    throw new Error(
+      `APP_CONFIG_ITERATE_AUTH__ISSUER does not match a known auth environment: ${issuerUrl.origin}`,
+    );
+  }
+  if (authEnv === authEnvs.prd && !input.allowProductionRemote) {
+    throw new Error(
+      "Remote RPC to auth-prd requires ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1 because the binding carries production write authority",
+    );
+  }
+  return { authWorkerName: authEnv.authWorkerName, authRemote: true };
+}
+
 function localDevBindings() {
-  const bindings = workerBindings({ workerName: "os", accountId: PREVIEW_AND_DEV_ACCOUNT_ID });
+  const authBinding = localAuthServiceBinding({
+    issuer: process.env.APP_CONFIG_ITERATE_AUTH__ISSUER,
+    allowProductionRemote: process.env.ALLOW_REMOTE_PRODUCTION_AUTH_RPC === "1",
+  });
+  const bindings = workerBindings({
+    workerName: "os",
+    accountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    ...authBinding,
+  });
+  const localAuthJwks = localDevAuthJwks();
   return {
     ...bindings,
     vars: {
       ...bindings.vars,
+      // Local dev rides the BYOK lane with the response cache, same as the
+      // preview slots: agent-loop iteration replays yesterday's answers for
+      // free. In envShapedVars for deployed envs; spelled out here because
+      // local dev has no envs.ts entry.
+      APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
+      APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      // Local dev trusts forge-minted sessions by deriving the public key from
+      // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
+      // Doppler here: stale snapshots caused login verification failures.
+      ...(localAuthJwks ? { APP_CONFIG_ITERATE_AUTH__JWKS: localAuthJwks } : {}),
     },
   };
 }
 
 const LOCAL_DEV_BINDINGS = localDevBindings();
+
+function localDevAuthJwks() {
+  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+  if (!forgePrivateJwk) return undefined;
+
+  const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
+    string,
+    unknown
+  > & { d?: string };
+  if (!publicJwk.kid || !publicJwk.kty) {
+    throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
+  }
+  return JSON.stringify({ keys: [publicJwk] });
+}
 
 export const config = {
   $schema: "node_modules/wrangler/config-schema.json",
@@ -415,13 +531,13 @@ export const config = {
   // compatibility_date, so anything default-on at that date is redundant).
   // nodejs_compat: @cloudflare/shell (repo git) and the dynamic worker
   // loader need Node APIs. global_fetch_strictly_public: same-zone
-  // subrequests (auth worker and project egress) must traverse Worker routes
+  // subrequests (including project egress) must traverse Worker routes
   // instead of going to origin.
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   // SSR + API paths reach the worker because no asset file matches them.
-  migrations: DO_MIGRATIONS,
+  exports: DO_EXPORTS,
   // Local dev: containers off by default so `pnpm dev` never requires Docker —
   // sandbox Durable Objects fail at their constructor until you opt in with
   // `OS_SANDBOX_CONTAINER_LOCAL_DEV=true pnpm dev`, which builds the sandbox
@@ -478,12 +594,43 @@ export const builderConfig = {
   env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, builderEnvBlock(env)])),
 };
 
+/**
+ * The typechecker sidecar's config, cut from the builder's pattern: the
+ * minimum possible worker around the TypeScript compiler wasm — a pure
+ * function (files in, diagnostics out) with NO bindings at all. Wrangler
+ * bundles src/typechecker.ts directly (no vite); local dev runs it as an
+ * auxiliary worker in the same workerd (vite.config.ts).
+ */
+export const typecheckerConfig = {
+  $schema: "node_modules/wrangler/config-schema.json",
+  name: "os-typechecker",
+  main: "./src/typechecker.ts",
+  compatibility_date: COMPATIBILITY_DATE,
+  compatibility_flags: ["nodejs_compat"],
+  observability: OBSERVABILITY,
+  env: Object.fromEntries(
+    Object.entries(envs).map(([name, env]) => [
+      name,
+      {
+        name: typecheckerWorkerName(env.osWorkerName),
+        account_id: env.cloudflareAccountId,
+        observability: OBSERVABILITY,
+      },
+    ]),
+  ),
+};
+
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
 export const writeWranglerConfig = () => {
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.builder.jsonc", import.meta.url),
     appLabel: "apps/os (builder sidecar)",
     config: builderConfig,
+  });
+  writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.typechecker.jsonc", import.meta.url),
+    appLabel: "apps/os (typechecker sidecar)",
+    config: typecheckerConfig,
   });
   return writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),

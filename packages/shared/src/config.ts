@@ -299,6 +299,7 @@ function unwrapConfigSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
 
   while (
     current instanceof z.ZodDefault ||
+    current instanceof z.ZodPrefault ||
     current instanceof z.ZodOptional ||
     current instanceof z.ZodNullable
   ) {

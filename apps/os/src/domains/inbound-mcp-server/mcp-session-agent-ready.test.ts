@@ -1,17 +1,18 @@
 import { describe, expect, it } from "vitest";
+import type { StreamEvent, StreamEventInput } from "../streams/schemas.ts";
 import {
   ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS,
   ensureMcpSessionAgentReady,
 } from "./mcp-session-agent-ready.ts";
-import type { StreamEvent, StreamEventInput } from "~/types.ts";
 
 describe("ensureMcpSessionAgentReady", () => {
-  it("creates the session stream and waits for the agent system prompt before returning", async () => {
+  it("creates the session stream and waits for keyed system context", async () => {
     const promptReady = Promise.withResolvers<StreamEvent>();
     const appended: StreamEventInput[] = [];
     const waitCalls: Array<{
       afterOffset?: number;
       eventTypes?: readonly string[];
+      predicate?: (event: StreamEvent) => boolean | Promise<boolean>;
       timeoutMs: number;
     }> = [];
     let requestedPath: string | undefined;
@@ -29,6 +30,7 @@ describe("ensureMcpSessionAgentReady", () => {
                   ...event,
                   createdAt: new Date(index + 1).toISOString(),
                   offset: index + 1,
+                  path,
                 }));
               },
               async waitForEvent(args) {
@@ -51,13 +53,21 @@ describe("ensureMcpSessionAgentReady", () => {
         payload: { agentPath: "/agents/mcp/session-test" },
       },
     ]);
-    expect(waitCalls).toEqual([
-      {
-        afterOffset: 0,
-        eventTypes: ["events.iterate.com/agent/system-prompt-updated"],
-        timeoutMs: ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS,
-      },
-    ]);
+    expect(waitCalls).toHaveLength(1);
+    expect(waitCalls[0]).toMatchObject({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/agents/context-added"],
+      timeoutMs: ASK_ASSISTANT_SESSION_READY_TIMEOUT_MS,
+    });
+    expect(
+      await waitCalls[0]!.predicate?.({
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "system", key: "something-else", content: "not ready" },
+        createdAt: new Date().toISOString(),
+        offset: 2,
+        path: "/agents/mcp/session-test",
+      }),
+    ).toBe(false);
 
     let returned = false;
     void ready.then(() => {
@@ -67,10 +77,11 @@ describe("ensureMcpSessionAgentReady", () => {
     expect(returned).toBe(false);
 
     promptReady.resolve({
-      type: "events.iterate.com/agent/system-prompt-updated",
-      payload: { systemPrompt: "ready" },
+      type: "events.iterate.com/agents/context-added",
+      payload: { role: "system", key: "agent/system-prompt", content: "ready" },
       createdAt: new Date().toISOString(),
-      offset: 2,
+      offset: 3,
+      path: "/agents/mcp/session-test",
     });
     await ready;
 

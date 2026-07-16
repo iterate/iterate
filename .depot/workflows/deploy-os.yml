@@ -1,16 +1,21 @@
-name: Deploy OS
+name: Deploy Auth + OS
 permissions:
   contents: read
   deployments: write
+  statuses: write
 concurrency:
-  group: os-${{ github.ref_name || 'prd' }}
-  cancel-in-progress: true
+  # Every dispatch below targets the same production Workers, even when the
+  # checked-out ref differs. Serialize the complete Auth -> OS -> revocation
+  # cutover and never cancel it between those steps.
+  group: deploy-auth-os-production
+  cancel-in-progress: false
 on:
   push:
     branches:
       - main
     paths:
       - .depot/workflows/deploy-os.yml
+      - .depot/workflows/deploy-auth.yml
       - envs.ts
       - scripts/lib/**
       - apps/os/**
@@ -19,7 +24,7 @@ on:
       - apps/os/src/domains/streams/**
       - packages/shared/**
       - packages/ui/**
-      - packages/mock-http-proxy/**
+      - patches/**
   workflow_dispatch:
     inputs:
       ref:
@@ -30,8 +35,9 @@ on:
 jobs:
   deploy:
     runs-on:
-      size: 8x32
+      size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 45
     outputs:
       public_url: ${{ steps.metadata.outputs.public_url }}
     steps:
@@ -42,6 +48,14 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
+      # Auth owns the default RPC entrypoint. This is the one production rollout
+      # path for both workers, so a push cannot race independent auth and OS
+      # workflows at different commits.
+      - name: Deploy apps/auth
+        working-directory: apps/auth
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project auth --config prd -- pnpm run-script deploy
       - name: Setup Doppler (baked CLI)
         run: doppler setup --config prd --project os
         env:
@@ -60,14 +74,41 @@ jobs:
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run-script deploy
+          # Explicitly authorizes config generation to target auth-prd. Local
+          # development remains fail-closed without this opt-in.
+          ALLOW_REMOTE_PRODUCTION_AUTH_RPC: "1"
+        # Teed so the size-report step below can parse wrangler's
+        # "Total Upload" line out of the deploy output.
+        run: |-
+          set -euo pipefail
+          doppler run -- pnpm run-script deploy 2>&1 | tee /tmp/deploy-os.log
+      # apps/os deploy forces a real AUTH RPC cache miss, revokes and re-lists
+      # the live Worker secret, repeats the probes against that new version,
+      # and only then removes the matching Doppler source.
+      # Publishes the deployed bundle size as a worker-size/os commit status;
+      # PR preview tables read it back as the "vs main" baseline
+      # (scripts/preview/preview.ts). Never fails the deploy. DEPLOY_SHA is
+      # rev-parsed from the workspace so the status lands on the commit that
+      # was actually deployed — checkout honors inputs.ref on dispatch, so
+      # the trigger's GITHUB_SHA can be a different commit.
+      - name: Report worker size
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          APP_SLUG: os
+          DEPLOY_LOG_FILE: /tmp/deploy-os.log
+        run: |-
+          set -euo pipefail
+          DEPLOY_SHA="$(git rev-parse HEAD)" pnpm tsx scripts/ci/report-worker-size.ts
   notify:
     needs:
       - deploy
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.deploy.result == 'success' || needs.deploy.result == 'failure')
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on:
-      size: 8x32
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
     steps:
@@ -81,4 +122,5 @@ jobs:
         env:
           APP_DISPLAY_NAME: OS
           PUBLIC_URL: ${{ needs.deploy.outputs.public_url }}
-        run: pnpm tsx scripts/ci/notify.ts deploy-${{ needs.deploy.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result == 'success' && 'success' || 'failure' }}
+        run: pnpm tsx scripts/ci/notify.ts deploy-${DEPLOY_RESULT}

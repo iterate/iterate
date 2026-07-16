@@ -1,5 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { slugify } from "@iterate-com/shared/slug";
+import { parseConfig } from "../../../config.ts";
 import {
   organizationAdminMiddleware,
   organizationScopedMiddleware,
@@ -25,7 +26,9 @@ import {
   updateMembershipRoleByOrganizationAndUserId,
   updateOrganizationNameById,
 } from "../../db/queries/index.ts";
-import { generateId, toMembershipRole, toOrganizationRecord, toUserRecord } from "./_shared.ts";
+import { sendOrganizationInvitationEmail } from "../../email.ts";
+import { generateId } from "../../id.ts";
+import { toMembershipRole, toOrganizationRecord, toUserRecord } from "./_shared.ts";
 
 const create = os.organization.create
   .use(protectedMiddleware)
@@ -195,9 +198,10 @@ const removeMember = os.organization.removeMember
 const createInvite = os.organization.createInvite
   .use(organizationAdminMiddleware)
   .handler(async ({ context, input }) => {
+    const inviteEmail = input.email.trim().toLowerCase();
     const existingInvite = await getInviteByOrganizationAndEmail(context.db, {
       organizationId: context.organization.id,
-      email: input.email,
+      email: inviteEmail,
     });
     if (existingInvite) {
       throw new ORPCError("CONFLICT", { message: "Invite already exists" });
@@ -205,7 +209,7 @@ const createInvite = os.organization.createInvite
 
     const existingMember = await getOrganizationMemberPresenceByEmail(context.db, {
       organizationId: context.organization.id,
-      email: input.email,
+      email: inviteEmail,
     });
     if (existingMember) {
       throw new ORPCError("CONFLICT", { message: "User is already a member" });
@@ -213,10 +217,13 @@ const createInvite = os.organization.createInvite
 
     const inviteId = generateId("inv");
     const role = input.role ?? "member";
+    const config = parseConfig(context.env);
+    const invitationUrl = new URL(`/invitations/${inviteId}`, config.authAppOrigin);
+    invitationUrl.searchParams.set("organization", context.organization.slug);
     await insertInvite(context.db, {
       id: inviteId,
       organizationId: context.organization.id,
-      email: input.email,
+      email: inviteEmail,
       role,
       status: "pending",
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
@@ -224,9 +231,27 @@ const createInvite = os.organization.createInvite
       inviterId: context.user.id,
     });
 
+    try {
+      await sendOrganizationInvitationEmail({
+        email: inviteEmail,
+        role,
+        organizationName: context.organization.name,
+        inviterName: context.user.name,
+        inviterEmail: context.user.email,
+        invitationUrl: invitationUrl.toString(),
+        senderDomain: config.emailSenderDomain,
+        emailBinding: context.env.EMAIL,
+      });
+    } catch (error) {
+      await updateInviteStatusById(context.db, { status: "canceled" }, { id: inviteId });
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        message: error instanceof Error ? error.message : "Could not send invitation email",
+      });
+    }
+
     return {
       id: inviteId,
-      email: input.email,
+      email: inviteEmail,
       role,
       invitedBy: {
         id: context.user.id,

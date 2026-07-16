@@ -1,12 +1,12 @@
 import type { RpcStub } from "capnweb";
 import { connectItx, type ItxWebSocketMessage } from "../../src/itx-client.ts";
+import type { ItxAuthCredentials } from "../../src/auth.ts";
 import type {
   Agent,
-  ItxAuthCredentials,
-  ProjectRpcTarget,
+  Project as ProjectRpcTarget,
   Session,
   UnauthenticatedOs,
-} from "../../src/types.ts";
+} from "../../src/itx-api.generated.ts";
 
 export type { ItxWebSocketMessage };
 
@@ -30,6 +30,20 @@ function requireAppBaseUrl(): string {
     throw new Error("itx e2e needs APP_CONFIG_BASE_URL (run under doppler or the e2e setup).");
   }
   return baseUrl;
+}
+
+/** A public deployment whose Firecracker containers are reachable by fixtures. */
+export function deployedBaseUrl(): string | null {
+  const raw = process.env.APP_CONFIG_BASE_URL?.trim();
+  if (!raw) return null;
+  const url = new URL(raw);
+  if (
+    ["localhost", "127.0.0.1", "::1"].includes(url.hostname) ||
+    url.hostname.endsWith(".localhost")
+  ) {
+    return null;
+  }
+  return url.toString();
 }
 
 type ItxSessionInput = {

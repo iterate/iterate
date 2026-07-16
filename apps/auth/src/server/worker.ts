@@ -1,4 +1,10 @@
 import { contextStorage } from "hono/context-storage";
+import type {
+  InternalCreateProjectForOrganizationInput,
+  InternalIntrospectOAuthAccessTokenInput,
+  ProjectInput,
+} from "@iterate-com/auth-contract";
+import { AuthWorker as AuthWorkerContract } from "@iterate-com/auth-contract/worker";
 import {
   OAUTH_RESOURCE_PARAMETER,
   copyMissingSearchParams,
@@ -13,11 +19,20 @@ import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { onError, ORPCError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import { auth, getAllowedBrowserOrigins } from "./auth.ts";
+import { db } from "./db/index.ts";
 import { config } from "./env.ts";
 import { hono, variablesProvider, type Variables } from "./utils/hono.ts";
 import { appRouter } from "./orpc/index.ts";
 import type { CloudflareEnv } from "./env.ts";
 import { appendSetCookieHeaders, resolveAuthLogoutReturnTo } from "./logout.ts";
+import { makeAuthorizationResponseIssuerOptional } from "./oauth-metadata.ts";
+import { introspectAccessToken } from "./oauth-token-introspection.ts";
+import {
+  createProjectForOrganization,
+  getProjectBySlug,
+  listProjectsForUser,
+  mintProjectId,
+} from "./project-directory.ts";
 
 const app = hono();
 const allowedBrowserOrigins = new Set(getAllowedBrowserOrigins());
@@ -38,17 +53,17 @@ app.use(
   variablesProvider(),
 );
 
-app.get("/api/auth/.well-known/openid-configuration", (c) =>
-  oauthProviderOpenIdConfigMetadata(auth)(c.req.raw),
+app.get("/api/auth/.well-known/openid-configuration", async (c) =>
+  makeAuthorizationResponseIssuerOptional(await oauthProviderOpenIdConfigMetadata(auth)(c.req.raw)),
 );
-app.get(`/.well-known/openid-configuration${AUTH_ISSUER_PATH}`, (c) =>
-  oauthProviderOpenIdConfigMetadata(auth)(c.req.raw),
+app.get(`/.well-known/openid-configuration${AUTH_ISSUER_PATH}`, async (c) =>
+  makeAuthorizationResponseIssuerOptional(await oauthProviderOpenIdConfigMetadata(auth)(c.req.raw)),
 );
-app.get("/api/auth/.well-known/oauth-authorization-server", (c) =>
-  oauthProviderAuthServerMetadata(auth)(c.req.raw),
+app.get("/api/auth/.well-known/oauth-authorization-server", async (c) =>
+  makeAuthorizationResponseIssuerOptional(await oauthProviderAuthServerMetadata(auth)(c.req.raw)),
 );
-app.get(`/.well-known/oauth-authorization-server${AUTH_ISSUER_PATH}`, (c) =>
-  oauthProviderAuthServerMetadata(auth)(c.req.raw),
+app.get(`/.well-known/oauth-authorization-server${AUTH_ISSUER_PATH}`, async (c) =>
+  makeAuthorizationResponseIssuerOptional(await oauthProviderAuthServerMetadata(auth)(c.req.raw)),
 );
 app.all("/api/auth/oauth2/authorize", async (c) =>
   preserveOAuthResourceRedirect(c.req.raw, await auth.handler(c.req.raw)),
@@ -166,4 +181,37 @@ function preserveRedirectSearchParams(
   });
 }
 
-export default app;
+/**
+ * Auth's default entrypoint serves public HTTP through `fetch`. Its other
+ * public methods are RPC capabilities available only to workers that hold a
+ * service binding to auth; public HTTP requests cannot select those methods.
+ */
+export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
+  override fetch(request: Request) {
+    return app.fetch(request, this.env, this.ctx);
+  }
+
+  createProjectForOrganization(input: InternalCreateProjectForOrganizationInput) {
+    return createProjectForOrganization(input, db);
+  }
+
+  getProjectBySlug(input: ProjectInput) {
+    return getProjectBySlug(input, db);
+  }
+
+  listProjectsForUser(input: { userId: string }) {
+    return listProjectsForUser(input, db);
+  }
+
+  mintProjectId() {
+    return mintProjectId();
+  }
+
+  introspectAccessToken(input: InternalIntrospectOAuthAccessTokenInput) {
+    return introspectAccessToken({
+      input,
+      client: db,
+      issuer: `${config.authAppOrigin.replace(/\/+$/, "")}/api/auth`,
+    });
+  }
+}

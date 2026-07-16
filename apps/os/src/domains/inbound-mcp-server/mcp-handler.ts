@@ -11,18 +11,21 @@ import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resourc
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
-// oxlint-disable-next-line iterate/no-capnweb-http-batch -- exec_js is a one-shot request-scoped call: a single pipelined batch (authenticate -> runScript) with no socket lifecycle to manage.
-import { newHttpBatchRpcSession } from "capnweb";
 import { env } from "cloudflare:workers";
 import packageJson from "../../../package.json" with { type: "json" };
 import { ensureMcpSessionAgentReady } from "./mcp-session-agent-ready.ts";
 import { resolveMcpSessionAgentPath } from "./mcp-session-agent-path.ts";
+import { readInboundMcpToolOptions, type InboundMcpToolOptions } from "./mcp-tool-options.ts";
+import {
+  EXEC_TYPESCRIPT_DESCRIPTION,
+  inboundMcpServerInstructions,
+} from "./exec-typescript-description.ts";
+import { trustedInternalAuthContext } from "~/auth.ts";
 import { authenticateAdminApiSecret, readBearerToken } from "~/auth/admin.ts";
-import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import { principalFromAccessToken } from "~/auth/principal.ts";
 import { MCP_START_MOUNT_PATH, resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import { readProjectBySlug } from "~/project-directory.ts";
-import type { UnauthenticatedOs } from "~/types.ts";
+import { ProjectCollectionRpcTarget } from "~/rpc-targets.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 type ProjectGrant = {
@@ -40,11 +43,11 @@ type McpAuth = {
 
 const requiredToolScope = "profile";
 const ASK_ASSISTANT_TIMEOUT_MS = 120_000;
-const ExecJsInput = z.object({
+const ExecTypescriptInput = z.object({
   code: z
     .string()
     .describe(
-      "JavaScript async arrow function to execute, e.g. async (itx) => { return await itx.__describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
+      "One itx TypeScript async arrow function to execute, e.g. async (itx) => { return await itx.__describe(); }. Whatever it returns (JSON-serializable) is the tool result; a thrown error surfaces as the tool error.",
     ),
   project: z.string().optional().describe("Project slug to run this code against."),
 });
@@ -52,23 +55,6 @@ const AskAssistantInput = z.object({
   message: z.string().trim().min(1).describe("Plain-language request for the project assistant."),
   project: z.string().optional().describe("Project slug to ask the assistant of."),
 });
-
-// Written for the LLM on the other end of the MCP connection: same tool-call
-// stance as the agent system prompts (small data-first snippets), adapted for
-// the request/response shape — here the return value IS the tool result.
-const EXEC_JS_DESCRIPTION = [
-  "Execute JavaScript against an Iterate project. The code must be a single async arrow function: async (itx) => { ... }. Whatever it returns (JSON-serializable) is the tool result.",
-  "",
-  "Treat each call like a tool call, not a program: keep snippets small and single-purpose. Fetch data and RETURN it so you can look at it before deciding what to do next — do not pattern-match response shapes you have never seen, compose user-facing prose from unknown fields, or wrap calls in defensive try/catch (a thrown error comes back as the tool error, which is more useful than a hand-built { error } object). Return only what you need: pick fields, slice arrays.",
-  "",
-  "Use JavaScript for what separate calls cannot do: Promise.all to fan out independent requests concurrently, map/filter to trim big responses.",
-  "",
-  "Discovering the surface: `await itx.__describe()` lists the project's capabilities (`children` is the member map) — and __describe() works on every node, including provided capabilities; `await itx.examples.list()` is a catalogue of known-good snippets (streams, repo, workers, secrets, provideCapability, MCP, Cloudflare bindings, ...) and `await itx.examples.get({ id })` returns one with full code — copy working patterns from there. Web search is built in via Exa: `await itx.mcp.exa.web_search_exa({ query, numResults })`, page reading via `itx.mcp.exa.web_fetch_exa({ urls })`.",
-  "",
-  'Cloudflare platform bindings are under `itx.integrations.cf`: `cf.ai.toMarkdown({ name, blob })` for document-to-markdown conversion (`itx.ai.toMarkdown()` with no args lists supported formats), `itx.ai.run(model, input)` for Workers AI model calls (see examples `ai-generate-image`, `ai-generate-audio`, `ai-transcribe-audio`, `ai-generate-video`), `itx.browser.quickAction("markdown", { url })` or `itx.integrations.cf.browser.quickAction(...)` for Browser Run quick actions, `cf.images.transform(...)` for image transformations, and `cf.videos.transform(...)` for Media Transformations. Call child `__describe()` methods for first-party Cloudflare docs before using unfamiliar options.',
-  "",
-  'Repo edits without a sandbox: use `const repo = itx.repos.get(vars.repoPath ?? "/")`, inspect with `await repo.readFile({ path })`, then apply targeted changes with `await repo.edit({ path, message, oldString, newString })`. `oldString` must match exactly once unless `replaceAll: true`; use `commitFiles` for new files or batch/full-file writes. Reach for `itx.sandboxes.get(...)` only when you need shell commands, tests, package managers, or servers.',
-].join("\n");
 
 const mcpCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -97,15 +83,17 @@ export async function handleInboundMcpRequest(input: {
   const auth = await resolveMcpAuth(input);
   if (auth instanceof Response) return auth;
 
-  const server = createServer({ ...input, auth });
+  const server = createServer({
+    ...input,
+    auth,
+    toolOptions: readInboundMcpToolOptions(input.request),
+  });
   const handler = createMcpHandler(server, {
     enableJsonResponse: true,
     route: MCP_START_MOUNT_PATH,
     sessionIdGenerator: undefined,
   });
-  return withCorsHeaders(
-    await handler(input.request, input.env, mcpExecutionContext(input.context)),
-  );
+  return withCorsHeaders(await handler(input.request, input.env, input.context.executionCtx));
 }
 
 function createServer(input: {
@@ -113,23 +101,19 @@ function createServer(input: {
   context: RequestContext;
   env: Env;
   request: Request;
+  toolOptions: InboundMcpToolOptions;
 }) {
   const server = new McpServer(
     { name: "os", version: packageJson.version },
     {
-      instructions: [
-        "This is an Iterate OS project MCP server.",
-        "Use exec_js to run a JavaScript async arrow function against a project.",
-        "Use ask_assistant to ask the project's assistant agent in plain language.",
-        "Prefer several small single-purpose calls (fetch data, return it, look at it, act) over one giant defensive script; use Promise.all inside a call to parallelize independent requests.",
-      ].join("\n"),
+      instructions: inboundMcpServerInstructions(input.toolOptions),
     },
   );
 
   const projects = input.auth.projects;
   const requireProjectInput = input.auth.authType === "admin_api_secret" || projects.length > 1;
   const resolveProject = async (requestedProject: string | undefined) => {
-    const project = await resolveToolProject(input.context, projects, requestedProject, {
+    const project = await resolveToolProject(projects, requestedProject, {
       authType: input.auth.authType,
       requireProjectInput,
     });
@@ -141,32 +125,36 @@ function createServer(input: {
   // /agents/mcp/request-* stream instead of minting a stream per call.
   let sessionAgentPath: Promise<string> | undefined;
   const resolveSessionAgentPath = () => (sessionAgentPath ??= resolveMcpSessionAgentPath(input));
+  // In-process itx: resolveProject verified the caller's access (OAuth project
+  // grants / admin secret), so the tool then runs with first-party authority
+  // in this same worker — no loopback HTTP batch to our own /api.
+  const projectItxFor = (projectId: string) =>
+    new ProjectCollectionRpcTarget({
+      auth: trustedInternalAuthContext(),
+      config: input.context.config,
+      ctx: input.context.executionCtx,
+    }).get(projectId);
 
   server.registerTool(
-    "exec_js",
+    "exec_typescript",
     {
-      title: "Run code",
-      description: EXEC_JS_DESCRIPTION,
-      inputSchema: ExecJsInput,
+      title: "Run TypeScript",
+      description: EXEC_TYPESCRIPT_DESCRIPTION,
+      inputSchema: ExecTypescriptInput,
     },
     async (rawInput) => {
-      const parsedInput = ExecJsInput.parse(rawInput);
+      const parsedInput = ExecTypescriptInput.parse(rawInput);
       const project = await resolveProject(parsedInput.project);
 
-      // Access was verified above (OAuth project grants / admin secret), so the
-      // script runs through the itx admin lane over one pipelined
-      // HTTP batch. runScript executes the async arrow function in a fresh
-      // dynamic-worker isolate scoped to this MCP session's agent stream, so
-      // the session transcript at /agents/mcp/** records every execution.
+      // runScript executes the async arrow function in a fresh dynamic-worker
+      // isolate scoped to this MCP session's agent stream, so the session
+      // transcript at /agents/mcp/** records every execution.
       try {
         const agentPath = await resolveSessionAgentPath();
-        const session = engineBatchSession(input.context);
-        const root = session.authenticate({
-          type: "admin-secret",
-          secret: requireAdminSecret(input.context),
-        });
-        const sessionAgent = root.projects.get(project.id).agents.get(agentPath);
-        const execution = await sessionAgent.capabilityHost.runScript(parsedInput.code);
+        const projectItx = await projectItxFor(project.id);
+        const execution = await projectItx.agents
+          .get(agentPath)
+          .capabilityHost.runScript(parsedInput.code);
         return {
           content: [
             {
@@ -186,68 +174,66 @@ function createServer(input: {
     },
   );
 
-  server.registerTool(
-    "ask_assistant",
-    {
-      title: "Ask assistant",
-      description:
-        "Ask this project's assistant agent in plain language. Blocks until the assistant replies (up to two minutes) and returns its reply. Conversation history lives on this MCP session's agent stream; asks are a plain chat conversation, so send them one at a time — concurrent asks on one session interleave like two people typing into the same chat.",
-      inputSchema: AskAssistantInput,
-    },
-    async (rawInput) => {
-      const parsedInput = AskAssistantInput.parse(rawInput);
-      const project = await resolveProject(parsedInput.project);
-      const agentPath = await resolveSessionAgentPath();
+  if (input.toolOptions.withAgent) {
+    server.registerTool(
+      "ask_assistant",
+      {
+        title: "Ask assistant",
+        description:
+          "Ask this project's assistant agent in plain language. Blocks until the assistant replies (up to two minutes) and returns its reply. Conversation history lives on this MCP session's agent stream; asks are a plain chat conversation, so send them one at a time — concurrent asks on one session interleave like two people typing into the same chat.",
+        inputSchema: AskAssistantInput,
+      },
+      async (rawInput) => {
+        const parsedInput = AskAssistantInput.parse(rawInput);
+        const project = await resolveProject(parsedInput.project);
+        const agentPath = await resolveSessionAgentPath();
 
-      // agents.ask appends the message and waits for the agent's next chat
-      // reply server-side. Reply matching is by order on the session stream,
-      // not per-request correlation — the session belongs to this one MCP
-      // client, so interleaved replies are the client's own doing (same trust
-      // model as one person running exec_js mid-conversation).
-      let reply;
-      try {
-        const root = engineBatchSession(input.context).authenticate({
-          type: "admin-secret",
-          secret: requireAdminSecret(input.context),
-        });
-        const projectItx = await root.projects.get(project.id);
-        await ensureMcpSessionAgentReady({ agentPath, projectItx });
-        reply = await projectItx.agents.get(agentPath).ask({
-          message: parsedInput.message,
-          origin: "mcp",
-          timeoutMs: ASK_ASSISTANT_TIMEOUT_MS,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `The assistant did not reply in time: ${message}. The session transcript is the ${agentPath} stream.`,
-            },
-          ],
-          isError: true,
-        };
-      }
+        // agents.ask appends the message and waits for the agent's next chat
+        // reply server-side. Reply matching is by order on the session stream,
+        // not per-request correlation — the session belongs to this one MCP
+        // client, so interleaved replies are the client's own doing (same trust
+        // model as one person running exec_typescript mid-conversation).
+        let reply;
+        try {
+          const projectItx = await projectItxFor(project.id);
+          await ensureMcpSessionAgentReady({ agentPath, projectItx });
+          reply = await projectItx.agents.get(agentPath).ask({
+            message: parsedInput.message,
+            origin: "mcp",
+            timeoutMs: ASK_ASSISTANT_TIMEOUT_MS,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `The assistant did not reply in time: ${message}. The session transcript is the ${agentPath} stream.`,
+              },
+            ],
+            isError: true,
+          };
+        }
 
-      const message = reply.payload?.message;
-      if (typeof message !== "string" || message.trim() === "") {
+        const message = reply.payload?.message;
+        if (typeof message !== "string" || message.trim() === "") {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Assistant reply event ${reply.offset} did not include a message. The session transcript is the ${agentPath} stream.`,
+              },
+            ],
+            isError: true,
+          };
+        }
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Assistant reply event ${reply.offset} did not include a message. The session transcript is the ${agentPath} stream.`,
-            },
-          ],
-          isError: true,
+          content: [{ type: "text" as const, text: message }],
+          isError: false,
         };
-      }
-      return {
-        content: [{ type: "text" as const, text: message }],
-        isError: false,
-      };
-    },
-  );
+      },
+    );
+  }
 
   return server;
 }
@@ -276,8 +262,17 @@ async function resolveMcpAuth(input: {
     });
   }
 
-  const accessToken = await resolveOAuthAccessToken({ ...input, auth, audiences: mcpAudiences });
-  if (!accessToken) return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
+  const resolution = await resolveOAuthAccessToken({ ...input, auth, audiences: mcpAudiences });
+  if (resolution.status === "unavailable") {
+    return new Response("Authentication service unavailable.", {
+      status: 503,
+      headers: { ...mcpCorsHeaders, "Retry-After": "5" },
+    });
+  }
+  if (resolution.status === "invalid") {
+    return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
+  }
+  const accessToken = resolution.accessToken;
   const audiences = Array.isArray(accessToken.aud) ? accessToken.aud : [accessToken.aud];
   if (!audiences.some((audience) => mcpAudiences.includes(audience))) {
     return unauthorizedMcpResponse(input, "Bearer token is not scoped to this MCP resource");
@@ -317,56 +312,69 @@ async function resolveMcpAuth(input: {
 // Iterate Auth issues a JWT access token only when the client requests an RFC
 // 8707 `resource` (audience); clients that omit it — Grok's connector, generic
 // MCP clients — get an OPAQUE token instead. The JWT verifier can't read those,
-// so fall back to the auth worker's introspection endpoint, which validates the
+// so fall back to auth's private RPC introspection method, which validates the
 // opaque token against its (hashed) store and reconstructs the same claims.
 async function resolveOAuthAccessToken(input: {
   auth: ReturnType<typeof createIterateAuth>;
   context: RequestContext;
+  env: Env;
   request: Request;
   audiences: readonly string[];
-}): Promise<AccessTokenClaims | null> {
+}): Promise<
+  | { status: "authenticated"; accessToken: AccessTokenClaims }
+  | { status: "invalid" }
+  | { status: "unavailable" }
+> {
   const jwtAccessToken = await input.auth.authenticateBearer({ headers: input.request.headers });
-  if (jwtAccessToken) return jwtAccessToken;
+  if (jwtAccessToken) return { status: "authenticated", accessToken: jwtAccessToken };
 
   const bearerToken = readBearerToken(input.request.headers.get("authorization"));
-  if (!bearerToken) return null;
+  if (!bearerToken) return { status: "invalid" };
 
   try {
-    const result = await createAuthWorkerServiceClient(
-      input.context,
-    ).internal.oauth.introspectAccessToken({
+    const result = await input.env.AUTH.introspectAccessToken({
       token: bearerToken,
       audiences: [...input.audiences],
     });
     if (!result.active) {
-      input.context.log.info("os.mcp.opaque_token_inactive");
-      input.context.log.set({ mcpAuth: { opaqueIntrospection: result.reason ?? "inactive" } });
-      return null;
+      input.context.log.info("os.mcp.opaque_token_inactive", {
+        mcpAuth: {
+          opaqueIntrospection: diagnosticIdentifier(result.reason) ?? "inactive",
+        },
+      });
+      return { status: "invalid" };
     }
 
     return {
-      sub: result.sub,
-      sid: result.sid,
-      iss: result.iss,
-      aud: result.aud,
-      iat: result.iat,
-      exp: result.exp,
-      scope: result.scope,
-      scopes: result.scopes,
-      [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: result.organizations,
-      [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: result.projects,
-      [ITERATE_IS_ADMIN_CLAIM]: result.isAdmin,
-      [ITERATE_ROLE_CLAIM]: result.role,
+      status: "authenticated",
+      accessToken: {
+        sub: result.sub,
+        sid: result.sid,
+        iss: result.iss,
+        aud: result.aud,
+        iat: result.iat,
+        exp: result.exp,
+        scope: result.scope,
+        scopes: result.scopes,
+        [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: result.organizations,
+        [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: result.projects,
+        [ITERATE_IS_ADMIN_CLAIM]: result.isAdmin,
+        [ITERATE_ROLE_CLAIM]: result.role,
+      },
     };
   } catch (error) {
-    input.context.log.info("os.mcp.opaque_introspection_error");
-    input.context.log.set({
+    input.context.log.info("os.mcp.opaque_introspection_error", {
       mcpAuth: {
-        opaqueIntrospectionError: error instanceof Error ? error.message : String(error),
+        opaqueIntrospectionErrorType: error instanceof Error ? "Error" : "NonErrorThrowable",
       },
     });
-    return null;
+    return { status: "unavailable" };
   }
+}
+
+function diagnosticIdentifier(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/u.test(value) ? value : undefined;
 }
 
 function createMcpIterateAuth(
@@ -394,7 +402,6 @@ function readAccessTokenScopes(accessToken: { scope?: string; scopes?: string[] 
 }
 
 async function resolveToolProject(
-  context: RequestContext,
   projects: ProjectGrant[],
   requestedProject: string | undefined,
   options: { authType: McpAuth["authType"]; requireProjectInput: boolean },
@@ -411,11 +418,7 @@ async function resolveToolProject(
     // KV directory cache in front of the auth worker (also resolves
     // admin-lane projects, which are primed at create but never registered
     // with the auth directory).
-    const record = await readProjectBySlug(
-      context.config,
-      env.PROJECT_DIRECTORY,
-      normalizedRequestedProject,
-    );
+    const record = await readProjectBySlug(env.PROJECT_DIRECTORY, normalizedRequestedProject);
     if (!record) throw new Error(`Project not found: ${normalizedRequestedProject}`);
     return { id: record.id, slug: record.slug };
   }
@@ -425,21 +428,6 @@ async function resolveToolProject(
     throw new Error(`MCP token does not grant access to project: ${normalizedRequestedProject}`);
   }
   return project;
-}
-
-function requireAdminSecret(context: RequestContext): string {
-  const secret = context.config.adminApiSecret?.exposeSecret();
-  if (!secret) throw new Error("Admin API secret is not configured.");
-  return secret;
-}
-
-function engineBatchSession(context: RequestContext) {
-  const baseUrl = (context.config.baseUrl ?? "").replace(/\/+$/, "");
-  if (!baseUrl) throw new Error("baseUrl is not configured");
-  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- one-shot pipelined batch per exec_js call; no socket lifecycle to manage.
-  return newHttpBatchRpcSession<UnauthenticatedOs>(
-    new Request(`${baseUrl}/api`, { method: "POST" }),
-  );
 }
 
 function requireScope(auth: McpAuth, scope: string) {
@@ -491,15 +479,6 @@ function unauthorizedMcpResponse(
       "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl}"`,
     },
   });
-}
-
-function mcpExecutionContext(context: RequestContext): ExecutionContext {
-  return {
-    exports: {} as Cloudflare.Exports,
-    passThroughOnException() {},
-    props: {},
-    waitUntil: (promise: Promise<unknown>) => context.waitUntil(promise),
-  } as ExecutionContext;
 }
 
 function withCorsHeaders(response: Response) {

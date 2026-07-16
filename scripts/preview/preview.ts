@@ -9,11 +9,20 @@ import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
+import { dummyPetshopEnvs } from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
-import { OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
+import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
+import { OS_PREVIEW_LANE_TIMEOUT_SECS } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
+import {
+  parseWorkerSizeFromDeployOutput,
+  parseWorkerSizeStatusDescription,
+  renderWorkerSizeCell,
+  workerSizeStatusContext,
+  type WorkerSizeInfo,
+} from "./worker-size.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -24,29 +33,115 @@ type PullRequestCommandOptions = {
   pullRequestNumber?: number;
 };
 
+/** Label a draft PR can wear to get previews despite the draft policy below. */
+const previewOptInLabel = "preview";
+
+const draftPreviewNotice = [
+  "This PR is a draft, so it doesn't claim a preview slot.",
+  `To get previews: add the \`${previewOptInLabel}\` label, mark the PR ready for review, or dispatch the Cloudflare Previews workflow for a one-off run.`,
+].join(" ");
+
 /**
- * Deploy affected preview apps for a pull request without running preview e2e.
+ * Draft PRs don't hold preview slots unless they ask: there are only nine
+ * slots and drafts are the default for agent-opened PRs, so a busy night of
+ * drafts was exhausting the fleet before any human asked for a preview.
+ * "Asking" = the `preview` label, marking ready for review, or an explicit
+ * `--allow-draft` run (the workflow_dispatch path). A draft that still holds
+ * a slot per the semaphore (it was ready once, or opted out again) gives it
+ * back.
  */
-export async function deploy(
-  options: PullRequestCommandOptions & {
-    /**
-     * Deploy every preview app regardless of the diff. Diff selection only
-     * redeploys apps affected since their LAST DEPLOYED head, so unaffected
-     * apps keep an older recorded head and the test lane then skips them
-     * ("stale — deploy has not run for the current head yet"). A caller that
-     * needs the whole fleet testable at the current head — the flake-hunt
-     * marathon preflight — uses this to reunify the fleet explicitly instead
-     * of relying on the commit happening to touch a fleet-shared path.
-     */
-    allApps?: boolean;
-  } = {},
-) {
+function decideDraftPreviewPolicy(input: {
+  allowDraft: boolean;
+  holdsSlot: boolean;
+  isDraft: boolean;
+  labels: string[];
+}): "deploy" | "skip" | "teardown" {
+  if (!input.isDraft || input.allowDraft || input.labels.includes(previewOptInLabel)) {
+    return "deploy";
+  }
+
+  return input.holdsSlot ? "teardown" : "skip";
+}
+
+type DeployCommandOptions = PullRequestCommandOptions & {
+  /**
+   * Deploy every preview app regardless of the diff. Diff selection only
+   * redeploys apps affected since their LAST DEPLOYED head, so unaffected
+   * apps keep an older recorded head and the test lane leaves them out of
+   * its testable set (stale — deploy has not run for the current head). A
+   * caller that needs the whole fleet testable at the current head — the
+   * flake-hunt marathon preflight — uses this to reunify the fleet
+   * explicitly instead of relying on the commit happening to touch a
+   * fleet-shared path.
+   */
+  allApps?: boolean;
+  /**
+   * Deploy even when the PR is a draft without the `preview` label. Draft
+   * PRs otherwise skip previews (or give their slot back); an explicit
+   * invocation — workflow_dispatch, the flake-hunt marathon, a human at a
+   * terminal — is an ask, so those callers pass this.
+   */
+  allowDraft?: boolean;
+};
+
+/** One PR context + runtime shared by every phase of a preview command. */
+async function resolvePreviewCommandSetup(options: PullRequestCommandOptions) {
   const runtime = createPreviewRuntime();
   const context = await resolvePullRequestPreviewContext({
     commandEnvironment: runtime.commandEnvironment,
     githubToken: resolveGithubToken(options, runtime.commandEnvironment),
     pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
   });
+  return { context, runtime };
+}
+
+/**
+ * Deploy affected preview apps for a pull request without running preview e2e.
+ */
+export async function deploy(options: DeployCommandOptions = {}) {
+  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  return await deployPreviewApps({ context, options, runtime });
+}
+
+/**
+ * Run preview e2e against deployed apps recorded in the managed PR preview section.
+ */
+export async function test(options: PullRequestCommandOptions = {}) {
+  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  return await testPreviewApps({ context, runtime });
+}
+
+/**
+ * Deploy then test, in one process — the shape CI runs. The two phases share
+ * ONE resolved PR context (head sha) and the deploy's final recorded state,
+ * so the class of two-step hazards — a push racing into the gap between the
+ * deploy and test steps, and the skip machinery needed to explain it — is
+ * structurally gone. The lease is shared through the semaphore itself (same
+ * holder; test's adopt re-issues the slot deploy just claimed), never
+ * through a handed-around copy. A deploy failure throws before any test
+ * runs; a draft skip skips both phases.
+ */
+export async function run(options: DeployCommandOptions = {}) {
+  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  const deployResult = await deployPreviewApps({ context, options, runtime });
+  if ("skippedReason" in deployResult && deployResult.skippedReason === "draft") {
+    return deployResult;
+  }
+
+  // A "nothing to deploy" skip still tests: the recorded deployments ARE the
+  // current head's code, and their green must be earned, not assumed.
+  return await testPreviewApps({ context, runtime, state: deployResult.state });
+}
+
+async function deployPreviewApps({
+  context,
+  options,
+  runtime,
+}: {
+  context: PullRequestPreviewContext;
+  options: DeployCommandOptions;
+  runtime: PreviewRuntime;
+}) {
   logPreview(
     `deploy for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
@@ -54,9 +149,65 @@ export async function deploy(
   const current = await readCloudflarePreviewState(context);
   logPreview(
     current.state.environmentConfigLease
-      ? `PR body records lease ${current.state.environmentConfigLease.slug} (doppler config ${current.state.environmentConfigLease.dopplerConfig}, recorded until ${formatUntil(current.state.environmentConfigLease.leasedUntil)})`
-      : "PR body records no lease — this PR has no slot yet",
+      ? `PR body shows slot ${current.state.environmentConfigLease.slug} (doppler config ${current.state.environmentConfigLease.dopplerConfig}) — display only; the semaphore decides ownership`
+      : "PR body shows no slot — this PR has not recorded a deploy yet",
   );
+
+  // The semaphore is the single source of lease truth: the draft policy's
+  // "does this PR hold a slot?" question goes there, not to the PR body,
+  // whose copy can be stale (a cancelled run can claim without recording).
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const holder = pullRequestHolder(context.pullRequestNumber);
+  const heldSlots = await listSlotsLeasedToHolder(semaphore, holder);
+  const draftPolicy = decideDraftPreviewPolicy({
+    allowDraft: options.allowDraft === true,
+    holdsSlot: heldSlots.length > 0,
+    isDraft: context.pullRequestIsDraft,
+    labels: context.pullRequestLabels,
+  });
+  if (draftPolicy === "skip") {
+    logPreview(
+      `draft PR without the ${previewOptInLabel} label — not claiming a preview slot (mark ready, add the label, or pass --allow-draft)`,
+    );
+    const update = await updatePreviewState(context, (state) => ({
+      ...state,
+      notice: draftPreviewNotice,
+    }));
+    return {
+      ok: true,
+      skipped: true,
+      skippedReason: "draft",
+      state: update.state,
+    };
+  }
+  if (draftPolicy === "teardown") {
+    logPreview(
+      `draft PR without the ${previewOptInLabel} label holds ${heldSlots.map((slot) => slot.slug).join(", ")} — tearing down and releasing the slot (mark ready, add the label, or pass --allow-draft to keep previews)`,
+    );
+    const cleanupResult = await cleanupPreviewForPullRequest({ ...runtime, context });
+    if (!cleanupResult.ok) {
+      // ok=false means the lease RELEASE failed (a failed teardown alone
+      // still releases and reports ok — see cleanupPreviewForPullRequest).
+      throw new Error("Failed to release the draft PR's preview slot lease.");
+    }
+    // Pin the post-teardown state in this write: the GitHub read inside
+    // updatePreviewState can be stale (read-after-write lag) and would
+    // otherwise resurrect the released lease and app rows — and this run's
+    // test step would then re-acquire the slot the draft just gave up.
+    const update = await updatePreviewState(context, (state) => ({
+      ...state,
+      ...cleanupResult.state,
+      notice: draftPreviewNotice,
+    }));
+    return {
+      ok: true,
+      skipped: true,
+      skippedReason: "draft",
+      releasedLease: cleanupResult.released,
+      state: update.state,
+    };
+  }
+
   const selectedApps = options.allApps
     ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
       Object.values(cloudflarePreviewApps))
@@ -67,7 +218,7 @@ export async function deploy(
 
   if (selectedApps.length === 0) {
     logPreview(
-      "nothing to deploy: no preview apps are affected by this diff and no failed apps need a retry — leaving lease and PR body untouched",
+      "nothing to deploy: no preview apps are affected by this diff, no failed apps need a retry, and every recorded app is still serving — leaving lease and PR body untouched",
     );
     return {
       ok: true,
@@ -84,12 +235,8 @@ export async function deploy(
   let environmentConfigLease: EnvironmentConfigLease;
   try {
     environmentConfigLease = await claimEnvironmentConfigLease({
-      createPreviewSemaphoreResourceClient: runtime.createPreviewSemaphoreResourceClient,
-      fetchPullRequestState: makePullRequestStateFetcher(
-        context.githubToken,
-        context.repositoryFullName,
-      ),
-      holder: pullRequestHolder(context.pullRequestNumber),
+      eraseSlotData: makePreviewSlotDataEraser(runtime),
+      holder,
       leaseMs: defaultPreviewLeaseMs,
       // Surface the wait in the PR body the moment every slot is busy, not
       // only in workflow logs nobody has open.
@@ -102,7 +249,8 @@ export async function deploy(
           ].join("\n"),
         }));
       },
-      previousEnvironmentConfigLease: current.state.environmentConfigLease,
+      recordedSlug: current.state.environmentConfigLease?.slug ?? null,
+      semaphore,
       waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
     });
   } catch (error) {
@@ -141,9 +289,18 @@ export async function deploy(
       : null;
   const leaseUpdate = await updatePreviewState(context, (state) => ({
     ...state,
-    environmentConfigLease,
+    environmentConfigLease: toSlotDisplay(environmentConfigLease),
     notice: claimNotice,
   }));
+
+  // Best-effort: a missing or unreadable baseline only costs the "vs main"
+  // delta in the size column, never the deploy.
+  const workerSizeBaselines = await fetchMainWorkerSizeBaselines(context).catch(
+    (error): Record<string, WorkerSizeInfo> => {
+      logPreview(`worker-size baselines unavailable: ${formatPreviewErrorMessage(error)}`);
+      return {};
+    },
+  );
 
   let ok = true;
   let latestState = leaseUpdate.state;
@@ -159,8 +316,17 @@ export async function deploy(
       async (app) => {
         return await deployPreviewAppWithStatus({
           app,
-          commandEnvironment: runtime.commandEnvironment,
+          commandEnvironment: {
+            ...runtime.commandEnvironment,
+            // apps/os/scripts/deploy.ts turns this into
+            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so projects seeded on the
+            // preview install this head's pkg.pr.new `iterate` build, not
+            // @main. The sha, not @<pr>: pkg.pr.new PR refs are moving
+            // targets, while the sha pins the exact build this deploy shipped.
+            PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
+          },
           dopplerConfig: environmentConfigLease.dopplerConfig,
+          mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
           pullRequestHeadSha: context.pullRequestHeadSha,
           repositoryRoot: runtime.repositoryRoot,
           runUrl: context.workflowRunUrl,
@@ -177,7 +343,7 @@ export async function deploy(
     }
     const update = await updatePreviewState(context, (state) => ({
       ...state,
-      environmentConfigLease,
+      environmentConfigLease: toSlotDisplay(environmentConfigLease),
       notice: claimNotice,
       apps: {
         ...state.apps,
@@ -213,72 +379,113 @@ export async function deploy(
   return result;
 }
 
-/**
- * Run preview e2e against deployed apps recorded in the managed PR preview section.
- */
-export async function test(options: PullRequestCommandOptions = {}) {
-  const runtime = createPreviewRuntime();
-  const context = await resolvePullRequestPreviewContext({
-    commandEnvironment: runtime.commandEnvironment,
-    githubToken: resolveGithubToken(options, runtime.commandEnvironment),
-    pullRequestNumber: resolvePullRequestNumber(options, runtime.commandEnvironment),
-  });
+function resolvePreviewTestBaseUrlEnvironment({
+  app,
+  apps,
+  headSha,
+}: {
+  app: CloudflarePreviewApp;
+  apps: Partial<
+    Record<CloudflarePreviewAppSlug, { headSha?: string | null; publicUrl?: string | null }>
+  >;
+  headSha: string;
+}): string[] {
+  const requiredUrls = new Map<CloudflarePreviewAppSlug, string>();
+  requiredUrls.set(app.slug, app.previewTestBaseUrlEnvVar);
+  for (const [dependencySlug, environmentVariable] of Object.entries(
+    app.previewTestDependencyBaseUrlEnvVars ?? {},
+  )) {
+    if (environmentVariable) {
+      requiredUrls.set(CloudflarePreviewAppSlug.parse(dependencySlug), environmentVariable);
+    }
+  }
 
+  return [...requiredUrls].map(([appSlug, environmentVariable]) => {
+    const entry = apps[appSlug];
+    if (!entry?.publicUrl || entry.headSha !== headSha) {
+      throw new Error(
+        `Cannot test ${app.slug}: ${environmentVariable} requires ${appSlug} deployed at head ${headSha.slice(0, 7)}. Re-run preview deploy.`,
+      );
+    }
+    return `${environmentVariable}=${entry.publicUrl}`;
+  });
+}
+
+async function testPreviewApps({
+  context,
+  runtime,
+  state: knownState,
+}: {
+  context: PullRequestPreviewContext;
+  runtime: PreviewRuntime;
+  /**
+   * In-process state from a just-finished deploy (the `run` path). A fresh
+   * PR-body read can lag deploy's write (GitHub read-after-write lag) and
+   * would miss entries deploy just recorded; the shared state cannot.
+   * Standalone `test` reads the PR body instead.
+   */
+  state?: CloudflarePreviewState;
+}) {
   logPreview(
     `test for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
-  const current = await readCloudflarePreviewState(context);
-  const recordedLease = current.state.environmentConfigLease;
-  if (recordedLease == null) {
-    logPreview("PR body records no lease — nothing is deployed for this PR, skipping tests");
-    return {
-      ok: true,
-      skipped: true,
-      state: current.state,
-    };
-  }
-  logPreview(
-    `PR body records lease ${recordedLease.slug} (doppler config ${recordedLease.dopplerConfig}, recorded until ${formatUntil(recordedLease.leasedUntil)})`,
-  );
+  const recorded = knownState ?? (await readCloudflarePreviewState(context)).state;
 
-  const testableApps = Object.values(current.state.apps)
-    .filter((entry) => canRunPreviewTests(entry))
-    .filter((entry) => entry.headSha === context.pullRequestHeadSha)
-    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
-    .filter((app): app is PreviewAppRuntime => app != null);
-
-  if (testableApps.length === 0) {
-    logPreview(
-      [
-        "no apps are testable for this head sha — skipping tests. Recorded app states:",
-        ...Object.values(current.state.apps).map(
-          (entry) =>
-            `  ${entry.appSlug}: ${entry.status}, head ${entry.shortSha ?? "?"}${entry.headSha !== context.pullRequestHeadSha ? " (stale — deploy has not run for the current head yet)" : ""}`,
-        ),
-      ].join("\n"),
-    );
-    return {
-      ok: true,
-      skipped: true,
-      state: current.state,
-    };
-  }
-  logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
-
-  // Re-assert the slot before hammering it with e2e: if the lease expired and
-  // another PR took the slot, the deployment under test is no longer ours.
+  // The semaphore is the single source of lease truth: resolve ownership
+  // FIRST, from what the semaphore attributes to this holder right now. The
+  // PR body's slot record is display only — it never authorizes tests and is
+  // never a reason to skip them (a recorded copy once got nulled after a slot
+  // steal, and the next run then skipped "no lease" instead of seeing the
+  // steal).
   const holder = pullRequestHolder(context.pullRequestNumber);
-  const reasserted = await reassertEnvironmentConfigLease({
-    holder,
-    lease: recordedLease,
-    leaseMs: defaultPreviewLeaseMs,
-    semaphore: runtime.createPreviewSemaphoreResourceClient(),
-  });
-  if (!reasserted.ok) {
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const displaySlot = recorded.environmentConfigLease;
+  const environmentConfigLease =
+    (await adoptLeaseHeldBySemaphore({
+      holder,
+      leaseMs: defaultPreviewLeaseMs,
+      preferSlug: displaySlot?.slug ?? null,
+      semaphore,
+    })) ??
+    (await retakeRecordedSlotIfFree({
+      holder,
+      leaseMs: defaultPreviewLeaseMs,
+      recordedSlug: displaySlot?.slug ?? null,
+      semaphore,
+    }));
+  if (!environmentConfigLease) {
+    const hasTestableRecordedApps = Object.values(recorded.apps).some((entry) =>
+      canRunPreviewTests(entry),
+    );
+    if (!displaySlot && !hasTestableRecordedApps) {
+      logPreview(
+        `the semaphore leases no slot to ${holder} and nothing is deployed — skipping tests`,
+      );
+      return {
+        ok: true,
+        skipped: true,
+        state: recorded,
+      };
+    }
+
+    // This PR has deployments on record but no slot: the slot was stolen (or
+    // lapsed and taken). Testing would hammer someone else's deployment, and
+    // skipping would hide the steal — refuse loudly instead.
+    const message = describeLostSlotOwnership({
+      currentHolder: displaySlot
+        ? await findEnvironmentConfigLeaseHolder(semaphore, displaySlot.slug)
+        : null,
+      displaySlot,
+      holder,
+    });
+    // Display only: keep the recorded slot visible under the notice so a
+    // human sees WHERE the takeover happened. Current-head apps are marked
+    // claim-failed so deploy's retry selection redeploys them; the next test
+    // run consults the semaphore again, so nothing written here can cause a
+    // skip.
     await updatePreviewState(context, (state) => ({
       ...state,
-      environmentConfigLease: null,
-      notice: `${reasserted.message} E2e was NOT run. Re-run preview deploy to claim a slot and redeploy.`,
+      notice: `${message} E2e was NOT run. Re-run preview deploy to claim a slot and redeploy.`,
       apps: Object.fromEntries(
         Object.entries(state.apps).map(([appSlug, entry]) => [
           appSlug,
@@ -288,7 +495,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
             ? {
                 ...entry,
                 status: "claim-failed" as const,
-                message: reasserted.message,
+                message,
                 updatedAt: new Date().toISOString(),
               }
             : entry,
@@ -296,35 +503,76 @@ export async function test(options: PullRequestCommandOptions = {}) {
       ),
     }));
     throw new Error(
-      `Refusing to run preview tests: ${reasserted.message} Re-run "pnpm preview deploy" to claim a slot and redeploy.`,
+      `Refusing to run preview tests: ${message} Re-run "pnpm preview deploy" to claim a slot and redeploy.`,
     );
   }
-
-  const environmentConfigLease = reasserted.lease;
+  // Keep the human-facing display in step with reality. Never read back as
+  // authority — the semaphore was just consulted above.
   if (
-    environmentConfigLease.leaseId !== recordedLease.leaseId ||
-    environmentConfigLease.leasedUntil !== recordedLease.leasedUntil
+    displaySlot?.slug !== environmentConfigLease.slug ||
+    displaySlot?.dopplerConfig !== environmentConfigLease.dopplerConfig
   ) {
     await updatePreviewState(context, (state) => ({
       ...state,
-      environmentConfigLease,
+      environmentConfigLease: toSlotDisplay(environmentConfigLease),
     }));
   }
+
+  const testableApps = Object.values(recorded.apps)
+    .filter((entry) => canRunPreviewTests(entry) && entry.headSha === context.pullRequestHeadSha)
+    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
+    .filter((app): app is PreviewAppRuntime => app != null);
+
+  if (testableApps.length === 0) {
+    // Deploy leaves nothing recorded at this head only when nothing
+    // app-affecting changed since the last fully tested deploy: its retry
+    // selection redeploys every non-green recorded app at the current head
+    // regardless of which head produced it (see
+    // selectPreviewAppsNeedingRetry), so any app still at an older head is a
+    // green whose results stand. `preview run` shares one resolved head
+    // between the deploy and test phases, so the old two-step hazard — a
+    // push racing into the gap and a green check describing a commit that
+    // never ran — cannot reach this branch there. A standalone `test` just
+    // reports the skip; the flake-hunt loop already treats any skip as "not
+    // a green run".
+    const notice = `Preview e2e skipped for head ${context.pullRequestHeadSha.slice(0, 7)}: no app is recorded at this head — nothing app-affecting changed since the last fully tested deploy, so the recorded results below still stand. If this PR has never deployed for this head, run preview deploy first.`;
+    logPreview(notice);
+    await updatePreviewState(context, (state) => ({
+      ...state,
+      notice,
+    }));
+    return {
+      ok: true,
+      skipped: true,
+      skippedReason: "no-apps-at-current-head",
+      state: recorded,
+    };
+  }
+  logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
 
   // Preview e2e commands are full app-level suites. They run concurrently:
   // each app deploys its own workers, and the non-OS suites are seconds-long
   // smokes whose load is negligible next to the OS lanes.
   const maybeEntries = await mapWithConcurrency(testableApps, testableApps.length, async (app) => {
-    const existingEntry = current.state.apps[app.slug];
+    const existingEntry = recorded.apps[app.slug];
     if (!existingEntry?.publicUrl) {
       return null;
     }
+
+    const baseUrlEnvironment = resolvePreviewTestBaseUrlEnvironment({
+      app,
+      apps: recorded.apps,
+      headSha: context.pullRequestHeadSha,
+    });
 
     const startedAt = Date.now();
     logPreview(
       `test start: ${app.slug} against ${existingEntry.publicUrl} (doppler config ${environmentConfigLease.dopplerConfig})`,
     );
-    const testResult = await runCommandWithRetries({
+    // One attempt, deliberately: retries live in the individual test
+    // (docs/testing.md#retries-and-timeouts) — everything above only
+    // watches and fails.
+    const testResult = await runCommand({
       args: [
         "run",
         "--project",
@@ -333,13 +581,11 @@ export async function test(options: PullRequestCommandOptions = {}) {
         environmentConfigLease.dopplerConfig,
         "--",
         "env",
-        `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
+        ...baseUrlEnvironment,
         ...app.previewTestCommandArgs,
       ],
       command: "doppler",
       environment: runtime.commandEnvironment,
-      maxAttempts: defaultPreviewTestMaxAttempts,
-      retryDelayMs: defaultPreviewTestRetryDelayMs,
       signal: runtime.signal,
       workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
     });
@@ -413,7 +659,7 @@ export async function test(options: PullRequestCommandOptions = {}) {
 
   const result = {
     ok,
-    state: current.state,
+    state: recorded,
   };
 
   if (!result.ok) {
@@ -439,8 +685,21 @@ export async function cleanup(options: PullRequestCommandOptions = {}) {
     }),
   });
 
+  // Exit-code contract (the only consumer is the cleanup workflow's
+  // red/green — nothing gates on it): exit non-zero ONLY when the lease
+  // RELEASE failed, because a held lease leaks the slot for 24h and starves
+  // the fleet. A failed teardown/erase alone exits zero with a loud warning:
+  // the lease was released, the fleet is healthy, and the dirty slot
+  // self-heals — every acquire erases on entry (eraseAcquiredSlotOrGiveItBack).
   if (!result.ok) {
-    throw new Error("Failed to clean up Cloudflare preview apps.");
+    throw new Error(
+      "Failed to release the preview slot lease — it leaks until its 24h expiry. Re-run cleanup, or free it with `pnpm preview release --slot <N> --force`.",
+    );
+  }
+  if (result.teardownFailed) {
+    logPreview(
+      "cleanup exits 0 despite the failed teardown: the lease was released (fleet healthy) and the dirty slot is erased by its next acquire",
+    );
   }
 
   return result;
@@ -472,14 +731,11 @@ export async function assign(options: AssignOptions = {}) {
 
   const current = await readCloudflarePreviewState(context);
   const result = await assignEnvironmentConfigLease({
-    fetchPullRequestState: makePullRequestStateFetcher(
-      context.githubToken,
-      context.repositoryFullName,
-    ),
+    eraseSlotData: makePreviewSlotDataEraser(runtime),
     force: options.force,
     holder,
     leaseMs: defaultPreviewLeaseMs,
-    recordedLease: current.state.environmentConfigLease,
+    recordedSlug: current.state.environmentConfigLease?.slug ?? null,
     semaphore,
     wantedSlug,
   });
@@ -493,7 +749,7 @@ export async function assign(options: AssignOptions = {}) {
     : `Slot ${result.lease.slug} was re-acquired after this PR's lease lapsed — previous deployments there may have been replaced. Run preview deploy to redeploy.`;
   const update = await updatePreviewState(context, (state) => ({
     ...state,
-    environmentConfigLease: result.lease,
+    environmentConfigLease: toSlotDisplay(result.lease),
     notice: needsRedeploy
       ? `${redeployMessage} (preview assign at ${new Date().toISOString()})`
       : null,
@@ -530,52 +786,70 @@ export async function assign(options: AssignOptions = {}) {
 }
 
 /**
- * Show environment config lease inventory and active leases for PR previews.
+ * Show environment config lease inventory, cross-check holders against GitHub
+ * PR state, and explain why the fleet can look full even when only a handful
+ * of PRs are open (orphaned closed-PR leases, idle holds, draft opt-ins, …).
+ *
+ *   doppler run --project _shared --config prd -- pnpm preview status
  */
-export async function status() {
+type StatusOptions = {
+  /** GitHub token. Defaults to GITHUB_TOKEN or `gh auth token`. */
+  githubToken?: string;
+  /** Hours without a deploy/test renewal before a hold counts as idle. */
+  minIdleHours?: number;
+};
+
+export async function status(options: StatusOptions = {}) {
   const runtime = createPreviewRuntime();
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
-  const now = Date.now();
-  const resources = await semaphore.list({
-    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  const { githubToken, repositoryFullName, fetchPullRequestState } = resolvePreviewGithubContext(
+    runtime,
+    options,
+  );
+  if (!fetchPullRequestState) {
+    logPreview(
+      "no GITHUB_TOKEN / gh auth — cannot check whether pr-* holders are closed or list open PRs; lease table is still live from the semaphore",
+    );
+  }
+
+  const minIdleHours = options.minIdleHours ?? defaultReclaimMinIdleHours;
+  const slots = await classifyEnvironmentConfigLeases({
+    fetchPullRequestState,
+    minIdleMs: minIdleHours * 3_600_000,
+    semaphore,
   });
-  const available = resources
-    .filter((resource) => resource.leaseState === "available")
-    .map((resource) => ({
-      data: resource.data,
-      slug: resource.slug,
-      lastReleasedAt:
-        resource.lastReleasedAt === null ? null : new Date(resource.lastReleasedAt).toISOString(),
-    }));
-  const leased = resources
-    .filter((resource) => resource.leaseState === "leased")
-    .map((resource) => ({
-      data: resource.data,
-      slug: resource.slug,
-      holder: resource.holder ?? null,
-      pullRequestUrl: holderPullRequestUrl(resource.holder),
-      leasedUntil:
-        resource.leasedUntil === null ? null : new Date(resource.leasedUntil).toISOString(),
-      expiresInMs: resource.leasedUntil === null ? null : resource.leasedUntil - now,
-      lastAcquiredAt:
-        resource.lastAcquiredAt === null ? null : new Date(resource.lastAcquiredAt).toISOString(),
-    }))
-    .sort((left, right) => {
-      if (left.leasedUntil === null) return 1;
-      if (right.leasedUntil === null) return -1;
-      return left.leasedUntil.localeCompare(right.leasedUntil);
-    });
+  const openPullRequests = githubToken
+    ? await listOpenPullRequestsForPreviewDiagnosis(githubToken, repositoryFullName)
+    : [];
+  const diagnosis = diagnosePreviewFleetCapacity({ openPullRequests, slots });
 
   return {
-    checkedAt: new Date(now).toISOString(),
+    checkedAt: new Date().toISOString(),
     semaphoreBaseUrl: defaultSemaphoreBaseUrl,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-    total: resources.length,
-    availableCount: available.length,
-    leasedCount: leased.length,
-    nextLeaseExpiryAt: leased[0]?.leasedUntil ?? null,
-    available,
-    leased,
+    total: slots.length,
+    availableCount: diagnosis.availableCount,
+    leasedCount: diagnosis.leasedCount,
+    minIdleHours,
+    nextLeaseExpiryAt: diagnosis.nextLeaseExpiryAt,
+    slots,
+    openPullRequests: openPullRequests.map((pullRequest) => ({
+      number: pullRequest.number,
+      title: pullRequest.title,
+      url: pullRequest.url,
+      isDraft: pullRequest.isDraft,
+      labels: pullRequest.labels,
+      previewEligible: pullRequestWouldClaimPreviewSlot(pullRequest),
+      holdsSlot: diagnosis.holdersWithOpenPrs.includes(pullRequest.number),
+    })),
+    diagnosis,
+    // Surface reclaim commands at the top level too, matching `reclaim`'s own
+    // output shape. Must be a fresh array: the trpc-cli renderer prints any
+    // value it has already seen elsewhere in the tree (here, the same array
+    // under `diagnosis.reclaimCommands`) as the literal string "[Circular]",
+    // even though it is only shared, not truly cyclic.
+    reclaimable: [...diagnosis.reclaimCommands],
+    note: diagnosis.summary,
   };
 }
 
@@ -646,6 +920,8 @@ export async function acquire(options: AcquireOptions) {
 
 /**
  * Release a preview slot lease. Pass the lease id from `preview acquire`, or --force to release someone else's (stale) lease.
+ * Does NOT erase the slot's data — that's safe, because every acquire erases
+ * on entry. Use `preview reclaim --slot N` to take back AND wipe in one step.
  */
 type ReleaseOptions = {
   /** Preview slot: a number (9) or slug (preview-9 / preview_9). */
@@ -691,15 +967,36 @@ export async function release(options: ReleaseOptions) {
   return { released: true, slug, evictedHolder: currentHolder };
 }
 
-/**
- * Resolve slot contention: report which leased slots are active/idle/orphaned, and take a non-active one back with --slot.
- */
+function requireExplicitReclaimForce(
+  slot: {
+    holder: string | null;
+    lastUsedAgo: string | null;
+    leasedUntil: string | null;
+    pullRequestUrl: string | null;
+    slug: string;
+    verdict: "active" | "available" | "idle" | "orphaned";
+  },
+  force: boolean | undefined,
+) {
+  if (force) return;
+
+  throw new Error(
+    [
+      `${slot.slug} is ${slot.verdict} and still leased by ${slot.holder ?? "unknown holder"}${slot.pullRequestUrl ? ` (${slot.pullRequestUrl})` : ""}:`,
+      `  last used ${slot.lastUsedAgo ?? "recently"}, lease expires ${slot.leasedUntil ?? "soon"}.`,
+      "Taking it would ERASE the slot's data and may race its owner's deploy or close-triggered cleanup.",
+      "Re-run with --force only after verifying no deploy or cleanup is still running.",
+    ].join("\n"),
+  );
+}
+
+/** Report slot contention or explicitly reclaim a held slot after checking its lifecycle. */
 type ReclaimOptions = {
   /** Preview slot to reclaim (number or slug). Omit for a report of every slot's verdict. */
   slot?: string;
   /** Hours without a deploy/test renewal before a hold counts as idle. */
   minIdleHours?: number;
-  /** Also reclaim a slot whose holder is still active. Avoid: this clobbers live work. */
+  /** Required to evict any held slot after verifying no deploy or cleanup is still running. */
   force?: boolean;
   /** GitHub token used to check whether pr-N holders are closed. Defaults to GITHUB_TOKEN. */
   githubToken?: string;
@@ -708,17 +1005,10 @@ type ReclaimOptions = {
 export async function reclaim(options: ReclaimOptions = {}) {
   const runtime = createPreviewRuntime();
   const semaphore = runtime.createPreviewSemaphoreResourceClient();
-  const githubToken =
-    options.githubToken?.trim() || runtime.commandEnvironment.GITHUB_TOKEN?.trim();
-  const fetchPullRequestState = githubToken
-    ? makePullRequestStateFetcher(
-        githubToken,
-        runtime.commandEnvironment.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName,
-      )
-    : null;
+  const { fetchPullRequestState } = resolvePreviewGithubContext(runtime, options);
   if (!fetchPullRequestState) {
     logPreview(
-      "no GITHUB_TOKEN available — cannot check whether pr-* holders are closed, so verdicts are idle-time only (orphaned PRs show as idle/active)",
+      "no GITHUB_TOKEN / gh auth — cannot check whether pr-* holders are closed, so verdicts are idle-time only (orphaned PRs show as idle/active)",
     );
   }
 
@@ -736,8 +1026,8 @@ export async function reclaim(options: ReclaimOptions = {}) {
       slots: report,
       reclaimable: report
         .filter((slot) => slot.verdict === "orphaned" || slot.verdict === "idle")
-        .map((slot) => `pnpm preview reclaim --slot ${slot.slug}`),
-      note: "orphaned = holder PR is closed, so its cleanup failed; idle = holder hasn't deployed/tested for a while; taking an active slot needs --force and clobbers live work",
+        .map((slot) => `pnpm preview reclaim --slot ${slot.slug} --force`),
+      note: "orphaned = holder PR is closed, so its cleanup may have failed; idle = holder hasn't deployed/tested for a while. Reclaiming ERASES the slot's data and always requires explicit --force after checking that no deploy or cleanup is running.",
     };
   }
 
@@ -749,29 +1039,176 @@ export async function reclaim(options: ReclaimOptions = {}) {
   if (slot.verdict === "available") {
     return { released: false, slug, message: `${slug} is already available.` };
   }
-  if (slot.verdict === "active" && !options.force) {
-    throw new Error(
-      [
-        `${slug} is actively held by ${slot.holder ?? "unknown holder"}${slot.pullRequestUrl ? ` (${slot.pullRequestUrl})` : ""}:`,
-        `  last used ${slot.lastUsedAgo ?? "recently"}, lease expires ${slot.leasedUntil ?? "soon"}.`,
-        "Taking it would clobber live work. Re-run with --force only after checking with the holder.",
-      ].join("\n"),
-    );
-  }
+  requireExplicitReclaimForce(slot, options.force);
 
   logPreview(
-    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""})`,
+    `reclaiming ${slug} from ${slot.holder ?? "unknown holder"} (${slot.verdict}${slot.lastUsedAgo ? `, last used ${slot.lastUsedAgo}` : ""}) — erasing its data before returning it to the pool`,
   );
+  // Take the slot under OUR OWN fresh lease before erasing. The old holder's
+  // lease could expire mid-erase (the verdict is a snapshot), and destroying
+  // data on a slot another PR just acquired would wreck an innocent tenant —
+  // a fresh lease parks the slot for the whole wipe. An erase failure leaves
+  // that lease in place (parked and visible in this report) and throws
+  // rather than returning a dirty slot to the pool.
+  const holder = `reclaim-${userInfo().username}`;
+  const taken = await semaphore.acquireSpecific({
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+    slug,
+    leaseMs: 30 * 60_000,
+    holder,
+    force: true,
+  });
+  if (!taken) {
+    throw new Error(`Could not take ${slug} from ${slot.holder ?? "its holder"} — retry.`);
+  }
+  await makePreviewSlotDataEraser(runtime)({ dopplerConfig: slot.dopplerConfig, slug });
   const result = await semaphore.release({
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-    force: true,
+    leaseId: taken.leaseId,
   });
   return {
     released: result.released,
+    erased: true,
     slug,
     reclaimedFrom: slot.holder,
     verdict: slot.verdict,
+  };
+}
+
+/** A slot whose lease has passed its expiry — a GC sweep candidate. */
+type ExpiredLeaseForGc = {
+  slug: string;
+  holder: string | null;
+  dopplerConfig: string;
+  leasedUntil: number;
+};
+
+/**
+ * Pure selection for {@link gc}: the slots whose lease is leased but past its
+ * expiry. Lease expiry is the sole GC signal — an expired lease means no live
+ * tenant, so the whole slot is fair game (available slots are cleaned by their
+ * next acquirer, not here). See docs/preview-resource-gc.md.
+ */
+function selectExpiredLeasesForGc(
+  resources: ReadonlyArray<{
+    data: Record<string, unknown>;
+    holder?: string | null;
+    leaseState: "available" | "leased";
+    leasedUntil: number | null;
+    slug: string;
+  }>,
+  now: number,
+): ExpiredLeaseForGc[] {
+  const expired: ExpiredLeaseForGc[] = [];
+  for (const resource of resources) {
+    if (resource.leaseState !== "leased" || resource.leasedUntil === null) continue;
+    if (resource.leasedUntil > now) continue;
+    expired.push({
+      slug: resource.slug,
+      holder: resource.holder ?? null,
+      // Same fallback classifyEnvironmentConfigLeases uses: the slug-derived
+      // config (preview-3 → preview_3) for a slot with no data payload yet.
+      dopplerConfig:
+        typeof resource.data.dopplerConfig === "string" && resource.data.dopplerConfig.trim()
+          ? resource.data.dopplerConfig.trim()
+          : resource.slug.replaceAll("-", "_"),
+      leasedUntil: resource.leasedUntil,
+    });
+  }
+  return expired;
+}
+
+/** Report what would be reclaimed without touching anything, or hold length. */
+type GcOptions = {
+  /** Print the plan without acquiring, erasing, or releasing anything. */
+  dryRun?: boolean;
+  /** Minutes to hold each slot while erasing it (default 30). */
+  holdMinutes?: number;
+};
+
+/**
+ * Garbage-collect preview slots whose lease has expired: for each, take it
+ * under a fresh lease, erase its data, and release it — unattended and
+ * rate-limited (runs sequentially). This is the lazy half of the model in
+ * docs/preview-resource-gc.md: releasing a slot never waits on teardown, and
+ * this scheduled sweep (the Cloudflare Preview GC Depot cron) reclaims whatever
+ * the fast path — PR-close cleanup — did not.
+ *
+ * Lease expiry is the ONLY signal; the take is a NON-force acquire, which
+ * succeeds only while the slot is genuinely free. So if a PR re-leased the slot
+ * between our snapshot and the take, the acquire returns null and we skip it
+ * (that PR's own erase-on-acquire cleans it) — no race, no verdict logic. An
+ * erase failure still releases the slot: its next taker erases first, so a
+ * half-wiped slot is self-healing and must not be parked out of the pool.
+ */
+export async function gc(options: GcOptions = {}) {
+  const runtime = createPreviewRuntime();
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const now = Date.now();
+  const resources = await semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
+  const expired = selectExpiredLeasesForGc(resources, now);
+  const holdMs = (options.holdMinutes ?? 30) * 60_000;
+  const eraseSlotData = makePreviewSlotDataEraser(runtime);
+
+  const outcomes: Array<{
+    slug: string;
+    action: "reclaimed" | "skipped" | "erase-failed" | "would-reclaim";
+    holder: string | null;
+    error?: string;
+  }> = [];
+  for (const slot of expired) {
+    if (options.dryRun) {
+      outcomes.push({ slug: slot.slug, action: "would-reclaim", holder: slot.holder });
+      continue;
+    }
+    const taken = await semaphore.acquireSpecific({
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      slug: slot.slug,
+      leaseMs: holdMs,
+      holder: "gc",
+    });
+    if (!taken) {
+      logPreview(`gc: ${slot.slug} was re-leased since the snapshot — leaving it to its tenant`);
+      outcomes.push({ slug: slot.slug, action: "skipped", holder: slot.holder });
+      continue;
+    }
+    try {
+      logPreview(
+        `gc: reclaiming ${slot.slug} — lease from ${slot.holder ?? "unknown"} expired ${formatDurationMs(now - slot.leasedUntil)} ago; erasing`,
+      );
+      await eraseSlotData({ dopplerConfig: slot.dopplerConfig, slug: slot.slug });
+      outcomes.push({ slug: slot.slug, action: "reclaimed", holder: slot.holder });
+    } catch (error) {
+      logPreview(
+        `gc: erase failed for ${slot.slug}; releasing it for its next taker to re-erase: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      outcomes.push({
+        slug: slot.slug,
+        action: "erase-failed",
+        holder: slot.holder,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      await semaphore.release({
+        slug: slot.slug,
+        type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+        leaseId: taken.leaseId,
+      });
+    }
+  }
+
+  const reclaimedCount = outcomes.filter((outcome) => outcome.action === "reclaimed").length;
+  logPreview(
+    `gc: ${expired.length} slot(s) past lease expiry, ${reclaimedCount} reclaimed${options.dryRun ? " (dry-run — nothing erased)" : ""}`,
+  );
+  return {
+    checkedAt: new Date(now).toISOString(),
+    leaseTtlHours: defaultPreviewLeaseMs / 3_600_000,
+    dryRun: options.dryRun ?? false,
+    expiredCount: expired.length,
+    reclaimedCount,
+    outcomes,
   };
 }
 
@@ -809,7 +1246,13 @@ export async function provisionAuthPreviewConfigs(
   };
 }
 
-export const CloudflarePreviewAppSlug = z.enum(["os", "semaphore", "auth", "streams-example-app"]);
+export const CloudflarePreviewAppSlug = z.enum([
+  "os",
+  "semaphore",
+  "auth",
+  "streams-example-app",
+  "dummy-petshop",
+]);
 
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 type CloudflarePreviewAppSlugType = CloudflarePreviewAppSlug;
@@ -826,12 +1269,27 @@ export type CloudflarePreviewApp = {
   deployCommandArgs: readonly [string, ...string[]];
   destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
+  /**
+   * Resolve non-secret public app config from the repo instead of Doppler.
+   * Most apps mirror this into APP_CONFIG_BASE_URL; apps whose envs.ts entry
+   * is the sole source of truth can opt into that source directly.
+   */
+  resolvePreviewAppConfig?: (dopplerConfig: string) => {
+    baseUrl: string;
+    projectHostnameBases?: string[];
+  };
   paths: string[];
   previewDependencies?: CloudflarePreviewAppSlug[];
+  /**
+   * Public URLs of deployed preview dependencies that the app's e2e command
+   * must receive. Values come from this PR's recorded deployment at the
+   * current head; a missing/stale dependency fails the lane instead of
+   * silently pointing at another environment.
+   */
+  previewTestDependencyBaseUrlEnvVars?: Partial<Record<CloudflarePreviewAppSlug, string>>;
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
   previewTestBaseUrlEnvVar: string;
-  previewTestArtifacts?: readonly [string, ...string[]];
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
    * Soft wall-clock budgets. When a phase runs slower than its budget we emit
@@ -877,6 +1335,9 @@ export type PreviewRetrySummary = {
  * (marathon loops) can't leak stale telemetry.
  */
 const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
+/** Same contract for the streams-example-app lane's vitest sub-lane. */
+const streamsExampleVitestRetryTelemetryFile =
+  "/tmp/os-preview-streams-example-vitest-retries.json";
 
 /** Reads the JSON written by RetryTelemetryReporter (vitest sub-lane). */
 async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetrySummary["retried"]> {
@@ -899,12 +1360,14 @@ async function readVitestRetryTelemetry(filePath: string): Promise<PreviewRetryS
 }
 
 /**
- * Reads Playwright's JSON report (already written by the root
- * playwright.config.ts json reporter). A retried spec has more than one
- * result attempt; Playwright reports "flaky" for passed-after-retry.
+ * Reads Playwright's JSON report (written by a config's json reporter — the
+ * root playwright.config.ts for the os specs, the app-local config for the
+ * streams example app). A retried spec has more than one result attempt;
+ * Playwright reports "flaky" for passed-after-retry.
  */
 async function readPlaywrightRetryTelemetry(
   filePath: string,
+  lane = "specs",
 ): Promise<PreviewRetrySummary["retried"]> {
   /** The subset of Playwright's JSON-reporter suite tree we walk. */
   type PlaywrightJsonSuite = {
@@ -924,7 +1387,7 @@ async function readPlaywrightRetryTelemetry(
         const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
         if (retryCount > 0) {
           retried.push({
-            lane: "specs",
+            lane,
             name: spec.title ?? "(unknown spec)",
             retryCount,
             passedAfterRetry: test.status === "flaky",
@@ -1000,7 +1463,6 @@ function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
 export const cloudflareAppSharedPaths = [
   "packages/shared/**",
   "packages/ui/**",
-  "packages/mock-http-proxy/**",
   // Dependency manifests: a lockfile bump, a catalog/patchedDependencies entry
   // (pnpm-workspace.yaml), or a pnpm patch can change every app's build
   // output. Selecting "no apps affected" for such a diff leaves the fleet's
@@ -1013,9 +1475,10 @@ export const cloudflareAppSharedPaths = [
 ] as const;
 
 export const cloudflarePreviewSharedPaths = [
-  // The preview deploy + e2e + cleanup lifecycle is one Depot CI workflow.
-  // Keep this in sync with that file's own `on.pull_request.paths` list: a
-  // change to the workflow (or the shared preview orchestration) triggers a
+  // The preview deploy + e2e lifecycle is one Depot CI workflow; cleanup on
+  // close lives in cloudflare-preview-cleanup.yml, which mirrors the same
+  // paths. Keep this in sync with both files' `on.pull_request.paths` lists:
+  // a change to the workflow (or the shared preview orchestration) triggers a
   // full-fleet preview.
   ".depot/workflows/cloudflare-previews.yml",
   ...cloudflareAppSharedPaths,
@@ -1049,18 +1512,21 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/os/**",
       "apps/auth/**",
       "apps/auth-contract/**",
+      "apps/dummy-petshop/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS bakes auth JWKS during deployment, so the slot's auth must deploy
-    // whenever OS does. Deploys run in parallel: the OS deploy polls the
-    // slot's auth worker for JWKS until it responds.
-    previewDependencies: ["auth"],
+    // OS bakes auth JWKS and binds auth's default RPC entrypoint, and its
+    // integration e2e talks to the slot's deployed dummy Petshop. Both must
+    // finish deploying before OS starts.
+    previewDependencies: ["auth", "dummy-petshop"],
     // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
     // ~60s as of 2026-07-02). Crossing them warns, never fails.
     previewDeployBudgetMs: 55_000,
     previewTestBudgetMs: 80_000,
-    previewTestArtifacts: ["test-results", "apps/os/test-results", "/tmp/os-e2e-*"],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
+    previewTestDependencyBaseUrlEnvVars: {
+      "dummy-petshop": "PETSHOP_BASE_URL",
+    },
     // The apps/os e2e Vitest suite runs its `node` project (engine + itx
     // catalogue matrix; the `browser` project is skipped here — the root
     // Playwright REPL specs cover the catalogue in-browser). It reads
@@ -1112,12 +1578,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // files were removed at the top of this script) for preview.ts to
         // fold into the PR body alongside Playwright's
         // playwright-results.json.
-        `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
+        `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
         // Capture the specs' exit without aborting (set -e) so the vitest lane
         // always finishes and its log is replayed — a Playwright flake must not
         // hide (or orphan) the vitest results.
-        "SPEC_OK=0; pnpm --dir ../.. spec || SPEC_OK=$?",
+        `SPEC_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?`,
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         "cat /tmp/os-preview-vitest.log",
         '[ "$E2E_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
@@ -1148,8 +1614,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
     // Semaphore bakes the slot's auth JWKS at deploy time (relying-party
-    // auth, same as OS), so the slot's auth must deploy whenever semaphore
-    // does. Deploys run in parallel: the JWKS fetch polls until auth serves.
+    // auth, same as OS), so auth must finish before semaphore starts.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
@@ -1157,7 +1622,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // targets prd and leaks through into this nested env — never the right
     // credential for a preview slot. Unsetting it makes the e2e forge-mint a
     // slot-scoped admin token instead (scripts/auth/semaphore-token.ts).
-    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e:preview"],
+    //
+    // Full `test:e2e` (both files, sequential, well under a minute), not a
+    // preview-only subset: live.e2e.test.ts uniquely covers blocking waitMs
+    // acquire, holder + force acquire/release, and least-recently-released
+    // handout order — the exact semantics this preview machinery's own slot
+    // leasing depends on — and was previously invoked by NOTHING
+    // (docs/testing.md#lanes).
+    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e"],
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
@@ -1175,11 +1647,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
     previewReadyUrlPath: "/api/auth/ok",
     previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
-    previewTestCommandArgs: [
-      "bash",
-      "-c",
-      'curl -fsS "$AUTH_BASE_URL/api/auth/.well-known/openid-configuration" | grep -q \'"authorization_endpoint"\'',
-    ],
+    // The OAuth2/OIDC provider e2e (apps/auth/e2e): discovery-vs-origin,
+    // dynamic registration, authorize → consent → code → token exchange with
+    // RFC 8707 resource validation, against the live worker — the lane that
+    // would have caught the 2026-07-11 streams.iterate.com stale-registration
+    // incident (a bare discovery curl used to be all that ran here). The
+    // doppler wrap supplies APP_CONFIG_SERVICE_AUTH_TOKEN for the internal.*
+    // seeding procedures; preview auth bakes the fixed test OTP the suite
+    // signs in with.
+    previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
   "streams-example-app": {
     slug: "streams-example-app",
@@ -1190,24 +1666,74 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "streams-example-app",
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewTestBaseUrlEnvVar: "WORKER_URL",
+    // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
+    // a tagged subset: a title-tag filter here once silently reduced CI to 3
+    // of ~37 tests while the rest rotted (docs/testing.md#lanes). Two
+    // sub-lanes run concurrently, each under its own watchdog `timeout`
+    // (fail, never retry — docs/testing.md#retries-and-timeouts); the
+    // Playwright config runs 4 parallel workers in CI so the browser suite
+    // fits its watchdog.
     previewTestCommandArgs: [
       "bash",
       "-c",
       [
+        "set -euo pipefail",
+        // Stale telemetry/report files from a previous run on the same
+        // machine (marathon loops) must not be reported against this one.
+        `rm -f ${streamsExampleVitestRetryTelemetryFile} test-results/playwright-results.json`,
         // Deployed playgrounds are admin-only: the node vitest lane rides a
         // forge-minted admin bearer (e2e/auth.ts); Playwright signs itself in
         // via its global setup.
         'export STREAMS_PLAYGROUND_TOKEN="$(pnpm exec tsx e2e/auth.ts)"',
-        "pnpm exec playwright install chromium & install_pid=$!",
-        "STREAM_STAGING_E2E=true pnpm vitest -t @preview & vitest_pid=$!",
-        "install_status=0",
-        "vitest_status=0",
-        'wait "$install_pid" || install_status=$?',
-        'wait "$vitest_pid" || vitest_status=$?',
-        'if [ "$install_status" -ne 0 ] || [ "$vitest_status" -ne 0 ]; then exit 1; fi',
-        "pnpm playwright --grep @preview --reporter=list",
+        "pnpm exec playwright install chromium > /tmp/os-preview-streams-example-pw-install.log 2>&1 & install_pid=$!",
+        `E2E_RETRY_TELEMETRY_FILE=${streamsExampleVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm vitest > /tmp/os-preview-streams-example-vitest.log 2>&1 & vitest_pid=$!`,
+        'wait "$install_pid" || { cat /tmp/os-preview-streams-example-pw-install.log; exit 1; }',
+        // Capture Playwright's exit without aborting (set -e) so the vitest
+        // sub-lane always finishes and its log is replayed.
+        `PW_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm playwright || PW_OK=$?`,
+        'VITEST_OK=0; wait "$vitest_pid" || VITEST_OK=$?',
+        "cat /tmp/os-preview-streams-example-vitest.log",
+        '[ "$VITEST_OK" -eq 0 ] && [ "$PW_OK" -eq 0 ]',
       ].join("; "),
     ],
+    collectRetryTelemetry: async ({ repositoryRoot }) => {
+      const [vitest, playwright] = await Promise.all([
+        readRetryTelemetryLane("streams-example-app vitest lane", () =>
+          readVitestRetryTelemetry(streamsExampleVitestRetryTelemetryFile),
+        ),
+        readRetryTelemetryLane("streams-example-app playwright lane", () =>
+          readPlaywrightRetryTelemetry(
+            resolve(
+              repositoryRoot,
+              "apps/streams-example-app/test-results/playwright-results.json",
+            ),
+            "playwright",
+          ),
+        ),
+      ]);
+      return { retried: [...vitest, ...playwright] };
+    },
+  },
+  "dummy-petshop": {
+    slug: "dummy-petshop",
+    displayName: "Dummy Petshop",
+    appPath: "apps/dummy-petshop",
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    // The fixture holds only fake data, so cleanup deliberately leaves its
+    // worker and singleton Durable Object in place.
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
+    dopplerProject: "dummy-petshop",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = dummyPetshopEnvs[dopplerConfig as keyof typeof dummyPetshopEnvs];
+      if (!env) {
+        throw new Error(`Unknown dummy-petshop environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return { baseUrl: env.baseUrl };
+    },
+    paths: ["apps/dummy-petshop/**"],
+    previewReadyUrlPath: "/",
+    previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
+    previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
 };
 
@@ -1218,9 +1744,12 @@ const defaultRepositoryFullName = "iterate/iterate";
 // A preview slot belongs to its PR for the PR's whole life: every `preview
 // deploy` and `preview test` run renews the lease for this long, and closing
 // the PR releases it. Expiry is only the safety valve for abandoned PRs — a
-// PR that pushes nothing for this long may lose its slot to another PR.
-// While a lease is live, nothing takes the slot without a human --force.
-const defaultPreviewLeaseMs = 24 * 60 * 60 * 1000;
+// PR that pushes nothing for this long loses its slot (the GC sweep reclaims
+// it; see docs/preview-resource-gc.md). While a lease is live, nothing takes
+// the slot without a human --force. 3h keeps idle slots (and the Cloudflare
+// resources behind them) from costing us for a full day after a PR goes quiet;
+// a deploy/e2e cycle is minutes, so an active PR never lapses mid-run.
+const defaultPreviewLeaseMs = 3 * 60 * 60 * 1000;
 // Routed previews can be healthy before Cloudflare has finished issuing edge
 // certificates for newly-created hostnames. Some apps record a separate
 // project-subdomain URL; wait on that URL only when it is expected to be
@@ -1231,14 +1760,6 @@ const defaultPreviewLeaseMs = 24 * 60 * 60 * 1000;
 // returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
-/**
- * Whole-lane attempts for an app's preview test command. Pinned to 1 by the
- * retry policy (docs/testing.md#retries-and-timeouts): retries live in the
- * individual test; everything above only watches and fails. Exported so
- * e2e-policy.test.ts can guard the pin.
- */
-export const defaultPreviewTestMaxAttempts = 1;
-const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
 const previewEnvironmentSlotNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
@@ -1252,13 +1773,36 @@ const sharedAuthPreviewSecretsCopiedFromDev = [
   "APP_CONFIG_SIGNUP_ALLOWLIST",
 ] as const;
 
-export const EnvironmentConfigLease = z.object({
+/**
+ * A live lease as the semaphore issued it. Exists only in memory for the
+ * duration of a command: the semaphore is the single source of lease truth,
+ * so leases are never persisted or compared against a stored copy — every
+ * command that needs one asks the semaphore afresh (see
+ * adoptLeaseHeldBySemaphore).
+ */
+export type EnvironmentConfigLease = {
+  dopplerConfig: string;
+  leasedUntil: number;
+  leaseId: string;
+  slug: string;
+  type: string;
+};
+
+/**
+ * The PR body's record of which slot a PR's previews live on — DISPLAY ONLY.
+ * It tells humans where to look (slot, doppler config) and lets deploy prefer
+ * its previous slot; it is never lease authority and never a reason to skip
+ * tests. Ownership questions always go to the semaphore.
+ */
+export const CloudflarePreviewSlotDisplay = z.object({
   dopplerConfig: z.string().trim().min(1),
-  leasedUntil: z.number().int().positive(),
-  leaseId: z.string().uuid(),
   slug: z.string().trim().min(1),
-  type: z.string().trim().min(1),
 });
+export type CloudflarePreviewSlotDisplay = z.infer<typeof CloudflarePreviewSlotDisplay>;
+
+function toSlotDisplay(lease: EnvironmentConfigLease): CloudflarePreviewSlotDisplay {
+  return { dopplerConfig: lease.dopplerConfig, slug: lease.slug };
+}
 
 const CloudflarePreviewStatus = z.enum([
   "awaiting-tests",
@@ -1266,7 +1810,6 @@ const CloudflarePreviewStatus = z.enum([
   "cleanup-failed",
   "deploy-failed",
   "deployed",
-  "fork-unavailable",
   "released",
   "tests-failed",
 ]);
@@ -1286,12 +1829,26 @@ export const CloudflarePreviewAppEntry = z.object({
   testDurationMs: z.number().nonnegative().finite().nullable().optional(),
   /** Rendered retry telemetry for the last test run (renderPreviewRetrySummary). */
   testRetries: z.string().trim().min(1).nullable().optional(),
+  /** Wrangler-reported "Total Upload" of the deployed worker, in KiB. */
+  workerSizeKib: z.number().nonnegative().finite().nullable().optional(),
+  /** Wrangler-reported gzip size of the deployed worker, in KiB. */
+  workerGzipKib: z.number().nonnegative().finite().nullable().optional(),
+  /**
+   * Main's deployed gzip size in KiB at deploy time, read from the
+   * `worker-size/<app>` commit status main deploys publish — the baseline for
+   * the table's "vs main" delta. Absent until the first post-merge main
+   * deploy publishes one.
+   */
+  mainWorkerGzipKib: z.number().nonnegative().finite().nullable().optional(),
 });
 export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry>;
 
 const CloudflarePreviewState = z.object({
   apps: z.record(z.string().trim().min(1), CloudflarePreviewAppEntry).default({}),
-  environmentConfigLease: EnvironmentConfigLease.nullable().default(null),
+  // Display only (see CloudflarePreviewSlotDisplay). Bodies written before
+  // the semaphore became the single lease truth carry extra lease fields
+  // (leaseId, leasedUntil, type); z.object strips them on parse.
+  environmentConfigLease: CloudflarePreviewSlotDisplay.nullable().default(null),
   /**
    * Prominent banner rendered at the top of the managed PR-body section —
    * slot exhaustion, slot takeovers, and moves land here so they are
@@ -1331,7 +1888,6 @@ const CloudflareZonesResponse = z
   })
   .passthrough();
 
-export type EnvironmentConfigLease = z.infer<typeof EnvironmentConfigLease>;
 type CloudflarePreviewState = z.infer<typeof CloudflarePreviewState>;
 
 type EnvironmentConfigLeaseResourceData = {
@@ -1377,12 +1933,6 @@ export type PreviewSemaphoreResourceClient = {
     slug: string;
     type: string;
   }) => Promise<PreviewSemaphoreLease | null>;
-  renew: (input: {
-    leaseId: string;
-    leaseMs: number;
-    slug: string;
-    type: string;
-  }) => Promise<PreviewSemaphoreLease | null>;
   release: (input: { force?: boolean; leaseId?: string; slug: string; type: string }) => Promise<{
     released: boolean;
   }>;
@@ -1412,6 +1962,8 @@ type PullRequestPreviewContext = {
   githubToken: string;
   pullRequestBaseSha: string;
   pullRequestHeadSha: string;
+  pullRequestIsDraft: boolean;
+  pullRequestLabels: string[];
   pullRequestNumber: number;
   repositoryFullName: string;
   workflowRunUrl: string | null;
@@ -1476,8 +2028,6 @@ function createPreviewSemaphoreResourceClient(
       semaphore.resources.acquire({ holder, leaseMs, type, waitMs }),
     acquireSpecific: ({ force, holder, leaseMs, slug, type }) =>
       semaphore.resources.acquireSpecific({ force, holder, leaseMs, slug, type }),
-    renew: ({ leaseId, leaseMs, slug, type }) =>
-      semaphore.resources.renew({ leaseId, leaseMs, slug, type }),
     release: ({ force, leaseId, slug, type }) =>
       semaphore.resources.release({ force, leaseId, slug, type }),
     list: ({ type }) => semaphore.resources.list({ type }),
@@ -1627,24 +2177,18 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
     notice,
     markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
     renderPreviewAppTableDetails({
+      // Expiry and leaseId are deliberately absent: they live in the
+      // semaphore (single source of lease truth) and a rendered copy would
+      // only go stale.
       summary: state.environmentConfigLease
-        ? renderEnvironmentConfigLeaseSummary(state.environmentConfigLease)
-        : "No active environment config lease.",
+        ? `Slot: ${state.environmentConfigLease.slug} | Doppler config: ${state.environmentConfigLease.dopplerConfig}`
+        : "No preview slot recorded.",
       table,
     }),
     failureDetails || null,
   ]
     .filter(Boolean)
     .join("\n\n");
-}
-
-function renderEnvironmentConfigLeaseSummary(lease: EnvironmentConfigLease) {
-  return [
-    `Lease: ${lease.slug}`,
-    `Doppler config: ${lease.dopplerConfig}`,
-    `Type: ${lease.type}`,
-    `Leased until: ${new Date(lease.leasedUntil).toISOString()}`,
-  ].join(" | ");
 }
 
 function renderPreviewAppTableDetails(input: { summary: string; table: string | null }) {
@@ -1664,6 +2208,7 @@ function renderPreviewAppTable(entries: z.infer<typeof CloudflarePreviewAppEntry
     "status",
     "commit",
     "preview",
+    "size (gzip)",
     "deploy duration",
     "test duration",
     "retries",
@@ -1687,6 +2232,7 @@ function renderPreviewAppTableRow(entry: z.infer<typeof CloudflarePreviewAppEntr
     renderStatusLabel(entry.status),
     entry.shortSha ? `\`${entry.shortSha}\`` : "",
     entry.publicUrl ? `[${entry.publicUrl}](${entry.publicUrl})` : "",
+    renderWorkerSizeCell(entry.workerGzipKib, entry.mainWorkerGzipKib),
     entry.deployDurationMs != null ? formatDurationMs(entry.deployDurationMs) : "",
     entry.testDurationMs != null ? formatDurationMs(entry.testDurationMs) : "",
     entry.testRetries ?? "",
@@ -1791,8 +2337,6 @@ function renderStatusLabel(status: z.infer<typeof CloudflarePreviewAppEntry>["st
       return "released";
     case "cleanup-failed":
       return "cleanup failed";
-    case "fork-unavailable":
-      return "unavailable for forks";
   }
 }
 
@@ -1853,6 +2397,60 @@ async function writePullRequestBody(params: {
       pull_number: params.pullRequestNumber,
     }),
   );
+}
+
+/**
+ * Newest `worker-size/<app>` commit status per preview app on main — the
+ * baseline for the PR table's "vs main" size delta, published by the main
+ * deploy workflows (scripts/ci/report-worker-size.ts). Apps deploy
+ * independently (path-filtered workflows), so no single main commit carries a
+ * status for every app: walk recent main commits and take each app's newest.
+ */
+async function fetchMainWorkerSizeBaselines(params: {
+  githubToken: string;
+  repositoryFullName: string;
+}): Promise<Record<string, WorkerSizeInfo>> {
+  const octokit = new Octokit({ auth: params.githubToken });
+  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
+  const commits = await withGithubRetry("repos.listCommits (main)", () =>
+    octokit.rest.repos.listCommits({ owner, repo, sha: "main", per_page: 30 }),
+  );
+  // All-or-nothing: swallowing one commit's failed status read could
+  // silently promote an OLDER commit's baseline and render a misleading
+  // "vs main" delta — a blank delta beats a wrong one. Any rejection here
+  // propagates to the caller's catch, which drops deltas for this run.
+  const combinedStatuses = await Promise.all(
+    commits.data.map((commit) =>
+      octokit.rest.repos
+        .getCombinedStatusForRef({ owner, repo, ref: commit.sha })
+        .then((response) => ({ sha: commit.sha, statuses: response.data.statuses })),
+    ),
+  );
+
+  const baselines: Record<string, WorkerSizeInfo> = {};
+  // Newest commit first, first hit per app wins.
+  for (const { sha, statuses } of combinedStatuses) {
+    for (const slug of Object.keys(cloudflarePreviewApps)) {
+      if (baselines[slug]) {
+        continue;
+      }
+      const status = statuses.find((entry) => entry.context === workerSizeStatusContext(slug));
+      const parsed = parseWorkerSizeStatusDescription(status?.description);
+      if (parsed) {
+        baselines[slug] = parsed;
+        logPreview(
+          `worker-size baseline for ${slug}: gzip ${parsed.gzipKib} KiB (main@${sha.slice(0, 7)})`,
+        );
+      }
+    }
+  }
+  if (Object.keys(baselines).length === 0) {
+    logPreview(
+      "no worker-size baselines found on recent main commits — size deltas will be blank until a main deploy publishes one",
+    );
+  }
+
+  return baselines;
 }
 
 type EnvironmentConfigLeaseReconcileResult = {
@@ -2129,12 +2727,17 @@ async function checkCloudflareZoneWithApi(input: {
   const url = new URL("https://api.cloudflare.com/client/v4/zones");
   url.searchParams.set("name", input.domain);
   url.searchParams.set("per_page", "50");
-  const response = await fetch(url, {
-    headers: {
-      authorization: `Bearer ${input.apiToken}`,
-    },
-    signal: input.signal,
-  });
+  const response = await fetchCloudflareWith429Retry(
+    `GET ${url.pathname}`,
+    () =>
+      fetch(url, {
+        headers: {
+          authorization: `Bearer ${input.apiToken}`,
+        },
+        signal: input.signal,
+      }),
+    { signal: input.signal },
+  );
   const parsed = CloudflareZonesResponse.parse(await response.json());
   if (!response.ok || !parsed.success) {
     return {
@@ -2327,7 +2930,6 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       APP_CONFIG_ITERATE_AUTH__ISSUER: `${authOrigin}/api/auth`,
       APP_CONFIG_ITERATE_AUTH__CLIENT_ID: clientId,
       APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: clientSecret,
-      APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
     });
 
     setDopplerSecrets("semaphore", config, {
@@ -2472,42 +3074,58 @@ async function cleanupPreviewForPullRequest(
     repositoryFullName: params.context.repositoryFullName,
     pullRequestNumber: params.context.pullRequestNumber,
   });
-  const recordedLease = current.state.environmentConfigLease;
-  if (recordedLease == null) {
-    logPreview("PR body records no lease — nothing to tear down or release");
-    return {
-      ok: true,
-      released: false,
-      state: current.state,
-    };
-  }
-  logPreview(
-    `PR body records lease ${recordedLease.slug} (doppler config ${recordedLease.dopplerConfig}, recorded until ${formatUntil(recordedLease.leasedUntil)}) — verifying this PR still holds it before destroying anything`,
-  );
-
-  // Never destroy a slot this PR no longer holds: after a lease expires,
-  // the slot (and the deployments on it) may belong to another PR now.
+  // Never destroy a slot this PR does not hold: ownership comes from the
+  // semaphore (single source of lease truth), not from the PR body — which
+  // also heals the case where a cancelled run claimed a slot but died before
+  // recording it (the slot still gets torn down and released here).
   const holder = pullRequestHolder(params.context.pullRequestNumber);
   const semaphore = params.createPreviewSemaphoreResourceClient();
-  const reasserted = await reassertEnvironmentConfigLease({
-    holder,
-    lease: recordedLease,
-    leaseMs: defaultPreviewLeaseMs,
-    semaphore,
-  });
-  if (!reasserted.ok) {
-    logPreview(`cleanup skipped: ${reasserted.message}`);
+  const displaySlot = current.state.environmentConfigLease;
+  const environmentConfigLease =
+    (await adoptLeaseHeldBySemaphore({
+      holder,
+      leaseMs: defaultPreviewLeaseMs,
+      preferSlug: displaySlot?.slug ?? null,
+      semaphore,
+    })) ??
+    // A lapsed-but-free recorded slot still carries this PR's deployment;
+    // take it back (non-force) so the teardown can erase it.
+    (await retakeRecordedSlotIfFree({
+      holder,
+      leaseMs: defaultPreviewLeaseMs,
+      recordedSlug: displaySlot?.slug ?? null,
+      semaphore,
+    }));
+  if (!environmentConfigLease) {
+    if (!displaySlot) {
+      logPreview(`the semaphore leases no slot to ${holder} — nothing to tear down or release`);
+      return {
+        ok: true,
+        released: false,
+        teardownFailed: false,
+        state: current.state,
+      };
+    }
+
+    // The recorded slot belongs to someone else now: their deployment lives
+    // there, so there is nothing of ours left to destroy.
+    const message = `Teardown skipped: ${describeLostSlotOwnership({
+      currentHolder: await findEnvironmentConfigLeaseHolder(semaphore, displaySlot.slug),
+      displaySlot,
+      holder,
+    })}`;
+    logPreview(`cleanup skipped: ${message}`);
     const update = await updatePreviewState(params.context, (state) => ({
       ...state,
       environmentConfigLease: null,
-      notice: `Teardown skipped: ${reasserted.message}`,
+      notice: message,
       apps: Object.fromEntries(
         Object.entries(state.apps).map(([appSlug, entry]) => [
           appSlug,
           {
             ...entry,
             status: "released" as const,
-            message: `Teardown skipped: ${reasserted.message}`,
+            message,
             updatedAt: new Date().toISOString(),
           },
         ]),
@@ -2517,11 +3135,11 @@ async function cleanupPreviewForPullRequest(
       ok: true,
       released: false,
       skippedTeardown: true,
+      teardownFailed: false,
       state: update.state,
     };
   }
 
-  const environmentConfigLease = reasserted.lease;
   let ok = true;
   let latestState = current.state;
   const appsToCleanUp = (Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[])
@@ -2583,40 +3201,89 @@ async function cleanupPreviewForPullRequest(
     latestState = update.state;
   }
 
-  if (!ok) {
+  // Cleanup's contract: RELEASING THE LEASE is the load-bearing outcome, not
+  // the teardown. A failed teardown/erase leaves only slot-local dirt, and
+  // dirt is self-healing — every acquire erases the slot before handing it
+  // out (see eraseAcquiredSlotOrGiveItBack) — but a lease that is never
+  // released leaks until its 24h expiry and starves the 9-slot fleet
+  // (2026-07-14: a Cloudflare API 429 failed erase-data mid-cleanup for the
+  // merged pr-1950; the old code bailed before releasing and pr-1988 waited
+  // 360s for a slot that never came). So: always release; `ok: false` now
+  // means the RELEASE itself failed — the lease truly leaked.
+  const releaseResult = await releaseLeaseDespiteTeardownFailure({
+    lease: environmentConfigLease,
+    semaphore,
+    teardownOk: ok,
+  });
+  if (!releaseResult.ok) {
+    // Keep the recorded lease in the PR body so a cleanup re-run still finds
+    // the slot to release.
     return {
       ok: false,
       released: false,
+      teardownFailed: !ok,
       state: latestState,
     };
   }
-
-  const released = await semaphore.release({
-    type: environmentConfigLease.type,
-    slug: environmentConfigLease.slug,
-    leaseId: environmentConfigLease.leaseId,
-  });
-  logPreview(
-    released.released
-      ? `lease released: ${environmentConfigLease.slug} is free again`
-      : `lease was already gone for ${environmentConfigLease.slug}`,
-  );
   const update = await updatePreviewState(params.context, (state) => ({
     ...state,
     environmentConfigLease: null,
+    notice: ok
+      ? state.notice
+      : `Teardown failed but the lease was released; ${environmentConfigLease.slug} is left dirty and its next acquire erases it before use. (preview cleanup at ${new Date().toISOString()})`,
   }));
 
   return {
     ok: true,
-    released: released.released,
+    released: releaseResult.released,
+    teardownFailed: !ok,
     state: update.state,
   };
+}
+
+/**
+ * Release cleanup's lease whether or not teardown succeeded, loudly flagging
+ * the dirty-slot case. Returns `ok: false` only when the release call itself
+ * failed — that is the one outcome where the lease actually leaks (until its
+ * 24h expiry); a teardown failure alone is not a leak because the next
+ * acquire erases the slot on entry (eraseAcquiredSlotOrGiveItBack).
+ */
+async function releaseLeaseDespiteTeardownFailure(input: {
+  lease: { type: string; slug: string; leaseId: string };
+  semaphore: PreviewSemaphoreResourceClient;
+  teardownOk: boolean;
+}): Promise<{ ok: boolean; released: boolean }> {
+  if (!input.teardownOk) {
+    logPreview(
+      `teardown FAILED on ${input.lease.slug} — releasing the lease anyway and leaving the slot dirty; its next acquire erases it before use (see eraseAcquiredSlotOrGiveItBack)`,
+    );
+  }
+  try {
+    const released = await input.semaphore.release({
+      type: input.lease.type,
+      slug: input.lease.slug,
+      leaseId: input.lease.leaseId,
+    });
+    logPreview(
+      released.released
+        ? `lease released: ${input.lease.slug} is free again`
+        : `lease was already gone for ${input.lease.slug}`,
+    );
+    return { ok: true, released: released.released };
+  } catch (error) {
+    logPreview(
+      `FAILED to release the lease on ${input.lease.slug} — it leaks until its 24h expiry (free it with \`pnpm preview release --slot ${input.lease.slug} --force\` or re-run cleanup): ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { ok: false, released: false };
+  }
 }
 
 async function deployPreviewAppWithStatus(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  /** Main's published size baseline for this app, when one exists. */
+  mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
   repositoryRoot: string;
   runUrl: string | null;
@@ -2662,6 +3329,7 @@ async function deployPreviewApp(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
   repositoryRoot: string;
   runUrl: string | null;
@@ -2692,9 +3360,20 @@ async function deployPreviewApp(input: {
     repositoryRoot: input.repositoryRoot,
     signal: input.signal,
   });
+  // Wrangler prints "Total Upload: … KiB / gzip: … KiB" on every upload —
+  // lift it out of the captured deploy output for the PR table's size column.
+  const workerSize = parseWorkerSizeFromDeployOutput(
+    `${deployResult.stdout}\n${deployResult.stderr}`,
+  );
+  const sizeFields = {
+    workerSizeKib: workerSize?.totalKib ?? null,
+    workerGzipKib: workerSize?.gzipKib ?? null,
+    mainWorkerGzipKib: workerSize ? (input.mainWorkerSize?.gzipKib ?? null) : null,
+  };
   if (deployResult.exitCode !== 0) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
+      ...sizeFields,
       message: commandFailureMessage(deployResult, "Preview deployment failed."),
       status: "deploy-failed",
     });
@@ -2709,6 +3388,7 @@ async function deployPreviewApp(input: {
   if (!readiness.ok) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
+      ...sizeFields,
       message: readiness.message,
       status: "deploy-failed",
     });
@@ -2716,6 +3396,7 @@ async function deployPreviewApp(input: {
 
   return CloudflarePreviewAppEntry.parse({
     ...baseEntry,
+    ...sizeFields,
     status: "awaiting-tests",
   });
 }
@@ -2727,6 +3408,15 @@ async function readPreviewAppConfig(input: {
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
+  const PreviewAppConfig = z.object({
+    baseUrl: z.string().trim().url(),
+    projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
+  });
+  const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
+  if (repoConfig) {
+    return PreviewAppConfig.parse(repoConfig);
+  }
+
   const script = [
     "function parseStringArrayEnv(value) {",
     "  if (!value?.trim()) return [];",
@@ -2767,13 +3457,7 @@ async function readPreviewAppConfig(input: {
     throw new Error(commandFailureMessage(result, "Failed to read preview app config."));
   }
 
-  const parsed = z
-    .object({
-      baseUrl: z.string().trim().url(),
-      projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
-    })
-    .parse(JSON.parse(result.stdout));
-  return parsed;
+  return PreviewAppConfig.parse(JSON.parse(result.stdout));
 }
 
 async function runPreviewDeployCommand(input: {
@@ -2808,6 +3492,46 @@ async function runPreviewDeployCommand(input: {
     signal: input.signal,
     workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
   });
+}
+
+/**
+ * Erase a preview slot's user data before handing the slot to a new holder.
+ * Reclaim paths MUST run this: a reclaim only ever happens because the
+ * previous holder's cleanup — which normally erases on the way out — failed
+ * or never ran, so a reclaimed slot is dirty by definition. Deploying over
+ * stale identity data breaks the next tenant (observed 2026-07-07 on
+ * preview-5: 208 orphaned project-directory KV keys against an empty auth D1
+ * → every itx project lookup answered "KV GET failed: 500").
+ */
+type EraseSlotData = (input: { dopplerConfig: string; slug: string }) => Promise<void>;
+
+/**
+ * The real {@link EraseSlotData}: the os app's destroy command, which is the
+ * erase-data script — it wipes the slot's auth D1 and project-directory KV
+ * (the data plane every preview app shares) and leaves infrastructure alone.
+ * The deploy that follows the reclaim re-seeds auth's OAuth client.
+ */
+function makePreviewSlotDataEraser(runtime: {
+  commandEnvironment: NodeJS.ProcessEnv;
+  repositoryRoot: string;
+  signal?: AbortSignal;
+}): EraseSlotData {
+  return async ({ dopplerConfig, slug }) => {
+    const startedAt = Date.now();
+    logPreview(`erasing ${slug} data before handover (doppler config ${dopplerConfig})`);
+    const result = await runPreviewDeployCommand({
+      app: cloudflarePreviewApps.os,
+      commandEnvironment: runtime.commandEnvironment,
+      dopplerConfig,
+      operation: "down",
+      repositoryRoot: runtime.repositoryRoot,
+      signal: runtime.signal,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(commandFailureMessage(result, `Erasing ${slug} data failed.`));
+    }
+    logPreview(`erased ${slug} data (${formatDurationMs(Date.now() - startedAt)})`);
+  };
 }
 
 function logPreview(message: string) {
@@ -2866,7 +3590,13 @@ function isNoSlotAvailableError(error: unknown) {
 // Contention is expected with many PRs in flight: instead of failing (or
 // worse, stealing a slot), the deploy waits its turn and logs who holds what
 // while it waits. Override with PREVIEW_SLOT_WAIT_MS=0 to fail fast.
-const defaultSlotWaitTotalMs = 20 * 60 * 1000;
+// Bounded so a slotless (or broken-slot) run fails LOUDLY inside the job's
+// 10-minute ceiling instead of being killed silently by it: 2026-07-09's
+// unerasable-slot loop burned this entire budget per attempt, and external
+// retries stacked those into 15-30 minute walls. 6 minutes still rides out
+// a normal handover (cleanup of a closing PR takes ~2m); a genuinely full
+// fleet surfaces as a failed check with the holder table.
+const defaultSlotWaitTotalMs = 6 * 60 * 1000;
 // Semaphore caps a single acquire long-poll at 5 minutes; loop to go longer.
 const slotWaitPerAttemptMs = 5 * 60 * 1000;
 
@@ -2886,8 +3616,10 @@ function resolveSlotWaitTotalMs(env: NodeJS.ProcessEnv) {
 
 // A hold with no deploy/test renewal for this long counts as idle in
 // `preview reclaim` verdicts. Renewals happen on every deploy/test run, so
-// idle means "that PR/person hasn't touched the slot in this window".
-const defaultReclaimMinIdleHours = 6;
+// idle means "that PR/person hasn't touched the slot in this window". Matches
+// the lease TTL (defaultPreviewLeaseMs, 3h): a slot idle this long has a lease
+// at or past expiry, and the GC sweep will reclaim it.
+const defaultReclaimMinIdleHours = 3;
 
 /** `unknown` = the check itself failed; distinct from "not checked" (null downstream). */
 type PullRequestStateFetcher = (
@@ -2920,7 +3652,26 @@ function makePullRequestStateFetcher(
   };
 }
 
-/** Pure verdict for one slot; `orphaned` beats `idle` beats `active`. */
+/**
+ * Resolve the GitHub token, repo, and PR-state fetcher shared by `status` and
+ * `reclaim`. Token precedence: explicit option → GITHUB_TOKEN → `gh auth token`.
+ * `fetchPullRequestState` is null when no token is available — callers log their
+ * own reason and fall back to idle-time-only verdicts.
+ */
+function resolvePreviewGithubContext(runtime: PreviewRuntime, options: { githubToken?: string }) {
+  const githubToken =
+    options.githubToken?.trim() ||
+    runtime.commandEnvironment.GITHUB_TOKEN?.trim() ||
+    tryReadGhAuthToken();
+  const repositoryFullName =
+    runtime.commandEnvironment.GITHUB_REPOSITORY?.trim() || defaultRepositoryFullName;
+  const fetchPullRequestState = githubToken
+    ? makePullRequestStateFetcher(githubToken, repositoryFullName)
+    : null;
+  return { githubToken, repositoryFullName, fetchPullRequestState };
+}
+
+/** Pure reporting verdict; it never authorizes an automatic lease takeover. */
 function classifyLeaseForReclaim(input: {
   holderPullRequestState: "open" | "closed" | "unknown" | null;
   lastAcquiredAt: number | null;
@@ -2932,13 +3683,14 @@ function classifyLeaseForReclaim(input: {
     return "available";
   }
   if (input.holderPullRequestState === "closed") {
-    // The holder PR is closed, so its cleanup should have released the slot;
-    // the lease only survives when that cleanup failed.
+    // Cleanup may still be running immediately after close. Call this an
+    // orphan candidate for operator visibility, but never use the verdict to
+    // authorize automation to force-acquire the live lease.
     return "orphaned";
   }
   if (input.holderPullRequestState === "unknown") {
-    // The GitHub check failed, so we cannot rule out an open PR — never let a
-    // transient API error downgrade a hold to reclaimable-without---force.
+    // The GitHub check failed, so we cannot rule out an open PR. Report the
+    // hold as active rather than implying that an operator should reclaim it.
     return "active";
   }
   if (input.lastAcquiredAt !== null && input.now - input.lastAcquiredAt >= input.minIdleMs) {
@@ -2946,6 +3698,180 @@ function classifyLeaseForReclaim(input: {
   }
 
   return "active";
+}
+
+type PreviewDiagnosisOpenPullRequest = {
+  number: number;
+  title: string;
+  url: string;
+  isDraft: boolean;
+  labels: string[];
+};
+
+/**
+ * Draft PRs only claim a slot when they opt in (same policy as deploy). Used
+ * by `preview status` so "9 open PRs" is not compared apples-to-oranges with
+ * the 9-slot fleet.
+ */
+function pullRequestWouldClaimPreviewSlot(pullRequest: {
+  isDraft: boolean;
+  labels: readonly string[];
+}): boolean {
+  return !pullRequest.isDraft || pullRequest.labels.includes(previewOptInLabel);
+}
+
+type PreviewDiagnosisSlot = {
+  slug: string;
+  verdict: "available" | "active" | "idle" | "orphaned";
+  holder: string | null;
+  pullRequestUrl: string | null;
+  pullRequestState: "open" | "closed" | "unknown" | null;
+  leasedUntil: string | null;
+  lastUsedAgo: string | null;
+};
+
+/**
+ * Pure capacity diagnosis: reconcile semaphore holders with open PRs so an
+ * operator can see why "only N open PRs" still means zero free slots.
+ */
+function diagnosePreviewFleetCapacity(input: {
+  openPullRequests: PreviewDiagnosisOpenPullRequest[];
+  slots: PreviewDiagnosisSlot[];
+}) {
+  const available = input.slots.filter((slot) => slot.verdict === "available");
+  const leased = input.slots.filter((slot) => slot.verdict !== "available");
+  const orphaned = leased.filter((slot) => slot.verdict === "orphaned");
+  const idle = leased.filter((slot) => slot.verdict === "idle");
+  const active = leased.filter((slot) => slot.verdict === "active");
+  const holdersWithOpenPrs = input.openPullRequests
+    .map((pullRequest) => pullRequest.number)
+    .filter((number) => leased.some((slot) => parsePullRequestHolder(slot.holder) === number));
+  const previewEligibleOpen = input.openPullRequests.filter(pullRequestWouldClaimPreviewSlot);
+  const previewEligibleWithoutSlot = previewEligibleOpen.filter(
+    (pullRequest) => !holdersWithOpenPrs.includes(pullRequest.number),
+  );
+  // Drafts that opted in via a one-shot `--allow-draft` dispatch hold a slot
+  // without the label, so exclude any that actually hold one — otherwise we'd
+  // tell the operator it "correctly claims no slot" next to holdsSlot: true.
+  const openButIneligible = input.openPullRequests.filter(
+    (pullRequest) =>
+      !pullRequestWouldClaimPreviewSlot(pullRequest) &&
+      !holdersWithOpenPrs.includes(pullRequest.number),
+  );
+  const closedHolders = leased.filter((slot) => slot.pullRequestState === "closed");
+  const nonPrHolders = leased.filter((slot) => parsePullRequestHolder(slot.holder) === null);
+
+  const reasons: string[] = [];
+  if (available.length === 0 && leased.length > 0) {
+    reasons.push(`All ${leased.length} preview slots are leased (0 available).`);
+  } else if (available.length > 0) {
+    reasons.push(`${available.length} of ${input.slots.length} slots are available.`);
+  }
+  if (closedHolders.length > 0) {
+    reasons.push(
+      `${closedHolders.length} leased by closed/merged PRs (cleanup failed or never ran): ${closedHolders
+        .map((slot) => `${slot.slug}←${slot.holder}`)
+        .join(", ")}.`,
+    );
+  }
+  if (idle.length > 0) {
+    reasons.push(
+      `${idle.length} idle (open holder, no deploy/test renewal recently): ${idle
+        .map(
+          (slot) =>
+            `${slot.slug}←${slot.holder}${slot.lastUsedAgo ? ` (${slot.lastUsedAgo})` : ""}`,
+        )
+        .join(", ")}.`,
+    );
+  }
+  if (nonPrHolders.length > 0) {
+    reasons.push(
+      `${nonPrHolders.length} held by non-PR holders (manual/reclaim): ${nonPrHolders
+        .map((slot) => `${slot.slug}←${slot.holder ?? "unknown"}`)
+        .join(", ")}.`,
+    );
+  }
+  if (previewEligibleWithoutSlot.length > 0) {
+    reasons.push(
+      `${previewEligibleWithoutSlot.length} open preview-eligible PR(s) have no slot: ${previewEligibleWithoutSlot
+        .map((pullRequest) => `#${pullRequest.number}`)
+        .join(", ")}.`,
+    );
+  }
+  if (openButIneligible.length > 0) {
+    reasons.push(
+      `${openButIneligible.length} open draft PR(s) without the \`${previewOptInLabel}\` label correctly claim no slot: ${openButIneligible
+        .map((pullRequest) => `#${pullRequest.number}`)
+        .join(", ")}.`,
+    );
+  }
+  if (
+    input.openPullRequests.length > 0 &&
+    closedHolders.length === 0 &&
+    available.length === 0 &&
+    previewEligibleOpen.length <= input.slots.length
+  ) {
+    reasons.push(
+      `Open-PR count alone (${input.openPullRequests.length} open, ${previewEligibleOpen.length} preview-eligible) does not explain a full fleet — check idle/manual holders above.`,
+    );
+  }
+
+  const reclaimCommands = [...orphaned, ...idle].map(
+    (slot) => `pnpm preview reclaim --slot ${slot.slug} --force`,
+  );
+
+  const summaryParts = [
+    `${available.length} available / ${leased.length} leased of ${input.slots.length}`,
+    closedHolders.length > 0 ? `${closedHolders.length} orphaned (closed PR)` : null,
+    idle.length > 0 ? `${idle.length} idle` : null,
+    active.length > 0 ? `${active.length} active` : null,
+    previewEligibleWithoutSlot.length > 0
+      ? `${previewEligibleWithoutSlot.length} open PR(s) waiting for a slot`
+      : null,
+  ].filter(Boolean);
+
+  return {
+    availableCount: available.length,
+    leasedCount: leased.length,
+    orphanedCount: orphaned.length,
+    idleCount: idle.length,
+    activeCount: active.length,
+    openPullRequestCount: input.openPullRequests.length,
+    previewEligibleOpenCount: previewEligibleOpen.length,
+    previewEligibleWithoutSlotCount: previewEligibleWithoutSlot.length,
+    holdersWithOpenPrs,
+    nextLeaseExpiryAt:
+      leased
+        .map((slot) => slot.leasedUntil)
+        .filter((value): value is string => value != null)
+        .sort()[0] ?? null,
+    reasons,
+    reclaimCommands,
+    summary: summaryParts.join(" · "),
+  };
+}
+
+async function listOpenPullRequestsForPreviewDiagnosis(
+  githubToken: string,
+  repositoryFullName: string,
+): Promise<PreviewDiagnosisOpenPullRequest[]> {
+  const octokit = new Octokit({ auth: githubToken });
+  const [owner, repo] = splitRepositoryFullName(repositoryFullName);
+  const pullRequests = await octokit.paginate(octokit.rest.pulls.list, {
+    owner,
+    repo,
+    state: "open",
+    per_page: 100,
+  });
+  return pullRequests.map((pullRequest) => ({
+    number: pullRequest.number,
+    title: pullRequest.title,
+    url: pullRequest.html_url,
+    isDraft: Boolean(pullRequest.draft),
+    labels: (pullRequest.labels ?? [])
+      .map((label) => (typeof label === "string" ? label : label.name))
+      .filter((name): name is string => typeof name === "string" && name.length > 0),
+  }));
 }
 
 async function classifyEnvironmentConfigLeases(input: {
@@ -2974,6 +3900,13 @@ async function classifyEnvironmentConfigLeases(input: {
       return {
         slug: resource.slug,
         verdict,
+        // What `eraseSlotData` needs to wipe the slot. Falls back to the
+        // slug-derived config (preview-3 → preview_3) for slots that have
+        // never been leased and so carry no data payload yet.
+        dopplerConfig:
+          typeof resource.data.dopplerConfig === "string" && resource.data.dopplerConfig.trim()
+            ? resource.data.dopplerConfig.trim()
+            : resource.slug.replaceAll("-", "_"),
         holder,
         pullRequestUrl: holderPullRequestUrl(holder),
         pullRequestState: holderPullRequestState,
@@ -2996,57 +3929,56 @@ function parsePullRequestHolder(holder: string | null | undefined) {
 }
 
 /**
- * Garbage-collect one orphaned lease: a slot held by a pr-N holder whose PR
- * is closed (its cleanup failed, or the lease would be gone). This is the one
- * case automation may take a live lease — the holder can never come back for
- * it, and GitHub confirms that before we touch anything.
+ * Erase a just-acquired slot before it is handed to the caller, giving the
+ * lease back on failure. Returns true when the slot is clean and ours.
+ *
+ * This runs on EVERY handover — plain acquire included, not just reclaims —
+ * so slot cleanliness is an invariant of entry rather than an assumption
+ * about how the previous tenant exited. Every exit path that skips the
+ * cleanup erase (failed cleanup + 24h lease expiry, `release --force`, a run
+ * cancelled mid-claim) becomes harmless: whoever picks the slot up next
+ * wipes it first. A failed erase releases the lease rather than handing out
+ * a dirty slot, and the released slot is safe back in the pool because its
+ * next taker runs this same erase.
  */
-async function tryReclaimOrphanedEnvironmentConfigLease(input: {
-  fetchPullRequestState: PullRequestStateFetcher | null;
-  holder: string;
-  leaseMs: number;
+async function eraseAcquiredSlotOrGiveItBack(input: {
+  eraseSlotData: EraseSlotData;
+  lease: { data: Record<string, unknown>; leaseId: string; slug: string; type: string };
   semaphore: PreviewSemaphoreResourceClient;
 }) {
-  if (!input.fetchPullRequestState) {
-    return null;
-  }
-
-  const report = await classifyEnvironmentConfigLeases({
-    fetchPullRequestState: input.fetchPullRequestState,
-    minIdleMs: Number.POSITIVE_INFINITY,
-    semaphore: input.semaphore,
-  });
-  const orphans = report
-    .filter((slot) => slot.verdict === "orphaned")
-    .sort((left, right) => (left.lastUsedAt ?? "").localeCompare(right.lastUsedAt ?? ""));
-  for (const orphan of orphans) {
-    const lease = await input.semaphore.acquireSpecific({
-      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-      slug: orphan.slug,
-      leaseMs: input.leaseMs,
-      holder: input.holder,
-      force: true,
+  try {
+    await input.eraseSlotData({
+      dopplerConfig: parseEnvironmentConfigLeaseData(input.lease.data).dopplerConfig,
+      slug: input.lease.slug,
     });
-    if (lease) {
-      logPreview(
-        `reclaimed orphaned slot ${orphan.slug}: it was leased by ${orphan.holder ?? "unknown holder"} whose PR is closed (${orphan.pullRequestUrl ?? "no PR url"}) — their cleanup must have failed`,
-      );
-      return lease;
-    }
+    return true;
+  } catch (error) {
+    logPreview(
+      `erase failed on just-acquired ${input.lease.slug} — giving the lease back (the next taker erases before use): ${error instanceof Error ? error.message : String(error)}`,
+    );
+    await input.semaphore
+      .release({ type: input.lease.type, slug: input.lease.slug, leaseId: input.lease.leaseId })
+      .catch((releaseError: unknown) => {
+        logPreview(
+          `failed to release ${input.lease.slug} after the failed erase (it will expire on its own, and its next taker still erases first): ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
+        );
+      });
+    return false;
   }
-
-  return null;
 }
 
 /**
  * Acquire any free slot, queueing (via semaphore long-poll) while all slots
- * are leased. Orphaned leases (holder PR closed but cleanup failed) are
- * garbage-collected before waiting. Fails with the full holder table and
- * remediation steps once `waitTotalMs` elapses.
+ * are leased. Automation never force-acquires a held slot: a close-triggered
+ * cleanup owns its lease until teardown finishes and releases it, which keeps
+ * another PR from erasing or deploying into that slot concurrently. Every
+ * handed-out slot is erased first (see eraseAcquiredSlotOrGiveItBack). Fails
+ * with the full holder table and remediation steps once `waitTotalMs` elapses.
  */
 async function acquireAnyEnvironmentConfigLease(input: {
   semaphore: PreviewSemaphoreResourceClient;
-  fetchPullRequestState?: PullRequestStateFetcher | null;
+  /** Required so no acquire path can hand out a slot without wiping it. */
+  eraseSlotData: EraseSlotData;
   holder: string;
   leaseMs: number;
   onFirstWait?: (holderTable: string) => Promise<void>;
@@ -3054,39 +3986,67 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }) {
   const deadline = Date.now() + input.waitTotalMs;
   let attempt = 0;
+  // Slots whose erase already failed this run. A free-but-unerasable slot
+  // comes straight back from the semaphore after we release it, so without
+  // a pause the loop hot-cycles the same broken slot (observed 2026-07-09:
+  // three unerasable slots, ~6s per lap, 150+ laps burning the entire wait
+  // budget while spamming the log). Erase is expected to self-heal now
+  // (do-reset resurrects unlisted classes), so a repeat failure means the
+  // slot needs a human/agent — pause to let other slots free up instead of
+  // thrashing, and say so once.
+  const eraseFailuresBySlug = new Map<string, number>();
+  const brokenSlotPauseMs = 30_000;
 
   for (;;) {
     attempt += 1;
     const remainingMs = deadline - Date.now();
-    // The first attempt returns immediately so orphan garbage collection runs
-    // before any long-poll; later attempts queue on the semaphore in 5-minute
-    // polls, re-checking for freshly orphaned slots between polls.
+    // The first attempt returns immediately so contention is surfaced before
+    // any long-poll; later attempts queue on the semaphore in 5-minute polls.
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
-      return await input.semaphore.acquire({
+      const acquired = await input.semaphore.acquire({
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         leaseMs: input.leaseMs,
         waitMs,
         holder: input.holder,
       });
+      if (
+        await eraseAcquiredSlotOrGiveItBack({
+          eraseSlotData: input.eraseSlotData,
+          lease: acquired,
+          semaphore: input.semaphore,
+        })
+      ) {
+        return acquired;
+      }
+      // Bound the acquire→failed-erase→release cycle: without this check the
+      // loop would spin on a free-but-unerasable slot past the wait budget.
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Could not hand ${input.holder} a clean slot: erasing ${acquired.slug} kept failing and the ${formatDurationMs(input.waitTotalMs)} wait budget is spent.`,
+        );
+      }
+      const eraseFailures = (eraseFailuresBySlug.get(acquired.slug) ?? 0) + 1;
+      eraseFailuresBySlug.set(acquired.slug, eraseFailures);
+      if (eraseFailures === 2) {
+        logPreview(
+          `${acquired.slug} failed erase twice — it needs repair (scripts/lib/do-reset.ts header has the recipe). ` +
+            `Pausing ${brokenSlotPauseMs / 1000}s between further attempts instead of hot-cycling it.`,
+        );
+      }
+      if (eraseFailures >= 2) {
+        await new Promise((res) =>
+          setTimeout(res, Math.min(brokenSlotPauseMs, Math.max(0, deadline - Date.now()))),
+        );
+      }
+      continue;
     } catch (error) {
       if (!isNoSlotAvailableError(error)) {
         throw error;
       }
 
-      const reclaimed = await tryReclaimOrphanedEnvironmentConfigLease({
-        fetchPullRequestState: input.fetchPullRequestState ?? null,
-        holder: input.holder,
-        leaseMs: input.leaseMs,
-        semaphore: input.semaphore,
-      });
-      if (reclaimed) {
-        return reclaimed;
-      }
-      if (attempt === 1 && input.fetchPullRequestState) {
-        logPreview(
-          "all slots leased and none are orphaned (every holder's PR is still open or the hold is manual)",
-        );
+      if (attempt === 1) {
+        logPreview("all slots leased — waiting for an owner to release one");
       }
 
       const holderTable = await describeEnvironmentConfigLeases(input.semaphore);
@@ -3103,10 +4063,10 @@ async function acquireAnyEnvironmentConfigLease(input: {
             `No preview slot became available for ${input.holder} after waiting ${formatDurationMs(input.waitTotalMs)}.`,
             "Current slots:",
             holderTable,
-            "Every slot is leased by an open PR or a manual hold. Options:",
+            "Every slot is still leased. Automation never force-reclaims a held slot because its owner may be cleaning it up. Options:",
             "  - re-run once a slot frees up (leases release when their PR closes)",
-            "  - see which holds are idle or orphaned: doppler run --project _shared --config prd -- pnpm preview reclaim",
-            "  - take an idle/orphaned slot back: doppler run --project _shared --config prd -- pnpm preview reclaim --slot N",
+            "  - inspect idle/orphaned holds: doppler run --project _shared --config prd -- pnpm preview reclaim",
+            "  - after verifying no cleanup/deploy is running, reclaim one explicitly: doppler run --project _shared --config prd -- pnpm preview reclaim --slot N --force",
             "  - close or merge stale PRs holding slots",
           ].join("\n"),
         );
@@ -3120,56 +4080,65 @@ async function acquireAnyEnvironmentConfigLease(input: {
 }
 
 /**
- * Claim a slot for a PR. Prefers the slot recorded in the PR body: renew it
- * if this PR still holds it, re-take it if the lease expired but nobody else
- * claimed it, and only otherwise fall back to acquiring a different slot.
- * Every transition is logged.
+ * Claim a slot for a PR deploy: adopt-or-claim, with the semaphore as the
+ * single source of lease truth.
+ *
+ * 1. Adopt whatever the semaphore already attributes to this holder — a live
+ *    lease from a previous run, or one a cancelled run claimed but never
+ *    recorded (observed 2026-07-04: pr-1634 and pr-1636 each held two slots
+ *    and every deploy queued for 20 minutes; adopting instead of acquiring a
+ *    second slot is what prevents that). Adoption re-issues the lease, which
+ *    doubles as the renewal, so no stored leaseId is ever consulted. The PR
+ *    body's recorded slug is only a data-provenance hint here: an adopted
+ *    slot that IS the recorded one carries this PR's own deployment and is
+ *    never wiped; any other adopted slot has unknown provenance (the run
+ *    that acquired it died before recording — possibly mid-erase) and is
+ *    erased before handover.
+ * 2. Re-take the recorded slot when its lease lapsed but nobody else claimed
+ *    it — slot affinity keeps a lapsed PR on its own deployment instead of
+ *    forcing a full redeploy elsewhere.
+ * 3. Otherwise queue for any free slot.
  */
 async function claimEnvironmentConfigLease(input: {
-  createPreviewSemaphoreResourceClient: () => PreviewSemaphoreResourceClient;
-  fetchPullRequestState?: PullRequestStateFetcher | null;
+  eraseSlotData: EraseSlotData;
   holder: string;
   leaseMs: number;
   onFirstWait?: (holderTable: string) => Promise<void>;
-  previousEnvironmentConfigLease: EnvironmentConfigLease | null;
+  recordedSlug: string | null;
+  semaphore: PreviewSemaphoreResourceClient;
   waitTotalMs: number;
 }) {
-  const semaphore = input.createPreviewSemaphoreResourceClient();
-  const previousLease = input.previousEnvironmentConfigLease;
-
-  if (previousLease) {
-    const reasserted = await reassertEnvironmentConfigLease({
-      holder: input.holder,
-      lease: previousLease,
-      leaseMs: input.leaseMs,
-      semaphore,
-    });
-    if (reasserted.ok) {
-      return reasserted.lease;
-    }
-
-    logPreview(`slot lost: ${reasserted.message} Acquiring a different slot.`);
-  }
-
-  // A run can acquire a slot and get cancelled (cancel-in-progress on a rapid
-  // push) before the lease lands in the PR body. The next run then sees "no
-  // lease recorded" and would acquire a SECOND slot — the semaphore happily
-  // leases one holder several slots, and the unrecorded one stays leased until
-  // expiry, shrinking the fleet (observed 2026-07-04: pr-1634 and pr-1636 each
-  // held two slots and every deploy queued for 20 minutes). Adopt any lease the
-  // semaphore already attributes to this holder before acquiring a fresh one.
-  const adopted = await adoptExistingHolderLease({
+  const adopted = await adoptLeaseHeldBySemaphore({
     holder: input.holder,
     leaseMs: input.leaseMs,
-    semaphore,
+    onAdopted: (lease) =>
+      lease.slug === input.recordedSlug
+        ? Promise.resolve(true)
+        : eraseAcquiredSlotOrGiveItBack({
+            eraseSlotData: input.eraseSlotData,
+            lease,
+            semaphore: input.semaphore,
+          }),
+    preferSlug: input.recordedSlug,
+    semaphore: input.semaphore,
   });
   if (adopted) {
     return adopted;
   }
 
+  const retaken = await retakeRecordedSlotIfFree({
+    holder: input.holder,
+    leaseMs: input.leaseMs,
+    recordedSlug: input.recordedSlug,
+    semaphore: input.semaphore,
+  });
+  if (retaken) {
+    return retaken;
+  }
+
   const lease = await acquireAnyEnvironmentConfigLease({
-    semaphore,
-    fetchPullRequestState: input.fetchPullRequestState,
+    semaphore: input.semaphore,
+    eraseSlotData: input.eraseSlotData,
     holder: input.holder,
     leaseMs: input.leaseMs,
     onFirstWait: input.onFirstWait,
@@ -3182,17 +4151,18 @@ async function claimEnvironmentConfigLease(input: {
 }
 
 /**
- * Core of `preview assign`: keep/renew the recorded slot when it satisfies
- * the request, otherwise take the wanted slot (or any free one) and release
- * the previously-held lease so it doesn't stay claimed against a slot the PR
- * no longer records.
+ * Core of `preview assign`: keep the slot the semaphore says this holder has
+ * (re-issued, which renews it) when it satisfies the request, otherwise take
+ * the wanted slot (or any free one) and release the previously-held lease so
+ * it doesn't stay claimed against a slot the PR no longer records. Ownership
+ * comes from the semaphore; the recorded slug is only an affinity hint.
  */
 async function assignEnvironmentConfigLease(input: {
-  fetchPullRequestState?: PullRequestStateFetcher | null;
+  eraseSlotData: EraseSlotData;
   force?: boolean;
   holder: string;
   leaseMs: number;
-  recordedLease: EnvironmentConfigLease | null;
+  recordedSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
   wantedSlug: string | null;
 }): Promise<{
@@ -3201,27 +4171,26 @@ async function assignEnvironmentConfigLease(input: {
   changedFromSlug: string | null;
   previousLeaseReleased: boolean;
 }> {
-  let heldLease: EnvironmentConfigLease | null = null;
-  if (input.recordedLease) {
-    const reasserted = await reassertEnvironmentConfigLease({
+  const heldLease =
+    (await adoptLeaseHeldBySemaphore({
       holder: input.holder,
-      lease: input.recordedLease,
       leaseMs: input.leaseMs,
+      preferSlug: input.recordedSlug,
       semaphore: input.semaphore,
-    });
-    if (reasserted.ok) {
-      heldLease = reasserted.lease;
-      if (!input.wantedSlug || input.wantedSlug === reasserted.lease.slug) {
-        return {
-          lease: reasserted.lease,
-          outcome: "kept",
-          changedFromSlug: null,
-          previousLeaseReleased: false,
-        };
-      }
-    } else {
-      logPreview(`recorded slot is gone: ${reasserted.message}`);
-    }
+    })) ??
+    (await retakeRecordedSlotIfFree({
+      holder: input.holder,
+      leaseMs: input.leaseMs,
+      recordedSlug: input.recordedSlug,
+      semaphore: input.semaphore,
+    }));
+  if (heldLease && (!input.wantedSlug || input.wantedSlug === heldLease.slug)) {
+    return {
+      lease: heldLease,
+      outcome: "kept",
+      changedFromSlug: null,
+      previousLeaseReleased: false,
+    };
   }
 
   let lease: EnvironmentConfigLease;
@@ -3268,6 +4237,18 @@ async function assignEnvironmentConfigLease(input: {
         ].join("\n"),
       );
     }
+    // Same entry invariant as every other handover — this also covers a
+    // --force eviction, where the acquired slot holds the evicted PR's data.
+    const clean = await eraseAcquiredSlotOrGiveItBack({
+      eraseSlotData: input.eraseSlotData,
+      lease: acquired,
+      semaphore: input.semaphore,
+    });
+    if (!clean) {
+      throw new Error(
+        `Erasing ${acquired.slug} failed, so its lease was given back rather than assigning a dirty slot. Retry, or pick another slot.`,
+      );
+    }
     lease = toEnvironmentConfigLease(acquired);
   } else {
     // A human is asking right now — fail fast with the holder table instead
@@ -3275,7 +4256,7 @@ async function assignEnvironmentConfigLease(input: {
     lease = toEnvironmentConfigLease(
       await acquireAnyEnvironmentConfigLease({
         semaphore: input.semaphore,
-        fetchPullRequestState: input.fetchPullRequestState,
+        eraseSlotData: input.eraseSlotData,
         holder: input.holder,
         leaseMs: input.leaseMs,
         waitTotalMs: 0,
@@ -3301,7 +4282,7 @@ async function assignEnvironmentConfigLease(input: {
     );
   }
 
-  const previousSlug = input.recordedLease?.slug ?? null;
+  const previousSlug = heldLease?.slug ?? input.recordedSlug;
   return {
     lease,
     outcome: heldLease ? "moved" : "assigned",
@@ -3327,41 +4308,115 @@ function toEnvironmentConfigLease(lease: {
   } satisfies EnvironmentConfigLease;
 }
 
+/** The slots the semaphore currently leases to this holder (usually 0 or 1; >1 heals via adoption). */
+async function listSlotsLeasedToHolder(semaphore: PreviewSemaphoreResourceClient, holder: string) {
+  const resources = await semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
+  return resources.filter(
+    (resource) => resource.leaseState === "leased" && resource.holder === holder,
+  );
+}
+
 /**
- * Find a lease the semaphore already attributes to this holder and re-issue it
- * under a fresh leaseId (safe force: the slot is already ours). Heals the
+ * The semaphore-truth ownership primitive: find the slot(s) the semaphore
+ * currently leases to this holder and re-issue the preferred one under a
+ * fresh leaseId (safe force: the slot is already ours). The re-issue doubles
+ * as the renewal, so callers never store or compare leaseIds — dual-truth
+ * comparisons between a recorded lease and the semaphore's answer are what
+ * produced the steal-then-skip bugs this replaced. This also heals the
  * acquire-then-cancelled gap where a lease exists server-side but was never
- * recorded in the PR body, so a holder never accumulates a second slot. The
- * recorded-but-unrenewable slug is deliberately NOT excluded: if the list
- * still attributes it to this holder, re-issuing our own lease is idempotent
- * and adopting beats leasing a second slot.
+ * recorded in the PR body, so a holder never accumulates a second slot
+ * (preferSlug wins; extra holds expire on their own).
+ *
+ * onAdopted is a per-lease ready check (deploy erases unknown-provenance
+ * slots there); returning false moves on to the holder's next slot, if any.
  */
-async function adoptExistingHolderLease(input: {
+async function adoptLeaseHeldBySemaphore(input: {
   holder: string;
   leaseMs: number;
+  onAdopted?: (lease: PreviewSemaphoreLease) => Promise<boolean>;
+  preferSlug: string | null;
   semaphore: PreviewSemaphoreResourceClient;
 }): Promise<EnvironmentConfigLease | null> {
-  const resources = await input.semaphore.list({ type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE });
-  const held = resources.filter(
-    (resource) => resource.leaseState === "leased" && resource.holder === input.holder,
+  const held = (await listSlotsLeasedToHolder(input.semaphore, input.holder)).sort(
+    (left, right) =>
+      Number(right.slug === input.preferSlug) - Number(left.slug === input.preferSlug),
   );
   for (const resource of held) {
-    const repaired = await input.semaphore.acquireSpecific({
+    const reissued = await input.semaphore.acquireSpecific({
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: resource.slug,
       leaseMs: input.leaseMs,
       holder: input.holder,
       force: true,
     });
-    if (repaired) {
-      logPreview(
-        `lease adopted: the semaphore already had ${repaired.slug} leased to ${input.holder} ` +
-          `(a previous run was cancelled before recording it); re-issued until ${formatUntil(repaired.expiresAt)}`,
-      );
-      return toEnvironmentConfigLease(repaired);
+    if (!reissued) {
+      continue;
     }
+    logPreview(
+      `lease held: the semaphore attributes ${reissued.slug} to ${input.holder}; ` +
+        `re-issued (renewed) until ${formatUntil(reissued.expiresAt)}`,
+    );
+    if (input.onAdopted && !(await input.onAdopted(reissued))) {
+      continue;
+    }
+    return toEnvironmentConfigLease(reissued);
   }
   return null;
+}
+
+/**
+ * Slot affinity for a lapsed lease: the PR body says this PR's deployment
+ * lives on recordedSlug, and if the semaphore says nobody holds that slot,
+ * take it back. Non-force, so the semaphore still arbitrates — a slot someone
+ * else holds returns null and the caller refuses or moves elsewhere; the
+ * recorded slug is only a hint about where to look, never authority. No
+ * erase: the deployment on the slot is this PR's own.
+ */
+async function retakeRecordedSlotIfFree(input: {
+  holder: string;
+  leaseMs: number;
+  recordedSlug: string | null;
+  semaphore: PreviewSemaphoreResourceClient;
+}): Promise<EnvironmentConfigLease | null> {
+  if (!input.recordedSlug) {
+    return null;
+  }
+  const retaken = await input.semaphore.acquireSpecific({
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+    slug: input.recordedSlug,
+    leaseMs: input.leaseMs,
+    holder: input.holder,
+  });
+  if (!retaken) {
+    return null;
+  }
+  logPreview(
+    `lease re-acquired: ${retaken.slug} had lapsed but was still free; ${input.holder} holds it again until ${formatUntil(retaken.expiresAt)}`,
+  );
+  return toEnvironmentConfigLease(retaken);
+}
+
+/**
+ * Why a slot action was refused: the semaphore no longer attributes a slot
+ * to this holder. CONTRACT: the message always contains the exact substring
+ * "no longer belongs to" — scripts/preview/flake-hunt-loop.sh and on-call
+ * humans grep for it to tell a slot steal apart from ordinary failures.
+ * Change both sides together.
+ */
+function describeLostSlotOwnership(input: {
+  currentHolder: string | null;
+  displaySlot: CloudflarePreviewSlotDisplay | null;
+  holder: string;
+}): string {
+  if (!input.displaySlot) {
+    return `This PR records deployments, but the semaphore leases no slot to ${input.holder} — the slot they ran on no longer belongs to ${input.holder}.`;
+  }
+
+  const prUrl = holderPullRequestUrl(input.currentHolder);
+  return [
+    `Slot ${input.displaySlot.slug} no longer belongs to ${input.holder}: it is now leased by ${input.currentHolder ?? "someone else"}${prUrl ? ` (${prUrl})` : ""}.`,
+    `Their deployment has replaced this PR's apps on ${input.displaySlot.dopplerConfig}.`,
+  ].join(" ");
 }
 
 async function findEnvironmentConfigLeaseHolder(
@@ -3374,75 +4429,135 @@ async function findEnvironmentConfigLeaseHolder(
 }
 
 /**
- * Confirm this PR still holds its recorded lease before acting on the slot
- * (running e2e against it, or destroying its deployments). Renews when held;
- * re-takes an expired-but-free slot; refuses when the slot now belongs to
- * someone else.
+ * The slice of GitHub's compare API the deploy selection needs: the compare
+ * status plus the changed filenames. Injectable so unit tests can drive
+ * force-push shapes (404s, diverged history) without a network.
  */
-async function reassertEnvironmentConfigLease(input: {
-  holder: string;
-  lease: EnvironmentConfigLease;
-  leaseMs: number;
-  semaphore: PreviewSemaphoreResourceClient;
-}): Promise<
-  | { ok: true; lease: EnvironmentConfigLease }
-  | { ok: false; currentHolder: string | null; message: string }
-> {
-  const renewed = await input.semaphore.renew({
-    type: input.lease.type,
-    slug: input.lease.slug,
-    leaseId: input.lease.leaseId,
-    leaseMs: input.leaseMs,
-  });
-  if (renewed) {
-    logPreview(
-      `lease renewed: ${renewed.slug} held by ${input.holder} until ${formatUntil(renewed.expiresAt)}`,
+type PreviewCompareFetcher = (basehead: string) => Promise<{
+  status: string;
+  changedFilenames: string[];
+}>;
+
+/** The real {@link PreviewCompareFetcher}: GitHub's compare API behind the transient-failure retry. */
+function makeGithubCompareFetcher(input: {
+  githubToken: string;
+  repositoryFullName: string;
+}): PreviewCompareFetcher {
+  const octokit = new Octokit({ auth: input.githubToken });
+  const [owner, repo] = splitRepositoryFullName(input.repositoryFullName);
+  return async (basehead) => {
+    const comparison = await withGithubRetry("compareCommits", () =>
+      octokit.rest.repos.compareCommitsWithBasehead({ owner, repo, basehead }),
     );
-    return { ok: true, lease: toEnvironmentConfigLease(renewed) };
+    return {
+      status: comparison.data.status,
+      changedFilenames:
+        comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [],
+    };
+  };
+}
+
+/**
+ * GitHub's three-dot compare diffs the head against the MERGE BASE of the two
+ * commits, not against the base commit itself. When the previously deployed
+ * head is an ancestor of the current head ("ahead" — the normal push), that
+ * is exactly the diff we want. After a force-push that rewrites history the
+ * deployed head is no longer an ancestor ("diverged") — or the new head is an
+ * ancestor of the deployed one ("behind", a straight rollback) — and the file
+ * list misses every change that existed only on the deployed side. The slot
+ * still RUNS that code, so apps it touched need a redeploy the diff would
+ * never select. Returns the reason to deploy the whole fleet instead, or null
+ * when the diff is trustworthy. Over-deploying is idempotent and costs
+ * minutes; under-deploying strands force-pushed-away code on the slot.
+ */
+function describeForcePushCompareHazard(status: string): string | null {
+  if (status === "ahead" || status === "identical") {
+    return null;
   }
 
-  const retaken = await input.semaphore.acquireSpecific({
-    type: input.lease.type,
-    slug: input.lease.slug,
-    leaseMs: input.leaseMs,
-    holder: input.holder,
-  });
-  if (retaken) {
-    logPreview(
-      `lease re-acquired: ${retaken.slug} had expired but was still free; ${input.holder} holds it again until ${formatUntil(retaken.expiresAt)}`,
-    );
-    return { ok: true, lease: toEnvironmentConfigLease(retaken) };
-  }
+  return `compare status "${status}" means the last deployed head is not an ancestor of the current head (force-push or rollback), so the file diff cannot see changes that existed only on the deployed side`;
+}
 
-  const currentHolder = await findEnvironmentConfigLeaseHolder(input.semaphore, input.lease.slug);
-  if (currentHolder === input.holder) {
-    // The slot is still ours — only the recorded leaseId is stale (a renewal's
-    // leaseId never made it into the PR body). Re-issuing our own lease is not
-    // stealing, so force is safe here.
-    const repaired = await input.semaphore.acquireSpecific({
-      type: input.lease.type,
-      slug: input.lease.slug,
-      leaseMs: input.leaseMs,
-      holder: input.holder,
-      force: true,
-    });
-    if (repaired) {
+/** GitHub compare 404s when a force-push rewrote the base commit out of the PR's history. */
+function isGithubNotFoundError(error: unknown) {
+  return (error as { status?: unknown } | null)?.status === 404;
+}
+
+/**
+ * One cheap "is this app actually serving?" check against a readiness URL.
+ * Returns ok=false with a detail string instead of throwing, so callers treat
+ * every failure mode (503, DNS, timeout) uniformly as "not serving".
+ */
+type PreviewAppServingProbe = (url: URL) => Promise<{ ok: boolean; detail: string }>;
+
+/** Deadline for one {@link PreviewAppServingProbe} GET — a healthy app answers in well under a second. */
+const previewServingProbeTimeoutMs = 15_000;
+
+/** The real {@link PreviewAppServingProbe}: a single GET, no polling — this checks a deploy that already passed readiness once. */
+async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const status = await fetchReadinessStatus(
+      url,
+      AbortSignal.timeout(previewServingProbeTimeoutMs),
+    );
+    return { ok: status >= 200 && status < 300, detail: `HTTP ${status}` };
+  } catch (error) {
+    return { ok: false, detail: formatPreviewErrorMessage(error) };
+  }
+}
+
+/**
+ * Recorded-green apps ("deployed"/"awaiting-tests") whose deployment is no
+ * longer actually serving. A green row is normally trustworthy — but an
+ * erase-data on the slot (the documented remedy when merged-main lands a
+ * non-migratable schema change) parks the os worker behind a 503 and wipes
+ * the slot's shared data WITHOUT touching the recorded PR-body state. Trusting
+ * the stale green rows then redeploys only the failed apps and leaves the slot
+ * half-dead: observed 2026-07-09 on preview-7 (PR #1793), where e2e failed
+ * with "no such column: epoch", the erase parked os and emptied auth's D1
+ * (OAuth clients), and the retry — os and auth both recorded green — never
+ * redeployed either; auth had to be redeployed by hand. Probing each green
+ * app's readiness URL once makes erase + re-run self-healing: the parked app
+ * fails its probe, joins the retry selection, and pulls its dependencies
+ * (auth, whose OAuth-client seed lives in the wiped D1) along via
+ * expandPreviewDependencies.
+ */
+async function selectRecordedGreenAppsNotServing(params: {
+  alreadySelectedSlugs: ReadonlySet<CloudflarePreviewAppSlugType>;
+  previousState: CloudflarePreviewState;
+  probeAppServing: PreviewAppServingProbe;
+}): Promise<CloudflarePreviewAppSlugType[]> {
+  const notServing: CloudflarePreviewAppSlugType[] = [];
+  for (const entry of Object.values(params.previousState.apps)) {
+    const app = cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType];
+    if (
+      app == null ||
+      params.alreadySelectedSlugs.has(app.slug) ||
+      !entry.publicUrl ||
+      !["awaiting-tests", "deployed"].includes(entry.status)
+    ) {
+      continue;
+    }
+
+    const probeFailures: string[] = [];
+    for (const url of resolvePreviewReadinessUrls({
+      publicUrl: entry.publicUrl,
+      readyUrlPath: app.previewReadyUrlPath,
+    })) {
+      const probe = await params.probeAppServing(url);
+      if (!probe.ok) {
+        probeFailures.push(`${url} answered ${probe.detail}`);
+      }
+    }
+    if (probeFailures.length > 0) {
       logPreview(
-        `lease repaired: ${repaired.slug} was already held by ${input.holder} under a different leaseId (stale PR body state); re-issued until ${formatUntil(repaired.expiresAt)}`,
+        `app ${app.slug} selected: recorded ${entry.status} but not actually serving (${probeFailures.join("; ")}) — the slot was likely erased since that deploy`,
       );
-      return { ok: true, lease: toEnvironmentConfigLease(repaired) };
+      notServing.push(app.slug);
     }
   }
 
-  const prUrl = holderPullRequestUrl(currentHolder);
-  return {
-    ok: false,
-    currentHolder,
-    message: [
-      `Slot ${input.lease.slug} no longer belongs to ${input.holder}: it is now leased by ${currentHolder ?? "someone else"}${prUrl ? ` (${prUrl})` : ""}.`,
-      `Their deployment has replaced this PR's apps on ${input.lease.dopplerConfig}.`,
-    ].join(" "),
-  };
+  return notServing;
 }
 
 async function selectPreviewAppsForPullRequest(input: {
@@ -3452,56 +4567,83 @@ async function selectPreviewAppsForPullRequest(input: {
   pullRequestHeadSha: string;
   pullRequestNumber: number;
   repositoryFullName: string;
+  /** Injectable for tests; defaults to {@link makeGithubCompareFetcher}. */
+  fetchCompare?: PreviewCompareFetcher;
+  /** Injectable for tests; defaults to {@link probePreviewAppServingOnce}. */
+  probeAppServing?: PreviewAppServingProbe;
 }) {
+  const fetchCompare = input.fetchCompare ?? makeGithubCompareFetcher(input);
+  const probeAppServing = input.probeAppServing ?? probePreviewAppServingOnce;
+
+  // Non-green recorded state is retried on EVERY path — not only when the
+  // head is unchanged. A push whose diff misses the failed apps must not
+  // leave them wedged (see the comment in selectPreviewAppsNeedingRetry).
+  const retryApps = selectPreviewAppsNeedingRetry({
+    previousState: input.previousState,
+  });
+
   const compareBaseSha = resolvePreviewCompareBaseSha(input);
-  if (!compareBaseSha) {
-    return [];
-  }
+  const diffSelectedSlugs: CloudflarePreviewAppSlugType[] = [];
   if (compareBaseSha === input.pullRequestHeadSha) {
-    const retryApps = selectPreviewAppsNeedingRetry({
-      previousState: input.previousState,
-      pullRequestHeadSha: input.pullRequestHeadSha,
-    });
     logPreview(
       retryApps.length > 0
         ? `head sha unchanged since the last run — retrying apps that didn't reach a green state: ${retryApps.map((app) => app.slug).join(", ")}`
         : "head sha unchanged since the last run and every app finished — nothing to retry",
     );
-    return retryApps;
-  }
-
-  const octokit = new Octokit({ auth: input.githubToken });
-  const [owner, repo] = splitRepositoryFullName(input.repositoryFullName);
-  const comparison = await withGithubRetry("compareCommits", () =>
-    octokit.rest.repos.compareCommitsWithBasehead({
-      owner,
-      repo,
-      basehead: `${compareBaseSha}...${input.pullRequestHeadSha}`,
-    }),
-  );
-  const changedFiles =
-    comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
-  logPreview(
-    `selecting apps by diff ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} (${changedFiles.length} changed files)`,
-  );
-
-  const sharedPathHit = changedFiles.find((filename) =>
-    matchesPreviewPath(filename, cloudflarePreviewSharedPaths),
-  );
-  if (sharedPathHit) {
-    logPreview(
-      `shared preview infrastructure changed (${sharedPathHit}) — deploying ALL preview apps`,
-    );
-    return Object.values(cloudflarePreviewApps);
-  }
-
-  const selectedSlugs = new Set<CloudflarePreviewAppSlugType>();
-  for (const app of Object.values(cloudflarePreviewApps)) {
-    const hit = changedFiles.find((filename) => matchesPreviewPath(filename, app.paths));
-    if (hit) {
-      logPreview(`app ${app.slug} selected: ${hit} changed`);
-      selectedSlugs.add(app.slug);
+  } else {
+    let compared: Awaited<ReturnType<PreviewCompareFetcher>>;
+    try {
+      compared = await fetchCompare(`${compareBaseSha}...${input.pullRequestHeadSha}`);
+    } catch (error) {
+      if (!isGithubNotFoundError(error)) {
+        throw error;
+      }
+      logPreview(
+        `compare ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} returned 404 — a force-push rewrote the last deployed head out of history, so no diff can be trusted; deploying ALL preview apps`,
+      );
+      return Object.values(cloudflarePreviewApps);
     }
+
+    const compareHazard = describeForcePushCompareHazard(compared.status);
+    if (compareHazard) {
+      logPreview(`${compareHazard} — deploying ALL preview apps`);
+      return Object.values(cloudflarePreviewApps);
+    }
+    logPreview(
+      `selecting apps by diff ${compareBaseSha.slice(0, 7)}...${input.pullRequestHeadSha.slice(0, 7)} (${compared.changedFilenames.length} changed files)`,
+    );
+
+    const sharedPathHit = compared.changedFilenames.find((filename) =>
+      matchesPreviewPath(filename, cloudflarePreviewSharedPaths),
+    );
+    if (sharedPathHit) {
+      logPreview(
+        `shared preview infrastructure changed (${sharedPathHit}) — deploying ALL preview apps`,
+      );
+      return Object.values(cloudflarePreviewApps);
+    }
+
+    for (const app of Object.values(cloudflarePreviewApps)) {
+      const hit = compared.changedFilenames.find((filename) =>
+        matchesPreviewPath(filename, app.paths),
+      );
+      if (hit) {
+        logPreview(`app ${app.slug} selected: ${hit} changed`);
+        diffSelectedSlugs.push(app.slug);
+      }
+    }
+  }
+
+  const selectedSlugs = new Set<CloudflarePreviewAppSlugType>([
+    ...diffSelectedSlugs,
+    ...retryApps.map((app) => app.slug),
+  ]);
+  for (const slug of await selectRecordedGreenAppsNotServing({
+    alreadySelectedSlugs: selectedSlugs,
+    previousState: input.previousState,
+    probeAppServing,
+  })) {
+    selectedSlugs.add(slug);
   }
 
   const expanded = expandPreviewDependencies([...selectedSlugs]);
@@ -3514,23 +4656,22 @@ async function selectPreviewAppsForPullRequest(input: {
   return expanded.map((slug) => cloudflarePreviewApps[slug]);
 }
 
-function selectPreviewAppsNeedingRetry(params: {
-  previousState: CloudflarePreviewState;
-  pullRequestHeadSha: string;
-}) {
-  // Failed state is retried regardless of which head produced it: a slot
-  // whose deploy failed at an OLD head stays wedged if the next push's diff
-  // doesn't select those apps (observed: an envs.ts-only fix push selected
-  // nothing, deploy skipped "nothing to deploy", the test lane then skipped
-  // its stale recorded apps and the whole check went GREEN on a slot with
-  // three deploy-failed apps). awaiting-tests keeps its same-head guard: at
-  // an old head it just means "an older deploy finished and its e2e never
-  // ran", which the current head's normal diff selection supersedes.
+function selectPreviewAppsNeedingRetry(params: { previousState: CloudflarePreviewState }) {
+  // Any non-green state is retried regardless of which head produced it. For
+  // the failed statuses: a slot whose deploy failed at an OLD head stays
+  // wedged if the next push's diff doesn't select those apps (observed: an
+  // envs.ts-only fix push selected nothing, deploy skipped "nothing to
+  // deploy", the test lane then skipped its stale recorded apps and the
+  // whole check went GREEN on a slot with three deploy-failed apps). For
+  // awaiting-tests: at any head it means a deploy landed and its e2e never
+  // ran (a cancelled run), so redeploying it at the current head — idempotent
+  // and cheap — is what makes the test lane's "no app recorded at this head"
+  // an honest green skip (observed 2026-07-10: run 7 deployed then got
+  // cancelled by run 8's push; run 8's one-line non-app diff then skipped
+  // green while every app sat at awaiting-tests).
   const retrySlugs = Object.values(params.previousState.apps)
-    .filter(
-      (entry) =>
-        ["claim-failed", "deploy-failed", "tests-failed"].includes(entry.status) ||
-        (entry.status === "awaiting-tests" && entry.headSha === params.pullRequestHeadSha),
+    .filter((entry) =>
+      ["awaiting-tests", "claim-failed", "deploy-failed", "tests-failed"].includes(entry.status),
     )
     .map((entry) => CloudflarePreviewAppSlug.parse(entry.appSlug));
 
@@ -3561,11 +4702,27 @@ function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugTy
 }
 
 function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
-  // One parallel batch. OS bakes auth JWKS during deployment, but its
-  // deploy-time JWKS fetch polls the slot's auth worker until it responds
-  // (apps/os/scripts/deploy.ts fetchJwksWithRetry), so it no longer needs the
-  // auth deploy sequenced before it.
-  return apps.length > 0 ? [[...apps]] : [];
+  const selectedSlugs = new Set(apps.map((app) => app.slug));
+  const pendingSlugs = new Set(selectedSlugs);
+  const batches: PreviewAppRuntime[][] = [];
+
+  while (pendingSlugs.size > 0) {
+    const batch = apps.filter(
+      (app) =>
+        pendingSlugs.has(app.slug) &&
+        (app.previewDependencies ?? []).every(
+          (dependency) => !selectedSlugs.has(dependency) || !pendingSlugs.has(dependency),
+        ),
+    );
+    if (batch.length === 0) {
+      throw new Error(`Preview app dependencies contain a cycle: ${[...pendingSlugs].join(", ")}`);
+    }
+
+    batches.push(batch);
+    for (const app of batch) pendingSlugs.delete(app.slug);
+  }
+
+  return batches;
 }
 
 async function mapWithConcurrency<T, Result>(
@@ -3732,6 +4889,8 @@ async function resolvePullRequestPreviewContext(params: {
     githubToken: params.githubToken,
     pullRequestBaseSha: pullRequest.data.base.sha,
     pullRequestHeadSha: pullRequest.data.head.sha,
+    pullRequestIsDraft: pullRequest.data.draft === true,
+    pullRequestLabels: pullRequest.data.labels.map((label) => label.name),
     pullRequestNumber: params.pullRequestNumber,
     repositoryFullName,
     workflowRunUrl:
@@ -3752,28 +4911,40 @@ function resolvePreviewCompareBaseSha(params: {
 export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
+  adoptLeaseHeldBySemaphore,
   assignEnvironmentConfigLease,
   claimEnvironmentConfigLease,
   classifyEnvironmentConfigLeases,
   classifyLeaseForReclaim,
+  decideDraftPreviewPolicy,
   describeEnvironmentConfigLeases,
+  describeForcePushCompareHazard,
+  describeLostSlotOwnership,
+  diagnosePreviewFleetCapacity,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
   pullRequestHolder,
-  reassertEnvironmentConfigLease,
+  pullRequestWouldClaimPreviewSlot,
+  requireExplicitReclaimForce,
+  retakeRecordedSlotIfFree,
   resolveSlotWaitTotalMs,
+  selectExpiredLeasesForGc,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
   readPlaywrightRetryTelemetry,
+  readPreviewAppConfig,
   readVitestRetryTelemetry,
   reconcileEnvironmentConfigLeaseResources,
+  releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   renderPreviewRetrySummary,
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
+  resolvePreviewTestBaseUrlEnvironment,
+  selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
   syncPreviewInventory,
@@ -3803,27 +4974,6 @@ function canRunPreviewTests(entry: z.infer<typeof CloudflarePreviewAppEntry> | u
   return Boolean(
     entry?.publicUrl && ["awaiting-tests", "deployed", "tests-failed"].includes(entry.status),
   );
-}
-
-async function runCommandWithRetries(
-  params: Parameters<typeof runCommand>[0] & {
-    maxAttempts: number;
-    retryDelayMs: number;
-  },
-) {
-  let attempt = 1;
-  let lastResult = await runCommand(params);
-
-  while (attempt < params.maxAttempts && lastResult.exitCode !== 0) {
-    console.error(
-      `Command failed on attempt ${attempt}/${params.maxAttempts}. Retrying in ${params.retryDelayMs}ms...`,
-    );
-    await sleep(params.retryDelayMs, params.signal);
-    attempt += 1;
-    lastResult = await runCommand(params);
-  }
-
-  return lastResult;
 }
 
 async function sleep(ms: number, signal?: AbortSignal) {

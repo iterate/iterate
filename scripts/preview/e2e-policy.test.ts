@@ -6,17 +6,13 @@ import {
   E2E_CI_RETRIES,
   E2E_HEAVY_TEST_TIMEOUT_MS,
   E2E_TEST_TIMEOUT_MS,
-  OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS,
+  OS_PREVIEW_LANE_TIMEOUT_SECS,
   PREVIEW_RUN_WATCHDOG_SECS,
   SPEC_ACTION_TIMEOUT_MS,
   SPEC_EXPECT_TIMEOUT_MS,
   SPEC_TEST_TIMEOUT_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
-import {
-  cloudflarePreviewApps,
-  defaultPreviewTestMaxAttempts,
-  previewInternals,
-} from "./preview.ts";
+import { cloudflarePreviewApps, previewInternals } from "./preview.ts";
 
 // Guards the e2e retry/timeout policy (docs/testing.md#retries-and-timeouts):
 // the budget ladder stays ordered, files that cannot import the constants
@@ -32,7 +28,7 @@ describe("budget ladder", () => {
       SPEC_TEST_TIMEOUT_MS,
       E2E_TEST_TIMEOUT_MS,
       E2E_HEAVY_TEST_TIMEOUT_MS,
-      OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS * 1000,
+      OS_PREVIEW_LANE_TIMEOUT_SECS * 1000,
       PREVIEW_RUN_WATCHDOG_SECS * 1000,
     ];
     for (let i = 1; i < ladder.length; i++) {
@@ -60,6 +56,11 @@ describe("budget ladder", () => {
       }
     };
     visit(resolve(repoRoot, "apps/os/e2e"));
+    // The root Playwright specs are part of the same preview lane; a spec
+    // that overrides its timeout above the heavy ceiling becomes the lane's
+    // worst-case tail (2x with its retry) — agent-chat sat at 480s until
+    // 2026-07-09.
+    visit(resolve(repoRoot, "specs"));
     expect(offenders).toEqual([]);
   });
 });
@@ -83,15 +84,13 @@ describe("retries live in exactly one layer", () => {
     }
   });
 
-  it("the os preview lane wraps vitest in a plain watchdog — no lane-level retry", () => {
+  it("the os preview lane wraps both sub-lanes in plain watchdogs — no lane-level retry", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
-    expect(script).toContain(`timeout ${OS_PREVIEW_VITEST_LANE_TIMEOUT_SECS} pnpm e2e`);
-    // Exactly one invocation: a second occurrence means a retry wrapper came back.
+    expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e`);
+    expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec`);
+    // Exactly one invocation each: a second occurrence means a retry wrapper came back.
     expect(script.split("pnpm e2e --project node")).toHaveLength(2);
-  });
-
-  it("the whole-lane test command machinery stays pinned to a single attempt", () => {
-    expect(defaultPreviewTestMaxAttempts).toBe(1);
+    expect(script.split("pnpm --dir ../.. spec")).toHaveLength(2);
   });
 
   it("the onboarding smoke gets one retry, like every other test", () => {

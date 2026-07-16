@@ -26,7 +26,12 @@ import {
   resolveItxAuth,
   type AgentConnectionStatus,
 } from "./agent-connection.ts";
-import { formatActivitySummary, formatStepLine, streamingTail } from "./feed-format.ts";
+import {
+  formatActivitySummary,
+  formatLiveActivityLabel,
+  formatStepLine,
+  streamingTail,
+} from "./feed-format.ts";
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
@@ -227,8 +232,13 @@ function ChatHeader(props: { status: AgentConnectionStatus; notice: string; even
 }
 
 function FeedItem(props: { item: AgentUiItem }) {
-  if (props.item.kind === "activity") return <SettledActivity activity={props.item} />;
-  return <Message item={props.item} />;
+  const item = props.item;
+  if (item.kind === "activity") return <SettledActivity activity={item} />;
+  if (item.kind === "user" || item.kind === "assistant") return <Message item={item} />;
+  if (item.kind === "child-stream-created") {
+    return <text fg={COLORS.textMuted}>✦ child stream created: {item.childPath}</text>;
+  }
+  return <text fg={COLORS.textMuted}>✦ {item.text}</text>;
 }
 
 function Message(props: { item: AgentUiMessageItem }) {
@@ -257,7 +267,61 @@ function SettledActivity(props: { activity: AgentUiActivity }) {
   );
 }
 
+/** Shared 100ms clock for live "Running code 0.9s" — useSyncExternalStore,
+ * not useState+setInterval, so the snapshot is stable between ticks. */
+let liveCodeClockNow = Date.now();
+const liveCodeClockListeners = new Set<() => void>();
+let liveCodeClockTimer: ReturnType<typeof setInterval> | undefined;
+
+function subscribeLiveCodeClock(onStoreChange: () => void) {
+  liveCodeClockListeners.add(onStoreChange);
+  liveCodeClockNow = Date.now();
+  if (liveCodeClockTimer == null) {
+    liveCodeClockTimer = setInterval(() => {
+      liveCodeClockNow = Date.now();
+      for (const listener of liveCodeClockListeners) listener();
+    }, 100);
+  }
+  // Notify after subscribe returns so the first snapshot is current wall time
+  // (updating the scalar alone does not re-render useSyncExternalStore).
+  // Skip if already unsubscribed (Strict Mode remount / codeRunning flip).
+  queueMicrotask(() => {
+    if (liveCodeClockListeners.has(onStoreChange)) onStoreChange();
+  });
+  return () => {
+    liveCodeClockListeners.delete(onStoreChange);
+    if (liveCodeClockListeners.size === 0 && liveCodeClockTimer != null) {
+      clearInterval(liveCodeClockTimer);
+      liveCodeClockTimer = undefined;
+    }
+  };
+}
+
+function getLiveCodeClockSnapshot() {
+  // Idle: refresh only when a full tick has elapsed so remounts aren't stuck
+  // on a stale freeze, but consecutive getSnapshot calls stay Object.is-stable.
+  if (liveCodeClockTimer == null) {
+    const wall = Date.now();
+    if (wall - liveCodeClockNow >= 100) liveCodeClockNow = wall;
+  }
+  return liveCodeClockNow;
+}
+
 function LiveActivity(props: { activity: AgentUiActivity }) {
+  // Tick while code runs so "Running code 0.9s" counts up without waiting
+  // for feed events (script execution often emits nothing mid-run).
+  const codeRunning = props.activity.steps.some(
+    (step) => step.kind === "code" && step.status === "running",
+  );
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (!codeRunning) return () => {};
+      return subscribeLiveCodeClock(onStoreChange);
+    },
+    [codeRunning],
+  );
+  const nowMs = useSyncExternalStore(subscribe, getLiveCodeClockSnapshot, getLiveCodeClockSnapshot);
+
   const lastStep = props.activity.steps[props.activity.steps.length - 1];
   const thinking = lastStep?.kind === "llm" ? streamingTail(lastStep.thinkingText) : "";
   const streamed =
@@ -268,9 +332,7 @@ function LiveActivity(props: { activity: AgentUiActivity }) {
         : "";
   return (
     <box flexDirection="column">
-      <text fg={props.activity.status === "waiting" ? COLORS.textMuted : COLORS.warning}>
-        ✦ {props.activity.status === "waiting" ? "waiting" : "working…"}
-      </text>
+      <text fg={COLORS.warning}>✦ {formatLiveActivityLabel(props.activity, nowMs)}</text>
       {props.activity.steps.map((step) => (
         <text key={step.id} fg={COLORS.textMuted}>
           {"  "}· {formatStepLine(step)}

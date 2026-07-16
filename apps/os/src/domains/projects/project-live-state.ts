@@ -1,0 +1,30 @@
+import type { ProjectProcessorState } from "./project-processor-contract.ts";
+import type { StreamIndexRow } from "./stream-database.ts";
+import type { AgentStatusRow } from "./agent-status-database.ts";
+
+/**
+ * The project's LIVE state — what `itx.liveState` exposes and the dashboard renders.
+ *
+ * This is PROJECT state, NOT stream-processor state. The project Durable Object
+ * assembles it from independent sources, each a peer slice:
+ * - `reduced` — the event-sourced project facts (created flag, agent/repo/secret
+ *   catalogs) folded by the project processor. One contributor, not the base.
+ * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
+ *   its own SQLite (recency, counts). Nothing to do with the processor.
+ * - `agents` — the agents roster: every agent stream's merged status record
+ *   (busy, title, note, shortStatus), same SQLite home as the streams index.
+ * - `liveDemo` — plain DO memory, for the live-state playground.
+ *
+ * A `useLiveState` selector picks whichever slice a component renders, so a
+ * change in one slice never re-renders watchers of another.
+ */
+export type ProjectLiveState = {
+  /** Event-sourced project facts, folded by the project processor — one source among several. */
+  reduced: ProjectProcessorState;
+  /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
+  streamsIndex: Record<string, StreamIndexRow>;
+  /** The agents roster keyed by agent path — each agent's merged status record, folded from its status-changed patches. */
+  agents: Record<string, AgentStatusRow>;
+  /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
+  liveDemo: { count: number };
+};

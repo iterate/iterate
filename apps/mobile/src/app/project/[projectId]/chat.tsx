@@ -33,6 +33,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import type { RpcStub } from "capnweb";
 import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
@@ -46,7 +47,7 @@ import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
 import { loadAndFollowThread, threadQueryKey } from "../../../lib/live-thread.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
-import type { StreamEvent } from "../../../../../os/src/types.ts";
+import type { Agent, StreamEvent } from "../../../../../os/src/itx-api.generated.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ChatScreen() {
@@ -87,9 +88,9 @@ export default function ChatScreen() {
     mutationFn: async (input: { message: string; files: PickedImage[] }) => {
       const itx = await getItxSession(baseUrl!);
       const project = await itx.projects.get(projectId);
-      const agent = project.agents.get(path);
+      const agent = project.agents.get(path) as RpcStub<Agent>;
       if (input.files.length === 0) {
-        await agent.sendMessage(input.message);
+        await agent.message(input.message);
         return;
       }
       // Same shape as the web composer: ONE addFiles call → one input event
@@ -250,11 +251,24 @@ function FeedList({
 }
 
 function FeedItem({ item }: { item: AgentUiItem }) {
-  if (item.kind === "activity") return <ActivityCard activity={item} />;
-  if (item.kind === "stream-woken") {
-    return <Text style={styles.wakeMarker}>— {item.text || "stream woke"} —</Text>;
+  switch (item.kind) {
+    case "activity":
+      return <ActivityCard activity={item} />;
+    case "stream-woken":
+      return <Text style={styles.wakeMarker}>— {item.text || "stream woke"} —</Text>;
+    case "child-stream-created":
+      return <Text style={styles.wakeMarker}>— created child stream {item.childPath} —</Text>;
+    case "stream-paused":
+    case "stream-resumed":
+      return (
+        <Text style={styles.wakeMarker}>
+          — {item.reason == null ? item.text : `${item.text}: ${item.reason}`} —
+        </Text>
+      );
+    case "user":
+    case "assistant":
+      return <MessageBubble message={item} />;
   }
-  return <MessageBubble message={item} />;
 }
 
 function MessageBubble({ message }: { message: AgentUiMessageItem }) {

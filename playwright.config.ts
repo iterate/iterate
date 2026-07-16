@@ -8,6 +8,9 @@ import {
 import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 
 const videoMode = process.env.VIDEO_MODE === "1";
+// CI retry artifacts already include screenshots/traces; retaining videos can
+// leave ffmpeg workers alive after a retry and keep the job open.
+const videoArtifactsEnabled = videoMode || !process.env.CI;
 
 /** Note: we use APP_CONFIG_BASE_URL as the *os* base url, even though that same variable name is used for other services too */
 const configuredOsBaseUrl = process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, "");
@@ -26,7 +29,10 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  workers: process.env.CI ? 6 : 1,
+  // 8 ≈ the Depot box's core count; the lane is network-bound (each spec
+  // waits on a deployed slot) and a full run peaked ~30% CPU at 6, so the
+  // extra workers shave the tail without starving the concurrent vitest lane.
+  workers: process.env.CI ? 8 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
     ["list"],
@@ -42,7 +48,7 @@ export default defineConfig({
     baseURL: osBaseUrl,
     screenshot: "only-on-failure",
     trace: process.env.CI ? "on-first-retry" : "retain-on-failure",
-    video: videoMode ? "on" : "retain-on-failure",
+    video: videoMode ? "on" : videoArtifactsEnabled ? "retain-on-failure" : "off",
   },
   projects: [
     {

@@ -1,6 +1,13 @@
 import { describe, expect, test } from "vitest";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
-import { RepoArtifactNameCodec } from "./utils.ts";
+import {
+  RepoArtifactNameCodec,
+  RepoNotSeededError,
+  base64ToBytes,
+  bytesToBase64,
+  classifyRepoAccessError,
+  isRepoNotSeededError,
+} from "./utils.ts";
 
 describe("RepoArtifactNameCodec", () => {
   test("round-trips project-scoped repo paths", () => {
@@ -31,6 +38,62 @@ describe("RepoArtifactNameCodec", () => {
     expect(() => RepoArtifactNameCodec.stringify({ projectId: "global", path: "/" })).toThrow(
       /reserved/,
     );
+  });
+});
+
+describe("repo binary base64 lane", () => {
+  test("round-trips bytes a utf8 decode would corrupt", () => {
+    // PNG magic followed by invalid-utf8 continuation bytes.
+    const bytes = Uint8Array.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x80,
+    ]);
+    expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes);
+  });
+
+  test("rejects junk base64 with a caller-friendly error", () => {
+    expect(() => base64ToBytes("not base64!!!")).toThrow(/contentBase64 must be valid base64/);
+  });
+});
+
+describe("classifyRepoAccessError", () => {
+  test("wraps isomorphic-git's missing-ref clone failure (the unseeded-remote shape)", () => {
+    // What an empty Artifacts remote actually produces: the server answers
+    // HEAD with a branch that has no commits, and isomorphic-git's clone
+    // fails resolving it (observed verbatim during every prd bootstrap).
+    const raw = Object.assign(new Error("Could not find refs/heads/master."), {
+      code: "NotFoundError",
+    });
+    const classified = classifyRepoAccessError(raw);
+    expect(classified).toBeInstanceOf(RepoNotSeededError);
+    expect(isRepoNotSeededError(classified)).toBe(true);
+    expect((classified as Error).message).toContain("refs/heads/master");
+    expect((classified as Error).cause).toBe(raw);
+  });
+
+  test("wraps a missing Artifacts repo (NOT_FOUND — the pre-createArtifactRepo window)", () => {
+    const raw = Object.assign(new Error("repo not found"), { code: "NOT_FOUND" });
+    expect(isRepoNotSeededError(classifyRepoAccessError(raw))).toBe(true);
+  });
+
+  test("passes every other failure through unchanged", () => {
+    const network = new Error("fetch failed");
+    expect(classifyRepoAccessError(network)).toBe(network);
+    // A NotFoundError about something other than a ref (a missing object id)
+    // is repo corruption or a bad caller input, not the unseeded window.
+    const object = Object.assign(new Error("Could not find deadbeef."), {
+      code: "NotFoundError",
+    });
+    expect(classifyRepoAccessError(object)).toBe(object);
+    expect(classifyRepoAccessError(undefined)).toBe(undefined);
+    expect(classifyRepoAccessError("string error")).toBe("string error");
+  });
+
+  test("isRepoNotSeededError matches by name, the only identity that survives Workers RPC", () => {
+    expect(
+      isRepoNotSeededError(Object.assign(new Error("x"), { name: "RepoNotSeededError" })),
+    ).toBe(true);
+    expect(isRepoNotSeededError(new Error("x"))).toBe(false);
+    expect(isRepoNotSeededError(null)).toBe(false);
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  documentedProcessorContracts,
   eventDocs,
   getEventDocByPath,
   getEventDocByProcessorRoute,
@@ -31,14 +32,15 @@ describe("event docs catalog", () => {
     expect(getEventDocByType("events.iterate.com/stream/created")).toBe(event);
   });
 
-  it("keeps events whose public path does not start with the processor slug under the processor", () => {
-    const event = getEventDocByPath("agents/user-message-received");
+  it("uses the event namespace as the agent processor's public docs path", () => {
+    const event = getEventDocByPath("agents/context-added");
 
-    expect(event?.processor.slug).toBe("agent");
-    expect(event?.href).toBe("/docs/streams/processors/agent/events/agents/user-message-received");
+    expect(event?.processor.slug).toBe("agents");
+    expect(event?.processor.contractSlug).toBe("agent");
+    expect(event?.href).toBe("/docs/streams/processors/agents/events/context-added");
     expect(event?.routeParams).toEqual({
-      processorSlug: "agent",
-      _splat: "agents/user-message-received",
+      processorSlug: "agents",
+      _splat: "context-added",
     });
   });
 
@@ -46,7 +48,7 @@ describe("event docs catalog", () => {
     expect(
       getEventDocByProcessorRoute({
         processorSlug: "stream",
-        eventPath: "agents/user-message-received",
+        eventPath: "agents/context-added",
       }),
     ).toBeUndefined();
   });
@@ -97,5 +99,77 @@ describe("event docs catalog", () => {
   it("builds a non-empty processor and event catalog", () => {
     expect(processorDocs.length).toBeGreaterThan(5);
     expect(eventDocs.length).toBeGreaterThan(10);
+  });
+});
+
+describe("event docs examples", () => {
+  it("documents at least one example for every owned event type", () => {
+    const undocumented = eventDocs
+      .filter((event) => event.examples.length === 0)
+      .map((event) => event.type);
+    expect(
+      undocumented,
+      "every contract event needs an `examples` entry for the docs site",
+    ).toEqual([]);
+  });
+
+  it("parses every example payload against its event's payload schema", () => {
+    for (const contract of documentedProcessorContracts) {
+      for (const [type, definition] of Object.entries(contract.events)) {
+        for (const example of definition.examples ?? []) {
+          const result = definition.payloadSchema.safeParse(example.payload);
+          expect(
+            result.success,
+            `${type} example "${example.description}" must parse: ${result.error}`,
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("keeps every example payload JSON-serializable", () => {
+    for (const event of eventDocs) {
+      for (const example of event.examples) {
+        const roundTripped: unknown = JSON.parse(JSON.stringify(example.payload));
+        expect(roundTripped, `${event.type} example "${example.description}"`).toEqual(
+          example.payload,
+        );
+      }
+    }
+  });
+});
+
+describe("event docs cross-references", () => {
+  it("links events to the processors that emit and consume them", () => {
+    const event = getEventDocByType("events.iterate.com/agent/status-changed");
+
+    expect(event?.emittedBy.map((processor) => processor.contractSlug)).toEqual(
+      expect.arrayContaining(["agent"]),
+    );
+    expect(event?.consumedBy.map((processor) => processor.contractSlug)).toEqual(
+      expect.arrayContaining(["agent", "slack-agent"]),
+    );
+  });
+
+  it("links processor consumes/emits rows to owned event docs", () => {
+    const processor = getProcessorDocByPath("project");
+
+    expect(processor?.consumesAllEvents).toBe(true);
+    expect(processor?.emits.map((event) => event.type)).toContain(
+      "events.iterate.com/stream/subscription-configured",
+    );
+    const foreignEmit = processor?.emits.find(
+      (event) => event.type === "events.iterate.com/repo/create-requested",
+    );
+    expect(foreignEmit?.ownerContractSlug).toBe("repo");
+    expect(foreignEmit?.href).toBe("/docs/streams/processors/repo/events/create-requested");
+  });
+
+  it("links processor dependencies in both directions", () => {
+    const agent = getProcessorDocByPath("agent");
+    const capabilityHost = getProcessorDocByPath("capability-host");
+
+    expect(agent?.dependencies.map((dep) => dep.contractSlug)).toContain("capability-host");
+    expect(capabilityHost?.dependents.map((dep) => dep.contractSlug)).toContain("agent");
   });
 });

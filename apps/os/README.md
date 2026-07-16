@@ -8,8 +8,8 @@ It combines:
 - **itx** (`src/`) — the capnweb surface at `/api` plus
   every project-scoped domain: streams, repos, agents, secrets, dynamic
   workers, egress, capabilities. [`src/README.md`](./src/README.md)
-  is itx guide; [`src/types.ts`](./src/types.ts) is the
-  public contract.
+  is itx guide; [`src/itx-api.generated.ts`](./src/itx-api.generated.ts) is
+  the public contract (generated from the RpcTarget classes + zod schemas).
 - **The dashboard** — TanStack Start, TanStack Router, and TanStack Query for
   the authenticated UI (`src/routes/`, `src/components/`), talking to the
   itx through the React hooks (`src/itx/itx-react.tsx`).
@@ -21,9 +21,10 @@ It combines:
   builds) — dashboard, itx API, and every Durable Object class in a single
   script. See [docs/worker-topology.md](./docs/worker-topology.md).
 
-Slack and Google integrations are being rebuilt on itx (in flight);
-their pre-migration source was held in a quarantine folder during the
-migration (deleted once the integrations landed; git history has it).
+Integrations are connections at fully qualified paths
+(`/integrations/<slug>/<connection>`): built-ins (Slack, Google) are named
+members of `itx.integrations`, and projects mount their own through the
+capability table. See [docs/integrations.md](./docs/integrations.md).
 
 ## How To Use It
 
@@ -41,7 +42,6 @@ project-scoped:
 /projects/:projectSlug/repos[/*]
 /projects/:projectSlug/secrets
 /projects/:projectSlug/streams[/*]
-/projects/:projectSlug/settings
 /new-project
 /admin[/projects, /repl, /streams]
 /itx-repl
@@ -65,7 +65,6 @@ pnpm dev                 # local OS dev with Doppler-backed env (all workers in 
 pnpm typecheck           # TypeScript (includes route-tree freshness check)
 pnpm test                # unit tests
 pnpm e2e                 # real-worker e2e against a live deployment (engine suites + itx example matrix)
-pnpm e2e --project node  # just the node lane (skip the browser example matrix)
 pnpm cli itx run --eval 'return await itx.whoami()'
                          # run an itx script against the deployment in your Doppler config
 pnpm cli claude-mcp      # open Claude against the OS MCP server in your local Doppler config
@@ -73,6 +72,8 @@ doppler run --project os --config preview_2 -- pnpm run deploy
                          # deploy the explicitly selected Doppler config
 doppler run --project os --config prd -- pnpm run deploy
                          # production deploy
+doppler run --config prd -- pnpm cli session create --project <slug-or-id> --open
+                         # open one production project with a confined operator principal
 ```
 
 Use `pnpm run deploy`, not `pnpm deploy`; `deploy` is also a pnpm built-in.
@@ -80,11 +81,11 @@ Use `pnpm run deploy`, not `pnpm deploy`; `deploy` is also a pnpm built-in.
 ## Running Real-Worker Tests
 
 The e2e suite runs against a real OS deployment, not the Workers Vitest pool:
-`pnpm e2e` (config `e2e/vitest.config.ts`, one config with two projects — a
-`node` project covering the engine suites in `e2e/vitest/**` and the itx
-example matrix in `e2e/examples/**`, and a `browser` project running the
-matrix in a real browser). Start the worker in one terminal, then run tests
-from another
+`pnpm e2e` (config `e2e/vitest.config.ts`, one project named `node` covering
+the engine suites in `e2e/vitest/**` and the itx example matrix in
+`e2e/examples/**`; browser catalogue coverage is the root Playwright spec
+`specs/repl-examples.spec.ts`). Start the worker in one terminal, then run
+tests from another
 through the matching Doppler config. For local dev configs, test helpers read
 `.dev-server/dev-server.json` to find the selected port; deployed configs get
 `APP_CONFIG_BASE_URL` from Doppler. All lanes, targets, and the canonical env
@@ -152,7 +153,7 @@ doppler run --project os --config dev -- sh -lc '
 '
 ```
 
-Then call `exec_js` with a real project slug:
+Then call `exec_typescript` with a real project slug:
 
 ```bash
 doppler run --project os --config dev -- sh -lc '
@@ -160,7 +161,7 @@ doppler run --project os --config dev -- sh -lc '
   npx -y @modelcontextprotocol/inspector --cli "$BASE/api/mcp" \
     --transport http \
     --method tools/call \
-    --tool-name exec_js \
+    --tool-name exec_typescript \
     --tool-arg project=<project-slug> \
     --tool-arg "code=async (itx) => { return await itx.__describe(); }" \
     --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"
@@ -169,6 +170,8 @@ doppler run --project os --config dev -- sh -lc '
 
 The script pattern is documented in
 [`docs/doppler-backed-scripts.md`](./docs/doppler-backed-scripts.md).
+Project-scoped and platform-wide operator browser sessions are documented in
+[`docs/operator-sessions.md`](./docs/operator-sessions.md).
 
 ## Important Files
 
@@ -197,11 +200,16 @@ test coverage removed without replacement is
 ## Read Next
 
 - [itx README](./src/README.md)
+- [Agent context and turns](./docs/agents.md) — the context event, projection, keyed publication boundary, request rendering, and compaction
+- [Integrations](./docs/integrations.md)
+- [GitHub pull-request agents](./docs/github-agents.md)
 - [Worker Topology](./docs/worker-topology.md)
+- [Dynamic Worker Dispatch](./docs/dynamic-worker-dispatch.md) — the capability tree vs the fetch lane; why WebSockets demand the class's own `fetch` handler
 - [Sandboxes](./docs/sandboxes.md) — how OUR sandbox works: identity, persistence, egress, the repo checkout (incl. local dev with OrbStack)
 - [Cloudflare Sandboxes & Containers](./docs/cloudflare-sandboxes.md) — platform guide: namespace layout, **SSH into an instance**, feature inventory, deprecations, ops
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)
+- [Smoke-Testing A Deployment](../../docs/smoke-testing.md) — deploy-inline probes + manual recipes
 - [Agent Smoke Testing](./docs/agent-smoke-testing.md)
 - [Doppler-Backed Scripts](./docs/doppler-backed-scripts.md)
 - [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)

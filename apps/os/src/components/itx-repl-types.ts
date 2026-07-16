@@ -1,6 +1,6 @@
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import type { WorkerShape } from "@valtown/codemirror-ts/worker";
-import { ITX_TYPES_SOURCE } from "~/types-source.generated.ts";
+import { itxTypesFileText } from "~/domains/itx/itx-types-text.ts";
 
 export type ItxReplTypeScriptWorker = WorkerShape & {
   getAutocompletionWithDocs(input: {
@@ -17,23 +17,22 @@ export type ItxReplTypeScriptWorker = WorkerShape & {
 export const ITX_TYPES_PATH = "/itx-types.ts";
 
 /**
- * The design-of-record itx surface (`~/types.ts`), verbatim. That file is
- * handwritten and import-free, so its raw source is a valid standalone module
- * for the editor's virtual filesystem — completions and hover docs in the
- * browser REPL come from THE type file, via the same generated embed worker
- * code ships to agents (freshness enforced by types-source.generated.test.ts).
+ * The public itx surface as one standalone module for the editor's virtual
+ * filesystem (see domains/itx/itx-types-text.ts — the typechecker's virtual
+ * project loads the same text), so completions and hover docs in the browser
+ * REPL come from THE type surface.
  */
-export const itxTypesDeclaration: string = ITX_TYPES_SOURCE;
+export const itxTypesDeclaration: string = itxTypesFileText;
 
 /**
  * REPL prelude for the editor's virtual filesystem. Only what
- * `~/types.ts` does not cover lives here: the session globals the REPL
+ * `~/itx-api.generated.ts` does not cover lives here: the session globals the REPL
  * runtime actually injects (see `~/itx/browser-repl.ts`), ambient shims for
  * the workers-runtime globals the raw type file references (`Disposable`,
  * `ExecutionContext` — the editor's lib is es2022 + dom), and global aliases
  * so snippets can name the types without importing them.
  *
- * The REPL handle is typed `Session & ProjectRpcTarget` — the same pragmatic intersection
+ * The REPL handle is typed `Session & Project` — the same pragmatic intersection
  * `~/itx/itx-react.tsx` uses: a project REPL holds the project itx, the
  * global/admin REPL holds the Session catalog, and a wrong call for the
  * context fails at runtime exactly like a missing capability would. Dynamic
@@ -70,7 +69,7 @@ declare global {
   // The design-of-record types, exposed globally so snippets can annotate
   // with them without an import. Shapes live in ./itx-types.ts only.
   type Session = itxTypes.Session;
-  type ProjectRpcTarget = itxTypes.ProjectRpcTarget;
+  type Project = itxTypes.Project;
   type Agent = itxTypes.Agent;
   type AgentChat = itxTypes.AgentChat;
   type Stream = itxTypes.Stream;
@@ -105,7 +104,7 @@ declare global {
    * project itx; the global/admin REPL holds the Session catalog. Awaiting is
    * always allowed: over Cap'n Web every member resolves as a promise.
    */
-  const itx: itxTypes.Session & itxTypes.ProjectRpcTarget;
+  const itx: itxTypes.Session & itxTypes.Project;
   /**
    * Script parameters — always in scope, so the catalogue examples
    * (src/itx/examples.ts) run unchanged in every runtime. Assign your own

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Env } from "../../env.ts";
-import type { StreamEventInput } from "../../types.ts";
+import type { StreamEventInput } from "../streams/schemas.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { RepoArtifactNameCodec } from "../repos/utils.ts";
 import {

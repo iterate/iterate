@@ -1,5 +1,5 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { Stream } from "~/types.ts";
+import type { Stream } from "~/itx-api.generated.ts";
 
 /**
  * What the playground worker serves at `/api/streams`: the itx

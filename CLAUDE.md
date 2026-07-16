@@ -74,6 +74,17 @@ Before PRs:
 pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
+How to open a PR (branch hygiene, body shape, **screenshots that actually
+render**, drafts/previews) — and **after open**: wait for Iterate Review /
+review bots, address **every** CI/review comment (fix or reply + resolve),
+**never leave threads standing**, **never merge on red CI** unless the human
+explicitly said so: **[Pull requests](docs/pull-requests.md)**.
+
+**Draft PRs don't get a preview deployment** (or preview e2e). If you open a
+PR as a draft and want a preview environment, add the `preview` label; marking
+the PR ready for review also starts previews. Lease model details:
+[Dev environments](docs/dev-environments.md).
+
 ## Repository map
 
 **Start here:** `apps/os/`
@@ -116,6 +127,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 ### Development
 
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities/admin sessions, browsers for agents, preview-from-local
+- [Preview resource GC](docs/preview-resource-gc.md) — how preview slots reclaim their Cloudflare resources: lease-expiry sweep, 3h TTLs, why teardown is decoupled from releasing the slot
 - [Coding style](docs/coding-style.md)
 - [Depot CI](docs/depot-ci.md) — workflow editing, Depot CLI commands, monitoring/wait loops, logs, dispatch, metrics, secrets, and gotchas
 - [CLI scripts](docs/cli-scripts.md) — how to write normal TypeScript scripts and expose them as CLIs
@@ -124,6 +136,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Testing](docs/testing.md) — test lanes, how to run them against any environment, and the retry/timeout policy (one retry layer, fail-fast watchdogs, retry telemetry)
 - [Vitest patterns](docs/vitest-patterns.md)
 - [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
+- [Writing & testing stream processors](docs/writing-stream-processors.md) — side-effect guarantees, the obligation/reconciler pattern, eviction recovery, staleness policy, and the node test harness
 
 ### Tasks & agent docs
 
@@ -134,7 +147,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 ### App-specific
 
 - [OS app](apps/os/AGENTS.md)
-- [Auth app](apps/auth/README.md) — OIDC provider, org/project directory, and the OS↔auth service API
+- [Auth app](apps/auth/README.md) — public OIDC/oRPC plus OS-only Workers RPC for the org/project directory
 - [itx](apps/os/src/README.md) — the `/api` surface and its public contract (`types.ts`)
 - [OS worker topology](apps/os/docs/worker-topology.md)
 - [OS architecture & operations](apps/os/docs/architecture-and-operations.md)

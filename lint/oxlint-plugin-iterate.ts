@@ -15,6 +15,38 @@ type ImportKindNode = {
 };
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
+/** What the server-side script isolate genuinely provides: the ES builtins
+ * plus the workerd/web globals of the script runtime — kept in the same
+ * spirit as the typechecker's RUNTIME_SHIMS list
+ * (apps/os/src/domains/typecheck/virtual-project.ts). oxlint's scope manager
+ * leaves ALL globals unresolved (`scope.through` contains `Promise` and
+ * `console` alike), so the itx-script-fn-self-contained rule allowlists by
+ * name instead of relying on env resolution. */
+const SCRIPT_ISOLATE_GLOBALS = new Set([
+  // ES language builtins.
+  ...["globalThis", "undefined", "NaN", "Infinity"],
+  ...["Object", "Function", "Array", "String", "Number", "Boolean", "Symbol", "BigInt"],
+  ...["Math", "JSON", "Date", "RegExp", "Intl"],
+  ...["Promise", "Proxy", "Reflect", "eval", "globalThis"],
+  ...["Error", "AggregateError", "EvalError", "RangeError", "ReferenceError"],
+  ...["SyntaxError", "TypeError", "URIError"],
+  ...["Map", "Set", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry"],
+  ...["ArrayBuffer", "SharedArrayBuffer", "Atomics", "DataView"],
+  ...["Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array"],
+  ...["Int32Array", "Uint32Array", "Float16Array", "Float32Array", "Float64Array"],
+  ...["BigInt64Array", "BigUint64Array", "Iterator", "AsyncIterator"],
+  ...["parseInt", "parseFloat", "isNaN", "isFinite"],
+  ...["decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent"],
+  // workerd/web runtime globals (see RUNTIME_SHIMS in virtual-project.ts).
+  ...["console", "fetch", "crypto", "performance", "navigator", "caches", "scheduler"],
+  ...["setTimeout", "clearTimeout", "setInterval", "clearInterval", "setImmediate"],
+  ...["queueMicrotask", "structuredClone", "reportError", "atob", "btoa"],
+  ...["TextEncoder", "TextDecoder", "URL", "URLSearchParams", "URLPattern"],
+  ...["AbortController", "AbortSignal", "Blob", "File", "FormData", "Headers"],
+  ...["Request", "Response", "ReadableStream", "WritableStream", "TransformStream"],
+  ...["WebSocket", "WebSocketPair", "Event", "EventTarget", "CustomEvent"],
+  ...["DOMException", "MessageChannel", "MessagePort", "Buffer", "process"],
+]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
 const getExpectedName = (name: string) => {
@@ -995,6 +1027,76 @@ const plugin: StrictPlugin = {
         };
       },
     },
+    "itx-script-fn-self-contained": {
+      meta: {
+        type: "problem",
+        docs: {
+          description:
+            "Function arguments of ItxScriptBuilder .execute()/.define() must be self-contained: " +
+            "they ship as compiled source into a server-side isolate where outer-scope " +
+            "identifiers and downleveled-syntax helpers do not exist.",
+        },
+      },
+      create(context) {
+        const checkScriptFunction = (node: any) => {
+          const call = node.parent;
+          if (!call || call.type !== "CallExpression" || !call.arguments.includes(node)) return;
+          if (call.callee.type !== "MemberExpression") return;
+          const method = getPropertyName(call.callee.property);
+          if (method !== "execute" && method !== "define") return;
+
+          // Outer-scope references: everything the function reads but does not
+          // define itself. Its parameters (itx, vars) resolve inside the
+          // function scope; runtime globals are allowlisted by name (oxlint's
+          // scope manager resolves no globals, so `Promise` and a test-file
+          // const look identical in `through`). What remains is test-file
+          // state the compiled source cannot reach from the script isolate.
+          const scope = context.sourceCode.getScope(node);
+          for (const reference of scope.through) {
+            const identifier = reference.identifier as Node & { parent?: Node };
+            const parentType = identifier.parent?.type as string | undefined;
+            // Type positions are erased by the transform — they never reach
+            // the isolate, so referencing test-file TYPES is fine.
+            if (parentType === "TSTypeReference" || parentType === "TSTypeQuery") continue;
+            if (SCRIPT_ISOLATE_GLOBALS.has((identifier as any).name)) continue;
+            context.report({
+              node: identifier,
+              message:
+                `\`${(identifier as any).name}\` is captured from outside the script function. ` +
+                `The function ships as compiled JavaScript into a server-side isolate where ` +
+                `only its own parameters (itx, vars) and runtime globals exist — test-file ` +
+                `bindings are dead references there. Pass values through .vars({...}).`,
+            });
+          }
+
+          // `using` declarations: the TEST-FILE transform downlevels them into
+          // module-scope helper references (__vite_ssr_import_…) that do not
+          // exist in the script isolate. The isolate itself supports `using`
+          // natively — scripts whose point is the `using` idiom go through
+          // executeSource() as strings.
+          const usingDeclarations = esquery.match(
+            node,
+            esquery.parse(
+              'VariableDeclaration[kind="using"], VariableDeclaration[kind="await using"]',
+            ),
+          );
+          for (const declaration of usingDeclarations) {
+            context.report({
+              node: declaration as never,
+              message:
+                "`using` inside a typed script function downlevels into test-isolate helper " +
+                "references that do not exist server-side. Use try/finally (or an explicit " +
+                "[Symbol.dispose]() call), or send the script as a string via " +
+                "executeSource() — the script isolate supports `using` natively.",
+            });
+          }
+        };
+        return {
+          FunctionExpression: checkScriptFunction,
+          ArrowFunctionExpression: checkScriptFunction,
+        };
+      },
+    },
     "import-rules": {
       meta: {
         fixable: "code",
@@ -1103,68 +1205,6 @@ const plugin: StrictPlugin = {
                 `Untrusted ingress should go through the root capability/capability adapter instead. ` +
                 `Allowed locations are domain Durable Objects, domain entrypoints, capability files, ` +
                 `and the current Cap'n Web compatibility layer.`,
-            });
-          },
-        };
-      },
-    },
-    "drizzle-conventions": {
-      meta: {
-        hasSuggestions: true,
-        fixable: "code",
-      },
-      create: (context) => {
-        const dbMutateMethods = ["insert", "update", "delete"];
-        const dbMutateEnforcementListeners: Record<string, (node: any) => void> = {};
-        for (const m of dbMutateMethods) {
-          const selector = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.type='Identifier']`;
-          const selector2 = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.object.name='schemas']`;
-          dbMutateEnforcementListeners[selector] = (node: any) => {
-            const before = context.sourceCode.getText(node.arguments[0]);
-            const after = before.startsWith("schemas.")
-              ? before.replace("schemas.", "schema.")
-              : `schema.${node.arguments[0].name}`;
-            if (
-              (m === "delete" || m === "update") &&
-              node.callee.object.name !== "db" &&
-              node.callee.object.name !== "tx"
-            ) {
-              return; // too many false positives for Maps, hmac.update, etc.
-            }
-            context.report({
-              node: node.arguments[0],
-              message: `use \`db.${m}(${after})\` instead of \`db.${m}(${before})\` - it makes it easier to find ${m} expressions in the codebase`,
-              suggest: [
-                {
-                  desc: `Change \`${before}\` to \`${after}\``,
-                  fix: (fixer: Rule.RuleFixer) => fixer.replaceText(node.arguments[0], after),
-                },
-              ],
-            });
-          };
-          dbMutateEnforcementListeners[selector2] = dbMutateEnforcementListeners[selector];
-        }
-
-        return {
-          ...dbMutateEnforcementListeners,
-
-          "CallExpression[callee.property.name='transaction']": (node: any) => {
-            const parentReference = context.sourceCode.getText(node.callee.object);
-            const shouldUse = node.arguments[0].params[0]?.name;
-            esquery.match(node, esquery.parse(`${node.callee.object.type}`)).forEach((m) => {
-              const used = context.sourceCode.getText(m);
-              if (m !== node.callee.object && parentReference === used) {
-                context.report({
-                  node: m,
-                  message: `Don't use the parent connection (${used}) in a transaction. Use the passed in transaction connection (${shouldUse}).`,
-                  suggest: [
-                    {
-                      desc: `Change \`${used}\` to \`${shouldUse}\``,
-                      fix: (fixer: Rule.RuleFixer) => fixer.replaceText(m, shouldUse),
-                    },
-                  ],
-                });
-              }
             });
           },
         };
@@ -1286,6 +1326,11 @@ const plugin: StrictPlugin = {
 
         const filename = context.filename ?? "";
         const isTestFile = /\.(test|spec)\.[cm]?[jt]sx?$/.test(filename);
+        // A contract package may expose an explicit worker-only subpath whose
+        // shared entrypoint class must extend Cloudflare's WorkerEntrypoint.
+        // Keep this exact so browser-visible contract modules cannot acquire
+        // a Worker runtime dependency accidentally.
+        const isWorkerOnlyContractModule = /\/src\/worker\.ts$/.test(filename);
 
         const allowedListForMessage =
           ALLOWED_RUNTIME_IMPORT_PREFIXES.map((p) => `  • ${p} (and ${p}/…)`).join("\n") +
@@ -1307,6 +1352,8 @@ const plugin: StrictPlugin = {
             if (typeof source !== "string") return;
 
             if (source.startsWith(".") || source.startsWith("/")) return;
+
+            if (source === "cloudflare:workers" && isWorkerOnlyContractModule) return;
 
             if (isAllowedRuntimeImport(source)) return;
 

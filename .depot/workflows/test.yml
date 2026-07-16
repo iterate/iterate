@@ -4,11 +4,22 @@ on:
     branches:
       - main
   pull_request: {}
+# Rapid pushes to a branch supersede each other. On PRs, head_ref identifies
+# the source branch; on main, ref_name keeps only the newest validation run.
+concurrency:
+  group: test-${{ github.head_ref || github.ref_name || github.run_id }}
+  cancel-in-progress: true
 jobs:
   test:
+    # Measured on main (run w301hvp2xr): peak ~37% CPU / ~8% memory on 8x32
+    # (~3 cores, ~2.5GB). Keep 4x16 for parallel workspace headroom; avoid a
+    # second large sandbox competing with lint-typecheck on main pushes
+    # (that pattern ends in "Sandbox terminated before worker reported
+    # completion" with no logs/metrics).
     runs-on:
-      size: 8x32
+      size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

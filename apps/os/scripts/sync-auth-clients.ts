@@ -16,10 +16,6 @@ type SeedOAuthClientSpec = {
   referenceId?: string;
 };
 
-type JsonWebKeySet = {
-  keys: unknown[];
-};
-
 const targets: Target[] = [
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
     (previewNumber) =>
@@ -65,7 +61,6 @@ if (!serviceToken) {
 
 const authClient = createAuthContractClient({ baseUrl: authBaseUrl, serviceToken });
 const seedOAuthClients = readSeedOAuthClients();
-const authJwks = await fetchAuthJwks();
 
 for (const target of targets) {
   if (targetFilter.size > 0 && !targetFilter.has(target.dopplerConfig)) {
@@ -116,8 +111,6 @@ for (const target of targets) {
     APP_CONFIG_ITERATE_AUTH__ISSUER: authIssuer,
     APP_CONFIG_ITERATE_AUTH__CLIENT_ID: webClient.clientId,
     APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: webClient.clientSecret,
-    APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
-    APP_CONFIG_ITERATE_AUTH__JWKS: JSON.stringify(authJwks),
   });
 
   upsertSeedOAuthClient(seedOAuthClients, {
@@ -139,37 +132,6 @@ for (const target of targets) {
 }
 
 setAuthSeedOAuthClients(seedOAuthClients);
-
-async function fetchAuthJwks(): Promise<JsonWebKeySet> {
-  const jwksUrl = `${authIssuer.replace(/\/+$/, "")}/jwks`;
-  let response: Response;
-  try {
-    response = await fetch(jwksUrl, { headers: { accept: "application/json" } });
-  } catch (cause) {
-    throw new Error(`Failed to fetch auth JWKS from ${jwksUrl}`, { cause });
-  }
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch auth JWKS from ${jwksUrl}: HTTP ${response.status}`);
-  }
-
-  const parsed = (await response.json()) as unknown;
-  if (!isJsonWebKeySet(parsed)) {
-    throw new Error(`Auth JWKS from ${jwksUrl} must be a JSON object with a non-empty keys array`);
-  }
-
-  return parsed;
-}
-
-function isJsonWebKeySet(value: unknown): value is JsonWebKeySet {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "keys" in value &&
-    Array.isArray(value.keys) &&
-    value.keys.length > 0
-  );
-}
 
 function getDopplerSecret(target: Target, key: string) {
   try {

@@ -1,5 +1,9 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
-import { env as workerEnv } from "cloudflare:workers";
+import {
+  env as workerEnv,
+  RpcTarget as WorkersRpcTarget,
+  WorkerEntrypoint,
+} from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
 import { parseConfig } from "./config.ts";
@@ -7,9 +11,34 @@ import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts
 import { trustedInternalAuthContext } from "~/auth.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
-import type { Stream } from "~/types.ts";
+import type { Stream } from "~/itx-api.generated.ts";
 
 export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
+
+/**
+ * The playground's stand-in for the project worker's event-batch sink.
+ *
+ * Every project-scoped stream births a `project-worker` push feed whose
+ * delivery dial resolves `ctx.exports.ItxEntrypoint` and evaluates
+ * `["processEventBatch"]` against `get()`'s result (see
+ * ~/domains/streams/subscriber-sinks.ts). The playground hosts the real
+ * `StreamDurableObject` but deliberately has no project worker, so this root
+ * acks every batch as a no-op. Without it the feed poisons out on offset 1
+ * (`exports.ItxEntrypoint is not a function`) and every fresh stream accretes
+ * error-occurred + subscription-parked noise a few seconds after birth —
+ * which is nondeterministic garbage in the UI and in every e2e count.
+ */
+class PlaygroundItxRoot extends WorkersRpcTarget {
+  processEventBatch(): undefined {
+    // Delivered-to-nobody by design: the playground has no project worker.
+  }
+}
+
+export class ItxEntrypoint extends WorkerEntrypoint {
+  get() {
+    return new PlaygroundItxRoot();
+  }
+}
 
 /**
  * The capnweb surface this playground serves at `/api/streams`.

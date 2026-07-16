@@ -19,6 +19,7 @@ import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
+import { Route as CollectSecretProjectSlugRouteImport } from './routes/collect-secret.$projectSlug'
 import { Route as ApiMcpRouteImport } from './routes/api.mcp'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
@@ -38,7 +39,7 @@ import { Route as AdminStreamsProjectIdIndexRouteImport } from './routes/admin/s
 import { Route as AppProjectsProjectSlugIndexRouteImport } from './routes/_app/projects/$projectSlug/index'
 import { Route as DocsStreamsProcessorsProcessorSlugRouteImport } from './routes/docs.streams.processors.$processorSlug'
 import { Route as AdminStreamsProjectIdSplatRouteImport } from './routes/admin/streams/$projectId/$'
-import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app/projects/$projectSlug/settings'
+import { Route as AppProjectsProjectSlugSchedulerRouteImport } from './routes/_app/projects/$projectSlug/scheduler'
 import { Route as AppProjectsProjectSlugReplRouteImport } from './routes/_app/projects/$projectSlug/repl'
 import { Route as AppProjectsProjectSlugReactivityRouteImport } from './routes/_app/projects/$projectSlug/reactivity'
 import { Route as AppProjectsProjectSlugIntegrationsRouteImport } from './routes/_app/projects/$projectSlug/integrations'
@@ -104,6 +105,12 @@ const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   path: '/posthog-proxy/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CollectSecretProjectSlugRoute =
+  CollectSecretProjectSlugRouteImport.update({
+    id: '/collect-secret/$projectSlug',
+    path: '/collect-secret/$projectSlug',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiMcpRoute = ApiMcpRouteImport.update({
   id: '/api/mcp',
   path: '/api/mcp',
@@ -207,10 +214,10 @@ const AdminStreamsProjectIdSplatRoute =
     path: '/$',
     getParentRoute: () => AdminStreamsProjectIdRouteRoute,
   } as any)
-const AppProjectsProjectSlugSettingsRoute =
-  AppProjectsProjectSlugSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
+const AppProjectsProjectSlugSchedulerRoute =
+  AppProjectsProjectSlugSchedulerRouteImport.update({
+    id: '/scheduler',
+    path: '/scheduler',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
 const AppProjectsProjectSlugReplRoute =
@@ -319,6 +326,7 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -331,7 +339,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
-  '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/projects/$projectSlug/scheduler': typeof AppProjectsProjectSlugSchedulerRoute
   '/admin/streams/$projectId/$': typeof AdminStreamsProjectIdSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
   '/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
@@ -361,6 +369,7 @@ export interface FileRoutesByTo {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -371,7 +380,7 @@ export interface FileRoutesByTo {
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
-  '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/projects/$projectSlug/scheduler': typeof AppProjectsProjectSlugSchedulerRoute
   '/admin/streams/$projectId/$': typeof AdminStreamsProjectIdSplatRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugIndexRoute
   '/admin/streams/$projectId': typeof AdminStreamsProjectIdIndexRoute
@@ -406,6 +415,7 @@ export interface FileRoutesById {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/collect-secret/$projectSlug': typeof CollectSecretProjectSlugRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -418,7 +428,7 @@ export interface FileRoutesById {
   '/_app/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/_app/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/_app/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
-  '/_app/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/_app/projects/$projectSlug/scheduler': typeof AppProjectsProjectSlugSchedulerRoute
   '/admin/streams/$projectId/$': typeof AdminStreamsProjectIdSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
   '/_app/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
@@ -454,6 +464,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
+    | '/collect-secret/$projectSlug'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -466,7 +477,7 @@ export interface FileRouteTypes {
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
-    | '/projects/$projectSlug/settings'
+    | '/projects/$projectSlug/scheduler'
     | '/admin/streams/$projectId/$'
     | '/docs/streams/processors/$processorSlug'
     | '/projects/$projectSlug/'
@@ -496,6 +507,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
+    | '/collect-secret/$projectSlug'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -506,7 +518,7 @@ export interface FileRouteTypes {
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
-    | '/projects/$projectSlug/settings'
+    | '/projects/$projectSlug/scheduler'
     | '/admin/streams/$projectId/$'
     | '/projects/$projectSlug'
     | '/admin/streams/$projectId'
@@ -540,6 +552,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
+    | '/collect-secret/$projectSlug'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -552,7 +565,7 @@ export interface FileRouteTypes {
     | '/_app/projects/$projectSlug/integrations'
     | '/_app/projects/$projectSlug/reactivity'
     | '/_app/projects/$projectSlug/repl'
-    | '/_app/projects/$projectSlug/settings'
+    | '/_app/projects/$projectSlug/scheduler'
     | '/admin/streams/$projectId/$'
     | '/docs/streams/processors/$processorSlug'
     | '/_app/projects/$projectSlug/'
@@ -581,6 +594,7 @@ export interface RootRouteChildren {
   ApiSplatRoute: typeof ApiSplatRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMcpRoute: typeof ApiMcpRoute
+  CollectSecretProjectSlugRoute: typeof CollectSecretProjectSlugRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
@@ -656,6 +670,13 @@ declare module '@tanstack/react-router' {
       path: '/posthog-proxy/$'
       fullPath: '/posthog-proxy/$'
       preLoaderRoute: typeof PosthogProxySplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/collect-secret/$projectSlug': {
+      id: '/collect-secret/$projectSlug'
+      path: '/collect-secret/$projectSlug'
+      fullPath: '/collect-secret/$projectSlug'
+      preLoaderRoute: typeof CollectSecretProjectSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/mcp': {
@@ -791,11 +812,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminStreamsProjectIdSplatRouteImport
       parentRoute: typeof AdminStreamsProjectIdRouteRoute
     }
-    '/_app/projects/$projectSlug/settings': {
-      id: '/_app/projects/$projectSlug/settings'
-      path: '/settings'
-      fullPath: '/projects/$projectSlug/settings'
-      preLoaderRoute: typeof AppProjectsProjectSlugSettingsRouteImport
+    '/_app/projects/$projectSlug/scheduler': {
+      id: '/_app/projects/$projectSlug/scheduler'
+      path: '/scheduler'
+      fullPath: '/projects/$projectSlug/scheduler'
+      preLoaderRoute: typeof AppProjectsProjectSlugSchedulerRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
     '/_app/projects/$projectSlug/repl': {
@@ -924,7 +945,7 @@ interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugIntegrationsRoute: typeof AppProjectsProjectSlugIntegrationsRoute
   AppProjectsProjectSlugReactivityRoute: typeof AppProjectsProjectSlugReactivityRoute
   AppProjectsProjectSlugReplRoute: typeof AppProjectsProjectSlugReplRoute
-  AppProjectsProjectSlugSettingsRoute: typeof AppProjectsProjectSlugSettingsRoute
+  AppProjectsProjectSlugSchedulerRoute: typeof AppProjectsProjectSlugSchedulerRoute
   AppProjectsProjectSlugIndexRoute: typeof AppProjectsProjectSlugIndexRoute
   AppProjectsProjectSlugAgentsNewRoute: typeof AppProjectsProjectSlugAgentsNewRoute
   AppProjectsProjectSlugReposSplatRoute: typeof AppProjectsProjectSlugReposSplatRoute
@@ -945,7 +966,7 @@ const AppProjectsProjectSlugRouteRouteChildren: AppProjectsProjectSlugRouteRoute
     AppProjectsProjectSlugReactivityRoute:
       AppProjectsProjectSlugReactivityRoute,
     AppProjectsProjectSlugReplRoute: AppProjectsProjectSlugReplRoute,
-    AppProjectsProjectSlugSettingsRoute: AppProjectsProjectSlugSettingsRoute,
+    AppProjectsProjectSlugSchedulerRoute: AppProjectsProjectSlugSchedulerRoute,
     AppProjectsProjectSlugIndexRoute: AppProjectsProjectSlugIndexRoute,
     AppProjectsProjectSlugAgentsNewRoute: AppProjectsProjectSlugAgentsNewRoute,
     AppProjectsProjectSlugReposSplatRoute:
@@ -1088,6 +1109,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSplatRoute: ApiSplatRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiMcpRoute: ApiMcpRoute,
+  CollectSecretProjectSlugRoute: CollectSecretProjectSlugRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,

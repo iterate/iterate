@@ -65,7 +65,6 @@ export default async function start(options: StartOptions = {}) {
   // APP_CONFIG_BASE_URL from PORT so the worker knows its own origin (signed
   // file URLs and other absolute-URL minting need it).
   process.env.PORT = String(port);
-  const env = { ...process.env, ...(await forgeTrustedJwksEnv(options)) };
   const viteArgs = ["exec", "vite", "dev", "--port", String(port), "--strictPort"];
   const [command, args] = options.skipDoppler
     ? ["pnpm", viteArgs]
@@ -80,7 +79,6 @@ export default async function start(options: StartOptions = {}) {
     const child = spawn(command, args, {
       cwd: APP_ROOT,
       detached: true,
-      env,
       stdio: ["ignore", log, log],
     });
     child.unref();
@@ -91,7 +89,7 @@ export default async function start(options: StartOptions = {}) {
     return formatStatus(info);
   }
 
-  const child = spawn(command, args, { cwd: APP_ROOT, env, stdio: "inherit" });
+  const child = spawn(command, args, { cwd: APP_ROOT, stdio: "inherit" });
   const code = await new Promise<number>((res) => child.on("exit", (c) => res(c ?? 0)));
   process.exit(code);
 }
@@ -212,54 +210,6 @@ async function waitForDiscovery(timeoutMs: number, childPid?: number): Promise<D
   throw new Error(
     `Dev server did not publish ${devServerDir(APP_ROOT)}/dev-server.json within ${timeoutMs}ms — see ${LOG_PATH}`,
   );
-}
-
-/**
- * Local dev's answer to deploy-time JWKS baking (scripts/lib/bake-auth-jwks.ts):
- * deployed workers verify auth JWTs against a baked key set that includes the
- * forge public key, but a local dev server has no bake step — without this,
- * `pnpm auth:mint` sessions and forge-minted bearer tokens fail with
- * JWKSNoMatchingKey (tasks/os-dev-server-auth-minting-without-auth-worker.md).
- *
- * When the Doppler config doesn't pin APP_CONFIG_ITERATE_AUTH__JWKS but does
- * carry the forge private key, fetch the issuer's live JWKS, merge the forge
- * public key in, and hand the result to the vite child as that same env var
- * (the generated wrangler config lists it, so the worker picks it up).
- * Best-effort: any failure warns and starts the server without it, exactly as
- * today — never blocks dev boot (unlike the deploy path's 4-minute retry).
- */
-async function forgeTrustedJwksEnv(
-  options: Pick<StartOptions, "config" | "skipDoppler">,
-): Promise<{ APP_CONFIG_ITERATE_AUTH__JWKS?: string }> {
-  try {
-    const loaded = options.skipDoppler
-      ? { ok: true as const, secrets: process.env as Record<string, string | undefined> }
-      : loadOsSecrets({ config: options.config });
-    if (!loaded.ok) return {};
-    const secrets = loaded.secrets;
-    if (secrets.APP_CONFIG_ITERATE_AUTH__JWKS?.trim()) return {};
-    const forgePrivateJwk = secrets.AUTH_FORGE_PRIVATE_JWK?.trim();
-    const issuer = secrets.APP_CONFIG_ITERATE_AUTH__ISSUER?.trim();
-    if (!forgePrivateJwk || !issuer) return {};
-
-    const response = await fetch(`${issuer.replace(/\/+$/, "")}/jwks`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) throw new Error(`GET ${issuer}/jwks → ${response.status}`);
-    const jwks = (await response.json()) as { keys: Record<string, unknown>[] };
-    const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
-      string,
-      unknown
-    > & { d?: string };
-    if (!publicJwk.kid || !publicJwk.kty) return {};
-    if (!jwks.keys.some((key) => key.kid === publicJwk.kid)) jwks.keys.push(publicJwk);
-    return { APP_CONFIG_ITERATE_AUTH__JWKS: JSON.stringify(jwks) };
-  } catch (error) {
-    console.warn(
-      `Could not merge the forge key into the dev JWKS (forge-minted sessions/tokens won't verify): ${String(error)}`,
-    );
-    return {};
-  }
 }
 
 /** Download this app's Doppler secrets as a plain object (config from doppler.yaml scoping unless overridden). */

@@ -119,7 +119,7 @@ The OS app's normal TanStack Start MCP route at `/api/mcp`. The canonical OAuth
 resource URL comes from `APP_CONFIG_MCP__BASE_URL` and may route through a
 dedicated MCP hostname, but the app-host `/api/mcp` route is also valid. OAuth
 access tokens expose projects granted by token claims and scopes; admin-token
-sessions expose all projects. Project-scoped tools such as `exec_js` select the
+sessions expose all projects. Project-scoped tools such as `exec_typescript` select the
 Project per invocation.
 _Avoid_: Project MCP hostname, ingress MCP alias
 
@@ -221,17 +221,53 @@ The default Project Egress capability used for `itx.fetch(...)` and bare
 secret placeholders are substituted.
 _Avoid_: Raw Dynamic Worker fetch, untraced public fetch
 
-**D1-backed Secrets Capability**:
-The current project-bound capability authority for storing, listing, reading, updating, and deleting Project Secrets in D1.
-_Avoid_: Secret Durable Object, separate secrets service
+**Secrets Capability**:
+The project-bound itx capability (`itx.secrets`) over path-addressed Secret
+Durable Objects. Secrets are identified by normalized paths under `/secrets/`;
+there is no separate secret ID or key.
+_Avoid_: D1-backed secrets, Secret ID, Secret Key, separate secrets service
 
-**Secret ID**:
-The stable TypeID-prefixed identifier for one Project Secret.
-_Avoid_: Secret Key, Secret Slug
+**Secret Material**:
+The single serializable value one Secret holds — write-only, encrypted at rest
+as one blob. Writes replace the whole value through the one update verb; there
+are no field-level writes and no per-field metadata. Placeholder references may
+select into structured material (`getSecret({ path, field: "field" })`), which is
+read addressing, not a storage concept.
+_Avoid_: material fields, store(), partial secret writes, per-field expiry
 
-**Secret Key**:
-The project-local arbitrary Key used by Secret References to resolve one Project Secret.
-_Avoid_: Secret ID, Secret Slug, hostname-safe name
+**Secret Cell Invariant**:
+The one property of a Secret: material goes in; nothing comes out except a
+request to a pinned host. No read lane, no reveal lane, no compute methods,
+no cross-secret chaining — the Secret Durable Object's only material-touching
+verb is `fetch()` (substitute header placeholders, dispatch under the egress
+pin). Ciphertext is authenticated to its project, secret path, exact effective
+origins, and storing event offset; every update without replacement material
+clears it, while replacement material requires its complete egress policy in
+the same update. Credential redirects are manual, bounded, and same-origin. Secret
+stream facts remain user-appendable; replayed ciphertext cannot authenticate in
+a different event or policy context. See ADR 0005.
+_Avoid_: revealForPlatformUse, secret read API, hmac/sign/matches on secrets
+
+**Secret Refresh Strategy**:
+The named credential-refresh behavior a Secret optionally runs in its own
+trusted DO code on a 401 or a missing field — `oauth-refresh-token` (RFC 6749
+refresh grant) or `github-app-installation` (App-JWT mint). One shared
+implementation per protocol, parameterized per secret; exchange endpoints
+must fall within the Secret's own egress pin. Configuring it is the trust
+event.
+_Avoid_: secret worker, refresh worker, per-secret refresh code, refresh
+convention
+
+**Platform Credential**:
+A deployment-owned credential (OAuth client, GitHub App key, first-party API
+key) resolved from typed AppConfig by ordinary trusted code against the
+closed registry in `platform-secrets.ts`, each entry pinned to its provider
+origins. Referenced from untrusted-composed requests as
+`getSecret({ platform: "<configPath>" })` (API keys, resolved at the project
+egress door) or from refresh strategies as `{ platform: "<configPath>" }`.
+Never a Durable Object, never project material, never readable.
+_Avoid_: platform secret path, /secrets/platform/\*\*, virtual secret,
+revealable platform credential
 
 **OS MCP Handler**:
 The app worker's stateless `/api/mcp` handler that exposes the inbound MCP
@@ -356,7 +392,7 @@ _Avoid_: Repo service, Artifact client, GitHub client
 The local JavaScript object handed to scripts, browser code, workers, and
 external clients. It holds built-in verbs such as `describe`,
 `provideCapability`, and `extend`, plus dotted capability calls such as
-`itx.slack.chat.postMessage(...)`.
+`itx.integrations.slack.get().chat.postMessage(...)`.
 _Avoid_: ExecutionContext, tools, legacy context tools
 
 **itx Capability**:
@@ -376,7 +412,7 @@ _Avoid_: Static callable, callable JSON helper, descriptor factory
 
 **Path Call**:
 The normalized call envelope produced by the itx path proxy for dotted calls
-such as `itx.slack.chat.postMessage(...)`.
+such as `itx.mcp.exa.web_search_exa(...)`.
 _Avoid_: Function Call, Tool Function Call, direct RPC call
 
 **Script Execution ID**:
@@ -488,7 +524,7 @@ A capability that exposes one OpenAPI specification as itx capability paths.
 _Avoid_: OpenAPI metadata provider, describe callable, OpenAPI registry
 
 **Script**:
-User-authored TypeScript or JavaScript code that can be run by itx.
+User-authored TypeScript code that can be run by itx.
 _Avoid_: Function, tool, provider, execution
 
 **Script Execution**:
@@ -598,7 +634,15 @@ _Avoid_: Project MCP route, inbound MCP
   not raw Secret material.
 - A **Project Secret** is addressed by a normalized path under `/secrets/`.
 - **Secret References** resolve by path, such as
-  `getSecret({ path: "/secrets/openai-api-key" })`.
+  `getSecret({ path: "/secrets/openai-api-key" })`, optionally selecting a field of
+  structured material: `getSecret({ path: "/secrets/foo", field: "tokens.access" })`.
+- Secret substitution is header-only, everywhere; request bodies and
+  WebSocket frames are never scanned or substituted (ADR 0005).
+- A request's headers may reference several Secrets; substitution chains
+  through each referenced Secret's resolver, and every hop enforces its own
+  host pin against the terminal destination.
+- **Platform Secret** material never enters a **Secret Jail**; jails hold
+  only project-tier material.
 - The app worker's **OS MCP Handler** owns MCP protocol paths, OAuth
   protected-resource metadata paths, and 404s for unsupported paths below
   `/api/mcp`.
@@ -634,8 +678,8 @@ _Avoid_: Project MCP route, inbound MCP
 - Projects are not born with MCP hostname aliases; MCP access is centralized at
   the canonical OS MCP endpoint.
 - Slug changes should update slug-derived ingress routes at the same time; alias lifecycle is future work.
-- Project MCP server `exec_js` starts a **Script Execution** and therefore requires a **Script**.
-- Browser REPL execution and Project MCP server `exec_js` share the same itx
+- Project MCP server `exec_typescript` starts a **Script Execution** and therefore requires a **Script**.
+- Browser REPL execution and Project MCP server `exec_typescript` share the same itx
   script runner shape.
 - A **Project Route** resolves its **Project Slug** to the stable **Project ID**
   before opening a **Project-Scoped itx Handle**.
@@ -656,7 +700,9 @@ _Avoid_: Project MCP route, inbound MCP
 - `itx.__describe()` is the capability discovery surface. Providers attach instructions and optional types to each capability entry.
 - Dynamic MCP and OpenAPI tools should be exposed as itx capabilities whose exact external tool names or operation IDs remain path segments; use bracket syntax when a segment contains dots.
 - Project default capabilities include `fetch`, `streams`, `secrets`, `integrations`, `repos`, `agents`, `workspace`, `worker`, and `ai` as defined by `PLATFORM_PROJECT_CAPABILITIES`.
-- Agent hosts add channel and agent-local capabilities such as `itx.slack` or `itx.chat`, `itx.debug`, `itx.gmail`, `itx.agents`, and an agent-private `itx.workspace`.
+- Agent hosts add channel and agent-local capabilities such as `itx.chat`,
+  `itx.debug`, `itx.agents`, and an agent-private `itx.workspace`; connected
+  services remain on the project-owned `itx.integrations` collection.
 
 ## Target itx Blocks
 
@@ -668,11 +714,11 @@ await itx.__describe();
 access shape, and the capabilities visible through the context chain.
 
 ```ts
-await itx.slack.chat.postMessage({ channel: "C123", text: "hello" });
+await itx.integrations.slack.get().chat.postMessage({ channel: "C123", text: "hello" });
 ```
 
-Slack is a provided itx capability. `SlackCapability.call` receives the dotted
-path as data and maps it to the Slack Web API method path.
+Slack is a built-in integration family. `get()` resolves the first connected
+workspace and its wrapped WebClient receives the remaining Slack Web API path.
 
 ```ts
 const repo = await itx.repos.get({ path: "/repos/project" });
@@ -693,14 +739,15 @@ the shared project workspace; agent contexts provide their own isolated
 workspace capability.
 
 ```ts
-const messages = await itx.gmail.request({
-  path: "/gmail/v1/users/me/messages",
+const messages = await itx.integrations.gmail.get().request({
+  path: "/users/me/messages",
   query: { maxResults: 5 },
 });
 ```
 
-Gmail is a project capability backed by the connected Google account. It reads
-fresh OAuth access through the secrets domain and proxies Gmail REST requests.
+Gmail is a project integration backed by the first connected Google account
+(or an explicit slug passed to `get`). It reads fresh OAuth access through the
+secrets domain and proxies Gmail REST requests.
 
 ```ts
 const response = await fetch("https://api.example.com/data");
@@ -749,7 +796,7 @@ context while the provider remains connected.
 > **Dev:** "Should `docs.search` from an MCP server become `itx.docs.search(...)`?"
 > **Domain expert:** "No. External tool names and OpenAPI operation IDs are exact path segments, so use bracket syntax such as `itx.mcp.cloudflareDocs["docs.search"](...)` when needed."
 
-> **Dev:** "What script shape should MCP `exec_js` send?"
+> **Dev:** "What script shape should MCP `exec_typescript` send?"
 > **Domain expert:** "Use one async arrow function: `async (itx) => { ... }`. The `/api/itx/run` endpoint accepts `{ itx, vars }` at its API boundary and wraps it into that runner shape."
 
 > **Dev:** "Is an outbound MCP capability the same thing as OS's MCP server connection?"

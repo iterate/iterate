@@ -1,12 +1,10 @@
-// Shared environment plumbing for the itx e2e suites (Node side): which
-// deployed worker to talk to and how to authenticate against it. The browser
-// suite cannot read process.env, so vitest.config.ts injects the same values
-// there via `define` (__ITX_BROWSER_E2E__) instead of importing this file.
+// Shared environment plumbing for the itx e2e suites: which deployed worker
+// to talk to and how to authenticate against it.
 
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
 import { connectItx } from "../../src/itx-client.ts";
-import type { ProjectRpcTarget, Session } from "../../src/types.ts";
+import type { Project as ProjectRpcTarget, Session } from "../../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));

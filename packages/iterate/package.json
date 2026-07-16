@@ -1,7 +1,7 @@
 {
   "name": "iterate",
-  "version": "0.2.7",
-  "description": "CLI for iterate",
+  "version": "0.3.0",
+  "description": "CLI and SDK for iterate",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
@@ -26,6 +26,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./sdk": "./src/sdk.ts",
     "./worker": "./src/worker.ts"
   },
   "publishConfig": {
@@ -34,6 +35,10 @@
       ".": {
         "import": "./dist/index.mjs",
         "types": "./dist/index.d.mts"
+      },
+      "./sdk": {
+        "import": "./dist/sdk.mjs",
+        "types": "./dist/sdk.d.ts"
       },
       "./worker": {
         "import": "./dist/worker.mjs",
@@ -44,10 +49,11 @@
   "files": [
     "bin",
     "dist",
+    "menubar",
     "README.md"
   ],
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && tsc -p tsconfig.sdk.json",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
     "prepack": "pnpm build"
@@ -58,17 +64,19 @@
     "@opentui/react": "0.1.102",
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
+    "@types/node": "^22.0.0",
     "capnweb": "^0.8.0",
-    "react": "^19.2.0",
+    "octokit": "^5.0.5",
+    "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
     "zod": "4.1.12"
   },
   "devDependencies": {
     "@iterate-com/ui": "workspace:*",
-    "@types/node": "^22.0.0",
-    "@types/react": "^19.2.14",
+    "@types/react": "^19.2.17",
     "tsdown": "0.22.2",
+    "typescript": "^5.9.3",
     "vitest": "4.0.15"
   }
 }

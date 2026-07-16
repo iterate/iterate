@@ -9,7 +9,7 @@
  * Lanes:
  *
  *   "os"       — the dashboard/app pipeline (OS host, non-itx paths)
- *   "api"      — rpc path lanes on the OS host: /api, /api/admin-cookie, and
+ *   "api"      — rpc path lanes on the OS host: /api, operator sessions, and
  *                Slack webhooks
  *   "project"  — a project worker target, resolved from:
  *                  /prj_<id>/...                      (URL rewritten)
@@ -75,6 +75,7 @@ export async function decideIngressRoute(input: {
       return projectRoute({
         appSlug: null,
         headers,
+        hostKind: "path",
         method: input.method,
         projectId: head,
         url: workerUrl.toString(),
@@ -91,6 +92,7 @@ export async function decideIngressRoute(input: {
     return projectRoute({
       appSlug: candidate.appSlug,
       headers,
+      hostKind: "platform",
       method: input.method,
       projectId,
       url: input.url,
@@ -102,6 +104,7 @@ export async function decideIngressRoute(input: {
     return projectRoute({
       appSlug: custom.appSlug,
       headers,
+      hostKind: "custom",
       method: input.method,
       projectId: custom.projectId,
       url: input.url,
@@ -114,6 +117,7 @@ export async function decideIngressRoute(input: {
 function projectRoute(input: {
   appSlug: string | null;
   headers: Headers;
+  hostKind: "custom" | "path" | "platform";
   method: string;
   projectId: string;
   url: string;
@@ -125,6 +129,7 @@ function projectRoute(input: {
   // world cannot pick an app or fake a path prefix the lane didn't produce.
   headers.delete("x-iterate-app");
   if (input.appSlug) headers.set("x-iterate-app", input.appSlug);
+  headers.set("x-iterate-host-kind", input.hostKind);
   headers.delete("x-iterate-url-prefix");
   if (input.urlPrefix) headers.set("x-iterate-url-prefix", input.urlPrefix);
   return {
@@ -136,17 +141,26 @@ function projectRoute(input: {
 
 /**
  * Path lanes served by the api pipeline on the OS host: the capnweb rpc
- * endpoint at exactly `/api` (plus its admin-cookie bridge), the Slack
- * webhook ingress lanes. Deliberately exact-match: other `/api/*` paths
- * (`/api/mcp`, `/api/health`, the OAuth
- * callback routes under `/api/integrations/...`) are app routes and stay on
- * the "os" lane.
+ * endpoint at exactly `/api` (plus operator-session issuance/redemption), the Slack,
+ * GitHub, and Telegram webhook ingress lanes. Deliberately exact-match —
+ * except Telegram, whose webhook path carries the bot id as a segment
+ * (`/api/integrations/telegram/webhook/<botId>`), so it is the one prefix.
+ * Other `/api/*` paths (`/api/mcp`, `/api/health`, the OAuth callback routes
+ * under `/api/integrations/...`) are app routes and stay on the "os" lane.
  */
 function isApiWorkerLanePath(pathname: string): boolean {
-  if (pathname === "/api" || pathname === "/api/admin-cookie") return true;
+  if (
+    pathname === "/api" ||
+    pathname === "/api/operator-sessions" ||
+    pathname.startsWith("/api/operator-sessions/")
+  ) {
+    return true;
+  }
   if (
     pathname === "/api/integrations/slack/webhook" ||
-    pathname === "/api/integrations/slack/interactivity-webhook"
+    pathname === "/api/integrations/slack/interactivity-webhook" ||
+    pathname === "/api/integrations/github/webhook" ||
+    pathname.startsWith("/api/integrations/telegram/webhook/")
   ) {
     return true;
   }

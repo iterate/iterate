@@ -1,37 +1,35 @@
-// The "event-feed" sibling view: grouped feed_items from the browser-event-feed processor.
-// Consecutive events of the same type collapse into one row; specific-renderer types
-// (created/woken/child-stream-created) always get their own singleton row with custom UI.
-// Uses the same virtualized tail-following
+// The "feed" sibling view: feed_items from the unified browser-feed processor.
+// Raw rows: consecutive events of the same type collapse into one raw.group row;
+// specific-renderer types (created/woken/child-stream-created) always get their own
+// raw.* singleton row with custom UI. Agent rows (kind agent.*) render generically —
+// this debug app has no chat UI. Uses the same virtualized tail-following
 // scroll shell as the raw-events view.
 
 import { Link } from "@tanstack/react-router";
-import { useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
 import { createCapnwebStreamClient } from "../lib/capnweb-stream-browser-client.ts";
-import {
-  shouldSuppressUnreadBadgeDuringInitialTail,
-  useInitialTailScroll,
-} from "../lib/use-initial-tail-scroll.ts";
+import { useStickToBottom } from "../lib/use-stick-to-bottom.ts";
 import {
   acquireStreamRuntime,
   type StreamBrowserSnapshot,
   type StreamBrowserStore,
 } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { browserProcessorStateStorage } from "~/domains/streams/client-libraries/browser/processor-state-storage.ts";
-import {
-  BROWSER_EVENT_FEED_SCHEMA_VERSION,
-  BROWSER_EVENT_FEED_TABLE,
-  BrowserEventFeedContract,
-  BrowserEventFeedProcessor,
-  type BrowserEventFeedState,
-} from "~/domains/streams/client-libraries/processors/browser-event-feed/implementation.ts";
+import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 type FeedItemRow = {
   local_index: number;
-  component: string;
+  kind: string;
   first_offset: number;
   last_offset: number;
   event_count: number;
@@ -39,9 +37,9 @@ type FeedItemRow = {
 };
 
 const SPECIFIC_RENDERER_TYPES: Record<string, string> = {
-  "stream.created": "events.iterate.com/stream/created",
-  "stream.woken": "events.iterate.com/stream/woken",
-  "stream.child-stream-created": "events.iterate.com/stream/child-stream-created",
+  "raw.stream.created": "events.iterate.com/stream/created",
+  "raw.stream.woken": "events.iterate.com/stream/woken",
+  "raw.stream.child-stream-created": "events.iterate.com/stream/child-stream-created",
 };
 
 export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) {
@@ -51,22 +49,7 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
         streamPath: streamView.path,
         projectId: streamView.projectId,
         createStreamClient: createCapnwebStreamClient,
-        slug: BrowserEventFeedContract.slug,
-        schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
-        tables: [BROWSER_EVENT_FEED_TABLE],
-        createProcessor({ stream, sql, subscriptionKey }) {
-          const storage = browserProcessorStateStorage<BrowserEventFeedState>({
-            sql,
-            processorSlug: BrowserEventFeedContract.slug,
-            subscriptionKey,
-          });
-          return new BrowserEventFeedProcessor({
-            stream,
-            sql,
-            readState: storage.readState,
-            writeState: storage.writeState,
-          });
-        },
+        processors: CANONICAL_MIRROR_PROCESSORS,
       }),
     [streamView.projectId, streamView.path],
   );
@@ -138,7 +121,12 @@ function FeedItemRows({
     estimateSize: () => estimatedFeedRowHeight,
     getItemKey: (index) => index,
     anchorTo: "end",
-    followOnAppend: true,
+    // OFF — the stick owns tail-following in DOM truth (useStickToBottom):
+    // the library's follow gate reads its internal offset model, which the
+    // sticky in-scroller composer's growth silently skews (content height
+    // changes with no scroll event) until isAtEnd() goes false and follows
+    // stop. anchorTo stays for mid-history measurement compensation.
+    followOnAppend: false,
     ...(initialScrollOffset.current === 0 ? {} : { initialOffset: initialScrollOffset.current }),
     paddingStart: topScrollAffordanceHeight,
     scrollEndThreshold: 80,
@@ -158,16 +146,33 @@ function FeedItemRows({
     },
   });
   const virtualItems = virtualizer.getVirtualItems();
-  const initialTailScroll = useInitialTailScroll({
-    count: itemCount,
+  // The stick observes the virtualizer's sizer AND the sticky composer
+  // chrome: the composer lives INSIDE the scroller, so its growth changes
+  // content height with no scroll event, and input inside it (typing,
+  // clicking the textarea or the affordance buttons) is not leaving-the-tail
+  // intent — hence the release exemption.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const composerChromeRef = useRef<HTMLDivElement | null>(null);
+  const setVirtualContainer = useCallback(
+    (node: HTMLDivElement | null) => {
+      virtualizer.containerRef(node);
+      contentRef.current = node;
+    },
+    [virtualizer],
+  );
+  const { stuckRef, release } = useStickToBottom({
     scrollElementRef: parentRef,
-    virtualizer,
+    contentElementRefs: [contentRef, composerChromeRef],
+    releaseExemptElementRef: composerChromeRef,
   });
 
   useLayoutEffect(() => {
     const appendedCount = itemCount - previousItemCount.current;
     previousItemCount.current = itemCount;
-    if (shouldSuppressUnreadBadgeDuringInitialTail(initialTailScroll)) {
+    // While stuck the reader is AT the newest item by definition — nothing is
+    // unread. This also covers the initial replay: appends pouring in before
+    // the viewport converges must not count as unread.
+    if (stuckRef.current) {
       setNewItemCount(0);
       return;
     }
@@ -178,7 +183,7 @@ function FeedItemRows({
     if (!scrollPosition.isAtEnd) {
       setNewItemCount((current) => current + appendedCount);
     }
-  }, [itemCount, initialTailScroll, scrollPosition.isAtEnd]);
+  }, [itemCount, stuckRef, scrollPosition.isAtEnd]);
 
   useLayoutEffect(() => {
     if (scrollPosition.isAtEnd) setNewItemCount(0);
@@ -201,7 +206,7 @@ function FeedItemRows({
               className="pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
               type="button"
               onClick={() => {
-                initialTailScroll.markUserLeftTail("scroll-to-top-button");
+                release("scroll-to-top-button");
                 virtualizer.scrollToOffset(0);
               }}
             >
@@ -246,7 +251,16 @@ function FeedItemRows({
             </span>
           </div>
         ) : (
-          <div className="relative w-full flex-1" style={{ minHeight: virtualizer.getTotalSize() }}>
+          // directDomUpdates contract: the virtualizer owns this container's
+          // height (containerRef) and each row's translate — JSX must not
+          // write either. grow/shrink-0 with basis auto: the box honors the
+          // virtualizer's height when content is tall (flex-1's 0% basis
+          // would OVERRIDE the height style, leaving a short box whose
+          // absolute rows overflow invisibly — the stick's ResizeObserver
+          // watches this box, so it must be real) and still grows to fill
+          // the viewport when content is short, keeping the sticky composer
+          // pinned to the viewport bottom.
+          <div ref={setVirtualContainer} className="relative w-full grow shrink-0">
             <FeedItemWindow
               expandedLocalIndexes={expandedLocalIndexes}
               itemCount={itemCount}
@@ -268,7 +282,11 @@ function FeedItemRows({
             />
           </div>
         )}
-        <div className="sticky bottom-0 z-[2] bg-white" data-testid="stream-composer-chrome">
+        <div
+          ref={composerChromeRef}
+          className="sticky bottom-0 z-[2] bg-white"
+          data-testid="stream-composer-chrome"
+        >
           {showScrollToBottom ? (
             <div
               className="pointer-events-none absolute inset-x-0 top-0 z-10 flex min-h-[72px] -translate-y-full items-end justify-center pb-2.5"
@@ -295,7 +313,10 @@ function FeedItemRows({
                   type="button"
                   onClick={() => {
                     setNewItemCount(0);
-                    virtualizer.scrollToEnd();
+                    // Direct DOM write: lands at the exact bottom, and the
+                    // scroll event it fires re-engages the stick (≤2px).
+                    const scroller = parentRef.current;
+                    if (scroller != null) scroller.scrollTop = scroller.scrollHeight;
                   }}
                 >
                   <span className="text-base leading-none">↓</span>
@@ -372,7 +393,7 @@ function FeedItemWindow({
   const lastIndex = virtualItems.at(-1)?.index ?? -1;
   const rowQueryResult = useStreamQuery(
     streamDatabase,
-    `SELECT local_index, component, first_offset, last_offset, event_count, json(data) AS data
+    `SELECT local_index, kind, first_offset, last_offset, event_count, json(data) AS data
      FROM feed_items
      WHERE local_index >= ? AND local_index < ?
      ORDER BY local_index ASC`,
@@ -402,8 +423,9 @@ function FeedItemWindow({
         data-index={virtualItem.index}
         data-testid="virtual-row"
         key={virtualItem.key}
-        ref={row === undefined ? undefined : measureElement}
-        style={{ transform: `translateY(${virtualItem.start}px)` }}
+        // Unconditional: directDomUpdates positions rows through the
+        // measurement cache, so unmeasured pending rows would never be placed.
+        ref={measureElement}
       >
         {row === undefined ? (
           <article
@@ -442,7 +464,7 @@ function FeedItem({
     ? "min-w-0 overflow-hidden bg-white"
     : "relative min-w-0 overflow-hidden bg-white";
 
-  if (row.component === "stream.created") {
+  if (row.kind === "raw.stream.created") {
     return (
       <StreamLifecycleMarker
         className={articleClass}
@@ -455,7 +477,7 @@ function FeedItem({
     );
   }
 
-  if (row.component === "stream.woken") {
+  if (row.kind === "raw.stream.woken") {
     return (
       <StreamLifecycleMarker
         className={articleClass}
@@ -468,7 +490,7 @@ function FeedItem({
     );
   }
 
-  if (row.component === "stream.child-stream-created") {
+  if (row.kind === "raw.stream.child-stream-created") {
     return (
       <ChildStreamCreatedFeedItem
         className={articleClass}
@@ -489,7 +511,7 @@ function FeedItem({
   return (
     <article
       data-testid="feed-item"
-      data-component={row.component}
+      data-kind={row.kind}
       data-event-type={eventType}
       data-first-offset={row.first_offset}
       data-last-offset={row.last_offset}
@@ -533,7 +555,7 @@ function StreamLifecycleMarker({
     <article
       className={className}
       data-testid="feed-item"
-      data-component={row.component}
+      data-kind={row.kind}
       data-event-type={feedItemEventType(row)}
       data-first-offset={row.first_offset}
       data-last-offset={row.last_offset}
@@ -584,14 +606,14 @@ function ChildStreamCreatedFeedItem({
       : streamViewSearch({
           path: childPath,
           projectId: streamView.projectId,
-          view: "browser-event-feed",
+          view: "browser-feed",
         });
 
   return (
     <article
       className={className}
       data-testid="feed-item"
-      data-component={row.component}
+      data-kind={row.kind}
       data-event-type={eventType}
       data-first-offset={row.first_offset}
       data-last-offset={row.last_offset}
@@ -666,7 +688,7 @@ function feedItemEventType(row: FeedItemRow) {
   if (typeof row.data.eventType === "string") return row.data.eventType;
   const first = feedItemEvents(row)[0];
   if (first !== undefined && typeof first.type === "string") return first.type;
-  return SPECIFIC_RENDERER_TYPES[row.component] ?? row.component;
+  return SPECIFIC_RENDERER_TYPES[row.kind] ?? row.kind;
 }
 
 function feedItemEvents(row: FeedItemRow): Record<string, unknown>[] {
@@ -684,7 +706,7 @@ function feedItemExpandedJson(row: FeedItemRow) {
 function parseFeedItem(row: Record<string, unknown>): FeedItemRow | undefined {
   if (
     typeof row.local_index !== "number" ||
-    typeof row.component !== "string" ||
+    typeof row.kind !== "string" ||
     typeof row.first_offset !== "number" ||
     typeof row.last_offset !== "number" ||
     typeof row.event_count !== "number"
@@ -702,7 +724,7 @@ function parseFeedItem(row: Record<string, unknown>): FeedItemRow | undefined {
   }
   return {
     local_index: row.local_index,
-    component: row.component,
+    kind: row.kind,
     first_offset: row.first_offset,
     last_offset: row.last_offset,
     event_count: row.event_count,

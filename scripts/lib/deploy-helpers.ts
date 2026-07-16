@@ -1,6 +1,6 @@
 /**
  * Shared primitives for the per-app deploy/ensure-resources/erase-data
- * scripts (apps/{os,auth,semaphore,tunnels,streams-example-app}/scripts).
+ * scripts (apps/{os,auth,semaphore,tunnels,streams-example-app,dummy-petshop}/scripts).
  *
  * Each script stays an imperative top-to-bottom program; these are the
  * handful of moves they all make (spawn-and-fail-fast, smoke probes, the
@@ -9,13 +9,16 @@
  * machinery.
  */
 import { spawnSync } from "node:child_process";
-import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import type { DeployableEnv, EnvContext } from "./env-context.ts";
+import { join } from "node:path";
+import { z } from "zod";
+import { CloudflareApiError, type DeployableEnv, type EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext these helpers actually need: the Cloudflare API fetchers. */
 type CfContext = Pick<EnvContext<DeployableEnv>, "cf" | "cfV4">;
+
+const SecretBindings = z.array(z.object({ name: z.string(), type: z.string() }));
 
 /**
  * Spawn a command with inherited stdio and throw on a nonzero exit — the
@@ -38,17 +41,36 @@ export function run(
 }
 
 /**
- * Probe a deployed URL until `ok(status)` holds (5 attempts, 3s apart) and
- * throw when it never does — a deploy is only done once the env answers.
+ * Probe a deployed URL until `ok(status)` holds (18 attempts, 5s apart ≈ 90s)
+ * and throw when it never does — a deploy is only done once the env answers.
+ *
+ * The window is deliberately generous: a fresh worker version can answer 503
+ * at the edge for tens of seconds while it propagates (measured 2026-07-09 on
+ * preview slots: dashboard 503 for ~30-60s after a green `wrangler deploy`).
+ * A success at attempt 12 costs nothing extra; giving up early fails the
+ * whole deploy+e2e job, whose retry costs ~5 minutes.
  */
 export async function smoke(url: string, ok: (status: number) => boolean, label: string) {
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  await smokeResponse(url, (response) => ok(response.status), label);
+}
+
+/**
+ * Response-aware variant of {@link smoke}. Use this when a status alone could
+ * be produced by an edge/router fallback and the response body is part of the
+ * deployment proof.
+ */
+export async function smokeResponse(
+  url: string,
+  ok: (response: Response) => boolean | Promise<boolean>,
+  label: string,
+) {
+  for (let attempt = 1; attempt <= 18; attempt++) {
     try {
       const response = await fetch(url, {
         redirect: "manual",
         signal: AbortSignal.timeout(15_000),
       });
-      if (ok(response.status)) {
+      if (await ok(response)) {
         console.log(`smoke ok: ${label} (${url} → ${response.status})`);
         return;
       }
@@ -56,7 +78,7 @@ export async function smoke(url: string, ok: (status: number) => boolean, label:
     } catch (error) {
       console.warn(`smoke attempt ${attempt}: ${label} → ${error}`);
     }
-    await new Promise((res) => setTimeout(res, 3000));
+    await new Promise((res) => setTimeout(res, 5000));
   }
   throw new Error(
     `Smoke failed: ${label} (${url}) never answered healthily — the deploy is NOT verified.`,
@@ -66,16 +88,11 @@ export async function smoke(url: string, ok: (status: number) => boolean, label:
 /**
  * `wrangler deploy --secrets-file` with the secrets in a 0600 tmpfile that is
  * always cleaned up — code + secrets land atomically in one worker version.
- *
- * When `ensureClassesFor` is given, first checks the live worker for Durable
- * Object bindings and runs a plain (secrets-less) deploy when there are none.
- * Gotcha (observed live 2026-07-03): a worker with NO Durable Object classes
- * yet — a brand-new env whose script has never been uploaded — fails
- * `wrangler deploy --secrets-file` with 10061, because the initial class
- * migrations don't ride that upload path. The plain deploy establishes the
- * classes (existing secrets are preserved across versions), then the secrets
- * deploy lands code+secrets atomically as usual. Apps without DO classes skip
- * it; envs that already carry the classes fall straight through.
+ * Durable Object classes ride the same upload: the config's declarative
+ * `exports` map is reconciled server-side per deploy, so a brand-new env's
+ * first upload and a steady-state redeploy are the same single command (the
+ * legacy migrations flow needed a classless bootstrap deploy first; exports
+ * does not — verified live 2026-07-08).
  */
 export async function deployWithSecrets(input: {
   /** App root the wrangler commands run in. */
@@ -88,8 +105,6 @@ export async function deployWithSecrets(input: {
   credentials: Record<string, string>;
   /** Extra `wrangler deploy` args (e.g. `["--env", name]` for env-block configs). */
   extraDeployArgs?: string[];
-  /** DO-class-carrying apps pass this to get the plain-deploy-first guard. */
-  ensureClassesFor?: { ctx: CfContext; workerName: string };
 }) {
   const deployArgs = [
     "exec",
@@ -99,43 +114,6 @@ export async function deployWithSecrets(input: {
     input.builtConfig,
     ...(input.extraDeployArgs ?? []),
   ];
-
-  if (input.ensureClassesFor) {
-    const { ctx, workerName } = input.ensureClassesFor;
-    const remote = await ctx
-      .cf<{ bindings?: { type: string }[] }>(`/workers/scripts/${workerName}/settings`)
-      .catch(() => null);
-    if (!remote?.bindings?.some((binding) => binding.type === "durable_object_namespace")) {
-      console.log(
-        "Worker has no Durable Object classes yet — plain deploy first to establish them.",
-      );
-      // The bootstrap deploy carries no --secrets-file, and a classless
-      // worker has no existing secrets either — wrangler's secrets.required
-      // enforcement would fail it. Deploy from a config copy without the
-      // `secrets` block; the real deploy below re-enforces it.
-      const { secrets: _secrets, ...config } = JSON.parse(readFileSync(input.builtConfig, "utf8"));
-      // Wrangler resolves relative paths (assets, containers) against the
-      // config's directory, so the copy must live next to the original.
-      const bootstrapConfig = join(dirname(input.builtConfig), "wrangler.bootstrap.json");
-      writeFileSync(bootstrapConfig, JSON.stringify(config));
-      try {
-        run(
-          "pnpm",
-          [
-            "exec",
-            "wrangler",
-            "deploy",
-            "--config",
-            bootstrapConfig,
-            ...(input.extraDeployArgs ?? []),
-          ],
-          { cwd: input.cwd, env: input.credentials },
-        );
-      } finally {
-        rmSync(bootstrapConfig, { force: true });
-      }
-    }
-  }
 
   const secretsDir = mkdtempSync(join(tmpdir(), "deploy-secrets-"));
   try {
@@ -148,6 +126,64 @@ export async function deployWithSecrets(input: {
   } finally {
     rmSync(secretsDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Refuse to deploy while a forbidden secret remains bound to the Worker.
+ *
+ * `wrangler deploy --secrets-file` deliberately preserves omitted secrets, so
+ * removing a name from generated config is not enough to prove it is absent.
+ * This is an assertion, not migration machinery: remediation is an explicit
+ * operator action, and a normal deploy never mutates credential state.
+ *
+ * Omitted-secret semantics: https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code
+ */
+export async function assertWorkerSecretAbsent(input: {
+  cf: (path: string, init?: RequestInit) => Promise<unknown>;
+  workerName: string;
+  secretName: string;
+}): Promise<void> {
+  const scriptPath = `/workers/scripts/${encodeURIComponent(input.workerName)}/secrets`;
+  let current: z.infer<typeof SecretBindings>;
+  try {
+    current = SecretBindings.parse(await input.cf(scriptPath));
+  } catch (error) {
+    if (error instanceof CloudflareApiError && error.status === 404) {
+      console.log(
+        `Worker not created; forbidden secret absent: ${input.workerName}/${input.secretName}`,
+      );
+      return;
+    }
+    throw error;
+  }
+  if (current.some((binding) => binding.name === input.secretName)) {
+    throw new Error(
+      `Forbidden Worker secret is present: ${input.workerName}/${input.secretName}. Remove it explicitly before deploying.`,
+    );
+  }
+
+  console.log(`forbidden Worker secret absent: ${input.workerName}/${input.secretName}`);
+}
+
+/**
+ * Refuse to deploy when the resolved Doppler config contains a forbidden
+ * secret. Checking the already-resolved config catches direct and inherited
+ * values without issuing a second download or exposing the value.
+ */
+export function assertDopplerSecretAbsent(input: {
+  project: string;
+  config: string;
+  secretName: string;
+  secrets: Record<string, string>;
+}): void {
+  if (Object.hasOwn(input.secrets, input.secretName)) {
+    throw new Error(
+      `Forbidden Doppler secret is present: ${input.project}/${input.config}/${input.secretName}. Remove it explicitly before deploying.`,
+    );
+  }
+  console.log(
+    `forbidden Doppler secret absent: ${input.project}/${input.config}/${input.secretName}`,
+  );
 }
 
 /**
@@ -214,6 +250,93 @@ export async function ensureD1(
   });
   console.log(`created D1 database ${name} (${created.uuid})`);
   return created;
+}
+
+/**
+ * One TTL to rule the preview fleet: a preview slot's disposable data (search
+ * corpus, project files, sandbox backups) is expired 3 hours after it was last
+ * written. Short because previews are synthetic and churn constantly, and the
+ * whole point is cost — abandoned data should not linger. Prd keeps its own,
+ * much longer retention (see `SANDBOX_BACKUP_TTL_SECONDS_PRD`); this constant
+ * is never applied there. See docs/preview-resource-gc.md.
+ */
+export const PREVIEW_DISPOSABLE_TTL_SECONDS = 3 * 60 * 60;
+
+/** Prd sandbox workspace backups: 90 days, matching the DO's SANDBOX_BACKUP_TTL_SECONDS. */
+export const SANDBOX_BACKUP_TTL_SECONDS_PRD = 90 * 24 * 60 * 60;
+
+/**
+ * The sandbox workspace backup expiry rule — shared id + `backups/` prefix so
+ * ensure-resources and erase-data install the SAME rule (the ttl differs: 3h on
+ * preview, 90 days on prd). Sandboxes snapshot `/workspace` under `backups/`
+ * and the DO only checks the ttl at restore time, so this rule is what actually
+ * reaps them.
+ */
+export const SANDBOX_BACKUP_EXPIRY_RULE = {
+  ruleId: "expire-sandbox-workspace-backups",
+  prefix: "backups/",
+} as const;
+
+/**
+ * The disposable per-slot R2 corpus (the itx.search `-search-index` bucket):
+ * pure derived state the worker re-mirrors, which on a churned preview slot
+ * grows to thousands of objects. Erasing it object-by-object is the single
+ * biggest source of the cleanup 429 storm that used to leak preview leases
+ * (2026-07-15: 1521 objects, rate-limited mid-delete). Preview slots let R2
+ * lifecycle expire it server-side — zero control-plane calls — and skip the
+ * object walk in erase-data. NOT applied to prd, whose corpus must persist.
+ */
+export const PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY = {
+  ruleId: "expire-preview-search-index",
+  ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
+} as const;
+
+/** Preview project-file storage (itx.files): same disposable 3h expiry as the corpus. */
+export const PREVIEW_FILES_OBJECT_EXPIRY = {
+  ruleId: "expire-preview-files",
+  ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
+} as const;
+
+/**
+ * Pure builder for a "delete every matching object `ttlSeconds` after it was
+ * written" R2 lifecycle policy. `prefix` scopes the rule; an empty prefix (the
+ * default) covers all objects/uploads, per the R2 lifecycle API. The Age
+ * transition takes seconds.
+ */
+export function buildR2ObjectExpiryLifecycleRules(input: {
+  ruleId: string;
+  ttlSeconds: number;
+  prefix?: string;
+}) {
+  return [
+    {
+      id: input.ruleId,
+      enabled: true,
+      conditions: { prefix: input.prefix ?? "" },
+      deleteObjectsTransition: { condition: { type: "Age", maxAge: input.ttlSeconds } },
+    },
+  ];
+}
+
+/**
+ * Put a single "expire matching objects after `ttlSeconds`" lifecycle rule on
+ * an R2 bucket, so Cloudflare garbage-collects the objects server-side instead
+ * of erase-data walking the bucket with one rate-limited DELETE per object. PUT
+ * replaces the bucket's lifecycle config wholesale — fine while this is the
+ * only rule the target buckets carry.
+ */
+export async function ensureR2ObjectExpiryLifecycle(
+  ctx: CfContext,
+  bucketName: string,
+  input: { ruleId: string; ttlSeconds: number; prefix?: string },
+): Promise<void> {
+  await ctx.cf(`/r2/buckets/${bucketName}/lifecycle`, {
+    method: "PUT",
+    body: JSON.stringify({ rules: buildR2ObjectExpiryLifecycleRules(input) }),
+  });
+  console.log(
+    `R2 bucket ${bucketName} lifecycle: objects under "${input.prefix ?? ""}" expire ${input.ttlSeconds}s after write (${input.ruleId})`,
+  );
 }
 
 /**

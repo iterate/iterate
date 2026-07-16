@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Box,
   Bug,
+  CalendarClock,
   Check,
   ChevronsLeft,
   ChevronsUpDown,
@@ -63,7 +64,9 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
+import type { ProjectListEntry } from "../project-deployment-status.ts";
+import { SidebarRecentAgents } from "./agent-roster.tsx";
+import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import {
@@ -71,8 +74,8 @@ import {
   projectsListQueryKey,
   projectsListStaleTime,
 } from "~/lib/projects-query.ts";
-import type { ProjectListEntry } from "~/types.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
+import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
@@ -89,28 +92,32 @@ export function AppSidebar({ routeConfig }: { routeConfig: PublicRouteConfig }) 
   // Missing projects (auth knows them, this deployment's engine does not) are
   // not navigable — the /projects page owns setting them up.
   const projects = data?.filter((project) => project.deploymentStatus !== "missing") ?? [];
-
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
+  // CloseMobileSidebarOnNavigate must sit outside <Sidebar>: on mobile, Sidebar
+  // children live inside a Sheet that remounts when opened.
   return (
-    <Sidebar collapsible="icon">
-      {/* Collapsed: nudge the logo down 4px (pt-2 → pt-3) so its center lines up
+    <>
+      <CloseMobileSidebarOnNavigate />
+      <Sidebar collapsible="icon">
+        {/* Collapsed: nudge the logo down 4px (pt-2 → pt-3) so its center lines up
           with the stream path pill in the page header (h-9 pill, pt-2.5 → center 28px).
           Transition padding with Tailwind's default timing — the same curve the
           SidebarMenuButton uses for its width/height/padding — so the padding offset
           and the button's height change move the logo together instead of drifting. */}
-      <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
-        <AppSidebarHeader projects={projects} />
-      </SidebarHeader>
-      <SidebarContent>
-        <AppSidebarNav routeConfig={routeConfig} />
-      </SidebarContent>
-      <SidebarFooter>
-        <AppSidebarCollapseButton />
-        <AppSidebarUser />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
+        <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
+          <AppSidebarHeader projects={projects} />
+        </SidebarHeader>
+        <SidebarContent>
+          <AppSidebarNav routeConfig={routeConfig} />
+        </SidebarContent>
+        <SidebarFooter>
+          <AppSidebarCollapseButton />
+          <AppSidebarUser />
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
+    </>
   );
 }
 
@@ -230,9 +237,30 @@ function AppSidebarUser() {
   const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
   const isAdmin = user?.isAdmin ?? false;
+  const operatorScope = session?.authenticated
+    ? ["operator admin", "operator project"].includes(session.session.scope)
+      ? session.session.scope
+      : null
+    : null;
+  const isOperatorSession = operatorScope !== null;
   const label = [user?.name, user?.email, "Account"].find((value) => value?.trim())?.trim() ?? "";
-  const email = user?.email?.trim() ?? "";
+  const detail =
+    operatorScope === "operator admin"
+      ? "Platform-wide operator access"
+      : operatorScope === "operator project"
+        ? "Project-scoped operator access"
+        : (user?.email?.trim() ?? "");
   const initials = userInitials(label);
+
+  async function endCurrentSession() {
+    if (!isOperatorSession) return await signOut();
+    const response = await fetch("/api/operator-sessions/current", {
+      credentials: "same-origin",
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error(`Could not end operator session (${response.status}).`);
+    window.location.assign("/");
+  }
   const debugInfo = useMemo(
     () => ({
       auth: {
@@ -270,7 +298,7 @@ function AppSidebarUser() {
                   </Avatar>
                   <span className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{label}</span>
-                    {email ? <span className="truncate text-xs">{email}</span> : null}
+                    {detail ? <span className="truncate text-xs">{detail}</span> : null}
                   </span>
                   <ChevronsUpDown className="ml-auto" />
                 </SidebarMenuButton>
@@ -289,21 +317,23 @@ function AppSidebarUser() {
                   </Avatar>
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{label}</span>
-                    {email ? <span className="truncate text-xs">{email}</span> : null}
+                    {detail ? <span className="truncate text-xs">{detail}</span> : null}
                   </div>
                 </div>
               </div>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuItem
-                  render={
-                    <a href={accountManagementUrl}>
-                      <UserCircle />
-                      <span>Manage account</span>
-                      <ExternalLink className="ml-auto" />
-                    </a>
-                  }
-                />
+                {!isOperatorSession && (
+                  <DropdownMenuItem
+                    render={
+                      <a href={accountManagementUrl}>
+                        <UserCircle />
+                        <span>Manage account</span>
+                        <ExternalLink className="ml-auto" />
+                      </a>
+                    }
+                  />
+                )}
                 {isAdmin && (
                   <DropdownMenuItem render={<Link to="/admin" />}>
                     <Shield />
@@ -317,9 +347,9 @@ function AppSidebarUser() {
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuItem onClick={() => void signOut()}>
+                <DropdownMenuItem onClick={() => void endCurrentSession()}>
                   <LogOut />
-                  <span>Sign out</span>
+                  <span>{isOperatorSession ? "End operator session" : "Sign out"}</span>
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>
@@ -384,15 +414,15 @@ function authWorkerOrigin(config: PublicConfig) {
 function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
-  const activeProjectSlug = getActiveProjectSlug(matches);
+  const activeRouteProject = getActiveRouteProject(matches);
+  const activeProjectSlug = activeRouteProject?.slug ?? getActiveProjectSlug(matches);
 
   // Drive the project nav from the active route slug, not list membership, so a valid
   // project that isn't in the cached list still shows its nav.
   if (activeProjectSlug) {
     return (
       <ProjectSidebarGroup
-        // Custom hostnames don't exist yet (tasks/os-project-archival.md): the list carries none.
-        customHostname={null}
+        projectId={activeRouteProject?.id ?? null}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
         appBaseUrl={routeConfig.baseUrl}
@@ -460,14 +490,29 @@ function getActiveProjectSlug(matches: ReturnType<typeof useMatches>) {
     .at(-1);
 }
 
+type ActiveRouteProject = Pick<ProjectListEntry, "id" | "slug">;
+
+function getActiveRouteProject(matches: ReturnType<typeof useMatches>): ActiveRouteProject | null {
+  return (
+    matches
+      .map((match) => (match.context as { project?: ActiveRouteProject } | undefined)?.project)
+      .filter((project): project is ActiveRouteProject =>
+        Boolean(project && typeof project.id === "string" && typeof project.slug === "string"),
+      )
+      .at(-1) ?? null
+  );
+}
+
 function ProjectSidebarGroup({
-  customHostname,
   projectHostnameBases,
+  projectId,
   projectSlug,
   appBaseUrl,
 }: {
-  customHostname: string | null;
   projectHostnameBases: readonly string[];
+  /** Null while the route context has not resolved the project (cached-slug
+   * fallback) — the agents roster needs the id to address its subscription. */
+  projectId: string | null;
   projectSlug: string;
   appBaseUrl?: string;
 }) {
@@ -479,9 +524,8 @@ function ProjectSidebarGroup({
       fuzzy: false,
     }),
   );
-  const customWorkerUrl = buildProjectWorkerUrl({
+  const projectWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
-    customHostname,
     projectHostnameBases,
     appBaseUrl,
   });
@@ -525,14 +569,14 @@ function ProjectSidebarGroup({
                 }),
               )}
             />
-            {customWorkerUrl ? (
+            {projectWorkerUrl ? (
               <ProjectSidebarMenuItem
                 icon={ExternalLink}
                 label="Homepage"
                 render={
                   <a
                     aria-label={`Open ${projectSlug} project homepage`}
-                    href={customWorkerUrl}
+                    href={projectWorkerUrl}
                     target="_blank"
                     rel="noreferrer"
                   />
@@ -577,6 +621,12 @@ function ProjectSidebarGroup({
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
+      {/* The live agents roster rides the nav content, so overflow scrolls
+          with the sidebar instead of a pinned footer box. Renders nothing
+          (including its leading divider) until an agent announces status. */}
+      {projectId === null ? null : (
+        <SidebarRecentAgents projectId={projectId} projectSlug={projectSlug} />
+      )}
     </>
   );
 }
@@ -590,6 +640,7 @@ type ProjectStreamNavItemConfig = {
     | "/projects/$projectSlug/agents"
     | "/projects/$projectSlug/integrations"
     | "/projects/$projectSlug/sandboxes"
+    | "/projects/$projectSlug/scheduler"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
     | "/projects/$projectSlug/streams";
@@ -630,6 +681,13 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     label: "/sandboxes",
     streamPath: StreamPath.parse("/sandboxes"),
     to: "/projects/$projectSlug/sandboxes",
+  },
+  {
+    fuzzy: true,
+    icon: CalendarClock,
+    label: "/scheduler",
+    streamPath: StreamPath.parse("/scheduler"),
+    to: "/projects/$projectSlug/scheduler",
   },
   {
     fuzzy: true,

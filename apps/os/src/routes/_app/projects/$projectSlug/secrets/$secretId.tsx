@@ -13,13 +13,17 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import type { SecretDescription, SecretUpdateInput } from "../../../../../domains/secrets/types.ts";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { breadcrumbLoaderData, streamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import {
+  breadcrumbLoaderData,
+  streamBreadcrumb,
+  streamPageStaticData,
+} from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import type { SecretDescription } from "~/types.ts";
-import { useItx, useItxState } from "~/itx/itx-react.tsx";
+import { useItx, useLiveState } from "~/itx/itx-react.tsx";
 
 const UpdateSecretForm = z.object({
   material: z.string(),
@@ -27,6 +31,7 @@ const UpdateSecretForm = z.object({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secretId")({
+  staticData: streamPageStaticData(),
   validateSearch: StreamViewSearch,
   ssr: false,
   loader: ({ context, params }) =>
@@ -52,8 +57,9 @@ function ProjectSecretDetailContent() {
   // Live secret processor state (the public description — material stays
   // write-only server-side): rotations and every egress-gated use push an
   // updated audit trail into this page while it's open.
-  const { state: secret } = useItxState<SecretDescription>(
-    (itx, setState) => itx.secrets.get(secretPath).processor.onStateChange(setState),
+  const { value: secret } = useLiveState(
+    (itx) => itx.secrets.get(secretPath).liveState,
+    (state) => state,
     [secretPath],
   );
 
@@ -88,7 +94,7 @@ function SecretDetail({
   const itx = useItx();
 
   const updateSecret = useMutation({
-    mutationFn: async (input: { material?: string; egress?: { urls: string[] } }) => {
+    mutationFn: async (input: SecretUpdateInput) => {
       return await itx.secrets.get(secretPath).update(input);
     },
     onSuccess: () => {
@@ -114,10 +120,11 @@ function SecretDetail({
         .split("\n")
         .map((url) => url.trim())
         .filter((url) => url !== "");
-      await updateSecret.mutateAsync({
-        ...(parsed.material === "" ? {} : { material: parsed.material }),
-        egress: { urls },
-      });
+      await updateSecret.mutateAsync(
+        parsed.material === ""
+          ? { egress: { urls } }
+          : { egress: { urls }, material: parsed.material },
+      );
     },
   });
 
@@ -163,7 +170,8 @@ function SecretDetail({
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      Leave blank to keep the current material; filling it rotates the material.
+                      Leave blank to clear the current material. Entering a value replaces it and
+                      binds it to the egress origins below.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>
@@ -189,7 +197,8 @@ function SecretDetail({
                       aria-invalid={isInvalid}
                     />
                     <FieldDescription>
-                      One URL pattern per line. The secret can only be sent to matching egress URLs.
+                      One URL pattern per line. Updating these origins without entering a
+                      replacement value above clears the stored material.
                     </FieldDescription>
                     {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
                   </Field>

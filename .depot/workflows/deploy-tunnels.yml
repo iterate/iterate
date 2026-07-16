@@ -3,19 +3,21 @@ permissions:
   contents: read
   deployments: write
 concurrency:
-  group: tunnels-${{ github.ref_name || 'prd' }}
-  cancel-in-progress: true
+  # Every ref deploys to the same production Worker. Never interrupt a
+  # credentialed deployment midway through its rollout.
+  group: deploy-tunnels-production
+  cancel-in-progress: false
 on:
   push:
     branches:
       - main
     paths:
+      - .depot/workflows/deploy-tunnels.yml
       - apps/tunnels/**
       - envs.ts
       - scripts/lib/**
       - packages/shared/**
       - packages/ui/**
-      - packages/mock-http-proxy/**
   workflow_dispatch:
     inputs:
       ref:
@@ -26,8 +28,9 @@ on:
 jobs:
   deploy:
     runs-on:
-      size: 8x32
+      size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

@@ -37,7 +37,13 @@ function AppLayout() {
   // presence + Feed/State inside the stream view) — a page publishing a
   // streamBreadcrumb IS a stream page. Only the few non-stream pages
   // (projects list, new-project, session REPL) get this minimal shell header.
-  const isStreamPage = activeStreamBreadcrumb(matches) != null;
+  // Project routes are client-only, so their loader data is absent from the
+  // server render. Static route data keeps the shell's first client render
+  // identical to SSR; the loader breadcrumb takes over after the route loads.
+  const isStreamPage =
+    matches.some(
+      (match) => (match.staticData as RouteBreadcrumbStaticData | undefined)?.streamPage === true,
+    ) || activeStreamBreadcrumb(matches) != null;
   // The projects list is the one app page with no project context, so the
   // stream ⌘K switcher has nothing to act on — hide its pill and don't mount
   // the palette here, which also drops its global ⌘K key handler.

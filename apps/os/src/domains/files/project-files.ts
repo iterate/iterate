@@ -20,13 +20,19 @@
 // bytes, and files attached to an agent conversation live under that agent's
 // path (`prj_x.iterate/agents/slack/T1/thr-9/abc12345-cat.png`).
 //
-// Paths are mutable, last-write-wins; URLs sign the path only (a re-upload is
-// served to holders of an older still-valid link). Deliberately v1-simple: no
-// versioning, no listing, no quotas. The pure pieces (byte coercion, HMAC,
-// request verification) live in file-url-signing.ts so they unit-test in Node.
+// Paths are mutable and last-write-wins, but signed URLs bind the R2 object
+// version as well as the path. Replacing a path therefore invalidates every
+// URL minted for the previous bytes. There is no listing or quota layer. The
+// pure pieces (byte coercion, HMAC, request verification) live in
+// file-url-signing.ts so they unit-test in Node.
 
 import { itxEnv } from "../../env.ts";
 import type { AppConfig } from "../../config.ts";
+import {
+  mirrorFileToSearchIndex,
+  removeFileFromSearchIndex,
+  triggerProjectSearchSyncDebounced,
+} from "../search/search-index.ts";
 import { readProjectById } from "../../project-directory.ts";
 import { normalizeProjectHostnameBase } from "../../lib/project-host-routing.ts";
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
@@ -35,7 +41,7 @@ import {
   checkSignedFileRequest,
   projectFileDataToBytes,
   sanitizeFileFilename as sanitizeName,
-  type ProjectFileData,
+  type FileData,
 } from "./file-url-signing.ts";
 
 export { sanitizeFileFilename } from "./file-url-signing.ts";
@@ -51,6 +57,9 @@ export const FILES_APP_SLUG = "iterate-files";
  * still works next week, short enough that leaked links eventually die. */
 const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
+/** Provider fetches happen at request start; keep this bearer capability brief. */
+export const MODEL_FILE_URL_TTL_SECONDS = 15 * 60;
+
 function fileObjectKey(input: { path: string; projectId: string }): string {
   return DurableObjectNameCodec.stringify({
     path: normalizePath(input.path),
@@ -58,8 +67,8 @@ function fileObjectKey(input: { path: string; projectId: string }): string {
   });
 }
 
-/** What a stored file looks like from the outside: address + wire facts. */
-type ProjectFileMetadata = {
+/** A stored project file: what it looks like from the outside — its itx path plus wire facts. */
+export type ProjectFileMetadata = {
   contentType: string;
   path: string;
   size: number;
@@ -67,7 +76,7 @@ type ProjectFileMetadata = {
 
 export async function putProjectFile(input: {
   contentType?: string;
-  data: ProjectFileData;
+  data: FileData;
   path: string;
   projectId: string;
 }): Promise<ProjectFileMetadata> {
@@ -76,6 +85,16 @@ export async function putProjectFile(input: {
   await itxEnv.FILES_BUCKET.put(fileObjectKey(input), bytes, {
     httpMetadata: { contentType },
   });
+  // Mirror into the itx.search corpus (best-effort; never fails the put),
+  // then nudge the project's search instance so the file is findable in
+  // minutes rather than on the hourly sync.
+  await mirrorFileToSearchIndex({
+    bytes,
+    contentType,
+    path: normalizePath(input.path),
+    projectId: input.projectId,
+  });
+  await triggerProjectSearchSyncDebounced(input.projectId);
   return { contentType, path: normalizePath(input.path), size: bytes.byteLength };
 }
 
@@ -95,6 +114,36 @@ export async function readProjectFile(input: {
 
 export async function deleteProjectFile(input: { path: string; projectId: string }): Promise<void> {
   await itxEnv.FILES_BUCKET.delete(fileObjectKey(input));
+  await removeFileFromSearchIndex({
+    path: normalizePath(input.path),
+    projectId: input.projectId,
+  });
+}
+
+/**
+ * Every stored file of one project, as `{ path, bytes, contentType }` — the
+ * enumeration the search-corpus backfill consumes. Lives here so the
+ * `{projectId}.iterate{path}` key convention stays owned by this domain (via
+ * the codec) instead of being re-derived by callers.
+ */
+export async function* listProjectFiles(
+  projectId: string,
+): AsyncGenerator<{ bytes: Uint8Array; contentType: string; path: string }> {
+  const prefix = DurableObjectNameCodec.stringify({ path: "/", projectId });
+  let cursor: string | undefined;
+  do {
+    const page = await itxEnv.FILES_BUCKET.list({ cursor, limit: 500, prefix });
+    for (const entry of page.objects) {
+      const object = await itxEnv.FILES_BUCKET.get(entry.key);
+      if (object === null) continue;
+      yield {
+        bytes: new Uint8Array(await object.arrayBuffer()),
+        contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+        path: DurableObjectNameCodec.parse(entry.key).path,
+      };
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor !== undefined);
 }
 
 /**
@@ -108,6 +157,9 @@ export async function mintProjectFileUrl(input: {
   path: string;
   projectId: string;
 }): Promise<string> {
+  const object = await itxEnv.FILES_BUCKET.head(fileObjectKey(input));
+  if (object === null) throw new Error(`Cannot mint a file URL: no file at ${input.path}.`);
+
   const record = await readProjectById(itxEnv.PROJECT_DIRECTORY, input.projectId);
   const identifier = record?.slug ?? input.projectId;
   const rawBase = input.config.projectHostnameBases?.[0];
@@ -133,6 +185,7 @@ export async function mintProjectFileUrl(input: {
     path: normalizePath(input.path),
     projectId: input.projectId,
     secret: itxEnv.SECRET_ENCRYPTION_KEY,
+    version: object.version,
   });
 }
 
@@ -140,14 +193,14 @@ export async function mintProjectFileUrl(input: {
  * Stores files under an agent's own path and returns the attachment records
  * (path + signed url + wire facts) that ride on agent stream events. The one
  * storage recipe behind every attachment surface — `agent.addFiles` (inputs)
- * and `chat.sendMessage({ files })` (agent replies). A short random prefix
+ * and `chat.sendMessage(message, { files })` (agent replies). A short random prefix
  * keeps two same-named uploads in one conversation from overwriting each
  * other under last-write-wins paths.
  */
 export async function storeAgentFileAttachments(input: {
   agentPath: string;
   config: AppConfig;
-  files: Array<{ contentType: string; data: ProjectFileData; filename: string }>;
+  files: Array<{ contentType: string; data: FileData; filename: string }>;
   projectId: string;
 }): Promise<Array<ProjectFileMetadata & { filename: string; url: string }>> {
   return await Promise.all(
@@ -194,14 +247,16 @@ export async function serveProjectFileRequest(input: {
   const object = await itxEnv.FILES_BUCKET.get(
     fileObjectKey({ path: check.path, projectId: input.projectId }),
   );
-  if (object === null) return new Response("not found", { status: 404 });
+  if (object === null || object.version !== check.version) {
+    return new Response("not found", { status: 404 });
+  }
 
   const filename = check.path.split("/").at(-1) ?? "file";
   const headers = new Headers({
     // Signed query-string auth makes the response origin-agnostic; CORS stays
     // wide open so browser fetch() works from the dashboard origin.
     "access-control-allow-origin": "*",
-    "cache-control": "private, max-age=3600",
+    "cache-control": "private, no-store",
     "content-disposition": `inline; filename="${filename.replaceAll('"', "")}"`,
     "content-length": String(object.size),
     "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",

@@ -1,7 +1,7 @@
 // The execution-runtime matrix for catalogue examples: ONE script body (an
 // example's `code`, with `itx` + `vars` in scope and a trailing `return`)
-// runs through every server-side runtime. The browser runtime lives in
-// examples-browser.test.ts (vitest's browser project); everything else is here.
+// runs through every server-side runtime. The browser runtime is proven by
+// specs/repl-examples.spec.ts (the real REPL); everything else is here.
 //
 //   node            AsyncFunction over an itx Cap'n Web stub in this process
 //   cli             spawned `tsx scripts/cli.ts itx run --eval … --context …`
@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { RpcTarget } from "capnweb";
 import type { ItxExample, ItxExampleRuntime } from "../../src/itx/examples.ts";
+import { runExample } from "../test-support/run-example.ts";
 import { baseUrl, connectProject } from "./e2e-env.ts";
 
 export const MATRIX_RUNTIMES = ["node", "cli", "run-script", "project-worker"] as const;
@@ -27,24 +28,23 @@ const AsyncFunction = async function () {}.constructor as new (
 
 export async function runExampleCode(
   runtime: MatrixRuntime,
-  input: { code: string; id?: string; projectId: string; vars: Record<string, unknown> },
+  input: { code: string; id: string; projectId: string; vars: Record<string, unknown> },
 ): Promise<unknown> {
-  // Worker-heavy examples running while other suites load their own dynamic
-  // workers can trip the deployment's loader isolate cap. That's shared-load
-  // contention, not a behavior bug — back off and retry that exact transient;
-  // anything else fails immediately.
-  return await retryOnWorkerStartupContention(async () => {
-    switch (runtime) {
-      case "node":
-        return await runInNode(input);
-      case "cli":
-        return await runInCli(input);
-      case "run-script":
-        return await runInRunScript(input);
-      case "project-worker":
-        return await runInProjectWorker(input);
-    }
-  });
+  // Exactly one attempt: transient absorption is the vitest CI retry's job
+  // (E2E_CI_RETRIES, docs/testing.md#retries-and-timeouts). A retry wrapper
+  // here used to re-roll anything containing "internal error; reference =" —
+  // Cloudflare's redaction of EVERY server-side crash — which could mask
+  // real worker-startup product bugs behind a silent second retry layer.
+  switch (runtime) {
+    case "node":
+      return await runInNode(input);
+    case "cli":
+      return await runInCli(input);
+    case "run-script":
+      return await runInRunScript(input);
+    case "project-worker":
+      return await runInProjectWorker(input);
+  }
 }
 
 const execFileAsync = promisify(execFile);
@@ -79,38 +79,6 @@ async function runInCli(input: {
   return JSON.parse(stdout);
 }
 
-const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
-// itx redacts server-side exceptions to "internal error; reference = …"
-// before they cross Cap'n Web. Mid-suite that shape is overwhelmingly loader
-// isolate saturation (each script execution and inline worker is its own
-// isolate), so treat it as the same retryable transient; a persistent itx
-// bug still fails after the backoff budget.
-const MASKED_INTERNAL_ERROR_MESSAGE = "internal error; reference =";
-// The repo examples commit then immediately read; on a COLD repo Durable
-// Object the read can lag the commit (Artifacts read-after-write), so the
-// example's own "seeded file" precondition throws. Warm repos never hit it —
-// retrying with backoff is exactly right. Underlying capability gap:
-// commitFiles resolving before read-your-write holds.
-const REPO_SEED_LAG_MESSAGE = "Expected seeded file to exist";
-const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
-
-async function retryOnWorkerStartupContention<T>(run: () => Promise<T>): Promise<T> {
-  for (const backoffMs of LOADER_CONTENTION_BACKOFF_MS) {
-    try {
-      return await run();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const retryable =
-        message.includes(LOADER_CONTENTION_MESSAGE) ||
-        message.includes(MASKED_INTERNAL_ERROR_MESSAGE) ||
-        message.includes(REPO_SEED_LAG_MESSAGE);
-      if (!retryable) throw error;
-      await new Promise((resolve) => setTimeout(resolve, backoffMs));
-    }
-  }
-  return await run();
-}
-
 async function runInNode(input: {
   code: string;
   projectId: string;
@@ -122,18 +90,17 @@ async function runInNode(input: {
 }
 
 async function runInRunScript(input: {
-  code: string;
+  id: string;
   projectId: string;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   using project = connectProject(input.projectId);
-  // runScript takes an async arrow function source string (see itx
-  // CapabilityHost contract); the example body becomes its body, with the
-  // case's vars serialized inline.
-  const execution = await project.capabilityHost.runScript(
-    `async (itx) => {\nconst vars = ${JSON.stringify(input.vars)};\n${input.code}\n}`,
-  );
-  return execution.result;
+  // The shared by-id door (test-support/run-example.ts) IS this runtime:
+  // the matrix proves the exact envelope any e2e test gets from runExample.
+  return await runExample(input.id, {
+    capabilityHost: project.capabilityHost,
+    vars: input.vars,
+  });
 }
 
 async function runInProjectWorker(input: {
@@ -193,10 +160,11 @@ export default class ItxExampleRunner extends WorkerEntrypoint {
     return await Reflect.apply(handler, receiver, args);
   }
 
-  processEvent(input) {
-    // The default project worker receives every committed project event; the
-    // example runner has nothing to do with them.
-    void input;
+  processEventBatch(batch) {
+    // Every project stream delivers its committed events here; the example
+    // runner has nothing to do with them, but must accept the batch so the
+    // streams' delivery checkpoints keep advancing.
+    void batch;
   }
 
   async runItxExample({ id, vars }) {

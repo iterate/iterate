@@ -31,7 +31,7 @@ type RunOptions = {
   eval?: string;
   /** Path to a script file with the same body shape as `eval`. */
   file?: string;
-  /** Project id to connect into. Omit for the global admin session. */
+  /** Project id to connect into. Omit to retain platform-wide admin-secret authority. */
   context?: string;
   /** JSON object passed to the script as `vars`, e.g. '{"note":"hi"}'. */
   vars?: string;
@@ -92,7 +92,7 @@ export function formatScriptError(error: unknown): string {
 }
 
 type ReplOptions = {
-  /** Project id to connect into. Omit for the global admin session. */
+  /** Project id to connect into. Omit to retain platform-wide admin-secret authority. */
   context?: string;
   /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
   baseUrl?: string;
@@ -128,13 +128,13 @@ type AgentSmokeOptions = {
   baseUrl?: string;
   /** Single user message to send to the agent. */
   message: string;
-  /** Project id to connect into over ITX. */
+  /** Project id to connect into over itx. */
   project: string;
   /** Maximum time to wait for an assistant response. */
   timeoutMs?: number;
 };
 
-/** Send one user message to an agent over ITX and wait for the assistant response. */
+/** Send one user message to an agent over itx and wait for the assistant response. */
 export async function agentSmoke(options: AgentSmokeOptions) {
   const agentPath = options.agentPath.trim();
   const project = options.project.trim();
@@ -159,7 +159,7 @@ export async function agentSmoke(options: AgentSmokeOptions) {
   // `ask` is the server-side send-and-wait: append the user message, resolve
   // on the agent's web reply. Waiting is bounded client-side as well.
   const responseEvent = await Promise.race([
-    agent.ask({ message }),
+    agent.ask({ message, timeoutMs }),
     new Promise<never>((_resolve, reject) =>
       setTimeout(() => reject(new Error(`No assistant response within ${timeoutMs}ms`)), timeoutMs),
     ),

@@ -39,13 +39,13 @@ type ResourceRow = {
   type: string;
   slug: string;
   data: string;
-  lease_state: string;
-  leased_until?: number | null;
+  leaseState: string;
+  leasedUntil?: number | null;
   holder?: string | null;
-  last_acquired_at?: number | null;
-  last_released_at?: number | null;
-  created_at: string;
-  updated_at: string;
+  lastAcquiredAt?: number | null;
+  lastReleasedAt?: number | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 function rowToResourceRecord(row: ResourceRow): SemaphoreResourceRecord {
@@ -53,13 +53,13 @@ function rowToResourceRecord(row: ResourceRow): SemaphoreResourceRecord {
     type: row.type,
     slug: row.slug,
     data: parseData(row.data),
-    leaseState: z.enum(["available", "leased"]).parse(row.lease_state),
-    leasedUntil: row.leased_until ?? null,
+    leaseState: z.enum(["available", "leased"]).parse(row.leaseState),
+    leasedUntil: row.leasedUntil ?? null,
     holder: row.holder ?? null,
-    lastAcquiredAt: row.last_acquired_at ?? null,
-    lastReleasedAt: row.last_released_at ?? null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    lastAcquiredAt: row.lastAcquiredAt ?? null,
+    lastReleasedAt: row.lastReleasedAt ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 

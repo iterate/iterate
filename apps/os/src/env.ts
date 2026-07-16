@@ -1,4 +1,5 @@
 import { env as workerEnv } from "cloudflare:workers";
+import type { AuthWorker } from "@iterate-com/auth-contract/worker";
 import type { SendEmailBinding } from "./domains/email/utils.ts";
 
 /**
@@ -25,12 +26,20 @@ export interface Env {
   ARTIFACTS_NAMESPACE: string;
   /** Worker Loader: hosts every dynamic worker isolate. Reach it through
    * DynamicWorkerRunner (domains/workers/worker-runner.ts) — its constructor
-   * is where a dynamic isolate gets its scoped ITX binding and egress
+   * is where a dynamic isolate gets its scoped itx binding and egress
    * fetcher. */
   LOADER: WorkerLoader;
   /** Slug -> project id (+ metadata) cache in front of the auth worker's
    * project directory (project-directory.ts). */
   PROJECT_DIRECTORY: KVNamespace;
+  /**
+   * Auth's default Worker binding. Its project-directory and token-
+   * introspection methods are private RPC capabilities; auth's public HTTP
+   * `fetch` remains a separate surface. Possession of this required same-
+   * account binding is the RPC credential; no auth service token is present
+   * in OS runtime configuration.
+   */
+  AUTH: Service<AuthWorker>;
   /**
    * Cloudflare Email Service send binding backing `itx.email`. Bound in every
    * wrangler env block including local dev, where miniflare simulates sends
@@ -51,6 +60,16 @@ export interface Env {
    * artifact cache (see its BuilderEnv).
    */
   BUILDER: Service<import("./domains/workers/builder-entrypoint.ts").BuilderEntrypoint>;
+  /**
+   * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
+   * projects and returns diagnostics, behind provide-time capability-types
+   * validation and `itx.docs.typecheck`. The only script carrying the
+   * TypeScript compiler (tswasm, ~30MB wasm) — same quarantine story as
+   * BUILDER.
+   */
+  TYPECHECKER: Service<
+    import("./domains/typecheck/typechecker-entrypoint.ts").TypecheckerEntrypoint
+  >;
 
   AGENT: DurableObjectNamespace<
     import("./domains/agents/agent-durable-object.ts").AgentDurableObject
@@ -62,8 +81,29 @@ export interface Env {
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;
   REPO: DurableObjectNamespace<import("./domains/repos/repo-durable-object.ts").RepoDurableObject>;
-  SANDBOX: DurableObjectNamespace<
-    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").CloudflareSandboxDurableObject
+  /**
+   * Sandbox container namespaces, ONE PER INSTANCE TYPE: Cloudflare fixes the
+   * container instance type per container class, so each instance type is its own
+   * Durable Object class and binding (src/domains/sandboxes/instance-types.ts is the
+   * canonical table; the collection routes by the path's instance-type segment).
+   */
+  SANDBOX_LITE: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxLiteDurableObject
+  >;
+  SANDBOX_BASIC: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxBasicDurableObject
+  >;
+  SANDBOX_STANDARD_1: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard1DurableObject
+  >;
+  SANDBOX_STANDARD_2: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard2DurableObject
+  >;
+  SANDBOX_STANDARD_3: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard3DurableObject
+  >;
+  SANDBOX_STANDARD_4: DurableObjectNamespace<
+    import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard4DurableObject
   >;
   /**
    * Workspace persistence for sandbox containers. Container disk is
@@ -102,6 +142,34 @@ export interface Env {
    * per env (`${WORKER_SELF}-files`), created by ensure-resources.ts.
    */
   FILES_BUCKET: R2Bucket;
+  /**
+   * SPIKE: the search-index corpus behind `itx.search`
+   * (domains/search/search-index.ts). Stream event segments, itx.files
+   * mirrors, and repo file snapshots are written here under
+   * `{projectId}/{streams|files|repos}/…` keys; a Cloudflare AI Search
+   * instance (`${WORKER_SELF}-search`, created by ensure-resources.ts)
+   * indexes the bucket and `itx.search` queries it with per-project folder
+   * filters. One bucket per env (`${WORKER_SELF}-search-index`). The whole
+   * bucket is derived data — safe to wipe and rebuild.
+   */
+  SEARCH_BUCKET: R2Bucket;
+  /**
+   * The deployment's AI Search namespace (`ai_search_namespaces` binding,
+   * namespace = `${WORKER_SELF}`). itx.search creates ONE INSTANCE PER
+   * PROJECT in it on first use (domains/search/search-index.ts,
+   * ensureProjectSearchInstance) — each instance indexes only that project's
+   * `{projectId}/**` slice of {@link Env.SEARCH_BUCKET}, so search tenancy is
+   * structural. The namespace itself is created by ensure-resources.ts.
+   */
+  SEARCH_INSTANCES: AiSearchNamespace;
+  /**
+   * Deploy identity (wrangler `version_metadata` binding). The stream
+   * processor hosts' crash-loop breaker keys its backoff budget on the version
+   * id so a fresh deploy — the usual antidote to a deterministic crash loop —
+   * retries immediately instead of waiting out the plateau. Optional because
+   * local dev may not provide it; read through {@link workerVersion}.
+   */
+  CF_VERSION_METADATA?: { id: string; tag?: string };
   SCHEDULER: DurableObjectNamespace<
     import("./domains/scheduler/scheduler-durable-object.ts").SchedulerDurableObject
   >;
@@ -114,6 +182,15 @@ export interface Env {
   WORKER: DurableObjectNamespace<
     import("./domains/workers/stateful-worker-durable-object.ts").StatefulWorkerDurableObject
   >;
+  WORKSPACE: DurableObjectNamespace<
+    import("./domains/workspaces/workspace-durable-object.ts").WorkspaceDurableObject
+  >;
 }
 
 export const itxEnv = workerEnv as unknown as Env;
+
+/** The deploy's version id, for the processor hosts' crash-loop breaker.
+ * "unversioned" in environments without the version_metadata binding. */
+export function workerVersion(env: Env): string {
+  return env.CF_VERSION_METADATA?.id ?? "unversioned";
+}

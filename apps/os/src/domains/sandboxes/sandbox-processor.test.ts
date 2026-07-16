@@ -1,89 +1,99 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import type { Stream, StreamEvent } from "../../types.ts";
+import { MemoryStream, driveProcessor } from "../streams/test-helpers.ts";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 import { SandboxProcessor } from "./sandbox-processor-implementation.ts";
 
-const neverStream = new Proxy({} as Stream, {
-  get(_target, property) {
-    throw new Error(`Unexpected stream access: ${String(property)}`);
-  },
-});
-
-let nextOffset = 0;
-function event(type: string, payload: Record<string, unknown> = {}): StreamEvent {
-  nextOffset += 1;
-  return { type, payload, createdAt: new Date(nextOffset).toISOString(), offset: nextOffset };
+function event(type: string, payload: Record<string, unknown> = {}) {
+  return { type, payload };
 }
 
-function sandboxProcessor() {
-  nextOffset = 0;
-  return new SandboxProcessor({ stream: neverStream });
+/** REAL runner drive over an in-memory journal: append facts, deliver, read
+ * the runner's committed fold — the pure-fold tests below never reach for
+ * anything beyond that. */
+function sandboxHarness() {
+  const stream = new MemoryStream("/sandboxes/test");
+  const processor = new SandboxProcessor({
+    stream,
+    path: "/sandboxes/test",
+    projectId: null,
+  });
+  return { stream, driver: driveProcessor(processor, stream) };
 }
 
 describe("SandboxProcessor", () => {
-  it("folds the idle-out/restore lifecycle into running + lastBackupId", async () => {
-    const processor = sandboxProcessor();
-    // The sequence observed live on preview_7: boot, clone, idle-out snapshot,
-    // stop, wake, restore of that same snapshot.
-    await processor.ingest({
-      events: [
-        event("events.iterate.com/sandbox/container-started"),
-        event("events.iterate.com/sandbox/workspace-cloned"),
-        event("events.iterate.com/sandbox/warmed-up"),
-        event("events.iterate.com/sandbox/backup-created", { backupId: "bkp-1" }),
-        event("events.iterate.com/sandbox/container-stopped"),
-      ],
-      streamMaxOffset: nextOffset,
-    });
-    await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: "bkp-1", running: false, warmedUp: true },
+  it("folds a pet's whole life: created → running → stopped → running → destroyed", async () => {
+    const { stream, driver } = sandboxHarness();
+    // create-requested lands on the /sandboxes catalogue stream, not here —
+    // the pet's own stream starts with the completion.
+    await stream.append(event("events.iterate.com/sandbox/created", { instanceType: "basic" }));
+    await driver.deliver();
+    await expect(driver.snapshot()).resolves.toMatchObject({
+      state: { status: "created", instanceType: "basic", lastBackupId: null },
     });
 
-    await processor.ingest({
-      events: [
-        // A fresh container starts logged-out, so container-started resets
-        // warmedUp until this container reports its own warm-up.
-        event("events.iterate.com/sandbox/container-started"),
-        event("events.iterate.com/sandbox/workspace-restored", { backupId: "bkp-1" }),
-      ],
-      streamMaxOffset: nextOffset,
+    await stream.append(
+      event("events.iterate.com/sandbox/started"),
+      event("events.iterate.com/sandbox/backup-created", { backupId: "bkp-1" }),
+      event("events.iterate.com/sandbox/stopped"),
+    );
+    await driver.deliver();
+    await expect(driver.snapshot()).resolves.toMatchObject({
+      state: { status: "stopped", instanceType: "basic", lastBackupId: "bkp-1" },
     });
-    await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: "bkp-1", running: true, warmedUp: false },
+
+    await stream.append(
+      // An implicit wake: started without a start-requested.
+      event("events.iterate.com/sandbox/started"),
+      event("events.iterate.com/sandbox/workspace-restored", { backupId: "bkp-1" }),
+      event("events.iterate.com/sandbox/destroy-requested"),
+      event("events.iterate.com/sandbox/destroyed"),
+    );
+    await driver.deliver();
+    await expect(driver.snapshot()).resolves.toMatchObject({
+      state: { status: "destroyed", instanceType: "basic" },
+    });
+  });
+
+  it("destroyed is terminal — a late-delivered stopped cannot resurrect the status", async () => {
+    const { stream, driver } = sandboxHarness();
+    await stream.append(
+      event("events.iterate.com/sandbox/created", { instanceType: "lite" }),
+      event("events.iterate.com/sandbox/destroyed"),
+      // The SDK delivers a stop that happened while the Durable Object was
+      // hibernated on the NEXT wake — after the destroy already landed.
+      event("events.iterate.com/sandbox/stopped"),
+    );
+    await driver.deliver();
+    await expect(driver.snapshot()).resolves.toMatchObject({
+      state: { status: "destroyed" },
     });
   });
 
   it("folds the configured env map (later configs merge over earlier)", async () => {
-    const processor = sandboxProcessor();
-    await processor.ingest({
-      events: [
-        event("events.iterate.com/sandbox/configured", {
-          env: { ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic" })', FOO: "bar" },
-        }),
-        event("events.iterate.com/sandbox/configured", {
-          env: { OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })', FOO: "baz" },
-        }),
-      ],
-      streamMaxOffset: nextOffset,
-    });
-    const snap: { state: z.infer<typeof SandboxProcessorContract.stateSchema> } =
-      await processor.snapshot();
+    const { stream, driver } = sandboxHarness();
+    await stream.append(
+      event("events.iterate.com/sandbox/configured", {
+        env: { GH_TOKEN: 'getSecret({ path: "/secrets/gh" })', FOO: "bar" },
+      }),
+      event("events.iterate.com/sandbox/configured", {
+        env: { OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })', FOO: "baz" },
+      }),
+    );
+    await driver.deliver();
+    const snap = await driver.snapshot();
     expect(snap.state.env).toEqual({
-      ANTHROPIC_API_KEY: 'getSecret({ path: "/secrets/anthropic" })',
+      GH_TOKEN: 'getSecret({ path: "/secrets/gh" })',
       OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })',
       FOO: "baz",
     });
   });
 
   it("ignores events outside its catalog", async () => {
-    const processor = sandboxProcessor();
-    await processor.ingest({
-      events: [event("events.iterate.com/agent/turn-started")],
-      streamMaxOffset: nextOffset,
-    });
-    await expect(processor.snapshot()).resolves.toMatchObject({
-      state: { lastBackupId: null, running: false },
+    const { stream, driver } = sandboxHarness();
+    await stream.append(event("events.iterate.com/agent/turn-started"));
+    await driver.deliver();
+    await expect(driver.snapshot()).resolves.toMatchObject({
+      state: { lastBackupId: null, status: "created" },
     });
   });
 });

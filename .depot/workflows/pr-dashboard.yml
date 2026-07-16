@@ -3,9 +3,10 @@ on:
   pull_request:
     types:
       - opened
-      - closed
       - reopened
       - ready_for_review
+      - converted_to_draft
+      - closed
   push:
     branches:
       - "**/*pr-dashboard*"
@@ -29,5 +30,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Notify PR update
+        if: github.event_name == 'pull_request'
+        run: pnpm tsx scripts/ci/notify.ts pr-update
       - name: Update PR dashboard
         run: pnpm tsx scripts/ci/pr-dashboard.ts

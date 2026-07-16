@@ -19,9 +19,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
-import { newWebSocketRpcSession } from "capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
-import type { StreamEvent, StreamEventBatch, UnauthenticatedOs } from "../../os/src/types.ts";
+import type {
+  Agent,
+  StreamEvent,
+  StreamEventBatch,
+  UnauthenticatedOs,
+} from "../../os/src/itx-api.generated.ts";
 import {
   ASSISTANT_MESSAGE_TYPE,
   mergeEventsByOffset,
@@ -71,8 +76,8 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
   expect(await subscription.ping()).toBe(true);
 
   // Sending the first message IS chat creation (lazy agent seeding).
-  const agent = project.agents.get(agentPath);
-  const sent = await agent.sendMessage(
+  const agent = project.agents.get(agentPath) as RpcStub<Agent>;
+  const sent = await agent.message(
     "Reply with a short greeting. Do not run any code or take any other action.",
   );
   expect(sent).toMatchObject({ offset: expect.any(Number) });

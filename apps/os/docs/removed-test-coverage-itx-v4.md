@@ -8,9 +8,9 @@ after the migration landed; both are recoverable from git history at PR #1585.
 
 ## How to recover anything listed here
 
-- Every deleted file is intact on `main` until this PR merges, and in history
-  forever after: `git show 'main:<path>'` (or `git log --all --diff-filter=D
--- '<path>'` to find the deleting commit, then `git show '<sha>^:<path>'`).
+- Every deleted file remains available in git history. Use
+  `git log --all --diff-filter=D -- '<path>'` to find the deleting commit, then
+  `git show '<sha>^:<path>'` to recover it.
 - The migration quarantined suites into `test-quarantine/` folders before
   deleting them at the very end in commit `551f172b7` ("The very end: delete
   the quarantine folders"). `git show '551f172b7^' --stat` lists everything
@@ -58,16 +58,16 @@ durable-objects/*.workers.test.ts`).
   DO-duration incident lineage); the lane is heavyweight and was a
   coexistence casualty, not an oversight.
 
-### 3. Live-OpenAI provider e2e
+### 3. Live agent LLM e2e
 
-- **Was:** `apps/os/e2e/vitest/agents.itx.e2e.test.ts` (main) had "uses
-  OpenAI for explicitly configured agent chats" against the live provider.
-- **Now:** the provider-toggle e2e (`agent-tools.itx.e2e.test.ts`) exercises
-  the Cloudflare AI lane live; openai-ws is covered by mocked unit tests
-  (`agent-processors.test.ts`) and was verified manually against deployed
-  previews (streaming chunks), but no automated live-OpenAI e2e exists.
-- **Worth restoring:** moderate — the openai-ws path is the production Slack
-  path. An env-gated live test mirroring the cloudflare-ai one would close it.
+- **Was:** separate live-OpenAI and provider-toggle lanes while agents had
+  dual LLM processors (`openai-ws` and `cloudflare-ai`).
+- **Now:** one agent processor runs every turn through the Cloudflare AI
+  binding. `agent-tools.itx.e2e.test.ts` exercises that path live;
+  `agent-processors.test.ts` covers streaming, failure→retry, and orphan
+  recovery with a mocked AI binding. The OpenAI WebSocket processor is gone.
+- **Worth restoring:** low for a second provider path (removed); keep the
+  live Cloudflare AI agent e2e healthy.
 
 ### 4. Fresh-agent configuration e2e lanes
 
