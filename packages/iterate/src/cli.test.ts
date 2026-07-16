@@ -16,7 +16,6 @@ import {
 const createFakeSession = (input: {
   listError?: unknown;
   onConnect?: (connectInput: { auth: unknown; baseUrl: string }) => void;
-  onAgentReadyWait?: (args: unknown) => void;
   description?: { principal: string };
   onProjectCreate?: (args: unknown) => void;
   projects?: Array<{
@@ -30,7 +29,6 @@ const createFakeSession = (input: {
 }) => {
   const disposeAuthenticated = vi.fn();
   const disposeProject = vi.fn();
-  const disposeStream = vi.fn();
   const createSession = ((connectInput: { auth: unknown; baseUrl: string }) => {
     input.onConnect?.(connectInput);
     return {
@@ -45,15 +43,6 @@ const createFakeSession = (input: {
         create: async (args: unknown) => {
           input.onProjectCreate?.(args);
           return {
-            streams: {
-              get: () => ({
-                waitForEvent: async (waitArgs: unknown) => {
-                  input.onAgentReadyWait?.(waitArgs);
-                  return {};
-                },
-                [Symbol.dispose]: disposeStream,
-              }),
-            },
             [Symbol.dispose]: disposeProject,
           };
         },
@@ -66,7 +55,7 @@ const createFakeSession = (input: {
     };
   }) as unknown as NonNullable<Parameters<typeof verifyOsSession>[0]["createSession"]>;
 
-  return { createSession, disposeAuthenticated, disposeProject, disposeStream };
+  return { createSession, disposeAuthenticated, disposeProject };
 };
 
 describe("oauthResourceForOsBaseUrl", () => {
@@ -317,11 +306,7 @@ describe("resolveChatProject", () => {
 
   test("sets up the only missing accessible project before selecting it for chat", async () => {
     let createArgs: unknown;
-    let waitArgs: unknown;
     const fake = createFakeSession({
-      onAgentReadyWait: (args) => {
-        waitArgs = args;
-      },
       onProjectCreate: (args) => {
         createArgs = args;
       },
@@ -350,15 +335,9 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_missing",
       slug: "missing",
-      waitUntilCreated: false,
-    });
-    expect(waitArgs).toEqual({
-      afterOffset: 0,
-      eventTypes: ["events.iterate.com/agent/llm-provider-selected"],
-      timeoutMs: 15_000,
+      waitUntilReady: false,
     });
     expect(fake.disposeProject).toHaveBeenCalledOnce();
-    expect(fake.disposeStream).toHaveBeenCalledOnce();
   });
 
   test("resolves and sets up a configured project slug when it is missing", async () => {
@@ -393,7 +372,7 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_default",
       slug: "default",
-      waitUntilCreated: false,
+      waitUntilReady: false,
     });
   });
 
@@ -429,7 +408,7 @@ describe("resolveChatProject", () => {
       organizationSlug: "acme",
       projectId: "prj_org_project",
       slug: "org-project",
-      waitUntilCreated: false,
+      waitUntilReady: false,
     });
   });
 

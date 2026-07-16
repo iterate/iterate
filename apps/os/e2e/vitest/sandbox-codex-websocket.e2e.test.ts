@@ -20,7 +20,7 @@ test.skipIf(deployedBaseUrl() === null || !exactCodexProofEnabled)(
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
     using project = itx.projects.create({ slug: `sandbox-codex-${crypto.randomUUID()}` });
     using secret = project.secrets.get(secretPath);
-    await secret.update({
+    await secret.create({
       egress: { urls: ["https://api.openai.com"] },
       material: openAiKey,
     });

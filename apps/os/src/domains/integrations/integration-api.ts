@@ -153,9 +153,11 @@ async function handleMcpOAuthCallback(input: {
       ...(iss ? { iss } : {}),
       fetchFn: fetchLikeFromFetcher(egress),
     });
-    await itxEnv.SECRET.getByName(
+    const secret = itxEnv.SECRET.getByName(
       DurableObjectNameCodec.stringify({ projectId: state.projectId, path: result.path }),
-    ).update(result.secret);
+    );
+    if ((await secret.describe()).created) await secret.update(result.secret);
+    else await secret.create(result.secret);
 
     // Best-effort notify: the token is stored regardless, so a notify failure
     // must not read as total failure (the user would redo it; the agent waits).

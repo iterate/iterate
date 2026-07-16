@@ -262,6 +262,11 @@ export class StreamDurableObject extends DurableObject<Env> {
           if (expectedOffset !== undefined && expectedOffset !== existing.offset) {
             throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
           }
+          if (!sameIdempotentEvent(existing, body)) {
+            throw new Error(
+              `idempotency key "${body.idempotencyKey}" already names a different event at offset ${existing.offset}`,
+            );
+          }
           events.push(existing);
           continue;
         }
@@ -1464,6 +1469,43 @@ export class StreamDurableObject extends DurableObject<Env> {
   kill(): void {
     this.ctx.abort("kill requested");
   }
+}
+
+/** Idempotency deduplicates one logical event, not arbitrary writes sharing a
+ * key. Provenance is deliberately excluded: a processor may retry the same
+ * logical output after a deploy changes its source-version stamp. */
+function sameIdempotentEvent(existing: StreamEvent, requested: StreamEventInput): boolean {
+  return (
+    existing.type === requested.type &&
+    jsonValuesEqual(existing.payload, requested.payload) &&
+    jsonValuesEqual(existing.metadata, requested.metadata) &&
+    existing.ephemeral === requested.ephemeral
+  );
+}
+
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index]))
+    );
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  return (
+    leftKeys.length === Object.keys(rightRecord).length &&
+    leftKeys.every(
+      (key) =>
+        Object.hasOwn(rightRecord, key) && jsonValuesEqual(leftRecord[key], rightRecord[key]),
+    )
+  );
 }
 
 /**

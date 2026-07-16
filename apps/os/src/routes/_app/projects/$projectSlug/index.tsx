@@ -39,7 +39,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
 /**
  * The project home is the project ROOT STREAM's page: the stream takes the
  * main space, and the project's reduced state renders live in the side panel.
- * Until the bootstrap saga commits `project/created`, that panel is the
+ * Until the bootstrap saga commits `project/ready`, that panel is the
  * creation checklist (create redirects here immediately, before the saga
  * finishes, and every tick arrives as a processor push); afterwards it is the
  * settings view.
@@ -58,16 +58,15 @@ function ProjectHomePage() {
     [project.id],
     { address: { projectId: project.id } },
   );
-  const created = lifecycle.value?.created ?? false;
-  // Onboarding phase: the completion event has not been appended yet. The
-  // agent itself may not exist — it births lazily when its chat page is first
-  // opened — so this keys off the phase marker alone.
+  const ready = lifecycle.value?.ready ?? false;
+  // Onboarding phase: the completion event has not been appended yet. This
+  // keys off the explicit project phase marker, independently of agent state.
   const inOnboarding = lifecycle.value === undefined ? false : isOnboardingActive(lifecycle.value);
   const handOffToOnboarding = welcome === true && inOnboarding;
 
   // The welcome handoff: arrived here from an older create/root redirect, so
   // as soon as the state confirms the onboarding phase, continue into the
-  // agent page (which births the agent on open).
+  // agent page.
   useEffect(() => {
     if (!handOffToOnboarding) return;
     void navigate({
@@ -87,7 +86,7 @@ function ProjectHomePage() {
       <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
         Loading project…
       </div>
-    ) : created && !handOffToOnboarding ? (
+    ) : ready && !handOffToOnboarding ? (
       <>
         {inOnboarding ? (
           <Link

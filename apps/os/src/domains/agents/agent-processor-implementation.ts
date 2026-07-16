@@ -18,13 +18,18 @@
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
 import { StreamProcessor, type ProcessorReads } from "../streams/stream-processor.ts";
-import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
+import {
+  cachedEventSchema,
+  getConsumedEventDefinition,
+  mergeProcessorConfig,
+} from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
   AGENT_COMPACTION_TRIGGER_FRACTION,
   AGENT_LLM_REQUEST_BACKSTOP_MS,
   AGENT_LLM_RETRY_BACKOFF_BASE_MS,
   AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+  AgentConfig,
   AgentContextAddedPayload,
   AgentProcessorContract,
   DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS,
@@ -181,7 +186,18 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   protected override processEvent(
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
   ): undefined {
-    const { append, blockProcessorWhile, event, previousState, runInBackground, state } = args;
+    const { append, appendTo, blockProcessorWhile, event, previousState, runInBackground, state } =
+      args;
+    if (event.type === "events.iterate.com/agent/created") {
+      blockProcessorWhile(() =>
+        appendTo("/", {
+          type: "events.iterate.com/agent/created",
+          idempotencyKey: this.idempotencyKey("catalog-created", event),
+          payload: event.payload,
+        }),
+      );
+    }
+    if (state.birthCertificate === null) return;
     // AT-HEAD reconcile (was `onCaughtUp`): fires only for the last consumed
     // event of a batch that reached head (`delivery.caughtUp`), so `state` is
     // the whole fold — drive or settle open LLM obligations, derive the next
@@ -790,6 +806,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const { state } = args;
+    if (state.config === null) {
+      throw new Error("created agent is missing its reduced config");
+    }
     if (state.currentRequest === null) {
       if (state.pendingTriggerOffset === null) return;
       // Agent birth and inbound input are independent distributed reactions.
@@ -827,7 +846,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         ),
         payload: {
           debounceMs: DEFAULT_AGENT_LLM_REQUEST_DEBOUNCE_MS + this.#llmRetryBackoffMs(state),
-          model: state.llmConfig.model,
+          model: state.config.llm.model,
           requestId: `llm-request:gen-${state.requestGeneration}`,
         },
       });
@@ -866,7 +885,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // makes this safe if the timer also fires concurrently.
     await args.append(
       this.#buildLlmRequestRequested({
-        model: state.llmConfig.model,
+        model: state.config.llm.model,
         requestId: state.currentRequest.requestId,
         scheduledOffset: state.currentRequest.scheduledOffset,
       }),
@@ -1209,6 +1228,30 @@ function reduceAgentEvent(input: { event: AgentConsumedEvent; state: AgentState 
 function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentState }): AgentState {
   const { event, state } = input;
   switch (event.type) {
+    case "events.iterate.com/agent/created":
+      if (state.birthCertificate !== null) {
+        throw new Error("agent received more than one created event");
+      }
+      return {
+        ...state,
+        birthCertificate: event.payload,
+        config: event.payload.config,
+        context: projectAgentSystemPrompt(state.context, {
+          content: event.payload.config.systemPrompt,
+          offset: event.offset,
+        }),
+      };
+    case "events.iterate.com/agent/configured": {
+      const config = AgentConfig.parse(mergeProcessorConfig(state.config, event.payload.config));
+      return {
+        ...state,
+        config,
+        context: projectAgentSystemPrompt(state.context, {
+          content: config.systemPrompt,
+          offset: event.offset,
+        }),
+      };
+    }
     case "events.iterate.com/agents/context-added": {
       const triggerSource = contextTriggerSource(event.payload);
       return {
@@ -1223,13 +1266,6 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
         consecutiveLlmFailures: triggerSource === "user" ? 0 : state.consecutiveLlmFailures,
       };
     }
-    case "events.iterate.com/agent/llm-provider-selected":
-      if (event.payload.ifUnset && state.llmConfigConfigured) return state;
-      return {
-        ...state,
-        llmConfig: { model: event.payload.model },
-        llmConfigConfigured: true,
-      };
     case "events.iterate.com/agent/llm-request-scheduled":
       return {
         ...state,
@@ -1499,6 +1535,26 @@ function projectContextAdded(
   return event.payload.role === "system"
     ? { ...context, system: projected }
     : { ...context, history: projected };
+}
+
+function projectAgentSystemPrompt(
+  context: AgentState["context"],
+  input: { content: string; offset: number },
+): AgentState["context"] {
+  const item: AgentState["context"]["system"][number] = {
+    role: "system",
+    key: AGENT_SYSTEM_PROMPT_CONTEXT_KEY,
+    content: input.content,
+    offset: input.offset,
+  };
+  return {
+    ...context,
+    system: projectContextLane({
+      item,
+      lane: context.system,
+      publishedThrough: context.publishedThrough,
+    }),
+  };
 }
 
 function retainLatestKeyedOccurrences(

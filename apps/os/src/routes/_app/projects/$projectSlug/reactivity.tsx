@@ -118,8 +118,8 @@ function ProjectReactivityContent() {
   const [incrementing, setIncrementing] = useState(false);
 
   const projectState = live.value;
-  const phase = projectState === undefined ? "unknown" : projectState.created ? "ready" : "pending";
-  const projectId = projectState?.createRequest?.projectId ?? project.id;
+  const phase = projectState === undefined ? "unknown" : projectState.ready ? "ready" : "pending";
+  const projectId = project.id;
   const indexedCount =
     streamsIndex.value === undefined ? "-" : String(Object.keys(streamsIndex.value).length);
 
@@ -256,9 +256,9 @@ function ProjectReactivityContent() {
                     {phase}
                   </Badge>
                 </dd>
-                <dt className="text-muted-foreground">Created</dt>
+                <dt className="text-muted-foreground">Ready</dt>
                 <dd data-testid="reactivity-onboarding">
-                  {projectState === undefined ? "unknown" : String(projectState.created)}
+                  {projectState === undefined ? "unknown" : String(projectState.ready)}
                 </dd>
                 <dt className="text-muted-foreground">Project ID</dt>
                 <dd className="truncate font-mono text-xs" data-testid="reactivity-project-id">
@@ -295,7 +295,12 @@ function ProjectReactivityContent() {
                 <dt className="text-muted-foreground">Events</dt>
                 <dd data-testid="reactivity-stream-event-count">{testStream.events.length}</dd>
                 <dt className="text-muted-foreground">Status</dt>
-                <dd data-testid="reactivity-action-status">{action.status}</dd>
+                <dd
+                  data-spinner={action.status === "running" ? "true" : undefined}
+                  data-testid="reactivity-action-status"
+                >
+                  {action.status}
+                </dd>
                 <dt className="text-muted-foreground">Marker</dt>
                 <dd className="truncate font-mono" data-testid="reactivity-last-action-marker">
                   {action.marker || "-"}

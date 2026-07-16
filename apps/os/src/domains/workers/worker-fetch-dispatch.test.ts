@@ -53,7 +53,9 @@ describe("worker fetch dispatch header", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get(WORKER_BUILDING_HEADER)).toBe("1");
     expect(response.headers.get("retry-after")).not.toBeNull();
-    expect(await response.text()).toContain('http-equiv="refresh"');
+    const body = await response.text();
+    expect(body).toContain('http-equiv="refresh"');
+    expect(body).toContain('data-spinner="true"');
   });
 
   test("upgrade detection is header-cased", () => {

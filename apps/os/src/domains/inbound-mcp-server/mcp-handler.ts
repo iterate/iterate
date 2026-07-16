@@ -152,6 +152,7 @@ function createServer(input: {
       try {
         const agentPath = await resolveSessionAgentPath();
         const projectItx = await projectItxFor(project.id);
+        await ensureMcpSessionAgentReady({ agentPath, projectItx });
         const execution = await projectItx.agents
           .get(agentPath)
           .capabilityHost.runScript(parsedInput.code);
