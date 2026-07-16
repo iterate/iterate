@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertWorkerSecretAbsent,
+  buildWranglerDeployArgs,
   buildR2ObjectExpiryLifecycleRules,
   ensureR2ObjectExpiryLifecycle,
   PREVIEW_DISPOSABLE_TTL_SECONDS,
@@ -17,6 +18,29 @@ afterEach(() => vi.unstubAllGlobals());
 const workerName = "os-prd";
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 const listPath = `/workers/scripts/${workerName}/secrets`;
+
+describe("Wrangler deployment", () => {
+  it("uses explicit repo-owned provisioning without Wrangler's redundant preflight", () => {
+    expect(
+      buildWranglerDeployArgs({
+        builtConfig: "/repo/app/dist/server/wrangler.json",
+        extraDeployArgs: ["--env", "preview_8"],
+        secretsFile: "/tmp/deploy-secrets/secrets.json",
+      }),
+    ).toEqual([
+      "exec",
+      "wrangler",
+      "deploy",
+      "--no-experimental-provision",
+      "--config",
+      "/repo/app/dist/server/wrangler.json",
+      "--env",
+      "preview_8",
+      "--secrets-file",
+      "/tmp/deploy-secrets/secrets.json",
+    ]);
+  });
+});
 
 describe("assertWorkerSecretAbsent", () => {
   it("accepts a Worker without the forbidden binding", async () => {

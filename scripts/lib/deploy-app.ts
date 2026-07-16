@@ -27,7 +27,8 @@ export interface SmokeProbe {
  *
  *   resolve --env → assert resources provisioned → collect secrets →
  *   app-specific prepare (migrations, seeds, config preflight) →
- *   build → deploy code+secrets in one version → smoke-probe → ✅
+ *   build → deploy code+secrets in one version (without Wrangler's redundant
+ *   auto-provision pass) → smoke-probe → ✅
  *
  * Durable Object classes are declared in each app's wrangler config
  * `exports` map and reconciled by the server on every deploy — no migration
