@@ -394,7 +394,7 @@ describe("itx session socket", () => {
     const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.tsx");
     const first = connectIterateSession();
     await openLatest();
-    const session = (await first) as { [Symbol.dispose]: ReturnType<typeof vi.fn> };
+    const session = (await first) as unknown as { [Symbol.dispose]: ReturnType<typeof vi.fn> };
 
     control.authError = new Error("session revoked");
     FakeWebSocket.instances[0]!.fire("close"); // transport dies → auto-redial
