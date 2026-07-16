@@ -25,16 +25,16 @@ vi.mock("~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts", 
             raw_json: "{}",
           },
         ],
-        status: "success",
+        status: "ok",
       };
     }
     if (sql.includes("offset < ?")) {
-      return { data: [{ offset: 1, created_at: "2026-07-16T12:00:00.000Z" }], status: "success" };
+      return { data: [{ offset: 1, created_at: "2026-07-16T12:00:00.000Z" }], status: "ok" };
     }
     if (sql.includes("offset > ?")) {
-      return { data: [{ offset: 3, created_at: "2026-07-16T12:00:02.000Z" }], status: "success" };
+      return { data: [{ offset: 3, created_at: "2026-07-16T12:00:02.000Z" }], status: "ok" };
     }
-    return { data: [{ total: 3 }], status: "success" };
+    return { data: [{ total: 3 }], status: "ok" };
   },
 }));
 

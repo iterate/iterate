@@ -462,14 +462,25 @@ function StreamInspectorSheet({
     [activeInspector, agentUiState, database],
   );
   const [retainedInspectorContext, setRetainedInspectorContext] = useState(activeInspectorContext);
+  const activeInspectorKey =
+    activeInspector?.kind === "script"
+      ? `script:${activeInspector.executionId}`
+      : activeInspector == null
+        ? null
+        : `${activeInspector.kind}:${activeInspector.offset}`;
   // Base UI reports dismissal before TanStack Router commits the URL search
   // update. Suppress that exact inspector immediately so retained exit content
-  // cannot navigate and write its deep link back during the closing frame. The
-  // object identity is intentional: useMemo preserves it until the URL leaves
-  // this selection, while re-selecting the same deep link creates a new object
-  // and can reverse the exit transition immediately.
-  const [dismissedInspector, setDismissedInspector] = useState<typeof activeInspector>(null);
-  const inspectorOpen = activeInspector != null && activeInspector !== dismissedInspector;
+  // cannot navigate and write its deep link back during the closing frame.
+  // Keep suppression latched past animation completion if the router is slow;
+  // release it only after the URL actually leaves this selection.
+  const [dismissedInspectorKey, setDismissedInspectorKey] = useState<string | null>(null);
+  const inspectorOpen = activeInspectorKey != null && activeInspectorKey !== dismissedInspectorKey;
+
+  useEffect(() => {
+    if (dismissedInspectorKey != null && activeInspectorKey !== dismissedInspectorKey) {
+      setDismissedInspectorKey(null);
+    }
+  }, [activeInspectorKey, dismissedInspectorKey]);
 
   // Base UI keeps the popup mounted for its exit transition. Retain the last
   // target and the stream data it belongs to while URL-driven navigation
@@ -526,14 +537,13 @@ function StreamInspectorSheet({
       open={inspectorOpen}
       onOpenChange={(open) => {
         if (!open) {
-          setDismissedInspector(activeInspector);
+          setDismissedInspectorKey(activeInspectorKey);
           panels.closeInspector();
         }
       }}
       onOpenChangeComplete={(open) => {
         if (!open) {
           setRetainedInspectorContext(null);
-          setDismissedInspector(null);
         }
       }}
     >
