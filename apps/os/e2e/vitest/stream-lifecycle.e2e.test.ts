@@ -683,7 +683,14 @@ async function waitForWaitForEventConnection(stream: Stream): Promise<string> {
       )?.[0];
       return key !== undefined;
     },
-    { description: "waitForEvent internal subscription to become visible" },
+    {
+      description: "waitForEvent internal subscription to become visible",
+      // Registration rides a fresh project's first stream calls: on a cold
+      // preview DO under full lane contention that takes longer than the 5s
+      // default (each runtimeState poll is its own RPC round-trip) — the
+      // kill-tag test hit exactly this wall on preview CI.
+      timeoutMs: 30_000,
+    },
   );
   return key!;
 }
