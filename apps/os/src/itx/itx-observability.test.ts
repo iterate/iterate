@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { newMessagePortRpcSession, RpcTarget } from "capnweb";
+import { ItxAuthenticationError } from "../auth.ts";
 import type { WideLogEvent } from "../observability/wide-log.ts";
 import { recordedSpans, resetRecordedSpans } from "../test/cloudflare-workers-shim.ts";
 import { createItxRpcSessionOptions, itxRpcMethod } from "./itx-observability.ts";
@@ -110,6 +111,46 @@ describe("ITX observability", () => {
     expect(recordedSpans[0]).toMatchObject({
       name: "itx Object.call",
       attributes: { "itx.outcome": "error" },
+    });
+  });
+
+  it("classifies rejected credentials as a client error without polluting server-error logs", async () => {
+    const events: WideLogEvent[] = [];
+    const log = vi
+      .spyOn(console, "log")
+      .mockImplementation((event) => void events.push(event as WideLogEvent));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const session = createItxRpcSessionOptions({
+      transport: "websocket",
+      sessionId: "itx_session_invalid_auth",
+      parentLogId: "log_handshake",
+    });
+
+    await expect(
+      session.onCall!(
+        {
+          path: ["authenticate"],
+          target: new (class UnauthenticatedOsRpcTarget {
+            authenticate() {}
+          })(),
+        },
+        async () => {
+          throw new ItxAuthenticationError();
+        },
+      ),
+    ).rejects.toThrow("missing or invalid auth");
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({
+      message: "itx_rpc",
+      outcome: "client_error",
+      error: { name: "Error" },
+      itx: { method: "UnauthenticatedOs.authenticate" },
+    });
+    expect(recordedSpans[0]).toMatchObject({
+      name: "itx UnauthenticatedOs.authenticate",
+      attributes: { "itx.outcome": "client_error" },
     });
   });
 

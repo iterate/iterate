@@ -1759,8 +1759,10 @@ export type ProjectDescription = Description & {
  * checkpoint, so an ordinary session poking it could feed fabricated batches
  * and fast-forward the checkpoint past real events. Multi-processor hosts (an
  * agent Durable Object hosts agent + slack-agent + more) resolve WHICH
- * processor wakes from the request's `processorSlug` — the inspection half of
- * this node reads the host's main processor.
+ * processor wakes from the request's `processorSlug`. Each public domain
+ * surface selects that same named processor for inspection, so
+ * `agent.processor`, `agent.slack.processor`, and other siblings expose their
+ * own snapshots and checkpoints.
  */
 export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<State> & {
   wakeStreamSubscriber(request: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse>;

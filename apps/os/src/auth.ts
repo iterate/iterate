@@ -65,6 +65,15 @@ export type ItxAuthCredentials =
   | { type: "operator-session"; token: string }
   | { type: "impersonate"; secret: string; token: ItxAuthToken };
 
+/** A request supplied no usable authority. This is a caller outcome at the
+ * public authentication door, not a server defect. */
+export class ItxAuthenticationError extends Error {
+  constructor() {
+    super("missing or invalid auth");
+    this.name = "ItxAuthenticationError";
+  }
+}
+
 /** Principal shape for `impersonate` credentials. */
 export type ItxAuthToken =
   | { type: "admin"; principal?: string }
@@ -224,7 +233,7 @@ export async function resolveItxAuth(input: {
       requestUrl: input.requestUrl,
       token: credentials.token,
     });
-    if (!session) throw new Error("missing or invalid auth");
+    if (!session) throw new ItxAuthenticationError();
     return itxAuthFromPrincipal(session.principal, { allowDirectoryFallback: false });
   }
 
@@ -239,7 +248,7 @@ export async function resolveItxAuth(input: {
     const accessToken = await auth.authenticateBearer({
       headers: new Headers({ authorization: `Bearer ${credentials.token}` }),
     });
-    if (!accessToken) throw new Error("missing or invalid auth");
+    if (!accessToken) throw new ItxAuthenticationError();
     return itxAuthFromPrincipal(principalFromAccessToken(accessToken));
   }
 
@@ -247,7 +256,7 @@ export async function resolveItxAuth(input: {
   // Browsers always send Origin on WebSocket handshakes; non-browser clients
   // normally omit it and authenticate explicitly.
   const cookieRequest = new Request(input.requestUrl, { headers: input.headers });
-  if (!isSameOriginBrowserRequest(cookieRequest)) throw new Error("missing or invalid auth");
+  if (!isSameOriginBrowserRequest(cookieRequest)) throw new ItxAuthenticationError();
 
   // A short-lived operator session wins over the ordinary Iterate session so
   // an operator can open a narrowly-scoped browser without signing out first.
@@ -264,7 +273,7 @@ export async function resolveItxAuth(input: {
   const auth = createOsIterateAuth(config, input.requestUrl);
   if (!auth) throw new Error("iterate auth is not configured");
   const result = await auth.authenticate({ headers: input.headers, includeUserInfo: false });
-  if (!result.session) throw new Error("missing or invalid auth");
+  if (!result.session) throw new ItxAuthenticationError();
   return itxAuthFromPrincipal(principalFromSession(result.session));
 }
 
@@ -273,7 +282,7 @@ function assertAdminSecret(config: AppConfig, secret: string): void {
     authorizationHeader: `Bearer ${secret}`,
     config,
   });
-  if (!admin) throw new Error("missing or invalid auth");
+  if (!admin) throw new ItxAuthenticationError();
 }
 
 /**
