@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMatches, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -9,11 +8,10 @@ import {
   DialogTitle,
 } from "@iterate-com/ui/components/dialog";
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
-import { connectItx, connectSession } from "~/itx/itx-react.tsx";
+import { connectItx, connectSession, useSessionQuery } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
-import { fetchProjectsList, projectsListQueryKey } from "~/lib/projects-query.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
@@ -190,9 +188,9 @@ function ProjectPickerDialog({
   onPick: (project: { id: string; slug: string }) => void;
   open: boolean;
 }) {
-  const { data: projects } = useQuery({
-    queryKey: projectsListQueryKey,
-    queryFn: fetchProjectsList,
+  const { data: projects } = useSessionQuery({
+    key: ["projects"],
+    query: (session) => session.projects.list(),
     enabled: open,
   });
 

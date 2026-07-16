@@ -90,7 +90,13 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useSuspenseQuery, type QueryKey } from "@tanstack/react-query";
+import {
+  useQuery,
+  useSuspenseQuery,
+  type QueryKey,
+  type UseQueryOptions,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type { LiveStateRpc } from "../domains/streams/rpc-types.ts";
 import type { Project, Session, UnauthenticatedOs } from "../itx-api.generated.ts";
@@ -615,6 +621,34 @@ export function useItxQuery<T>({
     console.warn("useItxQuery: background refetch failed", key, result.error);
   }
   return result.data;
+}
+
+/**
+ * Read once through the SESSION (the catalog — `projects.list`, admin `streams`),
+ * the session-scoped sibling of {@link useItxQuery}. NON-suspending: session
+ * reads live in the always-mounted shell (sidebar, ⌘K, admin) which must not
+ * suspend on the socket, so this returns the full TanStack result (`data`,
+ * `isPending`, …) and accepts the usual options (`enabled`, `staleTime`). Same
+ * `["itx", ...key]` namespace and the same transport-only retry as useItxQuery,
+ * resolved per fetch (never a render-captured session stub).
+ *
+ *   const { data } = useSessionQuery({ key: ["projects"], query: (s) => s.projects.list() });
+ */
+export function useSessionQuery<T>({
+  key,
+  query,
+  ...options
+}: {
+  key: QueryKey;
+  query: (session: SessionStub) => Promise<T>;
+} & Omit<UseQueryOptions<T, Error, T, QueryKey>, "queryKey" | "queryFn">): UseQueryResult<T> {
+  return useQuery({
+    queryKey: ["itx", ...(Array.isArray(key) ? key : [key])],
+    queryFn: () => connectSession().then(query),
+    retry: (failureCount, error) => isItxTransportError(error) && failureCount < 3,
+    retryDelay: (failureCount) => Math.min(250 * 2 ** failureCount, 2_000),
+    ...options,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

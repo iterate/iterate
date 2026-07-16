@@ -1,18 +1,9 @@
-import type { ProjectListEntry } from "../project-deployment-status.ts";
-import { connectSession } from "~/itx/itx-react.tsx";
-
 /**
- * The ONE client-side cache entry for `session.projects.list()` — the itx
- * session is the projects API (no server functions). The key matches what
- * `useItxQuery({ key: ["projects"], ... })` produces (it prefixes "itx"), so
- * the /projects page (suspense read), the app sidebar (plain useQuery), and
- * every invalidation after a create/recover all hit the same entry.
+ * The shared cache identity for the session's project list. Every reader uses
+ * `useSessionQuery({ key: ["projects"], query: (s) => s.projects.list() })`
+ * (which prefixes "itx"), and every invalidation after a create/recover targets
+ * `projectsListQueryKey` — so the /projects page, the app sidebar, and the ⌘K
+ * project picker all share one cache entry.
  */
 export const projectsListQueryKey = ["itx", "projects"] as const;
 export const projectsListStaleTime = 30_000;
-
-/** Fetch the session's project list — browser-only (dials the itx socket). */
-export async function fetchProjectsList(): Promise<ProjectListEntry[]> {
-  const session = await connectSession();
-  return await session.projects.list();
-}
