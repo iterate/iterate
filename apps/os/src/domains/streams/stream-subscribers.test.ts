@@ -5,7 +5,7 @@
 // skip-not-defer, backoff/park/resume, poison bisection, wake pokes with the
 // observational watermark, and the ephemeral lane.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type {
   CoreProcessorState,
@@ -1151,6 +1151,53 @@ describe("StreamSubscribers", () => {
     await h.settle();
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(h.row("k")?.attempt).toBe(0);
+  });
+
+  it("s1. keeps recovered DO lifecycle interruptions out of error telemetry", async () => {
+    const makeConnectedHarness = async () => {
+      const h = makeHarness();
+      h.configure(wakePayload(), 0);
+      h.append(evt(1, "a"));
+      h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink: makeSink().sink });
+      h.subscribers.wake();
+      await h.settle();
+      return h;
+    };
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const lifecycleHarness = await makeConnectedHarness();
+      const lifecycleError = Object.assign(new Error("incarnation reset during delivery"), {
+        durableObjectReset: true,
+        retryable: true,
+      });
+      lifecycleHarness.subscribers.onDurableDeliveryError("k", lifecycleError);
+      await lifecycleHarness.settle();
+
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "stream durable sink delivery interrupted by subscriber lifecycle; backing off before re-poke",
+        { subscriptionKey: "k", error: lifecycleError },
+      );
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(lifecycleHarness.row("k")).toMatchObject({ attempt: 1 });
+
+      consoleWarn.mockClear();
+      const applicationHarness = await makeConnectedHarness();
+      const applicationError = new Error("receiver rejected deterministically");
+      applicationHarness.subscribers.onDurableDeliveryError("k", applicationError);
+      await applicationHarness.settle();
+
+      expect(consoleWarn).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        "stream durable sink delivery failed; backing off before re-poke",
+        { subscriptionKey: "k", error: applicationError },
+      );
+      expect(applicationHarness.row("k")).toMatchObject({ attempt: 1 });
+    } finally {
+      consoleWarn.mockRestore();
+      consoleError.mockRestore();
+    }
   });
 
   it("t. an in-flight push delivery cannot clobber a cursor seek (epoch fence)", async () => {

@@ -82,6 +82,7 @@ import {
   MAX_DELIVERY_ATTEMPTS,
   SKIP_CONFIRM_ATTEMPTS,
 } from "./subscriber-math.ts";
+import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 
 /** Serializable debug view of one live connection, for `runtimeState()`. */
 export type ConnectionRuntimeState = {
@@ -1271,10 +1272,25 @@ export class StreamSubscribers {
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
-    console.error("stream durable sink delivery failed; backing off before re-poke", {
-      subscriptionKey,
-      error,
-    });
+    if (isDurableObjectLifecycleError(error)) {
+      // Deploys, evictions, overload, and an incarnation ending between a
+      // recovery alarm and its replay are workerd lifecycle outcomes. The
+      // durable cursor deliberately turns all of them into the same bounded
+      // backoff + replay path below, so keep them observable without putting
+      // an expected, recovered transport interruption in the error signal.
+      console.warn(
+        "stream durable sink delivery interrupted by subscriber lifecycle; backing off before re-poke",
+        { subscriptionKey, error },
+      );
+    } else {
+      // An application rejection is not a lifecycle interruption: it may be
+      // deterministic and eventually park this subscription, so it remains a
+      // real error until an operator or a deploy fixes the receiver.
+      console.error("stream durable sink delivery failed; backing off before re-poke", {
+        subscriptionKey,
+        error,
+      });
+    }
     this.#onDeliveryFailure(subscriptionKey, error);
     connection.close("delivery-failed");
   }
