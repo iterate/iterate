@@ -3,10 +3,11 @@
 //
 //   reduce       — pure fold: journal → AgentState. One switch, in
 //                  `reduceAgentEvent` below, shared with off-runtime refolds.
-//   processEvent — per-event side effects. One switch, nothing else.
-//   reconcile    — at-head only (base-gated): drive or settle open LLM
-//                  obligations, derive the next scheduling decision, then
-//                  announce busy/idle status flips.
+//   processEvent — per-event side effects (one switch) AND, under
+//                  `delivery.caughtUp` (this event was the observed head), the
+//                  at-head reconcile: drive or settle open LLM obligations,
+//                  derive the next scheduling decision, then announce
+//                  busy/idle status flips.
 //
 // Everything below the class is a pure helper one of the lanes calls: the
 // fold switch, chat-request building, and codemode script-result rendering.
@@ -16,7 +17,7 @@
 
 import { z } from "zod";
 import type { StreamEvent } from "../streams/schemas.ts";
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor, type ProcessorReads } from "../streams/stream-processor.ts";
 import { cachedEventSchema, getConsumedEventDefinition } from "../streams/processor-contracts.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
@@ -49,8 +50,20 @@ type AgentState = z.infer<typeof AgentProcessorContract.stateSchema>;
 type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
 
 /**
+ * RUNNER-backed reads of the committed fold. Under registry drive the runner
+ * owns both cursors and the processor instance's internal checkpoint never
+ * advances, so the one fold read the agent makes OUTSIDE a hook's own args —
+ * the idle debounce timer's fire-time staleness check — must go through the
+ * runner's committed progress. The hosting DO wires this to
+ * `registry.reads(processor)` (lazily — `reads()` needs the registered
+ * processor); the unit harness wires it to the driving StreamProcessorRunner.
+ */
+export type AgentProcessorReads = Pick<ProcessorReads<AgentState>, "snapshot">;
+
+/**
  * Host-provided deps beyond the stream plumbing.
  *
+ * - `reads` — runner-backed fold reads; see {@link AgentProcessorReads}.
  * - `ai` is the Workers AI binding (`env.AI`) used for every LLM turn.
  *   Optional so a host without one fails requests with a journaled error
  *   instead of crashing at construction.
@@ -78,6 +91,7 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  *   tests shrink it.
  */
 type AgentProcessorDeps = {
+  reads: AgentProcessorReads;
   ai?: WorkersAiBinding;
   writeWorkspaceFile?: (input: { content: string; path: string }) => Promise<void>;
   now?: () => number;
@@ -160,18 +174,32 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
   // ---------------------------------------------------------------------------
   // Lane 2: per-event side effects. One switch; every arm is a short append
-  // (blockProcessorWhile) or a droppable attempt whose outcome the reconcile
-  // lane recovers (runInBackground).
+  // (blockProcessorWhile) or a droppable attempt whose outcome the at-head
+  // reconciliation lane recovers (runInBackground).
   // ---------------------------------------------------------------------------
 
-  protected override processEvent({
-    append,
-    blockProcessorWhile,
-    event,
-    previousState,
-    runInBackground,
-    state,
-  }: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0]): undefined {
+  protected override processEvent(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
+  ): undefined {
+    const { append, blockProcessorWhile, event, previousState, runInBackground, state } = args;
+    // AT-HEAD reconcile (was `onCaughtUp`): fires only for the last consumed
+    // event of a batch that reached head (`delivery.caughtUp`), so `state` is
+    // the whole fold — drive or settle open LLM obligations, derive the next
+    // scheduling decision, then announce busy/idle flips. ONE blocking closure
+    // so the whole pass is awaited as this head event's own work before its
+    // deferred commit; a failure fails the frame and the transport replays it.
+    // A mid-catch-up fold never reaches this branch, so nothing dials env.AI
+    // for a long-settled request.
+    if (args.delivery.caughtUp) {
+      // The CAUGHT-UP lane runs AFTER this event's per-event work — so an
+      // interrupt's scheduled-phase cancel (appended in the switch below) folds
+      // BEFORE the reconcile's lost-debounce re-fire, and the cancel wins.
+      args.blockProcessorWhileCaughtUp(async () => {
+        await this.#reconcileLlmObligations(args);
+        await this.#reconcileLlmScheduling(args);
+        await this.#reconcileStatusAnnouncement(args);
+      });
+    }
     switch (event.type) {
       case "events.iterate.com/agents/web-message-sent": {
         // Files the agent attached to its own message ride the reflection too,
@@ -364,6 +392,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       // the threshold, STOP THE WORLD and summarize the history prefix into
       // one context item. blockProcessorWhile holds the checkpoint and later
       // delivery until that item lands.
+      //
+      // A catch-up that folds past SEVERAL over-threshold reports coalesces
+      // onto the NEWEST: only the last over-threshold report in the frame
+      // registers the summarize work (`#queueCompaction` picks the newest
+      // pending and the runner serializes blocking work per event, so a
+      // behind-head report whose newer sibling is still to come skips its own
+      // summarize). A report that is the newest over-threshold one this frame
+      // will see — the frame's last, or one with no later usage report behind
+      // head — summarizes exactly that request, with that request's own model.
       case "events.iterate.com/agent/token-usage-reported": {
         const usage = event.payload;
         const contextTokens = usage.inputTokens + usage.outputTokens;
@@ -371,16 +408,22 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           usage.maxContextTokens * AGENT_COMPACTION_TRIGGER_FRACTION,
         );
         if (contextTokens < thresholdTokens) return;
-        blockProcessorWhile(() =>
-          this.#queueCompaction({
+        blockProcessorWhile(async () => {
+          // A later over-threshold report already in the journal supersedes
+          // this one: summarizing an older prefix now would be thrown away by
+          // the newer request's compaction, so defer to it (the coalescing the
+          // batch model got from `#queueCompaction`'s microtask, recovered
+          // under the runner's strict per-event blocking).
+          if (await this.#laterOverThresholdReportPending(usage.llmRequestOffset)) return;
+          await this.#queueCompaction({
             contextTokens,
             hasHistory: state.context.history.length > 0,
             llmRequestOffset: usage.llmRequestOffset,
             model: usage.model,
             thresholdTokens,
             triggerOffset: event.offset,
-          }),
-        );
+          });
+        });
         return;
       }
       default:
@@ -389,8 +432,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   /** Coalesces all over-threshold reports registered synchronously by one
-   * delivered batch. Batches themselves are serialized until blocking work
-   * settles, so one shared promise is sufficient across the incarnation. */
+   * delivered frame. Frames are serialized (the runner reduces and processes
+   * one event at a time, and `blockProcessorWhile` holds delivery until this
+   * settles), so one shared promise is sufficient across the incarnation. */
   #queueCompaction(input: {
     contextTokens: number;
     hasHistory: boolean;
@@ -411,8 +455,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     if (this.#compactionWork !== undefined) return this.#compactionWork;
 
     const work = (async () => {
-      // processEventBatch invokes every per-event arm synchronously. Yield
-      // once so all reports in that batch can replace #pendingCompaction.
+      // The runner invokes every per-event arm of a frame synchronously. Yield
+      // once so all reports in that frame can replace #pendingCompaction.
       await Promise.resolve();
       const latest = this.#pendingCompaction;
       this.#pendingCompaction = undefined;
@@ -505,18 +549,19 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   }
 
   // ---------------------------------------------------------------------------
-  // Lane 3: reconciliation. The base calls this only for AT-HEAD batches, so
-  // neither pass needs its own mid-refold gate: a catch-up fold can never
-  // dial env.AI for a long-settled request or journal a false failure.
+  // Lane 3: reconciliation. Invoked from `processEvent` under
+  // `delivery.caughtUp` (the last consumed event of a batch that reached
+  // head), so neither pass needs its own mid-refold gate: a catch-up fold can
+  // never dial env.AI for a long-settled request or journal a false failure.
+  // RECOVERY rides this same path: `events.iterate.com/stream/processor-revived` — the
+  // fact the keepalive's revival pass journals after an eviction took
+  // in-flight work — is consumed by the contract, so its ordinary delivery is
+  // a guaranteed turn that lands at head and runs this reconcile, where the
+  // open obligations are settled or re-driven. Obligation idempotency keys
+  // stay bound to the request's own offsets (never the revival's, never the
+  // triggering delivery's), so every settle lane — attempt, backstop, expiry,
+  // crash-cancel — collapses to one durable outcome across revivals.
   // ---------------------------------------------------------------------------
-
-  protected override async reconcile(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
-  ): Promise<void> {
-    await this.#reconcileLlmObligations(args);
-    await this.#reconcileLlmScheduling(args);
-    this.#reconcileStatusAnnouncement(args);
-  }
 
   /**
    * Announce the fold's busy/idle flips as status-changed events for
@@ -535,9 +580,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * corrected by the busy announcement this pass already made for the newer
    * flip.
    */
-  #reconcileStatusAnnouncement(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
-  ): void {
+  async #reconcileStatusAnnouncement(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
+  ): Promise<void> {
     const flip = args.state.status;
     // Undefined means the agent has never been busy; genesis idle is not news.
     if (flip === undefined) return;
@@ -586,8 +631,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const debounceMs = this.deps.statusIdleDebounceMs ?? DEFAULT_AGENT_STATUS_IDLE_DEBOUNCE_MS;
     const delay = flip.busy ? 0 : Math.max(0, Date.parse(flip.since) + debounceMs - this.#now());
     if (delay === 0) {
+      // Inline await, not a nested blockProcessorWhile: this runs inside the
+      // head event's blocking closure already (see #reconcileLlmObligations).
       this.#cancelIdleStatusAnnouncement();
-      args.blockProcessorWhile(appendAnnouncement);
+      await appendAnnouncement();
       return;
     }
     if (this.#idleStatusAnnouncement?.sinceOffset === flip.sinceOffset) return;
@@ -615,9 +662,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     args.runInBackground(async () => {
       try {
         if (!(await wait)) return;
-        // Best-effort staleness check; the consuming folds' sinceOffset guard
-        // is the real protection when newer work lands inside this gap.
-        const current = this.state.status;
+        // Fire-time staleness check against the CURRENT committed fold (the
+        // runner-backed read the DO wires) — the legacy engine's live
+        // `this.state` read. A busy-triggering event reduced and committed
+        // after this timer armed suppresses the stale idle here, even before
+        // the at-head pass that would announce the newer busy runs. The
+        // consuming folds' sinceOffset guard remains the protection for the
+        // one window this cannot see: an event reduced in a frame whose
+        // commit has not landed yet.
+        const current = (await this.deps.reads.snapshot()).state.status;
         if (current === undefined || current.busy || current.sinceOffset !== attempt.sinceOffset) {
           return;
         }
@@ -650,7 +703,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    *   fresh request instead of silently dropping the user's question.
    */
   async #reconcileLlmObligations(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const now = this.#now();
     const cancelCrashed: number[] = [];
@@ -690,37 +743,38 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       cancelCrashed.push(llmRequestOffset);
     }
+    // The settle appends run inline: this reconcile is itself invoked inside
+    // the head event's blocking closure (processEvent under `delivery.caughtUp`),
+    // so awaiting the appends here holds the frame — a nested `blockProcessorWhile`
+    // would register after the runner's per-event blocker snapshot and NOT be
+    // awaited, stranding the settle.
     if (cancelCrashed.length === 0 && settleAsFailed.length === 0) return;
-    args.blockProcessorWhile(async () => {
-      for (const llmRequestOffset of cancelCrashed) {
-        console.error("[agent] cancelling in-flight llm request after durable-object crash", {
+    for (const llmRequestOffset of cancelCrashed) {
+      console.error("[agent] cancelling in-flight llm request after durable-object crash", {
+        llmRequestOffset,
+      });
+      await args.append({
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        idempotencyKey: this.idempotencyKey(`llm-request-cancelled@requested:${llmRequestOffset}`),
+        payload: {
+          phase: "requested",
+          reason: "durable-object-crashed",
           llmRequestOffset,
-        });
-        await args.append({
-          type: "events.iterate.com/agent/llm-request-cancelled",
-          idempotencyKey: this.idempotencyKey(
-            `llm-request-cancelled@requested:${llmRequestOffset}`,
-          ),
-          payload: {
-            phase: "requested",
-            reason: "durable-object-crashed",
-            llmRequestOffset,
-          },
-        });
-      }
-      for (const { llmRequestOffset, message } of settleAsFailed) {
-        console.error("[agent] settling undriven llm request", { llmRequestOffset, message });
-        await args.append({
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
-          payload: {
-            durationMs: 0,
-            llmRequestOffset,
-            result: { status: "failure", error: { message } },
-          },
-        });
-      }
-    });
+        },
+      });
+    }
+    for (const { llmRequestOffset, message } of settleAsFailed) {
+      console.error("[agent] settling undriven llm request", { llmRequestOffset, message });
+      await args.append({
+        type: "events.iterate.com/agent/llm-request-completed",
+        idempotencyKey: this.idempotencyKey(`llm-request-completed@${llmRequestOffset}`),
+        payload: {
+          durationMs: 0,
+          llmRequestOffset,
+          result: { status: "failure", error: { message } },
+        },
+      });
+    }
   }
 
   /**
@@ -733,7 +787,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    * event.
    */
   async #reconcileLlmScheduling(
-    args: Parameters<StreamProcessor<AgentProcessorContract>["reconcile"]>[0],
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const { state } = args;
     if (state.currentRequest === null) {
@@ -783,13 +837,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       // Last-resort backstop. Normally dead code: the obligation pass above
       // settles every open request (attempts self-cap at the expiry deadline,
       // crashed attempts cancel, expired intents fail), so this only fires
-      // for folds the lifecycle didn't produce — hand-seeded checkpoints,
-      // raw-append journals — or a reconciliation bug. The completion key is
-      // the SAME one every other settle lane uses, so the backstop, the
-      // obligation pass, and any late real settle collapse to one durable
-      // outcome instead of double-failing the request.
+      // on a reconciliation bug. The completion key is the SAME one every
+      // other settle lane uses, so the backstop, the obligation pass, and any
+      // late real settle collapse to one durable outcome instead of
+      // double-failing the request.
       const requestedAt = state.currentRequest.requestedAt;
-      if (requestedAt === undefined) return;
       if (this.#now() - requestedAt < AGENT_LLM_REQUEST_BACKSTOP_MS) return;
       const llmRequestOffset = state.currentRequest.llmRequestOffset;
       await args.append({
@@ -1063,6 +1115,51 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             parsed.data.compaction.replacesHistoryThrough >= offset &&
             parsed.data.compaction.replacesHistoryThrough < candidate.offset
           );
+        })
+      )
+        return true;
+      if (page.length < CONSUMED_EVENTS_PAGE_SIZE) return false;
+    }
+  }
+
+  /**
+   * True when the journal already holds a usage report for a LATER request
+   * (higher llmRequestOffset) that is itself over its own threshold. Such a
+   * report will compact a superset prefix with a newer model, so summarizing
+   * this older request first would just be discarded. Under the batch model
+   * this coalescing came free from `#queueCompaction`'s microtask; the runner
+   * settles each event's blocking work before the next, so the earlier report
+   * checks the journal for its successor instead.
+   */
+  async #laterOverThresholdReportPending(llmRequestOffset: number): Promise<boolean> {
+    using pager = this.stream.readEvents({
+      afterOffset: 0,
+      eventTypes: ["events.iterate.com/agent/token-usage-reported"],
+      limit: CONSUMED_EVENTS_PAGE_SIZE,
+    });
+    for (;;) {
+      const page = await pager.next();
+      if (
+        page.some((candidate) => {
+          const payload = candidate.payload as {
+            llmRequestOffset?: number;
+            maxContextTokens?: number;
+            inputTokens?: number;
+            outputTokens?: number;
+          };
+          if (
+            typeof payload.llmRequestOffset !== "number" ||
+            payload.llmRequestOffset <= llmRequestOffset ||
+            typeof payload.maxContextTokens !== "number" ||
+            typeof payload.inputTokens !== "number" ||
+            typeof payload.outputTokens !== "number"
+          ) {
+            return false;
+          }
+          const thresholdTokens = Math.floor(
+            payload.maxContextTokens * AGENT_COMPACTION_TRIGGER_FRACTION,
+          );
+          return payload.inputTokens + payload.outputTokens >= thresholdTokens;
         })
       )
         return true;

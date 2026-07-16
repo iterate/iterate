@@ -1,10 +1,15 @@
 // Contract for the "email-agent" processor that runs on one routed email
 // agent stream (`/agents/email/t<threadId>`), shaped after the slack-agent
-// processor contract. It owns no event types of its own: everything it
-// consumes and emits belongs to the email router or the agent contracts.
+// processor contract. It owns no event types of its own — everything it
+// consumes and emits belongs to the email router, the agent contracts, or the
+// core stream contract (the platform revival fact).
 
 import { z } from "zod";
 import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import {
+  CoreProcessorContract,
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+} from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { EmailProcessorContract } from "./email-processor-contract.ts";
 
@@ -30,10 +35,21 @@ export const EmailAgentProcessorContract = defineProcessorContract({
     subject: z.string().optional(),
   }),
   events: {},
-  processorDeps: [AgentProcessorContract, EmailProcessorContract],
+  // CoreProcessorContract brings the platform revival fact into scope (see
+  // `consumes`).
+  processorDeps: [AgentProcessorContract, EmailProcessorContract, CoreProcessorContract],
   consumes: [
     "events.iterate.com/email/thread-route-configured",
     "events.iterate.com/email/received",
+    // The platform revival fact (core-owned, ONE type for every recovery-wired
+    // processor; the payload's processorSlug names which). MUST be consumed
+    // (the runner throws at construction otherwise): appended when an
+    // incarnation died owing work — a blocking inbound-mail transcription lost
+    // to a simultaneous Agent+Stream DO death — the append cold-boots the
+    // Stream DO so the unacknowledged frame redelivers and the blocking
+    // transcription re-runs. Never emitted by the processor: the recovery
+    // adapter appends it raw, as the runtime speaking.
+    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: ["events.iterate.com/agents/context-added", "events.iterate.com/agent/status-changed"],
 });

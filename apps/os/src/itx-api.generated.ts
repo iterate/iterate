@@ -2407,7 +2407,7 @@ export type AgentProcessorState = {
   llmConfigConfigured: boolean;
   currentRequest:
     | { phase: "scheduled"; requestId: string; scheduledOffset: number }
-    | { phase: "requested"; llmRequestOffset: number; requestedAt?: number | undefined }
+    | { phase: "requested"; llmRequestOffset: number; requestedAt: number }
     | null;
   pendingTriggerOffset: number | null;
   pendingTriggerSource: "agent-loop" | "user" | null;
@@ -2904,7 +2904,7 @@ export type SchedulerProcessorState = {
       action: { [x: string]: unknown; kind: "itx-script"; script: string };
       definedAtOffset: number;
       metadata?: Record<string, unknown> | undefined;
-      path?: string | undefined;
+      path: string;
       nextTriggerAt: number | null;
       recurrence:
         | { [x: string]: unknown; at: string }

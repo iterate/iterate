@@ -169,11 +169,7 @@ import {
   openApiCapabilityTypeReference,
 } from "./domains/itx/capability-type-declarations.ts";
 import { checkItxScript } from "./domains/typecheck/virtual-project.ts";
-import type { ProcessorState } from "./domains/streams/processor-contracts.ts";
-import type {
-  StreamProcessor,
-  StreamProcessorContract,
-} from "./domains/streams/stream-processor.ts";
+import type { ProcessorReads } from "./domains/streams/stream-processor.ts";
 import type {
   CapabilityDescription,
   Description,
@@ -299,7 +295,7 @@ import type {
   SubscriptionRuntimeState,
 } from "./domains/streams/stream-subscribers.ts";
 import type { StreamThroughputMetrics } from "./domains/streams/stream-runtime-metrics.ts";
-import type { StreamProcessorHost } from "./domains/streams/stream-processor-host.ts";
+import type { StreamProcessorRegistry } from "./domains/streams/stream-processor-registry.ts";
 import type { LiveUpdate } from "./lib/live-state/protocol.ts";
 import { LiveState, type LiveStateSubscription } from "./lib/live-state/engine.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
@@ -6077,35 +6073,32 @@ export class ProjectEgressInterceptRpcTarget extends IterateRpcRelay<"ProjectEgr
 }
 
 /**
- * The read-only capability a host hands out for one of its processors.
+ * The read-only capability a hosting Durable Object hands out for one of its
+ * processors.
  *
- * A `StreamProcessor` is itself an `RpcTarget`, so returning the instance
- * directly over RPC would expose its host-only plumbing — most dangerously
- * `ingest`, which drives the durable checkpoint. A caller could then call
- * `ingest` with a fabricated high-offset event and fast-forward the checkpoint
- * past every real event, permanently silencing the processor (and run its side
- * effects for events that were never committed). This facade forwards only the
- * four inspection methods of the public `StreamProcessorRpc` contract, so the
- * dangerous surface never crosses the RPC boundary.
+ * A `StreamProcessor` is itself an `RpcTarget`, and its fold lives in the
+ * driving StreamProcessorRunner, not the instance — so the readable surface is
+ * the registry's runner-backed reads (`registry.reads(processor)`,
+ * stream-processor-registry.ts), and this facade forwards only the inspection
+ * methods of the public `StreamProcessorRpc` contract. Returning a processor
+ * instance over RPC would expose author-side plumbing without answering a
+ * single read correctly.
  */
-export class StreamProcessorRpcTarget<
-  Contract extends StreamProcessorContract,
-  PublicState = ProcessorState<Contract>,
->
+export class StreamProcessorRpcTarget<State, PublicState = State>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements StreamProcessorRpc<PublicState>
 {
-  readonly #processor: StreamProcessor<Contract, object>;
+  readonly #reads: ProcessorReads<State>;
   readonly #catchUpBeforeSnapshot: (() => Promise<void>) | undefined;
-  readonly #publicState: ((state: ProcessorState<Contract>) => PublicState) | undefined;
+  readonly #publicState: ((state: State) => PublicState) | undefined;
 
   constructor(
-    processor: StreamProcessor<Contract, object>,
+    reads: ProcessorReads<State>,
     options: {
       /**
-       * Host-provided pull-through (`StreamProcessorHost.catchUp`): snapshots
-       * served over this target reflect events the push delivery has not
-       * brought yet, giving remote readers read-your-writes.
+       * Registry-provided pull-through (`StreamProcessorRegistry.catchUp`):
+       * snapshots served over this target reflect events the push delivery
+       * has not brought yet, giving remote readers read-your-writes.
        */
       catchUpBeforeSnapshot?: () => Promise<void>;
       /**
@@ -6115,16 +6108,16 @@ export class StreamProcessorRpcTarget<
        * `hasMaterial` instead); the node's `.liveState` applies the SAME
        * redaction through the host's `getLiveState`. Omitted = identity.
        */
-      publicState?: (state: ProcessorState<Contract>) => PublicState;
+      publicState?: (state: State) => PublicState;
     } = {},
   ) {
     super();
-    this.#processor = processor;
+    this.#reads = reads;
     this.#catchUpBeforeSnapshot = options.catchUpBeforeSnapshot;
     this.#publicState = options.publicState;
   }
 
-  #project(state: ProcessorState<Contract>): PublicState {
+  #project(state: State): PublicState {
     return this.#publicState === undefined
       ? (state as unknown as PublicState)
       : this.#publicState(state);
@@ -6132,12 +6125,12 @@ export class StreamProcessorRpcTarget<
 
   async snapshot(): Promise<ProcessorSnapshot<PublicState>> {
     await this.#catchUpBeforeSnapshot?.();
-    const { offset, state } = await this.#processor.snapshot();
+    const { offset, state } = await this.#reads.snapshot();
     return { offset, state: this.#project(state) };
   }
 
   async getRuntimeState() {
-    const runtimeState = await this.#processor.getRuntimeState();
+    const runtimeState = await this.#reads.getRuntimeState();
     return {
       ...runtimeState,
       snapshot: {
@@ -6148,7 +6141,7 @@ export class StreamProcessorRpcTarget<
   }
 
   waitUntilEvent(input: { offset: number; timeoutMs?: number }) {
-    return this.#processor.waitUntilEvent(input);
+    return this.#reads.waitUntilEvent(input);
   }
 }
 
@@ -6492,19 +6485,19 @@ class ProcessorRelayRpcTarget<State>
 }
 
 /**
- * DO-side RpcTarget over a host's live-state engine — the surface a `.liveState`
- * node exposes: `get()`/`subscribe()` — read-only over the wire (see
- * LiveStateRpc: the DO derives this state from its fold, so writes go through
- * the node's own verbs). `get`/`subscribe` first seed the engine from committed
- * state so the first paint is never stale after a DO restart.
+ * DO-side RpcTarget over a registry's live-state engine — the surface a
+ * `.liveState` node exposes: `get()`/`subscribe()` — read-only over the wire
+ * (see LiveStateRpc: the DO derives this state from its fold, so writes go
+ * through the node's own verbs). `get`/`subscribe` first seed the engine from
+ * committed state so the first paint is never stale after a DO restart.
  */
 export class LiveStateRpcTarget<State extends object = Record<string, unknown>>
   extends IterateRpcRelay<"LiveStateRpc">
   implements LiveStateRpc<State>
 {
-  readonly #host: Pick<StreamProcessorHost<State>, "live" | "loadAndRefreshLive">;
+  readonly #host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">;
 
-  constructor(host: Pick<StreamProcessorHost<State>, "live" | "loadAndRefreshLive">) {
+  constructor(host: Pick<StreamProcessorRegistry<State>, "live" | "loadAndRefreshLive">) {
     super();
     this.#host = host;
   }
