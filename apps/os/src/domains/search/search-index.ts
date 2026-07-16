@@ -222,14 +222,9 @@ export async function indexStreamEventBatch(input: {
       segment,
     });
     if (document === null) {
-      // Nothing indexable in the segment (all housekeeping/ephemeral). Delete
-      // rather than skip so a segment that RENDERED before but no longer does
-      // (e.g. after a disallow-list change) self-heals instead of serving a
-      // stale document forever. R2 reports a native error for deleting a
-      // missing key, so make the ordinary never-indexed case a clean no-op.
-      if ((await itxEnv.SEARCH_BUCKET.head(key)) !== null) {
-        await itxEnv.SEARCH_BUCKET.delete(key);
-      }
+      // Append-only segments containing only housekeeping events never had a
+      // document. R2 reports missing head/delete operations as native errors,
+      // so the ordinary no-document case is simply a no-op.
       continue;
     }
     const { first: firstOffset, last: lastOffset } = segmentOffsetRange(segment);

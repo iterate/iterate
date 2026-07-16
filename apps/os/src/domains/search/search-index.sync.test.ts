@@ -4,7 +4,6 @@ const searchBinding = vi.hoisted(() => ({
   createJob: vi.fn(),
   deleteObject: vi.fn(),
   get: vi.fn(),
-  headObject: vi.fn(),
   list: vi.fn(),
   putObject: vi.fn(),
 }));
@@ -17,7 +16,6 @@ vi.mock("../../env.ts", () => ({
     },
     SEARCH_BUCKET: {
       delete: searchBinding.deleteObject,
-      head: searchBinding.headObject,
       put: searchBinding.putObject,
     },
     WORKER_SELF: "os-test",
@@ -62,7 +60,6 @@ describe("passive project search sync", () => {
 
 describe("automatic stream indexing", () => {
   it("does not delete an absent segment when the batch has no indexable events", async () => {
-    searchBinding.headObject.mockResolvedValue(null);
     const housekeepingEvent = {
       type: "events.iterate.com/stream/woken",
       offset: 1,
@@ -91,7 +88,6 @@ describe("automatic stream indexing", () => {
       readEvents: vi.fn().mockResolvedValue([housekeepingEvent]),
     });
 
-    expect(searchBinding.headObject).toHaveBeenCalledOnce();
     expect(searchBinding.deleteObject).not.toHaveBeenCalled();
     expect(searchBinding.putObject).not.toHaveBeenCalled();
   });
