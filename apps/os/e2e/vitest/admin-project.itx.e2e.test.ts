@@ -5,13 +5,70 @@
  * them on itx.
  */
 import { test } from "vitest";
+import type { RpcStub } from "capnweb";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
+import {
+  buildIntegrationRouterCreatedEvent,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
+} from "../../src/domains/integrations/integration-router-events.ts";
 import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
+import type { WakeableStreamProcessorRpc } from "../../src/itx-api.generated.ts";
 
 test("creates a disposable project and uses project streams through itx", async ({ expect }) => {
   await using handle = await createTestProject({ slugPrefix: "admin-fixture" });
   using itx = handle.itx();
+
+  // Project creation waits for every universally available sibling processor
+  // to consume its birth batch. This assertion deliberately goes through the
+  // public email capability: the email router shares the Project DO with the
+  // project processor, so its relay must select the email processor's own
+  // read facade rather than the host's default `processor` property.
+  expect((await itx.email.processor.snapshot()).state).toMatchObject({
+    birthCertificate: { config: {} },
+    threads: {},
+    threadByMessageId: {},
+  });
+
+  // Slack and Telegram routers have the same multi-processor hosting shape.
+  // Build their public birth batches without connecting an external account,
+  // then prove each connection handle reads its named router rather than the
+  // Project processor sharing that Durable Object instance.
+  for (const router of [
+    {
+      processorSlug: "slack",
+      slug: "slack",
+      state: { routes: {} },
+      processor: (connection: string) => itx.integrations.slack.get(connection).processor,
+    },
+    {
+      processorSlug: "telegram",
+      slug: "telegram",
+      state: { sentMessages: {}, sessionsByChat: {} },
+      processor: (connection: string) => itx.integrations.telegram.get(connection).processor,
+    },
+  ] as const) {
+    const connection = `e2e-${router.slug}-${crypto.randomUUID()}`;
+    const committed = await itx.streams.get(`/integrations/${router.slug}/${connection}`).append(
+      buildIntegrationRouterCreatedEvent({ connection, slug: router.slug }),
+      buildIntegrationRouterSubscriptionConfiguredEvent({
+        connection,
+        processorSlug: router.processorSlug,
+        projectId: handle.project.id,
+        slug: router.slug,
+      }),
+    );
+    const processor = router.processor(
+      connection,
+    ) as unknown as RpcStub<WakeableStreamProcessorRpc>;
+    await processor.waitUntilProcessed({
+      offset: Math.max(...committed.map((event) => event.offset)),
+    });
+    expect((await processor.snapshot()).state).toMatchObject({
+      birthCertificate: { config: { connection } },
+      ...router.state,
+    });
+  }
 
   const streamPath = `/e2e/admin-project/${crypto.randomUUID()}`;
   const eventType = "events.iterate.com/os/e2e-admin-stream-proof";
