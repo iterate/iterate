@@ -256,6 +256,9 @@ async function processGithubReviewTarget(input: {
   target: GithubReviewTarget;
 }): Promise<GithubReviewEventResult> {
   const { target } = input;
+  // Re-check scope at execution time: a request may have been checkpointed
+  // before this repository was removed from the live worker configuration.
+  if (!input.config.repositories.includes(target.fullName)) return "ignored";
   // A routed webhook carries the exact connection and deployment App slug
   // chosen by the signed-webhook door. Automatic work must not guess either.
   const octokit = input.itx.integrations.github.get(target.connection).octokit;

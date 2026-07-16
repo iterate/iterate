@@ -248,6 +248,37 @@ describe("config-repo GitHub reviews", () => {
     );
   });
 
+  it("ignores a checkpointed request after its repository is removed from config", async () => {
+    const h = harness();
+    const streamAppend = vi.fn().mockResolvedValue([]);
+    const processor = new GithubReviewProcessor({
+      config: { ...CONFIG, repositories: [] },
+      itx: h.itx,
+      path: REVIEW_PATH,
+      projectId: "prj_test",
+      stream: { append: streamAppend } as unknown as Stream,
+    });
+
+    await processor.ingest({
+      events: [webhook(), subscriptionConfigured()],
+      streamMaxOffset: 5,
+    });
+
+    expect(h.getConnection).not.toHaveBeenCalled();
+    expect(h.createAgent).not.toHaveBeenCalled();
+    expect(streamAppend).toHaveBeenCalledOnce();
+    expect(streamAppend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: {
+          requestKey: "head:head-b",
+          result: "ignored",
+          sourceOffset: 4,
+        },
+        type: "events.iterate.com/github-review/request-processed",
+      }),
+    );
+  });
+
   it("starts with the exact webhook carried by the subscription fact", async () => {
     const h = harness();
     const streamAppend = vi.fn().mockResolvedValue([]);
