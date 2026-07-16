@@ -53,6 +53,21 @@ The thread screen renders only visible messages plus a "working…" row derived
 from in-flight activity (`src/lib/chat.ts`); a live stream subscription pushes
 updates into the query cache (`src/lib/live-thread.ts`).
 
+## Approving held requests
+
+The Approvals screen (per project, from the chat list's header) is a human-
+in-the-loop approver for egress requests a project's `hold` rules park —
+the same protocol `iterate approve` (`packages/iterate/`) and Jonas's
+Secure Enclave menu-bar app (PR #1868) speak. "Enroll this device" generates
+a real P-256 keypair (`@noble/curves` — Hermes has no WebCrypto) and stores
+the private half in the Keychain behind Face ID (`expo-secure-store`'s
+`requireAuthentication`); it's the same "software" key kind
+`packages/iterate/src/approval-keys.ts` already uses for CI/non-Mac
+machines, not a fake — every grant is a real signature the platform
+verifies, just without Secure Enclave hardware isolation. See
+`tasks/mobile-approver-upgrades.md` for the gap and what closing it needs
+(all three items require leaving Expo Go for a dev build).
+
 ## Verification
 
 | Lane                                                          | What it proves                                                                                                                                                                                                                  |
@@ -64,12 +79,15 @@ updates into the query cache (`src/lib/live-thread.ts`).
 
 ## Layout
 
-| Path                     | What                                                                         |
-| ------------------------ | ---------------------------------------------------------------------------- |
-| `src/lib/itx-core.ts`    | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able) |
-| `src/lib/auth.ts`        | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh    |
-| `src/lib/chat.ts`        | Pure: stream events → bubbles + working flag; agent path conventions         |
-| `src/lib/live-thread.ts` | Live subscription per thread feeding the tanstack-query cache                |
-| `src/app/`               | expo-router screens: sign-in → projects → chat list → thread                 |
+| Path                       | What                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| `src/lib/itx-core.ts`      | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)            |
+| `src/lib/auth.ts`          | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
+| `src/lib/chat.ts`          | Pure: stream events → bubbles + working flag; agent path conventions                    |
+| `src/lib/live-thread.ts`   | Live subscription per thread feeding the tanstack-query cache                           |
+| `src/lib/approver-core.ts` | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
+| `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                             |
+| `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
+| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread → approvals                |
 
 `pnpm typecheck` / `pnpm test` run in root CI; nothing native does.

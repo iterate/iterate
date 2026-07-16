@@ -45,9 +45,18 @@ export default function ChatListScreen() {
         options={{
           title: slug || "Chats",
           headerRight: () => (
-            <Pressable onPress={() => router.push("/projects")}>
-              <Text style={styles.switchProject}>Switch project</Text>
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable
+                onPress={() =>
+                  router.push({ pathname: "/project/[projectId]/approvals", params: { projectId } })
+                }
+              >
+                <Text style={styles.switchProject}>Approvals</Text>
+              </Pressable>
+              <Pressable onPress={() => router.push("/projects")}>
+                <Text style={styles.switchProject}>Switch project</Text>
+              </Pressable>
+            </View>
           ),
         }}
       />
@@ -126,5 +135,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   retryText: { color: colors.text, fontSize: 14 },
+  headerActions: { flexDirection: "row", gap: spacing.md },
   switchProject: { color: colors.textMuted, fontSize: 14 },
 });

@@ -16,8 +16,6 @@
 // is exercised by the real sign-in on the phone; this lane proves transport,
 // event shapes, live push, and reducer.
 
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
@@ -36,6 +34,7 @@ import {
 import { base64ToUint8Array } from "../src/lib/encoding.ts";
 import { reduceFeed } from "../src/lib/feed.ts";
 import { dialItx } from "../src/lib/itx-core.ts";
+import { portlessOrigin, requireEnv, resolveBaseUrl, wsUrl } from "./e2e-helpers.ts";
 
 test("phone client seam: new mobile chat gets a live agent reply", async () => {
   const baseUrl = resolveBaseUrl();
@@ -144,55 +143,6 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
 /** 1x1 transparent PNG. */
 const TINY_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-
-/**
- * Deployed targets set APP_CONFIG_BASE_URL in Doppler; a local dev server
- * runs on a random port and publishes itself to the discovery file instead
- * (apps/os/scripts/lib/dev-server-info.ts).
- */
-function resolveBaseUrl(): string {
-  const fromEnv = process.env.APP_CONFIG_BASE_URL?.trim();
-  if (fromEnv) return fromEnv;
-  const discoveryFile = resolve(import.meta.dirname, "../../os/.dev-server/dev-server.json");
-  if (existsSync(discoveryFile)) {
-    const info = JSON.parse(readFileSync(discoveryFile, "utf8")) as { baseUrl?: string };
-    if (info.baseUrl) return info.baseUrl;
-  }
-  throw new Error(
-    "No target deployment: set APP_CONFIG_BASE_URL (doppler config for a deployed env) " +
-      "or start the local dev server (`pnpm dev start --detach`).",
-  );
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(
-      `${name} is required — run under a Doppler config for the target deployment, e.g. ` +
-        `doppler run --config dev -- pnpm --dir apps/mobile test:e2e`,
-    );
-  }
-  return value;
-}
-
-function wsUrl(baseUrl: string): string {
-  const url = new URL("/api", baseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
-
-/**
- * The RFC 8707 resource for an OS deployment — port-stripped loopback for
- * local dev, matching the auth worker's audience list. Mirrors osResource()
- * in src/lib/auth.ts (which is welded to expo imports).
- */
-function portlessOrigin(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
-    return `http://${url.hostname}`;
-  }
-  return url.origin;
-}
 
 async function waitFor(condition: () => boolean, what: string): Promise<void> {
   const deadline = Date.now() + 30_000;
