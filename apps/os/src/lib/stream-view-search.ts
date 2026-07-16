@@ -209,12 +209,12 @@ const RELEASE_PANEL_EDGE = {
 } satisfies Partial<StreamViewSearch>;
 
 /**
- * URL state for the stream view's right-edge overlays — the raw-event
+ * URL state for the stream view's right-edge sheets — the raw-event
  * inspector, the LLM request inspector, the script execution inspector, the
  * processors sheet, and (on full-panel layouts) the Events sheet. They share
  * the same screen edge, so every setter keeps them mutually exclusive; if a
  * hand-edited URL asks for more than one, an inspector beats the processors
- * sheet, which beats the Events sheet (StreamInspectorOverlay owns inspector
+ * sheet, which beats the Events sheet (StreamInspectorSheet owns inspector
  * precedence because it knows which modes can render the raw inspector).
  */
 export function useStreamViewPanels(): {
@@ -227,9 +227,7 @@ export function useStreamViewPanels(): {
   inspectEvent: (offset: number) => void;
   closeInspector: () => void;
   inspectLlmRequest: (llmRequestOffset: number) => void;
-  closeLlmRequestInspector: () => void;
   inspectScriptExecution: (executionId: string) => void;
-  closeScriptExecutionInspector: () => void;
   focusProcessor: (subscriptionKey: string) => void;
   openProcessorsOverview: () => void;
   closeProcessorsPanel: () => void;
@@ -240,7 +238,7 @@ export function useStreamViewPanels(): {
   const inspectedOffset = search.event ?? null;
   // Inspector identifiers are surfaced as-is. Openers keep them mutually
   // exclusive, so multiple values mean a stale or hand-edited URL; precedence
-  // is the RENDERER's call (StreamInspectorOverlay), because only it knows
+  // is the RENDERER's call (StreamInspectorSheet), because only it knows
   // whether the active mode can actually show the raw inspector.
   const inspectedLlmRequestOffset = search.llmRequest ?? null;
   const inspectedScriptExecutionId = search.scriptExecution ?? null;
@@ -259,22 +257,22 @@ export function useStreamViewPanels(): {
     (offset: number) => setSearch({ ...RELEASE_PANEL_EDGE, event: offset }),
     [setSearch],
   );
-  const closeInspector = useCallback(() => setSearch({ event: undefined }), [setSearch]);
+  const closeInspector = useCallback(
+    () =>
+      setSearch({
+        event: undefined,
+        llmRequest: undefined,
+        scriptExecution: undefined,
+      }),
+    [setSearch],
+  );
   const inspectLlmRequest = useCallback(
     (llmRequestOffset: number) =>
       setSearch({ ...RELEASE_PANEL_EDGE, llmRequest: llmRequestOffset }),
     [setSearch],
   );
-  const closeLlmRequestInspector = useCallback(
-    () => setSearch({ llmRequest: undefined }),
-    [setSearch],
-  );
   const inspectScriptExecution = useCallback(
     (executionId: string) => setSearch({ ...RELEASE_PANEL_EDGE, scriptExecution: executionId }),
-    [setSearch],
-  );
-  const closeScriptExecutionInspector = useCallback(
-    () => setSearch({ scriptExecution: undefined }),
     [setSearch],
   );
   const focusProcessor = useCallback(
@@ -319,9 +317,7 @@ export function useStreamViewPanels(): {
     inspectEvent,
     closeInspector,
     inspectLlmRequest,
-    closeLlmRequestInspector,
     inspectScriptExecution,
-    closeScriptExecutionInspector,
     focusProcessor,
     openProcessorsOverview,
     closeProcessorsPanel,
