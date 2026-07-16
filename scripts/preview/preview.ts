@@ -1289,6 +1289,13 @@ export type CloudflarePreviewApp = {
   previewTestDependencyBaseUrlEnvVars?: Partial<Record<CloudflarePreviewAppSlug, string>>;
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
+  /**
+   * Require the readiness route to report wrangler's newly deployed Worker
+   * version continuously before tests start. Cloudflare can serve the new
+   * edge Worker while Durable Objects are still rolling from the previous
+   * version; this barrier keeps that reset window out of the test phase.
+   */
+  previewReadyWorkerVersion?: { stableForMs: number };
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
@@ -1508,6 +1515,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
+    // A 2xx alone is not a deployment barrier: Cloudflare can still be
+    // propagating the new code to Durable Object nodes after wrangler exits.
+    // Hold the exact deployed version steady at the edge before creating any
+    // projects, otherwise the first object calls can be reset mid-saga.
+    previewReadyWorkerVersion: { stableForMs: 10_000 },
     paths: [
       "apps/os/**",
       "apps/auth/**",
@@ -3375,11 +3387,31 @@ async function deployPreviewApp(input: {
     });
   }
 
+  const deployedWorkerVersion = input.app.previewReadyWorkerVersion
+    ? parseLastDeployedWorkerVersionId(`${deployResult.stdout}\n${deployResult.stderr}`)
+    : null;
+  if (input.app.previewReadyWorkerVersion && !deployedWorkerVersion) {
+    return CloudflarePreviewAppEntry.parse({
+      ...baseEntry,
+      ...sizeFields,
+      message:
+        "Preview deployment succeeded, but wrangler did not report the deployed Worker version required by the readiness barrier.",
+      status: "deploy-failed",
+    });
+  }
+
   const readiness = await waitForPreviewAppReadiness({
     publicUrl: appConfig.baseUrl,
     readyUrlPath: input.app.previewReadyUrlPath,
     signal: input.signal,
     timeoutMs: defaultPreviewReadyTimeoutMs,
+    workerVersion:
+      deployedWorkerVersion && input.app.previewReadyWorkerVersion
+        ? {
+            expected: deployedWorkerVersion,
+            stableForMs: input.app.previewReadyWorkerVersion.stableForMs,
+          }
+        : undefined,
   });
   if (!readiness.ok) {
     return CloudflarePreviewAppEntry.parse({
@@ -4492,7 +4524,7 @@ const previewServingProbeTimeoutMs = 15_000;
 /** The real {@link PreviewAppServingProbe}: a single GET, no polling — this checks a deploy that already passed readiness once. */
 async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; detail: string }> {
   try {
-    const status = await fetchReadinessStatus(
+    const { status } = await fetchReadinessResponse(
       url,
       AbortSignal.timeout(previewServingProbeTimeoutMs),
     );
@@ -4747,6 +4779,7 @@ async function waitForPreviewAppReadiness(params: {
   readyUrlPath?: string;
   signal?: AbortSignal;
   timeoutMs: number;
+  workerVersion?: { expected: string; stableForMs: number };
 }) {
   const urls = resolvePreviewReadinessUrls({
     publicUrl: params.publicUrl,
@@ -4758,6 +4791,7 @@ async function waitForPreviewAppReadiness(params: {
       signal: params.signal,
       timeoutMs: params.timeoutMs,
       url,
+      workerVersion: params.workerVersion,
     });
     if (!readiness.ok) return readiness;
   }
@@ -4775,19 +4809,60 @@ function resolvePreviewReadinessUrls(params: {
   return [new URL(params.readyUrlPath ?? defaultPreviewReadyUrlPath, params.publicUrl)];
 }
 
-async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: number; url: URL }) {
+const workerVersionReadinessHeader = "x-iterate-worker-version";
+const deployedWorkerVersionPattern =
+  /Current Version ID:\s*([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})/gi;
+
+/**
+ * Wrangler prints one version id per uploaded Worker. The OS deploy uploads
+ * its sidecars first and the main Worker last, so the final id is the one its
+ * public readiness route must report.
+ */
+function parseLastDeployedWorkerVersionId(output: string): string | null {
+  return [...stripAnsi(output).matchAll(deployedWorkerVersionPattern)].at(-1)?.[1] ?? null;
+}
+
+async function waitForHttpReadiness(params: {
+  signal?: AbortSignal;
+  timeoutMs: number;
+  url: URL;
+  workerVersion?: { expected: string; stableForMs: number };
+}) {
   const deadline = Date.now() + params.timeoutMs;
   let lastFailure = "No response received yet.";
+  let matchingWorkerVersionSince: number | null = null;
 
   while (Date.now() < deadline) {
     try {
-      const status = await fetchReadinessStatus(params.url, params.signal);
-      if (status >= 200 && status < 300) {
-        return { ok: true as const };
-      }
+      const response = await fetchReadinessResponse(params.url, params.signal);
+      if (response.status >= 200 && response.status < 300) {
+        if (!params.workerVersion) {
+          return { ok: true as const };
+        }
 
-      lastFailure = `Readiness check returned ${status} for ${params.url.toString()}.`;
+        if (response.workerVersion === params.workerVersion.expected) {
+          const now = Date.now();
+          matchingWorkerVersionSince ??= now;
+          const stableForMs = now - matchingWorkerVersionSince;
+          if (stableForMs >= params.workerVersion.stableForMs) {
+            return { ok: true as const };
+          }
+
+          lastFailure =
+            `Readiness check reported Worker version ${params.workerVersion.expected}, ` +
+            `but it has only remained stable for ${stableForMs}ms of the required ${params.workerVersion.stableForMs}ms.`;
+        } else {
+          matchingWorkerVersionSince = null;
+          lastFailure =
+            `Readiness check reported Worker version ${response.workerVersion ?? "<missing>"}; ` +
+            `expected ${params.workerVersion.expected}.`;
+        }
+      } else {
+        matchingWorkerVersionSince = null;
+        lastFailure = `Readiness check returned ${response.status} for ${params.url.toString()}.`;
+      }
     } catch (error) {
+      matchingWorkerVersionSince = null;
       lastFailure = formatPreviewErrorMessage(error);
     }
 
@@ -4800,24 +4875,31 @@ async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: n
   };
 }
 
-async function fetchReadinessStatus(url: URL, signal: AbortSignal | undefined): Promise<number> {
+async function fetchReadinessResponse(
+  url: URL,
+  signal: AbortSignal | undefined,
+): Promise<{ status: number; workerVersion: string | null }> {
   try {
     const response = await fetch(url, {
+      cache: "no-store",
       method: "GET",
       redirect: "follow",
       signal,
     });
-    return response.status;
+    return {
+      status: response.status,
+      workerVersion: response.headers.get(workerVersionReadinessHeader),
+    };
   } catch (error) {
     if (!isDnsLookupError(error)) {
       throw error;
     }
 
-    return await requestStatusWithDnsResolve(url, signal);
+    return await requestReadinessWithDnsResolve(url, signal);
   }
 }
 
-async function requestStatusWithDnsResolve(url: URL, signal: AbortSignal | undefined) {
+async function requestReadinessWithDnsResolve(url: URL, signal: AbortSignal | undefined) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Unsupported readiness URL protocol: ${url.protocol}`);
   }
@@ -4832,7 +4914,7 @@ async function requestStatusWithDnsResolve(url: URL, signal: AbortSignal | undef
   const resolvedUrl = new URL(url);
   resolvedUrl.hostname = address;
 
-  return await new Promise<number>((resolve, reject) => {
+  return await new Promise<{ status: number; workerVersion: string | null }>((resolve, reject) => {
     const req = request(
       resolvedUrl,
       {
@@ -4843,8 +4925,12 @@ async function requestStatusWithDnsResolve(url: URL, signal: AbortSignal | undef
       },
       (response) => {
         const statusCode = response.statusCode ?? 0;
+        const rawWorkerVersion = response.headers[workerVersionReadinessHeader];
+        const workerVersion = Array.isArray(rawWorkerVersion)
+          ? (rawWorkerVersion[0] ?? null)
+          : (rawWorkerVersion ?? null);
         response.resume();
-        response.on("end", () => resolve(statusCode));
+        response.on("end", () => resolve({ status: statusCode, workerVersion }));
       },
     );
     req.on("error", reject);
@@ -4927,6 +5013,7 @@ export const previewInternals = {
   selectExpiredLeasesForGc,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
+  parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
   readPlaywrightRetryTelemetry,
@@ -4944,6 +5031,7 @@ export const previewInternals = {
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
   syncPreviewInventory,
+  waitForHttpReadiness,
 };
 
 function matchesPreviewPath(filename: string, patterns: readonly string[]) {

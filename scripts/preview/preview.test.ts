@@ -39,6 +39,7 @@ const {
   resolveSlotWaitTotalMs,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
+  parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
   readPreviewAppConfig,
@@ -54,6 +55,7 @@ const {
   selectPreviewAppsNeedingRetry,
   splitRepositoryFullName,
   syncPreviewInventory,
+  waitForHttpReadiness,
 } = previewInternals;
 
 describe("preview app dependency expansion", () => {
@@ -437,6 +439,58 @@ describe("preview readiness URLs", () => {
         readyUrlPath: cloudflarePreviewApps.os.previewReadyUrlPath,
       }).map((url) => url.toString()),
     ).toEqual(["https://os.iterate-preview-2.com/api/health"]);
+  });
+
+  test("takes the final worker version when one deploy uploads sidecars before the app", () => {
+    expect(
+      parseLastDeployedWorkerVersionId(
+        [
+          "Current Version ID: 11111111-1111-4111-8111-111111111111",
+          "Uploaded typechecker",
+          "Current Version ID: 22222222-2222-4222-8222-222222222222",
+          "Uploaded os",
+          "Current Version ID: a9fcbc76-8f52-4086-9b7d-ad5db90503d0",
+        ].join("\n"),
+      ),
+    ).toBe("a9fcbc76-8f52-4086-9b7d-ad5db90503d0");
+  });
+
+  test("returns null when wrangler did not report a deployed worker version", () => {
+    expect(parseLastDeployedWorkerVersionId("Uploaded os-preview-8")).toBeNull();
+  });
+
+  test("requires the expected worker version to remain stable before declaring readiness", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 200,
+          headers: { "x-iterate-worker-version": "previous-version" },
+        }),
+      )
+      .mockResolvedValue(
+        new Response(null, {
+          status: 200,
+          headers: { "x-iterate-worker-version": "expected-version" },
+        }),
+      );
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: { expected: "expected-version", stableForMs: 2_000 },
+      });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(readiness).resolves.toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });
 

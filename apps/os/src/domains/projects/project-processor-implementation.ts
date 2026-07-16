@@ -247,15 +247,27 @@ export class ProjectProcessor extends StreamProcessor<
           const [capabilityHostBirth, schedulerBirth, configRepoBirth, emailRouterBirth] =
             await siblingBirths;
 
-          const capabilityHostOffset = capabilityHostBirth.at(-1)?.offset;
-          const schedulerOffset = schedulerBirth.at(-1)?.offset;
-          const configRepoOffset = configRepoBirth.at(-1)?.offset;
-          const emailRouterOffset = emailRouterBirth.at(-1)?.offset;
+          const capabilityHostOffset = capabilityHostBirth.reduce(
+            (maximum, event) => Math.max(maximum, event.offset),
+            0,
+          );
+          const schedulerOffset = schedulerBirth.reduce(
+            (maximum, event) => Math.max(maximum, event.offset),
+            0,
+          );
+          const configRepoOffset = configRepoBirth.reduce(
+            (maximum, event) => Math.max(maximum, event.offset),
+            0,
+          );
+          const emailRouterOffset = emailRouterBirth.reduce(
+            (maximum, event) => Math.max(maximum, event.offset),
+            0,
+          );
           if (
-            capabilityHostOffset === undefined ||
-            schedulerOffset === undefined ||
-            configRepoOffset === undefined ||
-            emailRouterOffset === undefined
+            capabilityHostOffset === 0 ||
+            schedulerOffset === 0 ||
+            configRepoOffset === 0 ||
+            emailRouterOffset === 0
           ) {
             throw new Error("project birth saga committed an incomplete sibling birth batch");
           }

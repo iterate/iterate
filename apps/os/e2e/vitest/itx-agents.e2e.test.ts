@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
+import { agentDefaultsForPath } from "../../src/domains/agents/agent-defaults.ts";
 import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -22,6 +23,7 @@ test("Agent scripts update their own status record via itx.agent.setStatus", asy
   using project = itx.projects.create({ slug: "agent-set-status" });
   const agentPath = `/agents/set-status-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
 
   const statusPatch = agent.stream.waitForEvent({
     eventTypes: ["events.iterate.com/agent/status-changed"],
@@ -75,6 +77,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
   using project = itx.projects.create({ slug: "agent-project-tool" });
   const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
 
   using _projectToolProvision = await project.provideCapability({
     path: ["projectTool"],
@@ -157,7 +160,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
   expect(reflectedFilesReply?.payload).not.toHaveProperty("llmRequestOffset");
 });
 
-test("New agent streams install processors and replay existing child events", async () => {
+test("Late agent subscriptions replay history after an earlier birth certificate", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",
@@ -166,8 +169,17 @@ test("New agent streams install processors and replay existing child events", as
 
   const marker = `agent-auto-bootstrap-${crypto.randomUUID()}`;
   using project = itx.projects.create({ slug: `agent-auto-bootstrap-${marker}` });
+  const { projectId } = await project.__describe();
   const agentPath = `/agents/auto-bootstrap-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+
+  // Birth is the first domain event. Stage the ordinary creation policy
+  // without its processor subscriptions, then install those subscriptions
+  // through the idempotent public create() after history exists. This is the
+  // supported late-subscription case: history may precede the subscription,
+  // but it never precedes the birth certificate.
+  const policy = agentDefaultsForPath({ agentPath, projectId });
+  await agent.stream.append(...policy.events);
 
   const content = fencedAgentScript(
     defineItxScript<{ chat: AgentChat }, { marker: string }>(
@@ -180,14 +192,15 @@ test("New agent streams install processors and replay existing child events", as
   const { assistantContext: historicalAssistantContext, llmRequestOffset } =
     await appendSyntheticProviderOutput(agent.stream, content);
 
-  const replayedReply = await agent.stream.waitForEvent({
+  const replayedReply = agent.stream.waitForEvent({
     afterOffset: historicalAssistantContext.offset,
     eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
     predicate: (event) => event.payload?.message === marker,
     timeoutMs: 30_000,
   });
+  await agent.create({});
 
-  expect(replayedReply).toMatchObject({
+  expect(await replayedReply).toMatchObject({
     type: AGENT_WEB_MESSAGE_SENT_TYPE,
     payload: { message: marker },
   });
@@ -225,14 +238,14 @@ test("New agent streams install processors and replay existing child events", as
   const scriptRequestedOffset = events.find(
     (event) => event.type === "events.iterate.com/capability-host/script-execution-requested",
   )?.offset;
-  const modelSelectionOffset = events.find(
-    (event) => event.type === "events.iterate.com/agent/llm-provider-selected",
+  const birthCertificateOffset = events.find(
+    (event) => event.type === "events.iterate.com/agent/created",
   )?.offset;
 
   expect(assistantContextOffset).toBe(historicalAssistantContext.offset);
   expect(agentSubscriptionOffset).toBeGreaterThan(historicalAssistantContext.offset);
   expect(itxSubscriptionOffset).toBeGreaterThan(historicalAssistantContext.offset);
-  expect(modelSelectionOffset).toBeGreaterThan(historicalAssistantContext.offset);
+  expect(birthCertificateOffset).toBeLessThan(historicalAssistantContext.offset);
   expect(scriptRequestedOffset).toBeGreaterThan(agentSubscriptionOffset!);
 });
 
@@ -247,6 +260,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
   const { projectId } = await project.__describe();
   const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
   const durableWorkerKey = `agent-counter-${crypto.randomUUID()}`;
 
   using _agentProbeProvision = await agent.provideCapability({
@@ -385,6 +399,7 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
   const { projectId } = await project.__describe();
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
   const scopeProbeWorkerRef = (path: string) => ({
     entrypoint: "ScopeProbeEntrypoint",
     path,
@@ -443,6 +458,7 @@ test('An agent scope provides a capability to the whole project via capabilityHo
   await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
 
   // The provide runs INSIDE the agent scope: the script's `itx` fronts the
   // agent's own capability host and mounts on the project root by addressing
@@ -490,6 +506,12 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
   using agentStream = project.streams.get(agentPath);
 
+  // A scope may already have an explicitly created capability host. Its
+  // birth and subscription are old idempotency hits at the end of the agent
+  // create input batch; create() must still wait through the batch's NEWEST
+  // offset, not merely the last returned item.
+  await project.capabilityHosts.get(agentPath).create();
+
   const birth = agentStream.waitForEvent({
     eventTypes: ["events.iterate.com/agent/created"],
     timeoutMs: 60_000,
@@ -505,6 +527,10 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   });
 
   await project.agents.get(agentPath).create({});
+
+  expect(await project.agents.list()).toEqual(
+    expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
+  );
 
   const birthEvent = await birth;
   expect(

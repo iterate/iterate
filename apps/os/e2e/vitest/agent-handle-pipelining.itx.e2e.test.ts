@@ -187,6 +187,7 @@ test(
     // Promise.all — dependent calls ride one round trip instead of
     // await-per-hop.
     using capnwebAgent = itx.agents.get("/agents/fanout-capnweb");
+    await capnwebAgent.create({});
     const [sentA, sentB, description] = await Promise.all([
       capnwebAgent.message("capnweb fanout A"),
       capnwebAgent.message("capnweb fanout B"),
@@ -218,6 +219,7 @@ test(
       }>(`
       async (itx) => {
         using agent = itx.agents.get("/agents/fanout-workerd");
+        await agent.create({});
         const [a, b, desc] = await Promise.all([
           agent.message("workerd fanout A"),
           agent.message("workerd fanout B"),
@@ -235,12 +237,13 @@ test(
 );
 
 test(
-  "the child-agent delegation one-liner pipelines from an agent scope (relative path + message)",
+  "explicit child-agent delegation pipelines from an agent scope (relative path + create + message)",
   { timeout: 120_000 },
   async ({ expect }) => {
     await using handle = await createTestProject({ slugPrefix: "handle-pipeline-rel" });
     using itx = handle.itx();
     const parentPath = "/agents/pipeline-parent";
+    await itx.agents.get(parentPath).create({});
 
     // Run from the PARENT AGENT's scope, so the script's itx resolves relative
     // paths against it and message() stamps the parent as the sender — the
@@ -248,7 +251,9 @@ test(
     using parentHost = itx.capabilityHosts.get(parentPath);
     const run = (
       await itxScript(parentHost).execute(async (itx) => {
-        const sent = await itx.agents.get("researcher").message("pipelined delegation");
+        const researcher = itx.agents.get("researcher");
+        await researcher.create({});
+        const sent = await researcher.message("pipelined delegation");
         return {
           actor: sent.payload?.actor,
           offset: sent.offset,

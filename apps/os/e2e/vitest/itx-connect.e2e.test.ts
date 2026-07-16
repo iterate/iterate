@@ -429,6 +429,7 @@ test("itx expression capabilities resolve aliases against the current itx host p
   using project = itx.projects.create({ slug: `expr-agent-${crypto.randomUUID()}` });
   const agentPath = `/agents/expr-agent-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
+  await agent.create({});
 
   using _sourceProvision = await agent.provideCapability({
     capability: {

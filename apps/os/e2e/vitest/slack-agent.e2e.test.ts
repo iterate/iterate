@@ -12,12 +12,14 @@
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
-import { DurableObjectNameCodec } from "../../src/domains/durable-object-names.ts";
 import {
   CONNECTION_CLAIMED_EVENT_TYPE,
   INTEGRATION_DIRECTORY_STREAM_PATH,
 } from "../../src/domains/integrations/utils.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../../src/domains/streams/utils.ts";
+import {
+  buildIntegrationRouterCreatedEvent,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
+} from "../../src/domains/integrations/integration-streams.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { AGENT_CONTEXT_ADDED_TYPE } from "./itx-test-support.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -58,14 +60,12 @@ test.skipIf(signingSecret === null)(
     );
     using seededIntegrationStream = project.streams.get(SLACK_INTEGRATION_STREAM_PATH);
     await seededIntegrationStream.append(
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: DurableObjectNameCodec.stringify({
-          projectId,
-          path: SLACK_INTEGRATION_STREAM_PATH,
-        }),
-        idempotencyKey: `slack-router-subscription:${projectId}:${CONNECTION}`,
-        processor: ["integrations", "slack", ["get", CONNECTION], "processor"],
+      buildIntegrationRouterCreatedEvent({ connection: CONNECTION, slug: "slack" }),
+      buildIntegrationRouterSubscriptionConfiguredEvent({
+        connection: CONNECTION,
+        projectId,
         processorSlug: "slack",
+        slug: "slack",
       }),
       {
         type: "events.iterate.com/slack/connected",

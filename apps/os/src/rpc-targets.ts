@@ -878,8 +878,8 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
         processorSlug: SchedulerProcessorContract.slug,
       }),
     );
-    const offset = committed.at(-1)?.offset;
-    if (offset === undefined) throw new Error("scheduler create committed no events");
+    const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (offset === 0) throw new Error("scheduler create committed no events");
     await this.processor.waitUntilProcessed({ offset });
   }
 
@@ -977,8 +977,8 @@ async function requestRepoCreate(input: {
       }),
     ),
   );
-  const createOffset = committed.at(-1)?.offset;
-  if (createOffset === undefined) throw new Error("repo create committed no events");
+  const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+  if (createOffset === 0) throw new Error("repo create committed no events");
   const repo = new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
   await repo.processor.waitUntilProcessed({ offset: createOffset });
 
@@ -4134,8 +4134,12 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         processorSlug: CapabilityHostProcessorContract.slug,
       }),
     );
-    const offset = committed.at(-1)?.offset;
-    if (offset === undefined) throw new Error("agent create committed no events");
+    // append() preserves INPUT order, including idempotency hits at their old
+    // offsets. A paired capability host may already exist, so the last input
+    // is not necessarily the newest event. The create boundary is the maximum
+    // offset across the complete batch.
+    const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (offset === 0) throw new Error("agent create committed no events");
     await Promise.all([
       this.processor.waitUntilProcessed({ offset }),
       this.capabilityHost.processor.waitUntilProcessed({ offset }),
@@ -4671,7 +4675,9 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       projectId: args.projectId,
     });
     await timedStep("create-timing", timing, "wait-project-birth", () =>
-      project.processor.waitUntilProcessed({ offset: subscription.offset }),
+      project.processor.waitUntilProcessed({
+        offset: Math.max(created.offset, subscription.offset),
+      }),
     );
     // The project now EXISTS and its birth has been processed. Whether to
     // also wait for bootstrap readiness is the caller's choice.
@@ -4924,8 +4930,8 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         processorSlug: CapabilityHostProcessorContract.slug,
       }),
     );
-    const offset = committed.at(-1)?.offset;
-    if (offset === undefined) throw new Error("capability host create committed no events");
+    const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (offset === 0) throw new Error("capability host create committed no events");
     await this.processor.waitUntilProcessed({ offset });
   }
 
