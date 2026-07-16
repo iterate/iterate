@@ -201,6 +201,27 @@ describe("CompositeMirrorDrive", () => {
     expect(feed.applied).toEqual([1, 2]);
   });
 
+  it("preserves an empty frame's server head so every member self-pulls the missing durable tail", async () => {
+    const stream = new MemoryStream();
+    const readEvents = vi.spyOn(stream, "readEvents");
+    const raw = makeMember("browser-raw-events", stream);
+    const feed = makeMember("browser-feed", stream);
+    const composite = new CompositeMirrorDrive([raw.member, feed.member]);
+    await stream.append(
+      { type: "example.com/test", payload: {} },
+      { type: "example.com/test", payload: {} },
+    );
+
+    const opened = await composite.openDelivery();
+    await opened.sink(delivery([], { scannedThroughOffset: 0, streamMaxOffset: 2 }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(readEvents).toHaveBeenCalledTimes(2);
+    expect(raw.applied).toEqual([1, 2]);
+    expect(feed.applied).toEqual([1, 2]);
+  });
+
   it("delegates subscriber metrics to the primary (first) member", () => {
     const stream = new MemoryStream();
     const raw = makeMember("browser-raw-events", stream);

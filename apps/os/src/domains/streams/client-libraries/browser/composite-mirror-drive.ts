@@ -199,13 +199,15 @@ export class CompositeMirrorDrive implements AnyHostedProcessor {
         // behind-head branch. (An EMPTY frame keeps the server stamp — there
         // is no tail-continuation coming for it, so the self-pull IS the
         // catch-up lane.)
+        const memberStreamMaxOffset =
+          batch.events.length === 0 ? batch.streamMaxOffset : batch.scannedThroughOffset;
         for (const open of opened) {
           // eslint-disable-next-line react-doctor/async-await-in-loop -- Commits must remain ordered on the members' shared SQLite connection.
           await open.delivery.sink({
             events: durableEvents,
             scannedAfterOffset: batch.scannedAfterOffset,
             scannedThroughOffset: batch.scannedThroughOffset,
-            streamMaxOffset: batch.scannedThroughOffset,
+            streamMaxOffset: memberStreamMaxOffset,
           });
           open.acknowledgedThroughOffset = Math.max(
             open.acknowledgedThroughOffset,

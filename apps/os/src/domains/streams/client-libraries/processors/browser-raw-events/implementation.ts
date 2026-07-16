@@ -9,7 +9,10 @@ import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
 
-export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 6;
+// v7 clears mirrors that may contain replayed historical ephemeral rows. The
+// durable-only replay contract cannot leave those old rows visible after the
+// live-only ephemeral cutover.
+export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 7;
 
 /**
  * Tables this processor owns. Views pass this to the runtime so a mirror

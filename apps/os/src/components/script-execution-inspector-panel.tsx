@@ -9,6 +9,10 @@ import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { formatDateTime, formatSeconds } from "~/lib/feed-format.ts";
 import {
+  MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS,
+  oversizedScriptResultPreview,
+} from "~/lib/script-result-preview.ts";
+import {
   replayScriptExecution,
   SCRIPT_EXECUTION_COMPLETED_EVENT_TYPE,
   SCRIPT_EXECUTION_REPLAY_EVENT_TYPES,
@@ -166,6 +170,10 @@ function ScriptOutcomeSummary({ replay }: { replay: ScriptExecutionReplay }) {
 function ScriptResult({ replay }: { replay: ScriptExecutionReplay }) {
   const { outcome } = replay;
   const failure = outcome.settlement?.status === "failed" ? outcome.settlement : null;
+  const oversizedResult = useMemo(
+    () => (outcome.hasResult ? oversizedScriptResultPreview(outcome.result) : null),
+    [outcome.hasResult, outcome.result],
+  );
   return (
     <div className="flex flex-col gap-4">
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-xl bg-muted/40 px-4 py-3 font-mono text-xs">
@@ -217,12 +225,29 @@ function ScriptResult({ replay }: { replay: ScriptExecutionReplay }) {
           <h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             returned value
           </h3>
-          <SerializedObjectCodeBlock
-            data={outcome.result}
-            initialFormat="json"
-            showToggle
-            showCopyButton
-          />
+          {oversizedResult == null ? (
+            <SerializedObjectCodeBlock
+              data={outcome.result}
+              initialFormat="json"
+              showToggle
+              showCopyButton
+            />
+          ) : (
+            <div className="overflow-hidden rounded-xl border bg-muted/20">
+              <p className="border-b px-4 py-3 text-xs text-muted-foreground">
+                This result is {oversizedResult.totalCharacters.toLocaleString()} characters.
+                Showing the first {MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS / 1024} KB without
+                syntax highlighting.
+              </p>
+              <pre
+                className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words px-4 py-3 font-mono text-xs leading-relaxed"
+                data-testid="script-result-bounded-preview"
+              >
+                {oversizedResult.preview}
+                {"\n…"}
+              </pre>
+            </div>
+          )}
         </section>
       ) : outcome.status === "completed" ? (
         <p className="text-sm text-muted-foreground">

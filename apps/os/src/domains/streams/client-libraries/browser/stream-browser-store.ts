@@ -70,6 +70,7 @@ import {
 } from "./stream-transport.ts";
 import {
   errorMessage,
+  isStreamSessionBrokenError,
   isWriteStatement,
   raceWithTimeout,
   StepTimeoutError,
@@ -812,11 +813,6 @@ function createStreamRuntime(
   // interpreted — only equality with a call's captured value matters.
   let ledgerGeneration = 0;
 
-  function isSessionBrokenError(error: unknown) {
-    const message = errorMessage(error).toLowerCase();
-    return message.includes("websocket") || message.includes("rpc session");
-  }
-
   async function guardedCall<T>(
     step: string,
     connection: BrowserStreamClient,
@@ -869,7 +865,7 @@ function createStreamRuntime(
           // stall progress either — make sure one follow-up probe is running.
           scheduleStrikeFollowUpProbe(connection);
         }
-      } else if (isSessionBrokenError(error)) {
+      } else if (isStreamSessionBrokenError(error)) {
         reconnectAfterError(step, error, 0, { suspect: connection });
       }
       throw error;
@@ -1356,6 +1352,13 @@ function createStreamRuntime(
         // with no subscription, no probe, and no error.
         const opened = await withDeadline("checkpoint read", processor.openDelivery());
         if (!ownsRuntime()) return undefined;
+
+        const historicalGap = serverMaxOffset - opened.checkpointOffset;
+        if (historicalGap > MAX_LIVE_REPLAY_OFFSET_GAP) {
+          console.info(
+            `[stream ${args.streamPath} ${slug}] pull-paging ${historicalGap} durable historical offsets before opening the live subscription`,
+          );
+        }
 
         // Pull every pre-open historical offset through a bounded, durable-only
         // scan. The scan envelope advances across omitted ephemeral rows, so
@@ -2087,7 +2090,8 @@ function createStreamRuntime(
             // rejection — validation and friends — would fail identically 8
             // times; surface it immediately instead of burning ~23s of
             // backoff first.
-            const transient = error instanceof StepTimeoutError || isSessionBrokenError(error);
+            const transient =
+              error instanceof StepTimeoutError || isStreamSessionBrokenError(error);
             if (disposed || !transient || attempt >= APPEND_MAX_RETRIES) throw error;
             await new Promise((resolve) =>
               setTimeout(resolve, Math.min(5_000, 250 * 2 ** attempt)),

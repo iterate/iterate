@@ -1579,6 +1579,7 @@ function InsertEventsTool({
   streamPath: string;
   streamStore: StreamBrowserStore;
 }) {
+  const [insertError, setInsertError] = useState<string | null>(null);
   const [insertState, dispatchInsertState] = useReducer(
     (
       state: {
@@ -1631,6 +1632,7 @@ function InsertEventsTool({
     }
 
     dispatchInsertState({ type: "set-insert-state", value: "inserting" });
+    setInsertError(null);
 
     try {
       const pendingResponses: Promise<unknown>[] = [];
@@ -1678,7 +1680,10 @@ function InsertEventsTool({
       );
       if (insertState.appendResponseMode === "await") await Promise.all(pendingResponses);
       dispatchInsertState({ type: "set-insert-state", value: "done" });
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("stream random-event insertion failed", error);
+      setInsertError(message);
       dispatchInsertState({ type: "set-insert-state", value: "error" });
     }
   }
@@ -1772,6 +1777,11 @@ function InsertEventsTool({
       >
         {insertState.insertState}
       </output>
+      {insertError == null ? null : (
+        <p className="m-0 break-words font-mono text-xs text-[#b42318]" data-testid="insert-error">
+          {insertError}
+        </p>
+      )}
     </section>
   );
 }

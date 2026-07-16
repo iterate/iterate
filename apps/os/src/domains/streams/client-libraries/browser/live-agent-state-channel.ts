@@ -94,9 +94,15 @@ export class LiveAgentStateChannel implements Disposable {
 
   [Symbol.dispose](): void {
     if (this.#disposed) return;
-    this.release();
-    this.#disposed = true;
-    this.#port.close();
+    try {
+      this.release();
+    } finally {
+      // BroadcastChannel.postMessage can throw during teardown. Closing the
+      // port is still mandatory: otherwise a failed final snapshot leaks the
+      // channel and its message handler for the lifetime of the tab.
+      this.#disposed = true;
+      this.#port.close();
+    }
   }
 
   #receive(raw: unknown): void {

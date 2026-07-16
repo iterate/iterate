@@ -1038,7 +1038,11 @@ test("cold open of a deep stream pull-pages history and converges exactly", asyn
     )
     .toBe(insertedCount);
   // The catch-up must have gone through the pull lane, not the subscription blast.
-  expect(consoleLines.some((line) => line.includes("pull-paging before subscribing"))).toBe(true);
+  expect(
+    consoleLines.some((line) =>
+      line.includes("durable historical offsets before opening the live subscription"),
+    ),
+  ).toBe(true);
   await coldContext.close();
 });
 
@@ -1190,11 +1194,11 @@ async function holdCurrentWriterLock(page: Page, streamPath: string) {
     // apps/os/.../browser/stream-leader.ts. Format:
     //   stream-writer:<projectId>:<path>:browser-stream-mirror:<versionVector>
     // versionVector = the canonical members' `<slug>@<schemaVersion>` sorted and
-    // joined by "|" (browser-feed@1, browser-raw-events@6). Bump here whenever a
+    // joined by "|" (browser-feed@3, browser-raw-events@7). Bump here whenever a
     // member's schemaVersion changes — that bump is exactly what this lock guards.
     await new Promise<void>((resolve) => {
       void navigator.locks.request(
-        `stream-writer:default:${path}:browser-stream-mirror:browser-feed@1|browser-raw-events@6`,
+        `stream-writer:default:${path}:browser-stream-mirror:browser-feed@3|browser-raw-events@7`,
         async () => {
           resolve();
           await new Promise(() => {});

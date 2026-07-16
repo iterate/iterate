@@ -128,4 +128,29 @@ describe("LiveAgentStateChannel", () => {
       "stream-live-agent:project%3Aone:%2Fagents%2Fweb%20one:browser-feed%403%7Craw-events%407",
     );
   });
+
+  it("closes its port even when publishing the final cleared state throws", () => {
+    let failPosts = false;
+    let closed = false;
+    const channel = new LiveAgentStateChannel({
+      name: "stream",
+      createPort: () => ({
+        postMessage: () => {
+          if (failPosts) throw new Error("broadcast port is closing");
+        },
+        setMessageHandler: () => {},
+        close: () => {
+          closed = true;
+        },
+      }),
+      createSessionId: () => "writer",
+      now: () => 100,
+      onState: () => {},
+    });
+    channel.claim(state(1));
+    failPosts = true;
+
+    expect(() => channel[Symbol.dispose]()).toThrow(/broadcast port is closing/);
+    expect(closed).toBe(true);
+  });
 });
