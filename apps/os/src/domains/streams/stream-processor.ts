@@ -114,6 +114,14 @@ type ReduceArgs<Contract> = {
 type SideEffectHelpers = {
   /** Hold the cursor (and the next event) until this work completes. */
   blockProcessorWhile: (work: () => Promise<unknown>) => void;
+  /** Like {@link blockProcessorWhile}, but the work runs only AFTER this
+   * event's own per-event `blockProcessorWhile` work completes — so its appends
+   * land in the journal after the per-event appends. This is the lane for the
+   * at-head reconcile (`delivery.caughtUp`): the reconcile must observe/append
+   * after the head event's own effects (e.g. an interrupt cancel must fold
+   * before the reconcile's lost-debounce re-fire). Restores the ordering the
+   * separate `onCaughtUp` pass used to guarantee. */
+  blockProcessorWhileCaughtUp: (work: () => Promise<unknown>) => void;
   /** A droppable attempt; failures are caught and logged, evictions lose it. */
   runInBackground: (work: () => Promise<unknown>) => void;
 };

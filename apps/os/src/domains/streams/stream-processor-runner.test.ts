@@ -1110,6 +1110,42 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       { type: DRIVEN, idempotencyKey: "test-task/drive:b", payload: { id: "b" } },
     ]);
   });
+
+  it("runs the caughtUp reconcile AFTER the head event's own per-event work (ordering fix)", async () => {
+    // The head event registers BOTH a per-event append (blockProcessorWhile)
+    // and an at-head reconcile append (blockProcessorWhileCaughtUp). The
+    // reconcile MUST land after the per-event append — the guarantee that lets
+    // e.g. an interrupt cancel fold before the reconcile's re-fire. Without it
+    // the two race (the bug Bugbot caught folding onCaughtUp into processEvent).
+    const journal = makeJournal();
+    journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1 — consumed, at head
+
+    const hooks: TaskHooks = {
+      onProcess: (args) => {
+        args.blockProcessorWhile(() =>
+          args.appendTo(SIBLING, {
+            type: ECHOED,
+            idempotencyKey: "test-task/per-event",
+            payload: { id: "per-event" },
+          }),
+        );
+      },
+      onHead: (args) => {
+        args.blockProcessorWhileCaughtUp(() =>
+          args.appendTo(SIBLING, {
+            type: DRIVEN,
+            idempotencyKey: "test-task/at-head",
+            payload: { id: "at-head" },
+          }),
+        );
+      },
+    };
+    const harness = makeHarness({ journal, hooks });
+    await harness.deliverFrames([journal.rows().slice()]);
+
+    // Journal order proves the sequencing: per-event FIRST, at-head SECOND.
+    expect(journal.rows(SIBLING).map((row) => row.type)).toEqual([ECHOED, DRIVEN]);
+  });
 });
 
 // =============================================================================

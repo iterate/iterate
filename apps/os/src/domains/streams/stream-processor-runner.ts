@@ -617,6 +617,15 @@ export class StreamProcessorRunner<
             cursorRevision: ctx.revision,
           };
           const eventBlockers: Promise<unknown>[] = [];
+          // At-head reconcile work is DEFERRED (thunks, not started) and run
+          // only AFTER the per-event blockers complete, so its appends land in
+          // the journal AFTER this event's own per-event appends. That
+          // ordering is load-bearing: e.g. an interrupt's scheduled-phase
+          // cancel (a per-event append) must precede the reconcile's
+          // lost-debounce re-fire (`llm-request-requested`), or the re-fire
+          // wins the fold and the cancel no-ops. It restores the ordering the
+          // old separate `onCaughtUp` pass had (reconcile after per-event work).
+          const atHeadWork: (() => Promise<unknown>)[] = [];
           const whileProcessing = reduction.event;
           this.driver.processEvent({
             event: reduction.event,
@@ -630,6 +639,9 @@ export class StreamProcessorRunner<
               eventBlockers.push(attempt);
               startedBlockers.push(attempt);
             },
+            blockProcessorWhileCaughtUp: (work) => {
+              atHeadWork.push(work);
+            },
             runInBackground: (work) => this.#runInBackground(work),
             append: (...input) => this.driver.append({ whileProcessing }, input),
             appendTo: (path, ...input) => this.driver.appendTo(path, { whileProcessing }, input),
@@ -639,6 +651,12 @@ export class StreamProcessorRunner<
           // registered (keepalive-backed) and deliberately NOT awaited — it
           // may overtake later events.
           await Promise.all(eventBlockers);
+          // Then the at-head reconcile, AFTER per-event appends have landed.
+          for (const work of atHeadWork) {
+            const attempt = this.#keepAliveBackedWork(work);
+            startedBlockers.push(attempt);
+            await attempt;
+          }
           ctx.state = reduction.state;
         }
         // Non-consumed and malformed events advance both cursors too —

@@ -121,7 +121,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
     // nested registration would land after the runner's per-event blocker
     // snapshot and never be awaited.
     if (args.delivery.caughtUp) {
-      args.blockProcessorWhile(async () => {
+      args.blockProcessorWhileCaughtUp(async () => {
         await this.#repaintTypingAtHead(args);
       });
     }

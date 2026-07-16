@@ -175,7 +175,7 @@ export class SchedulerProcessor extends StreamProcessor<
     // awaited). Re-arming an unchanged time is a no-op in the registry's
     // slice reconcile, so the every-at-head-frame cadence is cheap.
     if (args.delivery.caughtUp) {
-      args.blockProcessorWhile(async () => {
+      args.blockProcessorWhileCaughtUp(async () => {
         await this.deps.repointAlarm(nextWakeAtMs(args.state, this.deps.now()));
       });
     }

@@ -191,7 +191,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // A mid-catch-up fold never reaches this branch, so nothing dials env.AI
     // for a long-settled request.
     if (args.delivery.caughtUp) {
-      blockProcessorWhile(async () => {
+      // The CAUGHT-UP lane runs AFTER this event's per-event work — so an
+      // interrupt's scheduled-phase cancel (appended in the switch below) folds
+      // BEFORE the reconcile's lost-debounce re-fire, and the cancel wins.
+      args.blockProcessorWhileCaughtUp(async () => {
         await this.#reconcileLlmObligations(args);
         await this.#reconcileLlmScheduling(args);
         await this.#reconcileStatusAnnouncement(args);

@@ -120,7 +120,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // blocking closure so the create seed+append is awaited before this head
     // event's deferred commit; a mid-catch-up fold never reaches it.
     if (args.delivery.caughtUp) {
-      blockProcessorWhile(() => this.#reconcileObligations(args));
+      args.blockProcessorWhileCaughtUp(() => this.#reconcileObligations(args));
     }
     if (event.type === "events.iterate.com/repo/cloudflare-artifact-event-received") {
       const push = repoArtifactPushFromEventPayload(event.payload);

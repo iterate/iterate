@@ -133,7 +133,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     // fails the frame and the transport replays it (the memo re-accumulates on
     // redelivery).
     if (args.delivery.caughtUp) {
-      blockProcessorWhile(() => this.#reconcileStatus(args));
+      args.blockProcessorWhileCaughtUp(() => this.#reconcileStatus(args));
     }
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured": {
