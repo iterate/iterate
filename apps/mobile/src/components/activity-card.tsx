@@ -67,7 +67,6 @@ function StepView({ step }: { step: AgentUiStep }) {
           {step.status === "done" && step.result !== undefined ? (
             <CodeBlock text={`→ ${previewJson(step.result)}`} muted />
           ) : null}
-          {step.logs?.length ? <CodeBlock text={step.logs.join("\n")} muted /> : null}
           {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
         </>
       )}
