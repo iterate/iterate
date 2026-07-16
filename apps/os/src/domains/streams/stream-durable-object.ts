@@ -1412,6 +1412,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // that throws rejects the wait.
     let scan: Promise<void> = Promise.resolve();
     const enqueue = (events: StreamEvent[], scannedThroughOffset: number) => {
+      const recoveryGeneration = this.#recoveryBoundary.generation;
       const previousDurableOffset = durableQueuedThroughOffset;
       durableQueuedThroughOffset = Math.max(durableQueuedThroughOffset, scannedThroughOffset);
       // A durable row can arrive through both the live subscription and the
@@ -1425,11 +1426,23 @@ export class StreamDurableObject extends DurableObject<Env> {
 
       scan = scan.then(async () => {
         for (const event of unseen) {
-          if (settled) break;
+          if (settled || recoveryGeneration !== this.#recoveryBoundary.generation) break;
           seenCount += 1;
           recentTypes.push(event.type);
           if (recentTypes.length > 20) recentTypes.shift();
-          if (await predicate(event)) {
+          let matches: boolean;
+          try {
+            matches = await predicate(event);
+          } catch (error) {
+            // A callback started against the replaced journal is no longer
+            // allowed to settle this wait, including by rejecting it.
+            if (recoveryGeneration !== this.#recoveryBoundary.generation) break;
+            throw error;
+          }
+          // Recovery can land while the remote/async predicate is suspended.
+          // Fence its completion as well as the callback that enqueued it.
+          if (recoveryGeneration !== this.#recoveryBoundary.generation) break;
+          if (matches) {
             settled = true;
             found.resolve(event);
             break;

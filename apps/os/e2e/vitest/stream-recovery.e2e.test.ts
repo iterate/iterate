@@ -69,6 +69,57 @@ test("waitForEvent still finds a durable event after recovery replaces its live 
   });
 });
 
+test("waitForEvent ignores a predicate result from the journal recovery replaced", async () => {
+  const marker = crypto.randomUUID();
+  const path = `/recovery-wait-predicate-${marker}`;
+  const staleType = "events.iterate.test/recovery-wait-stale-predicate";
+  const targetType = "events.iterate.test/recovery-wait-current-predicate";
+  const predicateEntered = Promise.withResolvers<void>();
+  const releasePredicate = Promise.withResolvers<void>();
+  using transport = withItxSession();
+  using session = transport.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using stream = session.streams.get(path);
+  using recovery = session.streamRecovery.get({ projectId: null, path });
+
+  const [seed] = await stream.append({
+    type: "events.iterate.test/recovery-wait-predicate-seed",
+    payload: { marker },
+  });
+  const exported = await recovery.exportForRecovery({ limit: 500 });
+  const pending = stream.waitForEvent({
+    afterOffset: seed!.offset,
+    predicate: async (event) => {
+      if (event.type === staleType) {
+        predicateEntered.resolve();
+        await releasePredicate.promise;
+        return true;
+      }
+      return event.type === targetType;
+    },
+    timeoutMs: 5_000,
+  });
+  void pending.catch(() => undefined);
+
+  await stream.append({ type: staleType, payload: { marker } });
+  await predicateEntered.promise;
+
+  await recovery.restoreFromRecovery({
+    format: exported.format,
+    version: exported.version,
+    stream: exported.stream,
+    events: exported.events,
+    highestAssignedOffset: exported.throughOffset,
+  });
+  const [target] = await stream.append({ type: targetType, payload: { marker } });
+  releasePredicate.resolve();
+
+  await expect(pending).resolves.toMatchObject({
+    offset: target!.offset,
+    payload: { marker },
+    type: targetType,
+  });
+});
+
 test("recovery rejects incompatible core events before replacing the live stream", async () => {
   const path = `/recovery-strict-${crypto.randomUUID()}`;
   using transport = withItxSession();
