@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
@@ -428,23 +428,55 @@ function StreamInspectorSheet({
   panels: ReturnType<typeof useStreamViewPanels>;
   database: StreamBrowserDatabase;
 }) {
+  const activeInspector = useMemo<
+    | { kind: "event"; offset: number }
+    | { kind: "llm"; offset: number }
+    | { kind: "script"; executionId: string }
+    | null
+  >(() => {
+    if (caps.eventInspector && panels.inspectedOffset != null) {
+      return { kind: "event", offset: panels.inspectedOffset };
+    }
+    if (panels.inspectedLlmRequestOffset != null) {
+      return { kind: "llm", offset: panels.inspectedLlmRequestOffset };
+    }
+    if (panels.inspectedScriptExecutionId != null) {
+      return { kind: "script", executionId: panels.inspectedScriptExecutionId };
+    }
+    return null;
+  }, [
+    caps.eventInspector,
+    panels.inspectedLlmRequestOffset,
+    panels.inspectedOffset,
+    panels.inspectedScriptExecutionId,
+  ]);
+  const [retainedInspector, setRetainedInspector] = useState(activeInspector);
+
+  // Base UI keeps the popup mounted for its exit transition. Retain the last
+  // target while the URL-driven open state closes so that transition never
+  // flashes an empty sheet.
+  useEffect(() => {
+    if (activeInspector != null) setRetainedInspector(activeInspector);
+  }, [activeInspector]);
+
+  const inspector = activeInspector ?? retainedInspector;
   let content: ReactNode = null;
   let testId: string | undefined;
 
-  if (caps.eventInspector && panels.inspectedOffset != null) {
+  if (inspector?.kind === "event") {
     testId = "raw-event-inspector";
     content = (
       <RawEventInspectorContent
         database={database}
-        offset={panels.inspectedOffset}
+        offset={inspector.offset}
         onNavigate={panels.inspectEvent}
       />
     );
-  } else if (panels.inspectedLlmRequestOffset != null) {
+  } else if (inspector?.kind === "llm") {
     const liveStep = agentUiState?.live?.steps.find(
       (step): step is AgentUiLlmStep =>
         step.kind === "llm" &&
-        step.llmRequestOffset === panels.inspectedLlmRequestOffset &&
+        step.llmRequestOffset === inspector.offset &&
         step.status === "running",
     );
     testId = "llm-request-inspector";
@@ -452,22 +484,19 @@ function StreamInspectorSheet({
       <LlmRequestInspectorContent
         database={database}
         {...(liveStep == null ? {} : { liveStep })}
-        llmRequestOffset={panels.inspectedLlmRequestOffset}
+        llmRequestOffset={inspector.offset}
       />
     );
-  } else if (panels.inspectedScriptExecutionId != null) {
+  } else if (inspector?.kind === "script") {
     testId = "script-execution-inspector";
     content = (
-      <ScriptExecutionInspectorContent
-        database={database}
-        executionId={panels.inspectedScriptExecutionId}
-      />
+      <ScriptExecutionInspectorContent database={database} executionId={inspector.executionId} />
     );
   }
 
   return (
     <Sheet
-      open={content != null}
+      open={activeInspector != null}
       onOpenChange={(open) => {
         if (!open) panels.closeInspector();
       }}

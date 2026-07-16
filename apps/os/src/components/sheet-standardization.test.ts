@@ -3,15 +3,29 @@ import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
-const sourceRoot = fileURLToPath(new URL("../", import.meta.url));
+const repositoryRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+const productSourceRoots = [
+  "apps/auth-contract/src",
+  "apps/auth-example/src",
+  "apps/auth/src",
+  "apps/dummy-petshop/src",
+  "apps/iterate-com/backend",
+  "apps/mobile/src",
+  "apps/os/src",
+  "apps/semaphore/src",
+  "apps/streams-example-app/src",
+  "apps/tunnels/src",
+].map((path) => resolve(repositoryRoot, path));
 
-test("right-edge overlays use the shared Sheet primitive", () => {
-  const violations = sourceFiles(sourceRoot).flatMap((filePath) => {
-    const source = readFileSync(filePath, "utf8");
-    return [...source.matchAll(/className="([^"]+)"/g)]
-      .filter((match) => isCustomRightEdgeOverlay(match[1] ?? ""))
-      .map(() => relative(sourceRoot, filePath));
-  });
+test("product right-edge overlays use the shared Sheet primitive", () => {
+  const violations = productSourceRoots.flatMap((sourceRoot) =>
+    sourceFiles(sourceRoot).flatMap((filePath) => {
+      const source = readFileSync(filePath, "utf8");
+      return [...source.matchAll(/className="([^"]+)"/g)]
+        .filter((match) => isCustomRightEdgeOverlay(match[1] ?? ""))
+        .map(() => relative(repositoryRoot, filePath));
+    }),
+  );
 
   expect(
     violations,
