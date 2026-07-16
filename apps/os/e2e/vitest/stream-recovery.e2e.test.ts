@@ -34,6 +34,25 @@ test("waitForEvent still finds a durable event after recovery replaces its live 
     { description: "waitForEvent subscription to open" },
   );
 
+  // Advance the live wait beyond the exported head. Recovery rewinds the
+  // allocator, so the target below deliberately reuses an offset this waiter
+  // already scanned in the replaced journal.
+  const [replacedTail] = await stream.append({
+    type: "events.iterate.test/recovery-wait-replaced-tail",
+    payload: { marker },
+  });
+  await waitForCondition(
+    async () => {
+      const state = await stream.runtimeState();
+      return Object.values(state.runtime.connections).some(
+        (connection) =>
+          connection.subscriber?.description === "waitForEvent" &&
+          connection.cursor >= replacedTail!.offset,
+      );
+    },
+    { description: "waitForEvent subscription to scan the replaced tail" },
+  );
+
   await recovery.restoreFromRecovery({
     format: exported.format,
     version: exported.version,

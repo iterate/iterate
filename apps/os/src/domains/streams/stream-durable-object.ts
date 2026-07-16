@@ -141,6 +141,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     },
   });
   #coreProcessorState: CoreProcessorState;
+  /** In-memory journal replacement boundary for one-shot waits surviving recovery. */
+  #recoveryBoundary = { generation: 0, afterOffset: 0 };
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -538,6 +540,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.#subscribers.resetForRecovery();
     this.#recordCoreProcessorCheckpointWritten();
     this.#coreProcessorState = recoveredCoreState;
+    this.#recoveryBoundary = {
+      generation: this.#recoveryBoundary.generation + 1,
+      afterOffset: parsed.highestAssignedOffset,
+    };
 
     // The imported incarnation's live connections are gone. A fresh woken
     // fact clears their folded roster and reconciles every durable subscriber.
@@ -1390,6 +1396,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     // `undefined` means live-from-now. Capture that boundary synchronously
     // before subscribe() opens so the recovery scan cannot match history.
     let durableQueuedThroughOffset = args.afterOffset ?? this.#coreProcessorState.maxOffset;
+    let observedRecoveryGeneration = this.#recoveryBoundary.generation;
+    const liveSubscriptionRecoveryGeneration = observedRecoveryGeneration;
 
     // Bound the memory a long wait on a busy stream can hold: keep a count and a
     // small ring of recent types for the timeout message rather than every seen
@@ -1440,6 +1448,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       replayAfterOffset: args.afterOffset,
       subscriber: { description: "waitForEvent" },
       processEventBatch: ({ events, scannedThroughOffset }) => {
+        // Recovery closes this exact subscription. Ignore any callback already
+        // queued by the replaced journal; durable rescans own the wait after it.
+        if (this.#recoveryBoundary.generation !== liveSubscriptionRecoveryGeneration) return;
         enqueue(events, scannedThroughOffset);
       },
     });
@@ -1447,6 +1458,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     const rescan = setInterval(() => {
       if (settled) return;
       try {
+        if (observedRecoveryGeneration !== this.#recoveryBoundary.generation) {
+          observedRecoveryGeneration = this.#recoveryBoundary.generation;
+          durableQueuedThroughOffset = this.#recoveryBoundary.afterOffset;
+        }
         const page = this.getEvents({
           afterOffset: durableQueuedThroughOffset,
           limit: MAX_GET_EVENTS_LIMIT,
