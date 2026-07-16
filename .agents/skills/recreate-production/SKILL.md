@@ -35,8 +35,10 @@ user at consequential forks unless they explicitly waive consultation.
 
 1. Read the PR diff and inspect production. Ask which projects to retain;
    normally suggest `iterate` and personal projects that actually exist.
-2. Inventory each selected project's current secrets, built-in integrations,
-   subscriptions, and config repo using their normal read surfaces.
+2. Record each selected project's exact ID, canonical slug, organization slug,
+   and an organization-member principal the operator can mint a session for.
+   Inventory its current secrets, built-in integrations, subscriptions, and
+   config repo using their normal read surfaces.
 3. Export only the durable histories needed to explain that current state with
    [`scripts/export-stream-events.itx.js`](scripts/export-stream-events.itx.js).
    Run it in the relevant project context; use an admin session without a
@@ -57,9 +59,15 @@ user at consequential forks unless they explicitly waive consultation.
 2. Merge, check out the exact merged commit, run
    `pnpm erase-data --env prd --yes-i-mean-prd --preserve-auth`, and manually
    deploy OS from that commit. Stop on unexplained erase or deploy warnings.
-3. Recreate each retained project through `session.projects.create({ projectId,
-slug })`. This emits the current project birth and all required sibling
-   processor births; do not hand-append historical bootstrap events.
+3. For each retained project, mint or obtain a user-authenticated itx session
+   whose claims include the project's preserved organization, then call
+   `session.projects.create({ projectId, slug, organizationSlug })`. Auth
+   idempotently adopts the existing exact ID only when both its organization
+   and canonical slug match; OS then primes the preserved association and emits
+   the current project birth plus all required sibling processor births. Do not
+   use an admin session for this step: caller-supplied admin projects are
+   intentionally organization-less test/operator fixtures. Stop on any mismatch,
+   and do not hand-append historical bootstrap events.
 4. Recreate selected secrets through `secrets.get(path).create/update` with
    freshly supplied material and egress policy. Reconnect integrations through
    their current connect/OAuth flows. These owning commands must recreate any
