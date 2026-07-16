@@ -103,22 +103,26 @@ consequential side effects, so a smaller read is not worth ambiguous liveness.
 Require at least 5% p50 and mean improvement with no greater than 2% p95/p99
 regression for any additional mechanism.
 
-### 2. Diagnose activation tail, then pack the activation record
+### 2. Flush activation catch-up, then decide whether to pack the record
 
 Store canonical Stream name and the optional core checkpoint in one physical
 KV record. The measured ceiling is about 0.26-0.28 ms, roughly 11%-12% of the
 observed 2.2-2.5 ms activation path. Reject it if the full cold-activation suite
 does not improve p50 and mean by at least 5% without a material p95 regression.
 
-Checkpoint 16 makes this the highest-priority bounded experiment. Five
-100-sample processes found forced-reactivation head p50 neutral at 0.62%
-slower, but p95 66.69% slower (2.735 ms to 4.559 ms). Dense
-post-reactivation read improved 15.73% p50 but regressed 9.98% p95. First
-instrument activation read count, bytes, checkpoint decode, and GC from the
-Node host/workerd profiler; do not infer elapsed time from a Worker clock.
-Packing one record has too small a measured ceiling to explain the whole p95
-gap, so keep it only if it improves the distribution rather than merely the
-best case.
+Checkpoint 16 found forced-reactivation head p50 neutral at 0.62% slower and
+p95 66.69% slower (2.735 ms to 4.559 ms). The immediate mechanism was not the
+number of point reads. A lagging core checkpoint survived abrupt restarts while
+every incarnation appended another `woken` fact, so constructor replay grew
+until the 64-event threshold.
+
+The bounded correction flushes caught-up state once at activation, then starts
+a fresh debounce window for the new `woken` fact. A clean five-process-per-arm,
+300-sample-per-process A/B improved pooled p50/p95/mean by
+7.45%/5.82%/4.56%; all five paired p50s improved. One noisy process left p99
+inconclusive. Ship this correction after deployed proof. Packing one record is
+now optional and still has only a 0.26-0.28 ms ceiling; keep it only if a
+separate cold suite improves p50 and mean at least 5% without p95/p99 loss.
 
 ### 3. Typed post-commit deltas
 
@@ -160,18 +164,28 @@ This is higher upside than the keyed insert but also higher risk. Do not start
 it until the landing branch is either frozen or copied to an isolated
 experiment worktree.
 
-### 6. Direct Project Worker delivery
+### 6. Flatten internal expression dispatch
 
-Re-run the preserved direct Project Worker path only after the merged baseline
-is stable. The first deployed PCM run improved p50 throughput but regressed
-p95; later evidence was contaminated by preview stalls and a storage reset. Its
-prototype was also about `+542/-206` lines, so it is not a 100-200-line landing
-candidate.
+The current Stream dial calls `ItxEntrypoint.get()`, retains the transient
+authority root, and walks a persisted expression over that RPC session. The
+latest preview emitted 3,248 error-level `get` invocations, mostly during E2E.
+Current workerd source says orderly capability release resolves the JS-RPC
+session as `OK`; cancellation or actor abort maps to an exception. The cached
+push root is therefore both a latency opportunity and a telemetry suspect.
 
-Use generic and direct source Durable Objects in one deployment, randomized
-ABBA pairs, fresh projects, and Node-host end-to-end timing. Require at least
-5% paired p50/capacity improvement, no more than 2% p95/p99 regression, exact
-recovery, and no source-DO duration or hibernation regression.
+Add one internal scoped entrypoint method that evaluates the complete
+expression and payload server-side. Push calls then return only an
+acknowledgement and retain no session; wake calls may return the live sink and
+tie only that returned capability to the existing idle-teardown lifetime. This
+preserves generic expressions and removes more RPC turns than the older direct
+Project Worker special case.
+
+Run both paths in one deployment with randomized ABBA pairs, fresh projects,
+and Node-host end-to-end timing. Require at least 5% paired p50/capacity
+improvement, no more than 2% p95/p99 regression, exact retry/recovery and
+capability disposal, and a clean or explicitly classified `get` telemetry
+delta. Reject any design that adds a second delivery protocol or
+canonical-expression branch.
 
 ## Parallel Kernel Spike Result
 
@@ -404,12 +418,13 @@ Correctness must prove:
 2. Measure birth plus sparse-delivery latency and verify the expected reduction
    in Stream reads/RPC turns; accept target-bounded folding only with
    reconciliation proof.
-3. Decide whether the small packed-activation change is worth shipping.
+3. Deploy the activation catch-up flush; decide separately whether the smaller
+   packed-activation ceiling is worth another format change.
 4. Measure the keyed homogeneous insert on end-to-end large batches.
 5. Build the replacement vertical slice and compare it against the frozen
    oracle.
-6. Revisit direct Project Worker delivery only if the replacement work exposes
-   a clear need and its tail-latency regression is gone.
+6. Prove flattened internal expression dispatch; retain the direct Project
+   Worker prototype only as a performance ceiling.
 
 This order lands the highest-confidence latency improvement first, then moves
 engineering effort toward reducing the kernel rather than adding more

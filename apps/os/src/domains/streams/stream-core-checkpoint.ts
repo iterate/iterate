@@ -15,12 +15,17 @@ export class CoreCheckpointSchedule {
     return this.#dirty;
   }
 
-  /** Restores offset-derived lag after loading and catching up a current checkpoint. */
+  /**
+   * Restores offset-derived lag after loading and catching up a current checkpoint.
+   * Any replayed suffix is flushed at this activation boundary: carrying it
+   * across repeated abnormal restarts makes each incarnation replay the prior
+   * incarnations' `woken` facts as well.
+   */
   restoreLag(args: { eventCount: number; nowMs: number }): boolean {
     this.#eventsSinceCheckpoint = args.eventCount;
     this.#dirty = args.eventCount > 0;
     this.#windowStartedAtMs = args.nowMs;
-    return this.#eventsSinceCheckpoint >= CHECKPOINT_EVERY_EVENTS;
+    return this.#dirty;
   }
 
   /** Records newly committed events and reports whether the checkpoint is due. */

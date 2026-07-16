@@ -4948,3 +4948,76 @@ MiB compressed), SHA-256
 Both benchmark servers were stopped. If optimization remains active, the next
 exact-current-main checkpoint is due by `2026-07-16T22:37:01.570Z`.
 Production remains untouched.
+
+## 2026-07-16: Clean Activation Checkpoint A/B And RPC Telemetry Finding
+
+The forced-reactivation regression had a concrete lifecycle mechanism. The
+debounced core checkpoint could lag the journal across an abrupt incarnation.
+Construction folded that suffix but restored its lag into the next 64-event
+budget, then appended the incarnation's `woken` fact. Repeated forced restarts
+therefore replayed an increasing suffix until the event threshold forced a
+write. Normal idle teardown already flushes; abnormal abort/code-update
+reactivation was the exposed path.
+
+A one-line variant flushed folded state whenever constructor catch-up advanced
+past the stored checkpoint. The warm append policy remained unchanged: after
+that write, the new `woken` fact started a fresh 64-event/one-second window.
+The shipping form makes this the tested return policy of
+`CoreCheckpointSchedule.restoreLag()`.
+
+The first A/B was rejected because its control worktree retained 3.9 GiB of
+old Wrangler state and recovered unrelated project/search activity. The clean
+runner moved `.wrangler/state` to a unique archive before every process,
+verified exact revisions, waited for explicit server and HTTP readiness, and
+ran only the forced-reactivation lane. An initial clean attempt was also
+rejected after a detached dev server failed to publish discovery and Bash
+command-substitution semantics failed to stop the runner; the failed attempt is
+preserved, and the hardened runner checks `pnpm dev start` directly.
+
+The valid matrix alternated five fresh processes per arm with 300 forced
+reactivations each. Control was exact candidate
+`b2712ad0934de105bdc8d112fc1d042226a5d5a6`; variant was exact
+`58eb9b2237528db1c5bd181036a5d9d5d2d00539` plus the recorded one-line patch.
+All 10 processes and 3,000 Node-host-timed head/cardinality assertions passed.
+Each workerd log contained exactly 300 expected `Stream.kill` error outcomes
+and no additional ITX error outcomes. Project creation emitted one equal,
+pre-measurement local-search warning per process because the benchmark's UUID
+project ID cannot derive a search instance ID.
+
+| Aggregate         | Control p50 | Variant p50 |       Change | Control p95 | Variant p95 |       Change | Control mean | Variant mean |       Change |
+| ----------------- | ----------: | ----------: | -----------: | ----------: | ----------: | -----------: | -----------: | -----------: | -----------: |
+| Pooled, 1,500/arm |    1.973 ms |    1.826 ms | 7.45% faster |    2.912 ms |    2.742 ms | 5.82% faster |     2.177 ms |     2.078 ms | 4.56% faster |
+| Median run metric |    1.900 ms |    1.761 ms | 7.31% faster |    2.707 ms |    2.653 ms | 1.98% faster |     2.094 ms |     1.937 ms | 7.50% faster |
+
+Every paired run improved p50: 7.31%, 12.61%, 1.05%, 7.89%, and 12.44%.
+One variant process had a short 6-16 ms disturbance, so pooled p99 regressed
+despite better p50, p95, and mean. The evidence supports the bounded lifecycle
+fix but not a deterministic p99 claim. Raw logs, patches, metadata, rejected
+attempt, and a standalone summary are archived at
+`/Users/jonastemplestein/stream-activation-checkpoint-evidence-2026-07-16-clean.tar.gz`
+(1.0 MiB), SHA-256
+`9650aca809c12e09152ba5f5dcefb048c4e20106f7d136fd08eabe38fd98fe9b`.
+
+The corrected branch's next complete preview passed all checks and deployed OS
+Worker version `76b793ca-efa8-4673-8d50-17fe6b09d0b5`. No schema-bootstrap
+collision recurred. The telemetry audit did, however, count 3,248 error-level
+`ItxEntrypoint.get` Worker RPC rows in the 18:48:00Z-18:55:30Z window, 3,225
+during E2E. A sampled row had `outcome: exception`, trigger `default.get`, one
+millisecond of CPU and 335 milliseconds wall time. Current workerd
+`JsRpcSessionCustomEvent::run()` returns `OK` when the completion membrane sees
+the last capability released; abort/cancellation throws and the request
+observer maps a generic exception to `EventOutcome::EXCEPTION`. This rules out
+silently declaring all rows normal successful disposal.
+
+The Stream push dial caches the transient authority root returned by
+`ItxEntrypoint.get()` until failure or isolate teardown, making its session a
+credible contributor. Dynamic workers also use this entrypoint, so attribution
+is not yet exclusive. The next controlled experiment is a scoped entrypoint
+method that evaluates the entire delivery expression server-side. Push then
+returns no capability and should complete one RPC session per acknowledgement;
+wake may still return the sink whose lifecycle is bounded by existing idle
+teardown. The experiment must compare latency and telemetry together. Two
+browser `GET /api` failures in the same preview are separate Cloudflare
+`outcome: canceled` / `Network connection lost` rows during WebSocket E2E.
+
+Production remains untouched.

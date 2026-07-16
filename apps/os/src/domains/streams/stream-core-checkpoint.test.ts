@@ -11,18 +11,20 @@ describe("CoreCheckpointSchedule", () => {
     expect(schedule.needsFlush).toBe(true);
   });
 
-  it("carries checkpoint lag across incarnations until the event bound", () => {
+  it("flushes replayed checkpoint lag at the activation boundary", () => {
     const schedule = new CoreCheckpointSchedule({ nowMs: 0 });
 
-    schedule.restoreLag({ eventCount: 63, nowMs: 10_000 });
+    expect(schedule.restoreLag({ eventCount: 1, nowMs: 10_000 })).toBe(true);
+    schedule.didWrite(10_000);
 
-    expect(schedule.record({ eventCount: 1, nowMs: 10_000 })).toBe(true);
+    // The activation's own `woken` fact starts a fresh warm-append window.
+    expect(schedule.record({ eventCount: 1, nowMs: 10_000 })).toBe(false);
   });
 
-  it("writes immediately when restored offset lag already reached the bound", () => {
+  it("does not rewrite a checkpoint already at the journal head", () => {
     const schedule = new CoreCheckpointSchedule({ nowMs: 0 });
 
-    expect(schedule.restoreLag({ eventCount: 64, nowMs: 10_000 })).toBe(true);
+    expect(schedule.restoreLag({ eventCount: 0, nowMs: 10_000 })).toBe(false);
   });
 
   it("keeps the first write immediate for a newborn or rebuilt checkpoint", () => {

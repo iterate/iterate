@@ -88,8 +88,23 @@ separate test-contract defect: a dynamically mounted append capability
 destructured the new acknowledgement-only default. It now requests
 `{ return: "events" }`; the deployed targeted rerun passes 3/3. The earlier
 Project Worker cross-post retry also passed cleanly when rerun against the same
-deployment. A new full preview is still required after committing that test
-correction, but the Stream runtime fixes themselves have deployed proof.
+deployment.
+
+The corrected branch then passed its complete preview workflow, including 40
+OS E2E files and 151 passing tests. Exact OS Worker version
+`76b793ca-efa8-4673-8d50-17fe6b09d0b5` again had no schema-bootstrap
+collision. The broader audit did expose a separate release blocker: 3,248
+error-level `ItxEntrypoint.get` RPC invocations during the preview window,
+3,225 while E2E was active. Workerd's current JS-RPC session code resolves an
+orderly last-capability release as `OK`; it maps cancellation/abort to an
+exception. The Stream push dial deliberately caches the transient authority
+root returned by `get()` for an incarnation, so caller teardown is a credible
+cause, but not yet a proved exclusive attribution because dynamic workers use
+the same entrypoint. Do not call the deployment telemetry-clean until a
+controlled generic-versus-flattened dispatch reproducer classifies or removes
+these rows. Two additional browser `GET /api` rows were explicitly reported by
+Cloudflare as `outcome: canceled` with `Network connection lost`; they coincide
+with WebSocket E2E activity and remain separately classified from Stream RPC.
 
 ### Exact current-main checkpoint
 
@@ -122,19 +137,35 @@ for one live subscriber, 9.01% for 25 live subscribers, and 46.08% for one
 inline 768 KiB event. Corresponding p50 throughput improved 47.82%, 43.68%,
 56.92%, 49.65%, and 9.90% in the batch/concurrent/fanout lanes.
 
-The primary unresolved regression is activation tail latency. Across five
-100-sample processes, forced-reactivation head p50 was neutral at 0.62% slower,
-but p95 was 66.69% slower (2.735 ms to 4.559 ms). Dense post-reactivation read
-improved 15.73% p50 while regressing 9.98% p95. Sparse post-reactivation read
-improved 22.24% p50 and remained neutral at 2.58% slower p95. The 1.1 MiB
-chunked append is now neutral at 2.22% faster p50 and 1.36% faster mean. These
-tails make activation diagnosis, not another broad delivery mechanism, the
-next performance gate.
+The checkpoint exposed one activation regression: across five 100-sample
+processes, forced-reactivation head p50 was neutral at 0.62% slower but p95 was
+66.69% slower (2.735 ms to 4.559 ms). The mechanism was checkpoint lag carried
+across abrupt incarnations. Every incarnation appended a `woken` fact, so later
+incarnations replayed a growing suffix until the 64-event write threshold.
+
+A clean focused A/B rotated Wrangler state before every process and compared
+the exact candidate with flushing caught-up state once per activation. All ten
+processes and 3,000 Node-host-timed head assertions passed. Across 1,500
+samples per arm, p50 improved 7.45% (1.973 ms to 1.826 ms), p95 improved 5.82%
+(2.912 ms to 2.742 ms), and mean improved 4.56% (2.177 ms to 2.078 ms). The
+variant won p50 in all five paired rounds. One noisy variant process makes p99
+inconclusive, so this supports the bounded lifecycle correction rather than a
+deterministic tail claim. The policy is encoded in `CoreCheckpointSchedule`:
+constructor catch-up flushes once, while the new incarnation's `woken` fact
+starts a fresh warm 64-event/one-second debounce window.
+
+Dense post-reactivation read still improved 15.73% p50 while regressing 9.98%
+p95; sparse read improved 22.24% p50 and remained neutral at 2.58% slower p95.
+The 1.1 MiB chunked append is neutral at 2.22% faster p50 and 1.36% faster mean.
 
 Both matrices, server logs, metadata, validator, and analyses are archived at
 `~/stream-performance-evidence-2026-07-16.tar.gz` (9.1 MiB compressed),
 SHA-256
 `09caee4e742ab454ea2e8e2047c8146c24bbe965963a4790ee2e2ab9c2ba9552`.
+The isolated activation A/B is archived at
+`~/stream-activation-checkpoint-evidence-2026-07-16-clean.tar.gz` (1.0 MiB),
+SHA-256
+`9650aca809c12e09152ba5f5dcefb048c4e20106f7d136fd08eabe38fd98fe9b`.
 
 ### Parallel redesign findings
 
@@ -490,20 +521,26 @@ failed receiver retry. Time append/birth through observed readiness on the
 Node host. This lane is required to isolate the compact frame's contribution,
 not to support the cumulative headline.
 
-The only delivery experiment with a credible deployed-scale mechanism is the
-preserved direct Project Worker lane from `9fd1cbbb3`. It bypasses the
-`ctx.exports.ItxEntrypoint(...).get()` loopback and transient `ProjectRpcTarget`
-only for the canonical private `processEventBatch` expression. The initial
-deployed 1,000 x 640 B result was 9.5% faster p50 and 10.6% higher p50
-capacity, but 13.8% worse p95. A later alternating result reversed while its
-preview suffered unrelated stalls and a storage reset. Neither result is
-shipping evidence. A clean rerun should use generic and direct source DOs in
-one deployment, randomized ABBA pairs, fresh projects, Node-host end-to-end
-timing, and singleton, PCM, fan-in, reactivation, recovery, agent-status, and
-search-index lanes. Require at least 5% paired p50/capacity improvement, no
-more than 2% p95/p99 regression, exact recovery, and no source DO duration or
-hibernation regression. Reject it if indexing requires another coordination
-system.
+The highest-value delivery experiment is now a generic flattened internal
+entrypoint. The current dial first calls
+`ctx.exports.ItxEntrypoint(...).get()`, retains the returned transient
+`ProjectRpcTarget`, and then walks the delivery expression across that RPC
+session. A scoped entrypoint method can instead evaluate the whole expression
+server-side in one call. Push delivery returns no capability, so its session
+can end normally after every acknowledgement; wake delivery may still return
+the live sink whose lifetime is already bounded by idle teardown. This keeps
+generic expressions while removing the cached authority-root session and
+several RPC turns.
+
+Compare generic root-walking and flattened calls in one deployment with
+randomized ABBA pairs, fresh projects, Node-host end-to-end timing, and
+singleton, PCM, fan-in, reactivation, recovery, agent-status, and search-index
+lanes. Require at least 5% paired p50/capacity improvement, no more than 2%
+p95/p99 regression, exact capability disposal, and elimination or explicit
+classification of the `ItxEntrypoint.get` exception rows. The older direct
+Project Worker prototype remains useful as a ceiling, not as the preferred
+architecture: it improved one deployed PCM p50 but regressed p95 and required a
+canonical-expression special case.
 
 The best cold-start experiment is one physical activation KV record containing
 canonical name plus optional core checkpoint. It removes one point read without
@@ -546,9 +583,10 @@ evidence to decide.
    after the destructive rollout procedure is approved, or replace it in one
    branch using the current implementation as an oracle. Do not maintain both
    kernels or add compatibility dispatch.
-3. If shipping current, treat the exact-current-main checkpoint as complete.
-   Keep the PR draft until the corrected full preview and wipe/rollback runbook
-   are in the PR body, then stop broad benchmarking.
+3. If shipping current, treat the exact-current-main checkpoint and activation
+   diagnosis as complete. Keep the PR draft until the flattened-dispatch
+   experiment classifies the `ItxEntrypoint.get` errors and the wipe/rollback
+   runbook is in the PR body, then stop broad benchmarking.
 4. If replacing now, freeze the public API and benchmark corpus. The
    replacement must pass the current Stream suite, crash matrix, post-GC replay
    profile, and deployed Worker-consumer lanes before the current code is
@@ -601,6 +639,15 @@ size: 9.1 MB compressed
 sha256: 09caee4e742ab454ea2e8e2047c8146c24bbe965963a4790ee2e2ab9c2ba9552
 ```
 
+The clean forced-reactivation checkpoint A/B is archived at:
+
+```text
+/Users/jonastemplestein/stream-activation-checkpoint-evidence-2026-07-16-clean.tar.gz
+samples: 3000 across 10 passing processes
+size: 1.0 MB compressed
+sha256: 9650aca809c12e09152ba5f5dcefb048c4e20106f7d136fd08eabe38fd98fe9b
+```
+
 High-value live paths:
 
 | Evidence                      | Path                                                                                 |
@@ -609,6 +656,7 @@ High-value live paths:
 | Checkpoint 15 validation      | `/tmp/cumulative-15-analysis.txt`                                                    |
 | Checkpoint 16 archive         | `~/stream-performance-evidence-2026-07-16.tar.gz`                                    |
 | Checkpoint 16 live analysis   | `~/stream-performance-evidence-2026-07-16-current-main/analysis.{txt,json}`          |
+| Activation checkpoint A/B     | `~/stream-activation-checkpoint-evidence-2026-07-16-clean/{RESULTS.md,activation-*}` |
 | Shipping replay profile       | `/private/tmp/replay-workerd-profile-shipping-release-focused.cpuprofile`            |
 | Shipping replay summary       | `/private/tmp/replay-workerd-profile-shipping-release-focused-summary.json`          |
 | Deployed final callback proof | `/tmp/payload-release-deployed-{durable,ephemeral}-886b5ecf1-r*.log`                 |

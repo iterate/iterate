@@ -1462,11 +1462,12 @@ export class StreamDurableObject extends DurableObject<Env> {
    * event. Event rows are the commit boundary and the durable truth; the KV
    * checkpoint is a rebuild accelerator, and boot ALWAYS folds log rows past
    * it (`#catchUpCoreProcessorState`, paged) — so a checkpoint that lags by a
-   * bounded window costs a small constructor fold, never correctness. A warm
-   * activation restores offset lag into the same 64-event budget instead of
-   * rewriting the full state for its one `woken` fact. The 1s clock bound
-   * applies within an incarnation; abrupt restarts retain the offset bound,
-   * while alarm and idle teardown flush before normal hibernation.
+   * bounded window costs a small constructor fold, never correctness. An
+   * activation flushes any replayed suffix once, so repeated abnormal restarts
+   * cannot compound that fold with each incarnation's `woken` fact; the new
+   * `woken` fact then starts a fresh 64-event window. The 1s clock bound applies
+   * within an incarnation, while alarm and idle teardown flush before normal
+   * hibernation.
    */
   #checkpointCoreProcessorState(newEventCount: number, now: number): void {
     if (this.#coreCheckpointSchedule.record({ eventCount: newEventCount, nowMs: now })) {

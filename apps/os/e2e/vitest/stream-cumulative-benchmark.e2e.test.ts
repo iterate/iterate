@@ -13,6 +13,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const ENABLED = process.env.STREAM_CUMULATIVE_BENCHMARK === "1";
 const FOCUS_TAILS = process.env.STREAM_BENCH_FOCUS_TAILS === "1";
+const COLD_REACTIVATION_ONLY = process.env.STREAM_BENCH_COLD_REACTIVATION_ONLY === "1";
 const FOCUS_LIVE_TAILS = process.env.STREAM_BENCH_FOCUS_LIVE_TAILS === "1";
 const FOCUS_WAIT_FOR_EVENT = process.env.STREAM_BENCH_FOCUS_WAIT_FOR_EVENT === "1";
 const FOCUS_PROCESSOR_CATCHUP = process.env.STREAM_BENCH_FOCUS_PROCESSOR_CATCHUP === "1";
@@ -966,7 +967,7 @@ test.skipIf(!ENABLED || !FOCUS_TAILS)(
     });
     await project.__describe();
 
-    {
+    if (!COLD_REACTIVATION_ONLY) {
       using stream = project.streams.get(`/bench/${runId}/append-concurrent`);
       const concurrentSamples = CONCURRENT_APPEND_SAMPLES || 200;
       const samples = await measure(
