@@ -42,12 +42,14 @@ import {
 import {
   appendConnectionDirectoryEvent,
   appendConnectionDirectoryEvents,
-  buildIntegrationRouterCreatedEvent,
-  buildIntegrationRouterSubscriptionConfiguredEvent,
   integrationStreamStub,
   latestStreamEventOfTypes,
   lookupConnectionClaim,
 } from "./integration-streams.ts";
+import {
+  buildIntegrationRouterCreatedEvent,
+  buildIntegrationRouterSubscriptionConfiguredEvent,
+} from "./integration-router-events.ts";
 import { callProjectSlackWebApi } from "./slack-api.ts";
 import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import { callProjectTelegramBotApi, telegramApiBaseUrl } from "./telegram-api.ts";

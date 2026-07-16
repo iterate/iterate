@@ -19,7 +19,7 @@ import {
 import {
   buildIntegrationRouterCreatedEvent,
   buildIntegrationRouterSubscriptionConfiguredEvent,
-} from "../../src/domains/integrations/integration-streams.ts";
+} from "../../src/domains/integrations/integration-router-events.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { AGENT_CONTEXT_ADDED_TYPE } from "./itx-test-support.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";

@@ -20,6 +20,11 @@ infer an "agent kind" from a path: one agent may span Slack, GitHub, and other
 facets. A facet exists because its own birth event and processor subscription
 were appended, not because its stream happens to match a prefix.
 
+Capability inheritance follows the same rule. A read passes through an
+uncreated container scope on its way to the next enclosing born host, while
+writes and script execution at a scope still require that capability host's
+explicit birth. Namespace folders therefore need no synthetic domain object.
+
 `get(path)` therefore only returns an addressable handle. It never creates
 anything. Mutation hangs off that handle:
 

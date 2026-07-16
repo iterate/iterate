@@ -525,13 +525,20 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
-    await this.#assertCreated();
     // A trailing __describe is a valid INVOCATION (answered from the mount's
     // durable metadata below) — the reserved-name rule is for MOUNT names, so
     // validate the path without it or discovery on provided capabilities dies
     // here with "invalid capability path segment".
     assertCapabilityPath(path[path.length - 1] === "__describe" ? path.slice(0, -1) : path);
     const { state } = await this.#reads.snapshot();
+    if (state.birthCertificate === null) {
+      // A physical path segment need not itself be a capability scope. Reads
+      // pass straight through an unborn container (`/agents`, `/agents/slack`,
+      // and so on) until they reach a real enclosing host. Writes and script
+      // execution still require an explicit birth at the addressed scope.
+      if (this.#parent) return await this.#parent.invokeCapability({ args, path });
+      throw new Error(`capability host at ${this.#path} has not been created`);
+    }
     const hit = resolveLongestPrefix(state.capabilities, path);
     if (!hit) {
       // Not declared at THIS scope. Capability reads chain up the scope hierarchy,

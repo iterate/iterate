@@ -459,7 +459,10 @@ test("Project egress substitutes path-addressed secrets for explicit and project
         ]),
       },
     });
-    expect((await project.repo.processor.snapshot()).state).toMatchObject({ created: true });
+    expect((await project.repo.processor.snapshot()).state).toMatchObject({
+      birthCertificate: { config: {} },
+      ready: true,
+    });
     // oxlint-disable-next-line iterate/prefer-object-property-match -- toEqual pins the exact egress config; a subset match would tolerate extra keys
     expect((await secret.processor.snapshot()).state.egress).toEqual({ urls: [echo.url] });
   } finally {

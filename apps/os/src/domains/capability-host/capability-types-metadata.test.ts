@@ -11,7 +11,10 @@ import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
 import { MemoryStream } from "../streams/test-helpers.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 import type { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
-import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";
+import {
+  CapabilityHostProcessor,
+  type ParentCapabilityHost,
+} from "./capability-host-processor-implementation.ts";
 
 const PROVIDED = "events.iterate.com/capability-host/capability-provided";
 
@@ -55,14 +58,17 @@ async function provideDelivered(harness: Harness, input: ProvideCapabilityInput)
 async function makeProcessor(options: {
   stream: MemoryStream;
   itx?: unknown;
+  parent?: ParentCapabilityHost;
+  path?: string;
   validateCapabilityTypes?: (types: string) => Promise<string[]>;
 }): Promise<Harness> {
   let runner!: Harness["runner"];
   const processor = new CapabilityHostProcessor({
     stream: options.stream,
     itx: (options.itx ?? {}) as Project,
-    path: "/",
+    path: options.path ?? "/",
     projectId: null,
+    parent: options.parent,
     scriptExecutionEntrypoint: {
       run: () => {
         throw new Error("must not run in this scenario");
@@ -92,6 +98,26 @@ describe("CapabilityHostProcessor birth", () => {
     await expect(harness.runner.catchUp()).rejects.toThrow(
       "capability host received more than one created event",
     );
+  });
+
+  it("forwards capability reads through an uncreated container scope", async () => {
+    const parent: ParentCapabilityHost = {
+      invokeCapability: vi.fn(async () => "pong"),
+      describeCapabilities: async () => [],
+    };
+    const harness = await makeProcessor({
+      stream: new MemoryStream("/agents"),
+      parent,
+      path: "/agents",
+    });
+
+    await expect(
+      harness.processor.invokeCapability({ path: ["projectTool", "ping"], args: [] }),
+    ).resolves.toBe("pong");
+    expect(parent.invokeCapability).toHaveBeenCalledWith({
+      path: ["projectTool", "ping"],
+      args: [],
+    });
   });
 });
 

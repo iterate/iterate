@@ -52,13 +52,11 @@ const network = vi.hoisted(() => {
 
 vi.mock("../../env.ts", () => ({ itxEnv: { STREAM: network.STREAM } }));
 
-const {
-  appendConnectionDirectoryEvent,
-  buildIntegrationRouterCreatedEvent,
-  buildIntegrationRouterSubscriptionConfiguredEvent,
-  integrationStreamStub,
-  routeIntegrationWebhook,
-} = await import("./integration-streams.ts");
+const { appendConnectionDirectoryEvent, integrationStreamStub, routeIntegrationWebhook } =
+  await import("./integration-streams.ts");
+
+const { buildIntegrationRouterCreatedEvent, buildIntegrationRouterSubscriptionConfiguredEvent } =
+  await import("./integration-router-events.ts");
 
 const PROJECT_ID = "prj_test";
 const CONNECTION = "acme";

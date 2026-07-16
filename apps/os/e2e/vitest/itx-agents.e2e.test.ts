@@ -520,12 +520,6 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     eventTypes: ["events.iterate.com/capability-host/capability-provided"],
     timeoutMs: 60_000,
   });
-  const mechanics = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/stream/subscription-configured"],
-    predicate: (event) => event.idempotencyKey?.endsWith("#capability-host") ?? false,
-    timeoutMs: 60_000,
-  });
-
   await project.agents.get(agentPath).create({});
 
   expect(await project.agents.list()).toEqual(
@@ -538,7 +532,6 @@ test("agents.get(path).create explicitly appends and processes the complete birt
       ?.systemPrompt,
   ).toContain("async (itx)");
   expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
-  await mechanics;
 
   // Birth mechanics: project-worker (every project stream) + agent processor +
   // capability-host. One agent processor owns history, scheduling, and the
