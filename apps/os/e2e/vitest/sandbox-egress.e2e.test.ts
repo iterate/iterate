@@ -46,7 +46,7 @@ test.skipIf(deployedBaseUrl() === null)(
     const authenticatedWebSocketUrl = new URL(authenticatedWebSocketEcho.url);
     authenticatedWebSocketUrl.protocol = "wss:";
     using secret = project.secrets.get(secretPath);
-    await secret.update({
+    await secret.create({
       egress: { urls: [echoOrigin, new URL(authenticatedWebSocketEcho.url).origin] },
       material,
     });

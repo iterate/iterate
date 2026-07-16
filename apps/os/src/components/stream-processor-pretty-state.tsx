@@ -204,6 +204,8 @@ export function AgentPrettyState({ state }: { state: unknown }) {
         ? "scheduled"
         : "requested";
   const context = readRuntimeRecord(agent.context);
+  const config = readRuntimeRecord(agent.config);
+  const llm = readRuntimeRecord(config?.llm);
   const system = Array.isArray(context?.system) ? context.system : [];
   const history = Array.isArray(context?.history) ? context.history : [];
   const lastMessage = history.length > 0 ? history[history.length - 1] : null;
@@ -220,16 +222,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <RuntimeStateStat label="phase" value={phase} />
         <RuntimeStateStat label="published" value={`#${String(context?.publishedThrough ?? 0)}`} />
-        <RuntimeStateStat
-          label="model"
-          value={String(
-            agent.llmConfig != null &&
-              typeof agent.llmConfig === "object" &&
-              "model" in agent.llmConfig
-              ? (agent.llmConfig as { model?: unknown }).model
-              : "—",
-          )}
-        />
+        <RuntimeStateStat label="model" value={String(llm?.model ?? "—")} />
         <RuntimeStateStat label="failures" value={String(agent.consecutiveLlmFailures ?? 0)} />
       </div>
 
@@ -301,7 +294,7 @@ function asAgentState(state: unknown): Record<string, unknown> | null {
   if (state == null || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
   // Agent state is recognized by its provider-neutral context projection.
-  if (!("context" in record) || !("llmConfig" in record)) {
+  if (!("context" in record) || !("config" in record)) {
     return null;
   }
   return record;

@@ -58,6 +58,10 @@ const CapabilityRevokedPayload = z.strictObject({
   providedAtOffset: z.number().int().nonnegative().optional(),
 }) satisfies z.ZodType<RevokeCapabilityInput, unknown>;
 
+const CapabilityHostBirthCertificate = z.strictObject({
+  config: z.strictObject({}),
+});
+
 /**
  * How stale a script-execution-requested's intent may be before the
  * reconciler settles it as expired instead of running it. Recovery can
@@ -75,6 +79,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   // signals (see `consumes`).
   processorDeps: [CoreProcessorContract],
   stateSchema: z.object({
+    birthCertificate: CapabilityHostBirthCertificate.nullable().default(null),
     capabilities: z.array(CapabilityRecord).default([]),
     /**
      * The host's open script OBLIGATIONS, keyed by executionId — the "what
@@ -97,6 +102,16 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
       .default({}),
   }),
   events: {
+    "events.iterate.com/capability-host/created": {
+      description: "Creates a capability-host processor on this stream.",
+      payloadSchema: CapabilityHostBirthCertificate,
+      examples: [
+        {
+          description: "An empty capability host is born before any mounts are provided.",
+          payload: { config: {} },
+        },
+      ],
+    },
     "events.iterate.com/capability-host/capability-provided": {
       description: "A capability was mounted at a path.",
       payloadSchema: CapabilityProvidedPayload,
@@ -195,6 +210,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
+    "events.iterate.com/capability-host/created",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
     "events.iterate.com/capability-host/script-execution-requested",
@@ -218,6 +234,7 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
+    "events.iterate.com/capability-host/created",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
     "events.iterate.com/capability-host/script-execution-requested",
@@ -229,6 +246,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
 /**
  * The contract's type under the same identifier, so type-level helpers read
  * without `typeof`: `ProcessorState<CapabilityHostProcessorContract>`,
- * `ConsumedEvent<CapabilityHostProcessorContract>`, `ProcessorEvent<CapabilityHostProcessorContract, T>`.
+ * `ConsumedEvent<CapabilityHostProcessorContract>`.
  */
 export type CapabilityHostProcessorContract = typeof CapabilityHostProcessorContract;

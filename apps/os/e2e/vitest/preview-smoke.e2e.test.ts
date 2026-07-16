@@ -8,10 +8,17 @@ test("OS preview smoke", async () => {
   // seed one deterministic project before checking the canonical MCP endpoint.
   // That makes the preview proof
   // repeatable without relying on a human Clerk session.
-  await expectStatus({
+  const healthResponse = await expectStatus({
     url: new URL("/api/health", baseUrl),
     status: 200,
   });
+  const healthVersion = healthResponse.headers.get("x-iterate-worker-version");
+  const healthBody = (await healthResponse.json()) as { version?: unknown };
+  if (!healthVersion || healthBody.version !== healthVersion) {
+    throw new Error(
+      `Expected /api/health to report one Worker version in its header and body; got header=${healthVersion ?? "<missing>"}, body=${String(healthBody.version)}.`,
+    );
+  }
 
   const rootResponse = await expectStatus({
     url: new URL("/", baseUrl),

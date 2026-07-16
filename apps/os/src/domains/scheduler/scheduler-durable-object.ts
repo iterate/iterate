@@ -131,35 +131,41 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   }
 
   async setSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {
+    await this.#registry.catchUp(PROCESSOR_SLUG);
+    await this.#schedulerProcessor.assertCreated();
     // Fail loudly at set time; raw appends bypass this and park via the reducer.
     assertValidRecurrence(input.recurrence);
     const [event] = await this.#stream.append(
       this.#schedulerProcessor.buildScheduleSetEvent(input),
     );
-    await this.#ingestThrough(event!.offset);
+    await this.#waitUntilProcessed(event!.offset);
     const view = await this.#schedulerProcessor.getScheduleView(input.key);
     if (view === undefined) throw new Error(`schedule "${input.key}" not visible after set`);
     return view;
   }
 
   async cancelSchedule(key: string): Promise<void> {
+    await this.#registry.catchUp(PROCESSOR_SLUG);
+    await this.#schedulerProcessor.assertCreated();
     const [event] = await this.#stream.append(
       this.#schedulerProcessor.buildScheduleCancelledEvent(key),
     );
-    await this.#ingestThrough(event!.offset);
+    await this.#waitUntilProcessed(event!.offset);
   }
 
   /** Manual "run now" for an existing key; the Trigger executes like any other. */
   async triggerSchedule(key: string): Promise<{ executionId: string }> {
     await this.#registry.catchUp(PROCESSOR_SLUG);
+    await this.#schedulerProcessor.assertCreated();
     const { event, executionId } = await this.#schedulerProcessor.buildManualTriggerEvent(key);
     const [committed] = await this.#stream.append(event);
-    await this.#ingestThrough(committed!.offset);
+    await this.#waitUntilProcessed(committed!.offset);
     return { executionId };
   }
 
   async listSchedules(): Promise<ScheduleView[]> {
     await this.#registry.catchUp(PROCESSOR_SLUG);
+    await this.#schedulerProcessor.assertCreated();
     return await this.#schedulerProcessor.listScheduleViews();
   }
 
@@ -183,7 +189,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   // catchUp swallows failures by design (it serves stale state to reads), so
   // the write path adds a hard wait: the command only returns once the fold
   // provably includes the event it just appended.
-  async #ingestThrough(offset: number): Promise<void> {
+  async #waitUntilProcessed(offset: number): Promise<void> {
     await this.#registry.catchUp(PROCESSOR_SLUG);
     await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
   }

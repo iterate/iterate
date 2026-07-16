@@ -39,14 +39,14 @@ function projectState(
 ): CustomDomainReduceInput["state"] {
   return {
     agents: [],
-    created: true,
-    createRequest: { projectId: project.id, slug: project.slug },
+    birthCertificate: { config: { slug: project.slug } },
     customDomains,
     egressRules: [],
     humanApprovalKeys: [],
     onboardingActive: false,
     onboardingCompletedAt: null,
     repos: [],
+    ready: true,
     secrets: [],
     streams: [],
   };

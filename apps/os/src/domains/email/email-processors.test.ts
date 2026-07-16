@@ -34,11 +34,44 @@ function receivedPayload(input: {
   };
 }
 
+function newEmailRouter(input: ConstructorParameters<typeof EmailProcessor>[0]): EmailProcessor {
+  void input.stream.append({
+    type: "events.iterate.com/email/created",
+    idempotencyKey: "test:email-router-created",
+    payload: { config: {} },
+  });
+  return new EmailProcessor(input);
+}
+
+function newEmailAgent(
+  input: ConstructorParameters<typeof EmailAgentProcessor>[0],
+): EmailAgentProcessor {
+  void input.stream.append({
+    type: "events.iterate.com/email-agent/created",
+    idempotencyKey: "test:email-agent-created",
+    payload: { config: { threadId: "1" } },
+  });
+  return new EmailAgentProcessor(input);
+}
+
 describe("EmailProcessor (thread router)", () => {
+  it("throws when a second email-router birth certificate is reduced", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/integrations/email");
+    const processor = newEmailRouter({ stream, path: stream.path, projectId: "prj_1" });
+    const driver = driveProcessor(processor, stream);
+    await stream.append({
+      type: "events.iterate.com/email/created",
+      payload: { config: {} },
+    });
+
+    await expect(driver.deliver()).rejects.toThrow("more than one email/created event");
+  });
+
   it("creates a thread route keyed by the received event's offset and forwards", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newEmailRouter({ stream, path: stream.path, projectId: "prj_1" });
     const driver = driveProcessor(processor, stream);
 
     await stream.append({
@@ -47,33 +80,41 @@ describe("EmailProcessor (thread router)", () => {
     });
     await driver.deliver();
 
-    // The route fact lands on the router's own stream, keyed by offset 1…
+    // The birth certificate is offset 1, so the first received event owns thread id 2.
     const routeEvents = stream.events.filter(
       (event) => event.type === "events.iterate.com/email/thread-route-configured",
     );
     expect(routeEvents).toHaveLength(1);
     expect(routeEvents[0]!.payload).toMatchObject({
-      threadId: "1",
-      streamPath: "/agents/email/t1",
+      threadId: "2",
+      streamPath: "/agents/email/t2",
       counterpart: "jonas@example.com",
       subject: "Hello agent",
     });
 
-    // …and the routed stream receives [route, received] verbatim.
-    const routed = network.eventsAt("/agents/email/t1");
+    // The routed stream is explicitly born and subscribed before its route context and mail.
+    const routed = network.eventsAt("/agents/email/t2");
     expect(routed.map((event) => event.type)).toEqual([
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/email-agent/created",
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/email/thread-route-configured",
       "events.iterate.com/email/received",
     ]);
-    expect(routed[1]!.payload).toEqual(receivedPayload({}));
-    expect(driver.state.threads).toEqual({ "1": "/agents/email/t1" });
-    expect(driver.state.threadByMessageId).toEqual({ "msg-1@mail.example": "1" });
+    expect(routed[9]!.payload).toEqual(receivedPayload({}));
+    expect(driver.state.threads).toEqual({ "2": "/agents/email/t2" });
+    expect(driver.state.threadByMessageId).toEqual({ "msg-1@mail.example": "2" });
   });
 
   it("routes a +t-tagged reply to the existing thread without a new route", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newEmailRouter({ stream, path: stream.path, projectId: "prj_1" });
     const driver = driveProcessor(processor, stream);
 
     await stream.append({
@@ -82,12 +123,12 @@ describe("EmailProcessor (thread router)", () => {
     });
     await stream.append({
       type: "events.iterate.com/email/received",
-      payload: receivedPayload({ threadTag: "1", messageId: "msg-2@mail.example" }),
+      payload: receivedPayload({ threadTag: "2", messageId: "msg-2@mail.example" }),
     });
     await driver.deliver();
 
     const routed = network
-      .eventsAt("/agents/email/t1")
+      .eventsAt("/agents/email/t2")
       .filter((event) => event.type === "events.iterate.com/email/received");
     expect(routed).toHaveLength(2);
     expect(
@@ -96,13 +137,13 @@ describe("EmailProcessor (thread router)", () => {
       ),
     ).toHaveLength(1);
     // The reply's message id joined the thread index too.
-    expect(driver.state.threadByMessageId["msg-2@mail.example"]).toBe("1");
+    expect(driver.state.threadByMessageId["msg-2@mail.example"]).toBe("2");
   });
 
   it("routes an untagged reply via In-Reply-To/References to the existing thread", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newEmailRouter({ stream, path: stream.path, projectId: "prj_1" });
     const driver = driveProcessor(processor, stream);
 
     await stream.append({
@@ -121,16 +162,16 @@ describe("EmailProcessor (thread router)", () => {
 
     expect(
       network
-        .eventsAt("/agents/email/t1")
+        .eventsAt("/agents/email/t2")
         .filter((event) => event.type === "events.iterate.com/email/received"),
     ).toHaveLength(2);
-    expect(network.streams.has("/agents/email/t2")).toBe(false);
+    expect(network.streams.has("/agents/email/t3")).toBe(false);
   });
 
   it("routes replies to the agent's own outbound mail via the email/sent index", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newEmailRouter({ stream, path: stream.path, projectId: "prj_1" });
     const driver = driveProcessor(processor, stream);
 
     await stream.append({
@@ -146,7 +187,7 @@ describe("EmailProcessor (thread router)", () => {
         projectId: "prj_1",
         subject: "Re: Hello agent",
         to: "jonas@example.com",
-        threadId: "1",
+        threadId: "2",
       },
     });
     // The human replies to the agent's mail — In-Reply-To names OUR outbound
@@ -162,7 +203,7 @@ describe("EmailProcessor (thread router)", () => {
 
     expect(
       network
-        .eventsAt("/agents/email/t1")
+        .eventsAt("/agents/email/t2")
         .filter((event) => event.type === "events.iterate.com/email/received"),
     ).toHaveLength(2);
   });
@@ -170,7 +211,7 @@ describe("EmailProcessor (thread router)", () => {
   it("folds sender-allowed patterns into the project allowlist, deduped and case-folded", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newEmailRouter({ stream, path: stream.path, projectId: "prj_1" });
     const driver = driveProcessor(processor, stream);
 
     await stream.append(
@@ -198,7 +239,7 @@ describe("EmailProcessor (thread router)", () => {
     // NOT /agents/email/**) and a sent audit fact carrying the threadId.
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newEmailRouter({ stream, path: stream.path, projectId: "prj_1" });
     const driver = driveProcessor(processor, stream);
 
     await stream.append(
@@ -248,7 +289,7 @@ describe("EmailProcessor (thread router)", () => {
   it("starts a new thread when an unknown +t tag arrives (no attacker-minted ids)", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newEmailRouter({ stream, path: stream.path, projectId: "prj_1" });
     const driver = driveProcessor(processor, stream);
 
     await stream.append({
@@ -258,14 +299,14 @@ describe("EmailProcessor (thread router)", () => {
     await driver.deliver();
 
     // The unknown tag did NOT become the thread id; the offset did.
-    expect(driver.state.threads).toEqual({ "1": "/agents/email/t1" });
+    expect(driver.state.threads).toEqual({ "2": "/agents/email/t2" });
     expect(network.streams.has("/agents/email/t999")).toBe(false);
   });
 
   it("replays the forward when the routed append fails instead of dropping the mail", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/integrations/email");
-    const routed = network.get("/agents/email/t1");
+    const routed = network.get("/agents/email/t2");
     const originalRoutedAppend = routed.append.bind(routed);
     let failNextForward = true;
     routed.append = async (...inputs: StreamEventInput[]) => {
@@ -275,7 +316,7 @@ describe("EmailProcessor (thread router)", () => {
       }
       return originalRoutedAppend(...inputs);
     };
-    const processor = new EmailProcessor({ stream, path: stream.path, projectId: null });
+    const processor = newEmailRouter({ stream, path: stream.path, projectId: "prj_1" });
     const driver = driveProcessor(processor, stream);
     await stream.append({
       type: "events.iterate.com/email/received",
@@ -291,6 +332,14 @@ describe("EmailProcessor (thread router)", () => {
     // already committed to the router's own stream.
     await driver.deliver();
     expect(routed.events.map((event) => event.type)).toEqual([
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/email-agent/created",
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/email/thread-route-configured",
       "events.iterate.com/email/received",
     ]);
@@ -310,7 +359,7 @@ describe("EmailAgentProcessor", () => {
   }) {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/agents/email/t1");
-    const processor = new EmailAgentProcessor({
+    const processor = newEmailAgent({
       stream,
       path: stream.path,
       projectId: null,
@@ -319,6 +368,16 @@ describe("EmailAgentProcessor", () => {
     const driver = driveProcessor(processor, stream);
     return { driver, network, processor, stream };
   }
+
+  it("throws when a second email-agent birth certificate is reduced", async () => {
+    const { driver, stream } = setup();
+    await stream.append({
+      type: "events.iterate.com/email-agent/created",
+      payload: { config: { threadId: "1" } },
+    });
+
+    await expect(driver.deliver()).rejects.toThrow("more than one email-agent/created event");
+  });
 
   it("attaches door-stored attachments to the agent context item as files", async () => {
     const resolved = {
@@ -428,7 +487,7 @@ describe("EmailAgentProcessor", () => {
         {
           type: "event",
           streamPath: "/agents/email/t1",
-          offset: 2,
+          offset: 3,
           eventType: "events.iterate.com/email/received",
         },
       ],

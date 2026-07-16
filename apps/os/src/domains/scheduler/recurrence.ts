@@ -74,7 +74,10 @@ export function dueSchedules(
  * anything else (parked schedules, pending executions) keeps the heartbeat so
  * the sweep can heal it.
  */
-export function nextWakeAtMs(state: SchedulerProcessorState, nowMs: number): number | null {
+export function nextWakeAtMs(
+  state: Pick<SchedulerProcessorState, "pendingTriggers" | "schedules">,
+  nowMs: number,
+): number | null {
   const schedules = Object.values(state.schedules);
   if (schedules.length === 0 && Object.keys(state.pendingTriggers).length === 0) return null;
   let wakeAtMs = nowMs + SCHEDULER_HEARTBEAT_MS;

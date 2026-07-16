@@ -79,6 +79,7 @@ function subscriptionConfigured(source = webhook(), offset = 5): StreamEvent {
 }
 
 function harness(input?: {
+  agentBirthCertificate?: unknown | null;
   checkRuns?: (args: { page: number; ref: string }) => unknown[];
   liveDraft?: boolean;
   liveHead?: string;
@@ -130,8 +131,17 @@ function harness(input?: {
     },
   };
   const getConnection = vi.fn(() => ({ octokit }));
+  const createAgent = vi.fn().mockResolvedValue(undefined);
+  const snapshotAgent = vi.fn().mockResolvedValue({
+    state: { birthCertificate: input?.agentBirthCertificate ?? null },
+  });
+  const getAgent = vi.fn(() => ({
+    create: createAgent,
+    processor: { snapshot: snapshotAgent },
+  }));
   const set = vi.fn().mockResolvedValue({});
   const itx = {
+    agents: { get: getAgent },
     integrations: { github: { get: getConnection } },
     // Scalar Workers RPC properties are promises at the caller even though
     // the generated project surface describes their resolved value.
@@ -139,7 +149,7 @@ function harness(input?: {
     processor: {
       snapshot: vi.fn().mockResolvedValue({
         offset: 1,
-        state: { createRequest: { projectId: "prj_test", slug: "widgets-project" } },
+        state: { birthCertificate: { config: { slug: "widgets-project" } } },
       }),
     },
     scheduler: { cancel, set },
@@ -148,10 +158,13 @@ function harness(input?: {
     append,
     cancel,
     create,
+    createAgent,
     getConnection,
+    getAgent,
     itx,
     listForRef,
     set,
+    snapshotAgent,
     update,
   };
 }
@@ -366,6 +379,9 @@ describe("config-repo GitHub reviews", () => {
       payload: { content: string; llmRequestPolicy: object };
     };
     expect(task.idempotencyKey).toBe("iterate-review:prj_test:42:7:head:head-b");
+    expect(h.getAgent).toHaveBeenCalledWith(REVIEW_PATH);
+    expect(h.createAgent).toHaveBeenCalledWith({});
+    expect(h.snapshotAgent).toHaveBeenCalledOnce();
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({
         check_run_id: 100,
@@ -378,6 +394,23 @@ describe("config-repo GitHub reviews", () => {
     expect(task.payload.content).toContain("100");
     expect(task.payload.content).toContain('"structure/no-small-single-use-helper"');
     expect(task.payload.llmRequestPolicy).toEqual({ behaviour: "interrupt-current-request" });
+  });
+
+  it("reuses an already-created review agent on webhook redelivery", async () => {
+    const h = harness({ agentBirthCertificate: { config: {} } });
+
+    await expect(
+      processGithubReviewEvent({
+        appendAgentMessage: h.append,
+        config: CONFIG,
+        event: webhook(),
+        itx: h.itx,
+      }),
+    ).resolves.toBe("queued");
+
+    expect(h.snapshotAgent).toHaveBeenCalledOnce();
+    expect(h.createAgent).not.toHaveBeenCalled();
+    expect(h.append).toHaveBeenCalledOnce();
   });
 
   it("does not extend the Check Run deadline when a webhook is redelivered", async () => {
@@ -500,6 +533,7 @@ describe("config-repo GitHub reviews", () => {
 
     expect(h.getConnection).toHaveBeenCalledWith("install-42");
     expect(h.create).not.toHaveBeenCalled();
+    expect(h.createAgent).not.toHaveBeenCalled();
     expect(h.append).not.toHaveBeenCalled();
     expect(h.set).not.toHaveBeenCalled();
   });
@@ -721,6 +755,7 @@ describe("config-repo GitHub reviews", () => {
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({ check_run_id: 90, conclusion: "cancelled" }),
     );
+    expect(h.createAgent).not.toHaveBeenCalled();
     expect(h.append).not.toHaveBeenCalled();
   });
 

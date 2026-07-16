@@ -21,6 +21,7 @@ test(
     await using handle = await createTestProject({ slugPrefix: "script-spill" });
     using agent = handle.agent(AGENT_PATH);
     using itx = handle.itx();
+    await agent.create({});
 
     // The spill writes into the agent's workspace, whose first use clones the
     // project repo — and the repo seeds asynchronously after project creation.

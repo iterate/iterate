@@ -68,7 +68,7 @@ export function workerBuildingResponse(): Response {
           <title>Building…</title>
         </head>
         <body>
-          <main>
+          <main data-spinner="true">
             <p>Your worker is building — this page retries automatically.</p>
           </main>
         </body>

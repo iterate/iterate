@@ -246,44 +246,6 @@ export function telegramChatStreamPath(input: {
 }
 
 /**
- * Connection segment of a routed Telegram agent path
- * (`/agents/telegram/{connection}/chat-{chatId}[/topic-{threadId}]`), or null
- * when the path is not a connection-qualified Telegram agent path.
- */
-export function telegramConnectionFromAgentPath(agentPath: string): string | null {
-  const segments = agentPath.split("/");
-  if (segments.length >= 5 && segments[1] === "agents" && segments[2] === "telegram") {
-    return segments[3] || null;
-  }
-  return null;
-}
-
-/** Chat id of a routed Telegram agent path (the `chat-{chatId}` segment), or
- * null. The id is what `sendMessage({ chat_id })` wants — the agent's system
- * prompt embeds it so replies need no payload spelunking. */
-export function telegramChatIdFromAgentPath(agentPath: string): string | null {
-  const segments = agentPath.split("/");
-  if (segments.length >= 5 && segments[1] === "agents" && segments[2] === "telegram") {
-    const chatSegment = segments[4]!;
-    if (chatSegment.startsWith("chat-")) return chatSegment.slice("chat-".length) || null;
-  }
-  return null;
-}
-
-/** Forum topic id of a routed Telegram agent path (the optional
- * `topic-{threadId}` segment after the chat segment), or null. The journaled
- * send effect passes it back as `message_thread_id` so replies land in the
- * right topic. */
-export function telegramTopicIdFromAgentPath(agentPath: string): string | null {
-  const segments = agentPath.split("/");
-  if (segments.length >= 6 && segments[1] === "agents" && segments[2] === "telegram") {
-    const topicSegment = segments[5]!;
-    if (topicSegment.startsWith("topic-")) return topicSegment.slice("topic-".length) || null;
-  }
-  return null;
-}
-
-/**
  * The routed agent stream path for one Slack thread of one named connection.
  * Stable wire shape: `/agents/slack/{connection}/{channel}/ts-{threadTs}`.
  * The connection segment is already sanitized by construction
@@ -299,19 +261,6 @@ export function slackThreadStreamPath(input: {
 }
 
 /**
- * Connection segment of a routed Slack agent path
- * (`/agents/slack/{connection}/{channel}/ts-{ts}`), or null when the path is
- * not a connection-qualified Slack agent path.
- */
-export function slackConnectionFromAgentPath(agentPath: string): string | null {
-  const segments = agentPath.split("/");
-  if (segments.length >= 6 && segments[1] === "agents" && segments[2] === "slack") {
-    return segments[3] || null;
-  }
-  return null;
-}
-
-/**
  * The `{ slug, connection }` coordinates of an integration connection stream
  * path (`/integrations/{slug}/{connection}`), or null for any other path —
  * notably the connection directory stream and the project root.
@@ -323,9 +272,4 @@ export function integrationCoordinatesFromStreamPath(
   if (segments.length !== 4 || segments[0] !== "" || segments[1] !== "integrations") return null;
   if (!segments[2] || !segments[3]) return null;
   return { connection: segments[3], slug: segments[2] };
-}
-
-/** Connection segment of an integration connection stream path, or null. */
-export function connectionFromIntegrationStreamPath(path: string): string | null {
-  return integrationCoordinatesFromStreamPath(path)?.connection ?? null;
 }

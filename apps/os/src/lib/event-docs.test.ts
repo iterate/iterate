@@ -159,10 +159,10 @@ describe("event docs cross-references", () => {
       "events.iterate.com/stream/subscription-configured",
     );
     const foreignEmit = processor?.emits.find(
-      (event) => event.type === "events.iterate.com/repo/create-requested",
+      (event) => event.type === "events.iterate.com/repo/created",
     );
     expect(foreignEmit?.ownerContractSlug).toBe("repo");
-    expect(foreignEmit?.href).toBe("/docs/streams/processors/repo/events/create-requested");
+    expect(foreignEmit?.href).toBe("/docs/streams/processors/repo/events/created");
   });
 
   it("links processor dependencies in both directions", () => {

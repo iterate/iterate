@@ -268,7 +268,7 @@ async function processGithubReviewTarget(input: {
       repo: target.repo,
     }),
   ]);
-  const projectSlug = projectSnapshot.state.createRequest?.slug;
+  const projectSlug = projectSnapshot.state.birthCertificate?.config.slug;
   if (projectSlug === undefined) throw new Error("GitHub reviews require a created project");
   const live = liveResponse.data;
   const liveLabels = live.labels.map((label) => label.name.toLowerCase());
@@ -389,9 +389,15 @@ async function processGithubReviewTarget(input: {
   // therefore cannot leave GitHub saying "reviewing" forever. The absolute
   // Check Run deadline makes webhook redelivery idempotent: resetting this
   // keyed schedule cannot extend the review's lifetime.
-  // The routed PR stream is already a configured agent. Review attempts join
-  // that one durable conversation instead of creating one child per Check Run.
+  // The canonical PR stream is one explicitly created, persistent agent. A
+  // new head joins and interrupts that conversation instead of creating a
+  // separate child for every Check Run.
+  const reviewAgent = input.itx.agents.get(target.reviewAgentPath);
+  const reviewAgentSnapshot = await reviewAgent.processor.snapshot();
   await Promise.all([
+    reviewAgentSnapshot.state.birthCertificate === null
+      ? reviewAgent.create({})
+      : Promise.resolve(),
     setGithubReviewDetailsUrl({
       check,
       detailsUrl,

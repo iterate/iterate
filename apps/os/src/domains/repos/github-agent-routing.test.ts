@@ -29,11 +29,38 @@ const OTHER_INSTALLATION_PR_7 = await githubAgentPath(
   { ...GITHUB_LINK, installationId: "999", repo: "gadgets", repoPath: "/repos/config" },
   7,
 );
+const REPO_ARTIFACT = {
+  artifactName: "prj_1--L3JlcG9zL2NvbmZpZw",
+  defaultBranch: "main",
+  remote: "https://example.artifacts.cloudflare.net/git/ns/prj_1--L3JlcG9zL2NvbmZpZw.git",
+};
+
+function seedReadyRepo(stream: MemoryStream): void {
+  stream.events.push(
+    {
+      type: "events.iterate.com/repo/created",
+      idempotencyKey: "repo/created:test",
+      payload: { config: {} },
+      createdAt: new Date(0).toISOString(),
+      offset: 1,
+      path: stream.path,
+    },
+    {
+      type: "events.iterate.com/repo/ready",
+      idempotencyKey: "repo/ready:test",
+      payload: { ...REPO_ARTIFACT, path: stream.path, projectId: "prj_1" },
+      createdAt: new Date(0).toISOString(),
+      offset: 2,
+      path: stream.path,
+    },
+  );
+}
 
 /** REAL runner drive (the production registry's driver): PR forwards launch
  * from per-event `processEvent` under the runner exactly as deployed; one
  * `catchUp()` is one delivery pass to the current head. */
 function newRepoProcessor(stream: MemoryStream, path = "/repos/config") {
+  seedReadyRepo(stream);
   const processor = new RepoProcessor({
     stream,
     path,
@@ -111,7 +138,7 @@ describe("github-agent path scheme", () => {
 });
 
 describe("RepoProcessor PR webhook forward (router)", () => {
-  it("forwards PR webhooks to the per-PR agent stream, route fact first", async () => {
+  it("forwards PR webhooks to an explicitly created per-PR agent stream", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");
     const repo = newRepoProcessor(stream);
@@ -127,21 +154,37 @@ describe("RepoProcessor PR webhook forward (router)", () => {
 
     const routed = network.eventsAt(WIDGETS_PR_7);
     expect(routed.map((event) => event.type)).toEqual([
-      "events.iterate.com/github-agent/route-configured",
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/github-agent/created",
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/github/webhook-received",
     ]);
-    expect(routed[0]!.payload).toEqual({
-      ...GITHUB_LINK,
-      number: 7,
-      repoPath: "/repos/config",
-      streamPath: WIDGETS_PR_7,
+    expect(routed[2]!.payload).toEqual({
+      config: {
+        ...GITHUB_LINK,
+        number: 7,
+        repoPath: "/repos/config",
+      },
     });
-    expect(routed[1]!.payload).toMatchObject({
-      subscriptionKey: expect.stringMatching(/#github-agent$/),
-      delivery: { processorSlug: "github-agent" },
-    });
-    expect(routed[2]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
+    expect(routed.slice(5, 8).map((event) => event.payload)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          delivery: expect.objectContaining({ processorSlug: "agent" }),
+        }),
+        expect.objectContaining({
+          delivery: expect.objectContaining({ processorSlug: "capability-host" }),
+        }),
+        expect.objectContaining({
+          delivery: expect.objectContaining({ processorSlug: "github-agent" }),
+        }),
+      ]),
+    );
+    expect(routed[8]!.payload).toEqual(webhookPayload(pullRequestBody({ number: 7 })));
   });
 
   it("routes each PR to its own stream and dedupes the route fact per PR", async () => {
@@ -167,13 +210,25 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     await repo.runner.catchUp();
 
     expect(network.eventsAt(WIDGETS_PR_7).map((event) => event.type)).toEqual([
-      "events.iterate.com/github-agent/route-configured",
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/github-agent/created",
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/github/webhook-received",
       "events.iterate.com/github/webhook-received",
     ]);
     expect(network.eventsAt(WIDGETS_PR_8).map((event) => event.type)).toEqual([
-      "events.iterate.com/github-agent/route-configured",
+      "events.iterate.com/agent/created",
+      "events.iterate.com/capability-host/created",
+      "events.iterate.com/github-agent/created",
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/agents/context-added",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/github/webhook-received",
     ]);
@@ -212,8 +267,7 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     const routePayload = (path: string) =>
       network
         .eventsAt(path)
-        .find((event) => event.type === "events.iterate.com/github-agent/route-configured")
-        ?.payload;
+        .find((event) => event.type === "events.iterate.com/github-agent/created")?.payload?.config;
     expect(routePayload(WIDGETS_PR_7)).toMatchObject({
       installationId: "789",
       repo: "widgets",
@@ -256,7 +310,13 @@ describe("RepoProcessor PR webhook forward (router)", () => {
           .eventsAt(await githubAgentPath({ ...GITHUB_LINK, repoPath: "/repos/config" }, number))
           .map((event) => event.type),
       ).toEqual([
-        "events.iterate.com/github-agent/route-configured",
+        "events.iterate.com/agent/created",
+        "events.iterate.com/capability-host/created",
+        "events.iterate.com/github-agent/created",
+        "events.iterate.com/capability-host/capability-provided",
+        "events.iterate.com/agents/context-added",
+        "events.iterate.com/stream/subscription-configured",
+        "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/stream/subscription-configured",
         "events.iterate.com/github/webhook-received",
       ]);
@@ -281,6 +341,6 @@ describe("RepoProcessor PR webhook forward (router)", () => {
     );
     await repo.runner.catchUp();
 
-    expect(network.streams.size).toBe(1);
+    expect(network.eventsAt(WIDGETS_PR_7)).toEqual([]);
   });
 });

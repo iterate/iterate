@@ -165,7 +165,6 @@ describe("handleIntegrationWebhookApiRequest (slack + routing)", () => {
       expectedCall: {
         slug: "slack",
         externalId: "T42",
-        routerProcessorSlug: "slack",
         event: {
           type: "events.iterate.com/slack/webhook-received",
           idempotencyKey: "slack-webhook:Ev1",
