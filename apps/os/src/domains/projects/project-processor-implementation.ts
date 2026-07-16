@@ -23,6 +23,7 @@ import { processCustomDomainEvent, reduceCustomDomainEvent } from "./custom-doma
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
 const PROJECT_WORKER_READY_URL = "https://iterate-project.localhost/__itx_project_ready";
+const SIBLING_BIRTH_WAIT_TIMEOUT_MS = 30_000;
 
 export class ProjectProcessor extends StreamProcessor<
   ProjectProcessorContract,
@@ -278,22 +279,38 @@ export class ProjectProcessor extends StreamProcessor<
           // processors it created: once the Project birth is processed, every
           // universally available project capability must have folded its own
           // complete birth batch too.
-          await Promise.all([
-            timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
-              this.deps.itx.capabilityHost.processor.waitUntilProcessed({
-                offset: capabilityHostOffset,
-              }),
-            ),
-            timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
-              this.deps.itx.scheduler.processor.waitUntilProcessed({ offset: schedulerOffset }),
-            ),
-            timedStep("create-timing", timing, "wait-config-repo-birth", () =>
-              this.deps.itx.repo.processor.waitUntilProcessed({ offset: configRepoOffset }),
-            ),
-            timedStep("create-timing", timing, "wait-email-router-birth", () =>
-              this.deps.itx.email.processor.waitUntilProcessed({ offset: emailRouterOffset }),
-            ),
-          ]);
+          // These remote processor facades are nested inside the Project
+          // processor's own blocking frame. Keep one acknowledgement in
+          // flight at a time: the sibling streams already start concurrently
+          // from the append batch above, so this does not serialize their
+          // processing; it only avoids retaining four cross-DO facade calls
+          // through one frame. Every wait is bounded so a broken sibling
+          // fails the frame and enters ordinary durable redelivery instead of
+          // pinning project creation forever.
+          await timedStep("create-timing", timing, "wait-root-capability-host-birth", () =>
+            this.deps.itx.capabilityHost.processor.waitUntilProcessed({
+              offset: capabilityHostOffset,
+              timeoutMs: SIBLING_BIRTH_WAIT_TIMEOUT_MS,
+            }),
+          );
+          await timedStep("create-timing", timing, "wait-primary-scheduler-birth", () =>
+            this.deps.itx.scheduler.processor.waitUntilProcessed({
+              offset: schedulerOffset,
+              timeoutMs: SIBLING_BIRTH_WAIT_TIMEOUT_MS,
+            }),
+          );
+          await timedStep("create-timing", timing, "wait-config-repo-birth", () =>
+            this.deps.itx.repo.processor.waitUntilProcessed({
+              offset: configRepoOffset,
+              timeoutMs: SIBLING_BIRTH_WAIT_TIMEOUT_MS,
+            }),
+          );
+          await timedStep("create-timing", timing, "wait-email-router-birth", () =>
+            this.deps.itx.email.processor.waitUntilProcessed({
+              offset: emailRouterOffset,
+              timeoutMs: SIBLING_BIRTH_WAIT_TIMEOUT_MS,
+            }),
+          );
         });
         break;
       }

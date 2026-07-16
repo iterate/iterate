@@ -4696,6 +4696,11 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     await timedStep("create-timing", timing, "wait-project-birth", () =>
       project.processor.waitUntilProcessed({
         offset: Math.max(created.offset, subscription.offset),
+        // A create must never leave its caller parked behind a wedged
+        // processor indefinitely. The processor's own sibling barriers are
+        // bounded more tightly, leaving this outer wait room to observe a
+        // transport redelivery after a failed frame.
+        timeoutMs: 60_000,
       }),
     );
     // The project now EXISTS and its birth has been processed. Whether to
@@ -6181,7 +6186,11 @@ export class StreamProcessorRpcTarget<State, PublicState = State>
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    await this.#catchUpBeforeSnapshot?.();
+    // The runner waiter registers first, then starts its own serialized
+    // self-pull. Its timeout therefore bounds the WHOLE read-your-writes
+    // operation. Awaiting catchUpBeforeSnapshot here first made timeoutMs
+    // dishonest: a stuck catch-up could hold this call forever before the
+    // timed waiter even existed.
     await this.#reads.waitUntilEvent(input);
   }
 }
@@ -6495,7 +6504,7 @@ type ProjectRouterProcessorHostStub = ProcessorHostStub & {
  * the host's durable checkpoint (the same hole `StreamProcessorRpcTarget`
  * exists to close for `ingest`).
  */
-class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorHostStub>
+export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorHostStub>
   extends IterateRpcRelay<"StreamProcessorRpc">
   implements WakeableStreamProcessorRpc<State>
 {
@@ -6518,16 +6527,33 @@ class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = ProcessorH
     return (await this.#processorFacade(this.#host())) as StreamProcessorRpc<State>;
   }
 
+  async #callProcessor<Result>(
+    call: (processor: StreamProcessorRpc<State>) => Promise<Result>,
+  ): Promise<Result> {
+    const processor = await this.#processor();
+    try {
+      return await call(processor);
+    } finally {
+      // A Workers RPC property returning an RpcTarget materializes a remote
+      // stub for every relay call. It is only needed for this one method and
+      // must be released deterministically. In-process targets are real
+      // RpcTargets and remain owned by their host.
+      if (!(processor instanceof RpcTarget)) {
+        (processor as StreamProcessorRpc<State> & Partial<Disposable>)[Symbol.dispose]?.();
+      }
+    }
+  }
+
   async snapshot() {
-    return await (await this.#processor()).snapshot();
+    return await this.#callProcessor((processor) => processor.snapshot());
   }
 
   async getRuntimeState() {
-    return await (await this.#processor()).getRuntimeState();
+    return await this.#callProcessor((processor) => processor.getRuntimeState());
   }
 
   async waitUntilProcessed(input: { offset: number; timeoutMs?: number }) {
-    return await (await this.#processor()).waitUntilProcessed(input);
+    return await this.#callProcessor((processor) => processor.waitUntilProcessed(input));
   }
 
   /** The host's wake-mode delivery handshake (see {@link WakeableStreamProcessorRpc}). */

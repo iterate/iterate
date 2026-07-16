@@ -17,22 +17,28 @@ const PROJECT_CREATED = {
 
 function makeHarness(
   options: {
-    capabilityHostBirthBarrier?: Promise<void>;
+    processorBirthBarriers?: Partial<Record<ProcessorName, Promise<void>>>;
     workerResponses?: Response[];
   } = {},
 ) {
   const network = new MemoryStreamNetwork();
   let workerFetchCalls = 0;
   const processorWaits: { offset: number; processor: string }[] = [];
-  let resolveProcessorWaitsStarted!: () => void;
-  const processorWaitsStarted = new Promise<void>((resolve) => {
-    resolveProcessorWaitsStarted = resolve;
-  });
-  const waitUntilProcessed = (processor: string) => async (input: { offset: number }) => {
-    processorWaits.push({ offset: input.offset, processor });
-    if (processorWaits.length === 4) resolveProcessorWaitsStarted();
-    if (processor === "capability-host") await options.capabilityHostBirthBarrier;
-  };
+  const processorWaitTimeouts: (number | undefined)[] = [];
+  const processorWaitStarted = {} as Record<ProcessorName, Promise<void>>;
+  const resolveProcessorWaitStarted = {} as Record<ProcessorName, () => void>;
+  for (const processor of ["capability-host", "scheduler", "repo", "email"] as const) {
+    processorWaitStarted[processor] = new Promise<void>((resolve) => {
+      resolveProcessorWaitStarted[processor] = resolve;
+    });
+  }
+  const waitUntilProcessed =
+    (processor: ProcessorName) => async (input: { offset: number; timeoutMs?: number }) => {
+      processorWaits.push({ offset: input.offset, processor });
+      processorWaitTimeouts.push(input.timeoutMs);
+      resolveProcessorWaitStarted[processor]();
+      await options.processorBirthBarriers?.[processor];
+    };
   const itx = {
     capabilityHost: {
       processor: { waitUntilProcessed: waitUntilProcessed("capability-host") },
@@ -62,11 +68,14 @@ function makeHarness(
     driver: driveProcessor(processor, stream),
     network,
     processorWaits,
-    processorWaitsStarted,
+    processorWaitStarted,
+    processorWaitTimeouts,
     stream,
     workerFetchCalls: () => workerFetchCalls,
   };
 }
+
+type ProcessorName = "capability-host" | "email" | "repo" | "scheduler";
 
 describe("ProjectProcessor bootstrap", () => {
   it("creates each required sibling processor explicitly", async () => {
@@ -110,13 +119,17 @@ describe("ProjectProcessor bootstrap", () => {
   });
 
   it("does not finish project birth until every sibling processor has folded its batch", async () => {
-    let releaseCapabilityHostBirth!: () => void;
-    const capabilityHostBirthBarrier = new Promise<void>((resolve) => {
-      releaseCapabilityHostBirth = resolve;
-    });
-    const { driver, processorWaits, processorWaitsStarted, stream } = makeHarness({
-      capabilityHostBirthBarrier,
-    });
+    const releases = {} as Record<Exclude<ProcessorName, "email">, () => void>;
+    const barriers = {} as Record<Exclude<ProcessorName, "email">, Promise<void>>;
+    for (const processor of ["capability-host", "scheduler", "repo"] as const) {
+      barriers[processor] = new Promise<void>((resolve) => {
+        releases[processor] = resolve;
+      });
+    }
+    const { driver, processorWaits, processorWaitStarted, processorWaitTimeouts, stream } =
+      makeHarness({
+        processorBirthBarriers: barriers,
+      });
 
     await stream.append(PROJECT_CREATED);
     let settled = false;
@@ -124,19 +137,35 @@ describe("ProjectProcessor bootstrap", () => {
       settled = true;
     });
 
-    await processorWaitsStarted;
+    await processorWaitStarted["capability-host"];
     expect(settled).toBe(false);
-    expect(processorWaits).toEqual(
-      expect.arrayContaining([
-        { offset: 3, processor: "capability-host" },
-        { offset: 2, processor: "scheduler" },
-        { offset: 3, processor: "repo" },
-        { offset: 3, processor: "email" },
-      ]),
-    );
-    expect(processorWaits).toHaveLength(4);
+    expect(processorWaits).toEqual([{ offset: 3, processor: "capability-host" }]);
 
-    releaseCapabilityHostBirth();
+    releases["capability-host"]();
+    await processorWaitStarted.scheduler;
+    expect(processorWaits).toEqual([
+      { offset: 3, processor: "capability-host" },
+      { offset: 2, processor: "scheduler" },
+    ]);
+
+    releases.scheduler();
+    await processorWaitStarted.repo;
+    expect(processorWaits).toEqual([
+      { offset: 3, processor: "capability-host" },
+      { offset: 2, processor: "scheduler" },
+      { offset: 3, processor: "repo" },
+    ]);
+
+    releases.repo();
+    await processorWaitStarted.email;
+    expect(processorWaits).toEqual([
+      { offset: 3, processor: "capability-host" },
+      { offset: 2, processor: "scheduler" },
+      { offset: 3, processor: "repo" },
+      { offset: 3, processor: "email" },
+    ]);
+    expect(processorWaitTimeouts).toEqual([30_000, 30_000, 30_000, 30_000]);
+
     await delivery;
     expect(settled).toBe(true);
   });
