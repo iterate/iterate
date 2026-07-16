@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
-import { XIcon } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
+import { SheetDescription, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
@@ -22,18 +21,16 @@ import {
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 /**
- * Script trace side panel: the exact submitted source and its durable outcome,
+ * Script trace sheet content: the exact submitted source and its durable outcome,
  * reconstructed from the raw mirror. The execution id is URL-backed by the
  * parent stream view, so every code row has a stable shareable destination.
  */
-export function ScriptExecutionInspectorPanel({
+export function ScriptExecutionInspectorContent({
   database,
   executionId,
-  onClose,
 }: {
   database: StreamBrowserDatabase;
   executionId: string;
-  onClose: () => void;
 }) {
   const eventsResult = useStreamQuery(
     database,
@@ -73,40 +70,26 @@ export function ScriptExecutionInspectorPanel({
   const [tab, setTab] = useState<"code" | "result">("code");
 
   return (
-    <aside
-      className="absolute inset-y-0 right-0 z-30 flex w-full flex-col rounded-tl-2xl border-l bg-background shadow-2xl sm:w-[min(92vw,72rem)]"
-      data-testid="script-execution-inspector"
-    >
-      <div className="flex shrink-0 items-start gap-2 px-5 pb-3 pt-4">
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-sm font-semibold" title={executionId}>
-            Code execution · {executionId}
-          </div>
-          <div className="flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
-            {replay == null ? (
-              "Submitted code and its result"
-            ) : (
-              <>
-                <span>{formatDateTime(Date.parse(replay.requestedAt))}</span>
-                <span aria-hidden="true">·</span>
-                <ScriptOutcomeSummary replay={replay} />
-                <span title={`Absolute deadline: ${formatDateTime(replay.expiresAtMs)}`}>
-                  · deadline {formatDateTime(replay.expiresAtMs)}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          title="Close"
-          aria-label="Close script execution inspector"
-          onClick={onClose}
-        >
-          <XIcon className="size-4" aria-hidden="true" />
-        </Button>
-      </div>
+    <>
+      <SheetHeader className="shrink-0 pr-12">
+        <SheetTitle className="truncate" title={executionId}>
+          Code execution · {executionId}
+        </SheetTitle>
+        <SheetDescription className="flex flex-wrap items-center gap-x-1">
+          {replay == null ? (
+            "Submitted code and its result"
+          ) : (
+            <>
+              <span>{formatDateTime(Date.parse(replay.requestedAt))}</span>
+              <span aria-hidden="true">·</span>
+              <ScriptOutcomeSummary replay={replay} />
+              <span title={`Absolute deadline: ${formatDateTime(replay.expiresAtMs)}`}>
+                · deadline {formatDateTime(replay.expiresAtMs)}
+              </span>
+            </>
+          )}
+        </SheetDescription>
+      </SheetHeader>
 
       <Tabs
         value={tab}
@@ -142,7 +125,7 @@ export function ScriptExecutionInspectorPanel({
           )}
         </TabsContent>
       </Tabs>
-    </aside>
+    </>
   );
 }
 

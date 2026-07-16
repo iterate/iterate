@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from "react";
-import { CheckIcon, CopyIcon, XIcon } from "lucide-react";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { SheetDescription, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { MessageResponse } from "@iterate-com/ui/components/ai-elements/message";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
@@ -18,7 +19,7 @@ import {
 } from "~/lib/llm-request-replay.ts";
 
 /**
- * LLM trace side panel: the EXACT request one LLM call sent to the model and
+ * LLM trace sheet content: the EXACT request one LLM call sent to the model and
  * the response it made, replayed locally from the raw-event mirror. The
  * processor never stores request bodies — it rebuilds them from committed
  * history per attempt — so this panel runs the same pure fold (see
@@ -34,11 +35,10 @@ import {
  * semantics match the ones that built the original request — the trade we
  * make for not duplicating every prompt into the journal.
  */
-export function LlmRequestInspectorPanel({
+export function LlmRequestInspectorContent({
   database,
   liveStep,
   llmRequestOffset,
-  onClose,
 }: {
   /** The raw-event mirror (the `events` table), NOT the feed-items database. */
   database: StreamBrowserDatabase;
@@ -46,7 +46,6 @@ export function LlmRequestInspectorPanel({
   liveStep?: AgentUiLlmStep;
   /** The llm-request-requested event's offset — the request's identity. */
   llmRequestOffset: number;
-  onClose: () => void;
 }) {
   // Prompt construction needs consumed history through the request offset.
   // Later lifecycle facts are request-scoped, so avoid reading every unrelated
@@ -87,40 +86,26 @@ export function LlmRequestInspectorPanel({
   );
 
   return (
-    <aside
-      className="absolute inset-y-0 right-0 z-30 flex w-full flex-col rounded-tl-2xl border-l bg-background shadow-2xl sm:w-[min(92vw,72rem)]"
-      data-testid="llm-request-inspector"
-    >
-      <div className="flex shrink-0 items-start gap-2 px-5 pb-2 pt-4">
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-sm font-semibold">
-            LLM trace #{llmRequestOffset}
-            {displayedReplay == null ? "" : ` · ${displayedReplay.model}`}
-          </div>
-          <div className="text-xs text-muted-foreground">
-            {displayedReplay == null ? (
-              "The exact request sent to the model, and its response"
-            ) : (
-              <>
-                {formatDateTime(Date.parse(displayedReplay.requestedAt))} ·{" "}
-                {displayedReplay.messages.length.toLocaleString()} messages ·{" "}
-                {(totalChars ?? 0).toLocaleString()} chars
-                <OutcomeBadge outcome={displayedReplay.outcome} />
-              </>
-            )}
-          </div>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          title="Close"
-          aria-label="Close LLM request inspector"
-          onClick={onClose}
-        >
-          <XIcon className="size-4" aria-hidden="true" />
-        </Button>
-      </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2 px-5 pb-3">
+    <>
+      <SheetHeader className="shrink-0 pr-12">
+        <SheetTitle className="truncate">
+          LLM trace #{llmRequestOffset}
+          {displayedReplay == null ? "" : ` · ${displayedReplay.model}`}
+        </SheetTitle>
+        <SheetDescription>
+          {displayedReplay == null ? (
+            "The exact request sent to the model, and its response"
+          ) : (
+            <>
+              {formatDateTime(Date.parse(displayedReplay.requestedAt))} ·{" "}
+              {displayedReplay.messages.length.toLocaleString()} messages ·{" "}
+              {(totalChars ?? 0).toLocaleString()} chars
+              <OutcomeBadge outcome={displayedReplay.outcome} />
+            </>
+          )}
+        </SheetDescription>
+      </SheetHeader>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-3">
         <Button
           size="sm"
           variant="outline"
@@ -152,7 +137,7 @@ export function LlmRequestInspectorPanel({
             }
           }}
         >
-          {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+          {copied ? <CheckIcon /> : <CopyIcon />}
           Copy JSON
         </Button>
         <span className="ml-auto text-[10px] text-muted-foreground/70">
@@ -183,7 +168,7 @@ export function LlmRequestInspectorPanel({
           </p>
         )}
       </div>
-    </aside>
+    </>
   );
 }
 
