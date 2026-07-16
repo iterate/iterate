@@ -5459,6 +5459,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     this.#indexStreamActivity(batch);
     this.#indexAgentStatus(batch);
+    // Search is a derived mirror, so schedule it independently of the user
+    // worker outcome: a batch that the delivery spine eventually poison-skips
+    // must still be searchable. waitUntil keeps it off the authoritative
+    // acknowledgement path, while the isolate-wide per-stream tail preserves
+    // ordering across cached project-target remints.
+    if (batch.projectId !== null) {
+      this.#props.ctx.waitUntil(
+        enqueueAutomaticStreamIndex({
+          projectId: batch.projectId,
+          path: batch.path,
+          run: () => this.#indexStreamSearch(batch),
+        }),
+      );
+    }
     try {
       await this.worker.processEventBatch(batch);
     } catch (error) {
@@ -5477,18 +5491,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         );
       }
       throw error;
-    }
-    // Search is a derived mirror, so it must neither extend nor reject the
-    // authoritative delivery acknowledgement. The isolate-wide per-stream
-    // tail also survives a cached project-target remint after a push failure.
-    if (batch.projectId !== null) {
-      this.#props.ctx.waitUntil(
-        enqueueAutomaticStreamIndex({
-          projectId: batch.projectId,
-          path: batch.path,
-          run: () => this.#indexStreamSearch(batch),
-        }),
-      );
     }
   }
 
