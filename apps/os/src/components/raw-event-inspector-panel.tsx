@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import { SheetDescription, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import { shortEventType } from "~/lib/stream-feed-filters.ts";
 
 /**
- * Raw-event inspection side panel: the full payload of one event from the
+ * Raw-event inspection sheet content: the full payload of one event from the
  * local SQLite raw-event mirror, pageable through the whole wire log with
  * Prev/Next (or arrow keys) and inter-event timing.
  *
@@ -18,17 +19,15 @@ import { shortEventType } from "~/lib/stream-feed-filters.ts";
  * URL-backed (`event` in stream-view-search.ts), so any inspected event is a
  * shareable link.
  */
-export function RawEventInspectorPanel({
+export function RawEventInspectorContent({
   database,
   offset,
   onNavigate,
-  onClose,
 }: {
   /** The raw-event mirror (the `events` table), NOT the feed-items database. */
   database: StreamBrowserDatabase;
   offset: number;
   onNavigate: (offset: number) => void;
-  onClose: () => void;
 }) {
   const selectedResult = useStreamQuery(
     database,
@@ -108,35 +107,18 @@ export function RawEventInspectorPanel({
   const total = asNumber(totalResult.data[0]?.total);
 
   return (
-    <aside
-      className="absolute inset-y-0 right-0 z-30 flex w-full flex-col rounded-tl-2xl bg-background shadow-2xl md:w-1/2"
-      data-testid="raw-event-inspector"
-    >
-      <div className="flex shrink-0 items-start gap-2 px-5 pb-2 pt-4">
-        <div className="min-w-0 flex-1">
-          <div
-            className="truncate font-mono text-sm font-semibold"
-            title={String(selected?.type ?? "")}
-          >
-            {selected == null ? `Event #${offset}` : shortEventType(String(selected.type))}
-          </div>
-          <div className="text-xs text-muted-foreground">
-            #{offset}
-            {total == null ? null : ` · ${total} mirrored events`}
-            {typeof selected?.created_at === "string" ? ` · ${selected.created_at}` : null}
-          </div>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          title="Close"
-          aria-label="Close event inspector"
-          onClick={onClose}
-        >
-          <XIcon aria-hidden="true" className="size-4" />
-        </Button>
-      </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2 px-5 pb-3">
+    <>
+      <SheetHeader className="shrink-0 pr-12">
+        <SheetTitle className="truncate" title={String(selected?.type ?? "")}>
+          {selected == null ? `Event #${offset}` : shortEventType(String(selected.type))}
+        </SheetTitle>
+        <SheetDescription>
+          #{offset}
+          {total == null ? null : ` · ${total} mirrored events`}
+          {typeof selected?.created_at === "string" ? ` · ${selected.created_at}` : null}
+        </SheetDescription>
+      </SheetHeader>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-3">
         <Button
           size="sm"
           variant="outline"
@@ -182,7 +164,7 @@ export function RawEventInspectorPanel({
           </p>
         )}
       </div>
-    </aside>
+    </>
   );
 }
 

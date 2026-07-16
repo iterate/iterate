@@ -19,9 +19,9 @@ import { BrowserFeedContract } from "~/domains/streams/client-libraries/processo
 import { isCurrentBrowserFeedState } from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
-import { RawEventInspectorPanel } from "~/components/raw-event-inspector-panel.tsx";
-import { LlmRequestInspectorPanel } from "~/components/llm-request-inspector-panel.tsx";
-import { ScriptExecutionInspectorPanel } from "~/components/script-execution-inspector-panel.tsx";
+import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel.tsx";
+import { LlmRequestInspectorContent } from "~/components/llm-request-inspector-panel.tsx";
+import { ScriptExecutionInspectorContent } from "~/components/script-execution-inspector-panel.tsx";
 import { StreamFeedFilterRow } from "~/components/stream-feed-filters.tsx";
 import {
   StreamStatePanel,
@@ -49,8 +49,8 @@ type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 /**
  * The stream view: every domain page's main pane. Renders mode-owned feed
  * surfaces under the shared header (Pretty / Pretty+raw / Raw on agents),
- * with the composer below and right-edge overlays (raw-event inspector,
- * processors sheet) on top.
+ * with the composer below and standard right-edge sheets (inspectors and
+ * processor state) on top.
  *
  * This component is the orchestrator: it owns the two browser-hosted
  * processors that mirror the stream into local SQLite (the raw `events` log
@@ -291,14 +291,14 @@ export function ProjectStreamView({
 
   const queuedUserMessages = caps.agentFeed ? (agentUiState?.queuedUserMessages ?? []) : [];
 
-  // The feed column — mode body with overlays on top, composer below. One JSX
+  // The feed column — mode body with inspectors on top, composer below. One JSX
   // value so the split layout and the fullPanel Events sheet render the same
   // thing.
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {modeBody}
-        <StreamInspectorOverlay
+        <StreamInspectorSheet
           agentUiState={agentUiState}
           caps={caps}
           panels={panels}
@@ -409,7 +409,7 @@ export function ProjectStreamView({
 }
 
 /**
- * The feed's right-edge inspector, or nothing. At most one inspector holds
+ * The feed's standard right-edge inspector sheet. At most one inspector holds
  * the edge (useStreamViewPanels keeps their URL keys mutually exclusive):
  * the raw-event inspector when the mode offers it and `?event=` is set,
  * else an LLM or script inspector when its deep-link parameter is set — in
@@ -417,7 +417,7 @@ export function ProjectStreamView({
  * inspectors read the RAW events mirror (not feed_items): the fold reads the journal,
  * the same source the processor read.
  */
-function StreamInspectorOverlay({
+function StreamInspectorSheet({
   agentUiState,
   caps,
   panels,
@@ -428,42 +428,59 @@ function StreamInspectorOverlay({
   panels: ReturnType<typeof useStreamViewPanels>;
   database: StreamBrowserDatabase;
 }) {
+  let content: ReactNode = null;
+  let testId: string | undefined;
+
   if (caps.eventInspector && panels.inspectedOffset != null) {
-    return (
-      <RawEventInspectorPanel
+    testId = "raw-event-inspector";
+    content = (
+      <RawEventInspectorContent
         database={database}
         offset={panels.inspectedOffset}
         onNavigate={panels.inspectEvent}
-        onClose={panels.closeInspector}
       />
     );
-  }
-  if (panels.inspectedLlmRequestOffset != null) {
+  } else if (panels.inspectedLlmRequestOffset != null) {
     const liveStep = agentUiState?.live?.steps.find(
       (step): step is AgentUiLlmStep =>
         step.kind === "llm" &&
         step.llmRequestOffset === panels.inspectedLlmRequestOffset &&
         step.status === "running",
     );
-    return (
-      <LlmRequestInspectorPanel
+    testId = "llm-request-inspector";
+    content = (
+      <LlmRequestInspectorContent
         database={database}
         {...(liveStep == null ? {} : { liveStep })}
         llmRequestOffset={panels.inspectedLlmRequestOffset}
-        onClose={panels.closeLlmRequestInspector}
       />
     );
-  }
-  if (panels.inspectedScriptExecutionId != null) {
-    return (
-      <ScriptExecutionInspectorPanel
+  } else if (panels.inspectedScriptExecutionId != null) {
+    testId = "script-execution-inspector";
+    content = (
+      <ScriptExecutionInspectorContent
         database={database}
         executionId={panels.inspectedScriptExecutionId}
-        onClose={panels.closeScriptExecutionInspector}
       />
     );
   }
-  return null;
+
+  return (
+    <Sheet
+      open={content != null}
+      onOpenChange={(open) => {
+        if (!open) panels.closeInspector();
+      }}
+    >
+      <SheetContent
+        side="right"
+        className="w-full gap-0 p-0 data-[side=right]:sm:w-[min(92vw,72rem)] data-[side=right]:sm:max-w-[92vw]"
+        data-testid={testId}
+      >
+        {content}
+      </SheetContent>
+    </Sheet>
+  );
 }
 
 /**
