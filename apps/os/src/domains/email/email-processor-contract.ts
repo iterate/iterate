@@ -5,7 +5,7 @@
 // agent context (the `email-agent` processor on the routed stream does that).
 
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract } from "iterate/processor-contracts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";

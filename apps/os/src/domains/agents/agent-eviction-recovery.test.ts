@@ -15,11 +15,8 @@ import { MemoryStream, MemoryStreamNetwork } from "../streams/test-helpers.ts";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
-} from "../streams/stream-processor-registry.ts";
-import {
-  StreamProcessorRunner,
-  type ProcessorProgress,
-} from "../streams/stream-processor-runner.ts";
+} from "iterate/stream-processor-registry";
+import { StreamProcessorRunner, type ProcessorProgress } from "iterate/stream-processor-runner";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
 import {

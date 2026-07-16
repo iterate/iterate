@@ -5,6 +5,34 @@ import {
   StreamEventInput as StreamEventInputSchema,
 } from "./stream-events.js";
 
+/**
+ * Merge one processor configuration patch into its current configuration.
+ *
+ * Configuration patches recurse only through plain JSON objects. Arrays,
+ * scalars, and `null` replace the previous value wholesale; omitted keys are
+ * retained. Processors validate the merged result with their own complete
+ * configuration schema before storing it in reduced state.
+ */
+export function mergeProcessorConfig(base: unknown, patch: unknown): unknown {
+  if (!isPlainObject(base) || !isPlainObject(patch)) return patch;
+
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, patchValue] of Object.entries(patch)) {
+    const baseValue = merged[key];
+    merged[key] =
+      isPlainObject(baseValue) && isPlainObject(patchValue)
+        ? mergeProcessorConfig(baseValue, patchValue)
+        : patchValue;
+  }
+  return merged;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 // =============================================================================
 // Processor contracts.
 //
@@ -102,8 +130,8 @@ type EventDefinitionForType<
     : never;
 
 // -----------------------------------------------------------------------------
-// Event shapes: the SDK's non-generic `StreamEvent` / `StreamEventInput` from
-// `./stream-events.js`, re-expressed with `<Type, Payload>` generics for inference.
+// Event shapes: the app's non-generic `StreamEvent` / `StreamEventInput` from
+// `./schemas.ts`, re-expressed with `<Type, Payload>` generics for inference.
 // -----------------------------------------------------------------------------
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
@@ -206,17 +234,6 @@ export type ProcessorState<Contract> = Contract extends {
 }
   ? z.output<State>
   : never;
-
-/**
- * One committed-event shape from a contract's consumable union, narrowed by
- * its durable type string: `ProcessorEvent<RepoProcessorContract,
- * "events.iterate.com/repo/created">`. Contracts export their type under the
- * same identifier as the value, so no `typeof` at the call site.
- */
-export type ProcessorEvent<Contract, Type extends ConsumedEvent<Contract>["type"]> = Extract<
-  ConsumedEvent<Contract>,
-  { type: Type }
->;
 
 // -----------------------------------------------------------------------------
 // Authoring-time validation types for defineProcessorContract.

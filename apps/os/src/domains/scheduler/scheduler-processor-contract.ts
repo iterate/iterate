@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "iterate/processor-contracts";
 import type {
   SchedulerAction as SchedulerActionType,
   SchedulerRecurrence as SchedulerRecurrenceType,

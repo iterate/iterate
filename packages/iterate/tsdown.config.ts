@@ -31,10 +31,21 @@ export default defineConfig([
     // entry above. Keeping these as separate entries prevents a browser-side
     // schema import from pulling in the Workers-only base classes.
     entry: [
+      "src/durable-object-processor-durability.ts",
+      "src/live-state.ts",
+      "src/live-state-diff.ts",
+      "src/live-state-protocol.ts",
       "src/processor-contracts.ts",
+      "src/processor-host-capabilities.ts",
+      "src/rpc-retain.ts",
       "src/stream-events.ts",
       "src/stream-processor.ts",
-      "src/stream-processor-host.ts",
+      "src/stream-processor-keepalive.ts",
+      "src/stream-processor-registry.ts",
+      "src/stream-processor-revival.ts",
+      "src/stream-processor-runner.ts",
+      "src/stream-runtime-metrics.ts",
+      "src/subscriber-metrics.ts",
     ],
     format: "esm",
     deps: {

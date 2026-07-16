@@ -3,7 +3,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { createStreamProcessorRegistry } from "iterate/stream-processor-registry";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -16,7 +16,7 @@ import {
 } from "../integrations/github-app.ts";
 import { isStreamOffsetConflictError } from "../streams/rpc-types.ts";
 import type { StreamEventInput } from "../streams/schemas.ts";
-import type { ProcessorState } from "../streams/processor-contracts.ts";
+import type { ProcessorState } from "iterate/processor-contracts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import type {
   SecretCreateInput,

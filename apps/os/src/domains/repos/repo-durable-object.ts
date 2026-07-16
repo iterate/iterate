@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { createStreamProcessorRegistry } from "iterate/stream-processor-registry";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,

@@ -15,7 +15,7 @@ at-least-once, per-stream order — `event.path` says which stream), and reaches
 the project's capabilities through `await this.env.ITX.get()`. Small local
 modules are fine when logic deserves focused tests; the seeded GitHub review
 contract and `StreamProcessor` live in `github-reviews.ts`, while its
-`createStreamProcessorHost` Durable Object, repository scope, and labels stay
+`createStreamProcessorRegistry` Durable Object, repository scope, and labels stay
 obvious in `worker.ts`. Review rules are typed data in `worker.ts` too, so each
 finding can carry a stable rule ID and file scope. The processor is attached
 to the canonical `/agents/repos/g~<sha256>/pull-requests/<number>` stream with
@@ -25,7 +25,7 @@ platform's worker build pipeline: multi-file TypeScript works (the bundler
 follows imports), and npm dependencies declared in `package.json` are
 installed at build time. The platform's capability types and worker base
 classes come from the `iterate` package — `import { IterateWorkerEntrypoint,
-IterateDurableObject, StreamProcessor, createStreamProcessorHost } from
+IterateDurableObject, StreamProcessor, createStreamProcessorRegistry } from
 "iterate/sdk"`. It's a
 devDependency here: the platform supplies `iterate/sdk` to every worker build
 as a virtual module, so the build never installs it; run `npm install` to get
@@ -41,11 +41,13 @@ into sibling workers. Env defaults to `{ ITX: ItxBinding }`.
 
 Project-defined stream processors use the same three pieces as built-ins:
 `defineProcessorContract(...)`, a class extending `StreamProcessor`, and a
-stateful worker class that creates a `StreamProcessorHost` and exposes both
-`wakeStreamSubscriber` and `alarm`. The GitHub review processor is the seeded
-copyable example. Keep consequential output on its typed `append` lane so the
-runtime stamps processor provenance and checkpoints only after blocking work
-settles.
+stateful worker class that registers it with `createStreamProcessorRegistry`
+and exposes `wakeStreamSubscriber`. The GitHub review processor is the seeded
+copyable example. Its consequential work is blocking, so it needs no recovery
+alarm; processors with consequential background work must enable registry
+recovery and forward `alarm`. Keep consequential output on the typed `append`
+lane so the runtime stamps processor provenance and checkpoints only after
+blocking work settles.
 
 The example apps are named exports of the same `worker.ts`, routed by the
 default export's `fetch`: `HelloApp` (stateless, extends

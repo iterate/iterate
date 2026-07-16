@@ -16,7 +16,7 @@ declare module "cloudflare:workers" {
   }
   export abstract class DurableObject<Env = unknown> {
     protected env: Env;
-    protected ctx: unknown;
+    protected ctx: DurableObjectState;
   }
 }
 
@@ -31,4 +31,26 @@ interface ExecutionContext {
   readonly exports: Record<string, unknown>;
   waitUntil(promise: Promise<unknown>): void;
   props: unknown;
+}
+
+/** Structural subset used by the SDK's Durable Object processor registry. */
+interface DurableObjectStorage {
+  readonly kv: {
+    get<Value>(key: string): Value | undefined;
+    put<Value>(key: string, value: Value): void;
+    delete(key: string): void;
+  };
+  getAlarm(): Promise<number | null>;
+  setAlarm(scheduledTime: number | Date): Promise<void>;
+  deleteAlarm(): Promise<void>;
+}
+
+interface DurableObjectState {
+  readonly storage: DurableObjectStorage;
+  waitUntil(promise: Promise<unknown>): void;
+}
+
+interface AlarmInvocationInfo {
+  readonly isRetry: boolean;
+  readonly retryCount: number;
 }

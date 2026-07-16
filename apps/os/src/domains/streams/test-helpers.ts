@@ -8,9 +8,9 @@
 
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import type { ProcessorState } from "./processor-contracts.ts";
-import type { StreamProcessor, StreamProcessorContract } from "./stream-processor.ts";
-import { StreamProcessorRunner } from "./stream-processor-runner.ts";
+import type { ProcessorState } from "iterate/processor-contracts";
+import type { StreamProcessor, StreamProcessorContract } from "iterate/stream-processor";
+import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 
 function emptyThroughputReport() {
   return {

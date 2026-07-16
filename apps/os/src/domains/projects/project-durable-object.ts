@@ -10,7 +10,7 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
+import { createStreamProcessorRegistry } from "iterate/stream-processor-registry";
 import type {
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
@@ -69,7 +69,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   #egressRulesFreshAt = 0;
   // Demo (stateful live state): a counter every watcher of `itx.liveState` sees
   // update, mutated by `itx.liveDemo.increment()`. Proves the DO-backed,
-  // shared-runner case — and dogfoods the `getLiveState` fold the streams index
+  // shared-engine case — and dogfoods the `getLiveState` fold the streams index
   // will use.
   #liveDemo: { count: number } = { count: 0 };
   // The project's streams index — a materialized view in the DO's own SQLite,

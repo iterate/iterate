@@ -13,14 +13,14 @@
 // vitest over an in-memory `storage.kv` fake
 // (durable-object-processor-durability.test.ts).
 
-import type { Stream } from "../../itx-api.generated.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
-import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
+import type { Stream } from "./itx-api.generated.js";
+import { ProcessorKeepalive, type KeepaliveRecord } from "./stream-processor-keepalive.js";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./stream-processor-revival.js";
 import type {
   ProcessorProgress,
   ProcessorProgressStore,
   ProcessorRecovery,
-} from "./stream-processor-runner.ts";
+} from "./stream-processor-runner.js";
 
 // -----------------------------------------------------------------------------
 // Key layout. Per-slug, all under the `stream-processor:` prefix.

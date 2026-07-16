@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor } from "iterate/stream-processor";
 import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CONFIG_REPO_PATH } from "../repos/utils.ts";

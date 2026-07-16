@@ -16,7 +16,8 @@ test("the embedded iterate/sdk runtime is loader-ready plain JavaScript", async 
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("IterateWorkerEntrypoint");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("IterateDurableObject");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("StreamProcessor");
-  expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("createStreamProcessorHost");
+  expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("StreamProcessorRunner");
+  expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("createStreamProcessorRegistry");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("defineProcessorContract");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("processEventBatch");
   expect(ITERATE_SDK_VIRTUAL_MODULE).toContain("invokeCapability");

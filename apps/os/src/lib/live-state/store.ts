@@ -1,5 +1,5 @@
-import { applyPatch } from "./diff.ts";
-import type { LiveUpdate } from "./protocol.ts";
+import { applyPatch } from "iterate/live-state-diff";
+import type { LiveUpdate } from "iterate/live-state-protocol";
 
 /**
  * The client half of the live-state channel: a tiny external store that folds

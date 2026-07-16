@@ -4,7 +4,7 @@
 // the browser store's tests.
 
 import { describe, expect, it } from "vitest";
-import { SubscriberMetrics } from "./subscriber-metrics.ts";
+import { SubscriberMetrics } from "iterate/subscriber-metrics";
 
 const T0 = 1_700_000_000_000;
 

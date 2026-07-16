@@ -20,12 +20,12 @@
 
 import { describe, expect, it } from "vitest";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
-import { KEEPALIVE_ALARM_LEAD_MS } from "../streams/stream-processor-keepalive.ts";
+import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/stream-processor-keepalive";
 import { MemoryStream } from "../streams/test-helpers.ts";
 import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
-} from "../streams/stream-processor-registry.ts";
+} from "iterate/stream-processor-registry";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "../streams/core-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";

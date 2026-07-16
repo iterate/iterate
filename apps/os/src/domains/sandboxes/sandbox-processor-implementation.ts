@@ -1,4 +1,4 @@
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor } from "iterate/stream-processor";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 
 /**

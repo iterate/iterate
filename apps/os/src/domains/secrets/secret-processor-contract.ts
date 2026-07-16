@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract } from "iterate/processor-contracts";
 
 /** Zod mirror of {@link import("./types.ts").PlatformCredsRef} — a
  * deployment-owned credential resolved from typed AppConfig in trusted code. */

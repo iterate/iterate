@@ -28,7 +28,7 @@
 // stream-wire.e2e.test.ts.
 
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
-import { disposeIgnoredRpcResult, isThenable, retainCallback } from "../../lib/rpc/retain.ts";
+import { disposeIgnoredRpcResult, isThenable, retainCallback } from "iterate/rpc-retain";
 import { itxLoopbackStub } from "../itx/utils.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import type {

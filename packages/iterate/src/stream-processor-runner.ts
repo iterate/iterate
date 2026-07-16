@@ -37,17 +37,16 @@
 // appends) shares the types below but is gated on a commit-path benchmark.
 
 import type { z } from "zod";
-import type { Stream } from "../../itx-api.generated.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
-import type { ProcessorState } from "./processor-contracts.ts";
-import type { StreamEvent } from "./schemas.ts";
-import type { StreamEventBatch } from "./rpc-types.ts";
+import type { Stream, StreamEventBatch } from "./itx-api.generated.js";
+import type { ProcessorState } from "./processor-contracts.js";
+import type { StreamEvent } from "./stream-events.js";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./stream-processor-revival.js";
 import {
   StreamProcessor,
   type MaybePromise,
   type StreamProcessorContract,
   type StreamProcessorDriver,
-} from "./stream-processor.ts";
+} from "./stream-processor.js";
 
 /**
  * The reduction half of a processor's durable progress: a disposable CACHE of

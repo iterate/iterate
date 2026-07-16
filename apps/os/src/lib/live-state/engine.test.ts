@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LiveState } from "./engine.ts";
-import type { LiveUpdate } from "./protocol.ts";
+import { LiveState } from "iterate/live-state";
+import type { LiveUpdate } from "iterate/live-state-protocol";
 
 /** Subscribe and accumulate every update the engine pushes to this sink. */
 function collect<State extends object>(engine: LiveState<State>) {

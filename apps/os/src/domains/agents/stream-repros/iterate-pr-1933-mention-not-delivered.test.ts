@@ -4,7 +4,7 @@ import { githubAgentPath } from "../../repos/github-agent-utils.ts";
 import { RepoProcessor } from "../../repos/repo-processor-implementation.ts";
 import type { StreamEvent } from "../../streams/schemas.ts";
 import { MemoryStreamNetwork } from "../../streams/test-helpers.ts";
-import { StreamProcessorRunner } from "../../streams/stream-processor-runner.ts";
+import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 import fixture from "./iterate-pr-1933-mention-not-delivered.json";
 
 describe("production stream repro: iterate PR 1933 mention was never delivered", () => {

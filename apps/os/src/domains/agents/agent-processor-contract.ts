@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
+import { defineProcessorContract, type ProcessorState } from "iterate/processor-contracts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import {
   CoreProcessorContract,

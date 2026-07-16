@@ -34,7 +34,7 @@ import {
   type ConnectionRuntimeState,
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
-import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
+import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "iterate/stream-runtime-metrics";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,

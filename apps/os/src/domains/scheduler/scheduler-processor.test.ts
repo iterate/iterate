@@ -8,7 +8,7 @@ import {
   StreamProcessorRunner,
   type ProcessorProgress,
   type ProcessorProgressStore,
-} from "../streams/stream-processor-runner.ts";
+} from "iterate/stream-processor-runner";
 import { MemoryStream } from "../streams/test-helpers.ts";
 import {
   SchedulerProcessor,

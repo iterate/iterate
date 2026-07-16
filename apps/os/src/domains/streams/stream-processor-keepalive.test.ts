@@ -7,7 +7,7 @@ import {
   REVIVAL_BACKOFF_PLATEAU_MS,
   revivalBackoffMs,
   type KeepaliveRecord,
-} from "./stream-processor-keepalive.ts";
+} from "iterate/stream-processor-keepalive";
 
 const T0 = Date.parse("2026-07-09T12:00:00Z");
 

@@ -1,8 +1,5 @@
-import {
-  StreamProcessor,
-  type StreamProcessorConstructorArgs,
-} from "../streams/stream-processor.ts";
-import type { ProcessorState } from "../streams/processor-contracts.ts";
+import { StreamProcessor, type StreamProcessorConstructorArgs } from "iterate/stream-processor";
+import type { ProcessorState } from "iterate/processor-contracts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { StreamEvent } from "../streams/schemas.ts";

@@ -25,13 +25,15 @@ import type {
 // dist/sdk.d.ts, where it must resolve to dist/itx-api.generated.d.ts.
 export type * from "./itx-api.generated";
 
-// A project-defined processor uses the same contract, runtime, and Durable
-// Object host as the platform's built-in processors. The `.js` specifiers land
+// A project-defined processor uses the same contract, runner, and Durable
+// Object registry as the platform's built-in processors. The `.js` specifiers land
 // verbatim in the published declarations and resolve to emitted files; the
 // virtual `iterate/sdk` module bundles their runtime implementations.
 export * from "./processor-contracts.js";
 export * from "./stream-processor.js";
-export * from "./stream-processor-host.js";
+export * from "./stream-processor-registry.js";
+export * from "./stream-processor-revival.js";
+export * from "./stream-processor-runner.js";
 export {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,

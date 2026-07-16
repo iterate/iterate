@@ -6,7 +6,7 @@
 // tasks directly when their own repository rules say to do so.
 
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract } from "iterate/processor-contracts";
 import {
   CoreProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,

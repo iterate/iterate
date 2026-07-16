@@ -32,15 +32,15 @@ import {
   announceContract,
   hostRuntimeCapabilities,
   type AnyHostedProcessor,
-} from "../../processor-host-capabilities.ts";
-import { LatencyRing, type LatencyStats } from "../../stream-runtime-metrics.ts";
-import type { SubscriberMetricsReport } from "../../subscriber-metrics.ts";
+} from "iterate/processor-host-capabilities";
+import { LatencyRing, type LatencyStats } from "iterate/stream-runtime-metrics";
+import type { SubscriberMetricsReport } from "iterate/subscriber-metrics";
 import {
   StreamProcessorRunner,
   type ProcessorProgressStore,
   type StreamProcessorDeliveryFrame,
-} from "../../stream-processor-runner.ts";
-import type { StreamProcessor } from "../../stream-processor.ts";
+} from "iterate/stream-processor-runner";
+import type { StreamProcessor } from "iterate/stream-processor";
 import { isStreamUnavailableError } from "../../stream-unavailable.ts";
 import { parseBrowserCoreProcessorState } from "./core-processor-state.ts";
 import {

@@ -3,7 +3,7 @@
 // wire formats.
 
 import { stringify as stringifyYaml } from "yaml";
-import { StreamProcessor } from "../streams/stream-processor.ts";
+import { StreamProcessor } from "iterate/stream-processor";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
 import type { InboundEmailPayload } from "./email-processor-contract.ts";
 import { emailCounterpart, isOwnProjectMail } from "./utils.ts";

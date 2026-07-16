@@ -70,7 +70,7 @@ import {
   type RetainedProcessEventBatch,
   type RetainedSubscriberPing,
 } from "./subscriber-sinks.ts";
-import { LatencyRing, pingRoundTrip, type LatencyStats } from "./stream-runtime-metrics.ts";
+import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/stream-runtime-metrics";
 import {
   computeBackoffMs,
   deliveryId,

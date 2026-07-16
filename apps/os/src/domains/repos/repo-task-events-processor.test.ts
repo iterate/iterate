@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
+import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 import {
   GITHUB_LINK,
   MemoryStream,

@@ -1,52 +1,75 @@
+import type { z } from "zod";
 import type {
   GetProcessorRuntimeState,
-  ProcessorRuntimeState,
   ProcessorSnapshot,
-  StreamEventBatch,
   StreamPingInput,
   StreamSubscriberPing,
 } from "./itx-api.generated.js";
 import type { SubscriberMetrics } from "./subscriber-metrics.js";
+import type { ProcessorRuntimeContribution } from "./stream-processor.js";
 
-/** The processor surface shared by Durable Object and browser hosts. */
+/** Serializable processor contract carried in a subscriber presence fact. */
+export type ProcessorContractAnnouncement = {
+  slug: string;
+  version: string;
+  description: string;
+  consumes: string[];
+  emits: string[];
+  ownedEvents: { type: string; description?: string }[];
+};
+
+/**
+ * The processor surface shared by the Durable Object registry
+ * (stream-processor-registry.ts) and the browser host (stream-browser-store.ts):
+ * the contract description the wake handshake announces, the
+ * processor-contributed runtime bag, and the self-measured subscriber metrics.
+ * Deliberately NOT the drive surface — cursors, snapshots, and delivery live
+ * in the StreamProcessorRunner, which reaches the protected hooks through
+ * `StreamProcessor.runnerDriver`.
+ */
 export type AnyHostedProcessor = {
   contract: {
     slug: string;
     version: string;
     description: string;
+    stateSchema: z.ZodType;
     consumes: readonly string[];
     emits: readonly string[];
     events: Record<string, { description?: string; payloadSchema?: unknown }>;
   };
-  ingest(args: {
-    events: readonly StreamEventBatch["events"][number][];
-    streamMaxOffset: number;
-  }): Promise<void>;
-  snapshot(): Promise<ProcessorSnapshot<unknown>>;
-  getRuntimeState(): Promise<ProcessorRuntimeState<unknown>>;
-  currentState: unknown;
-  readonly isLoaded: boolean;
+  /** The processor-contributed runtime bag; the snapshot half comes from the runner. */
+  getRuntimeState(): Promise<ProcessorRuntimeContribution>;
   readonly subscriberMetrics: Pick<
     SubscriberMetrics,
     "report" | "notePingObserved" | "noteAppendCommitted" | "clearPendingAppends"
   >;
-  markLoaded(): void;
-  observeStateChanges(observer: (snapshot: ProcessorSnapshot<unknown>) => void): () => void;
 };
 
 /**
  * The two live capabilities every processor host hands the stream alongside
- * its sink, shared by the server host and browser runtime so they cannot drift.
+ * its sink, shared by the DO registry and browser runtime so they cannot
+ * drift. `getRuntimeState` assembles the published shape from its two honest
+ * sources: the SNAPSHOT from the runner (`opts.snapshot` — the cursor owner),
+ * the `runtime` bag from the processor, with the self-measured metrics merged
+ * in host-side so a subclass override cannot accidentally drop them.
  */
 export function hostRuntimeCapabilities(
   processor: AnyHostedProcessor,
-  opts: { now: () => number; oneWayEstimateMs?: () => number | undefined },
+  opts: {
+    now: () => number;
+    /** The driving runner's committed snapshot (`() => runner.snapshot()`). */
+    snapshot: () => Promise<ProcessorSnapshot<unknown>>;
+    oneWayEstimateMs?: () => number | undefined;
+  },
 ): { getRuntimeState: GetProcessorRuntimeState; ping: StreamSubscriberPing } {
   return {
     getRuntimeState: async () => {
-      const state = await processor.getRuntimeState();
+      const contributed = await processor.getRuntimeState();
       const metrics = processor.subscriberMetrics.report();
-      return { ...state, runtime: { ...state.runtime, metrics } };
+      return {
+        snapshot: await opts.snapshot(),
+        runtime: { ...contributed.runtime, metrics },
+      };
     },
     ping: (input: StreamPingInput) => {
       const t1 = opts.now();
@@ -58,16 +81,6 @@ export function hostRuntimeCapabilities(
     },
   };
 }
-
-/** Serializable processor contract carried in a subscriber presence fact. */
-type ProcessorContractAnnouncement = {
-  slug: string;
-  version: string;
-  description: string;
-  consumes: string[];
-  emits: string[];
-  ownedEvents: { type: string; description?: string }[];
-};
 
 /** Serializable processor contract carried by server and browser hosts. */
 export function announceContract(contract: {

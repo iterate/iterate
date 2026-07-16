@@ -4,11 +4,10 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
 import { takeWorkerFetchDispatch, workerBuildingResponse } from "./worker-fetch-dispatch.ts";
 import { isWorkerBuildInProgressError } from "./worker-loader.ts";
-import { DynamicWorkerRef, type StatefulDynamicWorkerRef } from "./schemas.ts";
+import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
 const FACET_NAME = "target";
-const REF_STORAGE_KEY = "workers:stateful-worker-ref";
 const VERSION_STORAGE_KEY = "workers:stateful-worker-version";
 
 /** The durable marker for "which build is this facet running": enough to both
@@ -95,28 +94,6 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       : await replayPath({ args, path, target });
   }
 
-  /**
-   * A hosted facet shares this Durable Object's storage, but Cloudflare
-   * delivers its alarm to the outer platform class. Remember the last recipe
-   * used for this durable identity and replay the alarm into that userspace
-   * class. This is what lets an SDK StreamProcessorHost use its normal
-   * keepalive/revival contract without a project-specific platform binding.
-   */
-  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    const stored = this.ctx.storage.kv.get<unknown>(REF_STORAGE_KEY);
-    if (stored === undefined) return;
-    const ref = DynamicWorkerRef.parse(stored);
-    if (ref.type !== "stateful") {
-      throw new Error("Stateful worker alarm recipe must describe a stateful worker");
-    }
-    const target = await this.#facet(ref);
-    await replayPath({
-      args: alarmInfo === undefined ? [] : [alarmInfo],
-      path: ["alarm"],
-      target,
-    });
-  }
-
   /** Abort the hosted facet and current outer Durable Object incarnation. */
   kill(): void {
     try {
@@ -129,14 +106,6 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
 
   async #facet(ref: StatefulDynamicWorkerRef, buildBudgetMs?: number): Promise<unknown> {
     this.#assertRefMatchesName(ref);
-
-    // The alarm has no request argument from which to recover the dynamic
-    // worker recipe. Persist only when it changes: normal wake calls for a
-    // long-lived processor should not turn into a write per delivered batch.
-    const storedRef = this.ctx.storage.kv.get<StatefulDynamicWorkerRef>(REF_STORAGE_KEY);
-    if (JSON.stringify(storedRef) !== JSON.stringify(ref)) {
-      this.ctx.storage.kv.put(REF_STORAGE_KEY, ref);
-    }
 
     if (ref.updatePolicy === "stale-while-rebuild") {
       const stale = await this.#staleFacet(ref);

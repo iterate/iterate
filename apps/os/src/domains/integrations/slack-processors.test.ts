@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { StreamEventInput } from "../streams/schemas.ts";
 import { slackAgentSystemPrompt } from "../agents/agent-defaults.ts";
 import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
+import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 import { SlackProcessor } from "./slack-processor-implementation.ts";
 import {
   SlackAgentProcessor,

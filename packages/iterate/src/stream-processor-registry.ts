@@ -70,22 +70,25 @@
 // retry-forever.
 
 import { tracing } from "cloudflare:workers";
-import type { Stream } from "../../itx-api.generated.ts";
-import { LiveState } from "../../lib/live-state/engine.ts";
-import type { StreamEvent } from "./schemas.ts";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
-import type { ProcessorState } from "./processor-contracts.ts";
-import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
-import { StreamProcessorRunner } from "./stream-processor-runner.ts";
+import type {
+  Stream,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "./itx-api.generated.js";
+import { LiveState } from "./live-state.js";
+import type { ProcessorState } from "./processor-contracts.js";
+import type { StreamEvent } from "./stream-events.js";
+import type { ProcessorReads, StreamProcessor } from "./stream-processor.js";
+import { StreamProcessorRunner } from "./stream-processor-runner.js";
 import {
   durableObjectProgressStore,
   durableObjectRecovery,
-} from "./durable-object-processor-durability.ts";
+} from "./durable-object-processor-durability.js";
 import {
   announceContract,
   hostRuntimeCapabilities,
   type AnyHostedProcessor,
-} from "./processor-host-capabilities.ts";
+} from "./processor-host-capabilities.js";
 
 /**
  * What `register` accepts: a real {@link StreamProcessor} subclass instance
@@ -245,11 +248,10 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
      * half of the wake coordinate fence (see `path`). */
     projectId: string | null;
     /** Worker deploy version; a change resets each keepalive's crash-loop
-     * budget (the antidote deploy). Pass `workerVersion(env)`. REQUIRED: a
-     * registry that silently defaulted this could never take the
-     * version-reset lane, so a deterministic crash loop would wait out the
-     * full plateau even after the fixing deploy shipped. */
-    version: string;
+     * budget (the antidote deploy). Required only when a processor registers
+     * with recovery enabled; recovery-free userspace processors do not arm a
+     * keepalive and therefore have no deploy-version state to reset. */
+    version?: string;
     /** Injected clock for the node test harness; production uses Date.now. */
     now?: () => number;
     /**
@@ -414,17 +416,24 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       // a persisted alarm desire (the lost-platform-alarm heal) through this
       // runner's own slice — and because the runner's constructor validates
       // that the contract consumes the core `stream/processor-revived` fact.
-      const recovery = opts?.recovery
-        ? durableObjectRecovery({
-            storage: ctx.storage,
-            slug,
-            stream: options.stream,
-            version: options.version,
-            armAlarm: (atMs) => void setAlarmSlice(`keepalive:${slug}`, atMs),
-            waitUntil: (work) => ctx.waitUntil(work),
-            now,
-          })
-        : undefined;
+      let recovery;
+      if (opts?.recovery) {
+        const version = options.version;
+        if (version === undefined) {
+          throw new Error(
+            `Stream processor "${slug}" enables recovery, so its registry requires a worker deploy version`,
+          );
+        }
+        recovery = durableObjectRecovery({
+          storage: ctx.storage,
+          slug,
+          stream: options.stream,
+          version,
+          armAlarm: (atMs) => void setAlarmSlice(`keepalive:${slug}`, atMs),
+          waitUntil: (work) => ctx.waitUntil(work),
+          now,
+        });
+      }
       const runner = new StreamProcessorRunner({
         // See RegisterableProcessor: the class is invariant in its contract,
         // so the structural door narrows back to the class here; runnerDriver

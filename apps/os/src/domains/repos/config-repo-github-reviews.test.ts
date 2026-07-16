@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Project, Stream, StreamEvent, StreamEventInput } from "iterate/sdk";
+import {
+  StreamProcessorRunner,
+  type Project,
+  type Stream,
+  type StreamEvent,
+  type StreamEventInput,
+} from "iterate/sdk";
 import {
   GithubReviewProcessor,
   githubReviewTarget,
@@ -63,18 +69,15 @@ function webhook(input?: {
   };
 }
 
-function subscriptionConfigured(source = webhook(), offset = 5): StreamEvent {
+function reviewRequested(source = webhook(), offset = 5): StreamEvent {
   const target = githubReviewTarget(source, CONFIG);
-  if (target === null) throw new Error("test subscription source must be reviewable");
+  if (target === null) throw new Error("test request source must be reviewable");
   return {
     createdAt: "2026-07-14T08:00:00.500Z",
     offset,
     path: REVIEW_PATH,
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      subscriptionKey: "userspace/github-review",
-      params: { initialRequest: { sourceOffset: source.offset, target } },
-    },
+    type: "events.iterate.com/github-review/requested",
+    payload: { sourceOffset: source.offset, target },
   };
 }
 
@@ -169,27 +172,53 @@ function harness(input?: {
   };
 }
 
+function processorHarness(input?: {
+  config?: GithubReviewConfig;
+  github?: ReturnType<typeof harness>;
+  stream?: Stream;
+}) {
+  const github = input?.github ?? harness();
+  const streamAppend = vi.fn().mockResolvedValue([]);
+  const stream =
+    input?.stream ??
+    // These focused processor tests exercise only home-stream appends. The
+    // partial fake deliberately omits unrelated paging and subscription RPCs.
+    ({ append: streamAppend } as unknown as Stream);
+  const processor = new GithubReviewProcessor({
+    config: input?.config ?? CONFIG,
+    itx: github.itx,
+    path: REVIEW_PATH,
+    projectId: "prj_test",
+    stream,
+  });
+  return {
+    github,
+    processor,
+    runner: new StreamProcessorRunner({ processor, stream }),
+    streamAppend,
+  };
+}
+
+async function deliver(
+  runner: ReturnType<typeof processorHarness>["runner"],
+  events: StreamEvent[],
+  streamMaxOffset = events.at(-1)?.offset ?? 0,
+): Promise<void> {
+  const opened = await runner.openDelivery();
+  await opened.sink({
+    events,
+    scannedAfterOffset: opened.checkpointOffset,
+    scannedThroughOffset: streamMaxOffset,
+    streamMaxOffset,
+  });
+}
+
 describe("config-repo GitHub reviews", () => {
   it("folds a durable obligation and stamps its reconciled task and completion", async () => {
-    const h = harness();
-    const streamAppend = vi.fn().mockResolvedValue([]);
-    const processor = new GithubReviewProcessor({
-      config: CONFIG,
-      itx: h.itx,
-      path: REVIEW_PATH,
-      projectId: "prj_test",
-      // This focused processor test exercises only its home-stream append;
-      // implementing the unrelated pager/subscription RPC surface would hide
-      // the behavior under test, so the partial fake is widened deliberately.
-      stream: { append: streamAppend } as unknown as Stream,
-    });
+    const { runner, streamAppend } = processorHarness();
+    await deliver(runner, [reviewRequested()]);
 
-    await processor.ingest({
-      events: [webhook(), subscriptionConfigured()],
-      streamMaxOffset: 5,
-    });
-
-    await expect(processor.snapshot()).resolves.toEqual({
+    await expect(runner.snapshot()).resolves.toEqual({
       offset: 5,
       state: {
         pendingRequests: [
@@ -210,7 +239,6 @@ describe("config-repo GitHub reviews", () => {
             },
           },
         ],
-        subscriptionOffset: 5,
       },
     });
     expect(streamAppend).toHaveBeenNthCalledWith(
@@ -220,8 +248,12 @@ describe("config-repo GitHub reviews", () => {
         source: {
           processor: {
             slug: "github-review",
-            version: "0.2.0",
+            version: "0.3.0",
             stream: { path: REVIEW_PATH, projectId: "prj_test" },
+            whileProcessing: {
+              offset: 5,
+              type: "events.iterate.com/github-review/requested",
+            },
           },
         },
         type: "events.iterate.com/agents/message-received",
@@ -239,8 +271,12 @@ describe("config-repo GitHub reviews", () => {
         source: {
           processor: {
             slug: "github-review",
-            version: "0.2.0",
+            version: "0.3.0",
             stream: { path: REVIEW_PATH, projectId: "prj_test" },
+            whileProcessing: {
+              offset: 5,
+              type: "events.iterate.com/github-review/requested",
+            },
           },
         },
         type: "events.iterate.com/github-review/request-processed",
@@ -250,19 +286,11 @@ describe("config-repo GitHub reviews", () => {
 
   it("ignores a checkpointed request after its repository is removed from config", async () => {
     const h = harness();
-    const streamAppend = vi.fn().mockResolvedValue([]);
-    const processor = new GithubReviewProcessor({
+    const { runner, streamAppend } = processorHarness({
       config: { ...CONFIG, repositories: [] },
-      itx: h.itx,
-      path: REVIEW_PATH,
-      projectId: "prj_test",
-      stream: { append: streamAppend } as unknown as Stream,
+      github: h,
     });
-
-    await processor.ingest({
-      events: [webhook(), subscriptionConfigured()],
-      streamMaxOffset: 5,
-    });
+    await deliver(runner, [reviewRequested()]);
 
     expect(h.getConnection).not.toHaveBeenCalled();
     expect(h.createAgent).not.toHaveBeenCalled();
@@ -279,42 +307,36 @@ describe("config-repo GitHub reviews", () => {
     );
   });
 
-  it("starts with the exact webhook carried by the subscription fact", async () => {
-    const h = harness();
-    const streamAppend = vi.fn().mockResolvedValue([]);
-    const processor = new GithubReviewProcessor({
-      config: CONFIG,
-      itx: h.itx,
-      path: REVIEW_PATH,
-      projectId: "prj_test",
-      stream: { append: streamAppend } as unknown as Stream,
-    });
-
-    const previousWebhook = webhook({ headSha: "head-a", offset: 1 });
+  it("preserves every review request appended before the first wake", async () => {
+    const h = harness({ liveHead: "head-c" });
+    const { runner, streamAppend } = processorHarness({ github: h });
     const triggeringWebhook = webhook({ headSha: "head-b", offset: 2 });
     const interleavedWebhook = webhook({ headSha: "head-c", offset: 4 });
-    await processor.ingest({
-      events: [
-        previousWebhook,
-        triggeringWebhook,
-        interleavedWebhook,
-        subscriptionConfigured(triggeringWebhook),
-      ],
-      streamMaxOffset: 5,
-    });
+    await deliver(runner, [
+      reviewRequested(triggeringWebhook, 3),
+      reviewRequested(interleavedWebhook, 5),
+    ]);
 
-    expect(h.getConnection).toHaveBeenCalledOnce();
-    expect(streamAppend).toHaveBeenCalledTimes(2);
+    expect(h.getConnection).toHaveBeenCalledTimes(2);
+    expect(streamAppend).toHaveBeenCalledTimes(3);
     expect(streamAppend).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        idempotencyKey: "iterate-review:prj_test:42:7:head:head-b",
+        payload: expect.objectContaining({ result: "stale", sourceOffset: 2 }),
+        type: "events.iterate.com/github-review/request-processed",
       }),
     );
     expect(streamAppend).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        payload: expect.objectContaining({ sourceOffset: 2 }),
+        idempotencyKey: "iterate-review:prj_test:42:7:head:head-c",
+        type: "events.iterate.com/agents/message-received",
+      }),
+    );
+    expect(streamAppend).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        payload: expect.objectContaining({ result: "queued", sourceOffset: 4 }),
         type: "events.iterate.com/github-review/request-processed",
       }),
     );
@@ -322,7 +344,7 @@ describe("config-repo GitHub reviews", () => {
 
   it("refolds a completed review journal without touching GitHub or appending events", async () => {
     const firstHarness = harness();
-    const journal = [webhook(), subscriptionConfigured()];
+    const journal = [reviewRequested()];
     let nextOffset = 6;
     const appendToJournal = vi.fn(async (...inputs: StreamEventInput[]): Promise<StreamEvent[]> => {
       const committed = inputs.map(
@@ -336,44 +358,35 @@ describe("config-repo GitHub reviews", () => {
       journal.push(...committed);
       return committed;
     });
-    const firstProcessor = new GithubReviewProcessor({
-      config: CONFIG,
-      itx: firstHarness.itx,
-      path: REVIEW_PATH,
-      projectId: "prj_test",
-      // This in-memory journal implements the append slice exercised by the
-      // processor; widening avoids inventing unrelated RPC methods in the test.
-      stream: { append: appendToJournal } as unknown as Stream,
+    const stream = { append: appendToJournal } as unknown as Stream;
+    const { runner: firstRunner } = processorHarness({
+      github: firstHarness,
+      stream,
     });
 
-    await firstProcessor.ingest({ events: journal, streamMaxOffset: 5 });
+    await deliver(firstRunner, [...journal], 5);
     expect(journal.map((event) => event.type)).toEqual([
-      "events.iterate.com/github/webhook-received",
-      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/github-review/requested",
       "events.iterate.com/agents/message-received",
       "events.iterate.com/github-review/request-processed",
     ]);
-    await firstProcessor.ingest({ events: journal.slice(2), streamMaxOffset: 7 });
-    await expect(firstProcessor.snapshot()).resolves.toEqual({
+    await deliver(firstRunner, journal.slice(1), 7);
+    await expect(firstRunner.snapshot()).resolves.toEqual({
       offset: 7,
-      state: { pendingRequests: [], subscriptionOffset: 5 },
+      state: { pendingRequests: [] },
     });
 
     const refoldHarness = harness();
     const refoldAppend = vi.fn().mockResolvedValue([]);
-    const refoldedProcessor = new GithubReviewProcessor({
-      config: CONFIG,
-      itx: refoldHarness.itx,
-      path: REVIEW_PATH,
-      projectId: "prj_test",
-      // The fresh processor only needs append to prove replay emits nothing.
+    const { runner: refoldedRunner } = processorHarness({
+      github: refoldHarness,
       stream: { append: refoldAppend } as unknown as Stream,
     });
-    await refoldedProcessor.ingest({ events: journal, streamMaxOffset: 7 });
+    await deliver(refoldedRunner, journal, 7);
 
-    await expect(refoldedProcessor.snapshot()).resolves.toEqual({
+    await expect(refoldedRunner.snapshot()).resolves.toEqual({
       offset: 7,
-      state: { pendingRequests: [], subscriptionOffset: 5 },
+      state: { pendingRequests: [] },
     });
     expect(refoldHarness.getConnection).not.toHaveBeenCalled();
     expect(refoldAppend).not.toHaveBeenCalled();

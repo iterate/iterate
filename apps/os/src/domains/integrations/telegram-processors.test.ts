@@ -9,7 +9,7 @@ import {
   MemoryStreamNetwork as CanonicalMemoryStreamNetwork,
   driveProcessor,
 } from "../streams/test-helpers.ts";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
+import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 import { TelegramProcessor } from "./telegram-processor-implementation.ts";
 import {
   TELEGRAM_NEW_SESSION_ACK_TEXT,

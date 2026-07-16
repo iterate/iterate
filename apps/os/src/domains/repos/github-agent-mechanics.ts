@@ -2,7 +2,7 @@
 // beside the GitHub facet because the repo router owns its birth.
 
 import { agentCreationForPath, PR_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
-import type { EmittedInput } from "../streams/processor-contracts.ts";
+import type { EmittedInput } from "iterate/processor-contracts";
 import { GithubAgentProcessorContract } from "./github-agent-processor-contract.ts";
 import type { RepoProcessorContract } from "./repo-processor-contract.ts";
 

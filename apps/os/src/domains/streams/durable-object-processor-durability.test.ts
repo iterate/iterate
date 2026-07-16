@@ -9,21 +9,21 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import { defineProcessorContract } from "./processor-contracts.ts";
+import { defineProcessorContract } from "iterate/processor-contracts";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./core-processor-contract.ts";
-import { StreamProcessor } from "./stream-processor.ts";
-import { KEEPALIVE_ALARM_LEAD_MS, type KeepaliveRecord } from "./stream-processor-keepalive.ts";
+import { StreamProcessor } from "iterate/stream-processor";
+import { KEEPALIVE_ALARM_LEAD_MS, type KeepaliveRecord } from "iterate/stream-processor-keepalive";
 import {
   StreamProcessorRunner,
   type ProcessorProgress,
   type ProcessorRecovery,
-} from "./stream-processor-runner.ts";
+} from "iterate/stream-processor-runner";
 import {
   durableObjectProgressStore,
   durableObjectRecovery,
   processorKeepaliveKey,
   processorProgressKey,
-} from "./durable-object-processor-durability.ts";
+} from "iterate/durable-object-processor-durability";
 
 const SLUG = "test-durability";
 const REQUESTED = "events.iterate.com/test-durability/requested";

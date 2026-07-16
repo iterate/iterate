@@ -10,9 +10,12 @@
 // reconcile on presence facts list this contract in their `processorDeps`.
 
 import { z } from "zod";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/stream-processor-revival";
 import { ItxExpression } from "../../itx/expression.ts";
 import { EventSelector } from "./event-selector.ts";
-import { defineProcessorContract } from "./processor-contracts.ts";
+import { defineProcessorContract } from "iterate/processor-contracts";
+
+export { STREAM_PROCESSOR_REVIVED_EVENT_TYPE };
 
 // Version of the persisted core reduced state ("state" in KV). Bump this when
 // the core reducer starts deriving NEW state from already-reduced events
@@ -289,8 +292,6 @@ export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescript
  * ignores it — the at-head reconcile its delivery guarantees is the whole
  * point.
  */
-export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
-
 export const StreamSubscriberDisconnectReason = z.enum([
   /** A new connection for the same subscriptionKey replaced this one. */
   "replaced",

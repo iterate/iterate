@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { StreamProcessorRunner } from "../streams/stream-processor-runner.ts";
+import { StreamProcessorRunner } from "iterate/stream-processor-runner";
 import {
   GITHUB_LINK,
   MemoryStream,
