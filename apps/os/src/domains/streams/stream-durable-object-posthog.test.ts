@@ -2,27 +2,21 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-
-type CaptureCommittedStreamEvents =
-  typeof import("./stream-event-posthog.ts").captureCommittedStreamEvents;
-
-const captureCommittedStreamEvents = vi.hoisted(() =>
-  vi.fn<CaptureCommittedStreamEvents>(() => Promise.resolve()),
-);
-
-vi.mock("./stream-event-posthog.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./stream-event-posthog.ts")>()),
-  captureCommittedStreamEvents,
-}));
-
+import { StreamEventPostHogExporter } from "./stream-event-posthog.ts";
 import { StreamDurableObject } from "./stream-durable-object.ts";
 
-beforeEach(() => captureCommittedStreamEvents.mockReset().mockResolvedValue(undefined));
+const requestFlush = vi.spyOn(StreamEventPostHogExporter.prototype, "requestFlush");
+const flushIfDue = vi.spyOn(StreamEventPostHogExporter.prototype, "flushIfDue");
+
+beforeEach(() => {
+  requestFlush.mockReset().mockReturnValue(null);
+  flushIfDue.mockReset().mockResolvedValue(null);
+});
 
 describe("StreamDurableObject PostHog boundary", () => {
-  it("captures only new commits without letting telemetry change append", () => {
-    const stream = createStream();
-    captureCommittedStreamEvents.mockClear();
+  it("schedules only new commits without passing event data or changing append", () => {
+    const { stream } = createStream();
+    requestFlush.mockClear().mockReturnValueOnce(1_050);
 
     const first = {
       type: "events.iterate.test/posthog-boundary",
@@ -37,25 +31,15 @@ describe("StreamDurableObject PostHog boundary", () => {
     const appended = stream.append(first, first, second);
 
     expect(appended[1]).toEqual(appended[0]);
-    expect(captureCommittedStreamEvents).toHaveBeenCalledOnce();
-    const [captureInput] = captureCommittedStreamEvents.mock.calls[0]!;
-    expect(captureInput).toMatchObject({
-      events: [
-        { committedAt: appended[0]!.createdAt, offset: appended[0]!.offset },
-        { committedAt: appended[2]!.createdAt, offset: appended[2]!.offset },
-      ],
-      projectId: null,
-      streamId: "stream-do-id",
-      workerName: "os-test",
-    });
-    expect(JSON.stringify(captureInput.events)).not.toContain("private");
+    expect(requestFlush).toHaveBeenCalledOnce();
+    expect(requestFlush).toHaveBeenCalledWith();
 
-    captureCommittedStreamEvents.mockClear();
+    requestFlush.mockClear();
     expect(stream.append(first)).toEqual([appended[0]]);
-    expect(captureCommittedStreamEvents).not.toHaveBeenCalled();
+    expect(requestFlush).not.toHaveBeenCalled();
 
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    captureCommittedStreamEvents.mockImplementationOnce(() => {
+    requestFlush.mockImplementationOnce(() => {
       throw new Error("telemetry exploded");
     });
     const [survived] = stream.append({
@@ -64,11 +48,14 @@ describe("StreamDurableObject PostHog boundary", () => {
     });
     expect(survived?.offset).toBe(appended[2]!.offset + 1);
     expect(error).toHaveBeenCalledWith(
-      "stream core background work failed",
-      expect.objectContaining({ message: "telemetry exploded" }),
+      expect.objectContaining({
+        message: "stream_posthog_flush_request_failed",
+        projectId: null,
+        streamId: "stream-do-id",
+      }),
     );
 
-    captureCommittedStreamEvents.mockClear();
+    requestFlush.mockClear();
     expect(() =>
       stream.append({
         type: "events.iterate.test/posthog-boundary",
@@ -76,12 +63,23 @@ describe("StreamDurableObject PostHog boundary", () => {
         payload: {},
       } as unknown as Parameters<StreamDurableObject["append"]>[0]),
     ).toThrow();
-    expect(captureCommittedStreamEvents).not.toHaveBeenCalled();
+    expect(requestFlush).not.toHaveBeenCalled();
+  });
+
+  it("awaits the PostHog page under the native alarm invocation", async () => {
+    const { stream } = createStream();
+    requestFlush.mockClear();
+
+    await stream.alarm();
+
+    expect(flushIfDue).toHaveBeenCalledOnce();
+    expect(requestFlush).not.toHaveBeenCalled();
   });
 });
 
-function createStream(): StreamDurableObject {
+function createStream(): { stream: StreamDurableObject } {
   const values = new Map<string, unknown>();
+  let alarmAt: number | null = null;
   const ctx = {
     id: {
       name: DurableObjectNameCodec.stringify(
@@ -91,6 +89,13 @@ function createStream(): StreamDurableObject {
       toString: () => "stream-do-id",
     },
     storage: {
+      deleteAlarm: async () => {
+        alarmAt = null;
+      },
+      getAlarm: async () => alarmAt,
+      setAlarm: async (at: number | Date) => {
+        alarmAt = typeof at === "number" ? at : at.getTime();
+      },
       kv: {
         get: <T>(key: string) => values.get(key) as T | undefined,
         put: (key: string, value: unknown) => void values.set(key, value),
@@ -104,7 +109,7 @@ function createStream(): StreamDurableObject {
     APP_CONFIG_POSTHOG: JSON.stringify({ apiKey: "phc_public" }),
     WORKER_SELF: "os-test",
   } as unknown as Env;
-  return new StreamDurableObject(ctx, env);
+  return { stream: new StreamDurableObject(ctx, env) };
 }
 
 function wrapSqlStorage(db: DatabaseSync): SqlStorage {

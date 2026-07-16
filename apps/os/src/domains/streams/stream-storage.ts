@@ -33,6 +33,7 @@ const textEncoder = new TextEncoder();
  * cap with these instead of re-stringifying every event on every read.
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
+export type CommittedStreamEventMetadata = { committedAt: string; offset: number };
 
 export class StreamEventLog {
   constructor(
@@ -96,6 +97,23 @@ export class StreamEventLog {
         .exec<{ seq: number | null }>("select seq from sqlite_sequence where name = 'events'")
         .toArray()[0]?.seq ?? 0;
     return Math.max(this.highestOffset(), sequence);
+  }
+
+  /** Payload-blind cursor read for the alarm-owned PostHog exporter. */
+  getCommitMetadata(afterOffset: number, limit: number): CommittedStreamEventMetadata[] {
+    return this.sql
+      .exec<CommittedStreamEventMetadata>(
+        `
+          select offset, created_at as committedAt
+          from events
+          where offset > ?
+          order by offset asc
+          limit ?
+        `,
+        afterOffset,
+        limit,
+      )
+      .toArray();
   }
 
   /**

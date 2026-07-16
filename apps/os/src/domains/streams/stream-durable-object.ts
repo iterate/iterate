@@ -5,6 +5,7 @@ import type { Stream } from "../../itx-api.generated.ts";
 import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
+import { DurableObjectAlarm } from "./durable-object-alarm.ts";
 import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
@@ -35,10 +36,7 @@ import {
   type SubscriptionRuntimeState,
 } from "./stream-subscribers.ts";
 import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
-import {
-  captureCommittedStreamEvents,
-  posthogApiKeyFromStreamEnv,
-} from "./stream-event-posthog.ts";
+import { posthogApiKeyFromStreamEnv, StreamEventPostHogExporter } from "./stream-event-posthog.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
 import {
   CORE_STATE_VERSION,
@@ -91,8 +89,32 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  */
 export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
-  readonly #posthogApiKey = posthogApiKeyFromStreamEnv(this.env);
+  readonly #alarm = new DurableObjectAlarm(this.ctx);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
+  readonly #posthog = (() => {
+    const apiKey = posthogApiKeyFromStreamEnv(this.env);
+    if (apiKey === undefined) return undefined;
+    try {
+      return new StreamEventPostHogExporter({
+        apiKey,
+        initialOffset: this.#log.highestAssignedOffset(),
+        projectId: this.name.projectId,
+        readEvents: (afterOffset, limit) => this.#log.getCommitMetadata(afterOffset, limit),
+        state: this.ctx.storage.kv,
+        streamId: this.ctx.id.toString(),
+        workerName: this.env.WORKER_SELF,
+      });
+    } catch {
+      console.error({
+        schema: "iterate.stream-telemetry.v1",
+        message: "stream_posthog_state_initialization_failed",
+        operation: "posthog.configure_stream_events",
+        outcome: "disabled",
+        failureKind: "storage",
+      });
+      return undefined;
+    }
+  })();
   /**
    * The spine's durable cursor rows. A field (not inlined into the hooks)
    * because the core-state rebuild path also reconciles these rows against
@@ -139,7 +161,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      armAlarm: (atMs) => this.#alarm.schedule("subscriptions", atMs),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
@@ -148,6 +170,10 @@ export class StreamDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
+    const posthogAlarmAt = this.#posthog?.nextAttemptAt;
+    if (posthogAlarmAt !== null && posthogAlarmAt !== undefined) {
+      this.#alarm.schedule("posthog", posthogAlarmAt);
+    }
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
@@ -187,33 +213,22 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
-  alarm(): void {
-    this.#alarmArmedForMs = null;
-    // The constructor's `woken` append already ran `#subscribers.wake()` via
-    // post-commit fan-out; this call re-arms the alarm for the next due retry
-    // (wake() itself only attempts rows whose backoff has elapsed).
-    this.#subscribers.onAlarm();
-    this.#flushCoreProcessorState();
-  }
-
-  /**
-   * The earliest alarm time armed this incarnation, tracked in memory so two
-   * concurrent arms can't race each other through the async getAlarm/setAlarm
-   * pair (both observing null and the LATER one winning). Reset when the
-   * alarm fires; a stale-low value merely re-arms an already-set time.
-   */
-  #alarmArmedForMs: number | null = null;
-
-  /** Move the DO alarm earlier, never later (many rows share one alarm). */
-  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
-    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
-    this.#alarmArmedForMs = atMs;
+  /** Native alarm root: route every due slice, then publish the next earliest desire. */
+  async alarm(): Promise<void> {
+    const firedAt = Date.now();
+    await this.#alarm.fired(firedAt);
     try {
-      const current = await this.ctx.storage.getAlarm();
-      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
-    } catch (error) {
-      console.error("stream alarm arming failed", error);
+      // The constructor's `woken` append already ran `#subscribers.wake()`;
+      // onAlarm re-derives any remaining durable subscription retry.
+      this.#subscribers.onAlarm();
+      this.#flushCoreProcessorState();
+
+      const posthogAlarmAt = await this.#posthog?.flushIfDue(firedAt);
+      if (this.#posthog !== undefined) {
+        await this.#alarm.set("posthog", posthogAlarmAt ?? null);
+      }
+    } finally {
+      await this.#alarm.reconcile();
     }
   }
 
@@ -344,22 +359,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     // and lets both DOs hibernate.
     this.#subscribers.armOrClearIdleTimer();
 
-    const posthogApiKey = this.#posthogApiKey;
-    if (posthogApiKey !== undefined) {
-      this.#runInBackground(() =>
-        captureCommittedStreamEvents({
-          apiKey: posthogApiKey,
-          // Project inside the background failure boundary. The exporter
-          // cannot retain raw envelopes, payloads, or paths.
-          events: newEvents.map(({ createdAt, offset }) => ({
-            committedAt: createdAt,
-            offset,
-          })),
+    const posthog = this.#posthog;
+    if (posthog !== undefined) {
+      try {
+        // The event log is the outbox. No event object crosses this boundary,
+        // and no PostHog fetch runs in the product invocation.
+        const flushAt = posthog.requestFlush();
+        if (flushAt !== null) this.#alarm.schedule("posthog", flushAt);
+      } catch {
+        console.error({
+          schema: "iterate.stream-telemetry.v1",
+          message: "stream_posthog_flush_request_failed",
+          operation: "posthog.schedule_stream_events",
+          outcome: "failed",
+          failureKind: "storage",
           projectId: this.name.projectId,
           streamId: this.ctx.id.toString(),
-          workerName: this.env.WORKER_SELF,
-        }),
-      );
+        });
+      }
     }
 
     return events;
@@ -548,6 +565,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     this.ctx.storage.transactionSync(() => {
       this.#log.replaceAll(parsed.events, parsed.highestAssignedOffset);
+      this.#posthog?.resetTo(parsed.highestAssignedOffset);
       this.ctx.storage.sql.exec("delete from subscriptions");
       this.ctx.storage.kv.put("state", recoveredCoreState);
       this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);

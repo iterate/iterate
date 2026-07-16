@@ -116,6 +116,9 @@ describe("StreamEventLog.getRange", () => {
     });
     expect(sized.map((entry) => entry.byteLength)).toEqual(insertedByteLengths);
     expect(sized.map((entry) => entry.event)).toEqual(committedEvents);
+    expect(log.getCommitMetadata(0, 10)).toEqual(
+      committedEvents.map(({ createdAt: committedAt, offset }) => ({ committedAt, offset })),
+    );
 
     expect(
       log.getRangeSizes({

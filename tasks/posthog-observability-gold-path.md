@@ -186,44 +186,44 @@ would need reconnect/rotation or an out-of-band exporter.
 
 ### Bounded committed-stream feed
 
-The first server-side PostHog slice should remain a small observational sink,
-not become a second stream-delivery system:
+Every newly committed stream row enters an unsampled, forward-only PostHog
+feed. The stream's existing event log is the durable source; this does not copy
+payloads into a second outbox or introduce a coordinator:
 
-- Every newly committed stream row enters an unsampled best-effort capture.
-  One synchronous append becomes one PostHog `/batch/` attempt, however many
-  rows it commits; bounded saturation and oversize are explicit failed
-  attempts rather than network requests.
-- Project the committed rows to `{offset, committedAt}` before async work. The
-  exporter must have no API through which a payload, path, event type,
-  idempotency key, metadata, or source lineage can reach PostHog.
-- Index the fixed `iterate stream event committed` event by `project_id`, an
-  opaque `stream_id`, offset, worker, and project/deployment scope. Set
-  `$process_person_profile: false` and disable geo-IP enrichment.
-- Preserve the stream commit point: PostHog work is scheduled after synchronous
-  fan-out and never changes the append result. In a Durable Object, pending I/O
-  keeps the object active; `waitUntil()` does not extend its lifetime.
-- Bound resource use to four in-flight captures per isolate, a 5-second
-  request timeout, and a 4 MB batch body. An over-limit append is rejected as
-  one observable telemetry unit rather than silently split into more requests.
-- Give every attempt a `posthog.capture_stream_events` Cloudflare custom span.
-  Success means PostHog returned 2xx (`accepted`), not proven ingestion.
-  Timeout/network outcomes are `unknown`; saturation, oversize, and HTTP
-  rejection are `failed`. Structured warning/error lines are rate-limited by
-  failure class while the unsampled spans retain attempt volume.
+- A product append performs no PostHog fetch, JSON encoding, or custom span. It
+  only persists a near-term alarm desire after the stream commit succeeds, so
+  PostHog cannot consume an ITX request's six outbound-connection slots or
+  distort its trace duration.
+- The exporter stores only an offset cursor, next-attempt time, bounded retry
+  count, recovery generation, and last failure. Its storage reader returns
+  `{offset, committedAt}` and has no API through which a payload, path, event
+  type, idempotency key, metadata, or source lineage can reach PostHog.
+- The fixed `iterate stream event committed` event is indexed by `project_id`,
+  an opaque `stream_id`, offset, worker, and project/deployment scope. It sets
+  `$process_person_profile: false` and disables geo-IP enrichment.
+- One native Durable Object alarm awaits at most one PostHog `/batch/` request:
+  at most 20,000 metadata rows, a 4 MB body, and a 5-second HTTP timeout. A
+  backlog schedules the next page on a subsequent alarm rather than creating
+  concurrent requests. A small alarm multiplexer preserves the earliest desire
+  shared with subscription retries.
+- Network, timeout, 408, 429, and 5xx outcomes retry at most five times with
+  jittered backoff. Retries reuse deterministic event UUIDs and `$insert_id`
+  values. Permanent rejection or exhausted retries advance the cursor only
+  after a structured error and durable abandonment marker, preventing both
+  silent loss and an infinite hot loop.
+- Each attempt is a `posthog.capture_stream_events` custom span beneath the
+  native alarm trace root. Success means PostHog returned 2xx (`accepted`), not
+  proven ingestion; timeout/network outcomes remain `unknown`.
 
-This is deliberately **best-effort**. It excludes idempotency hits because they
-are not new commits, and it does not replay recovery imports. A saturated
-isolate or oversized append drops that append's analytics attempt; a timeout
-may have reached PostHog. If the product later requires guaranteed arrival,
-design an explicit bounded durable cursor or Queue project with its own failure
-and cost model. Do not quietly turn this slice into an alarm-owned SQLite
-outbox.
+Existing history is not backfilled on rollout, idempotency hits are not new
+commits, and recovery imports reset the cursor without replaying restored
+history. A recovery generation fence prevents an in-flight old-log response
+from acknowledging the replacement log.
 
-No Analytics Engine, coordinator Durable Object, stream alarm arbitration, or
-custom dashboard is part of this slice. Cloudflare's native trace viewer and
-PostHog's live event feed are the operator surfaces. Semantic event facets and
-deep links can follow only once their bounded privacy/query contracts are
-proven.
+No Analytics Engine, coordinator Durable Object, or custom dashboard is part
+of this slice. Cloudflare's native trace viewer and PostHog's live event feed
+are the operator surfaces. Semantic event facets and deep links can follow only
+once their bounded privacy/query contracts are proven.
 
 For an unexpected browser or Worker failure an operator should be able to:
 
