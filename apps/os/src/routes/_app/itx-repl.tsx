@@ -20,9 +20,16 @@ import {
   runBrowserReplEntry,
   type BrowserReplEntry,
 } from "~/itx/browser-repl.ts";
+import type { RpcStub } from "capnweb";
+import type { Project, Session } from "~/itx-api.generated.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
-import { useSession, type ItxReactHandle } from "~/itx/itx-react.tsx";
+import { useItx, useSession } from "~/itx/itx-react.tsx";
 import { ItxRepl } from "~/components/itx-repl.tsx";
+
+/** The REPL holds EITHER the Session (global repl) or a project itx — the
+ * runner (`browser-repl.ts`) executes arbitrary code against `itx: unknown`, so
+ * the honest handle type is the union, not a cast that erases the boundary. */
+type ReplHandle = RpcStub<Session> | RpcStub<Project>;
 
 export const Route = createFileRoute("/_app/itx-repl")({
   staticData: {
@@ -85,14 +92,42 @@ function ItxReplConnected({
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
-  // One socket either way: the session (global REPL) or a project itx narrowed
-  // from it (`session.projects.get`, poolContext = a project id/slug). The pool
-  // owns the connection; the REPL never disposes this handle.
-  const session = useSession();
-  const itx = (poolContext === undefined
-    ? session
-    : session.projects.get(poolContext)) as unknown as ItxReactHandle;
-  return <ItxReplPage itx={itx} context={context} initialCode={initialCode} scope={scope} />;
+  // One socket either way, but split so each branch calls ONE hook: the global
+  // repl reads the Session; a project repl reads the CACHED project itx (useItx —
+  // not `session.projects.get()` per render, which would leak an undisposed
+  // capability every render). ConnectedItxRepl keys by poolContext, so this
+  // branch is stable per mount. The pool owns the connection; the REPL never
+  // disposes this handle.
+  return poolContext === undefined ? (
+    <SessionReplConnected context={context} initialCode={initialCode} scope={scope} />
+  ) : (
+    <ProjectReplConnected
+      poolContext={poolContext}
+      context={context}
+      initialCode={initialCode}
+      scope={scope}
+    />
+  );
+}
+
+function SessionReplConnected(props: {
+  context?: "session" | "project";
+  initialCode?: string;
+  scope?: Record<string, unknown>;
+}) {
+  return <ItxReplPage itx={useSession()} {...props} />;
+}
+
+function ProjectReplConnected({
+  poolContext,
+  ...props
+}: {
+  poolContext: string;
+  context?: "session" | "project";
+  initialCode?: string;
+  scope?: Record<string, unknown>;
+}) {
+  return <ItxReplPage itx={useItx(poolContext)} {...props} />;
 }
 
 function ItxReplPage({
@@ -104,7 +139,7 @@ function ItxReplPage({
   initialCode = DEFAULT_BROWSER_REPL_CODE,
   scope,
 }: {
-  itx: ItxReactHandle;
+  itx: ReplHandle;
   context?: "session" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
@@ -123,7 +158,7 @@ function ItxReplPage({
   // binds/clears a reference — it never disposes `itx` or closes the socket
   // (the pool owns that). A fresh stub after a pool reconnect rebinds here.
   useEffect(() => {
-    const globals = globalThis as typeof globalThis & { itx?: ItxReactHandle };
+    const globals = globalThis as typeof globalThis & { itx?: ReplHandle };
     globals.itx = itx;
     return () => {
       if (globals.itx === itx) delete globals.itx;

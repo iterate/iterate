@@ -23,8 +23,8 @@ function ProjectItxReplPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1">
-        {/* A project repl is just an itx session on that project's context — the
-            same pooled socket every other component on this project rides. */}
+        {/* A project repl is just the project itx (session.projects.get) — the
+            one session socket every other component on this tab rides. */}
         <ConnectedItxRepl
           poolContext={project.id}
           context="project"

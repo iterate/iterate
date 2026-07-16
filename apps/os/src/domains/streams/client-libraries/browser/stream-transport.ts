@@ -1,6 +1,7 @@
 // The browser stream runtime's transport: the capnweb `Stream` stub it dials,
-// plus the ability to evict the exact socket that stub rides. Kept apart from
-// the runtime so the connection state machine imports a named transport concept
+// plus the ability to REPORT that the shared session socket looks half-open (the
+// socket-owned verifier decides whether to retire it). Kept apart from the
+// runtime so the connection state machine imports a named transport concept
 // rather than defining it inline.
 
 import type { Stream } from "../../../../itx-api.generated.ts";
@@ -17,7 +18,7 @@ export type BrowserStreamClient = Disposable &
      * against the same generation. Absent on clients whose factory doesn't wire
      * it; the runtime then falls back to the config-level resetTransport.
      */
-    evictTransport?: () => void;
+    reportTransportSuspicion?: () => void;
   };
 
 export type BrowserStreamClientFactory = (args: {
@@ -44,12 +45,12 @@ export type BrowserStreamTransport = {
 export function asBrowserStreamClient(
   stream: Stream,
   dispose: () => void,
-  evictTransport?: () => void,
+  reportTransportSuspicion?: () => void,
 ): BrowserStreamClient {
   return new Proxy(stream, {
     get(target, property, receiver) {
       if (property === Symbol.dispose) return dispose;
-      if (property === "evictTransport") return evictTransport;
+      if (property === "reportTransportSuspicion") return reportTransportSuspicion;
       const value = Reflect.get(target, property, receiver);
       if (typeof value !== "function") return value;
       return (...args: unknown[]) => Reflect.apply(value, target, args);

@@ -33,7 +33,7 @@ import {
 import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { useSession } from "~/itx/itx-react.tsx";
+import { isItxTransportError, useSession } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
@@ -106,10 +106,17 @@ function AdminGate() {
           if (!cancelled) setAuthority({ status: "ready" });
         },
         (error: unknown) => {
-          if (!cancelled) {
-            console.error("admin authority probe failed", error);
-            setAuthority({ status: "locked" });
+          if (cancelled) return;
+          // A transport-shaped rejection is a reconnect blip, not a denied
+          // operator: stay "checking" — the socket re-dials and the effect
+          // re-runs on the fresh session (its identity is the dep). Only a real
+          // authority rejection (session.streams throws for non-admins) locks.
+          if (isItxTransportError(error)) {
+            setAuthority({ status: "checking" });
+            return;
           }
+          console.error("admin authority probe failed", error);
+          setAuthority({ status: "locked" });
         },
       );
     return () => {
@@ -119,10 +126,10 @@ function AdminGate() {
 
   if (authority.status === "checking") return <AdminConnecting />;
   if (authority.status === "locked") return <AdminSessionRequired />;
-  // Children just call useItx() for the same global pooled handle — no admin
-  // context to thread, and they only render here, under the authorized gate.
-  // The ⌘K stream switcher mounts here too: its admin tier dials the same
-  // global session, which only has authority once this gate has passed.
+  // Children just call useSession() for the same one socket — no admin context
+  // to thread, and they only render here, under the authorized gate. The ⌘K
+  // stream switcher mounts here too: its admin tier reads the same session,
+  // which only has authority once this gate has passed.
   return (
     <>
       <Outlet />

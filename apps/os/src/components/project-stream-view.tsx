@@ -33,7 +33,7 @@ import {
 import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
 import { feedItemsFilterFromSearch } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
-import { connectSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
+import { connectItx, connectSession, reportTransportSuspicion } from "~/itx/itx-react.tsx";
 import { useBrowserStreamMetrics } from "~/lib/stream-presence.ts";
 import {
   modeCapabilities,
@@ -124,12 +124,10 @@ export function ProjectStreamView({
   const resolvedStreamSource = useMemo<ItxStreamSource>(
     () =>
       streamSource ??
-      (async (path) => {
-        const session = await connectSession();
-        return projectId == null
-          ? session.streams.get(path)
-          : session.projects.get(projectId).streams.get(path);
-      }),
+      (async (path) =>
+        projectId == null
+          ? (await connectSession()).streams.get(path)
+          : (await connectItx(projectId)).streams.get(path)),
     [projectId, streamSource],
   );
   const streamClientFactory = useMemo(() => {
@@ -144,11 +142,10 @@ export function ProjectStreamView({
       };
     }
     return async (input: { streamPath: string }) => {
-      const session = await connectSession();
       const stub =
         projectId == null
-          ? session.streams.get(input.streamPath)
-          : session.projects.get(projectId).streams.get(input.streamPath);
+          ? (await connectSession()).streams.get(input.streamPath)
+          : (await connectItx(projectId)).streams.get(input.streamPath);
       return asBrowserStreamClient(
         stub,
         () => (stub as Partial<Disposable>)[Symbol.dispose]?.(),

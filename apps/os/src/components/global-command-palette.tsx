@@ -106,11 +106,10 @@ export function GlobalCommandPalette() {
       return {
         source: (path) => ({
           async subscribe(args) {
-            const session = await connectSession();
             const stream =
               adminStream.adminProjectId === NULL_DURABLE_OBJECT_PROJECT_ID
-                ? session.streams.get(path)
-                : session.projects.get(adminStream.adminProjectId).streams.get(path);
+                ? (await connectSession()).streams.get(path)
+                : (await connectItx(adminStream.adminProjectId)).streams.get(path);
             return stream.subscribe(args);
           },
         }),

@@ -135,6 +135,8 @@ type Generation = {
   liveness: ReturnType<typeof setInterval> | undefined;
   /** Idempotency latch: resources released once, and a re-fired close is a no-op. */
   disposed: boolean;
+  /** Single-flight latch for {@link verifyTransport}, per generation. */
+  verifying: boolean;
 };
 
 /**
@@ -238,6 +240,7 @@ function dial(): Generation {
     ping: undefined,
     liveness: undefined,
     disposed: false,
+    verifying: false,
   };
   current = generation;
   // Keep showing the last session while the new generation dials (invisible
@@ -260,6 +263,12 @@ function dial(): Generation {
 
     ws.addEventListener("open", () => {
       clearTimeout(timeout);
+      // Generation CAS: a superseded generation's late `open` (its successor was
+      // already dialed) must never publish over the live one. Close and bail.
+      if (current !== generation) {
+        ws.close();
+        return;
+      }
       opened = true;
       consecutiveDialFailures = 0;
       // The pipelined, real root stub — usable immediately, no extra round trip.
@@ -280,9 +289,15 @@ function dial(): Generation {
       generation.liveness = setInterval(() => {
         if (current === generation) void verifyTransport(generation);
       }, LIVENESS_PROBE_INTERVAL_MS);
+      // Retire the PREVIOUS published session — exactly once, now that its
+      // successor is live. It was kept alive through the reconnect gap so
+      // useSession()/useItx() never handed out a disposed stub; dispose its
+      // project-stub cache + the stub itself only here.
+      const priorSession = liveSession;
       liveSession = root;
       setSnapshot({ generation: id, session: root, connecting: promise });
       resolve(root);
+      if (priorSession !== undefined) disposeSession(priorSession);
     });
 
     ws.addEventListener("close", () => {
@@ -330,21 +345,24 @@ function setSnapshot(next: Snapshot): void {
 }
 
 /**
- * Release a generation's resources — its liveness timer and cached project +
- * session stubs. Idempotent (the `disposed` latch), and it does NOT close the
- * socket, so it is safe to call from the `close` handler (the socket is already
- * gone) without re-entering it.
+ * Release a generation's TRANSPORT resources — its liveness timer. Idempotent
+ * (the `disposed` latch), and it does NOT close the socket or dispose the
+ * session stub: the session is retired separately, by its successor's publish
+ * (see the open handler), so invisible reconnect never hands out a disposed
+ * stub. Safe to call from the `close` handler without re-entering it.
  */
 function disposeGeneration(generation: Generation): void {
   if (generation.disposed) return;
   generation.disposed = true;
   if (generation.liveness !== undefined) clearInterval(generation.liveness);
   generation.liveness = undefined;
-  if (generation.session !== undefined) {
-    const cache = projectStubCaches.get(generation.session);
-    if (cache) for (const stub of cache.values()) (stub as Partial<Disposable>)[Symbol.dispose]?.();
-    (generation.session as Partial<Disposable>)[Symbol.dispose]?.();
-  }
+}
+
+/** Dispose a retired session's project-stub cache and the session stub itself. */
+function disposeSession(session: SessionStub): void {
+  const cache = projectStubCaches.get(session);
+  if (cache) for (const stub of cache.values()) (stub as Partial<Disposable>)[Symbol.dispose]?.();
+  (session as Partial<Disposable>)[Symbol.dispose]?.();
 }
 
 /**
@@ -372,25 +390,34 @@ export function reportTransportSuspicion(): void {
   void verifyTransport(generation);
 }
 
-let verifying = false;
-
 async function verifyTransport(generation: Generation): Promise<void> {
-  if (verifying || current !== generation || generation.ping === undefined) return;
-  verifying = true;
+  // Single-flight PER GENERATION, not process-wide: a probe still racing on a
+  // retired generation (its ping hung and never settled) must not block
+  // verifying the fresh successor.
+  if (generation.verifying || current !== generation || generation.ping === undefined) return;
+  generation.verifying = true;
   try {
-    const probeOnce = () =>
+    // A probe is a STRIKE only when the transport itself failed — a timeout, or
+    // a rejection classified as a transport close. Any other rejection means the
+    // socket ANSWERED (an application/auth error came back over it), so the
+    // transport is alive. Rejections are caught here, never left unhandled.
+    const probeOnce = (): Promise<"alive" | "strike"> =>
       Promise.race([
-        generation.ping!().then(() => true),
-        new Promise<boolean>((resolve) =>
-          setTimeout(() => resolve(false), LIVENESS_PROBE_TIMEOUT_MS),
+        generation.ping!().then(
+          () => "alive" as const,
+          (error: unknown) =>
+            (isItxTransportError(error) ? "strike" : "alive") as "alive" | "strike",
+        ),
+        new Promise<"strike">((resolve) =>
+          setTimeout(() => resolve("strike"), LIVENESS_PROBE_TIMEOUT_MS),
         ),
       ]);
     // Two-strike: one slow answer is a busy server, not a dead socket.
-    let alive = await probeOnce();
-    if (!alive && current === generation) alive = await probeOnce();
-    if (!alive) reconnectIfCurrent(generation);
+    let verdict = await probeOnce();
+    if (verdict === "strike" && current === generation) verdict = await probeOnce();
+    if (verdict === "strike") reconnectIfCurrent(generation);
   } finally {
-    verifying = false;
+    generation.verifying = false;
   }
 }
 
@@ -510,11 +537,20 @@ export function ProjectScope({ slug, children }: { slug: string; children: React
 // 2. Reads: useItxQuery() — suspends until resolved, then stale-while-revalidate
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Transport-shaped rejections that a read may retry — NOT auth/authz/validation. */
-function isTransientItxTransportError(error: unknown): boolean {
+/**
+ * The two — and only two — transport-close rejections a caller may treat as "the
+ * socket died, retry on a fresh one": our own dial-close reject, and capnweb's
+ * abort when the WebSocket closes (`Peer closed WebSocket: <code> <reason>`,
+ * capnweb `websocket.ts`). Deliberately NARROW: an application/auth/validation
+ * error that merely mentions "WebSocket" must never be mistaken for a transport
+ * failure and retried. This is the one discriminant shared by the query retry
+ * and the liveness verifier.
+ */
+export function isItxTransportError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /closed before connecting|Peer closed WebSocket|WebSocket|half-open|transport/i.test(
-    message,
+  return (
+    message.includes("itx WebSocket closed before connecting") ||
+    message.includes("Peer closed WebSocket")
   );
 }
 
@@ -570,7 +606,7 @@ export function useItxQuery<T>({
         (itx as Partial<Disposable>)[Symbol.dispose]?.();
       }
     },
-    retry: (failureCount, error) => isTransientItxTransportError(error) && failureCount < 3,
+    retry: (failureCount, error) => isItxTransportError(error) && failureCount < 3,
     retryDelay: (failureCount) => Math.min(250 * 2 ** failureCount, 2_000),
   });
   // A background-refetch failure (cached data still showing) doesn't throw —
@@ -656,6 +692,14 @@ function useItxEffect(
         if (opts?.onDialError) opts.onDialError(error);
         else console.error("useItxEffect: dial failed", error);
       });
+    } else {
+      // Neither a handle nor a resolvable project: fail loudly rather than sit
+      // on "connecting" forever (a subscription with no <ProjectScope>).
+      const error = new Error(
+        "useItxEffect needs a project: pass { itx } or { slug }, or render under <ProjectScope slug>.",
+      );
+      if (opts?.onDialError) opts.onDialError(error);
+      else console.error(error.message);
     }
     return () => {
       disposed = true;

@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 // Control the mock capnweb session from tests: `hangAuthProbe` makes the
 // liveness/confirm probe (every authenticate() AFTER the first per socket) hang,
 // modelling a half-open transport whose root was already established.
-const control = vi.hoisted(() => ({ hangAuthProbe: false }));
+const control = vi.hoisted(() => ({
+  hangAuthProbe: false,
+  authProbeError: undefined as Error | undefined,
+}));
 
 // Mock the capnweb session so dialing resolves to a disposable sentinel keyed
 // by the socket URL and the authenticate()/projects.get(slug) pipeline — we
@@ -18,6 +21,7 @@ vi.mock("capnweb", () => ({
       authenticate: () => {
         calls += 1;
         if (calls > 1 && control.hangAuthProbe) return new Promise(() => {});
+        if (calls > 1 && control.authProbeError) return Promise.reject(control.authProbeError);
         const handleFor = (suffix: string) => ({
           url: suffix ? `${ws.url}/${suffix}` : ws.url,
           [Symbol.dispose]: vi.fn(),
@@ -52,6 +56,7 @@ class FakeWebSocket {
 
 beforeEach(() => {
   control.hangAuthProbe = false;
+  control.authProbeError = undefined;
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket);
   vi.resetModules(); // fresh module-level session state per test
@@ -117,11 +122,14 @@ describe("itx session socket", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     const second = connectSession();
     expect(second).not.toBe(first);
-    // The retired generation's session stub was disposed.
+    // The old session is RETAINED through the gap (so useSession/useItx never
+    // hand out a disposed stub) — it is disposed only when its successor opens.
+    expect(session[Symbol.dispose]).not.toHaveBeenCalled();
+    await openLatest();
     expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
   });
 
-  test("reconnectItx (semantic reset) disposes the live socket and forces a fresh dial", async () => {
+  test("reconnectItx (semantic reset) retires the old session only once its successor publishes", async () => {
     const { connectSession, reconnectItx } = await import("./itx-react.tsx");
     const first = connectSession();
     await openLatest();
@@ -129,9 +137,48 @@ describe("itx session socket", () => {
 
     reconnectItx();
     await vi.waitFor(() => {});
-    expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
+    // Retained until the successor publishes — no disposed stub during the gap.
+    expect(session[Symbol.dispose]).not.toHaveBeenCalled();
     expect(connectSession()).not.toBe(first);
     expect(FakeWebSocket.instances).toHaveLength(2);
+    await openLatest();
+    expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
+  });
+
+  test("a superseded generation's late open never publishes over the live one", async () => {
+    const { connectSession, reconnectItx } = await import("./itx-react.tsx");
+    const first = connectSession();
+    reconnectItx(); // supersede the first dial before it ever opened
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const second = connectSession();
+    // The stale first socket opens LATE: it must close itself, not publish.
+    FakeWebSocket.instances[0]!.fire("open");
+    await vi.waitFor(() => {});
+    expect(connectSession()).toBe(second); // still the successor, not the corpse
+    // The successor opening is what actually publishes a session.
+    FakeWebSocket.instances[1]!.fire("open");
+    await expect(second).resolves.toMatchObject({ url: expect.stringContaining("/api") });
+  });
+
+  test("verifier: an application-error probe means the socket ANSWERED — no reconnect", async () => {
+    // The probe (authenticate) rejects with a non-transport error: the transport
+    // is alive, so two 10s windows must NOT retire the socket.
+    vi.useFakeTimers();
+    try {
+      const { connectSession, reportTransportSuspicion } = await import("./itx-react.tsx");
+      const first = connectSession();
+      FakeWebSocket.instances[0]!.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+      await first;
+
+      control.authProbeError = new Error("permission denied"); // NOT a transport error
+      reportTransportSuspicion();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      expect(connectSession()).toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("repeated closed-before-open dials get backoff from the SECOND consecutive failure", async () => {
