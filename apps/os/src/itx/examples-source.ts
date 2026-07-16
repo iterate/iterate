@@ -685,6 +685,32 @@ return await itx.projects.get(pid).__describe();
     },
   }),
   projectExample({
+    id: "egress-rules-configured",
+    title: "Hold outbound requests to a host for human approval",
+    description:
+      "Egress rules are project state: append egress-rules-configured with a `hold` rule and any future request to a matching host — itx.egress.fetch, or an agent's own fetch inside its turn, same door either way — parks instead of completing, appending human-approval-requested. A human grants or rejects on the project stream (`iterate approve`, the mobile app's Approvals screen, or a raw grant/reject append) and the held call resolves or refuses. The event REPLACES the project's whole rule list (not a merge) — pass every rule you want kept, not just the new one. Run this once to seed a rule, then trigger a hold with egress-fetch (or just ask an agent to fetch the same host).",
+    runtimes: ALL_RUNTIMES,
+    fn: async (itx, vars: { host?: string; ruleKey?: string; approvalTimeoutMs?: number }) => {
+      const host = vars.host ?? "httpbin.org";
+      const ruleKey = vars.ruleKey ?? "repl-demo-hold";
+      const [appended] = await itx.streams.get("/").append({
+        type: "events.iterate.com/project/egress-rules-configured",
+        payload: {
+          rules: [
+            {
+              ruleKey,
+              description: `Outbound requests to ${host} need a human`,
+              match: { hosts: [host] },
+              verdict: "hold",
+              approvalTimeoutMs: vars.approvalTimeoutMs ?? 600_000,
+            },
+          ],
+        },
+      });
+      return { host, ruleKey, offset: appended.offset };
+    },
+  }),
+  projectExample({
     id: "secret-postman-echo",
     e2eProven: false,
     title: "Use a stored secret in a Postman Echo request",

@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { RpcTarget } from "capnweb";
 import type { ItxExample, ItxExampleRuntime } from "../../src/itx/examples.ts";
-import { runExample } from "../test-support/run-example.ts";
+import { runExample } from "../../src/itx/run-example.ts";
 import { baseUrl, connectProject } from "./e2e-env.ts";
 
 export const MATRIX_RUNTIMES = ["node", "cli", "run-script", "project-worker"] as const;
@@ -95,7 +95,7 @@ async function runInRunScript(input: {
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   using project = connectProject(input.projectId);
-  // The shared by-id door (test-support/run-example.ts) IS this runtime:
+  // The shared by-id door (src/itx/run-example.ts) IS this runtime:
   // the matrix proves the exact envelope any e2e test gets from runExample.
   return await runExample(input.id, {
     capabilityHost: project.capabilityHost,

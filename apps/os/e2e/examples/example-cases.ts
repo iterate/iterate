@@ -212,6 +212,22 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect((result as { count: number }).count).toBeGreaterThan(0);
     },
   },
+  "egress-rules-configured": {
+    // .invalid is RFC 2606-reserved (never resolves) — the rule is never
+    // actually matched against a real request here, only appended and read
+    // back, so a real hostname would be misleading.
+    vars: ({ marker }) => ({
+      host: `example-${marker}.invalid`,
+      ruleKey: `repl-demo-hold-${marker}`,
+    }),
+    assert: (result, { marker }, expect) => {
+      expect(result).toMatchObject({
+        host: `example-${marker}.invalid`,
+        offset: expect.any(Number),
+        ruleKey: `repl-demo-hold-${marker}`,
+      });
+    },
+  },
   "ephemeral-events": {
     vars: ({ marker }) => ({ path: `/repl/ephemeral-demo-${marker}` }),
     assert: (result, _ctx, expect) => {
