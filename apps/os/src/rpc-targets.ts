@@ -145,7 +145,10 @@ import type {
 } from "./domains/workers/schemas.ts";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "./domains/streams/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
-import { rethrowStreamUnavailable } from "./domains/streams/stream-unavailable.ts";
+import {
+  isDurableObjectLifecycleError,
+  rethrowStreamUnavailable,
+} from "./domains/streams/stream-unavailable.ts";
 import {
   isObjectSchema,
   listOpenApiOperations,
@@ -6530,18 +6533,34 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   async #callProcessor<Result>(
     call: (processor: StreamProcessorRpc<State>) => Promise<Result>,
   ): Promise<Result> {
-    const processor = await this.#processor();
-    try {
-      return await call(processor);
-    } finally {
-      // A Workers RPC property returning an RpcTarget materializes a remote
-      // stub for every relay call. It is only needed for this one method and
-      // must be released deterministically. In-process targets are real
-      // RpcTargets and remain owned by their host.
-      if (!(processor instanceof RpcTarget)) {
-        (processor as StreamProcessorRpc<State> & Partial<Disposable>)[Symbol.dispose]?.();
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      let processor: StreamProcessorRpc<State> | undefined;
+      try {
+        processor = await this.#processor();
+        return await call(processor);
+      } catch (error) {
+        if (attempt === 1 && isDurableObjectLifecycleError(error)) {
+          // Deploys and evictions may reset a processor-hosting DO while its
+          // facade property or method call is in flight. A fresh host stub
+          // reaches the replacement incarnation; retry exactly once so this
+          // expected lifecycle transition does not strand a durable birth
+          // frame. App errors are never retried, and a second lifecycle
+          // failure propagates into the caller's ordinary bounded recovery.
+          console.info("processor relay retrying after Durable Object lifecycle reset");
+          continue;
+        }
+        throw error;
+      } finally {
+        // A Workers RPC property returning an RpcTarget materializes a remote
+        // stub for every relay call. It is only needed for this one method and
+        // must be released deterministically. In-process targets are real
+        // RpcTargets and remain owned by their host.
+        if (processor !== undefined && !(processor instanceof RpcTarget)) {
+          (processor as StreamProcessorRpc<State> & Partial<Disposable>)[Symbol.dispose]?.();
+        }
       }
     }
+    throw new Error("processor relay exhausted its bounded lifecycle retry");
   }
 
   async snapshot() {
