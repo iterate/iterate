@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -21,11 +21,14 @@ import { shortEventType } from "~/lib/stream-feed-filters.ts";
  */
 export function RawEventInspectorContent({
   database,
+  navigationEnabled,
   offset,
   onNavigate,
 }: {
   /** The raw-event mirror (the `events` table), NOT the feed-items database. */
   database: StreamBrowserDatabase;
+  /** False while retained solely to paint the parent Sheet's exit transition. */
+  navigationEnabled: boolean;
   offset: number;
   onNavigate: (offset: number) => void;
 }) {
@@ -58,30 +61,33 @@ export function RawEventInspectorContent({
   const previousOffset = asNumber(previousResult.data[0]?.offset);
   const nextOffset = asNumber(nextResult.data[0]?.offset);
 
-  // The neighbour offsets change on every page, but the key handler itself must
-  // not: re-subscribing a window listener per keypress is pure churn. Read the
-  // current neighbours from a ref so the effect binds once (onNavigate is stable).
+  // The neighbour offsets and navigation callback can change on every render,
+  // but the key handler itself should only bind while this content is active.
+  // Read neighbours from a ref and the callback through an Effect Event.
   const neighboursRef = useRef({ previousOffset, nextOffset });
   neighboursRef.current = { previousOffset, nextOffset };
+  const navigate = useEffectEvent(onNavigate);
   useEffect(() => {
+    if (!navigationEnabled) return;
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      // The panel coexists with the composer and filter inputs (it is not a
-      // modal, unlike the old sheet) — typing there must not page the log.
+      // This listener is window-scoped, so editable controls must keep their
+      // arrow keys instead of paging the event log.
       if (isTypingTarget(event.target)) return;
       const { previousOffset, nextOffset } = neighboursRef.current;
       if (event.key === "ArrowLeft" && previousOffset != null) {
         event.preventDefault();
-        onNavigate(previousOffset);
+        navigate(previousOffset);
       }
       if (event.key === "ArrowRight" && nextOffset != null) {
         event.preventDefault();
-        onNavigate(nextOffset);
+        navigate(nextOffset);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onNavigate]);
+  }, [navigationEnabled]);
 
   // Parse + reorder only when the underlying row changes, not on every render:
   // a fresh object identity would rebuild CodeMirror (its editor is keyed on
@@ -122,8 +128,8 @@ export function RawEventInspectorContent({
         <Button
           size="sm"
           variant="outline"
-          disabled={previousOffset == null}
-          onClick={() => previousOffset != null && onNavigate(previousOffset)}
+          disabled={!navigationEnabled || previousOffset == null}
+          onClick={() => navigationEnabled && previousOffset != null && onNavigate(previousOffset)}
         >
           <ChevronLeftIcon />
           Prev
@@ -131,8 +137,8 @@ export function RawEventInspectorContent({
         <Button
           size="sm"
           variant="outline"
-          disabled={nextOffset == null}
-          onClick={() => nextOffset != null && onNavigate(nextOffset)}
+          disabled={!navigationEnabled || nextOffset == null}
+          onClick={() => navigationEnabled && nextOffset != null && onNavigate(nextOffset)}
         >
           Next
           <ChevronRightIcon />

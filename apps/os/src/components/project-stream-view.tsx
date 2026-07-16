@@ -468,6 +468,7 @@ function StreamInspectorSheet({
     content = (
       <RawEventInspectorContent
         database={database}
+        navigationEnabled={activeInspector?.kind === "event"}
         offset={inspector.offset}
         onNavigate={panels.inspectEvent}
       />
@@ -500,11 +501,15 @@ function StreamInspectorSheet({
       onOpenChange={(open) => {
         if (!open) panels.closeInspector();
       }}
+      onOpenChangeComplete={(open) => {
+        if (!open && activeInspector == null) setRetainedInspector(null);
+      }}
     >
       <SheetContent
         side="right"
         className="w-full gap-0 p-0 data-[side=right]:sm:w-[min(92vw,72rem)] data-[side=right]:sm:max-w-[92vw]"
         data-testid={testId}
+        inert={activeInspector == null}
       >
         {content}
       </SheetContent>
